@@ -11,6 +11,25 @@ use PHPUnit\Framework\TestCase;
 final class MediaItemShaperTest extends TestCase
 {
     /**
+     * Merge-gate sentinel: this constant's VALUE must stay resident in the test
+     * file's CODE (it is a live string operand of an executed assertion in
+     * testS112GuardCallSitesRemainCodeResidentNotJustComments()), never merely
+     * in a comment or a docblock.
+     */
+    private const SURVIVAL_TOKEN = 'S112URLGUARDX3D7';
+
+    /**
+     * The EXACT ladder {@see \Phlix\Media\Metadata\PosterSrcset::forPosterUrl()}
+     * produces for the w500 fixture poster (WIDTHS = [185, 342, 500, 780],
+     * `", "`-separated `"<url> <width>w"` pairs) — measured, not imagined.
+     */
+    private const TMDB_POSTER_LADDER =
+        'https://image.tmdb.org/t/p/w185/p.jpg 185w, '
+        . 'https://image.tmdb.org/t/p/w342/p.jpg 342w, '
+        . 'https://image.tmdb.org/t/p/w500/p.jpg 500w, '
+        . 'https://image.tmdb.org/t/p/w780/p.jpg 780w';
+
+    /**
      * Narrow a shaped-response list key (cast/crew/files/production_companies)
      * — MediaItemShaper::shapeDetail() is typed array<string, mixed>, so these
      * nested list-of-rows values arrive as mixed — into a list of array rows
@@ -1980,5 +1999,741 @@ final class MediaItemShaperTest extends TestCase
         ]);
         $this->assertNull($e['poster_url']);
         $this->assertNull($e['poster_srcset']);
+    }
+
+    // -------------------------------------------------------------------------
+    // S112 — per-key URL guards: poster chain (:167), stored poster_srcset
+    // (:177), trailer_url (:386), logo_url (:403, BEFORE the re-mint) and the
+    // nested production_companies[].logo_url in normalizeCompanies() (:890).
+    // -------------------------------------------------------------------------
+
+    /**
+     * The S101 reject set, copied payload-for-payload as a SURFACE-AGNOSTIC
+     * provider so every S112 key is driven through the exact same 17 hostile
+     * shapes the backdrop keys are, without coupling the per-key matrices to
+     * {@see self::unsafeBackdropUrlProvider()} (which is backdrop-fixture-worded).
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unsafeUrlPayloadProvider(): iterable
+    {
+        yield 'javascript scheme' => ['javascript:alert(1)', 'javascript: URIs are never emitted'];
+        yield 'javascript uppercase' => ['JAVASCRIPT:alert(1)', 'the scheme check is case-insensitive'];
+        yield 'javascript newline-obfuscated' => [
+            "jav\nascript:alert(1)",
+            'browsers strip control bytes before parsing the scheme',
+        ];
+        yield 'data uri' => ['data:image/png;base64,AAAA', 'data: URIs are never emitted'];
+        yield 'vbscript scheme' => ['vbscript:msgbox(1)', 'only http/https are allowed'];
+        yield 'file scheme' => ['file:///etc/passwd', 'only http/https are allowed'];
+        yield 'protocol-relative' => ['//image.tmdb.org/t/p/w500/bg.jpg', 'protocol-relative URLs are rejected'];
+        yield 'attribute breakout on a real TMDB url' => [
+            'https://image.tmdb.org/t/p/w500/bg.jpg"><script>alert(1)</script>',
+            'a quote/angle-bracket payload must not be emitted or derived from',
+        ];
+        yield 'single-quote breakout' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg' onerror='alert(1)",
+            'single quotes break out of an attribute too',
+        ];
+        yield 'backtick' => ['https://example.com/`bg.jpg', 'backticks are an attribute delimiter in old IE'];
+        yield 'backslash' => ['https://example.com\\bg.jpg', 'backslashes are normalised to / by browsers'];
+        yield 'tab inside the url' => ["https://example.com/\tbg.jpg", 'control bytes are stripped by browsers'];
+        yield 'no scheme at all' => ['image.tmdb.org/t/p/w500/bg.jpg', 'a bare host is not a usable image URL'];
+        yield 'trailing NUL' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\0",
+            'an edge NUL must be rejected, not silently trimmed away',
+        ];
+        yield 'leading NUL' => [
+            "\0https://image.tmdb.org/t/p/w500/bg.jpg",
+            'an edge NUL must be rejected, not silently trimmed away',
+        ];
+        yield 'trailing vertical tab' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\x0B",
+            'a vertical tab is in trim()\'s default charlist too',
+        ];
+        yield 'trailing form feed' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\x0C",
+            'a form feed is NOT trimmed, and is still a control byte',
+        ];
+    }
+
+    /**
+     * AC1, surface 1: every reject-set payload in `poster_url` becomes null on
+     * BOTH paths (the poster chain rides shape() and shapeDetail() — the detail
+     * shape merges the list shape), and nothing is derived from it: a null
+     * poster_url yields a null poster_srcset.
+     *
+     * @dataProvider unsafeUrlPayloadProvider
+     */
+    public function testShapeRejectsUnsafePosterUrlSchemes(string $stored, string $why): void
+    {
+        $list = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => $stored],
+        ]);
+
+        $this->assertNull($list['poster_url'], $why);
+        $this->assertNull($list['poster_srcset'], $why . ' (nothing derives from a rejected poster_url)');
+
+        $detail = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => $stored],
+        ], []);
+
+        $this->assertNull($detail['poster_url'], $why . ' (detail path)');
+        $this->assertNull($detail['poster_srcset'], $why . ' (detail path, nothing derives)');
+    }
+
+    /**
+     * AC1, surface 1 (fallback legs): the SAME guard wraps every candidate of
+     * the chain — `cover_image_large` (with poster_url blank, the AniList shape)
+     * and `cover_image_extralarge` each emit their payload as `poster_url`, so
+     * both legs must reject the whole set to null too.
+     *
+     * @dataProvider unsafeUrlPayloadProvider
+     */
+    public function testShapeRejectsUnsafePosterChainFallbackCandidates(string $stored, string $why): void
+    {
+        $large = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => '', 'cover_image_large' => $stored],
+        ]);
+
+        $this->assertNull($large['poster_url'], $why . ' (cover_image_large is emitted AS poster_url)');
+        $this->assertNull($large['poster_srcset'], $why . ' (no ladder from a rejected cover)');
+
+        $xlarge = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['cover_image_extralarge' => $stored],
+        ]);
+
+        $this->assertNull($xlarge['poster_url'], $why . ' (cover_image_extralarge leg)');
+        $this->assertNull($xlarge['poster_srcset'], $why . ' (no ladder from a rejected cover)');
+    }
+
+    /**
+     * The 3 payloads whose HOSTILE byte sits at an edge the outer
+     * `nonemptyString()` trim of safeImageSrcset() strips (trailing NUL, leading
+     * NUL, trailing VT): whole-value in the srcset position they SANITISE to
+     * the clean legitimate URL instead of rejecting. Pinned as measured — the
+     * asymmetric counterpart of their rejection on every single-URL surface.
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function edgePaddedPosterSrcsetProvider(): iterable
+    {
+        yield 'trailing NUL whole value' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\0",
+            'https://image.tmdb.org/t/p/w500/bg.jpg',
+        ];
+        yield 'leading NUL whole value' => [
+            "\0https://image.tmdb.org/t/p/w500/bg.jpg",
+            'https://image.tmdb.org/t/p/w500/bg.jpg',
+        ];
+        yield 'trailing vertical tab whole value' => [
+            "https://image.tmdb.org/t/p/w500/bg.jpg\x0B",
+            'https://image.tmdb.org/t/p/w500/bg.jpg',
+        ];
+    }
+
+    /**
+     * @dataProvider edgePaddedPosterSrcsetProvider
+     */
+    public function testShapeTrimsEdgePaddingFromAWholeValueStoredPosterSrcset(
+        string $stored,
+        string $expected,
+    ): void {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_srcset' => $stored],
+        ]);
+
+        $this->assertSame($expected, $shaped['poster_srcset'], 'the emitted value carries none of the edge bytes');
+    }
+
+    /**
+     * AC1, surface 2: a reject-set payload WHOLE in `poster_srcset` is never
+     * emitted. 14 of the 17 payloads reject (the 3 whose edge byte is stripped
+     * by the value-level trim are pinned as sanitised in
+     * {@see self::testShapeTrimsEdgePaddingFromAWholeValueStoredPosterSrcset()}).
+     *
+     * @dataProvider unsafePosterSrcsetWholeValueProvider
+     */
+    public function testShapeRejectsUnsafeStoredPosterSrcsetAsWholeValue(string $stored, string $why): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            // No poster_url — nothing derivable, so ONLY the guard can keep the
+            // payload out.
+            'metadata' => ['poster_srcset' => $stored],
+        ]);
+
+        $this->assertNull($shaped['poster_srcset'], $why . ' (stored srcset rejected whole)');
+    }
+
+    /**
+     * The 17-payload reject set minus the 3 whose edge byte the value-level trim
+     * strips before the per-candidate guard ever sees it (those sanitize; see
+     * edgePaddedPosterSrcsetProvider).
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unsafePosterSrcsetWholeValueProvider(): iterable
+    {
+        $skip = ['trailing NUL' => true, 'leading NUL' => true, 'trailing vertical tab' => true];
+        foreach (self::unsafeUrlPayloadProvider() as $label => [$payload, $why]) {
+            if (isset($skip[$label])) {
+                continue;
+            }
+            yield $label => [$payload, $why];
+        }
+    }
+
+    /**
+     * AC1, surface 2 (mixed): ONE poisoned candidate among two valid ones
+     * rejects the WHOLE stored value and the derived TMDB ladder takes over —
+     * byte-for-byte the PosterSrcset output, proving the rejected payload was
+     * never width-swap-embedded. Covers the three srcset-class shapes the
+     * descriptor half of the guard exists for.
+     *
+     * @dataProvider unsafePosterSrcsetCandidateProvider
+     */
+    public function testShapeRejectsAPosterSrcsetCandidateAmongValidOnesAndDerivesInstead(
+        string $stored,
+        string $why,
+    ): void {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'poster_url' => 'https://image.tmdb.org/t/p/w500/p.jpg',
+                'poster_srcset' => $stored,
+            ],
+        ]);
+
+        $this->assertSame(self::TMDB_POSTER_LADDER, $shaped['poster_srcset'], $why);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unsafePosterSrcsetCandidateProvider(): iterable
+    {
+        $valid = 'https://image.tmdb.org/t/p/w185/p.jpg 185w, %s 500w, '
+            . 'https://image.tmdb.org/t/p/w780/p.jpg 780w';
+
+        // The reject set in the URL slot of the middle candidate. Minus the 3
+        // whose byte survives the candidate-level trim/split (measured: leading
+        // NUL is trimmed, VT/FF split as whitespace) — those are pinned in
+        // testShapeNormalizesWhitespaceControlPaddingInsideAPosterSrcsetCandidate().
+        $skip = ['leading NUL' => true, 'trailing vertical tab' => true, 'trailing form feed' => true];
+        foreach (self::unsafeUrlPayloadProvider() as $label => [$payload, $why]) {
+            if (isset($skip[$label])) {
+                continue;
+            }
+            yield 'url slot: ' . $label => [
+                sprintf($valid, $payload),
+                $why . ' (poisoned candidate rejects the whole value)',
+            ];
+        }
+
+        // Srcset-class payloads: hostile text parked in the DESCRIPTOR slot and
+        // the interior-space URL the derived path also guards on.
+        yield 'javascript words as a bare candidate among valid ones' => [
+            'https://image.tmdb.org/t/p/w185/p.jpg 185w, '
+            . 'javascript: URIs are never emitted, '
+            . 'https://image.tmdb.org/t/p/w780/p.jpg 780w',
+            'a javascript: URL plus loose words is never an admissible candidate',
+        ];
+        yield 'space-free svg onload after the descriptor' => [
+            'https://image.tmdb.org/t/p/w500/p.jpg 500w"><svg/onload=alert(1)>',
+            'a space-free payload after the descriptor must not ride through',
+        ];
+        yield 'interior space in the candidate url' => [
+            'https://image.tmdb.org/t/p/w500/p jpg 500w',
+            'a browser would read this as one url plus two descriptors',
+        ];
+    }
+
+    /**
+     * The measured counterpart of the mixed-candidate rejection: whitespace-class
+     * padding bytes INSIDE a stored poster_srcset are normalised by the candidate
+     * split/trim (VT and FF are `\s` to PCRE; a leading NUL is trim's charlist),
+     * so the WHOLE value is accepted and RECONSTRUCTED from validated pairs —
+     * a form feed mid-value is the byte that proves it is rebuilt, not echoed.
+     * A trailing NUL by contrast is NOT `\s` and NOT stripped mid-candidate, so
+     * the same byte at the same slot rejects (see the reject matrix above).
+     */
+    public function testShapeNormalizesWhitespaceControlPaddingInsideAPosterSrcsetCandidate(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'poster_srcset' => "\x00https://image.tmdb.org/t/p/w185/p.jpg 185w, "
+                    . "https://image.tmdb.org/t/p/w500/p.jpg\x0C 500w, "
+                    . "https://image.tmdb.org/t/p/w780/p.jpg\x0B 780w",
+            ],
+        ]);
+
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/w185/p.jpg 185w, '
+            . 'https://image.tmdb.org/t/p/w500/p.jpg 500w, '
+            . 'https://image.tmdb.org/t/p/w780/p.jpg 780w',
+            $shaped['poster_srcset']
+        );
+        $this->assertSame(
+            0,
+            preg_match('/[\x00-\x1f\x7f]/', (string) $shaped['poster_srcset']),
+            'no raw padding byte survives into the emitted srcset',
+        );
+    }
+
+    /**
+     * AC1, surface 3: every payload in `trailer_url` becomes null on the detail
+     * path (the only path that emits the key).
+     *
+     * @dataProvider unsafeUrlPayloadProvider
+     */
+    public function testShapeDetailRejectsUnsafeTrailerUrlSchemes(string $stored, string $why): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['trailer_url' => $stored],
+        ], []);
+
+        $this->assertNull($shaped['trailer_url'], $why . ' (a trailer button must never receive it)');
+    }
+
+    /**
+     * AC1, surface 4: every payload in `logo_url` becomes null — with the
+     * signing secret live, so this also pins the ordering the review called
+     * out: the allowlist runs BEFORE SignedUrl::refreshArtworkUrl(), i.e. a
+     * payload is nulled, never echoed back through the re-mint stage.
+     *
+     * @dataProvider unsafeUrlPayloadProvider
+     */
+    public function testShapeDetailRejectsUnsafeLogoUrlSchemesBeforeReMint(string $stored, string $why): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=s112-logo-guard-secret');
+        SignedUrl::resetSharedForTesting();
+
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['logo_url' => $stored],
+        ], []);
+
+        $this->assertNull(
+            $shaped['logo_url'],
+            $why . ' (null BEFORE refreshArtworkUrl — the payload is never re-emitted)'
+        );
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * AC1, surface 5: the NESTED production_companies[].logo_url rejects the
+     * whole set while the ENTRY survives — name and origin_country untouched.
+     *
+     * @dataProvider unsafeUrlPayloadProvider
+     */
+    public function testShapeDetailRejectsUnsafeNestedCompanyLogoUrls(string $stored, string $why): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'production_companies' => [
+                    ['name' => 'Solid Pictures', 'logo_url' => $stored, 'origin_country' => 'US'],
+                ],
+            ],
+        ], []);
+
+        $rows = $this->rows($shaped, 'production_companies');
+        $this->assertCount(1, $rows, $why . ' (the company entry survives — only the logo is nulled)');
+        $this->assertSame('Solid Pictures', $rows[0]['name'], $why . ' (name untouched)');
+        $this->assertSame('US', $rows[0]['origin_country'], $why . ' (origin_country untouched)');
+        $this->assertNull($rows[0]['logo_url'], $why . ' (nested logo_url rejected)');
+    }
+
+    /**
+     * S345 rule 1, enumerated for the poster chain: null key absent, non-string
+     * (int/bool/array), empty string, whitespace-only, padded-legit (trims to
+     * the clean URL and KEEPS the ladder), and an already-signed internal URL
+     * (passes the guard so refreshArtworkUrl() can re-mint it).
+     */
+    public function testPosterChainGuardPathVariants(): void
+    {
+        foreach (
+            [
+                'key absent' => [],
+                'null' => ['poster_url' => null],
+                'int' => ['poster_url' => 42],
+                'bool' => ['poster_url' => true],
+                'array' => ['poster_url' => ['https://image.tmdb.org/t/p/w500/p.jpg']],
+                'empty string' => ['poster_url' => ''],
+                'whitespace only' => ['poster_url' => " \t\n "],
+            ] as $label => $metadata
+        ) {
+            $shaped = MediaItemShaper::shape([
+                'id' => 'm', 'name' => 'M', 'type' => 'movie', 'metadata' => $metadata,
+            ]);
+            $this->assertNull($shaped['poster_url'], $label . ' → null');
+            $this->assertNull($shaped['poster_srcset'], $label . ' → nothing derives');
+        }
+
+        $padded = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => "  https://image.tmdb.org/t/p/w500/p.jpg\n"],
+        ]);
+        $this->assertSame('https://image.tmdb.org/t/p/w500/p.jpg', $padded['poster_url'], 'padded-legit trims');
+        $this->assertSame(self::TMDB_POSTER_LADDER, $padded['poster_srcset'], 'the ladder survives the trim');
+
+        $signed = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => '/api/v1/artwork/m1?size=poster&exp=1700000000&sig=xyz123'],
+        ]);
+        $this->assertIsString($signed['poster_url']);
+        $this->assertStringStartsWith('/api/v1/artwork/m1?size=poster&exp=', $signed['poster_url']);
+        $this->assertStringNotContainsString('sig=xyz123', (string) $signed['poster_url']);
+    }
+
+    /**
+     * S345 rule 1 for the stored-srcset guard path: blank/non-string variants
+     * null (nothing derives — no poster_url), and a signed internal candidate
+     * passes the guard so the re-mint still re-signs it descriptor-intact.
+     */
+    public function testStoredPosterSrcsetGuardPathVariants(): void
+    {
+        foreach (
+            [
+                'key absent' => [],
+                'null' => ['poster_srcset' => null],
+                'int' => ['poster_srcset' => 42],
+                'bool' => ['poster_srcset' => true],
+                'array' => ['poster_srcset' => ['https://image.tmdb.org/t/p/w500/p.jpg 500w']],
+                'empty string' => ['poster_srcset' => ''],
+                'whitespace only' => ['poster_srcset' => " \t "],
+            ] as $label => $metadata
+        ) {
+            $shaped = MediaItemShaper::shape([
+                'id' => 'm', 'name' => 'M', 'type' => 'movie', 'metadata' => $metadata,
+            ]);
+            $this->assertNull($shaped['poster_srcset'], $label . ' → null');
+        }
+
+        $signed = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'poster_srcset' => '/api/v1/artwork/m1?size=poster&exp=1700000000&sig=xyz123 500w',
+            ],
+        ]);
+        $this->assertIsString($signed['poster_srcset']);
+        $this->assertStringStartsWith('/api/v1/artwork/m1?size=poster&exp=', $signed['poster_srcset']);
+        $this->assertStringEndsWith(' 500w', $signed['poster_srcset'], 'the descriptor survives the re-mint');
+    }
+
+    /**
+     * S345 rule 1 for the two detail-only single-URL guards. Trailer has NO
+     * re-mint stage, so a signed internal URL passes through byte-identically;
+     * logo feeds the re-mint, so the same input comes out freshly signed. The
+     * nested company logo has no re-mint either (normalizeCompanies never signs).
+     */
+    public function testDetailUrlGuardPathVariants(): void
+    {
+        foreach (
+            [
+                'key absent' => [],
+                'null' => ['trailer_url' => null, 'logo_url' => null],
+                'int' => ['trailer_url' => 42, 'logo_url' => 42],
+                'bool' => ['trailer_url' => true, 'logo_url' => true],
+                'array' => ['trailer_url' => ['x'], 'logo_url' => ['x']],
+                'empty string' => ['trailer_url' => '', 'logo_url' => ''],
+                'whitespace only' => ['trailer_url' => '   ', 'logo_url' => "\t\n"],
+            ] as $label => $metadata
+        ) {
+            $shaped = MediaItemShaper::shapeDetail([
+                'id' => 'm', 'name' => 'M', 'type' => 'movie', 'metadata' => $metadata,
+            ], []);
+            $this->assertNull($shaped['trailer_url'], $label . ' → trailer null');
+            $this->assertNull($shaped['logo_url'], $label . ' → logo null');
+        }
+
+        $paddedTrailer = ' https://www.youtube.com/watch?v=KEY1 ';
+        $signedInternal = '/api/v1/artwork/m1?size=logo&exp=1700000000&sig=xyz123';
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'trailer_url' => $paddedTrailer,
+                'logo_url' => $signedInternal,
+                'production_companies' => [
+                    [
+                        'name' => 'Padded Co',
+                        'logo_url' => "  https://image.tmdb.org/t/p/original/logo.png\n",
+                        'origin_country' => 'GB',
+                    ],
+                    ['name' => 'Signed Co', 'logo_url' => $signedInternal, 'origin_country' => null],
+                ],
+            ],
+        ], []);
+
+        $this->assertSame('https://www.youtube.com/watch?v=KEY1', $shaped['trailer_url'], 'padded-legit trims');
+        $this->assertIsString($shaped['logo_url']);
+        $this->assertStringStartsWith('/api/v1/artwork/m1?size=logo&exp=', $shaped['logo_url']);
+        $this->assertStringNotContainsString('sig=xyz123', (string) $shaped['logo_url'], 're-minted, not echoed');
+
+        $rows = $this->rows($shaped, 'production_companies');
+        $this->assertSame(
+            'https://image.tmdb.org/t/p/original/logo.png',
+            $rows[0]['logo_url'],
+            'nested padded-legit trims to the clean URL'
+        );
+        $this->assertSame(
+            $signedInternal,
+            $rows[1]['logo_url'],
+            'nested logos are guard-only — never re-signed, byte-identical'
+        );
+    }
+
+    /**
+     * AC2: legitimate shapes per key, byte-for-byte, on BOTH paths. The poster
+     * rows also pin the REAL derived ladder (w185/342/500/780 — PosterSrcset
+     * WIDTHS) where the URL is a TMDB one, and null where it is not.
+     *
+     * @dataProvider legitimateSurfaceUrlProvider
+     */
+    public function testShapeKeepsLegitimatePosterUrlsByteIdenticallyOnBothPaths(
+        string $stored,
+        string $expected,
+        ?string $expectedSrcset,
+    ): void {
+        $list = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => $stored],
+        ]);
+        $this->assertSame($expected, $list['poster_url']);
+        $this->assertSame($expectedSrcset, $list['poster_srcset']);
+
+        $detail = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_url' => $stored],
+        ], []);
+        $this->assertSame($expected, $detail['poster_url'], 'detail path identical (shapeDetail merges shape)');
+        $this->assertSame($expectedSrcset, $detail['poster_srcset']);
+    }
+
+    /**
+     * AC2: the same legitimate set passes the trailer and logo guards on the
+     * detail path — the logo byte-identically too (none of these forms carry a
+     * `/api/v1/artwork/` prefix, so the re-mint stage is a pass-through).
+     *
+     * @dataProvider legitimateSurfaceUrlProvider
+     */
+    public function testShapeDetailKeepsLegitimateTrailerAndLogoUrlsByteIdentically(
+        string $stored,
+        string $expected,
+    ): void {
+        $trailer = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['trailer_url' => $stored],
+        ], []);
+        $this->assertSame($expected, $trailer['trailer_url']);
+
+        $logo = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['logo_url' => $stored],
+        ], []);
+        $this->assertSame($expected, $logo['logo_url']);
+    }
+
+    /**
+     * AC2: the nested company logo passes the guard byte-identically as well.
+     *
+     * @dataProvider legitimateSurfaceUrlProvider
+     */
+    public function testShapeDetailKeepsLegitimateNestedCompanyLogoUrlsByteIdentically(
+        string $stored,
+        string $expected,
+    ): void {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => [
+                'production_companies' => [
+                    ['name' => 'Co', 'logo_url' => $stored, 'origin_country' => null],
+                ],
+            ],
+        ], []);
+
+        $rows = $this->rows($shaped, 'production_companies');
+        $this->assertCount(1, $rows);
+        $this->assertSame($expected, $rows[0]['logo_url']);
+    }
+
+    /**
+     * Every legitimate single-URL shape for the S112 surfaces (S101 mirror).
+     * TMDB rows additionally pin their derived poster ladder; non-TMDB rows the
+     * null srcset.
+     *
+     * @return iterable<string, array{string, string, ?string}>
+     */
+    public static function legitimateSurfaceUrlProvider(): iterable
+    {
+        $ladder = 'https://image.tmdb.org/t/p/w185/%s 185w, https://image.tmdb.org/t/p/w342/%s 342w, '
+            . 'https://image.tmdb.org/t/p/w500/%s 500w, https://image.tmdb.org/t/p/w780/%s 780w';
+        yield 'tmdb w500 poster' => [
+            'https://image.tmdb.org/t/p/w500/p.jpg',
+            'https://image.tmdb.org/t/p/w500/p.jpg',
+            sprintf($ladder, 'p.jpg', 'p.jpg', 'p.jpg', 'p.jpg'),
+        ];
+        yield 'tmdb http poster' => [
+            'http://image.tmdb.org/t/p/w500/p.jpg',
+            'http://image.tmdb.org/t/p/w500/p.jpg',
+            sprintf(str_replace('https://image', 'http://image', $ladder), 'p.jpg', 'p.jpg', 'p.jpg', 'p.jpg'),
+        ];
+        yield 'fanart.tv' => [
+            'https://assets.fanart.tv/fanart/movies/550/moviebackground/fight-club-5234.jpg',
+            'https://assets.fanart.tv/fanart/movies/550/moviebackground/fight-club-5234.jpg',
+            null,
+        ];
+        yield 'thetvdb' => [
+            'https://artworks.thetvdb.com/banners/series/81189/backgrounds/61027.jpg',
+            'https://artworks.thetvdb.com/banners/series/81189/backgrounds/61027.jpg',
+            null,
+        ];
+        yield 'server-relative artwork path' => [
+            '/artwork/abc/poster.jpg',
+            '/artwork/abc/poster.jpg',
+            null,
+        ];
+        yield 'query string preserved' => [
+            'https://example.com/p.jpg?v=2&w=3',
+            'https://example.com/p.jpg?v=2&w=3',
+            null,
+        ];
+    }
+
+    /**
+     * AC2, stored-srcset half: byte-identity is pinned ONLY on writer-shaped
+     * `", "`-separator forms (safeImageSrcset RECONSTRUCTS, so deviant
+     * whitespace normalises — asserted in the second fixture row, never as
+     * identity). Both paths.
+     *
+     * @dataProvider legitimateStoredPosterSrcsetProvider
+     */
+    public function testShapeKeepsLegitimateStoredPosterSrcsetOnBothPaths(string $stored, string $expected): void
+    {
+        $list = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_srcset' => $stored],
+        ]);
+        $this->assertSame($expected, $list['poster_srcset']);
+
+        $detail = MediaItemShaper::shapeDetail([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie',
+            'metadata' => ['poster_srcset' => $stored],
+        ], []);
+        $this->assertSame($expected, $detail['poster_srcset']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function legitimateStoredPosterSrcsetProvider(): iterable
+    {
+        yield 'writer-shaped widths' => [
+            'https://assets.fanart.tv/a.jpg 780w, https://assets.fanart.tv/b.jpg 1280w',
+            'https://assets.fanart.tv/a.jpg 780w, https://assets.fanart.tv/b.jpg 1280w',
+        ];
+        yield 'full tmdb ladder as stored' => [
+            self::TMDB_POSTER_LADDER,
+            self::TMDB_POSTER_LADDER,
+        ];
+        yield 'bare url no descriptor' => [
+            '/artwork/m/p-500.jpg',
+            '/artwork/m/p-500.jpg',
+        ];
+        // Deviant whitespace — the RECONSTRUCTED value, not identity.
+        yield 'deviant separators normalise' => [
+            'https://assets.fanart.tv/a.jpg  780w,https://assets.fanart.tv/b.jpg 1280w',
+            'https://assets.fanart.tv/a.jpg 780w, https://assets.fanart.tv/b.jpg 1280w',
+        ];
+    }
+
+    /**
+     * AC3: pinned expired-signature re-mint on the logo surface WITH padding —
+     * the guard trims first, so the padded signed URL still reaches
+     * SignedUrl::refreshArtworkUrl()'s prefix check and comes out with a NEW
+     * exp (> the pinned 1000000000) whose signature verifies.
+     */
+    public function testShapeDetailPadsAndReMintsPinnedExpiredInternalLogoUrl(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=s112-logo-remint-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        $stale = ' /api/v1/artwork/m?size=logo&exp=1000000000&sig='
+            . $signer->signature('/api/v1/artwork/m', 1000000000);
+
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Padded Logo Film',
+            'type' => 'movie',
+            'metadata' => ['logo_url' => $stale],
+        ], []);
+
+        $this->assertIsString($shaped['logo_url']);
+        $this->assertStringStartsWith('/api/v1/artwork/m?size=logo&exp=', $shaped['logo_url']);
+        parse_str((string) parse_url($shaped['logo_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
+        $this->assertSame('logo', $q['size'], 'the size descriptor is preserved');
+        $this->assertGreaterThan(1000000000, (int) $q['exp'], 'the new expiry replaced the pinned stale one');
+        $this->assertTrue(
+            $signer->verify('/api/v1/artwork/m', $q['exp'], $q['sig']),
+            'the re-minted logo_url verifies with a fresh signature'
+        );
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    /**
+     * Merge gate: the five S112 guard call sites must remain CODE-resident in
+     * the shaper — verified structurally on the token stream with comments
+     * stripped, so a call site that survives only inside a docblock cannot pass.
+     * The failure message carries the survival token, making it a live string
+     * operand of an executed assertion on every green run too.
+     */
+    public function testS112GuardCallSitesRemainCodeResidentNotJustComments(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../../../../src/Media/Library/MediaItemShaper.php');
+        $this->assertIsString($source, self::SURVIVAL_TOKEN . ': shaper source must be readable');
+
+        $code = '';
+        foreach (token_get_all($source) as $token) {
+            if (is_array($token)) {
+                if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                    continue;
+                }
+                $code .= $token[1];
+            } else {
+                $code .= $token;
+            }
+        }
+
+        foreach (
+            [
+                "self::safeImageUrl(\$metadata['poster_url'] ?? null)",
+                "self::safeImageSrcset(\$metadata['poster_srcset'] ?? null)",
+                "self::safeImageUrl(\$metadata['trailer_url'] ?? null)",
+                "self::safeImageUrl(\$metadata['logo_url'] ?? null)",
+                "self::safeImageUrl(\$entry['logo_url'] ?? null)",
+            ] as $callSite
+        ) {
+            $this->assertStringContainsString(
+                $callSite,
+                $code,
+                self::SURVIVAL_TOKEN . ': comment-stripped code lost the guard call site ' . $callSite
+            );
+        }
+
+        $this->assertSame(self::SURVIVAL_TOKEN, 'S112' . 'URLGUARD' . 'X3D7');
     }
 }

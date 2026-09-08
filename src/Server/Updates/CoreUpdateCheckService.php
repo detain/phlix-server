@@ -23,9 +23,11 @@ use Throwable;
  * compiled {@see Version::STRING} constant. The outcome is PERSISTED in
  * `server_settings` so the admin HTTP surface can answer
  * `GET /api/v1/admin/updates/status` from the database with **no outbound I/O
- * inside an HTTP handler** — the fetch happens on the count=1
- * `phlix-background-timers` worker ({@see CoreUpdateCheckWorker}), never on a
- * request.
+ * inside an HTTP handler**. Fetches are DISPATCHED on the event loop and never
+ * awaited by a request: the periodic one comes from the count=1
+ * `phlix-background-timers` worker ({@see CoreUpdateCheckWorker}); S273's
+ * `POST /api/v1/admin/updates/check` dispatches one immediately and answers
+ * 202 while the transport is still in flight.
  *
  * ## Persistence
  *
@@ -133,7 +135,7 @@ final class CoreUpdateCheckService
     }
 
     /**
-     * Run one check: fetch the marker, compare, persist, then report.
+     * Run one PERIODIC check: fetch the marker, compare, persist, then report.
      *
      * Non-blocking — the fetch is handed to {@see VersionMarkerFetcherInterface}
      * and `$onComplete` fires on the event loop once the response (or the
@@ -153,6 +155,39 @@ final class CoreUpdateCheckService
             return;
         }
 
+        $this->dispatch($onComplete);
+    }
+
+    /**
+     * Run one check NOW, regardless of the `updates.check_enabled` toggle.
+     *
+     * The toggle is the master switch for the PERIODIC poll (S74), which is
+     * why the background worker goes through {@see check()}. An operator who
+     * presses a button on the admin page is not the periodic poll: gating
+     * their explicit action on a background-cadence switch would ship the
+     * very dishonesty S273 exists to remove — a trigger that silently does
+     * nothing. The dispatch shape is identical to `check()`: non-blocking,
+     * event-loop completion, and every transport failure leaves the last
+     * known version intact ({@see record()}).
+     *
+     * @param callable(CoreUpdateStatus):void|null $onComplete Optional completion callback.
+     *
+     * @return void
+     */
+    public function checkNow(?callable $onComplete = null): void
+    {
+        $this->dispatch($onComplete);
+    }
+
+    /**
+     * Hand one fetch to the non-blocking transport and arm the completion slot.
+     *
+     * @param callable(CoreUpdateStatus):void|null $onComplete Optional completion callback.
+     *
+     * @return void
+     */
+    private function dispatch(?callable $onComplete): void
+    {
         // ORDER MATTERS: the completion slot is armed BEFORE the fetch is
         // issued. A fetcher is free to call back synchronously (every test
         // double does, and a cached/failed-fast transport may too), in which

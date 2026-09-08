@@ -72,6 +72,7 @@ use Psr\Container\ContainerInterface;
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
  *  - `GET    /api/v1/admin/updates/status`           → core update-check status (S74)
  *  - `PUT    /api/v1/admin/updates/settings`         → core update-check toggle (S74)
+ *  - `POST   /api/v1/admin/updates/check`            → trigger one core update check now (S273)
  *  - `GET    /api/v1/admin/maintenance/tasks`        → maintenance task catalogue (S77)
  *  - `GET    /api/v1/admin/maintenance/jobs`         → recent queued maintenance runs (S77)
  *  - `GET    /api/v1/admin/maintenance/jobs/{id}`    → one maintenance job, for polling (S77)
@@ -367,17 +368,22 @@ final class AdminRoutes
 
                 // Core (server application) update check — S74 / updates.md #48.
                 //
-                // Read-only status + one boolean toggle. There is deliberately
-                // NO apply action: `data.updateCommand` is a copy-to-clipboard
-                // string the operator pastes into a root shell, and this handler
-                // never invokes git/composer/systemctl. The status read performs
-                // no outbound I/O either — the marker fetch belongs to the
-                // count=1 background-timer worker, not to a request.
+                // Read-only status, one boolean toggle, and S273's manual
+                // trigger. There is deliberately NO apply action:
+                // `data.updateCommand` is a copy-to-clipboard string the
+                // operator pastes into a root shell, and this handler never
+                // invokes git/composer/systemctl. The status read performs no
+                // outbound I/O — it serialises persisted state. `check`
+                // DISPATCHES the marker fetch onto the event loop and answers
+                // 202 without waiting on it: the periodic fetch stays with
+                // the count=1 background-timer worker, and no request handler
+                // ever blocks on a third-party host.
                 /** @var AdminUpdatesController $updatesController */
                 $updatesController = $container->get(AdminUpdatesController::class);
 
                 $r->get('/updates/status', [$updatesController, 'status']);
                 $r->put('/updates/settings', [$updatesController, 'updateSettings']);
+                $r->post('/updates/check', [$updatesController, 'check']);
 
                 // One-off maintenance tasks — S77 / updates.md #49, the backend
                 // for the admin Tasks page (S78).

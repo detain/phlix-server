@@ -473,6 +473,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     'similarityJobStore',
                     get(\Phlix\Media\SimilarityJobStore::class)
                 )
+                // S87: metadata write-back job store. Named for the same PHP-DI
+                // reason — without it the per-item enqueue guard is never true
+                // and the feature is dark in production. The scan only ENQUEUES;
+                // the MetadataWriteWorker (factory below) drains the queue.
+                ->constructorParameter(
+                    'metadataWriteJobStore',
+                    get(\Phlix\Media\Metadata\Writer\MetadataWriteJobStore::class)
+                )
                 // Effective `scanner.ignore_patterns` list for shouldSkipFile().
                 // Named for the same PHP-DI reason as every entry above — an
                 // unnamed optional param is SKIPPED during autowiring, which
@@ -1094,6 +1102,69 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 return new \Phlix\Media\CollectionWorker($store, $service, null, $maxConcurrent);
             }),
 
+            // S87: file-based metadata write-back job queue (keyed by media item
+            // ID). Config-driven (metadata_write_jobs.job_queue_dir) via a
+            // factory mirroring the CollectionJobStore idiom — queue directory
+            // minted LAZILY on first enqueue, so resolving this factory leaves
+            // zero /tmp residue (S439 census) — so the scanner (producer) and
+            // the MetadataWriteWorker (consumer) share the SAME directory even
+            // when an operator overrides it.
+            \Phlix\Media\Metadata\Writer\MetadataWriteJobStore::class => factory(
+                static function (ContainerInterface $c): \Phlix\Media\Metadata\Writer\MetadataWriteJobStore {
+                    $appConfig = $c->get('app.config');
+                    if (!is_array($appConfig)) {
+                        $appConfig = [];
+                    }
+                    $mwCfg = $appConfig['metadata_write_jobs'] ?? null;
+                    if (!is_array($mwCfg)) {
+                        /** @var mixed $inc */
+                        $inc = @include __DIR__ . '/../../../../config/metadata_write_jobs.php';
+                        $mwCfg = is_array($inc) ? $inc : [];
+                    }
+                    $queueDir = is_string(($mwCfg['job_queue_dir'] ?? null))
+                        ? $mwCfg['job_queue_dir']
+                        : '/tmp/phlix_metadata_write_jobs';
+                    return new \Phlix\Media\Metadata\Writer\MetadataWriteJobStore($queueDir);
+                }
+            ),
+
+            // S87: metadata write-back worker — the CONSUMER that drains the
+            // queue the scanner enqueues into. Without it the enqueued jobs
+            // accumulate undrained on disk (the SV-1.3/SV-2.9 leak class).
+            // Resolves the queue store, the process-scoped writer registry above,
+            // and the item repository (freshest canonical row at drain time).
+            // Spawned as a managed worker by start.php (config/managed_workers.php).
+            \Phlix\Media\Metadata\Writer\MetadataWriteWorker::class => factory(
+                static function (ContainerInterface $c): \Phlix\Media\Metadata\Writer\MetadataWriteWorker {
+                    $appConfig = $c->get('app.config');
+                    if (!is_array($appConfig)) {
+                        $appConfig = [];
+                    }
+                    $mwCfg = $appConfig['metadata_write_jobs'] ?? null;
+                    if (!is_array($mwCfg)) {
+                        /** @var mixed $inc */
+                        $inc = @include __DIR__ . '/../../../../config/metadata_write_jobs.php';
+                        $mwCfg = is_array($inc) ? $inc : [];
+                    }
+                    $maxConcurrent = is_int(($mwCfg['max_concurrent'] ?? null))
+                        ? $mwCfg['max_concurrent']
+                        : 2;
+                    /** @var \Phlix\Media\Metadata\Writer\MetadataWriteJobStore */
+                    $store = $c->get(\Phlix\Media\Metadata\Writer\MetadataWriteJobStore::class);
+                    /** @var \Phlix\Media\Metadata\Writer\MetadataWriterRegistry */
+                    $registry = $c->get(\Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class);
+                    /** @var \Phlix\Media\Library\ItemRepository */
+                    $items = $c->get(\Phlix\Media\Library\ItemRepository::class);
+                    return new \Phlix\Media\Metadata\Writer\MetadataWriteWorker(
+                        $store,
+                        $registry,
+                        $items,
+                        null,
+                        $maxConcurrent
+                    );
+                }
+            ),
+
             // P4-S2: because-you-watched recommendations engine
             \Phlix\Media\RecommendationService::class => autowire()
                 ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
@@ -1170,6 +1241,15 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // PluginLoader registers a source on plugin-enable and deregisters it
             // on plugin-disable (no leak). Mirrors SourceRegistry.
             SubtitleSourceRegistry::class => autowire(),
+
+            // S87: process-scoped registry of PLUGIN metadata writers
+            // (MetadataWriterInterface). Single container-scoped instance —
+            // PluginLoader (de)registers writers on enable/disable, and the
+            // MetadataWriteWorker reads the SAME instance. Note: registries are
+            // per-process resident state, so start.php re-runs
+            // PluginLoader::bootstrapEnabled() inside the metadata-write fork
+            // before draining — an unwired fork would otherwise no-op every job.
+            \Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class => autowire(),
 
             // F3: downloaded-subtitle storage under the configured root
             // (named because PHP-DI skips defaulted optional ctor params).

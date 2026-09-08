@@ -9,6 +9,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Metadata write-back plumbing — queue + capability arm, zero writers yet (S87).** The first head-step
+  of the S87→S88→S89 arc: a plugin can now declare the disk write-back capability by implementing the new
+  `Phlix\Media\Metadata\Writer\MetadataWriterInterface` (`supports(type)` / `write(item, canonicalMetadata,
+  mediaDir)`), and `PluginLoader::enable()` wires it into the process-scoped `MetadataWriterRegistry` —
+  the fourth arm of the typed-capability pattern after the metadata source, the F3 subtitle source and the
+  S84 theme source, deregistered on `disable()` for a leak-free cycle. The scan side is enqueue-only:
+  `MediaScanner::processFile()` drops one lightweight `MetadataWriteJob` file per finalized item into the
+  new `MetadataWriteJobStore` (a `CollectionJobStore`-style bounded, idempotent, lazily-minted file queue —
+  no `/tmp` residue at construction, S439 census) **when the library opts in** via the existing
+  `libraries.options` JSON column: `options.metadataWrite.enabled`, resolved by the new
+  `LibraryRow::metadataWriteEnabled()`. That gate defaults to OFF (the inverse of S33's
+  absent-means-on `autoCollections`): writing metadata back mutates the operator's media directory, so it
+  is opt-in per library. No blocking filesystem I/O ever happens inline in the scan path — the new
+  `MetadataWriteWorker` managed process (config `metadata-write`, spawned by `start.php`, which also
+  re-runs `PluginLoader::bootstrapEnabled()` inside that fork because plugin registries are per-process
+  resident state) is the ONLY place a writer executes, and with no writers shipped yet every drain is a
+  documented no-op. S88 adds the sidecar (NFO/poster/fanart) writer; S89 adds the embedded-tag writer on
+  top of the existing `MetadataOverwritePolicy`.
+
 - **`POST /api/v1/admin/updates/check` — the "check now" trigger the admin UI was missing (S273).**
   `GET /api/v1/admin/updates/status` only ever serialised the cached marker result, so the S78 button
   was honestly labelled "Check update status" because nothing could trigger a check. This adds the

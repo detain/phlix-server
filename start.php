@@ -1218,6 +1218,29 @@ try {
                                 ['process' => $procKey, 'error' => $folderWatchBootError->getMessage()],
                             );
                         }
+                    } elseif ($procKey === 'metadata-write') {
+                        // S87 — plugin boot activation in the METADATA-WRITE fork.
+                        // The MetadataWriterRegistry is per-process resident
+                        // state: an enabled writer plugin is registered by
+                        // PluginLoader::enable() in whatever process ran the
+                        // enable (typically an HTTP worker), so this fork's own
+                        // registry starts EMPTY and every drained job would
+                        // silently no-op without the boot re-attach. ONLY
+                        // bootstrapEnabled() is wired here — unlike library-scan
+                        // this worker dispatches no plugin events and enriches
+                        // nothing; writers are invoked DIRECTLY by the worker from
+                        // the registry it wires in its own process. Non-blocking;
+                        // a boot failure leaves an empty registry (the queue still
+                        // drains, every job a safe no-op) rather than killing the
+                        // fork.
+                        try {
+                            $container->get(\Phlix\Plugins\PluginLoader::class)->bootstrapEnabled();
+                        } catch (\Throwable $pluginBootError) {
+                            LoggerFactory::get(LogChannels::PLUGINS)->error(
+                                'plugin boot activation failed (managed worker)',
+                                ['process' => $procKey, 'error' => $pluginBootError->getMessage()],
+                            );
+                        }
                     }
 
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.

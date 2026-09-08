@@ -103,4 +103,18 @@ return [
         'count'        => 1,
         'poll_seconds' => 30,   // matches config/collection_jobs.php worker_interval
     ],
+
+    // S87: metadata write-back worker. Drains the file-based job queue
+    // (metadata_write_jobs.job_queue_dir) of media items awaiting canonical
+    // metadata to be written back to disk by plugin writers
+    // (MetadataWriterInterface — sidecars in S88, embedded tags in S89). The
+    // scanner only ENQUEUES, gated per library on options.metadataWrite.enabled
+    // (default OFF). Without this consumer the queue would accumulate undrained
+    // in /tmp (disk leak); inside it the fork re-runs PluginLoader::
+    // bootstrapEnabled() because plugin registries are per-process state.
+    'metadata-write' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 30,   // matches config/metadata_write_jobs.php worker_interval
+    ],
 ];

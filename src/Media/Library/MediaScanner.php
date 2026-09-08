@@ -28,6 +28,8 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\MediaAsset\MediaAssetJob;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
+use Phlix\Media\Metadata\Writer\MetadataWriteJob;
+use Phlix\Media\Metadata\Writer\MetadataWriteJobStore;
 use Phlix\Media\SimilarityJob;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityService;
@@ -103,6 +105,23 @@ class MediaScanner
     private bool $autoCollectionsEnabled = true;
 
     /**
+     * S87: per-scan gate for the metadata write-back enqueue, set once at the
+     * top of {@see scan()} from the library's `options.metadataWrite.enabled`
+     * flag (resolved by the caller via
+     * {@see \Phlix\Media\Library\Dto\LibraryRow::metadataWriteEnabled()}).
+     *
+     * Unlike the S33 auto-collections gate this one DEFAULTS TO FALSE: writing
+     * canonical metadata back to disk is a mutating feature and is opt-in per
+     * library (a library that never stored the flag enqueues nothing).
+     * Per-scan mutable instance state, exactly like {@see $containerCache} —
+     * one {@see scan()} runs to completion per library before the next, so it
+     * is never shared across concurrent scans.
+     *
+     * @var bool
+     */
+    private bool $metadataWriteEnabled = false;
+
+    /**
      * Optional ffprobe runner used to read each time-based file's total
      * duration during the scan, so the player's scrubber knows the full
      * length immediately (rather than growing as an in-progress transcode
@@ -134,6 +153,19 @@ class MediaScanner
      * @var SimilarityJobStore|null
      */
     private ?SimilarityJobStore $similarityJobStore = null;
+
+    /**
+     * S87: Optional job store for deferred metadata write-back. When set AND
+     * the per-library gate ({@see $metadataWriteEnabled}) is on, each finalized
+     * item enqueues a lightweight {@see MetadataWriteJob}; the actual disk
+     * writing is NEVER done here — it happens in the MetadataWriteWorker's own
+     * managed process (S87 AC 2: no blocking filesystem I/O inline in the scan
+     * path). Null = the feature is dark for this scanner (tests/legacy callers).
+     * Writer implementations arrive with S88 (sidecars) and S89 (embedded tags).
+     *
+     * @var MetadataWriteJobStore|null
+     */
+    private ?MetadataWriteJobStore $metadataWriteJobStore = null;
 
     /**
      * Effective trailing-edition noise-suffix list applied to parsed titles
@@ -471,6 +503,14 @@ class MediaScanner
      *                           retain their probe summary for the file-derived
      *                           re-description. Same rationale, same null/negative
      *                           handling; 0 means "adopt, but never re-describe".
+     * @param MetadataWriteJobStore|null $metadataWriteJobStore S87: optional job
+     *                           store for deferred metadata write-back. When
+     *                           supplied AND the per-library gate is on, each
+     *                           finalized item enqueues a lightweight job; the
+     *                           MetadataWriteWorker drains it in its own managed
+     *                           process. The scan path performs NO metadata
+     *                           disk writes. Appended last so every existing
+     *                           positional caller is untouched.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
@@ -479,6 +519,8 @@ class MediaScanner
      * @since 0.38.0 SimilarityJobStore parameter added for SV-2.9
      * @since 0.38.0 S215: CollectionService parameter REPLACED by CollectionJobStore —
      *               collection sync is enqueued, never inline in the scan loop.
+     * @since S87    MetadataWriteJobStore parameter added for the metadata
+     *               write-back queue (enqueue-only).
      */
     public function __construct(
         Connection $db,
@@ -495,7 +537,8 @@ class MediaScanner
         ?SimilarityJobStore $similarityJobStore = null,
         ?ScanIgnorePatterns $ignorePatterns = null,
         ?int $maxAdoptionCandidates = null,
-        ?int $maxAdoptionProbes = null
+        ?int $maxAdoptionProbes = null,
+        ?MetadataWriteJobStore $metadataWriteJobStore = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -519,6 +562,7 @@ class MediaScanner
         $this->collectionJobStore = $collectionJobStore;
         $this->mediaAssetJobStore = $mediaAssetJobStore;
         $this->similarityJobStore = $similarityJobStore;
+        $this->metadataWriteJobStore = $metadataWriteJobStore;
         // `>= 0`, not `> 0`: zero is a meaningful setting for both (never adopt /
         // never re-describe) and is what makes the overflow branches reachable
         // from a test. Only null or a negative falls back to the constant.
@@ -699,6 +743,14 @@ class MediaScanner
      *               historical unconditional behaviour); pass false to skip the
      *               per-item collection-job enqueue block entirely for this scan
      *               (S215: a disabled library enqueues NOTHING).
+     * @param bool   $metadataWriteEnabled S87: whether canonical metadata
+     *               write-back is enqueued for this library, from its
+     *               `options.metadataWrite.enabled` flag. Defaults to FALSE —
+     *               unlike the S33 gate this feature is opt-in; an off library
+     *               enqueues NOTHING (the per-item block never runs). When on,
+     *               the scan only ENQUEUES a {@link MetadataWriteJob} per
+     *               finalized item; the MetadataWriteWorker performs any disk
+     *               writing in its own managed process (S87 AC 2).
      * @return int Number of items this scan ADDED (S96(b)). Already computed for
      *             {@see self::dispatchScanCompleted()}'s `itemsAdded`; returning it
      *             is what lets {@see LibraryManager::scanLibrary()} put a truthful
@@ -716,7 +768,8 @@ class MediaScanner
         string $type,
         bool $seriesPerDirectory = false,
         ?callable $onFile = null,
-        bool $autoCollectionsEnabled = true
+        bool $autoCollectionsEnabled = true,
+        bool $metadataWriteEnabled = false
     ): int {
         if (!is_dir($path)) {
             $this->logger->warning('Scan path does not exist', ['path' => $path]);
@@ -729,6 +782,9 @@ class MediaScanner
         // per-item collection-sync gate (see processFile) can read it without
         // threading the flag through the whole scan call chain.
         $this->autoCollectionsEnabled = $autoCollectionsEnabled;
+        // S87: latch the per-library metadata write-back gate for this scan,
+        // same mechanism as the S33 toggle above.
+        $this->metadataWriteEnabled = $metadataWriteEnabled;
         // Re-read `scanner.ignore_patterns` once per scan (read-path class (a)
         // LIVE at scan granularity) rather than once per file.
         $this->ignorePatterns->refresh();
@@ -1736,6 +1792,33 @@ class MediaScanner
                 }
             } catch (\Throwable $e) {
                 $this->logger->debug('Collection sync enqueue failed for item', [
+                    'item_id' => $itemId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // S87: enqueue the metadata write-back after a new item is indexed —
+        // NEVER write to disk inline. This is the whole of S87's scan-side
+        // scope: one lightweight queue-file write per finalized item, gated on
+        // the per-library options.metadataWrite.enabled toggle (latched at the
+        // top of scan()), consumed by MetadataWriteWorker in its own managed
+        // process. Plugin writers implement MetadataWriterInterface (registered
+        // by the PluginLoader capability arm); the sidecar writer is S88 and the
+        // embedded-tag writer is S89 — neither exists yet, and none is needed
+        // for the enqueue to be proven (S87 AC 1) or for the scan path to stay
+        // free of blocking metadata I/O (S87 AC 2).
+        //
+        // Enqueue failure must never abort the scan (same fail-safe contract as
+        // the collection block above): a full/read-only queue directory degrades
+        // to a debug log, the item stays indexed.
+        if ($this->metadataWriteJobStore !== null && $this->metadataWriteEnabled) {
+            try {
+                $this->metadataWriteJobStore->enqueue(
+                    new MetadataWriteJob((string) $itemId, (string) $libraryId)
+                );
+            } catch (\Throwable $e) {
+                $this->logger->debug('Metadata write enqueue failed for item', [
                     'item_id' => $itemId,
                     'error' => $e->getMessage(),
                 ]);

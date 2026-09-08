@@ -119,6 +119,28 @@ final class LibraryRow
     }
 
     /**
+     * Whether canonical metadata is written back to disk for this library
+     * (S87), read from the decoded `options.metadataWrite.enabled` flag.
+     *
+     * Default when the flag is ABSENT (or malformed) is `false` — the mirror
+     * of {@see self::autoCollectionsEnabled()}'s absent-means-on rule, chosen
+     * deliberately: metadata write-back MUTATES the operator's media
+     * directory, so it is opt-in per library rather than inherited by every
+     * pre-existing row. Only an explicit stored truthy value (bool true, 1,
+     * "1"/"true"/"yes"/"on" — same coercion via {@see self::optionIsTruthy()})
+     * turns the per-item enqueue on; the scan path then only queues a job and
+     * the MetadataWriteWorker (S87) performs any writing out of band.
+     */
+    public function metadataWriteEnabled(): bool
+    {
+        $block = $this->options['metadataWrite'] ?? null;
+        if (!is_array($block) || !array_key_exists('enabled', $block)) {
+            return false;
+        }
+        return self::optionIsTruthy($block['enabled']);
+    }
+
+    /**
      * The image types (M5) enabled for this library, read from the decoded
      * `options.image_types` selection. Falls back to {@see ImageType::defaults()}
      * when the key is absent so existing (un-migrated) libraries behave sensibly.

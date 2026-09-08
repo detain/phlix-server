@@ -552,6 +552,10 @@ class LibraryManager
         // unconditional behaviour; an explicit stored `false` skips the scanner's
         // per-item collection-sync block for this library.
         $autoCollectionsEnabled = $library->autoCollectionsEnabled();
+        // S87: per-library toggle for canonical-metadata write-back. Inverse
+        // default from S33: ABSENT means OFF (disk mutation is opt-in). When on
+        // the scanner only enqueues; the MetadataWriteWorker writes.
+        $metadataWriteEnabled = $library->metadataWriteEnabled();
 
         // When a progress sink is supplied, pre-count the media files across all
         // paths so the callback can report a real percentage (processed/total),
@@ -583,7 +587,8 @@ class LibraryManager
                 $library->type,
                 $seriesPerDirectory,
                 $onFile,
-                $autoCollectionsEnabled
+                $autoCollectionsEnabled,
+                $metadataWriteEnabled
             );
         }
 
@@ -786,7 +791,16 @@ class LibraryManager
             // For now, fall back to basic scanning.
             // NB: 'image' is the SCANNER's library-type label; the media_items.type
             // ENUM member is `photo` (see the type-ENUM landmine).
-            $added += $this->scanner->scan($libraryId, $path, 'image', false, null, $autoCollectionsEnabled);
+            $added += $this->scanner->scan(
+                $libraryId,
+                $path,
+                'image',
+                false,
+                null,
+                $autoCollectionsEnabled,
+                // S87: per-library write-back gate (absent = OFF).
+                $library->metadataWriteEnabled()
+            );
         }
 
         $this->logger->info('Photo library scan complete', ['library_id' => $libraryId, 'added' => $added]);
@@ -820,7 +834,16 @@ class LibraryManager
                 continue;
             }
             // Use book type for scanner
-            $added += $this->scanner->scan($libraryId, $path, 'book', false, null, $autoCollectionsEnabled);
+            $added += $this->scanner->scan(
+                $libraryId,
+                $path,
+                'book',
+                false,
+                null,
+                $autoCollectionsEnabled,
+                // S87: per-library write-back gate (absent = OFF).
+                $library->metadataWriteEnabled()
+            );
         }
 
         $this->logger->info('Book library scan complete', ['library_id' => $libraryId, 'added' => $added]);
@@ -854,7 +877,16 @@ class LibraryManager
                 continue;
             }
             // Use audiobook type for scanner
-            $added += $this->scanner->scan($libraryId, $path, 'audiobook', false, null, $autoCollectionsEnabled);
+            $added += $this->scanner->scan(
+                $libraryId,
+                $path,
+                'audiobook',
+                false,
+                null,
+                $autoCollectionsEnabled,
+                // S87: per-library write-back gate (absent = OFF).
+                $library->metadataWriteEnabled()
+            );
         }
 
         $this->logger->info('Audiobook library scan complete', ['library_id' => $libraryId, 'added' => $added]);

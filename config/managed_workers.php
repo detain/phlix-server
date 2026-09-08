@@ -36,4 +36,10 @@ return [
     // collection enqueue (blocking-HTTPS sync must never run in the scan loop)
     // so it does not accumulate undrained on disk.
     'collection'         => \Phlix\Media\CollectionWorker::class,
+    // S87: metadata write-back worker — drains the scanner's per-item enqueue
+    // for the per-library-gated disk write-back (sidecar NFO/artwork in S88,
+    // embedded tags in S89); writer disk I/O must never run in a scan/HTTP
+    // worker. The fork calls PluginLoader::bootstrapEnabled() first so the
+    // per-process MetadataWriterRegistry holds the enabled plugin writers.
+    'metadata-write'     => \Phlix\Media\Metadata\Writer\MetadataWriteWorker::class,
 ];

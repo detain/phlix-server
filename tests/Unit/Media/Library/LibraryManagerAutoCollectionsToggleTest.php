@@ -78,9 +78,14 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
             . "pre-fix this call was 3-arg and the scanner's default true won",
         );
         self::assertSame(
-            6,
+            7,
             $calls[0]['argCount'],
-            'the photo call site must pass the toggle explicitly as the 6th argument',
+            'the photo call site must pass the S33 toggle as the 6th argument and the S87 '
+            . 'write-back toggle as the 7th — both explicit',
+        );
+        self::assertFalse(
+            $calls[0]['metadataWriteEnabled'],
+            'S87: a stored-only-autoCollections library must default metadataWrite OFF at the call site',
         );
     }
 
@@ -97,7 +102,7 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
             $calls[0]['autoCollectionsEnabled'],
             'the stored autoCollections.enabled=false must reach scan() for a book library',
         );
-        self::assertSame(6, $calls[0]['argCount']);
+        self::assertSame(7, $calls[0]['argCount']);
     }
 
     public function testAudiobookLibraryScanPassesStoredToggleOff(): void
@@ -113,7 +118,7 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
             $calls[0]['autoCollectionsEnabled'],
             'the stored autoCollections.enabled=false must reach scan() for an audiobook library',
         );
-        self::assertSame(6, $calls[0]['argCount']);
+        self::assertSame(7, $calls[0]['argCount']);
     }
 
     /**
@@ -169,7 +174,7 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
                 $calls[0]['autoCollectionsEnabled'],
                 "the main scan path must keep passing the stored toggle for $type",
             );
-            self::assertSame(6, $calls[0]['argCount'], "the $type call site must pass the toggle explicitly");
+            self::assertSame(7, $calls[0]['argCount'], "the $type call site must pass both toggles explicitly");
 
             $calls = [];
             $manager = $this->manager($type, ['autoCollections' => ['enabled' => true]], $calls);
@@ -215,13 +220,24 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
             . '(main path + photo/book/audiobook); a new call site without the toggle must turn this red',
         );
 
+        // S87 rewrote the three single-line calls into multi-line 7-arg calls;
+        // strip line comments and normalise whitespace runs so the shape pin
+        // survives reformatting but still dies on a MISSING argument (the point
+        // of the guard).
+        $stripped = (string) preg_replace('#//[^\n]*#', '', $source);
+        $flat = (string) preg_replace('/\s+/', ' ', $stripped);
         foreach (self::SCANNER_TYPES as $libraryType => $scannerType) {
             self::assertStringContainsString(
-                "scan(\$libraryId, \$path, '{$scannerType}', false, null, \$autoCollectionsEnabled)",
-                $source,
-                "the {$libraryType} call site must pass the toggle explicitly as its 6th argument",
+                "scan( \$libraryId, \$path, '{$scannerType}', false, null, \$autoCollectionsEnabled, \$library->metadataWriteEnabled() );",
+                $flat,
+                "the {$libraryType} call site must pass the S33 toggle 6th and the S87 write-back toggle 7th",
             );
         }
+        self::assertStringContainsString(
+            "scan( \$libraryId, \$path, \$library->type, \$seriesPerDirectory, \$onFile, \$autoCollectionsEnabled, \$metadataWriteEnabled );",
+            $flat,
+            'S87: the main movie/series/video call site must pass the resolved write-back toggle as the 7th arg',
+        );
     }
 
     /**
@@ -232,7 +248,7 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
      * @param string             $type    Library type: one of 'photo' | 'book' | 'audiobook' |
      *                                    'movie' | 'series' | 'video' | 'music'.
      * @param array<string, mixed> $options Stored `options` blob (autoCollections etc.).
-     * @param list<array{type: string, autoCollectionsEnabled: bool, argCount: int}> $calls Recorder, by reference.
+     * @param list<array{type: string, autoCollectionsEnabled: bool, metadataWriteEnabled: bool, argCount: int}> $calls Recorder, by reference.
      */
     private function manager(string $type, array $options, array &$calls): LibraryManager
     {
@@ -265,11 +281,13 @@ final class LibraryManagerAutoCollectionsToggleTest extends TestCase
                 string $type,
                 bool $seriesPerDirectory = false,
                 ?callable $onFile = null,
-                bool $autoCollectionsEnabled = true
+                bool $autoCollectionsEnabled = true,
+                bool $metadataWriteEnabled = false
             ) use (&$calls): int {
                 $calls[] = [
                     'type' => $type,
                     'autoCollectionsEnabled' => $autoCollectionsEnabled,
+                    'metadataWriteEnabled' => $metadataWriteEnabled,
                     'argCount' => func_num_args(),
                 ];
 

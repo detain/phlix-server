@@ -56,6 +56,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**
+  Three comments asserted that photo and book libraries are scanned for EXIF / EPUB / PDF / CBZ content via
+  `PhotoLibraryManager` / `PhotoScanner` / `BookScanner`. They are not: `scanPhotoLibrary()` and
+  `scanBookLibrary()` route both types through the shared `MediaScanner`
+  (`$this->scanner->scan(…, 'image'|'book', …)`), and neither the photo-EXIF nor the book-harvest path is
+  reachable from here — the manager/scanner classes are not even imported. The comments now state the harvest
+  path is DORMANT rather than pretending it is live (wiring the photo route to `PhotoLibraryManager` is a
+  separate behaviour change with its own scan-path blast radius, explicitly NOT this step). The three
+  genuinely-unused `use` lines (`MusicLibraryType`, `BookLibraryType`, `AudiobookLibraryType` — the plan's
+  "two" undercounts by one, and nothing in the estate's toolchain flags an unused import) are removed; the
+  kept imports were re-derived by a tokenized (`php -w`, comments stripped) source census rather than a
+  `use`-grep alone. Separately, `docker/Dockerfile.base`'s `ext-exif` comment claimed *"every photo/PDF scan
+  in the published image would have fatalled"*; corrected to the measured truth — those two `@exif_read_data`
+  call sites are dormant as shipped so none fatalled, while `ext-exif` stays a declared hard platform
+  requirement that the missing extension still failed at `composer check-platform-reqs`. No behaviour change:
+  the `src/` diff is comments plus three imports only.
+
 - **Migration 103 collapses the music tables' duplicate UNIQUE indexes to one named constraint each (S155).** `070_fix_music_fk_types.sql` declares its fixed columns with a column-level inline `UNIQUE` inside `MODIFY COLUMN` (070:28,35,42); MySQL auto-names such an index, so a replay never collides, never raises 1061, and `MigrationRunner`'s idempotent squelch never fires — every re-application minted ONE MORE unique index over the same `media_item_id` column (production carried 24 per table; even a first chain pass lands on two: 065's own inline `UNIQUE` + 070's re-mint). 070 is untouched — its checksum is in every install's ledger — and 103 instead ensures the named `uq_music_{artists,albums,tracks}_media_item`, drops every other unique over exactly that column in one multi-drop ALTER (FK-safe: the survivor backs `fk_*_media_item` before the final state is validated — measured on MySQL 8.0.46; the constraints themselves are never dropped, since 1553/1826 are not in the squelch set), and follows the S161 shape standard: a same-named NON-UNIQUE imposter is replaced, never skipped, and a duplicate-dirty table refuses loudly with the remedy in the error text, altering nothing, so 103 also self-heals on empty-ledger transitions (070 re-mints before 103 collapses in the same pass). Proven by `MusicMediaItemUniqueIndexGuardTest` (9 real-MySQL tests: collapse, silent replay, re-mint self-healing, post-collapse 1452 FK + 1062 unique INSERT probes, imposter replacement, dirty refusal, column-set scoping) and by twice-replayed from-scratch chain runs. No routes touched; `ROUTE_MANIFEST` byte-identical.
 
 - **False historical claims in the `MusicLibraryType::getScanner()` narrowing comment (S132, W42 rescope; comments only).**
@@ -229,6 +246,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   exists); no tag; new routes registered in `ROUTE_MANIFEST` (364 entries) and pinned.
 
 ### Changed
+
+- **S130 size-bounded log policy: app.log runs at `info`, and every file log has a real on-disk ceiling.**
+  `config/logger.php`'s `file` (app.log) handler shipped at `level: debug` — never a considered production
+  choice, just the inherited default, and the volume lever behind the music scan S96 had to attack at the
+  caller. It is now deliberately `info`: the scanners' INFO summaries and every WARNING/ERROR/critical record
+  are STILL written (the video scanner's precedent observability and the music scanner's error reporting are
+  preserved verbatim — the config header states exactly what an operator still sees during a six-hour scan);
+  only the verbose per-item debug chatter is dropped, and it is a one-line per-handler change to bring back.
+  The second half of the AC — "a bounded on-disk size is enforced" — could not be met by the old
+  `rotating_file` handler: Monolog's `RotatingFileHandler` rotates by DAY and prunes by COUNT (`max_files`),
+  so the file *count* was bounded but no individual file ever was (the plan's own Problem text refutes
+  `max_files` as a size ceiling). Since Monolog 3 ships no size handler, this adds a compact
+  `Phlix\Common\Logger\SizeRotatingFileHandler` (`StreamHandler` subclass) that rolls to a numbered shard on a
+  byte ceiling with a bounded shard chain, keeping the active file's name stable (so the admin log viewer's
+  `*.log` glob and `^[A-Za-z0-9._-]+\.log$` tail allowlist are unaffected — rolled `.N` shards are invisible
+  to it, no UI blast radius) and using `useLocking` + error-suppressed renames for the same concurrent-worker
+  tolerance Monolog applies to its own `unlink()` cleanup. All four file handlers convert to it with explicit
+  ceilings — app.log (14+1)×16 MB=240 MB, error.log 88 MB, events.log 32 MB, plugins.log 32 MB, an estate
+  worst case of ≈392 MB hard-bounded versus unbounded before. Pinned by `SizeRotatingFileHandlerTest` (rolls,
+  bounded shard count, hard total-bytes bound, level gate, fail-loud on a non-positive ceiling) and
+  `LoggerConfigPolicyTest` (real config read; level is `info` not `debug`; every handler is `size_rotating`
+  with a positive ceiling; app.log footprint pinned to 240 MB); each guard mutation-proven RED (drop the
+  ceiling check → the 240 MB test fails on a single 34 KB unbounded file; flip level back to `debug` → RED;
+  revert a handler off `size_rotating` → RED). Behaviour change is scoped to logging destination policy — no
+  code that *emits* logs changed (out of scope, owned by S96).
 
 - **Auto-collection TMDB sync is enqueued, never inline in the scan loop (S215 — the S33 promise,
   finally true).** `MediaScanner` held the HTTP-capable `CollectionService` and called

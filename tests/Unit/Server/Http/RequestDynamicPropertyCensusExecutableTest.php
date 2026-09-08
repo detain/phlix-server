@@ -206,12 +206,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1786→1787 by S155: the music-index-collapse arc adds one test
      * file (MusicMediaItemUniqueIndexGuardTest); it does not name Request —
      * same pattern.
-     * Re-pinned 1787→1800 by S87: the metadata-write-back plumbing arc adds thirteen
-     * first-party files (five Writer src classes, config/metadata_write_jobs.php,
-     * six test files incl. the RecordingWriter double); none names Request —
-     * same pattern.
-     */
-    private const EXPECTED_PHP_FILES = 1800;
+      * Re-pinned 1787→1800 by S87: the metadata-write-back plumbing arc adds thirteen
+      * first-party files (five Writer src classes, config/metadata_write_jobs.php,
+      * six test files incl. the RecordingWriter double); none names Request —
+      * same pattern.
+      * Re-pinned 1800→1803 by S130: the size-bounded log policy adds three
+      * first-party files (SizeRotatingFileHandler src + its unit test + the
+       * LoggerConfigPolicyTest config guard); none names Request — same pattern.
+       */
+    private const EXPECTED_PHP_FILES = 1803;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

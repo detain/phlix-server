@@ -31,10 +31,14 @@ use Stringable;
  * [
  *     'handlers' => [
  *         '<name>' => [
- *             'type' => 'rotating_file'|'stream'|'error'|'audit',
+ *             'type' => 'rotating_file'|'size_rotating'|'stream'|'error'|'audit',
  *             'path' => string,
  *             'level' => string, // optional, defaults to 'debug'
  *             'max_files' => int, // optional
+ *             'max_file_size_mb' => int, // optional; size_rotating only — the
+ *                                        // per-file byte ceiling. Total on-disk
+ *                                        // size is hard-bounded at
+ *                                        // (max_files + 1) * max_file_size_mb MB.
  *             'channels' => string[], // optional; channels this handler
  *                                     // serves. ABSENT/empty = all channels.
  *             'env' => string, // optional; name of an env var that must be
@@ -194,6 +198,17 @@ class StructuredLogger implements LoggerInterface
             case 'stream':
                 return new StreamHandler(
                     $path,
+                    $level
+                );
+
+            case 'size_rotating':
+                // Byte-capped rotation (S130): max_file_size_mb is the per-file
+                // ceiling; the on-disk footprint is hard-bounded at
+                // (max_files + 1) * max_file_size_mb MB.
+                return new SizeRotatingFileHandler(
+                    $path,
+                    self::intOption($config, 'max_files', 14),
+                    self::intOption($config, 'max_file_size_mb', 16) * 1024 * 1024,
                     $level
                 );
 

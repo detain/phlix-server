@@ -17,9 +17,6 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\Dto\LibraryRow;
 use Phlix\Media\Music\MusicLibraryService;
-use Phlix\Media\Music\MusicLibraryType;
-use Phlix\Media\Music\BookLibraryType;
-use Phlix\Media\Music\AudiobookLibraryType;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Theming\ThemeMediaRepository;
@@ -527,13 +524,17 @@ class LibraryManager
         // has no skip index, so there is nothing for the flag to switch off. It is
         // consumed by the music path above and by nothing else.
 
-        // Route photo libraries through PhotoLibraryManager for EXIF extraction
+        // Photo libraries are scanned through the shared MediaScanner (see
+        // scanPhotoLibrary()). The EXIF/PhotoLibraryManager harvest path is
+        // DORMANT here: this route does NOT perform EXIF extraction.
         if ($library->type === 'photo') {
             $result->added = $this->scanPhotoLibrary($libraryId, $library);
             return $result;
         }
 
-        // Route book libraries through BookLibraryManager for EPUB/PDF/CBZ extraction
+        // Book libraries are scanned through the shared MediaScanner (see
+        // scanBookLibrary()). The BookScanner EPUB/PDF/CBZ harvest path is
+        // DORMANT here: this route does NOT perform that extraction.
         if ($library->type === 'book') {
             $result->added = $this->scanBookLibrary($libraryId, $library);
             return $result;
@@ -762,7 +763,11 @@ class LibraryManager
     }
 
     /**
-     * Scans a photo library using PhotoLibraryManager for EXIF extraction.
+     * Scans a photo library through the shared MediaScanner.
+     *
+     * The EXIF harvest path (PhotoLibraryManager + PhotoScanner) is DORMANT:
+     * this method does not read EXIF. Wiring the photo route to those classes
+     * is a separate, unbuilt change, not what happens here.
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
@@ -786,9 +791,9 @@ class LibraryManager
                 $this->logger->warning('Photo library path does not exist', ['path' => $path]);
                 continue;
             }
-            // Photo scanning is handled by PhotoLibraryManager which uses
-            // PhotoScanner for EXIF metadata extraction.
-            // For now, fall back to basic scanning.
+            // Photo scanning here uses the basic MediaScanner only. The
+            // dedicated EXIF harvest path (PhotoLibraryManager -> PhotoScanner)
+            // is DORMANT and is not reached from this method.
             // NB: 'image' is the SCANNER's library-type label; the media_items.type
             // ENUM member is `photo` (see the type-ENUM landmine).
             $added += $this->scanner->scan(
@@ -809,7 +814,10 @@ class LibraryManager
     }
 
     /**
-     * Scans a book library using BookScanner for EPUB/PDF/CBZ extraction.
+     * Scans a book library through the shared MediaScanner.
+     *
+     * The BookScanner harvest path (EPUB content.opf / PDF metadata / CBZ
+     * ComicInfo.xml) is DORMANT: this method does not perform that extraction.
      *
      * @param string $libraryId The library's unique identifier
      * @param LibraryRow $library The library data
@@ -826,8 +834,9 @@ class LibraryManager
         // passed explicitly or the scanner's default true wins).
         $autoCollectionsEnabled = $library->autoCollectionsEnabled();
 
-        // Book scanning is handled by BookScanner for EPUB content.opf,
-        // PDF metadata, and CBZ ComicInfo.xml extraction.
+        // Book scanning here uses the basic MediaScanner only. The dedicated
+        // BookScanner harvest path (EPUB content.opf, PDF metadata, CBZ
+        // ComicInfo.xml) is DORMANT and is not reached from this method.
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Book library path does not exist', ['path' => $path]);

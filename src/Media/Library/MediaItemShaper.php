@@ -154,14 +154,27 @@ final class MediaItemShaper
             $rating = null;
         }
 
-        $posterUrl = self::nonemptyString($metadata['poster_url'] ?? null)
-            ?? self::nonemptyString($metadata['cover_image_large'] ?? null)
-            ?? self::nonemptyString($metadata['cover_image_extralarge'] ?? null)
-            ?? null;
+        // S112: the whole poster chain (including the legacy cover fallbacks, since
+        // whatever survives here is EMITTED as `poster_url`) goes through the same
+        // scheme allowlist S101 put on the backdrop keys — `metadata_json` is
+        // provider-, `.nfo`- or plugin-supplied, and this value rides on up to
+        // PageLimit::MAX list rows. Guarding here, BEFORE the derived ladder below,
+        // means `PosterSrcset::forPosterUrl()` can only ever see a validated URL, so
+        // no rejected payload is width-swapped into `poster_srcset`. A rejected
+        // `poster_url` falls through to the next candidate exactly as an absent one
+        // does; every legitimate value is byte-identical to before (the helper trims
+        // the same padding `nonemptyString()` always did).
+        $posterUrl = self::safeImageUrl($metadata['poster_url'] ?? null)
+            ?? self::safeImageUrl($metadata['cover_image_large'] ?? null)
+            ?? self::safeImageUrl($metadata['cover_image_extralarge'] ?? null);
 
         // Use stored poster_srcset if available (from ArtworkStorage cache, SV-3.4),
         // otherwise generate from poster_url (TMDB srcset or null for non-TMDB posters).
-        $posterSrcset = $metadata['poster_srcset'] ?? null;
+        // S112: the STORED value is validated candidate-by-candidate exactly like
+        // `backdrop_srcset` (below) — URL half against the allowlist, descriptor half
+        // against SRCSET_DESCRIPTOR — and a rejected candidate nulls the whole value,
+        // which then falls back to the derived ladder.
+        $posterSrcset = self::safeImageSrcset($metadata['poster_srcset'] ?? null);
         if ($posterSrcset === null) {
             $posterSrcset = PosterSrcset::forPosterUrl(
                 is_string($posterUrl) ? $posterUrl : null,
@@ -367,7 +380,10 @@ final class MediaItemShaper
         // button. Captured at scan time from TMDB `videos` (movie via the canonical
         // pipeline, series via SeriesMetadataResolver). Absent/empty → null (never a
         // broken URL); trailer_key/trailer_site are surfaced when present.
-        $merged['trailer_url'] = self::nonemptyString($metadata['trailer_url'] ?? null);
+        // S112: `http(s)` trailer URLs pass the allowlist byte-identically; a
+        // `javascript:`/`data:` payload now becomes null instead of reaching the
+        // client's "Play Trailer" handler verbatim.
+        $merged['trailer_url'] = self::safeImageUrl($metadata['trailer_url'] ?? null);
         $merged['trailer_key'] = self::nonemptyString($metadata['trailer_key'] ?? null);
         $merged['trailer_site'] = self::nonemptyString($metadata['trailer_site'] ?? null);
 
@@ -378,8 +394,14 @@ final class MediaItemShaper
         // served as a signed `/api/v1/artwork/{id}?size=logo` URL stored at scan
         // time, so re-mint the signature on the way out (same expiry fix as
         // poster_url); external/SVG logos pass through untouched.
+        // S112: the scheme allowlist runs BEFORE the re-mint and preserves it —
+        // `safeImageUrl()` trims the same padding `nonemptyString()` did, so a padded
+        // signed `/api/v1/artwork/{id}?size=…` URL still reaches
+        // `SignedUrl::refreshArtworkUrl()`'s prefix guard and gets a fresh token
+        // instead of shipping an expired signature (the 2026-07-19 incident class);
+        // a `javascript:` payload now becomes null before it can be re-emitted.
         $merged['logo_url'] = SignedUrl::refreshArtworkUrl(
-            self::nonemptyString($metadata['logo_url'] ?? null)
+            self::safeImageUrl($metadata['logo_url'] ?? null)
         );
 
         // Curated external provider-id map ({tmdb, imdb, tvdb, anidb, …}) so the
@@ -862,9 +884,10 @@ final class MediaItemShaper
             }
             $out[] = [
                 'name' => $name,
-                'logo_url' => is_string($entry['logo_url'] ?? null) && $entry['logo_url'] !== ''
-                    ? $entry['logo_url']
-                    : null,
+                // S112: same allowlist as every other image-URL surface. The old
+                // `is_string && !== ''` gate emitted `javascript:`/breakout payloads
+                // verbatim; legitimate TMDB logo URLs pass byte-identically.
+                'logo_url' => self::safeImageUrl($entry['logo_url'] ?? null),
                 'origin_country' => is_string($entry['origin_country'] ?? null) && $entry['origin_country'] !== ''
                     ? $entry['origin_country']
                     : null,

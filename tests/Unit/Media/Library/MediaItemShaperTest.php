@@ -1932,28 +1932,53 @@ final class MediaItemShaperTest extends TestCase
 
     /**
      * Full chain: poster_url > cover_image_large > cover_image_extralarge > null.
+     *
+     * S112: the fixtures carry a scheme because the whole chain now runs through the
+     * same allowlist S101 put on the backdrop keys — a bare relative name like
+     * `p.jpg` is on the REJECT side of that contract ('a bare host is not a usable
+     * image URL', unsafeBackdropUrlProvider), and the rejection coverage for it
+     * lives in the per-key S112 matrix below. Precedence itself is unchanged:
+     * a rejected/poisoned candidate falls through to the next one exactly like a
+     * blank one does, and only an all-rejected chain yields null.
      */
     public function testShapePosterUrlFullFallbackChain(): void
     {
         // poster_url wins
         $a = MediaItemShaper::shape([
             'id' => 'm', 'name' => 'T', 'type' => 'movie',
-            'metadata' => ['poster_url' => 'p.jpg', 'cover_image_large' => 'l.jpg', 'cover_image_extralarge' => 'e.jpg'],
+            'metadata' => ['poster_url' => 'https://p.test/p.jpg', 'cover_image_large' => 'https://p.test/l.jpg', 'cover_image_extralarge' => 'https://p.test/e.jpg'],
         ]);
-        $this->assertSame('p.jpg', $a['poster_url']);
+        $this->assertSame('https://p.test/p.jpg', $a['poster_url']);
 
         // cover_image_large wins when poster_url is blank
         $b = MediaItemShaper::shape([
             'id' => 'm', 'name' => 'T', 'type' => 'movie',
-            'metadata' => ['poster_url' => '', 'cover_image_large' => 'l.jpg', 'cover_image_extralarge' => 'e.jpg'],
+            'metadata' => ['poster_url' => '', 'cover_image_large' => 'https://p.test/l.jpg', 'cover_image_extralarge' => 'https://p.test/e.jpg'],
         ]);
-        $this->assertSame('l.jpg', $b['poster_url']);
+        $this->assertSame('https://p.test/l.jpg', $b['poster_url']);
 
         // cover_image_extralarge wins when both above are blank
         $c = MediaItemShaper::shape([
             'id' => 'm', 'name' => 'T', 'type' => 'movie',
-            'metadata' => ['poster_url' => '', 'cover_image_large' => '', 'cover_image_extralarge' => 'e.jpg'],
+            'metadata' => ['poster_url' => '', 'cover_image_large' => '', 'cover_image_extralarge' => 'https://p.test/e.jpg'],
         ]);
-        $this->assertSame('e.jpg', $c['poster_url']);
+        $this->assertSame('https://p.test/e.jpg', $c['poster_url']);
+
+        // S112: a rejected poster_url falls through to the cover candidates
+        // instead of being emitted verbatim.
+        $d = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'T', 'type' => 'movie',
+            'metadata' => ['poster_url' => 'javascript:alert(1)', 'cover_image_large' => 'https://p.test/l.jpg'],
+        ]);
+        $this->assertSame('https://p.test/l.jpg', $d['poster_url']);
+        $this->assertNull($d['poster_srcset'], 'no ladder is derived from the rejected value');
+
+        // S112: an all-rejected chain yields null for both keys.
+        $e = MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'T', 'type' => 'movie',
+            'metadata' => ['poster_url' => 'javascript:alert(1)', 'cover_image_large' => 'data:text/html,<script>', 'cover_image_extralarge' => '//host/e.jpg'],
+        ]);
+        $this->assertNull($e['poster_url']);
+        $this->assertNull($e['poster_srcset']);
     }
 }

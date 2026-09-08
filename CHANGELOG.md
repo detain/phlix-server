@@ -56,6 +56,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**
+  Three comments asserted that photo and book libraries are scanned for EXIF / EPUB / PDF / CBZ content via
+  `PhotoLibraryManager` / `PhotoScanner` / `BookScanner`. They are not: `scanPhotoLibrary()` and
+  `scanBookLibrary()` route both types through the shared `MediaScanner`
+  (`$this->scanner->scan(…, 'image'|'book', …)`), and neither the photo-EXIF nor the book-harvest path is
+  reachable from here — the manager/scanner classes are not even imported. The comments now state the harvest
+  path is DORMANT rather than pretending it is live (wiring the photo route to `PhotoLibraryManager` is a
+  separate behaviour change with its own scan-path blast radius, explicitly NOT this step). The three
+  genuinely-unused `use` lines (`MusicLibraryType`, `BookLibraryType`, `AudiobookLibraryType` — the plan's
+  "two" undercounts by one, and nothing in the estate's toolchain flags an unused import) are removed; the
+  kept imports were re-derived by a tokenized (`php -w`, comments stripped) source census rather than a
+  `use`-grep alone. Separately, `docker/Dockerfile.base`'s `ext-exif` comment claimed *"every photo/PDF scan
+  in the published image would have fatalled"*; corrected to the measured truth — those two `@exif_read_data`
+  call sites are dormant as shipped so none fatalled, while `ext-exif` stays a declared hard platform
+  requirement that the missing extension still failed at `composer check-platform-reqs`. No behaviour change:
+  the `src/` diff is comments plus three imports only.
+
 - **Migration 103 collapses the music tables' duplicate UNIQUE indexes to one named constraint each (S155).** `070_fix_music_fk_types.sql` declares its fixed columns with a column-level inline `UNIQUE` inside `MODIFY COLUMN` (070:28,35,42); MySQL auto-names such an index, so a replay never collides, never raises 1061, and `MigrationRunner`'s idempotent squelch never fires — every re-application minted ONE MORE unique index over the same `media_item_id` column (production carried 24 per table; even a first chain pass lands on two: 065's own inline `UNIQUE` + 070's re-mint). 070 is untouched — its checksum is in every install's ledger — and 103 instead ensures the named `uq_music_{artists,albums,tracks}_media_item`, drops every other unique over exactly that column in one multi-drop ALTER (FK-safe: the survivor backs `fk_*_media_item` before the final state is validated — measured on MySQL 8.0.46; the constraints themselves are never dropped, since 1553/1826 are not in the squelch set), and follows the S161 shape standard: a same-named NON-UNIQUE imposter is replaced, never skipped, and a duplicate-dirty table refuses loudly with the remedy in the error text, altering nothing, so 103 also self-heals on empty-ledger transitions (070 re-mints before 103 collapses in the same pass). Proven by `MusicMediaItemUniqueIndexGuardTest` (9 real-MySQL tests: collapse, silent replay, re-mint self-healing, post-collapse 1452 FK + 1062 unique INSERT probes, imposter replacement, dirty refusal, column-set scoping) and by twice-replayed from-scratch chain runs. No routes touched; `ROUTE_MANIFEST` byte-identical.
 
 - **False historical claims in the `MusicLibraryType::getScanner()` narrowing comment (S132, W42 rescope; comments only).**

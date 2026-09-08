@@ -52,6 +52,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   carry), and `ApplicationTest` — the suite's other MySQL-dependent minter — gets the identical
   block. Product untouched; the deeper lazy-mkdir-in-ctor fix stays the documented follow-up.
 
+- **Poster, trailer and logo keys pass the S101 artwork URL allowlist too (S112).** In
+  `MediaItemShaper`, `poster_url` — the whole fallback chain including the
+  `cover_image_large`/`cover_image_extralarge` legs — the stored `poster_srcset`, `trailer_url`,
+  `logo_url` and the nested `production_companies[].logo_url` now all run through the same scheme
+  allowlist (`safeImageUrl()`/`safeImageSrcset()`) S101 introduced for the backdrop keys;
+  legitimate values are byte-identical on both the list and detail shapes (proven by a
+  value-identity harness plus per-key matrices). The `logo_url` guard runs before
+  `SignedUrl::refreshArtworkUrl()`, so signed internal artwork URLs still re-mint (closing the
+  untrimmed-value skip that shipped expired signatures), and a rejected poster candidate falls
+  through to the next fallback instead of being echoed.
+
 ### Added
 
 - **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**

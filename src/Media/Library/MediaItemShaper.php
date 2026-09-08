@@ -20,7 +20,9 @@ use Phlix\Media\Metadata\PosterSrcset;
 /**
  * Shapes a raw hydrated media-item DB row into the public `media-item.schema.json`
  * response format (poster URLs, genres, overview, year, the season/episode
- * hierarchy fields, …).
+ * hierarchy fields, …). The raw `metadata` block that {@see shapeDetail()} merges
+ * into the detail response is unvalidated provider passthrough — the shaped
+ * top-level keys are the validated contract; clients must read those.
  *
  * Extracted so EVERY endpoint that returns a media item produces the SAME shape.
  * The list endpoint (`GET /api/v1/media`) already enriched its rows, but the

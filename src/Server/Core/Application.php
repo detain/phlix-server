@@ -1250,6 +1250,8 @@ class Application
      *     influenced by the CWD.
      *
      * @return string Absolute config-dir path with any trailing slash trimmed.
+     *                A value that is only slashes throws — the resolver never
+     *                returns an empty string.
      *
      * @since S211
      */
@@ -1263,7 +1265,14 @@ class Application
                 );
             }
 
-            return rtrim($seam, '/');
+            $trimmed = rtrim($seam, '/');
+            if ($trimmed === '') {
+                throw new \InvalidArgumentException(
+                    "Config '_config_dir' (test seam) resolves to nothing after trimming slashes; got '{$seam}'."
+                );
+            }
+
+            return $trimmed;
         }
 
         $hub = is_array($this->config['hub'] ?? null) ? $this->config['hub'] : [];
@@ -1275,7 +1284,14 @@ class Application
                 );
             }
 
-            return rtrim($hubDir, '/');
+            $trimmed = rtrim($hubDir, '/');
+            if ($trimmed === '') {
+                throw new \InvalidArgumentException(
+                    "Config 'hub.config_dir' must name a directory, not the filesystem root; got '{$hubDir}'."
+                );
+            }
+
+            return $trimmed;
         }
 
         return dirname(__DIR__, 3) . '/config';

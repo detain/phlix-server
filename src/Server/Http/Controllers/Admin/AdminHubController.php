@@ -47,8 +47,8 @@ final class AdminHubController
      * @param string                  $configDir ABSOLUTE config directory for JSON
      *                                           state files; `''` selects the repo
      *                                           `config/` derived from this file's
-     *                                           location (S211). A relative value
-     *                                           throws.
+     *                                           location (S211). A relative or
+     *                                           all-slashes value throws.
      */
     public function __construct(?ContainerInterface $container = null, string $configDir = '')
     {
@@ -58,12 +58,17 @@ final class AdminHubController
         // ./config/ wherever the process started and the relay fork would never
         // see the toggle. Empty → documented absolute default (repo config/,
         // derived from this file's location — same trick as HealthController);
-        // a non-empty RELATIVE value is refused loudly, never resolved CWD-wise.
+        // a non-empty RELATIVE value is refused loudly, never resolved CWD-wise,
+        // and so is the filesystem root itself — it is never this dir.
         if ($configDir === '') {
             $configDir = dirname(__DIR__, 5) . '/config';
         } elseif (!str_starts_with($configDir, '/')) {
             throw new \InvalidArgumentException(
                 "AdminHubController \$configDir must be an absolute path; got relative '{$configDir}'."
+            );
+        } elseif (rtrim($configDir, '/') === '') {
+            throw new \InvalidArgumentException(
+                "AdminHubController \$configDir must name a directory, not the filesystem root; got '{$configDir}'."
             );
         }
 

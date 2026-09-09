@@ -37,14 +37,16 @@ use RecursiveIteratorIterator;
  * Every assertion here checks an OBSERVABLE consequence under a foreign CWD
  * (chdir to a fresh temp dir): resolution stays absolute and lands inside the
  * install root; writer (AdminHubController path) and reader (HubServicesProvider
- * fork path) agree on the SAME file; relative inputs fail loudly instead of
- * resolving CWD-wise; and the last test is a comment-stripped source guard
- * pinning that no relative `?? 'config'` fallback shape survives anywhere in
- * src/ (S345 lesson: match against `php_strip_whitespace()` so docblocks
- * cannot recreate the forbidden string), with a positive control proving the
- * pattern still bites.
+ * fork path) agree on the SAME file; relative and filesystem-root inputs fail
+ * loudly instead of resolving CWD-wise; and the last test is a comment-stripped
+ * source guard pinning that the relative-`'config'` fallback shapes this step
+ * removed survive nowhere in src/ or start.php — `??` null-coalesce and `?:`
+ * elvis resurrections globally, the ternary `? … : 'config'` on the owned
+ * control surfaces (S345 lesson: match against `php_strip_whitespace()` so
+ * docblocks cannot recreate the forbidden string), with a positive control per
+ * pattern proving it still bites.
  */
-class ApplicationConfigDirResolutionTest extends TestCase
+final class ApplicationConfigDirResolutionTest extends TestCase
 {
     public const string SURVIVAL_TOKEN = 'S211CFGDIRABSX7K7';
 
@@ -79,9 +81,12 @@ class ApplicationConfigDirResolutionTest extends TestCase
         $repoRoot = dirname(__DIR__, 4);
         /** @var array<string, mixed> $config */
         $config = require $repoRoot . '/config/server.php';
-        // Production never sets the test seam; assert that fact, then honour it.
-        self::assertArrayNotHasKey('_config_dir', $config, 'start.php must never set _config_dir.');
-        unset($config['_config_dir']);
+        // Production never sets the test seam; assert that fact.
+        self::assertArrayNotHasKey(
+            '_config_dir',
+            $config,
+            'config/server.php must not set the _config_dir test seam (start.php adds no such key either).',
+        );
 
         self::assertIsArray($config['hub']);
         $hubDir = is_array($config['hub']) && is_string($config['hub']['config_dir'] ?? null)
@@ -227,6 +232,36 @@ class ApplicationConfigDirResolutionTest extends TestCase
     }
 
     /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function filesystemRootDirProvider(): array
+    {
+        return [
+            'test seam' => ['seam', '/'],
+            'hub config' => ['hub', '/'],
+        ];
+    }
+
+    /**
+     * The filesystem root is not a config dir. `'/'` passes the absolute-start
+     * check yet trims to nothing, so concatenations would target
+     * `/relay-control.json` at the root — both configured branches refuse it
+     * loudly; the resolver never returns an empty string.
+     */
+    #[DataProvider('filesystemRootDirProvider')]
+    public function test_resolver_refuses_filesystem_root_seams(string $branch, string $value): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/absolute|nothing after trimming|root/');
+
+        $config = $branch === 'seam'
+            ? ['_config_dir' => $value]
+            : ['hub' => ['config_dir' => $value]];
+
+        $this->makeApp($config)->resolveConfigDir();
+    }
+
+    /**
      * @return array<string, array{0: string}>
      */
     public static function relativeOrEmptyDirProvider(): array
@@ -252,6 +287,19 @@ class ApplicationConfigDirResolutionTest extends TestCase
     }
 
     /**
+     * `'/'` starts with a slash yet names no directory below it — the store
+     * refuses it independently of the resolver, so every construction path
+     * (fork boot, provider binding, tests) shares one root-free contract.
+     */
+    public function test_relay_state_store_refuses_filesystem_root(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/filesystem root/');
+
+        new RelayStateStore('/');
+    }
+
+    /**
      * The sole kill-switch writer defaults to an absolute repo `config/` derived
      * from its own file location, and refuses a relative injection outright.
      */
@@ -272,12 +320,32 @@ class ApplicationConfigDirResolutionTest extends TestCase
     }
 
     /**
-     * SECONDARY source guard: the relative fallback shapes this step removed may
-     * not reappear anywhere under src/ or in start.php. Matched against
-     * COMMENT-STRIPPED code (php_strip_whitespace) so explanatory docblocks that
-     * QUOTE the old bug (including resolveConfigDir()'s own) cannot trip it, and
-     * closed with a positive control proving the pattern still matches the bug
-     * shape it forbids (S345 rule 3).
+     * `'/'` is absolute yet names no directory below the root — refused like
+     * a relative value, never resolved.
+     */
+    public function test_admin_hub_controller_refuses_filesystem_root(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/filesystem root/');
+
+        new AdminHubController(null, '/');
+    }
+
+    /**
+     * SECONDARY source guard: the relative-`'config'` fallback shapes this step
+     * removed may not reappear anywhere under src/ or in start.php. Matched
+     * against COMMENT-STRIPPED code (php_strip_whitespace) so explanatory
+     * docblocks that QUOTE the old bug (including resolveConfigDir()'s own)
+     * cannot trip it. Coverage is by SHAPE, not one spelling: `?? 'config'` /
+     * `?? "config"` null-coalesce and `?: 'config'` / `?: "config"` elvis
+     * resurrections are forbidden in EVERY scanned file; the ternary
+     * `? … : 'config'` resurrection is forbidden on the OWNED control surfaces
+     * (Application.php, AdminHubController.php, every src/Hub/ file) because
+     * `: 'config'` also occurs legitimately in the deliberately out-of-scope
+     * PHLIX_CONFIG_DIR mechanism (BackupController, BackupManager). The scan
+     * covers src/ + start.php only, so this file's own control literals below
+     * are never policed. Closed with one positive control per pattern proving
+     * it still matches the bug shape it forbids (S345 rule 3).
      */
     public function test_no_relative_config_dir_fallback_survives_in_source(): void
     {
@@ -292,31 +360,86 @@ class ApplicationConfigDirResolutionTest extends TestCase
             }
         }
 
-        $seamFiles = [];
         $appPath = $repoRoot . '/src/Server/Core/Application.php';
+        $controllerPath = $repoRoot . '/src/Server/Http/Controllers/Admin/AdminHubController.php';
+        $storePath = $repoRoot . '/src/Hub/RelayStateStore.php';
+        $hubPaths = array_values(array_filter(
+            $paths,
+            static fn (string $path): bool => str_contains($path, '/src/Hub/'),
+        ));
+        // The owned list must never be silently empty or silently wrong: the
+        // exact 3 source surfaces this step changed still exist at their
+        // pinned paths, and the Hub glob found the directory's files
+        // (RelayStateStore among them).
+        foreach ([$appPath, $controllerPath, $storePath] as $surface) {
+            self::assertFileExists($surface, "An owned control surface is missing: {$surface}.");
+        }
+
+        self::assertContains($storePath, $hubPaths, 'The src/Hub/ glob lost RelayStateStore.php.');
+        self::assertGreaterThan(
+            5,
+            count($hubPaths),
+            'The src/Hub/ glob found almost nothing — the owned-surface shape check would be vacuous.',
+        );
+        $ownedPaths = array_values(array_unique([$appPath, $controllerPath, ...$hubPaths]));
+
+        // Forbidden in every scanned file, comment-stripped:
+        $globalPatterns = [
+            "/\\?\\?\\s*'config'/" => "null-coalesce `?? 'config'`",
+            '/\\?\\?\\s*"config"/' => 'null-coalesce `?? "config"`',
+            "/\\?:\\s*'config'/" => "elvis `?: 'config'`",
+            '/\\?:\\s*"config"/' => 'elvis `?: "config"`',
+        ];
+        // Forbidden on the OWNED surfaces only (docblock explains the scoping):
+        $ownedPatterns = [
+            "/:\\s*'config'/" => "ternary `? … : 'config'`",
+            '/:\\s*"config"/' => 'ternary `? … : "config"`',
+        ];
+
+        $seamFiles = [];
         foreach ($paths as $path) {
             $code = (string) php_strip_whitespace($path);
-            self::assertSame(
-                0,
-                preg_match("/_config_dir.{0,120}\?\?\s*'config'/s", $code),
-                "Relative `_config_dir ?? 'config'` fallback resurrected in {$path}.",
-            );
+            foreach ($globalPatterns as $pattern => $shape) {
+                self::assertSame(
+                    0,
+                    preg_match($pattern, $code),
+                    "Relative-config fallback ({$shape}) resurrected in {$path}.",
+                );
+            }
+
+            if (in_array($path, $ownedPaths, true)) {
+                foreach ($ownedPatterns as $pattern => $shape) {
+                    self::assertSame(
+                        0,
+                        preg_match($pattern, $code),
+                        "Relative-config resurrection ({$shape}) on an owned surface: {$path}.",
+                    );
+                }
+            }
+
             if (str_contains($code, '_config_dir')) {
                 $seamFiles[] = $path;
-                if ($path === $appPath) {
-                    self::assertSame(0, preg_match("/\?\?\s*'config'/", $code));
-                    self::assertSame(0, preg_match("/: 'config'/", $code));
-                }
             }
         }
 
         // The test seam may be read in exactly ONE first-party source file.
         self::assertSame([$appPath], $seamFiles);
 
-        // Positive control: the guard's pattern bites the very shape it forbids.
-        self::assertSame(
-            1,
-            preg_match("/_config_dir.{0,120}\?\?\s*'config'/s", "<?php\n\$d = \$c['_config_dir'] ?? 'config';\n"),
-        );
+        // Positive controls: every pattern above still bites the bug shape it forbids.
+        $controls = [
+            "/\\?\\?\\s*'config'/" => "<?php \$d = \$c['_config_dir'] ?? 'config';",
+            '/\\?\\?\\s*"config"/' => '<?php $d = $c["hub"]["config_dir"] ?? "config";',
+            "/\\?:\\s*'config'/" => '<?php $d = $c["hub"]["config_dir"] ?: \'config\';',
+            '/\\?:\\s*"config"/' => '<?php $d = $c["hub"]["config_dir"] ?: "config";',
+            "/:\\s*'config'/" => '<?php $d = is_string($raw) ? $raw : \'config\';',
+            '/:\\s*"config"/' => '<?php $d = is_string($raw) ? $raw : "config";',
+        ];
+        foreach ($controls as $pattern => $snippet) {
+            self::assertSame(
+                1,
+                preg_match($pattern, $snippet),
+                "Guard pattern {$pattern} no longer matches its own positive-control snippet.",
+            );
+        }
     }
 }

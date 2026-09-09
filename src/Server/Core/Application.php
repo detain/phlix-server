@@ -271,12 +271,12 @@ class Application
             ]);
         });
 
-        // P3B-S7: Network health monitoring endpoints
-        // Use the same config_dir source as HubServicesProvider so the fallback
-        // HubClient in HealthController::getHubClient() finds enrollment files
-        // in the same directory the container-wired HubClient uses.
-        $hubConfig = is_array($this->config['hub'] ?? null) ? $this->config['hub'] : [];
-        $configDir = is_string($hubConfig['config_dir'] ?? null) ? $hubConfig['config_dir'] : 'config';
+        // P3B-S7: Network health monitoring endpoints.
+        // S211: resolves through {@see self::resolveConfigDir()} — in production
+        // the same absolute `hub.config_dir` `HubServicesProvider` binds, so the
+        // fallback `HubClient` in `HealthController::getHubClient()` still finds
+        // enrollment files where the container-wired `HubClient` looks.
+        $configDir = $this->resolveConfigDir();
         $healthController = new \Phlix\Server\Http\Controllers\Admin\HealthController(
             $this->container,
             $configDir,
@@ -365,8 +365,7 @@ class Application
             $serverId = null;
             $enrolledAt = null;
 
-            $configDirRaw = $this->config['_config_dir'] ?? 'config';
-            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $configDir = $this->resolveConfigDir();
             $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
 
             if (file_exists($enrollmentPath)) {
@@ -1184,8 +1183,7 @@ class Application
             /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
             $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
 
-            $configDirRaw = $this->config['_config_dir'] ?? 'config';
-            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $configDir = $this->resolveConfigDir();
             $controller = new \Phlix\Server\Http\Controllers\Admin\AdminHubController(
                 $this->container,
                 $configDir,
@@ -1224,6 +1222,63 @@ class Application
         } catch (\Throwable) {
             // Remote access not configured — silent ignore
         }
+    }
+
+    /**
+     * Resolve the config directory shared by the hub/relay control surfaces.
+     *
+     * S211: production never sets `_config_dir`, so every former read site fell
+     * through `?? 'config'` to a RELATIVE path resolved against the process CWD.
+     * Started outside `WorkingDirectory=/var/www/phlix`, the operator relay
+     * kill-switch wrote `relay-control.json` into a stray `./config/` that the
+     * relay fork never reads — a silent success response for a dead lever
+     * (hazard: {@see \Phlix\Hub\RelayStateStore::writeState()}'s `@mkdir`).
+     * Resolution is now single-sourced and absolute by construction:
+     *
+     *  1. `$config['_config_dir']` — TEST SEAM ONLY (never set under `src/` or
+     *     `start.php`; the three test call sites pass absolute paths). A
+     *     non-empty string; a relative value is a test bug and throws instead
+     *     of silently resolving against the CWD.
+     *  2. `$config['hub']['config_dir']` — the production source: the very value
+     *     {@see \Phlix\Server\Http\Controllers\Admin\HealthController} receives
+     *     and `HubServicesProvider` binds `RelayStateStore` on. `config/hub.php`
+     *     sets it to `__DIR__`, so it is absolute; a relative value here is a
+     *     misconfiguration and throws (loud-fail beats CWD dependence).
+     *  3. Documented ABSOLUTE default derived from this file's location — the
+     *     repo's own `config/` — mirroring HealthController's
+     *     `dirname(__DIR__, 5) . '/config'` ctor default. No branch can be
+     *     influenced by the CWD.
+     *
+     * @return string Absolute config-dir path with any trailing slash trimmed.
+     *
+     * @since S211
+     */
+    public function resolveConfigDir(): string
+    {
+        $seam = $this->config['_config_dir'] ?? null;
+        if (is_string($seam) && $seam !== '') {
+            if (!str_starts_with($seam, '/')) {
+                throw new \InvalidArgumentException(
+                    "Config '_config_dir' (test seam) must be an absolute path; got relative '{$seam}'."
+                );
+            }
+
+            return rtrim($seam, '/');
+        }
+
+        $hub = is_array($this->config['hub'] ?? null) ? $this->config['hub'] : [];
+        $hubDir = $hub['config_dir'] ?? null;
+        if (is_string($hubDir) && $hubDir !== '') {
+            if (!str_starts_with($hubDir, '/')) {
+                throw new \InvalidArgumentException(
+                    "Config 'hub.config_dir' must be an absolute path; got relative '{$hubDir}'."
+                );
+            }
+
+            return rtrim($hubDir, '/');
+        }
+
+        return dirname(__DIR__, 3) . '/config';
     }
 
     /**
@@ -2929,9 +2984,9 @@ class Application
     /**
      * Arm the core update-check worker (S74 / updates.md #48).
      *
-     * Reads `config/updates.php` for the poll interval — the same
-     * `_config_dir`-relative `include` {@see self::startBackupTimerIfEnabled()}
-     * uses — and hands it to
+     * Reads `config/updates.php` for the poll interval — the same absolute
+     * `include` resolved via {@see self::resolveConfigDir()} that
+     * {@see self::startBackupTimerIfEnabled()} uses — and hands it to
      * {@see \Phlix\Server\Updates\CoreUpdateCheckWorker::start()}, which arms
      * BOTH the boot catch-up and the steady-state poll. See that method for why
      * a bare `Timer::add(86400, …)` is not sufficient on a box that is deployed
@@ -2956,8 +3011,7 @@ class Application
         $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
 
         try {
-            $configDirRaw = $this->config['_config_dir'] ?? 'config';
-            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $configDir = $this->resolveConfigDir();
             $updatesConfigFile = $configDir . '/updates.php';
 
             $pollSeconds = \Phlix\Server\Updates\CoreUpdateCheckWorker::DEFAULT_POLL_SECONDS;
@@ -3000,9 +3054,8 @@ class Application
 
     private function startBackupTimerIfEnabled(): void
     {
-        $configDirRaw = $this->config['_config_dir'] ?? 'config';
-        $backupConfigPath = is_string($configDirRaw) ? $configDirRaw : 'config';
-        $backupConfigFile = $backupConfigPath . '/backup.php';
+        $configDir = $this->resolveConfigDir();
+        $backupConfigFile = $configDir . '/backup.php';
 
         if (!file_exists($backupConfigFile)) {
             return;
@@ -4721,9 +4774,7 @@ class Application
 
         // Load ARR/Radarr configuration
         $arrConfigRaw = [];
-        $configDirRaw = $this->config['_config_dir'] ?? 'config';
-        $arrConfigFile = is_string($configDirRaw) ? $configDirRaw : 'config';
-        $arrConfigFile .= '/arr.php';
+        $arrConfigFile = $this->resolveConfigDir() . '/arr.php';
         if (file_exists($arrConfigFile)) {
             /** @var mixed $arrConfigRaw */
             $arrConfigRaw = include $arrConfigFile;

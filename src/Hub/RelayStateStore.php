@@ -81,11 +81,24 @@ final class RelayStateStore
     private string $configDir;
 
     /**
-     * @param string $configDir Directory for the state files (already writable;
-     *                          the same dir as `hub-enrollment.json`).
+     * @param string $configDir Absolute directory for the state files (already
+     *                          writable; the same dir as `hub-enrollment.json`).
+     *                          A relative or empty value throws (S211).
      */
     public function __construct(string $configDir)
     {
+        // S211: every consumer of this store (HTTP worker writer, relay/heartbeat
+        // fork readers) must point at the SAME directory. A relative path would
+        // resolve against each process's CWD — and writeState()'s `@mkdir` would
+        // then silently CREATE one instead of sharing it, so a load-bearing
+        // write (the operator kill-switch) could "succeed" into a file nobody
+        // reads. Absolute-only turns that failure class into a boot error.
+        if ($configDir === '' || !str_starts_with($configDir, '/')) {
+            throw new \InvalidArgumentException(
+                "RelayStateStore \$configDir must be a non-empty absolute path; got '{$configDir}'."
+            );
+        }
+
         $this->configDir = $configDir;
     }
 

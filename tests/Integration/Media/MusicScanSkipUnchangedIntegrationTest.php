@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media;
 
 use Phlix\Common\Uuid;
-use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicScanSkipIndex;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;

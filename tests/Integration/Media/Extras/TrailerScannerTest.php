@@ -6,7 +6,6 @@ namespace Phlix\Tests\Integration\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Extras\ExtrasRepository;
-use Phlix\Media\Extras\Trailer;
 use Phlix\Media\Extras\TrailerFinder;
 use Phlix\Media\Extras\TrailerResolver;
 use Phlix\Media\Library\ItemRepository;

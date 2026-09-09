@@ -5,9 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Codeception\Helper;
 
 use Phlix\Session\SyncPlay\SyncPlayManager;
-use Phlix\Session\SyncPlay\Messages;
-use Phlix\Session\SyncPlay\GroupState;
-use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Codeception\Module;
 use RuntimeException;

@@ -34,7 +34,7 @@ use ReflectionMethod;
  *
  * MySQL stores an ENUM by index and every widening re-declares the full set, so
  * the LAST migration to declare the type ENUM is the complete current set.
-  * Migration 104 is that file today (it re-declares the ENUM unchanged from 101 to correct the rescan comment); {@see self::test_the_parsed_migration_is_the_latest_type_enum_declarer()}
+ * Migration 104 is that file today (it re-declares the ENUM unchanged from 101 to correct the rescan comment); {@see self::test_the_parsed_migration_is_the_latest_type_enum_declarer()}
  * fails loudly the day a later migration widens the ENUM again, forcing this
  * test to parse the new latest declarer instead of silently comparing
  * `ALLOWED_TYPES` against a stale 9-member list.

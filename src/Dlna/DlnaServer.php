@@ -13,7 +13,6 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
-use Workerman\MySQL\Connection;
 
 /**
  * Main DLNA Server class implementing UPnP/DLNA MediaServer.

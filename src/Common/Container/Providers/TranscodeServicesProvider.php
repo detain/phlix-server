@@ -16,7 +16,6 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LogChannels;
-use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;

@@ -13,7 +13,6 @@ namespace Phlix\Admin;
 
 use Phlix\Admin\Dto\BackupConfig;
 use Phlix\Admin\Dto\DbConnectionConfig;
-use Phlix\Admin\Dto\S3Config;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;

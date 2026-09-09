@@ -228,8 +228,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * ExternalCommandRunnerTest, EmbeddedMetadataWriterTest,
         * EmbeddedMetadataWriterRealBinaryTest under tests/); none names
         * Request — same pattern, only this denominator moves.
+        * Re-pinned 1832→1833 by S187: the unused-import reflow adds exactly one
+        * first-party file (tests/Unit/Support/UnusedImportGuardTest.php, the
+        * permanent detector); the reflow itself deletes zero files — 150 whole
+        * `use` lines out of 100 existing ones. The guard names no Request.
         */
-    private const EXPECTED_PHP_FILES = 1832;
+    private const EXPECTED_PHP_FILES = 1833;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

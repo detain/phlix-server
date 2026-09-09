@@ -22,3 +22,4 @@ subbefore	1616	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, A
 subbefore	1717	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subbefore	1818	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
 subbefore	1919	count=0	six_skipped=0	phpunit_exit=0	secs=12	summary=
+subbefore	2020	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 295, Skipped: 3.

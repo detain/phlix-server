@@ -48,6 +48,37 @@ final class PooledConnectionConcurrencyTest extends TestCase
 {
     use RequiresRealDatabase;
 
+    /**
+     * S106 leak-gate traceability token. It is the string the acquire-timeout
+     * resolver embeds in its fail-loud message and it is checked to survive into
+     * `master` after this timing-flake fix lands — see {@see poolAcquireTimeout()}.
+     */
+    private const LEAK_GATE_TOKEN = 'S106LEAKGATEX8T4';
+
+    /**
+     * Environment variable that overrides the pool's connection-acquire timeout
+     * for this run only, so CI/an operator can widen the ceiling further without a
+     * code change. Unset → {@see DEFAULT_ACQUIRE_TIMEOUT}.
+     */
+    private const LEAK_GATE_TIMEOUT_ENV = 'PHLIX_S106_POOL_ACQUIRE_TIMEOUT';
+
+    /**
+     * Generous default acquire timeout (seconds) replacing the pool's historic
+     * fixed 10 s deadline, which was the sole cause of this class's CI flake.
+     * Large enough that normal fsync/commit jitter under durable-default MySQL can
+     * never trip it; small enough that a genuine connection leak (leases never
+     * returned → `created` pinned at `maxSize`) still fails the test, just later.
+     */
+    private const DEFAULT_ACQUIRE_TIMEOUT = 120.0;
+
+    /**
+     * Upper bound (seconds) accepted from {@see LEAK_GATE_TIMEOUT_ENV}. This soak
+     * test completes in seconds, so any value beyond an hour can only be a typo;
+     * rejecting it keeps a mis-set env from turning the bounded leak-detection wait
+     * into a run the CI job timeout is the only thing standing between us and.
+     */
+    private const MAX_ACQUIRE_TIMEOUT = 3600.0;
+
     private string $host = '127.0.0.1';
     private int $port = 3306;
     private string $user = 'root';
@@ -136,8 +167,69 @@ final class PooledConnectionConcurrencyTest extends TestCase
             $this->password,
             $this->database,
             $poolSize,
-            'utf8mb4'
+            'utf8mb4',
+            null, // default raw factory → real PhlixMySQLConnection per lease
+            $this->poolAcquireTimeout(), // S106 — see {@see poolAcquireTimeout()}
         );
+    }
+
+    /**
+     * Resolve the connection-acquire timeout this run hands to every pool it builds.
+     *
+     * The pool's historic fixed 10 s deadline (its constructor default) is the sole
+     * reason this class flakes in CI: on durable-default MySQL — exactly the
+     * `mysql:8.0` service the phpunit job runs (and this box:
+     * innodb_flush_log_at_trx_commit=1, sync_binlog=1) — a writer can hold its lease
+     * across a slow fsync-bound UPDATE long enough that a waiter on an exhausted
+     * pool trips the deadline, so {@see \Phlix\Common\Database\PooledMySQLConnection::acquire()}
+     * throws "pool exhausted" even though no connection actually leaked. Two
+     * reviewers proved it is a genuine timing flake, not a code defect: the same
+     * branch/container/load gives FAIL then PASS back-to-back, and the assertion
+     * count swings (87/443/1457) purely because the run aborts at a nondeterministic
+     * point — which is itself proof the fixed deadline is the wrong instrument.
+     *
+     * So we stop encoding any one host's latency into it: default generously and let
+     * {@see LEAK_GATE_TIMEOUT_ENV} widen it further. Generosity rejects only
+     * sub-window fsync JITTER, never a real leak — a leaked lease is never returned
+     * to the idle channel, so `created` climbs to `maxSize` and every later acquirer
+     * blocks the FULL window before the pool throws (exactly the behaviour the 10 s
+     * deadline gave, just on a wider clock). The test still fails loudly on a genuine
+     * leak or deadlock; it no longer fails on a slow-but-correct box. A generous
+     * (rather than a measured-latency skip) ceiling also means the run always
+     * completes to the same fixed set of assertions — determinism is preserved.
+     */
+    private function poolAcquireTimeout(): float
+    {
+        $raw = getenv(self::LEAK_GATE_TIMEOUT_ENV);
+
+        // Early exit: unset/blank → the generous default, no parsing needed.
+        if ($raw === false || trim($raw) === '') {
+            return self::DEFAULT_ACQUIRE_TIMEOUT;
+        }
+
+        // Fail fast, fail loud. A bad override must never silently fall back, and
+        // never flow an unusable number into the pool's idle-channel pop():
+        //   - non-numeric / <= 0 → a zero or negative ceiling would make the very
+        //     first contention throw, masking a genuine leak in the OPPOSITE
+        //     direction (a false red that perverts the leak detector's meaning);
+        //   - non-finite (INF/NAN) → `is_numeric("1e400")` is true yet casts to INF,
+        //     whose float→timeout conversion under swoole is undefined;
+        //   - > MAX_ACQUIRE_TIMEOUT → an absurd value can only be a typo, and would
+        //     replace the bounded leak-detection wait with one the CI job timeout is
+        //     the only backstop for.
+        $seconds = is_numeric($raw) ? (float) $raw : NAN;
+
+        if (!is_finite($seconds) || $seconds <= 0.0 || $seconds > self::MAX_ACQUIRE_TIMEOUT) {
+            $this->fail(sprintf(
+                '%s must be a finite number of seconds in (0, %g] (got %s); refusing to fall back silently. [%s]',
+                self::LEAK_GATE_TIMEOUT_ENV,
+                self::MAX_ACQUIRE_TIMEOUT,
+                var_export($raw, true),
+                self::LEAK_GATE_TOKEN,
+            ));
+        }
+
+        return $seconds;
     }
 
     /**

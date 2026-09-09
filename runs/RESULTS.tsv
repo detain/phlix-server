@@ -20,3 +20,4 @@ subbefore	1414	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subbefore	1515	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subbefore	1616	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 289, Skipped: 3.
 subbefore	1717	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1818	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=

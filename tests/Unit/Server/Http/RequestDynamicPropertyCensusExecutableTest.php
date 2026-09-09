@@ -222,7 +222,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * first-party files (Concerns/JsonOutput + seven User*Command src classes,
         * and one *CommandTest per command); none names Request — same pattern.
         */
-     private const EXPECTED_PHP_FILES = 1823;
+    private const EXPECTED_PHP_FILES = 1823;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

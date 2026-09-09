@@ -1242,14 +1242,49 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // on plugin-disable (no leak). Mirrors SourceRegistry.
             SubtitleSourceRegistry::class => autowire(),
 
-            // S87: process-scoped registry of PLUGIN metadata writers
+            // S87: process-scoped registry of metadata writers
             // (MetadataWriterInterface). Single container-scoped instance —
-            // PluginLoader (de)registers writers on enable/disable, and the
+            // PluginLoader (de)registers PLUGIN writers on enable/disable, and the
             // MetadataWriteWorker reads the SAME instance. Note: registries are
             // per-process resident state, so start.php re-runs
             // PluginLoader::bootstrapEnabled() inside the metadata-write fork
             // before draining — an unwired fork would otherwise no-op every job.
-            \Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class => autowire(),
+            //
+            // S88 (ruling R1): the definition additionally receives the BUILT-IN
+            // sidecar writer at definition time, so every process that builds the
+            // container — the metadata-write fork AND any admin/status consumer —
+            // sees it without any plugin being enabled. The PluginLoader
+            // capability arm keeps its plugin-only semantics: a plugin shipping
+            // the SAME class registers over this entry by FQCN (the registry's
+            // replace-on-same-class), while a subclass is a distinct FQCN and
+            // therefore ADDS a second entry — both writers then run, which is
+            // the same multiplicity the registry always allowed.
+            \Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class => factory(
+                static function (ContainerInterface $c): \Phlix\Media\Metadata\Writer\MetadataWriterRegistry {
+                    $registry = new \Phlix\Media\Metadata\Writer\MetadataWriterRegistry();
+                    $writer = $c->get(\Phlix\Media\Metadata\Writer\SidecarWriter::class);
+                    if (!$writer instanceof \Phlix\Media\Metadata\Writer\SidecarWriter) {
+                        // Unreachable while the autowire definition below holds;
+                        // loud anyway — a registry silently missing its built-in
+                        // writer is exactly the no-op drain this step exists to end.
+                        throw new \LogicException(
+                            'MediaServicesProvider: SidecarWriter DI definition '
+                                . 'must resolve to a SidecarWriter instance',
+                        );
+                    }
+                    $registry->register($writer);
+
+                    return $registry;
+                },
+            ),
+
+            // S88: the built-in sidecar writer (NFO + poster/fanart next to the
+            // media file). `artworkStorage` is NAMED because PHP-DI skips
+            // defaulted optional ctor params — without the explicit binding the
+            // autowired instance would get artworkStorage=null and poster sidecars
+            // from the artwork cache would silently never be written.
+            \Phlix\Media\Metadata\Writer\SidecarWriter::class => autowire()
+                ->constructorParameter('artworkStorage', get(ArtworkStorage::class)),
 
             // F3: downloaded-subtitle storage under the configured root
             // (named because PHP-DI skips defaulted optional ctor params).

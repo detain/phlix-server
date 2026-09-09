@@ -210,11 +210,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * first-party files (five Writer src classes, config/metadata_write_jobs.php,
       * six test files incl. the RecordingWriter double); none names Request —
       * same pattern.
-      * Re-pinned 1800→1803 by S130: the size-bounded log policy adds three
-      * first-party files (SizeRotatingFileHandler src + its unit test + the
+       * Re-pinned 1800→1803 by S130: the size-bounded log policy adds three
+       * first-party files (SizeRotatingFileHandler src + its unit test + the
        * LoggerConfigPolicyTest config guard); none names Request — same pattern.
+       * Re-pinned 1803→1807 by S88: the sidecar writer arc adds four first-party
+       * files (SidecarWriter + SidecarNotWritableException src, SidecarWriterTest +
+       * SidecarWriterRegistrationTest); none names Request — same pattern.
        */
-    private const EXPECTED_PHP_FILES = 1803;
+    private const EXPECTED_PHP_FILES = 1807;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

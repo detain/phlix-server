@@ -243,13 +243,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * refusal, merge arithmetic and the accumulating upsert are observable
          * only against a live server); the write path is an edit, not a file.
          * The guard names no Request.
-         * Re-pinned 1835→1836 by S266: the Timer-probe determinism fix adds exactly
-         * one first-party file (tests/Support/Workerman/WorkermanTimerFixture.php,
+         * Re-pinned 1835→1838 by S266: the Timer-probe determinism fix adds three
+         * first-party files (tests/Support/Workerman/WorkermanTimerFixture.php,
          * the shared fixture that makes the six LiveTv/Relay Timer cases always
-         * run); the polluter save/restore edits and the gate removals touch no
-         * file counts. The guard names no Request.
+         * run; tests/Unit/Support/WorkermanStaticStateLeakGuardTest.php and its
+         * tests/Support/Workerman/StaticProbeBootstrap.php, the leak guard that
+         * keeps Worker::$workers/Timer::$event from leaking again); the polluter
+         * save/restore edits and the gate removals touch no file counts.
+         * The guard names no Request.
          */
-    private const EXPECTED_PHP_FILES = 1836;
+    private const EXPECTED_PHP_FILES = 1838;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

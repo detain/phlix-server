@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata\Writer;
 
-use DOMComment;
 use DOMDocument;
 use DOMElement;
 use Phlix\Media\Library\MediaItem;
@@ -296,8 +295,11 @@ final class SidecarWriter implements MetadataWriterInterface
     }
 
     /**
-     * runtime_ticks is the canonical duration (9 digits of ns → minutes for
-     * Kodi's <runtime>); a negative or zero tick count emits nothing.
+     * runtime_ticks is the canonical duration (600000000 ticks per minute) →
+     * Kodi's <runtime>. TRUNCATION, not rounding, mirrors the canonical
+     * API-side mapper (FieldMappers duration_ticks → runtime_minutes, which
+     * casts) so the sidecar never shows a minute different from the UI for the
+     * same row. A zero or negative tick count emits nothing.
      */
     private function runtimeMinutes(mixed $ticks): ?int
     {
@@ -305,7 +307,7 @@ final class SidecarWriter implements MetadataWriterInterface
             return null;
         }
 
-        $minutes = (int) round(((float) $ticks) / 600000000);
+        $minutes = (int) (((float) $ticks) / 600000000);
 
         return $minutes > 0 ? $minutes : null;
     }
@@ -375,7 +377,15 @@ final class SidecarWriter implements MetadataWriterInterface
     {
         $stem = pathinfo(basename($item->path), PATHINFO_FILENAME);
         if ($stem === '') {
-            $stem = $item->name;
+            // Malformed-row fallback (path column NULL/empty): the DB `name` is
+            // provider-derived and NOT path-sanitized, so it must pass the same
+            // jail doctrine as the metadata artwork refs — basename() strips any
+            // directory component, and the dot guards keep the file inside
+            // $mediaDir. The forced `.nfo` extension is the final constant.
+            $stem = basename($item->name);
+            if ($stem === '' || $stem === '.' || $stem === '..') {
+                $stem = 'sidecar';
+            }
         }
 
         return rtrim($mediaDir, '/') . '/' . $stem . '.' . $extension;
@@ -385,11 +395,16 @@ final class SidecarWriter implements MetadataWriterInterface
      * Write via a sibling temp file + rename: readers never observe a partial
      * sidecar, and a failed write leaves the previous bytes in place.
      *
+     * The temp name is unique per write (not a fixed `.phlix-tmp` suffix) so
+     * two writers ever sharing a media directory — same-directory items today,
+     * the bounded-parallel drain the worker docblock reserves for later — can
+     * never clobber each other's temp file mid-flight.
+     *
      * @throws RuntimeException On any I/O failure (temp cleaned up first).
      */
     private function writeAtomically(string $targetPath, string $contents, string $itemId): void
     {
-        $tempPath = $targetPath . '.phlix-tmp';
+        $tempPath = $targetPath . '.phlix-tmp-' . uniqid('', true);
 
         if (file_put_contents($tempPath, $contents) === false) {
             @unlink($tempPath);
@@ -475,6 +490,13 @@ final class SidecarWriter implements MetadataWriterInterface
     /**
      * Resolve a metadata artwork reference ONLY when it points at a readable
      * path inside the item's own media directory.
+     *
+     * Residual (accepted, S345 rule 4): the jail resolves with realpath() at
+     * CHECK time; a local attacker who can already rename paths inside the
+     * media directory could still swap the final component before the read —
+     * an actor who can write sidecars there directly anyway. The threat model
+     * this guard exists for (provider-controlled metadata strings) is fully
+     * covered.
      *
      * Provider-controlled strings (TMDB relative paths like `/abc.jpg`, image
      * URLs) and absolute paths anywhere else on disk deliberately resolve to

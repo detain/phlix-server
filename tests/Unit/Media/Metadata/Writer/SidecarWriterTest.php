@@ -252,7 +252,7 @@ final class SidecarWriterTest extends TestCase
 
         // The interface contract: a failed write leaves prior state intact.
         $this->assertSame('PREVIOUS ON-DISK BYTES', file_get_contents($stale));
-        $this->assertSame([], glob($dir . '/*.phlix-tmp'));
+        $this->assertSame([], glob($dir . '/*.phlix-tmp*')); // per-write unique temp names
     }
 
     public function test_missing_media_directory_throws_named_exception_naming_the_missing_reason(): void
@@ -404,6 +404,23 @@ final class SidecarWriterTest extends TestCase
         $parsed = (new LocalNfoProvider())->getDetails($dir . '/Inception (2010).nfo');
         $this->assertSame('BadBell and NUL', $parsed['name']);
         $this->assertStringContainsString('tabs', (string) $parsed['overview']);
+    }
+
+    public function test_malformed_row_name_fallback_cannot_escape_the_media_directory(): void
+    {
+        // sidecarPath()'s empty-stem fallback interpolates the DB name; names
+        // are provider-derived and unsanitized, so the fallback must carry the
+        // same jail doctrine as metadata artwork refs. Removal-red: delete the
+        // basename() jail in sidecarPath() and evil.nfo lands OUTSIDE $dir.
+        $dir = $this->tempDir('jailname');
+        $item = new MediaItem('item-jail', '../../evil', 'movie', '', []);
+
+        (new SidecarWriter())->write($item, ['name' => 'anything'], $dir);
+
+        $this->assertFileExists($dir . '/evil.nfo');
+        $this->assertFileDoesNotExist($dir . '/../../evil.nfo');
+        $listing = array_values(array_diff((array) scandir($dir), ['.', '..']));
+        $this->assertSame(['evil.nfo'], $listing, 'nothing may escape the sidecar directory');
     }
 
     public function test_generator_marker_is_emitted_in_the_nfo_header(): void

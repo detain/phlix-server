@@ -66,7 +66,29 @@ final class SidecarWriterRegistrationTest extends TestCase
         $this->assertSame(
             $writer,
             $registry->all()[SidecarWriter::class] ?? null,
-            'the registry entry must BE the container-resolved writer (explicit artworkStorage binding included)',
+            'the registry entry must BE the container-resolved writer',
+        );
+    }
+
+    public function test_the_container_built_writer_actually_received_its_artwork_storage_binding(): void
+    {
+        // The load-bearing half of the R1 seam: PHP-DI SKIPS defaulted optional
+        // ctor params, so without the explicit constructorParameter binding on
+        // SidecarWriter's definition the container-built writer would carry
+        // artworkStorage=null and poster sidecars from the artwork cache would
+        // silently never be written. Presence assertions cannot see that —
+        // reflection on the RESOLVED instance can, and this test is removal-red
+        // the moment the binding is deleted from MediaServicesProvider.
+        $writer = $this->buildContainer()->get(SidecarWriter::class);
+
+        $property = new \ReflectionProperty(SidecarWriter::class, 'artworkStorage');
+        $property->setAccessible(true);
+        $storage = $property->getValue($writer);
+
+        $this->assertInstanceOf(
+            \Phlix\Media\Storage\ArtworkStorage::class,
+            $storage,
+            'artworkStorage must be the explicitly-bound ArtworkStorage, not the null default',
         );
     }
 }

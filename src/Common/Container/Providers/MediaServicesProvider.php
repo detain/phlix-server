@@ -1254,9 +1254,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // sidecar writer at definition time, so every process that builds the
             // container — the metadata-write fork AND any admin/status consumer —
             // sees it without any plugin being enabled. The PluginLoader
-            // capability arm keeps its plugin-only semantics: a plugin
-            // SidecarWriter subclass would replace this entry by FQCN, exactly
-            // like any other same-class re-registration.
+            // capability arm keeps its plugin-only semantics: a plugin shipping
+            // the SAME class registers over this entry by FQCN (the registry's
+            // replace-on-same-class), while a subclass is a distinct FQCN and
+            // therefore ADDS a second entry — both writers then run, which is
+            // the same multiplicity the registry always allowed.
             \Phlix\Media\Metadata\Writer\MetadataWriterRegistry::class => factory(
                 static function (ContainerInterface $c): \Phlix\Media\Metadata\Writer\MetadataWriterRegistry {
                     $registry = new \Phlix\Media\Metadata\Writer\MetadataWriterRegistry();
@@ -1266,7 +1268,8 @@ final class MediaServicesProvider implements ServiceProviderInterface
                         // loud anyway — a registry silently missing its built-in
                         // writer is exactly the no-op drain this step exists to end.
                         throw new \LogicException(
-                            'MediaServicesProvider: SidecarWriter DI definition must resolve to a SidecarWriter instance',
+                            'MediaServicesProvider: SidecarWriter DI definition '
+                                . 'must resolve to a SidecarWriter instance',
                         );
                     }
                     $registry->register($writer);

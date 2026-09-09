@@ -27,11 +27,12 @@ use Workerman\Timer;
  * true: disk-write capability lives exclusively in this managed process, away
  * from every scan and HTTP worker.
  *
- * S87-era steady state: no writers ship with the server (the sidecar writer is
- * S88, the embedded-tag writer is S89), so `supporting()` returns the empty
- * list and every drain is a documented no-op. The queue itself is still real,
- * bounded, and drained — a plugin registered through the S87 capability arm is
- * executed the moment a scan finalizes an item of a type it supports.
+ * S87 shipped the plumbing with zero writers; S88 added the built-in
+ * {@see SidecarWriter} through the registry's DI definition (ruling R1), so a
+ * drain now executes real writes for movie/episode/track rows. The embedded-tag
+ * writer remains S89. A plugin registered through the S87 capability arm
+ * executes alongside it — `supporting()` returns every registered writer whose
+ * type sniff passes, each isolated by the per-writer catch below.
  *
  * Two invariants this class exists to hold:
  *  - The plugin registry is PER-PROCESS resident state, so the fork running

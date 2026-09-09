@@ -31,7 +31,11 @@ namespace Phlix\Media\Metadata\Writer;
  * enable → disable → enable is idempotent and never grows the map.
  *
  * Leak-free enable/disable contract (same as the sibling registries):
- * `count(all()) === 0` after every enabled plugin has been disabled.
+ * `count(all()) === 0` after every enabled plugin has been disabled —
+ * S88 scope note: for a PLUGIN-wired registry (the one PluginLoader builds by
+ * hand in unit tests). The CONTAINER-built registry additionally carries the
+ * built-in {@see SidecarWriter} from its DI definition, so there the floor
+ * after a full plugin-disable cycle is that one entry, never zero.
  *
  * @since S87
  */

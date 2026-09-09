@@ -6,3 +6,4 @@ before	505	count=11	six_skipped=0	phpunit_exit=1	secs=284	summary=Time: 04:42.77
 subbefore	101	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subbefore	202	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subbefore	303	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	404	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=

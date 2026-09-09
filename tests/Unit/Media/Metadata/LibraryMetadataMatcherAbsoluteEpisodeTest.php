@@ -124,7 +124,14 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         $updates = new \ArrayObject();
         $items->method('update')->willReturnCallback(
             static function (string $id, array $data) use ($updates): void {
-                $updates[$id] = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+                // S186: is_array() proves "some array", not the string-keyed shape
+                // json_decode(assoc) produces for metadata_json — the capture point
+                // is exactly where that boundary fact is pinned (local @var), so the
+                // ArrayObject<string, array<string, mixed>> write below is checked,
+                // not glossed.
+                /** @var array<string, mixed> $meta */
+                $meta = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+                $updates[$id] = $meta;
             }
         );
 
@@ -486,6 +493,10 @@ class LibraryMetadataMatcherAbsoluteEpisodeTest extends TestCase
         );
         $items->method('update')->willReturnCallback(
             static function (string $id, array $data) use (&$rows, $updates): void {
+                // S186: same capture-point pin as the first matcher harness above —
+                // json_decode(assoc) metadata is string-keyed; state it once here so
+                // both the ArrayObject write and the $rows write stay checked.
+                /** @var array<string, mixed> $meta */
                 $meta = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
                 $updates[$id] = $meta;
                 if (isset($rows[$id])) {

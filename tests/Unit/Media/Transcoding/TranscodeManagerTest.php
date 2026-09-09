@@ -3931,15 +3931,20 @@ class TranscodeManagerTest extends TestCase
         $thrown = null;
         try {
             $manager->ensureSegment('seg-job', null, 8);
-        } catch (AssertionFailedError $e) {
+        } catch (\RuntimeException $e) {
             // S120 — PHPUnit's ExpectationFailedException extends AssertionFailedError
             // extends PHPUnit\Framework\Exception extends RuntimeException, so without
-            // this arm the `catch (\RuntimeException)` below eats any assertion that
-            // future maintenance puts inside the callback above and the test goes
-            // green regardless. Re-throw: a failed assertion is never "the exception
-            // under test".
-            throw $e;
-        } catch (\RuntimeException $e) {
+            // this re-throw the arm below would eat any assertion that future
+            // maintenance puts inside the callback above and the test would go green
+            // regardless. A failed assertion is never "the exception under test".
+            // (S186: this arm used to be `catch (AssertionFailedError $e)` before the
+            // RuntimeException arm; PHPStan level 4 correctly proved nothing
+            // analysable throws that type here, i.e. the arm only ever fires for
+            // future in-callback asserts. instanceof on the caught exception states
+            // exactly that and stays live for the analyser.)
+            if ($e instanceof AssertionFailedError) {
+                throw $e;
+            }
             $thrown = $e;
         }
 
@@ -5170,14 +5175,14 @@ class TranscodeManagerTest extends TestCase
         $thrown = null;
         try {
             $manager->ensureSegment('seg-job', null, 3);
-        } catch (AssertionFailedError $e) {
-            // S120 — see the twin arm in
-            // testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows(): an
-            // ExpectationFailedException IS a RuntimeException, so this arm is what
-            // stops the catch below from silently eating a future in-callback
-            // assertion.
-            throw $e;
         } catch (\RuntimeException $e) {
+            // S120 — see the twin guard in
+            // testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows(): an
+            // ExpectationFailedException IS a RuntimeException, so this re-throw is
+            // what stops the arm from silently eating a future in-callback assertion.
+            if ($e instanceof AssertionFailedError) {
+                throw $e;
+            }
             $thrown = $e;
         }
 

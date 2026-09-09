@@ -737,7 +737,14 @@ class HubClientTest extends TestCase
         // restore the mock so driving the callback touches no network.
         (new \ReflectionProperty(HubClient::class, 'httpClient'))->setValue($client, $httpClient);
 
-        $this->assertSame([], $stateStore->readHeartbeatState(), 'nothing recorded before the first tick');
+        // S186: the floor assertion used to inline the call, i.e. the SAME expression
+        // the post-tick read below performs — PHPStan keys method-call narrowing on the
+        // expression itself, so `assertSame([], readHeartbeatState())` silently pinned
+        // every later `readHeartbeatState()` to array{} and the post-tick offset then
+        // looked impossible. Reading into a local first keeps both assertions exactly
+        // as strict and as live as they were.
+        $stateBeforeTick = $stateStore->readHeartbeatState();
+        $this->assertSame([], $stateBeforeTick, 'nothing recorded before the first tick');
 
         ($client->scheduled[1]['callback'])();
 

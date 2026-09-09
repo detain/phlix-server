@@ -255,7 +255,9 @@ final class SsdpMSearchListenerTest extends TestCase
             $this->parseHeaders($replies[0])['ST'] ?? null
         );
 
-        self::assertInstanceOf(SsdpAdvertiser::class, $worker);
+        // S186: the assertInstanceOf(SsdpAdvertiser::class, $worker) that used to
+        // sit here is now statically guaranteed by exchange()'s @param-out — the
+        // analyser reports a contract break instead of waiting for runtime.
         self::assertSame(
             [],
             $this->lastPendingAfterLoop,
@@ -578,6 +580,13 @@ final class SsdpMSearchListenerTest extends TestCase
      * @param string               $request         Raw datagram to send.
      * @param int                  $expectedReplies Stop as soon as this many replies arrive.
      * @param SsdpAdvertiser|null  $worker          Out-param: the worker that was driven.
+     *
+     * S186: the input type is nullable (every caller may omit the out-param) but
+     * exchange() always installs a constructed worker before returning — @param-out
+     * states the POST-call fact for the analyser, replacing what the caller's old
+     * assertInstanceOf() did at runtime.
+     *
+     * @param-out SsdpAdvertiser $worker
      *
      * @return list<string> Reply datagrams, in arrival order.
      */

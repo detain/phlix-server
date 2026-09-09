@@ -132,14 +132,6 @@ final class EmbeddedMetadataWriterTest extends TestCase
         );
     }
 
-    /** The single staged sibling currently present for $mediaPath. */
-    private function stagedFor(string $mediaPath): ?string
-    {
-        $staged = glob($mediaPath . '.phlix-embed.tmp.*');
-
-        return is_array($staged) && $staged !== [] ? (string) $staged[0] : null;
-    }
-
     private function assertNoStageResidue(string $mediaPath): void
     {
         $this->assertSame([], glob($mediaPath . '.phlix-embed.tmp.*'));

@@ -32,6 +32,14 @@ final class UserRepositoryFindOrCreateCreatedFlagTest extends TestCase
      *
      * @param list<array<string, mixed>> $identityRows
      * @param list<array<string, mixed>> $userRows
+     *
+     * The by-ref out-param accepts null on input (callers may omit it) but db()
+     * ALWAYS installs a fresh capture list first — `@param-out` states that
+     * post-call fact for the analyser (S186), which is why the caller's old
+     * assertIsArray() became provably redundant and was removed; assertCount()
+     * still pins the captured INSERTs at runtime.
+     *
+     * @param-out array $txCalls
      */
     private function db(array $identityRows, array $userRows, ?array &$txCalls = null): Connection
     {
@@ -96,7 +104,10 @@ final class UserRepositoryFindOrCreateCreatedFlagTest extends TestCase
 
         $this->assertNotSame('', $userId);
         $this->assertTrue($created, 'the insert path must report created=true');
-        $this->assertIsArray($inserts);
+        // S186: assertIsArray($inserts) dropped — db()'s @param-out array now
+        // guarantees the shape statically (it is checked at the assignment inside
+        // db(), so a broken contract is a BUILD error, earlier than any assert).
+        // assertCount() below is the live pin on the captured dual-write.
         $this->assertCount(3, $inserts, 'users + user_settings + user_identities dual-write');
     }
 

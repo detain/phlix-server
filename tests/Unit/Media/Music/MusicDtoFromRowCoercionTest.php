@@ -75,7 +75,7 @@ final class MusicDtoFromRowCoercionTest extends TestCase
     /**
      * One data set per DTO, for the cases that do not vary by value.
      *
-     * @return array<string, array{class-string}>
+     * @return array<string, array{class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>}>
      */
     public static function dtoProvider(): array
     {
@@ -95,7 +95,7 @@ final class MusicDtoFromRowCoercionTest extends TestCase
      * once anything other than `workerman/mysql` builds the array (a JSON decode,
      * a cached payload, a hand-written fixture).
      *
-     * @return array<string, array{class-string, mixed}>
+     * @return array<string, array{class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>, mixed}>
      */
     public static function nonStringMediaItemIdProvider(): array
     {
@@ -125,7 +125,7 @@ final class MusicDtoFromRowCoercionTest extends TestCase
      * legitimate `CHAR(36)` contents — the DTO deliberately does not validate UUID
      * format (the FK to `media_items` does), which is what the DTO docblocks say.
      *
-     * @return array<string, array{class-string, string}>
+     * @return array<string, array{class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>, string}>
      */
     public static function truthyAwkwardStringProvider(): array
     {
@@ -320,7 +320,7 @@ final class MusicDtoFromRowCoercionTest extends TestCase
      * `match` without a `default` on purpose: a fourth music DTO makes this throw
      * `UnhandledMatchError` instead of silently testing two of three.
      *
-     * @param class-string         $dtoClass
+     * @param class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack> $dtoClass
      * @param array<string, mixed> $row
      */
     private function fromRow(string $dtoClass, array $row): MusicArtist|MusicAlbum|MusicTrack

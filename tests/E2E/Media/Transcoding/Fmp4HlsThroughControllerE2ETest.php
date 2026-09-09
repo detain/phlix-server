@@ -411,7 +411,11 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
 
         $this->report(sprintf(
             'negative control: ok=%s, %d hls.js errors, %d controller requests',
-            $probe['ok'] === true ? 'true' : 'false',
+            // S186: `$probe['ok'] === true ? 'true' : 'false'` here was provably
+            // dead — the assertFalse() above has already pinned ok !== true, so the
+            // ternary could only ever print 'false'. Reporting the live value keeps
+            // the line honest without changing what a green run prints.
+            (string) json_encode($probe['ok']),
             count($probe['errors']),
             count($served)
         ));

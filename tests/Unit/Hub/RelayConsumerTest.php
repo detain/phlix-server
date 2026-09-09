@@ -1387,7 +1387,10 @@ class RelayConsumerTest extends TestCase
         /** @var \Phlix\Server\Http\Request|null $captured */
         $captured = null;
         $dispatchCount = 0;
-        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured, &$dispatchCount): \Phlix\Server\Http\Response {
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (
+            &$captured,
+            &$dispatchCount,
+        ): \Phlix\Server\Http\Response {
             $dispatchCount++;
             $captured = $req;
             return (new \Phlix\Server\Http\Response())->json(['ok' => true]);

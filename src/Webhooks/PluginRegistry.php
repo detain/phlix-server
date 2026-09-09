@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Webhooks;
 
-use Phlix\Webhooks\Plugins\AbstractNotificationPlugin;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 

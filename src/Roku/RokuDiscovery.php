@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Roku;
 
-use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Discovery\Mdns\MdnsDiscovery;
 use Phlix\Discovery\Mdns\MdnsService;

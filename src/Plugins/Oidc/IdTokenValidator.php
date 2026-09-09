@@ -12,15 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Oidc;
 
 use Jose\Component\Checker\AlgorithmChecker;
-use Jose\Component\Checker\AudienceChecker;
-use Jose\Component\Checker\ClaimCheckerManager;
-use Jose\Component\Checker\ExpirationTimeChecker;
 use Jose\Component\Checker\HeaderCheckerManager;
-use Jose\Component\Checker\IssuedAtChecker;
-use Jose\Component\Checker\IssuerChecker;
-use Jose\Component\Checker\NonceChecker;
-use Jose\Component\Checker\NotBeforeChecker;
-use Jose\Component\Core\Algorithm\Algorithm;
 use Jose\Component\Core\JWKSet;
 use Jose\Component\Signature\Algorithm\RS256;
 use Jose\Component\Signature\Algorithm\RS384;

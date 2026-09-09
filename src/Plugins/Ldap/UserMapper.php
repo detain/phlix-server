@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Ldap;
 
-use RuntimeException;
-
 final class UserMapper
 {
     /** @var array<string, mixed> */

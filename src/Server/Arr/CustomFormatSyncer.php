@@ -17,7 +17,6 @@ use Phlix\Common\Uuid;
 use Phlix\Shared\Arr\RadarrClient;
 use Phlix\Shared\Arr\SyncResult;
 use Phlix\Shared\Arr\TrashGuidesProvider;
-use RuntimeException;
 use Workerman\MySQL\Connection;
 
 /**

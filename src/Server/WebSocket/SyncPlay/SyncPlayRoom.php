@@ -13,7 +13,6 @@ namespace Phlix\Server\WebSocket\SyncPlay;
 
 use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;
-use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Session\SyncPlay\Messages;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;

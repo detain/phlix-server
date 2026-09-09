@@ -13,14 +13,11 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\RateLimitException;
-use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
-use Phlix\Auth\WebAuthn\WebAuthnSettings;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
-use Workerman\MySQL\Connection;
 
 final class WebAuthnController
 {

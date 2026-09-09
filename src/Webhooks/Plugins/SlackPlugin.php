@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Webhooks\Plugins;
 
-use DateTimeImmutable;
 use Phlix\Webhooks\WebhookEvent;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;

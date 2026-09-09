@@ -34,7 +34,7 @@ use ReflectionMethod;
  *
  * MySQL stores an ENUM by index and every widening re-declares the full set, so
  * the LAST migration to declare the type ENUM is the complete current set.
- * Migration 101 is that file today; {@see self::test_101_is_the_latest_migration_to_declare_the_type_enum()}
+ * Migration 104 is that file today (it re-declares the ENUM unchanged from 101 to correct the rescan comment); {@see self::test_the_parsed_migration_is_the_latest_type_enum_declarer()}
  * fails loudly the day a later migration widens the ENUM again, forcing this
  * test to parse the new latest declarer instead of silently comparing
  * `ALLOWED_TYPES` against a stale 9-member list.
@@ -51,7 +51,7 @@ use ReflectionMethod;
 final class ScanJobsEnumMigrationTest extends TestCase
 {
     /** The migration this test parses — must stay the LATEST declarer of the ENUM. */
-    private const MIGRATION = '101_library_scan_jobs_media_assets_type.sql';
+    private const MIGRATION = '104_library_scan_jobs_rescan_comment_correction.sql';
 
     /** The phlix-ui mirror, named in failure messages. */
     private const PHLIX_UI_MIRROR = 'phlix-ui `src/api/admin/libraries.ts` `SCAN_JOB_TYPES`';
@@ -171,7 +171,7 @@ final class ScanJobsEnumMigrationTest extends TestCase
      * ENUM again, this must fail loudly instead of comparing `ALLOWED_TYPES`
      * against a stale 9-member list while the DB has already grown.
      */
-    public function test_101_is_the_latest_migration_to_declare_the_type_enum(): void
+    public function test_the_parsed_migration_is_the_latest_type_enum_declarer(): void
     {
         $declarers = self::enumDeclarers();
 

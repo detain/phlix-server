@@ -216,8 +216,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
        * Re-pinned 1803→1807 by S88: the sidecar writer arc adds four first-party
        * files (SidecarWriter + SidecarNotWritableException src, SidecarWriterTest +
        * SidecarWriterRegistrationTest); none names Request — same pattern.
+       * Re-pinned 1807→1808 by S154: the migration-104 guard test
+       * RescanEnumCommentGuardTest.php is one new file; it names no Request.
        */
-    private const EXPECTED_PHP_FILES = 1807;
+    private const EXPECTED_PHP_FILES = 1808;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

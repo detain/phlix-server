@@ -57,3 +57,4 @@ after	101	count=11	six_skipped=0	phpunit_exit=1	secs=284	summary=Tests: 11109, A
 after	202	count=11	six_skipped=0	phpunit_exit=1	secs=287	summary=Tests: 11109, Assertions: 91383, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
 after	303	count=11	six_skipped=0	phpunit_exit=1	secs=288	summary=Tests: 11109, Assertions: 91385, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
 after	404	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	505	count=11	six_skipped=0	phpunit_exit=1	secs=289	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.

@@ -28,9 +28,18 @@ use Workerman\Worker;
  */
 class WebhookServiceTest extends TestCase
 {
+    /** @var array<int, Worker> */
+    private array $savedWorkers = [];
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        // S266: snapshot the process-global Worker registry BEFORE registering
+        // our bare worker, so tearDown hands it back untouched. A leaked Worker
+        // is what made Workerman\Timer::add() order-dependent for the six
+        // LiveTv/Relay cases across the estate (±6 skips between seeds).
+        $this->savedWorkers = Worker::getAllWorkers();
 
         // Workerman\Timer::add() throws unless at least one Worker exists in
         // the process (same bare-Worker idiom as StreamSessionServiceTest,
@@ -38,6 +47,14 @@ class WebhookServiceTest extends TestCase
         if (!Worker::getAllWorkers()) {
             new Worker();
         }
+    }
+
+    protected function tearDown(): void
+    {
+        $workers = new ReflectionProperty(Worker::class, 'workers');
+        $workers->setAccessible(true);
+        $workers->setValue(null, $this->savedWorkers);
+        parent::tearDown();
     }
 
     private function delivery(int $attempt, int $id = 42): WebhookDeliveryRecord

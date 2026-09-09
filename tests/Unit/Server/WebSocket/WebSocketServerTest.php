@@ -17,11 +17,28 @@ use Workerman\Connection\TcpConnection;
  */
 class WebSocketServerTest extends TestCase
 {
+    /** @var array<int, \Workerman\Worker> */
+    private array $savedWorkers = [];
+
     protected function setUp(): void
     {
         parent::setUp();
+        // S266: snapshot the process-global Worker registry. WebSocketServer's
+        // constructor registers a fallback Worker on every un-injected
+        // construction, and this file's listener test registers a named one —
+        // a leaked Worker is what made Workerman\Timer::add() order-dependent
+        // for the six LiveTv/Relay cases across the estate (±6 skips).
+        $this->savedWorkers = \Workerman\Worker::getAllWorkers();
         // Clear the connection pool singleton between tests
         ConnectionPool::getInstance()->clear();
+    }
+
+    protected function tearDown(): void
+    {
+        $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
+        $workers->setAccessible(true);
+        $workers->setValue(null, $this->savedWorkers);
+        parent::tearDown();
     }
 
     public function testCanConstructWithConfig(): void

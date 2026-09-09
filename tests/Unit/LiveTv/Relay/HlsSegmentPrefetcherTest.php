@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\LiveTv\Relay;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
+use Phlix\Tests\Support\Workerman\WorkermanTimerFixture;
 
 /**
  * Unit tests for HlsSegmentPrefetcher.
@@ -14,28 +15,26 @@ use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
  */
 class HlsSegmentPrefetcherTest extends TestCase
 {
+    use WorkermanTimerFixture;
+
     private HlsSegmentPrefetcher $prefetcher;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->prefetcher = new HlsSegmentPrefetcher(null, 3, 10485760, 30);
+
+        // S266: guarantee Workerman\Timer::add() works for the cases below,
+        // deterministically — regardless of what ran earlier in the shared
+        // PHPUnit process. Replaces the old order-dependent isTimerAvailable()
+        // probe (see WorkermanTimerFixture for the diagnosis).
+        $this->installWorkermanTimerFixture();
     }
 
-    /**
-     * Check if Workerman Timer is available.
-     *
-     * @return bool True if Timer can be used.
-     */
-    private function isTimerAvailable(): bool
+    protected function tearDown(): void
     {
-        try {
-            \Workerman\Timer::add(1, function () {
-            }, [], false);
-            return true;
-        } catch (\RuntimeException $e) {
-            return false;
-        }
+        $this->removeWorkermanTimerFixture();
+        parent::tearDown();
     }
 
     public function testCanCreatePrefetcher(): void
@@ -118,11 +117,6 @@ class HlsSegmentPrefetcherTest extends TestCase
      */
     public function testStartPrefetchDoesNotThrow(): void
     {
-        // Skip if Workerman Timer is not available
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $sessionId = 'test-session-123';
         $playlistUrl = 'http://nonexistent.local/playlist.m3u8';
 
@@ -150,10 +144,6 @@ class HlsSegmentPrefetcherTest extends TestCase
      */
     public function testStartAndStopPrefetch(): void
     {
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $sessionId = 'session-stop-test';
 
         $this->prefetcher->startPrefetch($sessionId, 'http://nonexistent.local/playlist.m3u8');
@@ -169,10 +159,6 @@ class HlsSegmentPrefetcherTest extends TestCase
      */
     public function testMultipleStartPrefetchReplacesPrevious(): void
     {
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $sessionId = 'session-multi-start';
 
         // Start first prefetch

@@ -10,6 +10,7 @@ use Phlix\LiveTv\Relay\HlsRelayManager;
 use Phlix\LiveTv\Relay\HlsRelaySession;
 use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Tests\Support\Workerman\WorkermanTimerFixture;
 use PHPUnit\Framework\MockObject\MockObject;
 
 /**
@@ -40,6 +41,8 @@ class StubRelayConsumer
  */
 class HlsRelayManagerTest extends TestCase
 {
+    use WorkermanTimerFixture;
+
     private HlsRelayManager $manager;
     /** @var \Workerman\MySQL\Connection&MockObject */
     private $mockDb;
@@ -71,22 +74,18 @@ class HlsRelayManagerTest extends TestCase
             '/relay/live',
             10
         );
+
+        // S266: guarantee Workerman\Timer::add() works for the cases below,
+        // deterministically — regardless of what ran earlier in the shared
+        // PHPUnit process. Replaces the old order-dependent isTimerAvailable()
+        // probe (see WorkermanTimerFixture for the diagnosis).
+        $this->installWorkermanTimerFixture();
     }
 
-    /**
-     * Check if Workerman Timer is available.
-     *
-     * @return bool True if Timer can be used.
-     */
-    private function isTimerAvailable(): bool
+    protected function tearDown(): void
     {
-        try {
-            \Workerman\Timer::add(1, function () {
-            }, [], false);
-            return true;
-        } catch (\RuntimeException $e) {
-            return false;
-        }
+        $this->removeWorkermanTimerFixture();
+        parent::tearDown();
     }
 
     public function testCanCreateManager(): void
@@ -100,11 +99,6 @@ class HlsRelayManagerTest extends TestCase
      */
     public function testStartRelaySessionCreatesTuneRequest(): void
     {
-        // Skip if Workerman Timer not available
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $channelId = 'channel-123';
         $userId = 'user-456';
 
@@ -145,10 +139,6 @@ class HlsRelayManagerTest extends TestCase
      */
     public function testStartRelaySessionStoresInDb(): void
     {
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $channelId = 'channel-abc';
         $userId = 'user-xyz';
 
@@ -357,10 +347,6 @@ class HlsRelayManagerTest extends TestCase
      */
     public function testStopRelaySessionDropsPerSessionSegmentCache(): void
     {
-        if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
-        }
-
         $channelId = 'channel-cache-teardown';
         $userId = 'user-cache-teardown';
         $tuneResult = [

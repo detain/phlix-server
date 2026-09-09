@@ -60,3 +60,9 @@ admin-ui/*.tsbuildinfo
 # NB: public/assets/admin/ (the built bundle) is intentionally NOT ignored.
 
 # Transient supervisor handoff docs (Wave-N work notes, intentionally untracked)
+
+# S266 measurement artefacts (junit XML + phpunit logs kept on disk, not committed)
+runs/*.xml
+runs/*.log
+runs/tmp/
+runs/.harness.lock

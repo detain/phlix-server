@@ -1,0 +1,75 @@
+before	101	count=11	six_skipped=0	phpunit_exit=1	secs=296	summary=Time: 04:54.984, Memory: 349.00 MB|FAILURES!|Tests: 11109, Assertions: 91382, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.|
+before	202	count=11	six_skipped=0	phpunit_exit=1	secs=284	summary=Time: 04:42.619, Memory: 362.02 MB|FAILURES!|Tests: 11109, Assertions: 91382, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.|
+before	303	count=11	six_skipped=0	phpunit_exit=1	secs=293	summary=Time: 04:51.441, Memory: 342.00 MB|FAILURES!|Tests: 11109, Assertions: 91382, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.|
+before	404	count=11	six_skipped=0	phpunit_exit=1	secs=288	summary=Time: 04:47.140, Memory: 358.02 MB|FAILURES!|Tests: 11109, Assertions: 91382, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.|
+before	505	count=11	six_skipped=0	phpunit_exit=1	secs=284	summary=Time: 04:42.775, Memory: 346.02 MB|FAILURES!|Tests: 11109, Assertions: 91382, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.|
+subbefore	101	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	202	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	303	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	404	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	505	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	606	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subbefore	707	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subbefore	808	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	909	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 295, Skipped: 3.
+subbefore	1010	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1111	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1212	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1313	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	1414	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1515	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1616	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	1717	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subbefore	1818	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subbefore	1919	count=0	six_skipped=0	phpunit_exit=0	secs=12	summary=
+subbefore	2020	count=3	six_skipped=3	phpunit_exit=0	secs=13	summary=Tests: 87, Assertions: 295, Skipped: 3.
+subbefore	2121	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 295, Skipped: 3.
+subbefore	2222	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 295, Skipped: 3.
+subbefore	2323	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subbefore	2424	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subbefore	2525	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 289, Skipped: 3.
+subafter	101	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	202	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	303	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	404	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	505	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	606	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	707	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	808	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	909	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	1010	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	1111	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	1212	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	1313	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	1414	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	1515	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	1616	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	1717	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	1818	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	1919	count=0	six_skipped=0	phpunit_exit=0	secs=12	summary=
+subafter	2020	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	2121	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+subafter	2222	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	2323	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	2424	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	2525	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
+after	101	count=11	six_skipped=0	phpunit_exit=1	secs=284	summary=Tests: 11109, Assertions: 91383, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after	202	count=11	six_skipped=0	phpunit_exit=1	secs=287	summary=Tests: 11109, Assertions: 91383, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after	303	count=11	six_skipped=0	phpunit_exit=1	secs=288	summary=Tests: 11109, Assertions: 91385, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	404	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	505	count=11	six_skipped=0	phpunit_exit=1	secs=289	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	606	count=11	six_skipped=0	phpunit_exit=1	secs=297	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	707	count=11	six_skipped=0	phpunit_exit=1	secs=301	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after	808	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 3, PHPUnit Warnings: 1, Skipped: 11.
+after2	101	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after2	202	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after2	303	count=11	six_skipped=0	phpunit_exit=1	secs=295	summary=Tests: 11112, Assertions: 91412, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after2	404	count=11	six_skipped=0	phpunit_exit=1	secs=293	summary=Tests: 11112, Assertions: 91412, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after2	505	count=11	six_skipped=0	phpunit_exit=1	secs=288	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after3	101	count=11	six_skipped=0	phpunit_exit=1	secs=293	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after3	202	count=11	six_skipped=0	phpunit_exit=1	secs=294	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after3	303	count=11	six_skipped=0	phpunit_exit=1	secs=294	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after3	404	count=11	six_skipped=0	phpunit_exit=1	secs=293	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+after3	505	count=11	six_skipped=0	phpunit_exit=1	secs=289	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
+controlon	101	count=12	six_skipped=0	phpunit_exit=1	secs=298	summary=Tests: 11113, Assertions: 91417, Failures: 2, PHPUnit Warnings: 1, Skipped: 12.
+controloff	101	count=11	six_skipped=0	phpunit_exit=1	secs=297	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.

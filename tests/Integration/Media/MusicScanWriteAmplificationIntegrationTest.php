@@ -210,14 +210,18 @@ final class MusicScanWriteAmplificationIntegrationTest extends TestCase
      * test in place the same mutant is RED — `Failed asserting that 3 is identical to 0`
      * at the assertion below.
      *
-     * ⚠ The SKIP COUNT is deliberately not quoted here, because it is not stable: three
-     * of the six Workerman-`Timer` self-skips in `tests/Unit/LiveTv/Relay/`
-     * (`HlsRelayManagerTest` and `HlsSegmentPrefetcherTest` carry three apiece, on the
-     * same `isTimerAvailable()` condition and the same message) report "Workerman Timer
-     * not available" only on some runs, so the same tree reports `Skipped: 7` or
-     * `Skipped: 10` under `executionOrder="random"`. A delta of exactly 3 says one
-     * file's worth flipped, not which file. Neither number is evidence of anything about
-     * this mutant. `Failures: 0` is, and none of the varying skips is in this file.
+     * ⚠ The SKIP COUNT is deliberately not quoted here. It used to be unstable: before
+     * S266, three of the six Workerman-`Timer` self-skips in `tests/Unit/LiveTv/Relay/`
+     * (`HlsRelayManagerTest` and `HlsSegmentPrefetcherTest` carried three apiece, on the
+     * same order-dependent `isTimerAvailable()` condition and the same message) reported
+     * "Workerman Timer not available" only on some seeds, so the same tree reported
+     * `Skipped: 7` or `Skipped: 10` under `executionOrder="random"` — a delta of exactly
+     * 3 said one file's worth flipped, not which file. S266 deleted those self-skips
+     * (fixture + polluter restore, see `tests/Support/Workerman/WorkermanTimerFixture.php`)
+     * and the leak guard `tests/Unit/Support/WorkermanStaticStateLeakGuardTest.php` keeps
+     * the restored statics from leaking again. Even historically, neither number was
+     * evidence of anything about this mutant. `Failures: 0` is, and no varying skip was
+     * ever in this file.
      *
      * It is not a harmless mutant. A healing `rescan` is run BECAUSE the library is
      * unhealed — that is the operator's reason for asking — so the production shape is

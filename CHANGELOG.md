@@ -18,8 +18,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   index.php/php-fpm/nginx process runs in the image. The file nevertheless kept compiling, kept being
   tokenized by the census, and kept reading like a supported path — enough that S99's audit had to
   qualify its own finding as "Workerman path only". Deleted with a permanent Unit guard
-  (`tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php`) pinning the absence plus every
-  artifact that could re-front it; mutation-verified (recreating the file reddens it). The S163
+  (`tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php`) pinning the absence plus that
+  the artifacts it pins — supervisord, the Dockerfiles, the compose files, the shipped
+  reverse-proxy configs, the helm charts, the systemd unit — front nothing; mutation-verified
+  (recreating the file reddens it). The S163
   incident block in `docker/supervisord.conf` and the `docker/README.md` narrative are updated to
   past tense; the dual-entry-point pin in `ThemeEndpointsReachabilityTest` is reworked to the sole
   authoritative entry point. S116's `du -sb` request-path residual closes with the file — the daemon

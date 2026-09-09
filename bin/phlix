@@ -40,6 +40,13 @@ use Phlix\Console\Commands\PluginEnableCommand;
 use Phlix\Console\Commands\PluginInstallCommand;
 use Phlix\Console\Commands\PluginListCommand;
 use Phlix\Console\Commands\PluginUninstallCommand;
+use Phlix\Console\Commands\UserApproveCommand;
+use Phlix\Console\Commands\UserCreateCommand;
+use Phlix\Console\Commands\UserDeleteCommand;
+use Phlix\Console\Commands\UserDisableCommand;
+use Phlix\Console\Commands\UserListCommand;
+use Phlix\Console\Commands\UserPromoteCommand;
+use Phlix\Console\Commands\UserRejectCommand;
 use Phlix\Console\Commands\UserResetPasswordCommand;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\PathDeduper;
@@ -149,6 +156,18 @@ $cli->add(new HwaccelProbeCommand(static function (): HwaccelProbe {
     return new HwaccelProbe($ffmpegPath);
 }));
 $cli->add(new UserResetPasswordCommand(static fn(): UserRepository => $containerProvider()->get(UserRepository::class)));
+// S61 — the CLI user/admin management surface. Every command shares one LAZY
+// UserRepository factory (the same shape as the reset-password line above): the
+// closure is invoked only inside a command's execute(), so `php bin/phlix list`
+// still builds neither the container nor a database connection.
+$userRepositoryFactory = static fn(): UserRepository => $containerProvider()->get(UserRepository::class);
+$cli->add(new UserListCommand($userRepositoryFactory));
+$cli->add(new UserCreateCommand($userRepositoryFactory));
+$cli->add(new UserPromoteCommand($userRepositoryFactory));
+$cli->add(new UserDeleteCommand($userRepositoryFactory));
+$cli->add(new UserApproveCommand($userRepositoryFactory));
+$cli->add(new UserDisableCommand($userRepositoryFactory));
+$cli->add(new UserRejectCommand($userRepositoryFactory));
 $cli->add(new MediaDedupePathsCommand(
     static fn(): PathDeduper => new PathDeduper(ConnectionPool::getConnection('mysql'))
 ));

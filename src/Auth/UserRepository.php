@@ -268,6 +268,52 @@ class UserRepository
     }
 
     /**
+     * Count the users flagged `is_admin = 1`.
+     *
+     * The repository-level counterpart to the last-admin safety check the HTTP
+     * {@see \Phlix\Server\Http\Controllers\Admin\AdminUserController} applies
+     * inline (its private helper delegates to the exact same
+     * `countUsers('is_admin = 1')` predicate). Exposing it here — rather than
+     * keeping it controller-private — is what lets the `user:promote --revoke`,
+     * `user:disable` and `user:delete` console commands enforce the same
+     * "never lose the last administrator" invariant without reaching into HTTP
+     * code. Read-only: it issues a single `SELECT COUNT`, never a write.
+     *
+     * @return int Number of admin users (>= 0).
+     *
+     * @since S61
+     */
+    public function countAdmins(): int
+    {
+        return $this->countUsers('is_admin = 1');
+    }
+
+    /**
+     * Whether demoting, disabling or deleting the given user would remove the
+     * LAST remaining administrator.
+     *
+     * True only when the row is itself an admin AND there is at most one admin
+     * in total; any non-admin row short-circuits to false. The predicate is the
+     * same shape the admin controller uses at its three guard sites
+     * (`!empty($user['is_admin']) && countAdmins() <= 1`), so console and HTTP
+     * agree on what "the last admin" means. Callers treat `true` as an absolute
+     * invariant — never bypassable, not even by an operator's `--force`.
+     *
+     * @param array<string, mixed> $user A resolved user row (as returned by
+     *        {@see findById()}, {@see findByUsername()} or {@see findByEmail()}).
+     *
+     * @since S61
+     */
+    public function isLastAdmin(array $user): bool
+    {
+        if (empty($user['is_admin'])) {
+            return false;
+        }
+
+        return $this->countAdmins() <= 1;
+    }
+
+    /**
      * Return all users.
      *
      * @return array<int, array<string, mixed>> Array of user rows

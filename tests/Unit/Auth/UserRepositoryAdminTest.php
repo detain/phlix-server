@@ -127,4 +127,48 @@ final class UserRepositoryAdminTest extends TestCase
         $repo = new UserRepository($db);
         $repo->setAdmin('user-1', false);
     }
+
+    // --- S61: repository-level last-admin guard -----------------------------
+
+    public function test_count_admins_uses_is_admin_predicate(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->stringContains('is_admin = 1'))
+            ->willReturn([['c' => '3']]);
+
+        $repo = new UserRepository($db);
+        $this->assertSame(3, $repo->countAdmins());
+    }
+
+    public function test_is_last_admin_true_for_the_only_admin(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['c' => '1']]);
+
+        $repo = new UserRepository($db);
+        $this->assertTrue($repo->isLastAdmin(['id' => 'root', 'is_admin' => 1]));
+    }
+
+    public function test_is_last_admin_false_when_more_than_one_admin(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['c' => '2']]);
+
+        $repo = new UserRepository($db);
+        $this->assertFalse($repo->isLastAdmin(['id' => 'root', 'is_admin' => 1]));
+    }
+
+    public function test_is_last_admin_false_for_non_admin_without_counting(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // A non-admin short-circuits before any SELECT COUNT is issued, so the
+        // query must never run — this is the guard's OWN anti-vacuity control:
+        // if the short-circuit were removed the query would fire and this fails.
+        $db->expects($this->never())->method('query');
+
+        $repo = new UserRepository($db);
+        $this->assertFalse($repo->isLastAdmin(['id' => 'alice', 'is_admin' => 0]));
+    }
 }

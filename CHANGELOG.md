@@ -9,6 +9,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **CLI user/admin management (`S61`).** Seven new `bin/phlix` commands mirroring `user:reset-password`:
+  `user:list [--status=]`, `user:create {username} --email= --password=`, `user:promote {user} [--revoke]`,
+  `user:delete {user} [--force]` and the server-only status-flow trio `user:approve`/`user:disable`/`user:reject`.
+  Every one takes `--json`, emitting the shared `{"ok":true,"data":[...]}` / `{"ok":false,"error":"..."}`
+  envelope from a new `Phlix\Console\Commands\Concerns\JsonOutput` trait. `user:list` redacts the
+  `SELECT *` secret columns (`password_hash`, `password_reset_token`, `provider_data`) before output. A
+  repository-level last-admin guard (`UserRepository::countAdmins()`/`isLastAdmin()`, mirroring the admin
+  controller's predicate) refuses demoting/disabling/deleting the final administrator, and `--force` is a
+  confirmation bypass only — never a guard bypass. Commands are registered explicitly in `bin/phlix` behind a
+  lazy `UserRepository` factory, so `php bin/phlix list` still opens no database. No HTTP routes, no migrations.
 - **Sidecar metadata writer — NFO + poster/fanart next to the media file (S88).** The first writer for the
   S87 write-back plumbing: the built-in `Phlix\Media\Metadata\Writer\SidecarWriter` implements
   `MetadataWriterInterface` and writes `<basename>.nfo` (XBMC/Kodi XML), `poster.jpg` and `fanart.jpg`

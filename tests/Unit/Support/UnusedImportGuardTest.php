@@ -54,15 +54,18 @@ final class UnusedImportGuardTest extends TestCase
     {
         $root = \dirname(__DIR__, 3);
         $rows = [];
+        $scanned = 0;
         foreach (self::GUARDED_ROOTS as $rel) {
             $abs = $root . '/' . $rel;
             if (!is_dir($abs)) {
                 continue;
             }
             foreach (self::phpFiles($abs) as $file) {
+                $scanned++;
                 $rows = array_merge($rows, self::unusedImportsInFile($file, $root));
             }
         }
+        $this->assertGreaterThan(1000, $scanned, 'guard ran on a partial tree — estate missing?');
         $this->assertSame([], $rows, "unused imports found:\n" . implode("\n", $rows));
     }
 
@@ -181,6 +184,12 @@ final class UnusedImportGuardTest extends TestCase
         for ($i = 0; $i < $n; $i++) {
             $id = $norm[$i][0];
             if ($id === '{') {
+                $depth++;
+                continue;
+            }
+            if ($id === T_CURLY_OPEN || $id === T_DOLLAR_OPEN_CURLY_BRACES) {
+                // string interpolation opens via these tokens but closes with a
+                // plain '}'; counting them keeps the depth pairing exact.
                 $depth++;
                 continue;
             }

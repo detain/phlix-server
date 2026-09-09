@@ -9,7 +9,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Chromecast\CastDevice;
 use Phlix\Chromecast\CastDiscovery;
 use Phlix\Chromecast\CastManager;
-use Phlix\Chromecast\CastSession;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Session\PlaybackController;
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
 use Phlix\Access\StreamSessionService;
-use Phlix\Auth\AuthManager;
 use Phlix\Auth\SignedUrl;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;

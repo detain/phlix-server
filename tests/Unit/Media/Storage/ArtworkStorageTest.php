@@ -7,7 +7,6 @@ namespace Phlix\Tests\Unit\Media\Storage;
 use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Media\Storage\ArtworkStorage;
 use PHPUnit\Framework\TestCase;
-use Psr\Http\Message\ResponseInterface;
 use Workerman\Http\Client;
 use Workerman\Http\Response as HttpResponse;
 

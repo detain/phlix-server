@@ -6,7 +6,6 @@ namespace Phlix\Tests\Unit\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Extras\TrailerFinder;
-use Phlix\Media\Transcoding\FfmpegRunner;
 
 class TrailerFinderTest extends TestCase
 {

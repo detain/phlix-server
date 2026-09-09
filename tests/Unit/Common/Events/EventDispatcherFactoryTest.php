@@ -12,7 +12,6 @@ use Phlix\Common\Events\ListenerRegistry;
 use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 use Phlix\Tests\Fixtures\Events\SampleEvent;
-use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;

@@ -10,7 +10,6 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Server\Http\Controllers\MarkerController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 

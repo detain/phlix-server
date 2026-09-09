@@ -9,7 +9,6 @@ use Phlix\AirPlay\AirPlayDevice;
 use Phlix\AirPlay\AirPlayDiscovery;
 use Phlix\AirPlay\AirPlayManager;
 use Phlix\AirPlay\AirPlaySession;
-use Phlix\AirPlay\RaopClient;
 
 class AirPlayManagerTest extends TestCase
 {

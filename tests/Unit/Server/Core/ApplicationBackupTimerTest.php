@@ -6,9 +6,7 @@ namespace Phlix\Tests\Unit\Server\Core;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\BackupManager;
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Server\Core\Application;
-use Psr\Container\ContainerInterface;
 use Workerman\Timer;
 use Workerman\Worker;
 

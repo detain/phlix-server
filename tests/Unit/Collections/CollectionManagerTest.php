@@ -9,7 +9,6 @@ use Phlix\Collections\CollectionManager;
 use Phlix\Collections\CollectionRepository;
 use Phlix\Collections\CollectionWithItems;
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Playlists\SmartPlaylist;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRepository;
 use Workerman\MySQL\Connection;

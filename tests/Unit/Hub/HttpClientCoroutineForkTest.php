@@ -8,7 +8,6 @@ use Phlix\Hub\HttpClient;
 use Phlix\Tests\Support\Coroutine\RunsInCoroutine;
 use Phlix\Tests\Support\Coroutine\WithWorkerEventLoop;
 use PHPUnit\Framework\TestCase;
-use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 use Workerman\Http\Client;
 

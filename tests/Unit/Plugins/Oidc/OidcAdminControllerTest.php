@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
 use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 
 final class OidcAdminControllerTest extends TestCase
 {

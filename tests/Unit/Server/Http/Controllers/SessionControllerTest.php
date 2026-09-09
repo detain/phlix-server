@@ -10,7 +10,6 @@ use Phlix\Media\Markers\IntroMarker;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Media\Markers\OutroMarker;
-use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Server\Http\Controllers\SessionController;
 use Phlix\Server\Http\Request;
 use Phlix\Session\PlaybackController;

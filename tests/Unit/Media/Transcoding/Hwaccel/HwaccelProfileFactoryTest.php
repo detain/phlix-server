@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;

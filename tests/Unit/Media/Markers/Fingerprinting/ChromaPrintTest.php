@@ -4,12 +4,9 @@ namespace Phlix\Tests\Unit\Media\Markers\Fingerprinting;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrint;
-use Phlix\Media\Markers\Fingerprinting\ChromaPrintFactory;
-use Phlix\Media\Markers\Fingerprinting\ChromaPrintFfi;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintFingerprintFailedException;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintNotAvailableException;
-use Phlix\Media\Markers\Fingerprinting\ChromaPrintShelled;
 use Psr\Log\NullLogger;
 
 class ChromaPrintTest extends TestCase

@@ -6,12 +6,9 @@ namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlix\Dlna\AvTransport;
 use Phlix\Dlna\CdsServer;
 use Phlix\Dlna\ContentDirectory;
-use Phlix\Dlna\DlnaDevice;
 use Phlix\Dlna\DlnaServer;
-use Phlix\Dlna\DeviceRegistry;
 use Phlix\Media\Library\ItemRepository;
 
 /**

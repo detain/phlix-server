@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
-use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Streaming\Rendition;

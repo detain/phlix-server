@@ -12,7 +12,6 @@ use Phlix\Webhooks\Plugins\NtfyPlugin;
 use Phlix\Webhooks\Plugins\PushoverPlugin;
 use Phlix\Webhooks\Plugins\SlackPlugin;
 use Phlix\Webhooks\Plugins\TelegramPlugin;
-use Phlix\Webhooks\WebhookEvent;
 use Phlix\Webhooks\WebhookDispatcher;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;

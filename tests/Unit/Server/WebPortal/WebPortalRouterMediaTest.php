@@ -7,7 +7,6 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserProfileManager;
-use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;

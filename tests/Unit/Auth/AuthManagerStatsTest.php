@@ -11,7 +11,6 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Stats\StatsCollector;
 use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 /**
  * Verifies AuthManager records user-activity stats (login/logout) into the

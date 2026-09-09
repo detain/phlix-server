@@ -6,12 +6,9 @@ namespace Phlix\Tests\Unit\Admin\Maintenance;
 
 use Phlix\Admin\Maintenance\MaintenanceTask;
 use Phlix\Admin\Maintenance\MaintenanceTaskRunner;
-use Phlix\Media\Library\PathDeduper;
-use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Server\Http\Controllers\Admin\MaintenanceController;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
-use Workerman\MySQL\Connection;
 
 /**
  * The maintenance task vocabulary must stay covered end to end (S77).

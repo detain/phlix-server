@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
-use Phlix\Auth\AuthManager;
 use Phlix\Auth\SignedUrl;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
@@ -14,7 +13,6 @@ use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\FastPath\PreRouterFastPaths;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 use Phlix\Server\Workerman\BodylessResponse;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;

@@ -7,11 +7,7 @@ namespace Phlix\Tests\Unit\Plugins\Oidc;
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Phlix\Plugins\Oidc\OidcProvider;
-use Phlix\Plugins\Oidc\OidcValidationException;
-use Phlix\Shared\Auth\AuthResult;
 use Phlix\Shared\Auth\ProviderInterface;
-use Phlix\Shared\Auth\UserInfo;
-use RuntimeException;
 
 final class OidcProviderTest extends TestCase
 {

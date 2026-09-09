@@ -7,7 +7,6 @@ namespace Phlix\Tests\Unit\Plugins\Oidc;
 use Jose\Component\Core\JWKSet;
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
-use Phlix\Plugins\Oidc\IdTokenClaims;
 use Phlix\Plugins\Oidc\IdTokenValidator;
 use Phlix\Plugins\Oidc\OidcValidationException;
 use Phlix\Plugins\Util\RecursiveDelete;

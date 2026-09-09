@@ -6,13 +6,9 @@ namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Ed25519KeyManager;
-use Phlix\Hub\HeartbeatResult;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\HttpClient;
-use Phlix\Hub\HttpResponse;
-use Phlix\Hub\StoredEnrollment;
 use Phlix\Hub\SubdomainClient;
-use Phlix\Hub\SubdomainResult;
 use Phlix\Common\Logger\StructuredLogger;
 
 class SubdomainClientTest extends TestCase

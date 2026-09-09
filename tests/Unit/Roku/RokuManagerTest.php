@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Roku\RokuDevice;
 use Phlix\Roku\RokuDiscovery;
 use Phlix\Roku\RokuManager;
-use Phlix\Roku\RokuSession;
 use Phlix\Session\PlaybackController;
 use Workerman\MySQL\Connection;
 

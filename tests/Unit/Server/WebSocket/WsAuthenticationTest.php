@@ -7,7 +7,6 @@ namespace Phlix\Tests\Unit\Server\WebSocket;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\JwtHandler;
 use Phlix\Server\WebSocket\Connection;
-use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Server\WebSocket\WebSocketServer;

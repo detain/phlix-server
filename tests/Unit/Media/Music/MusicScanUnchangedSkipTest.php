@@ -17,7 +17,6 @@ use Phlix\Media\Music\MusicScanPrefetcher;
 use Phlix\Media\Music\MusicScanSkipIndex;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 /**
  * S122(a) — the unchanged-file fast path, and every way it must NOT fire.

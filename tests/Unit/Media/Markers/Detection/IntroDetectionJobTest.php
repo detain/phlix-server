@@ -4,7 +4,6 @@ namespace Phlix\Tests\Unit\Media\Markers\Detection;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Markers\Detection\FingerprintClusterer;
 use Phlix\Media\Markers\Detection\IntroDetectionJob;
 use Phlix\Media\Markers\Detection\IntroDetectionResult;
 use Phlix\Media\Markers\Detection\IntroMarkerCandidate;

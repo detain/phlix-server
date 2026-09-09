@@ -9,8 +9,6 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MetadataProviderInterface;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\StructuredLogger;
 
 class MetadataManagerTest extends TestCase
 {

@@ -10,7 +10,6 @@ use Phlix\Hub\ClaimStatusResult;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\HeartbeatResult;
 use Phlix\Hub\HubClient;
-use Phlix\Hub\HubClientException;
 use Phlix\Hub\HttpClient;
 use Phlix\Hub\HttpClientInterface;
 use Phlix\Hub\HttpResponse;

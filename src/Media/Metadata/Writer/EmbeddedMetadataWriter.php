@@ -373,8 +373,9 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
         $staged = $this->stagePath($mediaPath);
 
         try {
-            copy($mediaPath, $staged);
-
+            // NO pre-stage copy(): ffmpeg -y creates the staged file itself, so
+            // copying a multi-GB film first would double the I/O and buy
+            // nothing — the original stays read-only either way.
             $arguments = [
                 escapeshellarg($this->ffmpegPath),
                 '-nostdin -hide_banner -loglevel error -y',
@@ -446,7 +447,16 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
         $staged = $this->stagePath($mediaPath);
 
         try {
-            copy($mediaPath, $staged);
+            // getID3 edits IN PLACE, so the copy must be complete before it
+            // runs — an unchecked copy() could hand a PARTIAL stage to a tool
+            // that happily tags it, and the publish would ship the truncation.
+            if (!copy($mediaPath, $staged)) {
+                throw EmbeddedWriteFailedException::stageFailed(
+                    $item->id,
+                    $mediaPath,
+                    'could not stage a complete copy of the original beside it (disk full?)',
+                );
+            }
 
             $writer = new \getid3_writetags();
             $writer->filename = $staged;

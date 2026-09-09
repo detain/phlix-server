@@ -454,10 +454,11 @@ final class EmbeddedMetadataWriterTest extends TestCase
             // Simulated power loss mid-remux: the tool created the output and
             // wrote PARTIAL bytes, then died on SIGTERM (shell 128+15 shape).
             static function (string $cmd) use ($media): array {
+                // The tool opened its output and wrote PARTIAL bytes, then died
+                // on SIGTERM (shell 128+15 shape).
                 $staged = S89ScriptedRunner::stageOf($cmd, $media);
-                if ($staged !== null) {
-                    file_put_contents($staged, 'PART');
-                }
+                self::assertNotNull($staged, 'the interrupted arm needs the real staged target from the command');
+                file_put_contents((string) $staged, 'PART');
                 $observed = file_get_contents($media);
 
                 return ['exitCode' => 143, 'stdout' => '', 'stderr' => 'Terminated', 'observed' => $observed];
@@ -500,15 +501,14 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $dir = $this->tempDir('nostage');
         $media = $this->fakeMedia($dir, 'x.mkv');
 
-        // ffmpeg "succeeds" but produced nothing at the staged path (e.g. the
-        // process was killed after closing a 0-byte output): publishing that
-        // would truncate a good file, so it must be refused.
+        // ffmpeg "succeeds" but left a 0-BYTE staged file (interrupted right
+        // after container creation): publishing that would truncate a good
+        // file, so the empty-stage guard must refuse it.
         $runner = new S89ScriptedRunner([
             static function (string $cmd) use ($media): array {
                 $staged = S89ScriptedRunner::stageOf($cmd, $media);
-                if ($staged !== null) {
-                    unlink($staged); // the copy() stage itself removed
-                }
+                self::assertNotNull($staged);
+                touch((string) $staged);
 
                 return ['exitCode' => 0, 'stdout' => '', 'stderr' => ''];
             },
@@ -721,36 +721,40 @@ final class S89ScriptedRunner implements ExternalCommandRunnerInterface
         $this->script = $script;
     }
 
-    /** The single staged sibling of $mediaPath currently on disk. */
+    /**
+     * The output target of the recorded ffmpeg command: the LAST single-quoted
+     * token of the line, with escapeshellarg's `'\''` un-escaping reversed.
+     * Returns null unless the line ends in a well-formed quoted token shaped
+     * like $mediaPath's staged sibling — so every arm using it simultaneously
+     * PINS "ffmpeg's output arg is the stage (never the original)" and locates
+     * the exact path the real tool would have created.
+     */
     public static function stageOf(string $cmd, string $mediaPath): ?string
     {
-        unset($cmd); // stages are located on the filesystem, not by shell lexing
-        $staged = glob($mediaPath . '.phlix-embed-tmp-*');
+        if (!preg_match("/'((?:[^']|'\\'')*)'\s*$/", $cmd, $m)) {
+            return null;
+        }
+        $token = str_replace("'\\''", "'", $m[1]);
 
-        return is_array($staged) && $staged !== [] ? (string) $staged[0] : null;
+        return str_starts_with($token, $mediaPath . '.phlix-embed-tmp-') ? $token : null;
     }
 
     /**
-     * Step callable simulating a COMPLETED tool run: writes $bytes to the
-     * staged sibling and exits 0 — and FAILS (exit 1) unless the command's
-     * final single-quoted token IS the staged path, so these arms also pin
-     * "the stage, never the original, is ffmpeg's output target". (escapeshellarg
-     * stage paths never contain embedded quotes: they are ASCII media names +
-     * pid/entropy suffix; a mismatch here reddens loudly, it cannot pass silently.)
+     * Step callable simulating a COMPLETED tool run: creates the staged file
+     * at exactly the path the command's final token names and exits 0. If the
+     * final token is NOT a staged sibling of $mediaPath the step FAILS loudly
+     * (exit 1, nothing published) — this is the arm that would catch a writer
+     * regression pointing ffmpeg at the original itself.
      */
     public static function writeToStage(string $mediaPath, string $bytes): callable
     {
         return static function (string $cmd) use ($mediaPath, $bytes): array {
-            $staged = glob($mediaPath . '.phlix-embed-tmp-*');
-            if (!is_array($staged) || $staged === []) {
-                return ['exitCode' => 1, 'stdout' => '', 'stderr' => 'no staged sibling existed at run() time'];
+            $staged = self::stageOf($cmd, $mediaPath);
+            if ($staged === null) {
+                return ['exitCode' => 1, 'stdout' => '', 'stderr' => 'final token was not a stage of the media: ' . $cmd];
             }
 
-            if (!preg_match("/'([^']*)'\s*$/", $cmd, $m) || $m[1] !== $staged[0]) {
-                return ['exitCode' => 1, 'stdout' => '', 'stderr' => 'final quoted token was not the stage: ' . $cmd];
-            }
-
-            file_put_contents((string) $staged[0], $bytes);
+            file_put_contents($staged, $bytes);
 
             return ['exitCode' => 0, 'stdout' => '', 'stderr' => ''];
         };

@@ -8,8 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Ldap\LdapProvider;
 use Phlix\Plugins\Ldap\LdapConnection;
 use Phlix\Plugins\Ldap\UserMapper;
-use Phlix\Plugins\Ldap\LdapUserInfo;
-use Phlix\Shared\Auth\AuthResult;
 use Phlix\Shared\Auth\ProviderInterface;
 
 final class LdapProviderTest extends TestCase

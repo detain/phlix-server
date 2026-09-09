@@ -9,10 +9,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 use Phlix\Auth\WebAuthn\WebAuthnCredential;
-use Phlix\Shared\Auth\AuthResult;
-use Workerman\MySQL\Connection;
 use PHPUnit\Framework\MockObject\MockObject;
 
 final class WebAuthnControllerTest extends TestCase

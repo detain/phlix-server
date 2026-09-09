@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Media\Storage;
 
 use Phlix\Auth\SignedUrl;
-use Phlix\Server\Http\Response;
 
 /**
  * Stores, resizes, and serves user avatar images.

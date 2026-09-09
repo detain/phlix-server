@@ -13,7 +13,6 @@ namespace Phlix\Admin;
 
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
-use Throwable;
 use Workerman\Coroutine;
 use Workerman\Http\Client;
 

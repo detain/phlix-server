@@ -23,9 +23,7 @@ use Phlix\Hub\SubdomainClient;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\HttpClient;
-use Phlix\Hub\HttpResponse;
 use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Common\Logger\StructuredLogger;
 
 $configDir = __DIR__ . '/../config';
 $hubConfigFile = $configDir . '/hub.php';

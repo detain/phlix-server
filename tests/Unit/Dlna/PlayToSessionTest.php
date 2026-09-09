@@ -10,8 +10,6 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Dlna\PlayToSession;
 use Phlix\Dlna\RendererControlClient;
 use Phlix\Session\PlaybackController;
-use Phlix\Session\SessionManager;
-use Workerman\MySQL\Connection;
 
 class PlayToSessionTest extends TestCase
 {

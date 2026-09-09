@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaPosterController;

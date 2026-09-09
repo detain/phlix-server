@@ -14,7 +14,6 @@ namespace Phlix\Media\Library;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
-use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
 

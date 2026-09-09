@@ -6,7 +6,6 @@ namespace Phlix\Tests\Integration\Theming;
 
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Theming\ThemeMedia;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Theming\ThemeMediaRepository;

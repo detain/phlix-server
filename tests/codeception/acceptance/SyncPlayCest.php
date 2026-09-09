@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Codeception\acceptance;
 
 use Phlix\Tests\Codeception\SyncPlayTester;
-use Phlix\Session\SyncPlay\Messages;
-use Phlix\Tests\Codeception\Helper\MockConnection;
 
 /**
  * SyncPlay E2E Acceptance Tests.

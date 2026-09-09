@@ -9,10 +9,8 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\HttpClientInterface;
 use Phlix\Hub\HubClient;
-use Phlix\Hub\KeyPair;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 
 class HubJwksControllerTest extends TestCase
 {

@@ -11,7 +11,6 @@ use Phlix\LiveTv\Epg\SchedulesDirect\SdProgramMapper;
 use Phlix\LiveTv\ChannelManager;
 use Phlix\LiveTv\GuideManager;
 use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 class SdEpgServiceTest extends TestCase
 {

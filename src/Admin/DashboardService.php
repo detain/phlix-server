@@ -14,7 +14,6 @@ namespace Phlix\Admin;
 use DateTime;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\StreamManager;
-use Phlix\Media\Streaming\StreamState;
 use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;

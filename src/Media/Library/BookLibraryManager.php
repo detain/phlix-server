@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
-use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 

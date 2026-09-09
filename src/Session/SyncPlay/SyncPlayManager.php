@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Session\SyncPlay;
 
-use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;

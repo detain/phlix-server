@@ -10,7 +10,6 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 use PHPUnit\Framework\MockObject\MockObject;
 
 final class AuthProviderControllerTest extends TestCase

@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Access;
 
 use DateTime;
-use DateTimeInterface;
 use Workerman\MySQL\Connection;
 
 /**

@@ -10,7 +10,6 @@ use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Session\SyncPlay\Messages;
 use Workerman\Connection\TcpConnection;
-use Workerman\Worker;
 
 /**
  * Unit tests for frame shape handling (SP2 - flat canonical wire format).

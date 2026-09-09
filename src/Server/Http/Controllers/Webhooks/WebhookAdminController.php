@@ -15,7 +15,6 @@ use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Webhooks\DispatchResult;
 use Phlix\Webhooks\WebhookDispatcher;
 use Phlix\Webhooks\WebhookEvent;
 use DateTimeImmutable;

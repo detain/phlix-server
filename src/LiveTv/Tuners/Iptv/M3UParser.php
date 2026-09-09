@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\LiveTv\Tuners\Iptv;
 
-use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
 
 /**

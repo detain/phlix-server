@@ -6,7 +6,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Monolog\Handler\HandlerInterface;
 use Monolog\Handler\WhatFailureGroupHandler;
-use Monolog\Level;
 use Monolog\Logger;
 use Monolog\LogRecord;
 

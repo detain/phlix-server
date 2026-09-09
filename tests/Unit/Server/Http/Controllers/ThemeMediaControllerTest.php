@@ -15,7 +15,6 @@ use Phlix\Theming\ThemeAudio;
 use Phlix\Theming\ThemeMedia;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Theming\ThemeMediaRepository;
-use Phlix\Theming\ThemeVideo;
 
 /**
  * Unit tests for {@see ThemeMediaController}.

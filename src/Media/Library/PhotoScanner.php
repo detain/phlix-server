@@ -11,11 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
-use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
-use Psr\Log\LoggerInterface;
-use SplFileInfo;
 use Workerman\MySQL\Connection;
 
 /**

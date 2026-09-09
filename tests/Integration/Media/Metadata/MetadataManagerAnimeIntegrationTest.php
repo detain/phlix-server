@@ -9,7 +9,6 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MetadataProviderInterface;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Common\Logger\LogChannels;
 
 /**
  * Integration tests for MetadataManager with anime-type providers.

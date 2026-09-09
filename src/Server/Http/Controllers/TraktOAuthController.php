@@ -15,7 +15,6 @@ use Phlix\Server\Integrations\Trakt\HttpClient;
 use Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore;
 use Phlix\Server\Integrations\Trakt\InvalidOAuthStateException;
 use Phlix\Server\Integrations\Trakt\SessionTraktOAuthStateStore;
-use Phlix\Server\Integrations\Trakt\SodiumTokenCipher;
 use Phlix\Server\Integrations\Trakt\TraktApi;
 use Phlix\Server\Integrations\Trakt\TraktOAuthStateStore;
 use Phlix\Server\Integrations\Trakt\TraktOperatorConfig;

@@ -9,7 +9,6 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\KeyPair;
-use RuntimeException;
 
 class Ed25519KeyManagerTest extends TestCase
 {

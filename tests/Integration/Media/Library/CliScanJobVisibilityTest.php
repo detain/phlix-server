@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media\Library;
 
 use Phlix\Common\Uuid;
-use Phlix\Common\Database\ConnectionPool;
 use Phlix\Console\Commands\LibraryScanCommand;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;

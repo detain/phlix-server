@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Media\Metadata;
 
 use Phlix\Media\Library\ItemRepository;
-use Psr\Log\LoggerInterface;
 
 /**
  * ExifProvider provides local EXIF metadata for photos.

@@ -10,7 +10,6 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
 use Phlix\Media\Transcoding\Subtitles\SubtitleBurnerFactory;
 use Phlix\Media\Transcoding\Subtitles\SubtitleFormat;
-use Phlix\Media\Transcoding\Subtitles\SubtitleStyleOptions;
 use Phlix\Media\Transcoding\Subtitles\SubtitleTrack;
 
 class SubtitleBurnerTest extends TestCase

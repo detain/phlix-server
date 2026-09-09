@@ -13,7 +13,6 @@ namespace Phlix\Auth;
 
 use Phlix\Shared\Auth\AuthResult;
 use Phlix\Shared\Auth\ProviderInterface;
-use Psr\Container\ContainerInterface;
 use RuntimeException;
 
 /**

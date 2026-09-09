@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
-use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 

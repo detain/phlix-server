@@ -13,7 +13,6 @@ use Phlix\Server\Http\Request;
 use Phlix\Webhooks\DispatchResult;
 use Phlix\Webhooks\WebhookDispatcher;
 use Phlix\Webhooks\WebhookEvent;
-use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 
 /**

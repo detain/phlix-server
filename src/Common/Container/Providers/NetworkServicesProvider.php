@@ -18,7 +18,6 @@ use Phlix\Network\NatPmpClient;
 use Phlix\Network\PortForwardService;
 use Phlix\Network\StunClient;
 use Phlix\Network\UpnpIgdClient;
-use Psr\Log\LoggerInterface;
 
 use function DI\autowire;
 use function DI\get;

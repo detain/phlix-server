@@ -13,7 +13,6 @@ namespace Phlix\Media\Metadata;
 
 use DOMDocument;
 use DOMElement;
-use DOMNode;
 use Phlix\Media\Library\ItemRepository;
 
 /**

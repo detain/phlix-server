@@ -10,7 +10,6 @@ use Phlix\LiveTv\Relay\HlsRelayManager;
 use Phlix\LiveTv\Relay\HlsRelaySession;
 use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 use Phlix\Media\Streaming\HlsStreamer;
-use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\MockObject\MockObject;
 
 /**

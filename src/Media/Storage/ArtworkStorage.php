@@ -14,7 +14,6 @@ namespace Phlix\Media\Storage;
 use Phlix\Auth\SignedUrl;
 use Phlix\Common\Http\EventLoopTls;
 use Phlix\Common\Runtime\WorkerContext;
-use Phlix\Server\Http\Response;
 use Psr\Http\Message\ResponseInterface;
 use Workerman\Http\Client;
 

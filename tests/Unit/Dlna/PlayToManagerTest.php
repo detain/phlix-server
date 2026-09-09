@@ -12,7 +12,6 @@ use Phlix\Dlna\RendererControlClient;
 use Phlix\Dlna\RendererDiscovery;
 use Phlix\Dlna\PlayToSession;
 use Phlix\Session\PlaybackController;
-use Phlix\Session\SessionManager;
 
 /**
  * @group network

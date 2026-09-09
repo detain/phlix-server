@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
 use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;

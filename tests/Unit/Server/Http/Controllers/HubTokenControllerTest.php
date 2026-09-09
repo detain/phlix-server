@@ -10,7 +10,6 @@ use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Hub\HubUserClaims;
 use Phlix\Server\Http\Controllers\HubTokenController;
 use Phlix\Server\Http\Request;
-use Phlix\Server\Http\Response;
 
 class HubTokenControllerTest extends TestCase
 {

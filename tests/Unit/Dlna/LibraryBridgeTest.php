@@ -10,7 +10,6 @@ use Phlix\Dlna\LibraryBridge;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
-use Phlix\Media\Streaming\QualitySelector;
 
 /**
  * Tests for LibraryBridge class.

@@ -53,7 +53,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
      * resolver embeds in its fail-loud message and it is checked to survive into
      * `master` after this timing-flake fix lands — see {@see poolAcquireTimeout()}.
      */
-    public const LEAK_GATE_TOKEN = 'S106LEAKGATEX8T4';
+    private const LEAK_GATE_TOKEN = 'S106LEAKGATEX8T4';
 
     /**
      * Environment variable that overrides the pool's connection-acquire timeout
@@ -70,6 +70,14 @@ final class PooledConnectionConcurrencyTest extends TestCase
      * returned → `created` pinned at `maxSize`) still fails the test, just later.
      */
     private const DEFAULT_ACQUIRE_TIMEOUT = 120.0;
+
+    /**
+     * Upper bound (seconds) accepted from {@see LEAK_GATE_TIMEOUT_ENV}. This soak
+     * test completes in seconds, so any value beyond an hour can only be a typo;
+     * rejecting it keeps a mis-set env from turning the bounded leak-detection wait
+     * into a run the CI job timeout is the only thing standing between us and.
+     */
+    private const MAX_ACQUIRE_TIMEOUT = 3600.0;
 
     private string $host = '127.0.0.1';
     private int $port = 3306;
@@ -199,19 +207,29 @@ final class PooledConnectionConcurrencyTest extends TestCase
             return self::DEFAULT_ACQUIRE_TIMEOUT;
         }
 
-        // Fail fast, fail loud: a bad override must not silently fall back — a
-        // zero/negative ceiling would make the exhausted-pool acquire throw on the
-        // very first contention, i.e. mask a genuine leak in the opposite direction.
-        if (!is_numeric($raw) || (float) $raw <= 0.0) {
+        // Fail fast, fail loud. A bad override must never silently fall back, and
+        // never flow an unusable number into the pool's idle-channel pop():
+        //   - non-numeric / <= 0 → a zero or negative ceiling would make the very
+        //     first contention throw, masking a genuine leak in the OPPOSITE
+        //     direction (a false red that perverts the leak detector's meaning);
+        //   - non-finite (INF/NAN) → `is_numeric("1e400")` is true yet casts to INF,
+        //     whose float→timeout conversion under swoole is undefined;
+        //   - > MAX_ACQUIRE_TIMEOUT → an absurd value can only be a typo, and would
+        //     replace the bounded leak-detection wait with one the CI job timeout is
+        //     the only backstop for.
+        $seconds = is_numeric($raw) ? (float) $raw : NAN;
+
+        if (!is_finite($seconds) || $seconds <= 0.0 || $seconds > self::MAX_ACQUIRE_TIMEOUT) {
             $this->fail(sprintf(
-                '%s must be a positive number of seconds (got %s); refusing to fall back silently. [%s]',
+                '%s must be a finite number of seconds in (0, %g] (got %s); refusing to fall back silently. [%s]',
                 self::LEAK_GATE_TIMEOUT_ENV,
+                self::MAX_ACQUIRE_TIMEOUT,
                 var_export($raw, true),
                 self::LEAK_GATE_TOKEN,
             ));
         }
 
-        return (float) $raw;
+        return $seconds;
     }
 
     /**

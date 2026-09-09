@@ -59,7 +59,10 @@ final class ArtworkDownloadPolicyTest extends TestCase
     public function test_the_shipped_default_is_enabled(): void
     {
         // Pinned so turning artwork off by default becomes a deliberate edit.
-        $this->assertTrue(ArtworkDownloadPolicy::DEFAULT_ENABLED);
+        // Read through constant(): the check must be evaluated by the RUNTIME
+        // (this test must still redden if the constant flips), not pre-computed
+        // into a tautology by the static analyser.
+        $this->assertTrue((bool) constant(ArtworkDownloadPolicy::class . '::DEFAULT_ENABLED'));
     }
 
     public function test_an_explicit_false_override_disables_downloads(): void

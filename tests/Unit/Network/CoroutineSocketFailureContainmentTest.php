@@ -86,9 +86,13 @@ class CoroutineSocketFailureContainmentTest extends TestCase
     {
         $this->assertTrue(extension_loaded('swoole'), 'swoole is expected in CI and on the dev box');
 
-        $swooleException = new \Swoole\Exception('planted');
-        $socketException = new \Swoole\Coroutine\Socket\Exception('planted');
-        $error = new \Error('planted');
+        // Planted through plant() so the analyser sees `object`, not the concrete
+        // class: these assertions pin the REAL (loaded-extension) hierarchy, which
+        // the phpstan stubs only mirror — folding them away would delete the check
+        // the tests exist for.
+        $swooleException = self::plant(new \Swoole\Exception('planted'));
+        $socketException = self::plant(new \Swoole\Coroutine\Socket\Exception('planted'));
+        $error = self::plant(new \Error('planted'));
 
         // What the OLD `catch (RuntimeException $e)` could actually contain: none of them.
         $this->assertNotInstanceOf(RuntimeException::class, $swooleException);
@@ -105,6 +109,18 @@ class CoroutineSocketFailureContainmentTest extends TestCase
         // And the exact chain, so a swoole release that re-parents the class is noticed.
         $this->assertSame(\Exception::class, get_parent_class($swooleException));
         $this->assertSame(\Swoole\Exception::class, get_parent_class($socketException));
+    }
+
+    /**
+     * Identity that hands back the planted value typed as plain `object`. The
+     * hierarchy assertions in the tests above must run against the extension's
+     * runtime class graph; without this seam the static analyser (reading the
+     * phpstan stubs, not the extension) constant-folds each assert and level 4
+     * flags a tautology that still guards a real regression at runtime.
+     */
+    private static function plant(object $planted): object
+    {
+        return $planted;
     }
 
     /**

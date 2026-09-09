@@ -1386,7 +1386,9 @@ class RelayConsumerTest extends TestCase
     {
         /** @var \Phlix\Server\Http\Request|null $captured */
         $captured = null;
-        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+        $dispatchCount = 0;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured, &$dispatchCount): \Phlix\Server\Http\Response {
+            $dispatchCount++;
             $captured = $req;
             return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
         };
@@ -1421,8 +1423,10 @@ class RelayConsumerTest extends TestCase
             $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, $requestId, $bodyChunk));
         }
         $this->assertGreaterThan(2, $bodyFrameCount, 'body must fragment across multiple BODY frames');
-        // Nothing dispatched until END arrives.
-        $this->assertNull($captured, 'request must not dispatch before the END chunk');
+        // Nothing dispatched until END arrives. Counted through $dispatchCount —
+        // assertNull($captured) here would pin the capture variable to null for
+        // every later use, including the real check below.
+        $this->assertSame(0, $dispatchCount, 'request must not dispatch before the END chunk');
 
         $this->hub->fireMessage($this->codec->encode(
             RelayFrameType::HTTP_REQUEST,

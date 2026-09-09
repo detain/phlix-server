@@ -379,7 +379,7 @@ final class CuratedHookDeliveryProbeTest extends TestCase
             $thrown,
             'an inconclusive sample must throw, never be scored: ' . ($thrown?->getMessage() ?? '(no throw)')
         );
-        self::assertStringContainsString('inconclusive', strtolower((string) $thrown?->getMessage()));
+        self::assertStringContainsString('inconclusive', strtolower((string) $thrown->getMessage()));
     }
 
     public function test_probe_demands_a_coroutine_context(): void

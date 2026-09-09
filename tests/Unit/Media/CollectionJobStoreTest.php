@@ -79,7 +79,7 @@ final class CollectionJobStoreTest extends TestCase
 
         $first = $store->dequeue();
         $this->assertInstanceOf(CollectionJob::class, $first);
-        $this->assertSame('item-first', $first?->itemId, 'Dequeue must be FIFO by enqueue time.');
+        $this->assertSame('item-first', $first->itemId, 'Dequeue must be FIFO by enqueue time.');
 
         $second = $store->dequeue();
         $this->assertSame('item-second', $second?->itemId);

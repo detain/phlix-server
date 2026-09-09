@@ -89,8 +89,8 @@ final class MetadataWriteJobStoreTest extends TestCase
         $b = $store->dequeue();
 
         $this->assertInstanceOf(MetadataWriteJob::class, $a);
-        $this->assertSame('first', $a?->itemId, 'Drain order is FIFO by enqueue timestamp.');
-        $this->assertSame('lib-1', $a?->libraryId);
+        $this->assertSame('first', $a->itemId, 'Drain order is FIFO by enqueue timestamp.');
+        $this->assertSame('lib-1', $a->libraryId);
         $this->assertSame('second', $b?->itemId);
         $this->assertNull($store->dequeue(), 'Queue is empty after both jobs drained.');
         $this->assertFalse($store->isEnqueued('first'), 'Dequeue removes the job file.');

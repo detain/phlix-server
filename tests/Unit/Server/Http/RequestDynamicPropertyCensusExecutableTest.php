@@ -257,7 +257,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
          * cancel out — measured on the rebased tree, not predicted. The guard
          * names no Request.
          */
-    private const EXPECTED_PHP_FILES = 1838;
+    private const EXPECTED_PHP_FILES = 1839;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

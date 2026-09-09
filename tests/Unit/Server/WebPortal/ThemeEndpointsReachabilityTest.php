@@ -46,22 +46,22 @@ use function DI\factory;
  *
  * ## Why `WebPortalRouter` is the correct registrar for `/api/v1/themes`
  *
- * phlix-server has two HTTP entry points and they reach the two routers
- * differently:
+ * Since S171 there is exactly ONE HTTP entry point. The Workerman daemon
+ * ({@see \Phlix\Server\Workerman\HttpHandler}) tries `Application::dispatch()`
+ * first and falls through to {@see WebPortalRouter} for any `/api/` request
+ * that 404s. The file's original premise — a second CGI/FPM path
+ * (`public/index.php`) that sent every non-admin `/api/` request straight to
+ * `WebPortalRouter` — described a controller nothing on this deployment ever
+ * executed; S171 deleted it (its absence and the artifact sweep that justified
+ * the deletion are pinned by
+ * {@see \Phlix\Tests\Unit\Docker\PublicFrontControllerRemovalGuardTest}).
  *
- *  - **CGI / FPM (`public/index.php`)** — `/api/v1/admin/*` goes to a local
- *    `Router` carrying {@see \Phlix\Server\Http\Routes\AdminRoutes}; **every
- *    other `/api/` path goes straight to {@see WebPortalRouter}**. `Application`'s
- *    router is never consulted on this path at all.
- *  - **Workerman daemon ({@see \Phlix\Server\Workerman\HttpHandler})** — tries
- *    `Application::dispatch()` first and falls through to
- *    {@see WebPortalRouter} for any `/api/` request that 404s.
- *
- * So `WebPortalRouter` is the one registrar BOTH entry points dispatch `/api/*`
- * to, and a registration there is served by both. A registration on
- * `Application` alone would work in the daemon and 404 under CGI/FPM.
- * {@see testBothEntryPointsRouteApiRequestsToTheWebPortalRouter()} pins that
- * premise so this reasoning cannot rot silently.
+ * So `WebPortalRouter` is the registrar the sole entry point dispatches
+ * unmatched `/api/*` to, and a registration there is served. A registration on
+ * `Application` alone would also work in the daemon — which is exactly why the
+ * registrar choice is pinned, not assumed.
+ * {@see testTheSoleEntryPointRoutesApiRequestsToTheWebPortalRouter()} pins the
+ * daemon's `/api/` fall-through so this reasoning cannot rot silently.
  */
 final class ThemeEndpointsReachabilityTest extends TestCase
 {
@@ -426,37 +426,27 @@ final class ThemeEndpointsReachabilityTest extends TestCase
     }
 
     // -----------------------------------------------------------------
-    // 3. The premise: both entry points reach this registrar
+    // 3. The premise: the sole entry point reaches this registrar
     // -----------------------------------------------------------------
 
     /**
-     * Pins the dual-entry-point premise this whole design rests on.
+     * Pins the single-entry-point premise this whole design rests on.
      *
-     * Asserted against source, deliberately: neither entry point can be booted
-     * inside the unit suite (one is a CGI script that calls `send()`/`exit`, the
-     * other needs a live Workerman connection), and the failure being guarded is
-     * "someone rerouted `/api/` away from WebPortalRouter", which no runtime
-     * test in this suite can observe. Both halves are checked — a gate that
-     * covered only one of the two entry points would be exactly the
-     * "green build is not a link check" trap.
+     * After S171 the unserved CGI front controller (`public/index.php`) is
+     * gone: the Workerman daemon is the ONLY documented entry point for
+     * `/api/`. (This method used to pin both halves; the CGI half died with
+     * the file it read. The absence of that file — and of any deployment
+     * artifact that could re-front it — is guarded permanently by
+     * {@see \Phlix\Tests\Unit\Docker\PublicFrontControllerRemovalGuardTest}.)
+     *
+     * Asserted against source, deliberately: the daemon cannot be booted inside
+     * the unit suite (it needs a live Workerman connection), and the failure
+     * being guarded — "someone rerouted `/api/` away from WebPortalRouter" — is
+     * no more observable in unit runtime than the boot is.
      */
-    public function testBothEntryPointsRouteApiRequestsToTheWebPortalRouter(): void
+    public function testTheSoleEntryPointRoutesApiRequestsToTheWebPortalRouter(): void
     {
         $root = dirname(__DIR__, 4);
-
-        $cgi = file_get_contents($root . '/public/index.php');
-        $this->assertIsString($cgi);
-        $this->assertMatchesRegularExpression(
-            "/str_starts_with\(\\\$path,\s*'\/api\/'\)/",
-            $cgi,
-            'public/index.php must still branch on the /api/ prefix',
-        );
-        $this->assertMatchesRegularExpression(
-            '/\$webPortalRouter->dispatch\(\$request\)/',
-            $cgi,
-            'public/index.php must dispatch /api/ requests to WebPortalRouter — a theme route '
-            . 'registered there would otherwise 404 under CGI/FPM',
-        );
 
         $daemon = file_get_contents($root . '/src/Server/Workerman/HttpHandler.php');
         $this->assertIsString($daemon);

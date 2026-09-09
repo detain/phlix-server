@@ -72,3 +72,4 @@ after3	303	count=11	six_skipped=0	phpunit_exit=1	secs=294	summary=Tests: 11112, 
 after3	404	count=11	six_skipped=0	phpunit_exit=1	secs=293	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
 after3	505	count=11	six_skipped=0	phpunit_exit=1	secs=289	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.
 controlon	101	count=12	six_skipped=0	phpunit_exit=1	secs=298	summary=Tests: 11113, Assertions: 91417, Failures: 2, PHPUnit Warnings: 1, Skipped: 12.
+controloff	101	count=11	six_skipped=0	phpunit_exit=1	secs=297	summary=Tests: 11112, Assertions: 91416, Failures: 2, PHPUnit Warnings: 1, Skipped: 11.

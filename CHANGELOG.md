@@ -19,6 +19,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   controller's predicate) refuses demoting/disabling/deleting the final administrator, and `--force` is a
   confirmation bypass only — never a guard bypass. Commands are registered explicitly in `bin/phlix` behind a
   lazy `UserRepository` factory, so `php bin/phlix list` still opens no database. No HTTP routes, no migrations.
+
+- **Embedded-tag writer — destructive in-file tag writing, strictly opt-in and default OFF (S89).** The
+  second and riskier writer for the S87 write-back plumbing: the built-in
+  `Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter` implements `MetadataWriterInterface` and writes
+  canonical metadata INTO the media file — `getid3_writetags` for audio (MP3/FLAC/OGG/M4A/…), and an
+  `ffmpeg -map 0 -c copy -metadata …` remux for MP4/MKV that rewrites only the metadata container and
+  leaves the audio/video streams byte-identical. It is default-off at two layers: the S87 per-library
+  enqueue gate (`libraries.options.metadataWrite.enabled`) still has to be on for a job to be queued at
+  all, and on top of that this writer re-checks its OWN dedicated global setting
+  (`metadata.embedded_write_enabled`, resolved by the new `Phlix\Media\Metadata\EmbeddedWritePolicy`,
+  shipped default FALSE) before a single byte is touched — so enabling the safe sidecar writer can never
+  implicitly start rewriting media files. Three safety rails, each proven by tests:
+  (1) **atomic-rename discipline** — every mutation stages a unique sibling temp file in the media
+  directory and only then `rename()`s over the original, so a remux interrupted at any point (a non-zero
+  exit, a signal kill, a failed publish) leaves the ORIGINAL bytes intact; `getid3_writetags` rewrites in
+  place, so the original is never handed to it — only a copy. (The stage path re-appends the source
+  extension because ffmpeg picks the muxer from the output-file extension — a refusal no fake runner could
+  surface.) (2) **overwrite policy** — when a file already carries content embedded tags, the existing
+  `MetadataOverwritePolicy` is consulted; a deny is a normal return with a logged reason, never a throw
+  (ruling R1). (3) **per-file curation** — a concrete predicate runs IN FRONT of the global policy: an
+  existing stem or Kodi-convention (`movie.nfo`/`tvshow.nfo`/`episode.nfo`) sidecar that does NOT carry the
+  sidecar writer's generator marker is treated as operator-curated and blocks the destructive write
+  (ruling R2); an unreadable sidecar also blocks it, because the writer must not clobber what it cannot
+  prove is machine-made. A pre-flight refuses a degenerate/empty media dir, a missing file, or an
+  unwritable directory via the named `EmbeddedWriteFailedException` (item id + path + reason), which the
+  worker's per-writer `catch` surfaces as a warning. External process calls run through a small
+  `ExternalCommandRunnerInterface` seam (production: `ExecExternalCommandRunner`, a blocking `exec()`
+  inside the managed fork per the S87 AC-2 contract) so every interruption exit path is deterministically
+  testable. Registration rides the SAME `MetadataWriterRegistry` DI seam S88 established, ordered AFTER
+  the sidecar writer within a drain (ruling R4); zero new routes, zero migrations. Known limits, measured
+  not implied: in the combined sidecar→embedded drain the sidecar re-stamps the stem NFO with its marker
+  first, so the curation predicate there guards the Kodi-convention names and a not-rewritten stem; a
+  hand-edited NFO that still carries the marker reads as machine-made; and `metadata.embedded_write_enabled`
+  has no admin-UI surface until `detain/phlix-shared`'s `server-settings.schema.json` declares the key.
+
 - **Sidecar metadata writer — NFO + poster/fanart next to the media file (S88).** The first writer for the
   S87 write-back plumbing: the built-in `Phlix\Media\Metadata\Writer\SidecarWriter` implements
   `MetadataWriterInterface` and writes `<basename>.nfo` (XBMC/Kodi XML), `poster.jpg` and `fanart.jpg`

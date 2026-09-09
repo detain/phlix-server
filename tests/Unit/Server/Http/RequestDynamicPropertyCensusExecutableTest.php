@@ -236,8 +236,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * one first-party file (tests/Unit/Server/Core/ApplicationConfigDirResolutionTest.php,
         * the CWD-independence regression + source guard); zero files deleted.
         * The guard names no Request.
+        * Re-pinned 1834→1835 by S114: the stats_storage unique-key arc adds
+        * exactly one first-party file
+        * (tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php, the
+        * real-MySQL proof for migration 105 — NULL-distinctness, the 1138
+        * refusal, merge arithmetic and the accumulating upsert are observable
+        * only against a live server); the write path is an edit, not a file.
+        * The guard names no Request.
         */
-    private const EXPECTED_PHP_FILES = 1834;
+    private const EXPECTED_PHP_FILES = 1835;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

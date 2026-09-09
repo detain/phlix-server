@@ -266,7 +266,9 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
      * S102 review r1 MED-2, READER half — colliding rows must SUM.
      *
      * Seeded with one explicit `recorded_at` shared by all 13 rows, which is
-     * exactly what a snapshot run used to produce: `stats_storage.recorded_at` is
+     * exactly what a snapshot run used to produce (since S114 such a set stores as
+     * distinct-LIBRARY rows per bucket instead of same-library duplicates — the
+     * reader-visible sum is identical either way). `stats_storage.recorded_at` is
      * `DATETIME` (second precision) written with `NOW()`, and several raw types
      * fold onto the same bucket. `getStorageSummary()` ASSIGNED (`=`) while
      * ordering `BY total_bytes DESC`, so the SMALLEST colliding row won each
@@ -278,10 +280,20 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
         $recordedAt = '2031-02-03 04:05:06';
         $written = 0;
 
+        // S114: rows sharing (recorded_at, media_type) now carry DISTINCT
+        // library_ids — the UNIQUE key uq_stats_storage_recorded_media_library
+        // forbids a second '' row per bucket per second, and per-library rows
+        // sharing a bucket+second are exactly the multi-row case this reader
+        // aggregation exists for. The rolled-up bytes are unchanged.
         foreach (MediaItemType::ALL as $index => $type) {
             $bytes = 1_000 * ($index + 1);
             $written += $bytes;
-            $this->seedStorageRow(StorageSnapshotHelper::TYPE_TO_BUCKET[$type], $bytes, $recordedAt);
+            $this->seedStorageRow(
+                StorageSnapshotHelper::TYPE_TO_BUCKET[$type],
+                $bytes,
+                $recordedAt,
+                sprintf('s102-seed-lib-%02d', $index)
+            );
         }
 
         $this->assertSame(91_000, $written, 'The review r1 fixture: 13 types, 91,000 bytes');
@@ -360,11 +372,14 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
         /** @var array<string, int> $expected */
         $expected = [];
         $written = 0;
+        // S114: the two rows per bucket+second carry distinct library_ids —
+        // the UNIQUE key rejects the second '' row outright (1062), and
+        // per-library rows are how a multi-row bucket legitimately exists now.
         foreach (StorageSnapshotHelper::BUCKETS as $index => $bucket) {
             $first = 1_000 * ($index + 1);
             $second = 10_000 * ($index + 1);
-            $this->seedStorageRow($bucket, $first, $recordedAt);
-            $this->seedStorageRow($bucket, $second, $recordedAt);
+            $this->seedStorageRow($bucket, $first, $recordedAt, 's102-collapsing-lib-a');
+            $this->seedStorageRow($bucket, $second, $recordedAt, 's102-collapsing-lib-b');
             $expected[$bucket] = $first + $second;
             $written += $first + $second;
         }
@@ -394,8 +409,11 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     /**
      * The reviewer's EXACT fixture, through the public single-row API: 13 separate
      * `recordStorageSnapshot()` calls, i.e. the ad-hoc pattern that API still
-     * allows. Each call writes its own row, several of them into the same bucket,
-     * which is the collision the roll-ups used to lose 60,000 of 91,000 bytes to.
+     * allows. Several of them land in the same bucket, which is the collision the
+     * roll-ups used to lose 60,000 of 91,000 bytes to. Since S114 those calls
+     * ACCUMULATE into one row per bucket via the upsert behind migration 105's
+     * UNIQUE key, so the fixture is 5 rows carrying the summed per-bucket bytes —
+     * every byte still survives, which is what this test has always been about.
      *
      * ## The loop deliberately STRADDLES a wall-clock second (S102 review r2, MED-2)
      *
@@ -439,7 +457,14 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
         }
 
         $this->assertSame(91_000, $written, 'The review r1 fixture: 13 types, 91,000 bytes');
-        $this->assertCount(13, $ids, 'One row per call — the writer must not drop a single type');
+        $this->assertCount(
+            5,
+            $ids,
+            'S114: one row per BUCKET per run, not per call — the 13 calls share one stamp and one '
+            . "'' library, so migration 105's UNIQUE key folds each bucket's calls into a single "
+            . 'accumulating row. Five rows carrying all 13 types means NOTHING dropped; eight rows '
+            . 'or four rows here would mean the fold or the upsert broke.'
+        );
         $this->assertSame(
             1,
             $this->distinctRecordedAt($ids),
@@ -529,9 +554,21 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
     /**
      * Insert one `stats_storage` row with an explicit `recorded_at`, bypassing the
      * writer so the READER can be tested in isolation.
+     *
+     * S114 collateral: migration 105 made `library_id` `CHAR(36) NOT NULL DEFAULT
+     * ''`, and strict mode rejects an EXPLICIT NULL on INSERT (error 1048 — the
+     * ALTER's implicit conversion does not extend to INSERTs; measured), so the
+     * old hardcoded `NULL` becomes the bound `''` sentinel by default. Multiple
+     * rows in ONE `(recorded_at, media_type)` now require distinct `$libraryId`s —
+     * that is the UNIQUE key doing its job, and it is also the only way such a
+     * row set can exist in the post-105 world.
      */
-    private function seedStorageRow(string $bucket, int $totalBytes, string $recordedAt): void
-    {
+    private function seedStorageRow(
+        string $bucket,
+        int $totalBytes,
+        string $recordedAt,
+        string $libraryId = ''
+    ): void {
         $db = $this->db;
         $this->assertNotNull($db);
 
@@ -539,8 +576,8 @@ final class PlaybackEventMediaTypeEnumTest extends TestCase
         $db->query(
             'INSERT INTO stats_storage (id, recorded_at, library_id, media_type, item_count, total_bytes,
                                         transcode_cache_bytes)
-             VALUES (?, ?, NULL, ?, 1, ?, 0)',
-            [$id, $recordedAt, $bucket, $totalBytes],
+             VALUES (?, ?, ?, ?, 1, ?, 0)',
+            [$id, $recordedAt, $libraryId, $bucket, $totalBytes],
         );
         $this->storageIds[] = $id;
     }

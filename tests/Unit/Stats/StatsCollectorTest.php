@@ -314,6 +314,103 @@ class StatsCollectorTest extends TestCase
     }
 
     /**
+     * S114 — the storage write is an ACCUMULATING upsert on migration 105's UNIQUE
+     * key `(recorded_at, media_type, library_id)`, and the `''` sentinel is bound
+     * for an unscoped run.
+     *
+     * Two halves, both load-bearing:
+     *   * `col = COALESCE(col, 0) + VALUES(col)` — never `col = VALUES(col)`. The S102 reader
+     *     SUMs every row of the newest second per bucket, so a first-write-wins
+     *     upsert (the 097 playback_state shape) would silently SHRINK the
+     *     dashboard's totals whenever two runs share a generation. The COALESCE
+     *     half is load-bearing too: 019 left the numeric columns NULLABLE and
+     *     105's merge faithfully preserves an all-NULL legacy group as NULL —
+     *     bare `NULL + VALUES(col)` is NULL, which would silently LOSE the
+     *     incoming snapshot's bytes on the fold onto such a survivor.
+     *   * `library_id` is NOT NULL since 105 and strict mode rejects an explicit
+     *     INSERT NULL (1048, measured), so a null `$libraryId` must arrive at the
+     *     driver as the `''` sentinel, never as null.
+     *
+     * The real-MySQL half — the key exists, collides, and the survivor keeps its
+     * id — lives in
+     * {@see \Phlix\Tests\Integration\Stats\StatsStorageUniqueKeyUpsertGuardTest}.
+     */
+    public function testTheStorageWriteIsAnAccumulatingUpsertAndBindsTheEmptyLibrarySentinel(): void
+    {
+        /** @var list<string> $statements */
+        $statements = [];
+        /** @var list<array<int, mixed>> $paramsList */
+        $paramsList = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, array $params) use (&$statements, &$paramsList): array {
+                $statements[] = $sql;
+                $paramsList[] = $params;
+
+                return [];
+            }
+        );
+
+        $collector = new StatsCollector($db);
+        $collector->recordStorageSnapshots(['movie' => ['count' => 1, 'bytes' => 1_000]]);
+        $collector->recordStorageSnapshot('series', 2, 2_000, 33, 'library-42');
+
+        $this->assertCount(2, $statements, 'Two runs, two statements');
+
+        foreach ($statements as $index => $sql) {
+            $normalized = (string) preg_replace('/\s+/', ' ', $sql);
+
+            $this->assertStringContainsString(
+                'INSERT INTO stats_storage',
+                $normalized,
+                "query #{$index} must still be the stats_storage INSERT the string-pinned callers match"
+            );
+            $this->assertStringContainsString(
+                'ON DUPLICATE KEY UPDATE',
+                $normalized,
+                "query #{$index} must upsert, not plain-INSERT — a bare INSERT behind the UNIQUE key "
+                . 'turns every same-second repeat into a contained 1062 (a lost snapshot)'
+            );
+
+            foreach (['item_count', 'total_bytes', 'transcode_cache_bytes'] as $column) {
+                $this->assertStringContainsString(
+                    $column . ' = COALESCE(' . $column . ', 0) + VALUES(' . $column . ')',
+                    $normalized,
+                    "{$column} must ACCUMULATE, NULL-safely. The S102 reader sums rows, so "
+                    . "overwriting the row's value with the incoming one would shrink reader-visible "
+                    . 'totals, and bare addition onto a NULL survivor (an all-NULL legacy group kept '
+                    . "as NULL by 105's merge) would erase the incoming bytes."
+                );
+            }
+
+            // The first-write-wins shape `col = VALUES(col)` must be absent: in the
+            // accumulating form a `+ <col> ` always separates `= ` from `VALUES(`.
+            $this->assertDoesNotMatchRegularExpression(
+                '/=\s*VALUES\s*\(/i',
+                $normalized,
+                "query #{$index} contains a first-write-wins assignment — forbidden by S114/R3"
+            );
+
+            // The survivor keeps its identity and its slot in time: `id` (the
+            // PRIMARY) and `recorded_at` (the key) are never in the UPDATE clause.
+            $updateClause = (string) (preg_split('/ON DUPLICATE KEY UPDATE/i', $normalized)[1] ?? '');
+            $this->assertDoesNotMatchRegularExpression(
+                '/(^|[\s,])id\s*=/i',
+                $updateClause,
+                'the upsert must not re-key the surviving row'
+            );
+            $this->assertStringNotContainsString('recorded_at', $updateClause);
+            $this->assertStringNotContainsString('library_id', $updateClause);
+            $this->assertStringNotContainsString('media_type', $updateClause);
+        }
+
+        // Unscoped run → the '' sentinel, never a null bind (105 made the column
+        // NOT NULL; explicit NULL on INSERT is error 1048 under STRICT_TRANS_TABLES).
+        $this->assertSame('', $paramsList[0][1], 'A null libraryId must bind the empty-string sentinel');
+        $this->assertSame('library-42', $paramsList[1][1], 'A scoped run still binds its real library id');
+    }
+
+    /**
      * S102 review r2 MED-2 — one snapshot RUN carries one `recorded_at`.
      *
      * `recorded_at` is a second-precision `DATETIME` and the dashboard joins on

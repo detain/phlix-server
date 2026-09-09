@@ -28,11 +28,13 @@ use Workerman\Timer;
  * from every scan and HTTP worker.
  *
  * S87 shipped the plumbing with zero writers; S88 added the built-in
- * {@see SidecarWriter} through the registry's DI definition (ruling R1), so a
- * drain now executes real writes for movie/episode/track rows. The embedded-tag
- * writer remains S89. A plugin registered through the S87 capability arm
- * executes alongside it — `supporting()` returns every registered writer whose
- * type sniff passes, each isolated by the per-writer catch below.
+ * {@see SidecarWriter} and S89 the built-in {@see EmbeddedMetadataWriter}
+ * through the registry's DI definition (rulings R1/R4), so a drain now executes
+ * real sidecar writes plus — only behind its own explicit opt-in — real
+ * embedded-tag writes for movie/episode/track rows. A plugin registered through
+ * the S87 capability arm executes alongside them — `supporting()` returns every
+ * registered writer whose type sniff passes, each isolated by the per-writer
+ * catch below.
  *
  * Two invariants this class exists to hold:
  *  - The plugin registry is PER-PROCESS resident state, so the fork running
@@ -180,9 +182,10 @@ final class MetadataWriteWorker
      * supports its type.
      *
      * Failure isolation: a throwing writer must never stop the batch (the S88
-     * is_writable()/S89 overwrite-policy error paths will throw exactly this
-     * way) and a vanished row (item deleted between enqueue and drain) is a
-     * legitimate drop.
+     * is_writable() pre-flight and the S89 write-failure paths throw exactly
+     * this way — S89's POLICY and CURATION skips are normal returns with a
+     * logged reason, per ruling R1, and never reach this catch) and a vanished
+     * row (item deleted between enqueue and drain) is a legitimate drop.
      */
     private function processOneJob(MetadataWriteJob $job): void
     {

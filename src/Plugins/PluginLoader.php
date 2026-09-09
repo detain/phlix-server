@@ -542,7 +542,8 @@ class PluginLoader
         // leak-free cycle. Registration itself cannot refuse (unlike the theme
         // arm above) — deciding whether a write is SAFE is the writer's job at
         // drain time in the MetadataWriteWorker process (S88 is_writable()
-        // pre-flight, S89 MetadataOverwritePolicy), never the host's at enable.
+        // pre-flight, S89 EmbeddedWritePolicy opt-in / MetadataOverwritePolicy
+        // / per-file curation), never the host's at enable.
         if ($this->metadataWriterRegistry !== null && $instance instanceof MetadataWriterInterface) {
             $this->metadataWriterRegistry->register($instance);
         }

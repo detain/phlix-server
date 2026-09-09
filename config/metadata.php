@@ -73,6 +73,18 @@ return [
     // server-settings.schema.json `metadata.overwrite_existing` default.
     'overwrite_existing' => true,
 
+    // S89 — whether the embedded-tag writer may rewrite tags INSIDE media
+    // files at all. FALSE (default) is strict opt-in for a DESTRUCTIVE mode:
+    // nothing here is "behaviour-preserving" because embedded writing did not
+    // exist before S89, so the safe ship value is off and only an explicit,
+    // readable override turns it on. Read LIVE via SettingsRepository by
+    // Phlix\Media\Metadata\EmbeddedWritePolicy at EmbeddedMetadataWriter::write()
+    // — this file is not composed into config/server.php, so the settings
+    // store is the only live read path. (KNOWN LIMIT: the key has no admin-UI
+    // surface until detain/phlix-shared's server-settings.schema.json declares
+    // it; until then the override is a server_settings row.)
+    'embedded_write_enabled' => false,
+
     // F2b — background, throttled plugin-source enrichment. Consumed by
     // MediaServicesProvider to build the SourceRateLimiter + PluginEnrichmentQueue
     // that the library-scan worker's BackgroundEnrichmentSubscriber drains. These

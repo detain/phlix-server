@@ -98,18 +98,19 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     private const CONVENTIONAL_NFO_NAMES = ['movie.nfo', 'tvshow.nfo', 'episode.nfo'];
 
     /**
-     * Container tag names that mean a human or tool actually tagged this file
-     * (getID3 normalises frame names to upper case for every format it reads).
-     * `encoder`/`creation_time` style muxer housekeeping is deliberately NOT
-     * in this set: its presence must not turn a clean file into an
-     * overwrite-policy-gated one.
+     * Tag frame names (lower-case — measured: getID3 exposes frames as
+     * `tags['id3v2']['title'] = ['Real Title']` on a real ffmpeg-tagged MP3,
+     * name-matched case-insensitively below) that mean a human or tool
+     * actually tagged this file. `encoder_settings` / `creation_time` style
+     * muxer housekeeping is deliberately NOT in this set: its presence must
+     * not turn a clean file into an overwrite-policy-gated one.
      *
      * @var list<string>
      */
     private const CONTENT_TAG_NAMES = [
-        'TITLE', 'ARTIST', 'ALBUM', 'TRACK', 'TRACKNUMBER', 'DATE', 'YEAR',
-        'GENRE', 'COMMENT', 'SYNOPSIS', 'DESCRIPTION', 'SUMMARY', 'LYRICS',
-        'ALBUMARTIST', 'ARTISTS', 'PERFORMER', 'COMPOSER', 'DURATION',
+        'title', 'artist', 'album', 'track', 'tracknumber', 'date', 'year',
+        'genre', 'comment', 'synopsis', 'description', 'summary', 'lyrics',
+        'albumartist', 'artists', 'performer', 'composer',
     ];
 
     private LoggerInterface $logger;
@@ -292,9 +293,15 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     // ── ruling R1: existing-tag detection for the policy gate ─────────────
 
     /**
-     * Does the file already carry CONTENT embedded tags? Detection failure
-     * (unreadable/corrupt) answers TRUE — fail-safe toward "there might be
-     * operator tags here", never toward clobbering them.
+     * Does the file already carry CONTENT embedded tags? An analyze() that
+     * THROWS or returns a non-array answers TRUE — fail-safe toward "there
+     * might be operator tags here", never toward clobbering them. A file that
+     * parses cleanly with zero frames answers FALSE (measured: getID3 does
+     * not throw on junk bytes; the write arms then fail on them loudly).
+     *
+     * Measured traversal (real ffmpeg→getID3 round-trip): one level of format
+     * key (`id3v2`, `quicktime`, `matrosk`, …) then lower-case frame names; a
+     * second optional case-normalisation level (`raw`/`lossy`/…) is tolerated.
      */
     private function hasExistingEmbeddedTags(string $mediaPath): bool
     {
@@ -314,25 +321,42 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
             return false;
         }
 
-        foreach ($tagSections as $section) {
-            if (!is_array($section)) {
+        foreach ($tagSections as $formatSection) {
+            if (!is_array($formatSection)) {
                 continue;
             }
-            foreach (self::CONTENT_TAG_NAMES as $name) {
-                if (!array_key_exists($name, $section)) {
-                    continue;
+            foreach ($formatSection as $caseOrFrame => $caseOrValues) {
+                if ($this->isContentFrameHit((string) $caseOrFrame, $caseOrValues)) {
+                    return true;
                 }
-                // getID3 yields list<string> per frame; accept the scalar form
-                // defensively, reject anything else (an ARRAY frame carries its
-                // first non-empty string — an array of empty strings does not
-                // count as tagged content).
-                $raw = $section[$name];
-                $values = is_array($raw) ? $raw : [$raw];
-                foreach ($values as $value) {
-                    if (is_scalar($value) && trim((string) $value) !== '') {
-                        return true;
+
+                if (is_array($caseOrValues)) {
+                    foreach ($caseOrValues as $frame => $values) {
+                        if ($this->isContentFrameHit((string) $frame, $values)) {
+                            return true;
+                        }
                     }
                 }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Name matches a content frame AND carries a non-empty value. List values
+     * of only empty strings do not count as tagged content.
+     */
+    private function isContentFrameHit(string $name, mixed $values): bool
+    {
+        if (!in_array(strtolower($name), self::CONTENT_TAG_NAMES, true)) {
+            return false;
+        }
+
+        $list = is_array($values) ? $values : [$values];
+        foreach ($list as $value) {
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                return true;
             }
         }
 

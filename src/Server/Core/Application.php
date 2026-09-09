@@ -1240,9 +1240,11 @@ class Application
      * Resolution is now single-sourced and absolute by construction:
      *
      *  1. `$config['_config_dir']` — TEST SEAM ONLY (never set under `src/` or
-     *     `start.php`; the three test call sites pass absolute paths). A
-     *     non-empty string; a relative value is a test bug and throws instead
-     *     of silently resolving against the CWD.
+     *     `start.php`; the three test files that use it functionally pass
+     *     absolute paths, while the S211 guard test additionally pins that
+     *     deliberately invalid values throw). A non-empty string; a relative
+     *     value is a test bug and throws instead of silently resolving against
+     *     the CWD.
      *  2. `$config['hub']['config_dir']` — the production source: when SET, the very
      *     value {@see \Phlix\Server\Http\Controllers\Admin\HealthController} receives
      *     and `HubServicesProvider` binds `RelayStateStore` on. `config/hub.php`

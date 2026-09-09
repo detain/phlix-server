@@ -23,16 +23,16 @@ use Phlix\Media\Library\MediaItem;
  * {@see \Phlix\Plugins\PluginLoader::enable()} — sniff-free, no method_exists()
  * or FQCN checks.
  *
- * S87 is plumbing ONLY: no writer ships with the server. The implementations
- * are the following steps of this arc —
+ * S87 itself shipped plumbing ONLY; the arc's writers followed —
  *   - S88: the sidecar writer (NFO + poster + fanart next to the media file),
  *     round-tripping against {@see \Phlix\Media\Metadata\LocalNfoProvider} and
  *     pre-flighting with is_writable() so an unwritable library reports a
- *     clear status instead of throwing;
+ *     clear status instead of throwing ({@see SidecarWriter});
  *   - S89: the embedded-tag writer (getid3_writetags / ffmpeg remux), default
  *     OFF, writing via atomic rename and consuming the EXISTING
- *     {@see \Phlix\Media\Metadata\MetadataOverwritePolicy} — it must not
- *     re-invent conflict handling.
+ *     {@see \Phlix\Media\Metadata\MetadataOverwritePolicy} rather than
+ *     re-inventing conflict handling, plus a per-file operator-curation
+ *     predicate in front of it ({@see EmbeddedMetadataWriter}).
  *
  * The host guarantees exactly one thing a writer implementation may rely on:
  * {@see self::write()} is NEVER called on the scan path, an HTTP worker, or

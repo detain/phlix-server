@@ -23,7 +23,7 @@ use RuntimeException;
  * `fanart.jpg` next to the media file — the recommended-default, safer,
  * reversible member of the write-back family (updates.md #53). Non-destructive
  * and human-visible: it touches only sidecar files, never the media file
- * itself (embedded tags are S89), and every write lands atomically
+ * itself (embedded tags are S89's {@see EmbeddedMetadataWriter}), and every write lands atomically
  * (write-to-temp + rename) so a failure mid-write leaves the PREVIOUS sidecar
  * bytes intact, never a half-written file.
  *

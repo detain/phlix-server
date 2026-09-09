@@ -46,6 +46,7 @@ use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\FuzzyMatcher;
 use Phlix\Media\Library\ScanIgnorePatterns;
+use Phlix\Media\Metadata\EmbeddedWritePolicy;
 use Phlix\Media\Metadata\Enrichment\BackgroundEnrichmentSubscriber;
 use Phlix\Media\Metadata\Enrichment\PluginEnrichmentQueue;
 use Phlix\Media\Metadata\Enrichment\PluginMetadataEnricher;
@@ -66,6 +67,9 @@ use Phlix\Media\Metadata\ThemeMusic\ThemeMusicFetcherInterface;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter;
+use Phlix\Media\Metadata\Writer\ExecExternalCommandRunner;
+use Phlix\Media\Metadata\Writer\ExternalCommandRunnerInterface;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\MediaAsset\MediaAssetWorker;
 use Phlix\Media\Playback\GaplessPlaybackManager;
@@ -134,6 +138,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $ffmpegConfigForScan = is_array($appConfig['ffmpeg'] ?? null) ? $appConfig['ffmpeg'] : [];
         $maxConcurrentScanProbesRaw = $ffmpegConfigForScan['max_concurrent_scan_probes'] ?? null;
         $maxConcurrentScanProbes = is_int($maxConcurrentScanProbesRaw) ? $maxConcurrentScanProbesRaw : null;
+
+        // S89: ffmpeg binary for the embedded-tag writer's MP4/MKV remux arm.
+        // Same parse + fallback shape as TranscodeServicesProvider's ffmpeg_path
+        // (a malformed/absent entry resolves to the shipped default, never to
+        // a null binary path on a command line).
+        $ffmpegPathRaw = $ffmpegConfigForScan['ffmpeg_path'] ?? null;
+        $embeddedFfmpegPath = is_string($ffmpegPathRaw) && $ffmpegPathRaw !== ''
+            ? $ffmpegPathRaw : '/usr/bin/ffmpeg';
 
         // Folder-watch (config/folder_watch.php, composed into config/server.php).
         // Absent or malformed config leaves the feature OFF — the same value the
@@ -661,6 +673,16 @@ final class MediaServicesProvider implements ServiceProviderInterface
             MetadataOverwritePolicy::class => factory(
                 static fn(ContainerInterface $c): MetadataOverwritePolicy
                     => new MetadataOverwritePolicy(self::optionalSettings($c))
+            ),
+
+            // S89: the destructive-write opt-in gate (`metadata.embedded_write_enabled`,
+            // shipped default OFF). Same optional-store rationale as the two
+            // policies above — but note the DEFAULT differs: an unavailable
+            // settings store degrades to OFF here (never silently rewrite media
+            // files), while overwrite/download degrade to their historical ON.
+            EmbeddedWritePolicy::class => factory(
+                static fn(ContainerInterface $c): EmbeddedWritePolicy
+                    => new EmbeddedWritePolicy(self::optionalSettings($c))
             ),
 
             // Effective scanner skip-pattern list behind `scanner.ignore_patterns`.
@@ -1274,6 +1296,23 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     }
                     $registry->register($writer);
 
+                    // S89 (ruling R4): the embedded-tag writer rides the SAME
+                    // definition-time seam as the sidecar — registered AFTER it,
+                    // so within one drain the sidecar NFO is (re)stamped with
+                    // the generator marker before the embedded writer's R2
+                    // curation predicate reads it. The instanceof guard mirrors
+                    // the SidecarWriter one above for the same reason: a
+                    // registry silently missing a built-in writer is the no-op
+                    // drain this seam exists to prevent.
+                    $embedded = $c->get(\Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter::class);
+                    if (!$embedded instanceof \Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter) {
+                        throw new \LogicException(
+                            'MediaServicesProvider: EmbeddedMetadataWriter DI definition '
+                                . 'must resolve to an EmbeddedMetadataWriter instance',
+                        );
+                    }
+                    $registry->register($embedded);
+
                     return $registry;
                 },
             ),
@@ -1285,6 +1324,19 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // from the artwork cache would silently never be written.
             \Phlix\Media\Metadata\Writer\SidecarWriter::class => autowire()
                 ->constructorParameter('artworkStorage', get(ArtworkStorage::class)),
+
+            // S89: the embedded-tag writer (destructive, strictly opt-in). Its
+            // two policy ctor params are REQUIRED (no defaults), so plain
+            // autowiring resolves them to the factory definitions above — the
+            // settings-backed wiring is INHERITED, not skipped (the PHP-DI
+            // skip caveat only ever hits OPTIONAL params). `ffmpegPath` and
+            // `logger` are optional and therefore NAMED explicitly: left
+            // implicit the writer would run with NullLogger (skips and
+            // failures invisible) and a hardcoded binary.
+            ExternalCommandRunnerInterface::class => autowire(ExecExternalCommandRunner::class),
+            EmbeddedMetadataWriter::class => autowire()
+                ->constructorParameter('ffmpegPath', $embeddedFfmpegPath)
+                ->constructorParameter('logger', get('logger.media')),
 
             // F3: downloaded-subtitle storage under the configured root
             // (named because PHP-DI skips defaulted optional ctor params).

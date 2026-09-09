@@ -221,8 +221,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * Re-pinned 1808→1823 by S61: the CLI user/admin arc adds fifteen
         * first-party files (Concerns/JsonOutput + seven User*Command src classes,
         * and one *CommandTest per command); none names Request — same pattern.
+        * Re-pinned 1823→1832 by S89: the embedded-tag writer arc adds nine
+        * first-party files (EmbeddedWritePolicy, EmbeddedMetadataWriter,
+        * ExternalCommandRunnerInterface + ExecExternalCommandRunner,
+        * EmbeddedWriteFailedException under src/; EmbeddedWritePolicyTest,
+        * ExternalCommandRunnerTest, EmbeddedMetadataWriterTest,
+        * EmbeddedMetadataWriterRealBinaryTest under tests/); none names
+        * Request — same pattern, only this denominator moves.
         */
-    private const EXPECTED_PHP_FILES = 1823;
+    private const EXPECTED_PHP_FILES = 1832;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -155,8 +155,7 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
             return;
         }
 
-        $this->assertMediaJail($item, $mediaDir);
-        $mediaPath = $this->mediaFilePath($item, $mediaDir);
+        $mediaPath = $this->assertMediaJail($item, $mediaDir);
 
         // 2. Per-file curation check — ruling R2, concrete predicate in front
         //    of the global policy bool.
@@ -208,11 +207,14 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
      * Mirror of SidecarWriter's refusal taxonomy for the media-file case:
      * a degenerate dir, a missing file, an unwritable directory each throw the
      * named exception (the worker's per-writer catch logs it as the
-     * operator-visible status).
+     * operator-visible status). Returns the JAIL-resolved media path —
+     * basename() of the row path under the worker-provided directory — which
+     * is what every subsequent operation uses, so a hostile/stale path column
+     * can never aim the writer outside $mediaDir.
      *
      * @throws EmbeddedWriteFailedException
      */
-    private function assertMediaJail(MediaItem $item, string $mediaDir): void
+    private function assertMediaJail(MediaItem $item, string $mediaDir): string
     {
         if ($mediaDir === '' || $mediaDir === '.') {
             // dirname('') is '.' — same working-directory write this pre-flight
@@ -220,25 +222,17 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
             throw EmbeddedWriteFailedException::degenerateDirectory($item->id, $item->path);
         }
 
-        if (!is_file($item->path)) {
-            throw EmbeddedWriteFailedException::missingMediaFile($item->id, $item->path);
+        $mediaPath = rtrim($mediaDir, '/') . '/' . basename($item->path);
+
+        if (!is_file($mediaPath)) {
+            throw EmbeddedWriteFailedException::missingMediaFile($item->id, $mediaPath);
         }
 
         if (!is_writable($mediaDir)) {
-            throw EmbeddedWriteFailedException::directoryNotWritable($item->id, $item->path);
+            throw EmbeddedWriteFailedException::directoryNotWritable($item->id, $mediaPath);
         }
-    }
 
-    /**
-     * The media file, jailed to the worker-provided directory: basename() of
-     * the row path joined onto $mediaDir. The DB path column is what the
-     * scanner persisted and is not re-trusted for I/O shape here — dirname()
-     * gave $mediaDir, basename() gives the file, and the join cannot escape
-     * the directory regardless of the column content.
-     */
-    private function mediaFilePath(MediaItem $item, string $mediaDir): string
-    {
-        return rtrim($mediaDir, '/') . '/' . basename($item->path);
+        return $mediaPath;
     }
 
     // ── ruling R2: per-file operator-curated NFO predicate ────────────────
@@ -524,11 +518,18 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     /**
      * Unique staged-sibling path, same pid+entropy discipline as
      * SidecarWriter::writeAtomically() (pids separate processes, uniqid
-     * entropy separates calls within one).
+     * entropy separates calls within one) — PLUS a trailing copy of the real
+     * extension: ffmpeg selects the muxer from the OUTPUT FILE EXTENSION, and
+     * a stage like `x.mp4.phlix-embed-tmp-...` makes the real binary refuse
+     * the job with "Error initializing the muxer … Invalid argument"
+     * (measured; no fake runner could ever have caught this — S345 rule 2).
      */
     private function stagePath(string $mediaPath): string
     {
-        return $mediaPath . '.phlix-embed-tmp-' . getmypid() . '-' . uniqid('', true);
+        $extension = strtolower(pathinfo($mediaPath, PATHINFO_EXTENSION));
+        $stage = $mediaPath . '.phlix-embed-tmp-' . getmypid() . '-' . uniqid('', true);
+
+        return $extension === '' ? $stage : $stage . '.' . $extension;
     }
 
     private function discardStaged(string $staged): void

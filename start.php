@@ -204,9 +204,9 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     $authManager = $container->get(AuthManager::class);
 
     // HttpHandler arg #2 is a RequestAuthenticator (the shared auth
-    // collaborator), NOT the raw AuthManager. Wrap the AuthManager exactly
-    // like the CGI entry point does (see public/index.php) so the daemon and
-    // CGI dispatch paths construct the handler identically and cannot drift.
+    // collaborator), NOT the raw AuthManager. Wrap the AuthManager in one —
+    // the same shape the pre-S171 CGI entry point used (public/index.php is
+    // deleted; the constructor contract is pinned by HttpHandlerWiringTest).
     $authenticator = new RequestAuthenticator($authManager);
 
     // Build the full route table + middleware chain once per worker.
@@ -323,8 +323,8 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // runs OUTSIDE any coroutine here — resumeActiveRecordings()'s process
     // checks + detached spawns are ordinary blocking calls, valid at boot just
     // like the hwaccel probe above (no coroutine-only work to guard). It is
-    // NOT wired in public/index.php: recovery/timers belong only to the
-    // long-running Workerman master, never the single-shot CGI request path.
+    // recovery/timers belong only to the long-running Workerman master — the
+    // deleted single-shot CGI path (public/index.php, S171) never had them.
     // (Scheduler Timers are SV-3.1c; this is only the recovery bootstrap.)
     if ((int) $w->id === 0) {
         try {
@@ -356,8 +356,8 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // Coroutine::create() (safeCall), so the DB work + process kills inside the
     // tick run in a valid coroutine context (hooked PDO can yield); the body is
     // additionally wrapped in try/catch so a scan error can never bubble out and
-    // kill the worker. Timers belong only to the resident daemon — this is NOT
-    // mirrored in public/index.php (single-shot CGI runs no timers).
+    // kill the worker. Timers belong only to the resident daemon — the
+    // single-shot CGI front controller (public/index.php, deleted by S171) ran none.
     if ((int) $w->id === 0) {
         try {
             /** @var \Phlix\LiveTv\Recording\RecordingScheduler $recordingScheduler */
@@ -407,8 +407,8 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // back into local WatchHistory. Plugins expose NO scheduling hook
     // (LifecycleInterface has none), so the periodic pull Timer must live here in
     // the resident HTTP worker — worker-0-gated (mirroring the DVR boot-recovery /
-    // scheduler gates above) so 14 HTTP workers don't each run the sync, and it is
-    // NOT mirrored in public/index.php (the single-shot CGI path runs no timers).
+    // scheduler gates above) so 14 HTTP workers don't each run the sync; the
+    // single-shot CGI path (public/index.php, deleted by S171) ran no timers.
     //
     // Like the DVR scheduler above, the Workerman Swoole event adapter wraps every
     // Timer callback in Coroutine::create() (safeCall), so the pull's de-blocked

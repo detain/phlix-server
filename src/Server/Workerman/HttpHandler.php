@@ -43,13 +43,17 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * Workerman request first tries the static-file fast path against the
  * public/ document root; falling through, it converts the Workerman
  * request into the project's own {@see Request} object, validates the
- * Bearer token if one is present, and dispatches via the same router
- * tree {@see public/index.php} uses for CGI-style requests.
+ * Bearer token if one is present, and dispatches via the
+ * {@see \Phlix\Server\Core\Application} router tree, falling through to
+ * {@see \Phlix\Server\WebPortal\WebPortalRouter} on its 404s.
  *
- * `public/index.php` is left untouched as the CGI entry point — direct
- * invocation by php-fpm / `php -S` / similar continues to work. This
- * class is the *parallel* dispatcher used only when phlix-server runs
- * as a Workerman daemon via {@see start.php}.
+ * This class is the SOLE HTTP dispatcher: it is what the resident daemon
+ * built by {@see start.php} runs on :8096. The former one-shot CGI front
+ * controller `public/index.php` was deleted by S171 — measured against
+ * this repo's deployment artifacts (Dockerfiles, supervisord, compose,
+ * systemd unit, installer, reverse-proxy configs, helm) nothing served it,
+ * and tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php pins
+ * that removal.
  *
  * @package Phlix\Server\Workerman
  */
@@ -141,7 +145,8 @@ final class HttpHandler
             $httpLogger->debug("HttpHandler.__invoke Request parsed [uid={$requestUid}] [userId={$request->userId}]");
 
             // CORS: answer a credentialed preflight for an allowlisted origin
-            // before any dispatch (shared seam with public/index.php). With an
+            // before any dispatch (the pre-S171 CGI front controller shared
+            // this seam; it is now this handler's alone). With an
             // empty allowlist this is always null and behavior is unchanged.
             $cors = CorsManager::fromEnv();
             $securityHeaders = new SecurityHeaders();
@@ -253,8 +258,9 @@ final class HttpHandler
             //     doesn't own — /api/v1/libraries, /api/v1/media/{id},
             //     /api/v1/users/me/* (continue-watching, recently-watched,
             //     history, settings). These live on {@see WebPortalRouter}
-            //     and public/index.php dispatches them for the CGI path; the
-            //     Workerman daemon must mirror that or the entire web-portal
+            //     and dispatches them here. The pre-S171 CGI front controller
+            //     had to mirror THIS handler, never the reverse; if this
+            //     fall-through breaks the entire web-portal
             //     API 404s (e.g. the /settings page hangs on its
             //     GET /api/v1/users/me/settings fetch). Any /api/ request the
             //     Application router 404s on is served here and never falls
@@ -308,8 +314,9 @@ final class HttpHandler
             // bubbles out of dispatch (e.g. the existing login limiter in
             // AuthManager/DbLoginRateLimitStore, which no controller catches —
             // previously it fell through to the generic 500 below with no
-            // Retry-After). Emit the shared canonical envelope so the Workerman,
-            // CGI (public/index.php), and Application::run() paths are identical.
+            // Retry-After). Emit the shared canonical envelope so the Workerman
+            // and Application::run() paths are identical (the CGI path —
+            // public/index.php — was deleted by S171).
             //
             // SV-4.15 F4: route the 429 through the SAME CORS + security-header +
             // compression decoration the success branches use. A cross-origin XHR

@@ -40,13 +40,14 @@ use Workerman\MySQL\Connection;
  * (`ItemRepository::update()` with a merged `metadata_json`), and reads the LIST
  * endpoint back. No scan is involved in the read.
  *
- * Driven through `WebPortalRouter::dispatch()` because that is the ONE seam both
- * HTTP entry points share: `public/index.php` resolves `WebPortalRouter` from the
- * container and calls `dispatch()` (public/index.php:240-242), and the resident
+ * Driven through `WebPortalRouter::dispatch()` because that is the seam the
+ * HTTP entry points shared: since S171 deleted `public/index.php` (which had
+ * resolved `WebPortalRouter` from the container and called `dispatch()`), the
+ * resident
  * `Phlix\Server\Workerman\HttpHandler` falls through to the same object when
  * `Application`'s router 404s. `/api/v1/media` has exactly ONE registration
  * repo-wide (`WebPortalRouter.php:309`), so proving the key here proves it on
- * both paths.
+ * the served path.
  */
 final class MediaListBackdropIntegrationTest extends TestCase
 {

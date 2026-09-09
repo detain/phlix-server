@@ -262,7 +262,8 @@ class StorageSnapshotHelperTest extends TestCase
     }
 
     /**
-     * `public/index.php` calls `bootstrapSnapshot()` on EVERY PHP-FPM request. Its
+     * `public/index.php` (deleted by S171) used to call `bootstrapSnapshot()` on
+     * EVERY PHP-FPM request. Its
      * docblock always promised "if data is stale or missing", but nothing checked
      * — so every request re-ran `du -sb` over both vault roots and wrote another
      * five rows. Now that the dashboard SUMS same-second rows, a second run inside

@@ -285,8 +285,9 @@ class WebPortalRouter
         // search, single-item detail, watch activity, settings), so require a
         // signed-in user — otherwise the whole library was enumerable without a
         // token. `$request->userId` is populated from the Bearer token (or the
-        // `phlix_session` cookie) by BOTH entry points (public/index.php and
-        // HttpHandler) before dispatch; AuthMiddleware just enforces its presence.
+        // `phlix_session` cookie) by HttpHandler — the sole HTTP entry point
+        // since S171 deleted the CGI front controller — before dispatch;
+        // AuthMiddleware just enforces its presence.
         $auth = new AuthMiddleware();
 
         // Public media-item ratings endpoint (P1-S1): no auth required.
@@ -380,12 +381,13 @@ class WebPortalRouter
             // capability arm.
             //
             // Registered HERE, on WebPortalRouter, and not on Application's
-            // router, because this is the one registrar BOTH entry points
-            // dispatch /api/* to: public/index.php sends every non-admin /api/
-            // path straight here (it never consults Application's router at
-            // all), and HttpHandler tries Application first and falls through
-            // to here on a 404. A registration on Application alone would serve
-            // the Workerman daemon and 404 under CGI/FPM.
+            // router, because this is the registrar every /api/* request ends
+            // up on: HttpHandler tries Application first and falls through
+            // to here on a 404. (Historical S85 rationale: the pre-S171 CGI
+            // front controller sent every non-admin /api/ path straight here
+            // without consulting Application at all, so a registration on
+            // Application alone would once have served the daemon and 404
+            // under CGI/FPM — that mirroring obligation died with the file.)
             //
             // Static segment, so no {id} route can swallow it, and nothing else
             // in either router owns /api/v1/themes.

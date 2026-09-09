@@ -174,13 +174,14 @@ class WebPortalRouterMediaTest extends TestCase
      * wide-backdrop list renderer has something to paint (it previously fell back
      * to a blurred poster because the LIST shape had no backdrop key at all).
      *
-     * Driven through `dispatch()` on purpose: that is the ONE seam both HTTP entry
-     * points share — `public/index.php` (CGI/dev path, line ~240) and
-     * `Phlix\Server\Workerman\HttpHandler` (resident path, line ~269) each resolve
-     * the SAME `WebPortalRouter` from the container and call `dispatch()`. Proving
-     * the key here proves it on both paths.
+     * Driven through `dispatch()` on purpose: that is the seam the HTTP entry
+     * points shared — since S171 deleted the unserved `public/index.php`,
+     * `Phlix\Server\Workerman\HttpHandler` (resident path, line ~269) is the sole
+     * one; it resolves the SAME `WebPortalRouter` from the container and calls
+     * `dispatch()`. Proving
+     * the key here proves it on the served path.
      */
-    public function testDispatchMediaListingCarriesRowSizedBackdropOnBothEntryPoints(): void
+    public function testDispatchMediaListingCarriesRowSizedBackdropOnTheSoleEntryPoint(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);
         $itemRepo->method('query')->willReturn([

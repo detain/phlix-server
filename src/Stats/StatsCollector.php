@@ -873,7 +873,8 @@ class StatsCollector
      * runs a second apart reported 2,000 bytes for a real 1,000 (2×).
      *
      * Latent today, and only by luck of the caller list: the one container-resolved
-     * snapshot writer is `public/index.php`'s PHP-FPM bootstrap (one request per
+     * snapshot writer was `public/index.php`'s PHP-FPM bootstrap (deleted by S171;
+     * one request per
      * process, no coroutines), and the daemon timer CONSTRUCTS its own collector
      * (`Server\Core\Application::startStorageSnapshotTimer()`). It becomes reachable the
      * moment a Workerman task takes the snapshot with `$container->get(...)`, which is

@@ -39,8 +39,9 @@
  *
  * ## Deliberately NOT required (each has a guard, cited)
  *
- *   - `swoole`   — `public/index.php:26` `extension_loaded('swoole')`; the whole
- *                  coroutine runtime degrades gracefully. Named in the phpunit /
+ *   - `swoole`   — `start.php:126`/`start.php:161` `extension_loaded('swoole')`; the
+ *                  whole coroutine runtime degrades gracefully (the pre-S171 guard at
+ *                  public/index.php:26 died with that unserved file). Named in the phpunit /
  *                  psalm / e2e workflows instead, where it IS needed.
  *   - `ffi`      — `src/Media/Markers/Fingerprinting/ChromaPrintFfi.php:89`
  *                  `extension_loaded('FFI')`, and the caller falls back.

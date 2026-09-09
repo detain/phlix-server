@@ -31,9 +31,9 @@ use Phlix\Server\Http\Response;
  *
  * File bodies are streamed through Workerman's event loop via
  * {@see Response::withFile()} (never buffered into worker memory) and honour HTTP
- * `Range` (206 + `Content-Range`, unsatisfiable → 416) on both entry points — the
- * CGI/`public/index.php` path mirrors the Workerman byte semantics via
- * {@see Response::finalizeFileHeaders()}.
+ * `Range` (206 + `Content-Range`, unsatisfiable → 416) on the served path — the
+ * Workerman daemon. The pre-S171 CGI front controller (`public/index.php`) used
+ * to mirror these byte semantics via {@see Response::finalizeFileHeaders()}.
  *
  * @since SV-3.1
  */

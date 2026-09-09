@@ -251,6 +251,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
          * keeps Worker::$workers/Timer::$event from leaking again); the polluter
          * save/restore edits and the gate removals touch no file counts.
          * The guard names no Request.
+         * Held at 1838 by S171: deleting the unserved front controller
+         * public/index.php (−1) and adding its permanent removal guard
+         * (tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php, +1)
+         * cancel out — measured on the rebased tree, not predicted. The guard
+         * names no Request.
          */
     private const EXPECTED_PHP_FILES = 1838;
 

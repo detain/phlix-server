@@ -117,7 +117,7 @@ public/
   `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
   **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
   `/app/login`, `/library` → `/app`, `/player/{id}` → `/app/player/{id}`, `/music|/books|/audiobooks|/photo`
-  → their `/app` pages), dispatched in `public/index.php`. Smarty (`smarty/smarty`) is retained on the
+  → their `/app` pages), dispatched in `src/Server/Workerman/HttpHandler.php` (the served daemon; the pre-S171 `public/index.php` copy of that logic was unserved and deleted). Smarty (`smarty/smarty`) is retained on the
   server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
   `public/templates/emails/newsletter.tpl`).
 - **REST API Endpoints**: Complete API for library browsing, media info, and user data

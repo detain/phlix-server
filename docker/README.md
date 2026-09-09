@@ -46,8 +46,9 @@ change `"<host>:80"` to `"<host>:8096"`.
 
 `docker build` never executes `CMD`, `ENTRYPOINT` or `HEALTHCHECK`, so a green
 build proves nothing about the runtime path — for the whole life of these images
-supervisord started `public/index.php` (the one-shot CGI front controller)
-instead of `start.php`, and no container had ever served a request. Boot it:
+supervisord started the then-present one-shot CGI front controller
+(`public/index.php`, since removed by S171) instead of `start.php`, and no
+container had ever served a request. Boot it:
 
 ```bash
 scripts/docker-boot-smoke.sh docker/Dockerfile        phlix-boot:alpine

@@ -32,8 +32,8 @@ use Workerman\MySQL\Connection;
  * `?limit=100000000` is not a big page — it is a memory-exhaustion vector that
  * can OOM the process serving every other user.
  *
- * Coverage spans BOTH dispatch paths (§7): `MediaItemController` (reached via
- * `public/index.php` / `Application`) and `WebPortalRouter` (reached via
+ * Coverage spans BOTH dispatch paths: `MediaItemController` (reached via
+ * `Application`) and `WebPortalRouter` (reached via
  * `start.php` and the relay dispatcher).
  */
 final class PaginationClampTest extends TestCase
@@ -105,7 +105,7 @@ final class PaginationClampTest extends TestCase
     }
 
     // -----------------------------------------------------------------
-    // Dispatch path 1: MediaItemController (public/index.php + Application).
+    // Dispatch path 1: MediaItemController (via Application).
     // -----------------------------------------------------------------
 
     public function testLibraryItemsEndpointClampsLimit(): void

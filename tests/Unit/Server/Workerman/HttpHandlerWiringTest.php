@@ -24,8 +24,9 @@ use ReflectionParameter;
  *
  * That is exactly what happened: start.php passed a raw {@see AuthManager} to
  * HttpHandler arg #2, which actually requires the shared
- * {@see RequestAuthenticator} collaborator (`public/index.php` wraps the
- * AuthManager in one; start.php had drifted). Every HTTP worker died at boot.
+ * {@see RequestAuthenticator} collaborator — the pre-S171 CGI front controller
+ * `public/index.php` (since deleted) wrapped the
+ * AuthManager in one; start.php had drifted, and every HTTP worker died at boot.
  *
  * This test pins the contract start.php depends on:
  *  - HttpHandler's constructor arg #2 is typed `RequestAuthenticator`.
@@ -60,7 +61,7 @@ final class HttpHandlerWiringTest extends TestCase
 
     /**
      * A RequestAuthenticator must be constructible directly from an AuthManager,
-     * exactly as start.php (and public/index.php) build it.
+     * exactly as start.php builds it (as the pre-S171 public/index.php did too).
      */
     public function testRequestAuthenticatorIsConstructibleFromAuthManager(): void
     {

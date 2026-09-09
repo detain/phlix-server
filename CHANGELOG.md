@@ -9,6 +9,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by
+  nothing on any published deployment artifact — re-measured at the step's tip: the Dockerfiles run
+  php-cli only under supervisord's `start.php` program (the fpm/nginx binaries are removed from the
+  base image), `systemd/phlix-server.service` ExecStarts `start.php`, the compose files and examples
+  reference nothing under `public/` as a program, `scripts/install.sh` actively REWRITES legacy
+  `public/index.php start` units onto `start.php`, and the docker boot gate ASSERTS no
+  index.php/php-fpm/nginx process runs in the image. The file nevertheless kept compiling, kept being
+  tokenized by the census, and kept reading like a supported path — enough that S99's audit had to
+  qualify its own finding as "Workerman path only". Deleted with a permanent Unit guard
+  (`tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php`) pinning the absence plus that
+  the artifacts it pins — supervisord, the Dockerfiles, the compose files, the shipped
+  reverse-proxy configs, the helm charts, the systemd unit — front nothing; mutation-verified
+  (recreating the file reddens it). The S163
+  incident block in `docker/supervisord.conf` and the `docker/README.md` narrative are updated to
+  past tense; the dual-entry-point pin in `ThemeEndpointsReachabilityTest` is reworked to the sole
+  authoritative entry point. S116's `du -sb` request-path residual closes with the file — the daemon
+  records snapshots via its timer instead. "Unserved" is measured on THIS deployment; the guard
+  claims no impossibility on a third-party fpm stack. No routes, no migrations, no behavior change
+  to the daemon.
+
 - **Whole-tree unused-import reflow (`S187`).** 150 dead `use` statements removed across 100 files
   (`src/` 58, `tests/` 90, `scripts/` 2) — content-neutral by construction: the phlix-contracts server
   route manifest regenerates byte-identical (401 tuples) before and after, and PHPStan (`src` level 9 +

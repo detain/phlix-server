@@ -98,7 +98,7 @@ sudo systemctl --failed
 
 Common failure causes:
 
-- `ExecStart` missing the trailing `start` argument (`public/index.php start`)
+- `ExecStart` missing the trailing `start` argument (`start.php start`)
   — Workerman prints help and exits.
 - `DB_PASSWORD` empty or wrong in `/etc/phlix/env`.
 - `/var/run/phlix` not writable — the unit's `RuntimeDirectory=phlix`

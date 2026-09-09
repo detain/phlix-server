@@ -43,9 +43,10 @@ that file returns.
 It is reached two ways:
 
 - **`bootstrapAndOverlay($config)`** — called at the top of every `onWorkerStart` in `start.php`
-  (HTTP, WebSocket, hub-heartbeat, relay-tunnel, and each managed worker) and in `public/index.php`,
+  (HTTP, WebSocket, hub-heartbeat, relay-tunnel, and each managed worker),
   **before `ContainerFactory::create($config)`**. Every DI provider that reads boot config therefore
-  sees the effective value with no per-provider wiring. Mirrored across both entry points (§7).
+  sees the effective value with no per-provider wiring. It runs on the sole entry point since S171
+  deleted the unserved `public/index.php` that used to require mirroring.
 - **`EffectiveConfig::file('<name>')`** — for consumers that `include` a config file directly and so
   bypass `$config` entirely. Rewired: `HwAccelConfig::get()`,
   `FfmpegRunner::getTranscodeTimeout()`, `Recorder::getTranscodeTimeout()`, and `start.php`'s
@@ -234,8 +235,8 @@ So an override saved while a worker is running is invisible to that worker no ma
 `SELECT` on every call** and *is* genuinely live — that difference is the whole line between
 the 23 `restart: false` keys and the rest.
 
-(`public/index.php` also bootstraps, per request — but production runs Workerman via
-`start.php`, so the per-worker semantics are the ones that matter.)
+(`public/index.php` used to bootstrap per request too — S171 deleted that unserved
+front controller, so the per-worker Workerman semantics are now the only ones.)
 
 #### On "restart" vs "reload"
 

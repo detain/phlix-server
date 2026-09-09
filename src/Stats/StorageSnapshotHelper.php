@@ -209,14 +209,16 @@ final class StorageSnapshotHelper
     /**
      * Record one storage snapshot if data is stale or missing.
      *
-     * This is a one-time bootstrap for PHP-FPM context. It scans the
+     * This is a one-time bootstrap for the PHP-FPM context it was built for. It scans the
      * filesystem at /vault1 and /vault2 to get real storage sizes and
      * queries the database for item counts, then records a snapshot.
      *
      * ## The staleness check (S102 review r1, MED-2)
      *
      * "If data is stale or missing" was the documented contract but was never
-     * implemented — `public/index.php:111` calls this on EVERY request, so every
+     * implemented — `public/index.php:111` called this on EVERY request (that file was
+     * deleted by S171 as the unserved CGI front controller; the staleness guard below
+     * stands on its own), so every
      * PHP-FPM request re-ran `du -sb` over both vault roots and wrote another five
      * rows. That was survivable while `DashboardService::getStorageSummary()`
      * ASSIGNED each bucket's bytes (a duplicate run in the same second overwrote

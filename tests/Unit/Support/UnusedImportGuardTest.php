@@ -47,8 +47,15 @@ final class UnusedImportGuardTest extends TestCase
     /** Path segments excluded from the estate — identical to the census. */
     private const EXCLUDED_SEGMENTS = ['vendor', 'node_modules', '.git'];
 
-    /** Roots whose estate must be unused-import-free at all times. */
-    private const GUARDED_ROOTS = ['src', 'tests', 'scripts', 'config', 'migrations', 'public', 'examples'];
+    /**
+     * Roots whose estate must be unused-import-free at all times.
+     * 'public' left this list with S171: public/index.php — the root's only .php —
+     * was deleted as the unserved CGI front controller, and
+     * tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php keeps it absent;
+     * public/ now carries only SPA assets and email templates. Re-add 'public' only
+     * if the root ever carries PHP again.
+     */
+    private const GUARDED_ROOTS = ['src', 'tests', 'scripts', 'config', 'migrations', 'examples'];
 
     public function testEveryImportInTheEstateIsReferencedInItsFile(): void
     {

@@ -30,9 +30,10 @@ use function DI\factory;
  * {@see \Phlix\Server\Workerman\HttpHandler} (the Workerman daemon) is the ONLY
  * entry point that dispatches this router: it runs this router first and falls
  * through to {@see \Phlix\Server\WebPortal\WebPortalRouter} only when this router
- * answers 404. `public/index.php` (the CGI entry point) never dispatches this
- * router at all — it builds its own Router with only the admin group and sends
- * every other `/api/` path straight to WebPortalRouter (public/index.php:212-243).
+ * answers 404. The pre-S171 CGI front controller (`public/index.php`, since deleted)
+ * never dispatched this
+ * router at all — it built its own Router with only the admin group and sent
+ * every other `/api/` path straight to WebPortalRouter.
  *
  * The WebPortalRouter fall-through is NOT an equivalent gated duplicate:
  *

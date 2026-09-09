@@ -765,9 +765,12 @@ class StatsCollector
             // allows, and the merge SUMs rather than overwrites: the S102 reader
             // adds every row of the newest second per bucket, so `col = VALUES(col)`
             // (first-write-wins — the 097 playback_state shape) would silently
-            // SHRINK reader-visible totals. `item_count = item_count +
+            // SHRINK reader-visible totals. `item_count = COALESCE(item_count, 0) +
             // VALUES(item_count)` keeps `getStorageSummary()` byte-identical to
-            // what the same write sequence produced pre-105; the surviving row
+            // what the same write sequence produced pre-105 — the COALESCE because
+            // 019 left these columns NULLABLE and 105's merge faithfully keeps an
+            // all-NULL group's survivor NULL, and `NULL + VALUES(col)` would erase
+            // the incoming bytes on a fold onto such a survivor. The surviving row
             // keeps its original id. Proven by
             // {@see \Phlix\Tests\Integration\Stats\StatsStorageUniqueKeyUpsertGuardTest}.
             $this->write(
@@ -776,9 +779,9 @@ class StatsCollector
                  (id, library_id, media_type, item_count, total_bytes, transcode_cache_bytes, recorded_at)
                  VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
                  ON DUPLICATE KEY UPDATE
-                     item_count = item_count + VALUES(item_count),
-                     total_bytes = total_bytes + VALUES(total_bytes),
-                     transcode_cache_bytes = transcode_cache_bytes + VALUES(transcode_cache_bytes)",
+                     item_count = COALESCE(item_count, 0) + VALUES(item_count),
+                     total_bytes = COALESCE(total_bytes, 0) + VALUES(total_bytes),
+                     transcode_cache_bytes = COALESCE(transcode_cache_bytes, 0) + VALUES(transcode_cache_bytes)",
                 [
                     $this->generateUuid(),
                     // Migration 105 makes the column `NOT NULL DEFAULT ''`; strict

@@ -319,10 +319,14 @@ class StatsCollectorTest extends TestCase
      * for an unscoped run.
      *
      * Two halves, both load-bearing:
-     *   * `col = col + VALUES(col)` — never `col = VALUES(col)`. The S102 reader
+     *   * `col = COALESCE(col, 0) + VALUES(col)` — never `col = VALUES(col)`. The S102 reader
      *     SUMs every row of the newest second per bucket, so a first-write-wins
      *     upsert (the 097 playback_state shape) would silently SHRINK the
-     *     dashboard's totals whenever two runs share a generation.
+     *     dashboard's totals whenever two runs share a generation. The COALESCE
+     *     half is load-bearing too: 019 left the numeric columns NULLABLE and
+     *     105's merge faithfully preserves an all-NULL legacy group as NULL —
+     *     bare `NULL + VALUES(col)` is NULL, which would silently LOSE the
+     *     incoming snapshot's bytes on the fold onto such a survivor.
      *   * `library_id` is NOT NULL since 105 and strict mode rejects an explicit
      *     INSERT NULL (1048, measured), so a null `$libraryId` must arrive at the
      *     driver as the `''` sentinel, never as null.
@@ -370,10 +374,12 @@ class StatsCollectorTest extends TestCase
 
             foreach (['item_count', 'total_bytes', 'transcode_cache_bytes'] as $column) {
                 $this->assertStringContainsString(
-                    $column . ' = ' . $column . ' + VALUES(' . $column . ')',
+                    $column . ' = COALESCE(' . $column . ', 0) + VALUES(' . $column . ')',
                     $normalized,
-                    "{$column} must ACCUMULATE. The S102 reader sums rows, so overwriting the row's "
-                    . 'value with the incoming one would shrink reader-visible totals.'
+                    "{$column} must ACCUMULATE, NULL-safely. The S102 reader sums rows, so "
+                    . "overwriting the row's value with the incoming one would shrink reader-visible "
+                    . 'totals, and bare addition onto a NULL survivor (an all-NULL legacy group kept '
+                    . "as NULL by 105's merge) would erase the incoming bytes."
                 );
             }
 

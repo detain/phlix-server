@@ -55,6 +55,8 @@ use Workerman\MySQL\Connection;
  *   |------------------------------------------------|------------|
  *   | fresh (stamp,bucket,library) triple            | INSERT, new id |
  *   | repeat triple, any caller                      | UPDATE survivor: sums ride along, id kept |
+ *   | repeat triple onto a NULL-valued survivor (all-NULL legacy group, kept NULL by the merge)
+ *   |                                                | COALESCE rides the values in — never `NULL + x` |
  *   | explicit NULL library bind (post-105 caller)   | 1048 — the collector binds '' instead |
  *
  * SAFETY: all destructive proofs run in a throwaway `phlix_s114_*` DATABASE
@@ -473,6 +475,69 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
             'precondition never met in 25 attempts: two back-to-back snapshot writes must share a '
             . 'wall-clock second at least once — a box that never repeats a second is not a test venue'
         );
+    }
+
+    /**
+     * The NULL-fold branch of the write path (review r1 finding 1): a survivor of
+     * an all-NULL legacy group keeps NULL numerics (faithful to the pre-105 SUM
+     * reader), and bare `NULL + VALUES(col)` is NULL — which would silently ERASE
+     * the incoming snapshot. The COALESCE accumulation lands the values instead,
+     * through the REAL collector, byte-identical to what the pre-105 SUM reader
+     * computed for the same history (the NULL row added nothing, the new row added
+     * its values).
+     */
+    public function testFoldOntoANullSurvivorLandsEveryIncomingByte(): void
+    {
+        $this->applyPreSchema();
+        $this->applyFix();
+
+        $db = $this->db();
+
+        for ($attempt = 1; $attempt <= 25; $attempt++) {
+            $db->query("DELETE FROM stats_storage WHERE library_id = '' AND media_type = 'movie'");
+
+            // The survivor shape 105's merge legitimately produces for an all-NULL
+            // legacy group — and stamp it on the CURRENT second so the collector's
+            // fold targets it.
+            $stamp = time();
+            $db->query(
+                'INSERT INTO stats_storage (id, recorded_at, library_id, media_type,
+                                            item_count, total_bytes, transcode_cache_bytes)
+                 VALUES (?, FROM_UNIXTIME(?), ?, ?, NULL, NULL, NULL)',
+                ['nullsurvivor', $stamp, '', 'movie']
+            );
+
+            (new StatsCollector($db))->recordStorageSnapshots(['movie' => ['count' => 3, 'bytes' => 4_000]]);
+
+            $rows = $this->rows(
+                "SELECT id, item_count, total_bytes, transcode_cache_bytes FROM stats_storage
+                  WHERE library_id = '' AND media_type = 'movie'"
+            );
+            if (count($rows) === 1) {
+                $this->assertSame('nullsurvivor', (string) $rows[0]['id'], 'the fold must land on the survivor');
+                $this->assertSame(
+                    ['3', '4000', '0'],
+                    [
+                        (string) $rows[0]['item_count'],
+                        (string) $rows[0]['total_bytes'],
+                        (string) $rows[0]['transcode_cache_bytes'],
+                    ],
+                    'the incoming values must ride in despite the survivor holding NULL — bare addition '
+                    . 'would have left NULL here, silently erasing the snapshot'
+                );
+
+                return;
+            }
+
+            // Two rows: the wall second crossed between the seed stamp and the
+            // collector stamp — precondition churn, re-seed and retry.
+            $this->assertSame(2, count($rows), 'a fold either lands or misses the second; three rows '
+                . 'means the write path stopped upserting');
+            usleep(120_000);
+        }
+
+        $this->fail('precondition never met in 25 attempts: seed and collector stamp must share a '
+            . 'wall-clock second at least once');
     }
 
     /**

@@ -50,6 +50,16 @@ final class SidecarNotWritableException extends RuntimeException
         );
     }
 
+    public static function degenerateDirectory(string $itemId, string $targetDir): self
+    {
+        return new self(
+            $itemId,
+            $targetDir,
+            'item row carries no usable media directory (empty path) - refusing to write '
+                . 'sidecars into the process working directory',
+        );
+    }
+
     public static function notWritable(string $itemId, string $targetDir): self
     {
         return new self(

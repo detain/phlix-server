@@ -116,6 +116,14 @@ final class SidecarWriter implements MetadataWriterInterface
      */
     private function assertDirectoryWritable(string $itemId, string $mediaDir): void
     {
+        if ($mediaDir === '' || $mediaDir === '.') {
+            // dirname('') is '.' — a row with an empty path column would put
+            // sidecars in the metadata-write fork's WORKING DIRECTORY, which is
+            // not "next to the media file" and exactly the write-somewhere-
+            // surprising failure mode this pre-flight exists to catch.
+            throw SidecarNotWritableException::degenerateDirectory($itemId, $mediaDir);
+        }
+
         if (!is_dir($mediaDir)) {
             throw SidecarNotWritableException::missingDirectory($itemId, $mediaDir);
         }
@@ -297,9 +305,9 @@ final class SidecarWriter implements MetadataWriterInterface
     /**
      * runtime_ticks is the canonical duration (600000000 ticks per minute) →
      * Kodi's <runtime>. TRUNCATION, not rounding, mirrors the canonical
-     * API-side mapper (FieldMappers duration_ticks → runtime_minutes, which
-     * casts) so the sidecar never shows a minute different from the UI for the
-     * same row. A zero or negative tick count emits nothing.
+     * API-side mapper (FieldMappers::ticksToMinutes, runtime_ticks → runtime,
+     * which casts) so the sidecar never shows a minute different from the UI
+     * for the same row. A zero or negative tick count emits nothing.
      */
     private function runtimeMinutes(mixed $ticks): ?int
     {
@@ -395,16 +403,19 @@ final class SidecarWriter implements MetadataWriterInterface
      * Write via a sibling temp file + rename: readers never observe a partial
      * sidecar, and a failed write leaves the previous bytes in place.
      *
-     * The temp name is unique per write (not a fixed `.phlix-tmp` suffix) so
+     * The temp name is unique per write (pid-prefixed, entropy-suffixed) so
      * two writers ever sharing a media directory — same-directory items today,
-     * the bounded-parallel drain the worker docblock reserves for later — can
-     * never clobber each other's temp file mid-flight.
+     * the bounded-parallel drain the worker docblock reserves for later —
+     * cannot clobber each other's temp file mid-flight: pids distinguish
+     * processes, and within one process uniqid's monotonic entropy suffix
+     * distinguishes calls. (uniqid alone does NOT guarantee uniqueness across
+     * fork siblings sharing an inherited LCG state — hence the prefix.)
      *
      * @throws RuntimeException On any I/O failure (temp cleaned up first).
      */
     private function writeAtomically(string $targetPath, string $contents, string $itemId): void
     {
-        $tempPath = $targetPath . '.phlix-tmp-' . uniqid('', true);
+        $tempPath = $targetPath . '.phlix-tmp-' . getmypid() . '-' . uniqid('', true);
 
         if (file_put_contents($tempPath, $contents) === false) {
             @unlink($tempPath);

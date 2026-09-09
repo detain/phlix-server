@@ -423,6 +423,47 @@ final class SidecarWriterTest extends TestCase
         $this->assertSame(['evil.nfo'], $listing, 'nothing may escape the sidecar directory');
     }
 
+    public function test_malformed_name_dot_variants_land_on_the_sidecar_stem(): void
+    {
+        // The ''/'.'/'..' dot-guard has its own coverage (S345 rule 3): removing
+        // it yields '..nfo'/'.nfo'/a double-slash path instead of 'sidecar'.
+        foreach (['.', '..', ''] as $name) {
+            $dir = $this->tempDir('dotguard');
+            $item = new MediaItem('item-dot', $name, 'movie', '', []);
+
+            (new SidecarWriter())->write($item, ['name' => 'anything'], $dir);
+
+            $listing = array_values(array_diff((array) scandir($dir), ['.', '..']));
+            $this->assertSame(
+                ['sidecar.nfo'],
+                $listing,
+                "name " . var_export($name, true) . " must fall through the dot guards to sidecar.nfo",
+            );
+        }
+    }
+
+    public function test_degenerate_media_directory_is_refused_not_written_into_cwd(): void
+    {
+        // dirname('') is '.': a row with an empty path column must NOT produce
+        // sidecars in the draining process's working directory. The named throw
+        // is the status; removal-red: delete the guard and both cases below
+        // write ./<stem>.nfo into CWD instead of throwing.
+        foreach (['', '.'] as $degenerate) {
+            $item = new MediaItem('item-cwd', 'Ghost', 'movie', '', []);
+
+            try {
+                (new SidecarWriter())->write($item, ['name' => 'Ghost'], $degenerate);
+                $this->fail('degenerate mediaDir ' . var_export($degenerate, true) . ' must throw');
+            } catch (SidecarNotWritableException $e) {
+                $this->assertStringContainsString('working directory', $e->getMessage());
+                $this->assertStringContainsString('item-cwd', $e->getMessage());
+            }
+        }
+
+        $this->assertFileDoesNotExist('sidecar.nfo');
+        $this->assertFileDoesNotExist('Ghost.nfo');
+    }
+
     public function test_generator_marker_is_emitted_in_the_nfo_header(): void
     {
         $dir = $this->tempDir('marker');

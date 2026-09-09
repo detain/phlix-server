@@ -43,11 +43,14 @@ use Throwable;
  *    file. (Marker-presence is the detectable candidate ruling R2 allowed;
  *    an NFO the sidecar writer itself emitted carries the marker — verified
  *    at `SidecarWriter::renderNfo()`.)
- *  - **Atomic-rename discipline.** Every mutation stages into a sibling temp
- *    file in the media directory and only then `rename()`s over the original.
- *    A remux interrupted at any point — killed binary, codec refusal, failed
- *    publish — leaves the ORIGINAL bytes intact; the staged temp is removed
- *    best-effort and the failure throws (the worker logs it and continues).
+     *  - **Atomic-rename discipline.** Every mutation stages into an exclusively
+     *    created (`fopen 'xb'`) sibling temp file in the media directory — the
+     *    media itself must be a regular file; a symlink at the media path is
+     *    refused rather than dereferenced — and only then `rename()`s over the
+     *    original.
+     *    A remux interrupted at any point — killed binary, codec refusal, failed
+     *    publish — leaves the ORIGINAL bytes intact; the staged temp is removed
+     *    best-effort and the failure throws (the worker logs it and continues).
  *
  * Registered through the SAME `MetadataWriterRegistry` DI seam S88 established
  * (ruling R4) — NOT the PluginLoader capability arm; zero routes, zero
@@ -146,8 +149,11 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     {
         // 1. Explicit opt-in (default off). This is the AC's "no write happens
         //    without explicit opt-in" gate; the enqueue gate sits upstream.
+        //    Logged at DEBUG, not INFO: gate-off is the shipped steady state
+        //    for every drained job, and an INFO line per item would bury the
+        //    policy/curation skips that operators actually act on.
         if (!$this->optIn->embeddedWriteEnabled()) {
-            $this->logger->info('EmbeddedMetadataWriter: skipped, embedded writing not enabled', [
+            $this->logger->debug('EmbeddedMetadataWriter: skipped, embedded writing not enabled', [
                 'item_id' => $item->id,
                 'setting' => EmbeddedWritePolicy::SETTING_KEY,
             ]);
@@ -226,6 +232,15 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
 
         if (!is_file($mediaPath)) {
             throw EmbeddedWriteFailedException::missingMediaFile($item->id, $mediaPath);
+        }
+
+        // is_file() follows symlinks, so a valid link passes the check above —
+        // and this writer is the DESTRUCTIVE arm: copy() would read through the
+        // link and the publish rename would replace the operator's link with a
+        // regular file containing (possibly out-of-tree) target content. Only a
+        // real regular file is rewritten.
+        if (is_link($mediaPath)) {
+            throw EmbeddedWriteFailedException::symlinkRefused($item->id, $mediaPath);
         }
 
         if (!is_writable($mediaDir)) {
@@ -370,9 +385,24 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
      */
     private function embedViaFfmpegRemux(MediaItem $item, string $mediaPath, array $canonicalMetadata): void
     {
-        $staged = $this->stagePath($mediaPath);
+        $extension = strtolower(pathinfo($mediaPath, PATHINFO_EXTENSION));
+        $flags = $this->metadataFlags($canonicalMetadata);
+        if ($flags === []) {
+            // Symmetric with the audio arm's empty-tag_data guard: a remux with
+            // ZERO -metadata flags would be a pointless multi-GB rewrite of the
+            // operator's file that changes nothing worth changing — refuse
+            // before staging (and before any I/O on the original at all).
+            throw EmbeddedWriteFailedException::stageFailed(
+                $item->id,
+                $mediaPath,
+                'canonical metadata carries no embeddable video fields',
+            );
+        }
 
+        $staged = '';
         try {
+            $staged = $this->createStage($item, $mediaPath);
+
             // NO pre-stage copy(): ffmpeg -y creates the staged file itself, so
             // copying a multi-GB film first would double the I/O and buy
             // nothing — the original stays read-only either way.
@@ -382,12 +412,17 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
                 '-i ' . escapeshellarg($mediaPath),
                 '-map 0 -c copy',
             ];
-            foreach ($this->metadataFlags($canonicalMetadata) as $flag) {
+            foreach ($flags as $flag) {
                 $arguments[] = $flag;
             }
             // faststart only rebuilds the MP4 atom index; MKV would reject it.
-            if (in_array(strtolower(pathinfo($mediaPath, PATHINFO_EXTENSION)), ['mp4', 'm4v'], true)) {
-                $arguments[] = '-movflags +faststart';
+            // The container itself is PINNED with -f: the staged sibling carries
+            // no media extension by design (scanner-invisible), so extension
+            // sniffing is not available and must not be relied on.
+            if (in_array($extension, ['mp4', 'm4v'], true)) {
+                $arguments[] = '-movflags +faststart -f mp4';
+            } else {
+                $arguments[] = '-f matroska';
             }
             $arguments[] = escapeshellarg($staged);
 
@@ -444,9 +479,21 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
         array $canonicalMetadata,
         string $extension,
     ): void {
-        $staged = $this->stagePath($mediaPath);
+        $tagData = $this->audioTagData($canonicalMetadata);
+        if ($tagData === []) {
+            // Fail loud BEFORE any file is staged: rewriting the header with an
+            // empty frame map would strip existing tags and add nothing.
+            throw EmbeddedWriteFailedException::stageFailed(
+                $item->id,
+                $mediaPath,
+                'canonical metadata carries no embeddable audio fields',
+            );
+        }
 
+        $staged = '';
         try {
+            $staged = $this->createStage($item, $mediaPath);
+
             // getID3 edits IN PLACE, so the copy must be complete before it
             // runs — an unchecked copy() could hand a PARTIAL stage to a tool
             // that happily tags it, and the publish would ship the truncation.
@@ -464,15 +511,7 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
             $writer->overwrite_tags = true;
             $writer->remove_other_tags = false;
             $writer->tag_encoding = 'UTF-8';
-            $writer->tag_data = $this->audioTagData($canonicalMetadata);
-
-            if ($writer->tag_data === []) {
-                throw EmbeddedWriteFailedException::stageFailed(
-                    $item->id,
-                    $mediaPath,
-                    'canonical metadata carries no embeddable audio fields',
-                );
-            }
+            $writer->tag_data = $tagData;
 
             $wrote = $writer->WriteTags();
             if ($wrote === false) {
@@ -513,11 +552,13 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     private function publish(MediaItem $item, string $mediaPath, string $staged): void
     {
         // copy() preserves the source mode for a new target; the explicit
-        // chmod only re-applies the ORIGINAL's permissions in case the staged
-        // file inherited a different umask mid-flight.
+        // chmod only re-applies the ORIGINAL's permission bits in case the
+        // staged file inherited a different umask mid-flight. The mask drops
+        // setuid/setgid/sticky deliberately: a media file must never gain
+        // special bits through a writer round-trip.
         $originalMode = @fileperms($mediaPath);
         if ($originalMode !== false) {
-            @chmod($staged, $originalMode & 07777);
+            @chmod($staged, $originalMode & 0777);
         }
 
         if (!rename($staged, $mediaPath)) {
@@ -528,18 +569,44 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     /**
      * Unique staged-sibling path, same pid+entropy discipline as
      * SidecarWriter::writeAtomically() (pids separate processes, uniqid
-     * entropy separates calls within one) — PLUS a trailing copy of the real
-     * extension: ffmpeg selects the muxer from the OUTPUT FILE EXTENSION, and
-     * a stage like `x.mp4.phlix-embed-tmp-...` makes the real binary refuse
-     * the job with "Error initializing the muxer … Invalid argument"
-     * (measured; no fake runner could ever have caught this — S345 rule 2).
+     * entropy separates calls within one) — and deliberately NO media
+     * extension:
+     *  - a concurrent scan can never pick the stage up as a media candidate
+     *    (no supported extension), and the `.tmp` in the name additionally
+     *    matches the shipped `scanner.ignore_patterns` substring rule, so even
+     *    an operator-listed pattern cannot let it through unnoticed;
+     *  - the muxer is therefore PINNED on the command line (`-f mp4` /
+     *    `-f matroska`), not inferred from a filename — measured on the real
+     *    binary both ways: extension-less output without `-f` fails with
+     *    "Error initializing the muxer", with `-f` it writes a tagged file
+     *    that ffprobe reads back (S345 rule 2 — no fake runner could have
+     *    caught the first shape).
+     *
+     * The file is created HERE with `fopen(...,'xb')` — exclusive: O_EXCL
+     * refuses to open through a pre-existing symlink or clobber a pre-existing
+     * path, so neither `ffmpeg -y` nor `copy()` below can ever be aimed at an
+     * object the writer did not just mint.
      */
-    private function stagePath(string $mediaPath): string
+    private function createStage(MediaItem $item, string $mediaPath): string
     {
-        $extension = strtolower(pathinfo($mediaPath, PATHINFO_EXTENSION));
-        $stage = $mediaPath . '.phlix-embed-tmp-' . getmypid() . '-' . uniqid('', true);
+        $stage = $mediaPath . '.phlix-embed.tmp.' . getmypid() . '-' . uniqid('', true);
 
-        return $extension === '' ? $stage : $stage . '.' . $extension;
+        $handle = @fopen($stage, 'xb');
+        if ($handle === false) {
+            // 'xb' fails when the path exists (ANY type — file, link, fifo) or
+            // the directory went unwritable after the pre-flight. Nothing was
+            // created, so there is nothing to discard; the message names both
+            // input classes instead of claiming one.
+            throw EmbeddedWriteFailedException::stageFailed(
+                $item->id,
+                $mediaPath,
+                'could not exclusively create the stage file (path already present or directory '
+                    . 'unwritable mid-flight): ' . $stage,
+            );
+        }
+        fclose($handle);
+
+        return $stage;
     }
 
     private function discardStaged(string $staged): void

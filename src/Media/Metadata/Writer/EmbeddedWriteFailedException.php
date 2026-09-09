@@ -53,6 +53,16 @@ final class EmbeddedWriteFailedException extends RuntimeException
         );
     }
 
+    public static function symlinkRefused(string $itemId, string $mediaPath): self
+    {
+        return new self(
+            $itemId,
+            $mediaPath,
+            'media path is a symbolic link - the embedded writer only rewrites regular files, '
+                . 'it will not read through a link nor replace the link itself',
+        );
+    }
+
     public static function degenerateDirectory(string $itemId, string $mediaPath): self
     {
         return new self(

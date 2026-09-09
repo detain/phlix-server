@@ -41,8 +41,12 @@ interface ExternalCommandRunnerInterface
      * @param string $commandLine Complete command line (already escaped by the caller).
      *
      * @return array{exitCode: int, stdout: string, stderr: string}
-     *         `exitCode` is the process exit status; a negative value means the
-     *         process was killed by that signal number (interrupted-remux shape).
+     *         `exitCode` is the process exit status. Two kill shapes exist and
+     *         the caller must treat BOTH as failure: real shells report
+     *         signal-death as `128 + signum` (what {@see ExecExternalCommandRunner}
+     *         surfaces — measured), while an injected runner may report the
+     *         negative `-signum` shape directly; {@see EmbeddedMetadataWriter}
+     *         fails on any non-zero value, whichever shape carries it.
      *         `stdout`/`stderr` are whatever the process emitted.
      */
     public function run(string $commandLine): array;

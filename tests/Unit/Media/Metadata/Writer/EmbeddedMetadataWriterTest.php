@@ -32,7 +32,7 @@ use Workerman\MySQL\Connection;
  *    (atomic-rename discipline verified)" → the three interruption arms
  *    (non-zero exit with PARTIAL stage, signal-shaped negative exit, real
  *    ffmpeg refusing junk bytes) + the success arms proving the staged file
- *    IS what gets published; every arm asserts zero `.phlix-embed-tmp-*`
+ *    IS what gets published; every arm asserts zero `.phlix-embed.tmp.*`
  *    residue and byte-identical originals where expected.
  *  - "MetadataOverwritePolicy respected when an operator-curated NFO exists"
  *    → ruling R2's concrete predicate (stem + Kodi-convention NFOs lacking
@@ -135,14 +135,14 @@ final class EmbeddedMetadataWriterTest extends TestCase
     /** The single staged sibling currently present for $mediaPath. */
     private function stagedFor(string $mediaPath): ?string
     {
-        $staged = glob($mediaPath . '.phlix-embed-tmp-*');
+        $staged = glob($mediaPath . '.phlix-embed.tmp.*');
 
         return is_array($staged) && $staged !== [] ? (string) $staged[0] : null;
     }
 
     private function assertNoStageResidue(string $mediaPath): void
     {
-        $this->assertSame([], glob($mediaPath . '.phlix-embed-tmp-*'));
+        $this->assertSame([], glob($mediaPath . '.phlix-embed.tmp.*'));
     }
 
     private function ffmpegBin(): string
@@ -200,7 +200,7 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $this->writer(new S89ScriptedRunner(), $this->optIn(false))->write($this->item('/nope/gone.mkv'), [], '/nope');
 
         $logger = $this->createMock(LoggerInterface::class);
-        $logger->expects($this->once())->method('info')
+        $logger->expects($this->once())->method('debug')
             ->with(
                 $this->stringContains('skipped, embedded writing not enabled'),
                 $this->callback(fn (array $c): bool => $c['item_id'] === 'item-s89-1'
@@ -273,7 +273,7 @@ final class EmbeddedMetadataWriterTest extends TestCase
             chmod($dir, 0777);
         }
         $this->assertSame('ORIGINAL-BYTES', file_get_contents($media));
-        $this->assertSame([], glob($dir . '/*.phlix-embed-tmp-*'));
+        $this->assertSame([], glob($dir . '/*.phlix-embed.tmp.*'));
     }
 
     // ── AC 3 + ruling R2: operator-curated NFO predicate ──────────────────
@@ -572,6 +572,11 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $this->assertStringContainsString('-metadata title=' . escapeshellarg('Inception'), $cmd);
         $this->assertStringContainsString('-metadata synopsis=' . escapeshellarg('A heist <film> & more'), $cmd);
         $this->assertStringNotContainsString('-movflags', $cmd, 'MKV rejects faststart');
+        $this->assertStringContainsString(
+            '-f matroska',
+            $cmd,
+            'container pinned: the stage carries no extension to sniff',
+        );
         $this->assertStringContainsString('-i ' . escapeshellarg($media) . ' ', $cmd, 'the ORIGINAL is only -i');
         $this->assertStringEndsNotWith(escapeshellarg($media), $cmd, 'output must be the stage, never the original');
     }
@@ -582,12 +587,13 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $media = $this->fakeMedia($dir, 'x.mp4');
         $runner = new S89ScriptedRunner([S89ScriptedRunner::writeToStage($media, 'NEW')]);
         $this->writer($runner)->write($this->item($media), ['name' => 'X'], $dir);
-        $this->assertStringContainsString('-movflags +faststart', $runner->calls[0]);
+        $this->assertStringContainsString('-movflags +faststart -f mp4', $runner->calls[0]);
 
         $mkv = $this->fakeMedia($dir, 'y.mkv');
         $runner2 = new S89ScriptedRunner([S89ScriptedRunner::writeToStage($mkv, 'NEW')]);
         $this->writer($runner2)->write($this->item($mkv), ['name' => 'Y'], $dir);
         $this->assertStringNotContainsString('-movflags', $runner2->calls[0]);
+        $this->assertStringContainsString('-f matroska', $runner2->calls[0]);
     }
 
     public function test_provider_metadata_values_cannot_break_out_of_their_quoting(): void
@@ -650,6 +656,69 @@ final class EmbeddedMetadataWriterTest extends TestCase
         }
         $this->assertSame('ORIGINAL-BYTES', file_get_contents($media));
         $this->assertNoStageResidue($media);
+    }
+
+    // ── review round 1: symmetric guards ──────────────────────────────────
+
+    public function test_empty_video_fields_fail_loud_before_any_staging(): void
+    {
+        $dir = $this->tempDir('emptyvideo');
+        $media = $this->fakeMedia($dir, 'v.mkv');
+        $runner = new S89ScriptedRunner();
+
+        try {
+            $this->writer($runner)->write($this->item($media), [], $dir);
+            $this->fail('a zero-flag remux is a pointless destructive rewrite and must throw');
+        } catch (EmbeddedWriteFailedException $e) {
+            $this->assertStringContainsString('no embeddable video fields', $e->getMessage());
+        }
+
+        $this->assertSame([], $runner->calls, 'the guard must fire before the command runs');
+        $this->assertSame('ORIGINAL-BYTES', file_get_contents($media));
+        $this->assertNoStageResidue($media);
+    }
+
+    public function test_a_symlink_at_the_media_path_is_refused_not_followed(): void
+    {
+        $dir = $this->tempDir('symlink');
+        $target = $dir . '/outside-target.mp3';
+        file_put_contents($target, 'SENSITIVE-TARGET-BYTES');
+        $link = $dir . '/link.mp3';
+        self::assertTrue(symlink($target, $link));
+
+        try {
+            $this->writer(new S89ScriptedRunner())
+                ->write($this->item($link, ['name' => 'X'], 'track'), ['name' => 'X'], $dir);
+            $this->fail('the destructive arm must never dereference a symlinked media path');
+        } catch (EmbeddedWriteFailedException $e) {
+            $this->assertStringContainsString('symbolic link', $e->getMessage());
+        }
+
+        $this->assertTrue(is_link($link), 'the operator link itself must survive untouched');
+        $this->assertSame('SENSITIVE-TARGET-BYTES', file_get_contents($target));
+        $this->assertSame([], glob($dir . '/*.phlix-embed.tmp.*'));
+    }
+
+    public function test_stage_creation_is_exclusive_and_fails_loud_when_the_path_exists(): void
+    {
+        // Removal-red for the `fopen(...,'xb')` guard (S345 rule 3): calling the
+        // guard directly in a directory the process cannot write must throw, so
+        // reverting it to a plain path builder reddens this arm instead of
+        // silently handing stage creation to ffmpeg -y / copy().
+        $dir = $this->tempDir('stageguard');
+        $media = $this->fakeMedia($dir, 'g.mp3');
+        self::assertTrue(chmod($dir, 0555));
+
+        try {
+            $method = new \ReflectionMethod(EmbeddedMetadataWriter::class, 'createStage');
+            $method->setAccessible(true);
+            $method->invoke($this->writer(new S89ScriptedRunner()), $this->item($media), $media);
+            $this->fail('stage creation must fail loudly when it cannot create exclusively');
+        } catch (EmbeddedWriteFailedException $e) {
+            $this->assertStringContainsString('exclusively create the stage file', $e->getMessage());
+        } finally {
+            chmod($dir, 0777);
+        }
     }
 
     // ── worker-visible contract (R1: deny is never a warning) ─────────────
@@ -742,7 +811,7 @@ final class S89ScriptedRunner implements ExternalCommandRunnerInterface
         }
         $token = str_replace("'\\''", "'", $m[1]);
 
-        return str_starts_with($token, $mediaPath . '.phlix-embed-tmp-') ? $token : null;
+        return str_starts_with($token, $mediaPath . '.phlix-embed.tmp.') ? $token : null;
     }
 
     /**

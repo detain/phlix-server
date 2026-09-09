@@ -119,7 +119,7 @@ final class EmbeddedMetadataWriterRealBinaryTest extends TestCase
         $this->assertSame('Probe Movie', $tags['title'] ?? null, 'real ffmpeg must accept the emitted command shape');
         $this->assertSame('2026', $tags['date'] ?? null);
         $this->assertDecodable($media);
-        $this->assertSame([], glob($media . '.phlix-embed-tmp-*'), 'no staged residue after a real publish');
+        $this->assertSame([], glob($media . '.phlix-embed.tmp.*'), 'no staged residue after a real publish');
     }
 
     public function test_real_ffmpeg_remux_of_a_real_mkv_stamps_title_and_survives_without_faststart(): void
@@ -143,7 +143,7 @@ final class EmbeddedMetadataWriterRealBinaryTest extends TestCase
 
         $this->assertSame('Probe Episode', $this->containerTags($media)['title'] ?? null);
         $this->assertDecodable($media);
-        $this->assertSame([], glob($media . '.phlix-embed-tmp-*'));
+        $this->assertSame([], glob($media . '.phlix-embed.tmp.*'));
     }
 
     public function test_a_real_tagged_video_before_and_after_keeps_the_original_bytes_until_publish(): void

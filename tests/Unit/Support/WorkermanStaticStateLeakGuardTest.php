@@ -110,7 +110,8 @@ final class WorkermanStaticStateLeakGuardTest extends TestCase
 
         $output = (string) shell_exec(
             'PHLIX_S266_STATIC_DUMP=' . escapeshellarg($dumpPath)
-            . ' php ' . escapeshellarg($scriptPath) . ' 2>&1; echo "__PHLIX_S266_EXIT=$?"'
+            . ' ' . escapeshellarg(PHP_BINARY)
+            . ' ' . escapeshellarg($scriptPath) . ' 2>&1; echo "__PHLIX_S266_EXIT=$?"'
         );
         $exit = $this->childExit($output);
         $dump = $this->readDump($dumpPath);
@@ -190,19 +191,41 @@ final class WorkermanStaticStateLeakGuardTest extends TestCase
         $output = (string) shell_exec(
             'cd ' . escapeshellarg($root)
             . ' && PHLIX_S266_STATIC_DUMP=' . escapeshellarg($dumpPath)
-            . ' php vendor/bin/phpunit --no-coverage'
+            . ' ' . escapeshellarg(PHP_BINARY) . ' vendor/bin/phpunit --no-coverage --colors=never'
+            . ' --testsuite Unit'
             . ' --bootstrap tests/Support/Workerman/StaticProbeBootstrap.php'
             . ' --filter ' . escapeshellarg($filter)
             . ' 2>&1; echo "__PHLIX_S266_EXIT=$?"'
         );
 
+        // Belt and braces with --colors=never: scripts/skipped-test-names.sh
+        // records that colorized runs wrap the summary lines in ANSI, which
+        // would defeat these parses and silently read a regrown self-skip as
+        // skipped=0. Strip first, then REQUIRE a terminating summary — a child
+        // whose output cannot be assessed must fail the guard, never default
+        // past it (repo doctrine: a guard that cannot measure must not pass).
+        $clean = (string) preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $output);
+        $this->assertMatchesRegularExpression(
+            '/^(Tests:|OK \(|FAILURES!|ERRORS!)/m',
+            $clean,
+            "S266: the probe child emitted no PHPUnit summary line — skipped count is "
+            . "unassessable and the guard refuses to assume 0.\n--- output ---\n$output"
+        );
         $tests = null;
-        if (preg_match('/^Tests:\s*(\d+)/m', $output, $m) === 1) {
+        if (preg_match('/^Tests:\s*(\d+)/m', $clean, $m) === 1) {
             $tests = (int) $m[1];
-        } elseif (preg_match('/OK \((\d+) tests?,/', $output, $m) === 1) {
+        } elseif (preg_match('/OK \((\d+) tests?,/', $clean, $m) === 1) {
             $tests = (int) $m[1];
         }
-        $skipped = preg_match('/Skipped:\s*(\d+)/m', $output, $m) === 1 ? (int) $m[1] : 0;
+        $this->assertNotNull(
+            $tests,
+            "S266: a summary line was present but the test count unparsable — not a pass.\n"
+            . "--- output ---\n$output"
+        );
+        // PHPUnit 10 lists `Skipped:` only when it is non-zero ("OK (N tests, …)"
+        // means zero by construction), so absence from ASSESSED output is truly
+        // zero — the fail-open this guards against is the colorized-parse miss.
+        $skipped = preg_match('/Skipped:\s*(\d+)/m', $clean, $m) === 1 ? (int) $m[1] : 0;
 
         return [
             'exit' => $this->childExit($output),

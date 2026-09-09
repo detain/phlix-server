@@ -23,9 +23,11 @@ use Workerman\Timer;
  * race: WebhookServiceTest, StreamSessionServiceTest and
  * RecordingSchedulerTest each did `if (!Worker::getAllWorkers()) new Worker();`
  * in setUp with no restore, and WebSocketServerTest registers workers through
- * the `WebSocketServer` constructor on nearly every test method — so a seed in
- * which both relay classes landed before every leaker produced six skips, and
- * any other seed produced none. The `Timer::init()` writers
+ * the `WebSocketServer` constructor on nearly every test method — so whichever
+ * relay class landed before the first leaker skipped its three cases: seeds
+ * flipped between 0, 3 and 6 self-skips (S266 measured 10 of 25 subset seeds
+ * flipping a class triple), and only a seed placing both relay classes ahead
+ * of every leaker skipped all six. The `Timer::init()` writers
  * (SsdpMSearchListenerTest, TraktSyncBootRealDbTest) already save and restore
  * `Timer::$event` around their own loops; this trait follows that same model.
  *

@@ -203,7 +203,8 @@ final class PlaybackControllerStatsTypeTest extends TestCase
         // stats failure may not swallow the rest of the method either.
         $controller->reportProgress('sess-102', 'media-ep-102', 100, 2000, false);
 
-        $this->assertTrue(true, 'reportProgress() completed despite the stats write failing');
+        // reportProgress() completed despite the stats write failing.
+        $this->addToAssertionCount(1);
     }
 
     /**

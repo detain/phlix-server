@@ -547,15 +547,14 @@ final class CliScanJobVisibilityTest extends TestCase
 
         $claimed = $jobs->claimNext();
 
-        if ($claimed !== null) {
-            $this->assertNotSame(
-                $mine,
-                $claimed['id'] ?? null,
-                'the worker must never be able to claim a row the CLI is already executing',
-            );
-        } else {
-            $this->assertNull($claimed);
-        }
+        // One always-live assertion: whatever the worker claimed, it is never the
+        // row the CLI is already executing (no claim → null, which differs from
+        // $mine and passes).
+        $this->assertNotSame(
+            $mine,
+            $claimed['id'] ?? null,
+            'the worker must never be able to claim a row the CLI is already executing',
+        );
     }
 
     private function tester(LibraryManager $manager): CommandTester

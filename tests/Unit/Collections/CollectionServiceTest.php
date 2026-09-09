@@ -176,7 +176,6 @@ final class CollectionServiceTest extends TestCase
             $inserts[0]['params'],
             'Membership must bind (collection_id, <uuid>, tmdb_part_order).'
         );
-        $this->assertIsString($inserts[0]['params'][1]);
     }
 
     /**

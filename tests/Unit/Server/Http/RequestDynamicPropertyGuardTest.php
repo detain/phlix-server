@@ -113,9 +113,11 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         // Declared members are all initialized by defaults, so existence
         // tests behave exactly as before the guard (except nullable-nulls,
         // which `isset` correctly answers false for — pre-existing PHP
-        // semantics, untouched).
-        $this->assertTrue(isset($request->method));
-        $this->assertTrue(isset($request->body));
+        // semantics, untouched). The dynamic name form is the guard's own
+        // access shape, so `isset()` reaching a declared member still fails here.
+        foreach (['method', 'body'] as $declaredName) {
+            $this->assertTrue(isset($request->{$declaredName}), "isset(\${$declaredName}) on a declared member");
+        }
     }
 
     /**
@@ -142,7 +144,7 @@ final class RequestDynamicPropertyGuardTest extends TestCase
             } catch (\LogicException $e) {
                 $this->fail("declared member \$$name must never reach the dynamic guard: " . $e->getMessage());
             }
-            $this->assertTrue(true, "read of \$$name bypassed the guard");
+            $this->addToAssertionCount(1); // read bypassed the guard
         }
     }
 

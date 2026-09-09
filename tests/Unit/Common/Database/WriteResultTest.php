@@ -84,8 +84,10 @@ final class WriteResultTest extends TestCase
             . 'reading it as "wrote nothing" reports every such write as a failure',
         );
 
-        // The reason it is dangerous, asserted rather than asserted-about.
-        $this->assertFalse((bool) '0', "PHP still says '0' is falsy — that is the whole trap");
+        // The trap itself — `(bool) '0' === false` — is a language fact, fixed for
+        // every supported PHP 8.x (verified: php -r 'var_dump((bool) "0");' → bool(false)),
+        // so it is recorded as rationale rather than asserted; the live check above is
+        // the one that can actually redden if the predicate ever learns the mistake.
     }
 
     /**

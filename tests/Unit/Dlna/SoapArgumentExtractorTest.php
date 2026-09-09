@@ -70,7 +70,7 @@ final class SoapArgumentExtractorTest extends TestCase
         if ($doc !== null) {
             self::assertStringNotContainsString('root:', (string) $doc->x);
         } else {
-            self::assertNull($doc);
+            self::addToAssertionCount(1); // refusal to parse is itself the safe outcome
         }
     }
 

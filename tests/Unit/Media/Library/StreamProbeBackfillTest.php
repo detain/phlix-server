@@ -526,7 +526,8 @@ class StreamProbeBackfillTest extends TestCase
         // Retried: two requests, two probes.
         $ffmpeg->expects($this->exactly(2))->method('probe')->willReturn($this->multiTrackProbe());
 
-        $stamped = false;
+        // No stamp writer is wired in this scenario — markStreamsProbed is pinned
+        // never(), below — so the item row starts and stays unstamped.
         $attempts = 0;
         $repo = $this->createMock(ItemRepository::class);
         $repo->method('replaceStreams')->willReturnCallback(function () use (&$attempts): void {
@@ -544,13 +545,12 @@ class StreamProbeBackfillTest extends TestCase
         for ($request = 0; $request < 2; $request++) {
             $backfill->ensureFor(
                 ['id' => 'movie-1', 'path' => $path,
-                 'streams_probed_at' => $stamped ? '2026-07-28 09:00:00' : null],
+                 'streams_probed_at' => null],
                 $stored
             );
         }
 
         $this->assertSame(2, $attempts, 'the repair was attempted again on the second request');
-        $this->assertFalse($stamped, 'and the item was never stamped');
     }
 
     /**

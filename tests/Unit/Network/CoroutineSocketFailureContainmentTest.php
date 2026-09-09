@@ -343,7 +343,7 @@ class CoroutineSocketFailureContainmentTest extends TestCase
     private function assertNullOrString(mixed $value, string $message = ''): void
     {
         if ($value === null) {
-            $this->assertNull($value, $message);
+            $this->addToAssertionCount(1); // the `=== null` above IS the check
             return;
         }
 

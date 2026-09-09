@@ -151,7 +151,6 @@ final class ZeroResidueCensusTest extends TestCase
         $this->assertMatchesRegularExpression('/^[A-Z0-9]{19}$/', self::LANE_SENTINEL);
 
         $stripped = php_strip_whitespace(__FILE__);
-        $this->assertIsString($stripped);
         $this->assertStringContainsString(
             self::LANE_SENTINEL,
             $stripped,

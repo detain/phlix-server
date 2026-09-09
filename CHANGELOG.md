@@ -34,9 +34,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   (1) **atomic-rename discipline** — every mutation stages a unique sibling temp file in the media
   directory and only then `rename()`s over the original, so a remux interrupted at any point (a non-zero
   exit, a signal kill, a failed publish) leaves the ORIGINAL bytes intact; `getid3_writetags` rewrites in
-  place, so the original is never handed to it — only a copy. (The stage path re-appends the source
-  extension because ffmpeg picks the muxer from the output-file extension — a refusal no fake runner could
-  surface.) (2) **overwrite policy** — when a file already carries content embedded tags, the existing
+  place, so the original is never handed to it — only a copy. (The stage carries deliberately NO media
+  extension — invisible to a concurrent scan and matched by the shipped `scanner.ignore_patterns` `.tmp`
+  rule — so the muxer is PINNED on the command line instead (`-f mp4`/`-f matroska`), and the stage is
+  created exclusively (`fopen 'xb'`); a symlink at the media path is refused rather than dereferenced.
+  The extension-less + pinned-muxer shape was found against the real binary, not a fake runner.)
+  (2) **overwrite policy** — when a file already carries content embedded tags, the existing
   `MetadataOverwritePolicy` is consulted; a deny is a normal return with a logged reason, never a throw
   (ruling R1). (3) **per-file curation** — a concrete predicate runs IN FRONT of the global policy: an
   existing stem or Kodi-convention (`movie.nfo`/`tvshow.nfo`/`episode.nfo`) sidecar that does NOT carry the

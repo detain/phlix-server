@@ -155,7 +155,12 @@ final class ApplicationConfigDirResolutionTest extends TestCase
             // The write landed in the fake install's config dir, not a stray CWD dir.
             $controlFile = $fakeCfg . '/' . RelayStateStore::RELAY_CONTROL_FILE;
             self::assertFileExists($controlFile);
-            self::assertSame(realpath($fakeCfg), realpath(dirname($controlFile)));
+            // Independent on-disk proof: the previous dirname() check was vacuous by
+            // construction (dirname of a constant-suffixed path is that path's dir), so
+            // read the kill-switch bytes back and assert they really encode disabled=true.
+            $decoded = json_decode((string) file_get_contents($controlFile), true);
+            self::assertIsArray($decoded, 'relay-control.json must decode to an array on disk.');
+            self::assertTrue(($decoded['disabled'] ?? false) === true);
             self::assertDirectoryDoesNotExist($elsewhere . '/config');
         } finally {
             chdir($cwd0);
@@ -372,14 +377,22 @@ final class ApplicationConfigDirResolutionTest extends TestCase
         // pinned paths, and the Hub glob found the directory's files
         // (RelayStateStore among them).
         foreach ([$appPath, $controllerPath, $storePath] as $surface) {
-            self::assertFileExists($surface, "An owned control surface is missing: {$surface}.");
+            self::assertFileExists(
+                $surface,
+                self::SURVIVAL_TOKEN . ": An owned control surface is missing: {$surface}.",
+            );
         }
 
-        self::assertContains($storePath, $hubPaths, 'The src/Hub/ glob lost RelayStateStore.php.');
+        self::assertContains(
+            $storePath,
+            $hubPaths,
+            self::SURVIVAL_TOKEN . ': The src/Hub/ glob lost RelayStateStore.php.',
+        );
         self::assertGreaterThan(
             5,
             count($hubPaths),
-            'The src/Hub/ glob found almost nothing — the owned-surface shape check would be vacuous.',
+            self::SURVIVAL_TOKEN . ': The src/Hub/ glob found almost nothing — the owned-surface '
+                . 'shape check would be vacuous.',
         );
         $ownedPaths = array_values(array_unique([$appPath, $controllerPath, ...$hubPaths]));
 
@@ -403,7 +416,7 @@ final class ApplicationConfigDirResolutionTest extends TestCase
                 self::assertSame(
                     0,
                     preg_match($pattern, $code),
-                    "Relative-config fallback ({$shape}) resurrected in {$path}.",
+                    self::SURVIVAL_TOKEN . ": Relative-config fallback ({$shape}) resurrected in {$path}.",
                 );
             }
 
@@ -412,7 +425,8 @@ final class ApplicationConfigDirResolutionTest extends TestCase
                     self::assertSame(
                         0,
                         preg_match($pattern, $code),
-                        "Relative-config resurrection ({$shape}) on an owned surface: {$path}.",
+                        self::SURVIVAL_TOKEN . ": Relative-config resurrection ({$shape}) on an owned "
+                            . "surface: {$path}.",
                     );
                 }
             }
@@ -423,7 +437,11 @@ final class ApplicationConfigDirResolutionTest extends TestCase
         }
 
         // The test seam may be read in exactly ONE first-party source file.
-        self::assertSame([$appPath], $seamFiles);
+        self::assertSame(
+            [$appPath],
+            $seamFiles,
+            self::SURVIVAL_TOKEN . ': the _config_dir test seam must be read in exactly ONE source file.',
+        );
 
         // Positive controls: every pattern above still bites the bug shape it forbids.
         $controls = [
@@ -438,8 +456,14 @@ final class ApplicationConfigDirResolutionTest extends TestCase
             self::assertSame(
                 1,
                 preg_match($pattern, $snippet),
-                "Guard pattern {$pattern} no longer matches its own positive-control snippet.",
+                self::SURVIVAL_TOKEN . ": Guard pattern {$pattern} no longer matches its own "
+                    . 'positive-control snippet.',
             );
         }
+
+        // Pin the shipped token WITHOUT the full literal re-appearing contiguously:
+        // the concatenation survives comment-stripping yet never forms the string in
+        // source, so exactly one occurrence (the const declaration) remains.
+        self::assertSame(self::SURVIVAL_TOKEN, 'S211' . 'CFGDIRABS' . 'X7K7');
     }
 }

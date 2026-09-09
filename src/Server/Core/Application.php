@@ -1220,7 +1220,11 @@ class Application
                 [$adminMiddleware],
             );
         } catch (\Throwable) {
-            // Remote access not configured — silent ignore
+            // Remote access not configured — silent ignore. Post-S211 this catch also
+            // swallows resolveConfigDir()'s throw on a misconfigured (relative or root)
+            // hub.config_dir, so admin remote routes come up ABSENT (404s) instead of
+            // the pre-S211 silently-CWD-dependent behavior; a loud boot would be nicer,
+            // but the group-registration context swallows like its sibling loaders.
         }
     }
 
@@ -1239,11 +1243,14 @@ class Application
      *     `start.php`; the three test call sites pass absolute paths). A
      *     non-empty string; a relative value is a test bug and throws instead
      *     of silently resolving against the CWD.
-     *  2. `$config['hub']['config_dir']` — the production source: the very value
-     *     {@see \Phlix\Server\Http\Controllers\Admin\HealthController} receives
+     *  2. `$config['hub']['config_dir']` — the production source: when SET, the very
+     *     value {@see \Phlix\Server\Http\Controllers\Admin\HealthController} receives
      *     and `HubServicesProvider` binds `RelayStateStore` on. `config/hub.php`
      *     sets it to `__DIR__`, so it is absolute; a relative value here is a
-     *     misconfiguration and throws (loud-fail beats CWD dependence).
+     *     misconfiguration and throws (loud-fail beats CWD dependence). KNOWN LIMIT
+     *     of this contract: when the key is ABSENT the provider falls back on its own
+     *     (out-of-fileset) chain while branch 3 below yields the repo `config/` — a
+     *     divergence unreachable with shipped config (`config/hub.php` sets `__DIR__`).
      *  3. Documented ABSOLUTE default derived from this file's location — the
      *     repo's own `config/` — mirroring HealthController's
      *     `dirname(__DIR__, 5) . '/config'` ctor default. No branch can be

@@ -282,7 +282,10 @@ final class EmbeddedMetadataWriterTest extends TestCase
     {
         $dir = $this->tempDir('curated');
         $media = $this->fakeMedia($dir, 'Inception (2010).mkv');
-        file_put_contents($dir . '/Inception (2010).nfo', "<?xml version=\"1.0\"?>\n<movie><title>Hand-curated</title></movie>\n");
+        file_put_contents(
+            $dir . '/Inception (2010).nfo',
+            "<?xml version=\"1.0\"?>\n<movie><title>Hand-curated</title></movie>\n",
+        );
 
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects($this->once())->method('info')
@@ -569,8 +572,8 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $this->assertStringContainsString('-metadata title=' . escapeshellarg('Inception'), $cmd);
         $this->assertStringContainsString('-metadata synopsis=' . escapeshellarg('A heist <film> & more'), $cmd);
         $this->assertStringNotContainsString('-movflags', $cmd, 'MKV rejects faststart');
-        $this->assertStringContainsString('-i ' . escapeshellarg($media) . ' ', $cmd, 'the ORIGINAL is only the -i input');
-        $this->assertStringEndsNotWith(escapeshellarg($media) , $cmd, 'the output target must be the stage, never the original');
+        $this->assertStringContainsString('-i ' . escapeshellarg($media) . ' ', $cmd, 'the ORIGINAL is only -i');
+        $this->assertStringEndsNotWith(escapeshellarg($media), $cmd, 'output must be the stage, never the original');
     }
 
     public function test_mp4_gets_faststart_and_mkv_does_not(): void
@@ -624,7 +627,8 @@ final class EmbeddedMetadataWriterTest extends TestCase
         $media = $this->fakeMedia($dir, 'fake.mp3');
 
         try {
-            $this->writer(new S89ScriptedRunner())->write($this->item($media, ['name' => 'I'], 'track'), ['name' => 'I'], $dir);
+            $item = $this->item($media, ['name' => 'I'], 'track');
+            $this->writer(new S89ScriptedRunner())->write($item, ['name' => 'I'], $dir);
             $this->fail('getID3 must refuse a junk MP3');
         } catch (EmbeddedWriteFailedException $e) {
             $this->assertStringContainsString('getid3_writetags failed', $e->getMessage());
@@ -672,8 +676,10 @@ final class EmbeddedMetadataWriterTest extends TestCase
             );
 
         $rows = [
-            'w-1' => ['id' => 'w-1', 'name' => 'x', 'type' => 'movie', 'path' => $curated, 'metadata_json' => '{"name":"x"}'],
-            'w-2' => ['id' => 'w-2', 'name' => 'y', 'type' => 'movie', 'path' => $junk, 'metadata_json' => '{"name":"y"}'],
+            'w-1' => ['id' => 'w-1', 'name' => 'x', 'type' => 'movie', 'path' => $curated,
+                'metadata_json' => '{"name":"x"}'],
+            'w-2' => ['id' => 'w-2', 'name' => 'y', 'type' => 'movie', 'path' => $junk,
+                'metadata_json' => '{"name":"y"}'],
         ];
         $worker = new MetadataWriteWorker(
             $store,
@@ -751,7 +757,8 @@ final class S89ScriptedRunner implements ExternalCommandRunnerInterface
         return static function (string $cmd) use ($mediaPath, $bytes): array {
             $staged = self::stageOf($cmd, $mediaPath);
             if ($staged === null) {
-                return ['exitCode' => 1, 'stdout' => '', 'stderr' => 'final token was not a stage of the media: ' . $cmd];
+                return ['exitCode' => 1, 'stdout' => '',
+                    'stderr' => 'final token was not a stage of the media: ' . $cmd];
             }
 
             file_put_contents($staged, $bytes);

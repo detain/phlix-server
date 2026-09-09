@@ -91,7 +91,8 @@ final class SidecarWriterRegistrationTest extends TestCase
 
         $this->assertTrue(
             $registry->has(EmbeddedMetadataWriter::class),
-            'MediaServicesProvider must hand every container-scoped registry the built-in EmbeddedMetadataWriter (ruling R4: same seam, zero PluginLoader)',
+            'MediaServicesProvider must hand every container-scoped registry the built-in '
+            . 'EmbeddedMetadataWriter (ruling R4: same seam, zero PluginLoader)',
         );
         $this->assertEqualsCanonicalizing(
             [SidecarWriter::class, EmbeddedMetadataWriter::class],

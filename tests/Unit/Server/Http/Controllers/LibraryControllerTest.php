@@ -83,7 +83,7 @@ class LibraryControllerTest extends TestCase
     ): LibraryController {
         $users = $this->createMock(UserRepository::class);
         $users->method('findAdminById')->willReturnCallback(
-            static fn (string $id): ?array => ['id' => $id, 'is_admin' => 1, 'status' => 'active']
+            static fn (string $id): array => ['id' => $id, 'is_admin' => 1, 'status' => 'active']
         );
 
         return new LibraryController(

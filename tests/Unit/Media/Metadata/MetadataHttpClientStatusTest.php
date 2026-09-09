@@ -49,7 +49,7 @@ class MetadataHttpClientStatusTest extends TestCase
                 parent::__construct($baseUrl, $apiKey, $timeout, $health);
             }
 
-            protected function requestCurl(string $url, array $headers): ?ResponseInterface
+            protected function requestCurl(string $url, array $headers): ResponseInterface
             {
                 return new Response($this->cannedStatus, [], $this->cannedBody);
             }

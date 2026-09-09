@@ -127,13 +127,13 @@ class RokuEcpClientTest extends TestCase
                 return true;
             }
 
-            protected function fetchAsync(string $method, string $url, ?string $body): ?string
+            protected function fetchAsync(string $method, string $url, ?string $body): string
             {
                 $this->asyncCalled = true;
                 return '';
             }
 
-            protected function fetchBlocking(string $method, string $url, ?string $body): ?string
+            protected function fetchBlocking(string $method, string $url, ?string $body): string
             {
                 $this->blockingCalled = true;
                 return '';

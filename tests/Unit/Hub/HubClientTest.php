@@ -792,7 +792,7 @@ final class RecordingTimerHubClient extends HubClient
     /** @var list<array{interval: float|int, callback: callable, persistent: bool}> */
     public array $scheduled = [];
 
-    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): ?int
+    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): int
     {
         $this->scheduled[] = [
             'interval' => $interval,

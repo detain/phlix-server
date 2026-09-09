@@ -25,9 +25,9 @@ final class BackfillTaggedScanner extends MusicLibraryScanner
 
     /**
      * @param string $path Absolute filesystem path.
-     * @return array<string, mixed>|null
+     * @return array<string, mixed>
      */
-    protected function probeViaGetId3(string $path): ?array
+    protected function probeViaGetId3(string $path): array
     {
         return ($this->tagger)($path);
     }

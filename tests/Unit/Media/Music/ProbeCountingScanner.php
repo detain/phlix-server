@@ -72,7 +72,7 @@ final class ProbeCountingScanner extends MusicLibraryScanner
         $this->probedPaths = [];
     }
 
-    protected function probeViaGetId3(string $path): ?array
+    protected function probeViaGetId3(string $path): array
     {
         $this->probeCount++;
         $this->probedPaths[] = $path;

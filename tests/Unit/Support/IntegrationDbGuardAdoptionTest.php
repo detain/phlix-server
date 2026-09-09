@@ -354,8 +354,19 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * double cannot express any of them, so every S155 acceptance-criteria
      * proof (collapse-to-one, silent replay, self-healing re-mint, imposter
      * replacement, dirty refusal, column-set scoping) runs against real MySQL.
+     *
+     * 55 since S154's
+     * `tests/Integration/Common/Database/RescanEnumCommentGuardTest.php`:
+     * the S154 claim — migration 104 moves ONLY the `library_scan_jobs.type`
+     * column COMMENT while the nine ENUM members and their ordinals, `NOT NULL`,
+     * the 'scan' default and the inherited collation stay byte-identical, 084's
+     * ledger checksum stays unchanged and the ALTER replays idempotently — is a
+     * property of live InnoDB column metadata plus the real `schema_migrations`
+     * row and the runner's stripped-checksum algorithm; a canned
+     * information_schema answer can be made to say anything, so every clause is
+     * pinned against real MySQL.
      */
-    private const EXPECTED_ADOPTERS = 54;
+    private const EXPECTED_ADOPTERS = 55;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

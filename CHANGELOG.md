@@ -76,6 +76,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Migration 104 corrects the false `rescan=purge+rescan` claim in the live `library_scan_jobs.type` column COMMENT (S154).** `rescan` never purges the library — it re-reads every file and prunes only items whose source file has gone (`LibraryManager::pruneRemovedItems()`, behind a per-root presence guard). The falsehood had been baked into the column comment since migration 027 and restated by every later ENUM widening (030, 081, 084, 101); it is the copy a DBA sees in `SHOW FULL COLUMNS`, and the one S149's documentation sweep could not reach because it lives in SQL. Migration 104 re-issues the full `MODIFY COLUMN` definition — all nine ENUM members and their ordinals, `NOT NULL`, `DEFAULT 'scan'` and the inherited `utf8mb4_unicode_ci` collation copied byte-for-byte from the live schema — changing ONLY the comment text. Migrations 027/030/081/084/101 are left byte-identical on purpose: their `COMMENT` is executable SQL held in every install's `schema_migrations` ledger, so editing any in place would flip its checksum and re-run the whole ALTER everywhere. Proven against real MySQL by `tests/Integration/Common/Database/RescanEnumCommentGuardTest.php`.
+
 - **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**
   Three comments asserted that photo and book libraries are scanned for EXIF / EPUB / PDF / CBZ content via
   `PhotoLibraryManager` / `PhotoScanner` / `BookScanner`. They are not: `scanPhotoLibrary()` and

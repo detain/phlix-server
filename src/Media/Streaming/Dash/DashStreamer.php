@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Media\Streaming\Dash;
 
 use DOMDocument;
-use DOMElement;
 
 /**
  * DASH Streamer - Generates DASH MPD manifests and manages segment files.

@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Media\Extras;
 
 use Phlix\Media\Transcoding\FfmpegRunner;
-use SplFileInfo;
 
 /**
  * TrailerFinder scans the filesystem for local trailers.

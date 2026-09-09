@@ -9,8 +9,6 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
-use InvalidArgumentException;
-
 /**
  * Represents a single rating record from a source (TMDB, IMDb, or user).
  */

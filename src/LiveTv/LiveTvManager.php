@@ -19,9 +19,7 @@ use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgService;
 use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
 use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
 use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
-use Phlix\LiveTv\Tuners\Iptv\IptvTunerDriver;
 use Phlix\LiveTv\Tuners\TunerDriverInterface;
 use Workerman\MySQL\Connection;
 

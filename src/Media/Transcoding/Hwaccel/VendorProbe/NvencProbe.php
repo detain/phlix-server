@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlix\Media\Transcoding\Hwaccel\HwaccelEncodeFailedException;
 use Phlix\Media\Transcoding\Hwaccel\ShellTimeout;
 use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;

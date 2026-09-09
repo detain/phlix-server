@@ -15,7 +15,6 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
-use Workerman\MySQL\Connection;
 
 /**
  * PhotoLibraryManager orchestrates photo library scanning and EXIF metadata extraction.

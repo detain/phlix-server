@@ -17,7 +17,6 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\Dash\DashStreamer;
-use Phlix\Server\WebSocket\MessageHandler;
 use Workerman\MySQL\Connection;
 
 /**

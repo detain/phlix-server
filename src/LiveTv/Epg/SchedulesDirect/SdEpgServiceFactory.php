@@ -16,7 +16,6 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\ChannelManager;
 use Phlix\LiveTv\GuideManager;
 use Psr\Log\LoggerInterface;
-use Workerman\MySQL\Connection;
 
 /**
  * Factory for building SdEpgService instances from configuration.

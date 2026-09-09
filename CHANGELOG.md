@@ -9,6 +9,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Sidecar metadata writer — NFO + poster/fanart next to the media file (S88).** The first writer for the
+  S87 write-back plumbing: the built-in `Phlix\Media\Metadata\Writer\SidecarWriter` implements
+  `MetadataWriterInterface` and writes `<basename>.nfo` (XBMC/Kodi XML), `poster.jpg` and `fanart.jpg`
+  beside the media file — non-destructive (the media file itself is never touched; embedded tags are S89)
+  and human-visible. Every sidecar lands atomically (temp file + rename), so a failure mid-write leaves the
+  previous on-disk bytes intact, and re-writing the same item is byte-identical. The emitted NFO round-trips
+  through the existing `LocalNfoProvider` reader (pinned by tests in both directions), and discovered image
+  sidecars are exactly the ones its `findLocalImages()` poster/backdrop patterns already recognise. Ruling R1
+  registers it via the `MetadataWriterRegistry` DI definition in `MediaServicesProvider`, so every process
+  that builds the container — the `metadata-write` worker fork and any admin/status consumer — sees the
+  writer; the `PluginLoader` capability arm keeps its plugin-only semantics. The `is_writable()` pre-flight
+  throws the named `SidecarNotWritableException` carrying item id + target directory + remediation hint
+  (missing dir vs. unwritable dir, the latter citing the systemd `ReadWritePaths` lesson from the
+  `/var/artwork` sandbox incident); the worker's per-writer `catch (Throwable)` turns it into a warning log
+  line — the operator-visible status. Image sidecars are opportunistic and jailed: poster bytes come from the
+  server's own artwork cache, and a `poster_path`/`backdrop_path` reference is copied only when it resolves
+  inside the item's own media directory — provider-controlled remote paths and absolute paths elsewhere on
+  disk never become file reads. Per-library opt-in stays exactly as S87 shipped it
+  (`libraries.options.metadataWrite.enabled`, default OFF).
+
 - **Metadata write-back plumbing — queue + capability arm, zero writers yet (S87).** The first head-step
   of the S87→S88→S89 arc: a plugin can now declare the disk write-back capability by implementing the new
   `Phlix\Media\Metadata\Writer\MetadataWriterInterface` (`supports(type)` / `write(item, canonicalMetadata,

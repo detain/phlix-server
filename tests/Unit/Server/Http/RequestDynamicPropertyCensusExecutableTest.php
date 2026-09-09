@@ -232,8 +232,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * first-party file (tests/Unit/Support/UnusedImportGuardTest.php, the
         * permanent detector); the reflow itself deletes zero files — 150 whole
         * `use` lines out of 100 existing ones. The guard names no Request.
+        * Re-pinned 1833→1834 by S211: the absolute-config-dir fix adds exactly
+        * one first-party file (tests/Unit/Server/Core/ApplicationConfigDirResolutionTest.php,
+        * the CWD-independence regression + source guard); zero files deleted.
+        * The guard names no Request.
         */
-    private const EXPECTED_PHP_FILES = 1833;
+    private const EXPECTED_PHP_FILES = 1834;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

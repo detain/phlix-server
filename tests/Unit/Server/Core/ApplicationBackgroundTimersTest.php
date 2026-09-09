@@ -83,9 +83,10 @@ class ApplicationBackgroundTimersTest extends TestCase
         $container->method('has')->willReturn(false);
         $container->method('get')->willThrowException(new \RuntimeException('not bound'));
 
-        // '_config_dir' is never set in production either; the code falls back to
-        // the relative 'config', which resolves because the daemon runs with
-        // WorkingDirectory=/var/www/phlix and PHPUnit runs from the repo root.
+        // '_config_dir' is a TEST SEAM only — production never sets it and
+        // Application::resolveConfigDir() resolves it absolutely (a relative seam
+        // value throws). The seam short-circuits branch 1, so the daemon/CWD
+        // never participates.
         $app = $this->makeApp(['_config_dir' => __DIR__ . '/../../../../config'], $pool, $container);
 
         $app->startBackgroundTimers();

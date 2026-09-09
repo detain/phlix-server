@@ -18,7 +18,9 @@ namespace Phlix\Hub;
  * tunnel and hub heartbeat run in SEPARATE forked processes
  * (`phlix-relay-tunnel`, `phlix-hub-heartbeat`) with no shared memory. This
  * store is the cross-process bridge: each fork holds its own instance pointing
- * at the SAME `$configDir`, so the HTTP worker can read state the forks write.
+ * at the SAME `$configDir`, so the HTTP worker can read the files the forks
+ * write, and the forks can read the operator kill-switch file the HTTP worker
+ * writes.
  *
  * Three SINGLE-WRITER JSON files (one owner each — never shared between two
  * writer processes, to avoid multi-process write races):
@@ -81,11 +83,28 @@ final class RelayStateStore
     private string $configDir;
 
     /**
-     * @param string $configDir Directory for the state files (already writable;
-     *                          the same dir as `hub-enrollment.json`).
+     * @param string $configDir Absolute directory for the state files (already
+     *                          writable; the same dir as `hub-enrollment.json`).
+     *                          A relative, empty, or all-slashes value (e.g.
+     *                          `/`) throws (S211).
      */
     public function __construct(string $configDir)
     {
+        // S211: every consumer of this store (HTTP worker writer, relay/heartbeat
+        // fork readers) must point at the SAME directory. A relative path would
+        // resolve against each process's CWD — and writeState()'s `@mkdir` would
+        // then silently CREATE one instead of sharing it, so a load-bearing
+        // write (the operator kill-switch) could "succeed" into a file nobody
+        // reads. The filesystem root itself is refused for the same reason: it
+        // is never this store's directory. Absolute-only turns that failure
+        // class into a boot error.
+        if ($configDir === '' || !str_starts_with($configDir, '/') || rtrim($configDir, '/') === '') {
+            throw new \InvalidArgumentException(
+                "RelayStateStore \$configDir must be a non-empty absolute path below the filesystem root;"
+                . " got '{$configDir}'."
+            );
+        }
+
         $this->configDir = $configDir;
     }
 

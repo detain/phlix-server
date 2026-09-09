@@ -44,11 +44,34 @@ final class AdminHubController
 
     /**
      * @param ContainerInterface|null $container PSR-11 container (optional for testing).
-     * @param string                  $configDir Config directory for JSON state files.
+     * @param string                  $configDir ABSOLUTE config directory for JSON
+     *                                           state files; `''` selects the repo
+     *                                           `config/` derived from this file's
+     *                                           location (S211). A relative or
+     *                                           all-slashes value throws.
      */
-    public function __construct(?ContainerInterface $container = null, string $configDir = 'config')
+    public function __construct(?ContainerInterface $container = null, string $configDir = '')
     {
         $this->container = $container;
+        // S211: this controller is the SOLE writer of the operator relay
+        // kill-switch (relay-control.json). A relative dir would @mkdir a stray
+        // ./config/ wherever the process started and the relay fork would never
+        // see the toggle. Empty → documented absolute default (repo config/,
+        // derived from this file's location — same trick as HealthController);
+        // a non-empty RELATIVE value is refused loudly, never resolved CWD-wise,
+        // and so is the filesystem root itself — it is never this dir.
+        if ($configDir === '') {
+            $configDir = dirname(__DIR__, 5) . '/config';
+        } elseif (!str_starts_with($configDir, '/')) {
+            throw new \InvalidArgumentException(
+                "AdminHubController \$configDir must be an absolute path; got relative '{$configDir}'."
+            );
+        } elseif (rtrim($configDir, '/') === '') {
+            throw new \InvalidArgumentException(
+                "AdminHubController \$configDir must name a directory, not the filesystem root; got '{$configDir}'."
+            );
+        }
+
         $this->configDir = $configDir;
     }
 

@@ -136,6 +136,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The relay/admin control surface now resolves its config dir absolutely (S211).** Five read sites in `src/Server/Core/Application.php` used
+  `$this->config['_config_dir'] ?? 'config'` — and `_config_dir` is never set in production — so every hub/relay state path silently depended on the
+  process CWD: started anywhere but the install root (manual `php start.php`, a container with a different WORKDIR, cron/debug runs),
+  `RelayStateStore::writeState()`'s `@mkdir` created a stray `./config/` and the operator kill-switch wrote `relay-control.json` where the relay fork
+  would never look — the API still returned success. The supported deployment worked only because systemd/install scripts set `WorkingDirectory`.
+  Fix: a single `Application::resolveConfigDir()` — honors the absolute `_config_dir` test seam, else production `hub.config_dir` (`config/hub.php`,
+  an absolute `__DIR__` — the same source `HealthController` already used), else a documented absolute default derived from `__DIR__`; relative or
+  filesystem-root values throw instead of silently resolving. `RelayStateStore` and `AdminHubController` constructors refuse empty/relative/root
+  config dirs (`AdminHubController`'s own default is now absolute): the admin relay writer and the relay fork reader now provably resolve the same
+  directory — the previous silent-wrong-dir write is impossible by construction. Known limit: an absent `hub.config_dir` diverges from the container
+  provider's fallback chain — unreachable with shipped config, documented as a KNOWN LIMIT in the resolver docblock. New regression test
+  `tests/Unit/Server/Core/ApplicationConfigDirResolutionTest.php` (15 executions): resolution against the REAL `config/server.php` with the process
+  CWD moved to a directory with no `config/` sibling — and no test sets `_config_dir` — plus a writer/relay-fork kill-switch round-trip under a
+  foreign CWD, loud-fail cases, and a comment-stripped source guard with positive controls forbidding resurrection of the relative-fallback shapes. Census `EXPECTED_PHP_FILES` re-pinned 1833→1834. Zero new routes, zero migrations.
+
 - **Migration 104 corrects the false `rescan=purge+rescan` claim in the live `library_scan_jobs.type` column COMMENT (S154).** `rescan` never purges the library — it re-reads every file and prunes only items whose source file has gone (`LibraryManager::pruneRemovedItems()`, behind a per-root presence guard). The falsehood had been baked into the column comment since migration 027 and restated by every later ENUM widening (030, 081, 084, 101); it is the copy a DBA sees in `SHOW FULL COLUMNS`, and the one S149's documentation sweep could not reach because it lives in SQL. Migration 104 re-issues the full `MODIFY COLUMN` definition — all nine ENUM members and their ordinals, `NOT NULL`, `DEFAULT 'scan'` and the inherited `utf8mb4_unicode_ci` collation copied byte-for-byte from the live schema — changing ONLY the comment text. Migrations 027/030/081/084/101 are left byte-identical on purpose: their `COMMENT` is executable SQL held in every install's `schema_migrations` ledger, so editing any in place would flip its checksum and re-run the whole ALTER everywhere. Proven against real MySQL by `tests/Integration/Common/Database/RescanEnumCommentGuardTest.php`.
 
 - **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**

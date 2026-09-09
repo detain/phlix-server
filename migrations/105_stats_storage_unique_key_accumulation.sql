@@ -68,8 +68,10 @@
 -- NULL-`library_id` row, or two same-key rows. Both fail SAFE and loud: the UPDATE
 -- already ran so the MODIFY may still hit a new NULL (1138 → error recorded, file
 -- stays unrecorded, retried next deploy — which now ships the upsert), or the ADD
--- hits 1062 (same terminal behavior). A retrying operator converges; nothing is
--- silently half-applied.
+-- hits 1062 (same terminal behavior). A retrying operator converges BYTE-EXACTLY:
+-- the merge deliberately ignores NULL-keyed rows (see STEP 1b) so a raced-in NULL
+-- pair is never half-merged — nothing is inflated, deleted, or silently
+-- half-applied, and the retry's clobber folds those rows with the rest.
 --
 -- FORWARD-ONLY (R4). 019 and 086 stay byte-identical forever; their ledger
 -- checksums e7032697acbfc7b31f5f45b5ec16581a and 4ad8d1c323159c2206b34e62320f7189
@@ -186,6 +188,15 @@ DEALLOCATE PREPARE stmt;
 -- columns (019) and `SUM()` over an all-NULL group yields NULL, which is what
 -- the reader already summed them to before 105 — so the copy is faithful, and
 -- the write path never binds NULL into them (ints, defaulting 0).
+--
+-- ⚠ `WHERE library_id IS NOT NULL` is load-bearing under the TOCTOU window
+-- above: GROUP BY folds NULL keys into ONE group, but the DELETE's equality
+-- JOIN can never match a NULL loser — folding such a group would inflate the
+-- survivor with values whose rows survive (double-counted on retry, breaking
+-- byte-exactness). Excluding NULL-keyed rows leaves any raced-in NULL pair
+-- UNTOUCHED for the MODIFY to reject loudly (1138), and the retry's clobber
+-- then merges it correctly. For every non-racing input the filter is inert:
+-- STEP 1 has already collapsed entry NULLs, and a NOT NULL column holds none.
 -- ---------------------------------------------------------------------------
 UPDATE stats_storage survivor
 JOIN (
@@ -195,6 +206,7 @@ JOIN (
            SUM(transcode_cache_bytes) AS sum_transcode_cache_bytes,
            MIN(id) AS keep_id
     FROM stats_storage
+    WHERE library_id IS NOT NULL
     GROUP BY recorded_at, media_type, library_id
     HAVING COUNT(*) > 1
 ) phlix_duplicate_groups ON survivor.id = phlix_duplicate_groups.keep_id
@@ -207,6 +219,7 @@ FROM stats_storage loser
 JOIN (
     SELECT recorded_at, media_type, library_id, MIN(id) AS keep_id
     FROM stats_storage
+    WHERE library_id IS NOT NULL
     GROUP BY recorded_at, media_type, library_id
     HAVING COUNT(*) > 1
 ) phlix_duplicate_survivors

@@ -541,6 +541,86 @@ final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
     }
 
     /**
+     * The TOCTOU merge-window input class (review r2 finding 1): if the old
+     * write path slips NULL-keyed duplicates in between STEP 1's clobber and
+     * STEP 1b's merge, GROUP BY would fold them into ONE group but the DELETE's
+     * equality JOIN can never remove a NULL loser — an unguarded merge would
+     * INFLATE the survivor (double-count on retry, breaking R3 byte-exactness).
+     * STEP 1b therefore excludes NULL keys; this test runs the migration's OWN
+     * two merge statements (extracted from the shipped file with the runner's
+     * own splitStatements, not a hand copy) against the exact mid-race state:
+     * a sentinel duplicate pair that MUST merge and a NULL pair that MUST be
+     * left untouched for the MODIFY to reject.
+     */
+    public function testTheMergeStatementsLeaveRacedNullGroupsUntouched(): void
+    {
+        $this->applyPreSchema();
+
+        $db = $this->db();
+        foreach (
+            [
+                ['s1', '', 'movie', 1, 100, 1],
+                ['s2', '', 'movie', 2, 200, 2],
+                ['r1', null, 'movie', 10, 1_000, 10],
+                ['r2', null, 'movie', 20, 2_000, 20],
+            ] as [$id, $libraryId, $type, $items, $bytes, $cache]
+        ) {
+            $db->query(
+                'INSERT INTO stats_storage (id, recorded_at, library_id, media_type, item_count,
+                                            total_bytes, transcode_cache_bytes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [$id, self::T1, $libraryId, $type, $items, $bytes, $cache]
+            );
+        }
+
+        $split = new ReflectionMethod(MigrationRunner::class, 'splitStatements');
+        $split->setAccessible(true);
+        /** @var list<string> $statements */
+        $statements = $split->invoke(null, $this->migrationSql(self::MIGRATION_105));
+
+        $merge = array_values(array_filter(
+            $statements,
+            static fn(string $s): bool => str_contains($s, 'phlix_duplicate_groups')
+                || str_contains($s, 'phlix_duplicate_survivors')
+        ));
+        $this->assertCount(
+            2,
+            $merge,
+            'POSITIVE CONTROL: exactly the merge UPDATE and merge DELETE must carry those derived-table '
+            . 'aliases — if the migration reorganizes and this grabs nothing, the proof below is vacuous'
+        );
+        foreach ($merge as $statement) {
+            $this->assertStringContainsString('library_id IS NOT NULL', $statement);
+        }
+
+        $merge[0] = rtrim($merge[0], " \t\n\r\0\x0B;");
+        $db->query($merge[0]);
+        $merge[1] = rtrim($merge[1], " \t\n\r\0\x0B;");
+        $db->query($merge[1]);
+
+        $survivor = $this->rows("SELECT item_count, total_bytes FROM stats_storage WHERE id = 's1'");
+        $this->assertCount(1, $survivor, 'the sentinel pair must merge');
+        $this->assertSame(
+            ['3', '300'],
+            [(string) $survivor[0]['item_count'], (string) $survivor[0]['total_bytes']],
+            'the sentinel merge must be unaffected by the NULL guard'
+        );
+        $this->assertSame([], $this->rows("SELECT id FROM stats_storage WHERE id = 's2'"));
+
+        $raced = $this->rows("SELECT id, item_count FROM stats_storage WHERE id IN ('r1','r2') ORDER BY id");
+        $this->assertCount(
+            2,
+            $raced,
+            'the NULL pair must survive UNTOUCHED — folding without deleting would double-count on retry'
+        );
+        $this->assertSame(
+            ['10', '20'],
+            [(string) $raced[0]['item_count'], (string) $raced[1]['item_count']],
+            'no survivor may carry an inflated SUM of rows that still exist'
+        );
+    }
+
+    /**
      * Ledger-bypassing replay (raw `mysql < file` class): with the 105 ledger row
      * deleted, a second full pass is silent, error-free, and changes nothing.
      */

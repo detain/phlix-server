@@ -704,6 +704,19 @@ class StatsCollector
      * {@see \Phlix\Tests\Unit\Media\MediaItemTypeDriftTest}, so this branch is
      * unreachable for any real column value.
      *
+     * ## Duplicate structurally impossible, writes ACCUMULATE (S114)
+     *
+     * Migration 105 put a UNIQUE key on `(recorded_at, media_type, library_id)`
+     * and `library_id` became `CHAR(36) NOT NULL DEFAULT ''` — the `''` sentinel
+     * is what "not scoped to one library" (both live callers) now stores, bound
+     * here at the only writer because strict mode rejects an explicit INSERT NULL
+     * into a NOT NULL column. The write is an accumulating upsert: a second run
+     * landing on the same stamp+bucket+library folds into the existing row by
+     * SUMMING its columns instead of inserting (or overwriting) one, so the
+     * dashboard's totals for any write sequence are byte-identical to the
+     * pre-105 N-rows world the S102 reader summed. First-write-wins is forbidden
+     * here for exactly that reason.
+     *
      * ## The run stamp is taken BEFORE the fold can reject everything (r3, C2)
      *
      * `$recordedAt` is computed before {@see foldStorageTotals()} runs, so a call whose
@@ -721,7 +734,8 @@ class StatsCollector
      * @param array<string, array{count: int, bytes: int, cache?: int}> $totals
      *        Item counts and byte totals keyed by bucket name or raw
      *        `media_items.type` value; `cache` (transcode cache bytes) defaults to 0.
-     * @param string|null $libraryId Library UUID if the run is scoped to one library
+     * @param string|null $libraryId Library UUID if the run is scoped to one library;
+     *        null stores the `''` sentinel (migration 105 made the column NOT NULL).
      *
      * @return void
      *
@@ -745,14 +759,33 @@ class StatsCollector
         $recordedAt = $this->snapshotRunSecond();
 
         foreach ($this->foldStorageTotals($totals) as $bucket => $summed) {
+            // S114: ACCUMULATING upsert on the UNIQUE key
+            // `(recorded_at, media_type, library_id)` added by migration 105. Two
+            // runs sharing stamp+bucket+library merge into the ONE row the key
+            // allows, and the merge SUMs rather than overwrites: the S102 reader
+            // adds every row of the newest second per bucket, so `col = VALUES(col)`
+            // (first-write-wins — the 097 playback_state shape) would silently
+            // SHRINK reader-visible totals. `item_count = item_count +
+            // VALUES(item_count)` keeps `getStorageSummary()` byte-identical to
+            // what the same write sequence produced pre-105; the surviving row
+            // keeps its original id. Proven by
+            // {@see \Phlix\Tests\Integration\Stats\StatsStorageUniqueKeyUpsertGuardTest}.
             $this->write(
                 'storage_snapshot',
                 "INSERT INTO stats_storage
                  (id, library_id, media_type, item_count, total_bytes, transcode_cache_bytes, recorded_at)
-                 VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))",
+                 VALUES (?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
+                 ON DUPLICATE KEY UPDATE
+                     item_count = item_count + VALUES(item_count),
+                     total_bytes = total_bytes + VALUES(total_bytes),
+                     transcode_cache_bytes = transcode_cache_bytes + VALUES(transcode_cache_bytes)",
                 [
                     $this->generateUuid(),
-                    $libraryId,
+                    // Migration 105 makes the column `NOT NULL DEFAULT ''`; strict
+                    // mode rejects an EXPLICIT NULL on INSERT (measured: 1048 — the
+                    // ALTER's implicit conversion does not extend to INSERTs), so
+                    // the unscoped sentinel is bound here, once, at the only writer.
+                    $libraryId ?? '',
                     $bucket,
                     $summed['count'],
                     $summed['bytes'],
@@ -844,7 +877,7 @@ class StatsCollector
      * the obvious way to write it. Such a caller must construct its own collector (or
      * carry its own stamp) — the DI registration itself is deliberately left alone here.
      *
-     * ## Residual, and what it hands to the unique-index step
+     * ## Residual, and what the unique-index step closed (S114)
      *
      * Two runs by the SAME collector less than a gap window apart now share a second,
      * where before they had to collide on the same second — and the reader SUMS rows
@@ -852,13 +885,19 @@ class StatsCollector
      * every coroutine holding the container's singleton, per the note above.
      * Unreachable on the live paths
      * (`bootstrapSnapshot()` refuses inside 6 h, and the daemon timer is one
-     * `count=1` worker on a 6 h interval), and the structural fix is the unique
-     * index on `(recorded_at, media_type, library_id)` plus a SUMMING upsert, which
-     * needs a migration. That step must ship the upsert WITH the index: this method
-     * makes duplicate `(recorded_at, media_type, library_id)` tuples from a looping
-     * caller deterministic rather than occasional, so a bare unique index would
-     * turn them into rejected INSERTs (contained and logged, but rows lost) instead
-     * of merged ones.
+     * `count=1` worker on a 6 h interval).
+     *
+     * The structural storage fix — the unique index on
+     * `(recorded_at, media_type, library_id)` plus the SUMMING upsert — shipped in
+     * S114 (migration 105 + this method's write), and the two MUST stay together:
+     * this stamp makes duplicate `(recorded_at, media_type, library_id)` tuples from
+     * a looping caller deterministic rather than occasional, so a bare unique index
+     * would turn them into rejected INSERTs (contained and logged, but rows lost)
+     * instead of merged ones. What the pair does NOT become is two rows: the upsert
+     * folds the second run into the first, so the double-COUNT of two
+     * same-generation runs stays exactly what the pre-105 reader computed from two
+     * duplicate rows — the storage defect is closed, that display behaviour is
+     * deliberately unchanged (a KNOWN LIMIT, not a fixed one).
      *
      * @return int Unix seconds; bind through `FROM_UNIXTIME(?)`, never as a string.
      *

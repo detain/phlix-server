@@ -227,10 +227,12 @@ final class StorageSnapshotHelper
      * snapshot per {@see SNAPSHOT_MAX_AGE_SECONDS}, matching the daemon's own
      * cadence.
      *
-     * A residual race remains (two concurrent requests can both observe stale data
-     * and both write); closing it properly needs a unique index on
-     * `(recorded_at, media_type, library_id)` plus an upsert, i.e. a migration, so
-     * it is deliberately left to a follow-up rather than smuggled into this step.
+     * The race between two concurrent requests that both observed stale data was
+     * closed in S114: migration 105 added the UNIQUE key on
+     * `(recorded_at, media_type, library_id)` and the snapshot write became an
+     * accumulating upsert, so the second writer folds into the first writer's row
+     * instead of duplicating it. The dashboard totals for such a pair are what the
+     * S102 reader already computed from two rows — one row now, same bytes.
      *
      * @param StatsCollector $collector Collector to write through
      * @param Connection     $db        Live MySQL connection

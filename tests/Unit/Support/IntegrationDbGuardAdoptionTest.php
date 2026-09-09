@@ -365,8 +365,21 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * row and the runner's stripped-checksum algorithm; a canned
      * information_schema answer can be made to say anything, so every clause is
      * pinned against real MySQL.
+     *
+     * 56 since S114's
+     * `tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php`:
+     * the S114 claim — migration 105 collapses `library_id` to the NOT-NULL ''
+     * sentinel and merges pre-existing duplicates with SUMmed totals before the
+     * UNIQUE key `(recorded_at, media_type, library_id)` goes live, and the write
+     * path then accumulates instead of clobbering — is a set of live-server
+     * behaviours: NULL-distinctness inside a UNIQUE index (the inert-as-specified
+     * failure, measured), the 1138 refusal of MODIFY over live NULLs under
+     * STRICT_TRANS_TABLES, 1048 on an explicit NULL INSERT, 1062 on the repeated
+     * triple, multi-table UPDATE/DELETE JOINs over grouped derived tables, and the
+     * ledger's checksum of the applied file. A mocked Connection models none of
+     * them, so every acceptance clause is pinned against real MySQL.
      */
-    private const EXPECTED_ADOPTERS = 55;
+    private const EXPECTED_ADOPTERS = 56;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

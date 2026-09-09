@@ -7,6 +7,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- **Whole-tree unused-import reflow (`S187`).** 150 dead `use` statements removed across 100 files
+  (`src/` 58, `tests/` 90, `scripts/` 2) — content-neutral by construction: the phlix-contracts server
+  route manifest regenerates byte-identical (401 tuples) before and after, and PHPStan (`src` level 9 +
+  `tests` level 2) and both Psalm configs report identical issue sets. A permanent detector now guards
+  the invariant: `tests/Unit/Support/UnusedImportGuardTest.php` tokenises every first-party PHP file
+  and fails on any import unreferenced in its own file, counting docblock-only mentions as used
+  (PHPStan/Psalm resolve FQCNs through them). Planted-import mutation proofs for both `src/`-style and
+  `tests/`-style fixtures ship inside the same guard; an empty scan tree fails fast instead of passing.
+  No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
+
 ### Added
 
 - **CLI user/admin management (`S61`).** Seven new `bin/phlix` commands mirroring `user:reset-password`:

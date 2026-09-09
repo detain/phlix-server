@@ -333,7 +333,12 @@ final class UnusedImportGuardTest extends TestCase
         $it = new RecursiveIteratorIterator(
             new RecursiveCallbackFilterIterator(
                 new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
-                static function (\SplFileInfo $f): bool {
+                static function (RecursiveDirectoryIterator|\SplFileInfo|string $f): bool {
+                    if (!$f instanceof \SplFileInfo) {
+                        // Psalm models FilesystemIterator traversal as yielding this union;
+                        // in default fileinfo mode iteration yields SplFileInfo only.
+                        return false;
+                    }
                     if ($f->isDir()) {
                         return !in_array($f->getFilename(), self::EXCLUDED_SEGMENTS, true);
                     }

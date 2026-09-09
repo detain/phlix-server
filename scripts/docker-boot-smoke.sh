@@ -113,6 +113,25 @@ FATAL_LISTENER_PROGRAM="${FATAL_LISTENER_PROGRAM:-exit-on-fatal}"
 # ASSERT 11 appends a deliberately-unstartable program to it.
 SUPERVISORD_CONF_IN_IMAGE="${SUPERVISORD_CONF_IN_IMAGE:-/etc/supervisor/conf.d/supervisord.conf}"
 
+# S210 — heartbeat cadence. The gate's wall time is dominated by operations this
+# script does not control (image build pulling multi-GB bases + apt from Ubuntu
+# mirrors, the mysql:8.0 pull). During the 2026-08-04 and 2026-09-05 mirror storms
+# those ran 5–15x slower on BOTH master pushes and PR runs; with no log line for
+# minutes at a time, a merely slow leg was indistinguishable from a hung one and a
+# human cancelled PR #623's legs at ~34 min. The heartbeat guarantees at least one
+# line per interval naming the current phase, so "stall" and "slow" are separable
+# from the log alone, and whatever `timeout-minutes` in docker.yml kills, the last
+# heartbeat names what it was waiting on.
+HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-30}"
+
+# Executable no-op carrying the S210 survival token (asserted by
+# tests/Unit/Support/BootGateTimeoutWiringTest.php).
+: S210BOOTTIMEOUTX8H3
+
+GATE_START_TS="$(date +%s)"
+PHASE_FILE=''
+HEARTBEAT_PID=''
+
 FAILURES=0
 
 # ===========================================================================
@@ -163,8 +182,48 @@ fatal-exit-code-nonzero
 RECORDED_CHECKS=''
 
 # ---------------------------------------------------------------------------
-say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+# S210: every phase banner carries a UTC timestamp and records the phase (with
+# its start epoch) in PHASE_FILE for the heartbeat below. CI already timestamps
+# raw log lines; the banner timestamp makes the phase boundary itself readable
+# in the step UI and on a dev box, where it does not.
+ts_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+say()  {
+    printf '\n\033[1m== %s — %s\033[0m\n' "$(ts_utc)" "$*"
+    if [ -n "$PHASE_FILE" ]; then
+        printf '%s\t%s\n' "$(date +%s)" "$*" > "$PHASE_FILE"
+    fi
+}
 info() { printf '   %s\n' "$*"; }
+
+# S210 heartbeat: one line per HEARTBEAT_INTERVAL while the gate runs, naming
+# the current phase and how long the gate has been inside it. Deliberately NOT
+# a check id — it never calls pass/fail and adds nothing to EXPECTED_CHECKS.
+# Runs in a background subshell: it can print, and nothing else (a write to a
+# parent variable could not be seen by this shell anyway).
+heartbeat() {
+    while sleep "$HEARTBEAT_INTERVAL"; do
+        _hb_now="$(date +%s)"
+        _hb_phase='(before first phase banner)'
+        _hb_in_phase=$(( _hb_now - GATE_START_TS ))
+        if [ -n "$PHASE_FILE" ] && [ -r "$PHASE_FILE" ]; then
+            _hb_line="$(head -n 1 "$PHASE_FILE" 2>/dev/null || true)"
+            case "$_hb_line" in
+                *$'\t'*)
+                    _hb_phase="${_hb_line#*$'\t'}"
+                    # A torn read (say() truncates+rewrites the file) could leave a
+                    # non-numeric epoch; arithmetic on it under `set -e` would kill
+                    # the subshell and stop the heartbeat silently. Refuse it.
+                    if is_uint "${_hb_line%%$'\t'*}"; then
+                        _hb_in_phase=$(( _hb_now - ${_hb_line%%$'\t'*} ))
+                    fi
+                    ;;
+            esac
+        fi
+        printf '   %s [heartbeat] alive — phase: %s | in phase %ss | gate %ss\n' \
+            "$(ts_utc)" "$_hb_phase" "$_hb_in_phase" "$(( _hb_now - GATE_START_TS ))"
+    done
+}
 pass() { RECORDED_CHECKS="${RECORDED_CHECKS} $1"; printf '   \033[32mPASS\033[0m [%s] %s\n' "$1" "$2"; }
 fail() {
     RECORDED_CHECKS="${RECORDED_CHECKS} $1"
@@ -206,7 +265,8 @@ uint_or_fail() {
 # HERE rather than discovering a non-numeric one halfway through a 5-minute run
 # — where, per finding 1, it would abandon a block instead of failing.
 for _tunable in BOOT_TIMEOUT STABILITY_WINDOW STABILITY_SAMPLE MAX_START_PERIOD \
-                SUP_EXEC_RETRIES WORKER_NAME_CHURN_BUDGET WORKER_DROP_TOLERANCE; do
+                SUP_EXEC_RETRIES WORKER_NAME_CHURN_BUDGET WORKER_DROP_TOLERANCE \
+                HEARTBEAT_INTERVAL; do
     eval "_tv=\${${_tunable}:-}"
     if [ -n "$_tv" ] && ! is_uint "$_tv"; then
         printf '   \033[31mFAIL\033[0m %s must be an unsigned integer, got %s\n' "$_tunable" "$_tv" >&2
@@ -214,6 +274,12 @@ for _tunable in BOOT_TIMEOUT STABILITY_WINDOW STABILITY_SAMPLE MAX_START_PERIOD 
     fi
 done
 unset _tunable _tv
+
+# 0 would make the heartbeat a busy loop hammering the runner log.
+if [ "$HEARTBEAT_INTERVAL" -lt 1 ]; then
+    printf '   \033[31mFAIL\033[0m HEARTBEAT_INTERVAL must be >= 1 second, got %s\n' "$HEARTBEAT_INTERVAL" >&2
+    exit 1
+fi
 
 # supervisorctl status is "NAME  STATE  extra…". Parse it BY COLUMN, never by
 # grepping the whole line: the `exit-on-fatal` event listener has "fatal" in its
@@ -303,6 +369,17 @@ dump_diagnostics() {
 }
 
 cleanup() {
+    # S210: stop the heartbeat first — teardown below calls say(), and an
+    # un-stopped heartbeat would race the last phase write for no reader.
+    if [ -n "$HEARTBEAT_PID" ] && kill -0 "$HEARTBEAT_PID" 2>/dev/null; then
+        kill "$HEARTBEAT_PID" 2>/dev/null || true
+        wait "$HEARTBEAT_PID" 2>/dev/null || true
+    fi
+    HEARTBEAT_PID=''
+    if [ -n "$PHASE_FILE" ]; then
+        rm -f "$PHASE_FILE"
+        PHASE_FILE=''
+    fi
     if [ "$KEEP" = "1" ]; then
         say "KEEP=1 — leaving ${APP_NAME} / ${MYSQL_NAME} / ${NET} up"
         return
@@ -315,6 +392,12 @@ cleanup() {
     $DOCKER rm -f "$MYSQL_NAME" >/dev/null 2>&1 || true
     $DOCKER network rm "$NET"   >/dev/null 2>&1 || true
 }
+# S210: start the heartbeat once every helper it calls (is_uint, ts_utc) exists.
+# A failure to create the phase file must not fail the gate: say() degrades to
+# no phase recording (empty PHASE_FILE) and the log keeps its timestamps.
+PHASE_FILE="$(mktemp "${TMPDIR:-/tmp}/phlix-boot-phase.XXXXXX")" || PHASE_FILE=''
+heartbeat &
+HEARTBEAT_PID=$!
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
@@ -328,21 +411,31 @@ info "ports      : published on 127.0.0.1, allocated by Docker (read back after 
 #    image against a stale registry base would prove nothing about this commit.
 # ---------------------------------------------------------------------------
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
+    # S210: the default (tidy) BuildKit output overwrites one line per layer, so a
+    # multi-minute apt fetch shows nothing at all. Plain output prints every step
+    # — including each `Get:` line of a slow apt fetch — as its own log line: during
+    # an Ubuntu-mirror storm the build itself then reports what it is downloading,
+    # separating "stalled" from "slow" inside the build, not only at phase level.
+    # Probed, not assumed: older/plain docker has no --progress and would hard-fail.
+    BUILD_PROGRESS=()
+    if $DOCKER build --help 2>/dev/null | grep -q -F -- '--progress'; then
+        BUILD_PROGRESS=(--progress=plain)
+    fi
     BASE_TAG="${PHLIX_BASE_IMAGE:-}"
     if grep -q 'PHLIX_BASE_IMAGE' "${REPO_ROOT}/${DOCKERFILE}"; then
         if [ -z "$BASE_TAG" ]; then
             BASE_TAG="phlix-base-boot:${RUN_ID}"
             say "Building base image ${BASE_TAG} (docker/Dockerfile.base)"
-            $DOCKER build --network host -f "${REPO_ROOT}/docker/Dockerfile.base" \
+            $DOCKER build "${BUILD_PROGRESS[@]}" --network host -f "${REPO_ROOT}/docker/Dockerfile.base" \
                 -t "$BASE_TAG" "${REPO_ROOT}"
         fi
         say "Building ${IMAGE_TAG} from ${DOCKERFILE} (base=${BASE_TAG})"
-        $DOCKER build --network host -f "${REPO_ROOT}/${DOCKERFILE}" \
+        $DOCKER build "${BUILD_PROGRESS[@]}" --network host -f "${REPO_ROOT}/${DOCKERFILE}" \
             --build-arg "PHLIX_BASE_IMAGE=${BASE_TAG}" \
             -t "$IMAGE_TAG" "${REPO_ROOT}"
     else
         say "Building ${IMAGE_TAG} from ${DOCKERFILE}"
-        $DOCKER build --network host -f "${REPO_ROOT}/${DOCKERFILE}" \
+        $DOCKER build "${BUILD_PROGRESS[@]}" --network host -f "${REPO_ROOT}/${DOCKERFILE}" \
             -t "$IMAGE_TAG" "${REPO_ROOT}"
     fi
 fi

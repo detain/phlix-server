@@ -310,6 +310,18 @@ jobs:
     name: Boot gate (${{ matrix.name }})
     runs-on: ubuntu-latest
 
+    # S210 — an unbounded gate is indistinguishable from a slow one. Without this
+    # the GitHub default (360 min) let a 2026-08-04 PR-leg stall burn 34 min of
+    # human-watched wall time before a manual cancel, with no log line naming what
+    # it was waiting on. Bound derived from the estate's own history (143 master +
+    # 187 PR runs, 2026-08-01..09-09): master p95 per leg is 379/442/552s, but the
+    # worst SUCCESSFUL leg anywhere was a PR nvidia at 4530s (2026-09-05, Ubuntu
+    # mirror storm — master pushes the same night hit 2818s too). A 15–20 min bound
+    # would have turned 11 measured-successful legs red, manufacturing exactly the
+    # false-red pressure this repo forbids relaxing against. 90 min = 1.19x the
+    # worst observed success, 9.8x master p95, and still cuts worst-case burn 4x.
+    timeout-minutes: 90
+
     permissions:
       contents: read
 

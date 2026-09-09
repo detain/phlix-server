@@ -89,7 +89,7 @@ class SsdpMulticastJoinTest extends TestCase
         // the pre-fix class (IP_MULTICAST_IF + '0.0.0.0', the line that sat
         // under the comment "Join the multicast group").
         [$oldStyle, $portB] = $this->bindEphemeral();
-        $armBReturn = @socket_set_option($oldStyle, IPPROTO_IP, IP_MULTICAST_IF, '0.0.0.0');
+        @socket_set_option($oldStyle, IPPROTO_IP, IP_MULTICAST_IF, '0.0.0.0');
         $armB = $this->multicastRoundTrip($oldStyle, $group, $portB, $ifIndex);
         socket_close($oldStyle);
 
@@ -103,11 +103,9 @@ class SsdpMulticastJoinTest extends TestCase
         socket_close($newStyle);
 
         self::assertFalse($armA, 'CONTROL: without a group join, multicast must NOT be delivered.');
-        self::assertIsBool(
-            $armBReturn,
-            'The pre-fix spelling returns a bool (FALSE on this box, TRUE on hosts where the '
-            . 'outbound-interface selector succeeds) — either way it is NOT a membership join.'
-        );
+        // Arm B's socket_set_option returns a plain bool (FALSE on this box, TRUE
+        // on hosts where the outbound-interface selector succeeds) — either way it
+        // is NOT a membership join, which arm C below proves by real delivery.
         self::assertFalse(
             $armB,
             'The pre-fix SsdpSocket spelling must be shown to receive NOTHING. '

@@ -18,8 +18,8 @@
 # is why the fix is a second config plus a second CI step that names it, and why
 # tests/Unit/Support/StaticAnalysisScopeTest.php asserts the WORKFLOW, not the config.
 #
-# LEVEL 2, chosen from a measured ladder rather than aspiration. Every level was run
-# against `tests/` on origin/master @ 12bdea6c (phpstan 2.2.5, PHP 8.3.6):
+# LEVEL — measured, never aspirational. The original ladder below was run against
+# `tests/` on origin/master @ 12bdea6c (phpstan 2.2.5, PHP 8.3.6, CI no-swoole ini set):
 #
 #     level 0 ->   6 errors        level 5 -> 138
 #     level 1 ->   9               level 6 -> 152
@@ -27,34 +27,30 @@
 #     level 3 ->  52               level 8 -> 274
 #     level 4 ->  86               level 9 -> 532
 #
-# Level 2 is the highest level whose fallout was fixable AT SOURCE inside one atomic
-# change — all 51 fixed, zero `ignoreErrors`, zero baseline. It is also the level that
-# earns its keep for test code specifically: level 2 is where PHPStan checks methods,
-# properties and functions on ALL expressions, so a test that calls a production method
-# that no longer exists becomes a static error instead of a runtime surprise on the one
-# branch that reaches it. The 51 included three calls to functions that do not exist at
-# all and one call to a repository method that was never defined.
+# S128 chose level 2 — the highest rung fixable at source in one atomic change (all 51
+# fixed, zero config ignores, zero baseline): a test calling a production method that no
+# longer exists becomes a static error instead of a runtime surprise on the one branch
+# that reaches it.
 #
-# ⚠ RAISING THIS IS WORTH REAL MONEY, and level 4 is the next rung, not level 3.
-# Level 4 adds 34 errors that are almost all TEST-INTEGRITY defects of exactly the kind
-# this program keeps finding by hand — measured, with identifiers:
-#
-#     10 x *.alreadyNarrowedType   tautological assertions: assertTrue(true),
-#                                  assertIsString('literal'), assertNull(null)
-#      2 x method.impossibleType   an assertion that can never hold, e.g.
-#                                  assertNotNull(null) — so the line is unreachable
-#      2 x catch.neverThrown       dead catch of AssertionFailedError (cf. S120)
-#      1 x foreach.emptyArray      a loop body that never runs (cf. S110's vacuous loop)
-#      4 x *.alwaysTrue/alwaysFalse   conditions with one possible outcome
-#     11 x return.unusedType       nullable returns on test doubles that never return null
-#      4 x other
-#
-# Each of those is a test asserting less than it appears to. Closing them is a separate
-# step with its own mutation evidence — NOT a config change — because the fix for a
-# tautological assertion is a judgement about what the test meant to pin. Do not
-# "resolve" them by adding ignoreErrors here.
+# S186 raised the rung to LEVEL 4. The ladder moved under the plan's own feet: the
+# documented "level 4 adds 34" was a stale claim — re-derived at tip 5986b61d the level-4
+# delta measured 85 errors across 61 files (identifiers: 18 method.alreadyNarrowedType,
+# 13 return.unusedType, 7 nullsafe.neverNull, 6 function.alreadyNarrowedType, 5
+# staticMethod.alreadyNarrowedType, 4 method.impossibleType, 4 nullCoalesce.offset, 3
+# catch.neverThrown, and 25 others). All 85 were triaged with per-error MUTATION evidence
+# and closed AT SOURCE: tautological assertions deleted where a live sibling already
+# pinned the fact (or made live via reflection/`constant()` seams where the fold was the
+# only reason they looked dead), test-double return types narrowed to what they actually
+# return, dead guards dropped, `@param-out` for by-ref contracts, and honest docblocks
+# where the old annotation over-promised. Three errors describe code that is intentional
+# and are covered by identifier-carrying INLINE suppressions only: two writes whose whole
+# purpose is proving PHP rejects a readonly write, and one fixture method whose existence
+# is the subject of a reflection-enumeration assertion. Each is self-clearing —
+# reportUnmatchedIgnoredErrors turns a stale suppression into a build failure. The
+# config-level ignore list below stays EMPTY by policy: it excuses by pattern and keeps
+# excusing new code.
 parameters:
-    level: 2
+    level: 4
     paths:
         - tests
     bootstrapFiles:

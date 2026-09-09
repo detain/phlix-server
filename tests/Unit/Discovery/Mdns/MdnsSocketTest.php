@@ -21,7 +21,10 @@ class MdnsSocketTest extends TestCase
         // is a DNS QUERY (flags 0, zero answer records) — never a response.
         $result = $socket->query('_googlecast._tcp.local.');
 
-        $this->assertIsArray($result);
+        // query() returns array by signature; the live check is that every
+        // received datagram is a string (a non-string element would otherwise
+        // only surface as a TypeError deep inside parseResponse()).
+        $this->assertContainsOnly('string', $result);
         foreach ($result as $datagram) {
             $parsed = $socket->parseResponse($datagram);
             $this->assertIsArray($parsed, 'Received datagram is not a DNS query echo: ' . bin2hex($datagram));

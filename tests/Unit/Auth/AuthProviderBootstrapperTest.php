@@ -660,6 +660,22 @@ final class AuthProviderBootstrapperTest extends TestCase
                 return $this->inner->get($pluginName);
             }
 
+            /**
+             * Drain phase-1 samples so later assertions only see the rebuild's reads.
+             *
+             * S186: this reset used to be a direct `$store->visibleDuringReads = []`
+             * in the test — a write the analyser DOES replay in the test's flow, while
+             * the pushes from get() during ensureProviderRegistered() happen behind an
+             * interface call it cannot see. The property was therefore pinned to the
+             * empty array literal and the all-true census loop below became provably
+             * vacuous. Resetting through this method keeps the declared list<bool>
+             * contract visible to the analyser; the runtime semantics are unchanged.
+             */
+            public function resetReads(): void
+            {
+                $this->visibleDuringReads = [];
+            }
+
             public function save(string $pluginName, array $settings): void
             {
                 $this->inner->save($pluginName, $settings);
@@ -684,7 +700,7 @@ final class AuthProviderBootstrapperTest extends TestCase
 
         // Another worker rewrites the row → this worker must REBUILD.
         $backing->save(GithubPlugin::PLUGIN_NAME, ['client_id' => 'cid', 'client_secret' => 'new-secret']);
-        $store->visibleDuringReads = [];
+        $store->resetReads();
 
         $this->assertTrue($boot->ensureProviderRegistered('github'));
 

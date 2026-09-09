@@ -246,7 +246,7 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         // real HDR file (needsToneMapping/probe would otherwise short-circuit on
         // a non-existent input) by overriding getToneMappingProfile().
         $runner = new class ('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp') extends FfmpegRunner {
-            public function getToneMappingProfile(string $inputPath, string $outputPath, string $codec): ?string
+            public function getToneMappingProfile(string $inputPath, string $outputPath, string $codec): string
             {
                 return 'zscale=t=linear:npl=100,tonemap=hable,zscale=t=bt709,format=yuv420p';
             }

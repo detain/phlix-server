@@ -66,17 +66,12 @@ final class CatalogChannelConfigDefaultTest extends TestCase
      * catalog repo's moving `master` branch, which is precisely the mutable
      * trust anchor S217(b) documents as opt-in / advanced.
      *
-     * Floor (anti-vacuity): `CHANNEL_VALUES` must be non-empty, otherwise
-     * `assertContains` over it could never fail.
+     * Anti-vacuity is structural, not pinned: the assertContains below fails on
+     * its own if `CHANNEL_VALUES` were ever emptied (an empty haystack contains
+     * nothing), so a separate non-empty assertion would be tautological.
      */
     public function testShippedDefaultIsAValidChannelThatKeepsThePinnedRef(): void
     {
-        self::assertNotEmpty(
-            PluginCatalogService::CHANNEL_VALUES,
-            'CHANNEL_VALUES is the vocabulary this test checks against; an empty '
-            . 'list would make the membership assertion vacuous.',
-        );
-
         $repo    = $this->repositoryOverRealConfigDir();
         $default = $repo->getDefault(PluginCatalogService::KEY_CHANNEL);
 

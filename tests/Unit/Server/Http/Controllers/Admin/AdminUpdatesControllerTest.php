@@ -418,7 +418,7 @@ final class AdminUpdatesControllerTest extends TestCase
         }
 
         self::assertFalse(
-            method_exists(AdminUpdatesController::class, 'apply'),
+            (new \ReflectionClass(AdminUpdatesController::class))->hasMethod('apply'),
             'No inline update-apply action — explicitly out of scope for S74.',
         );
     }

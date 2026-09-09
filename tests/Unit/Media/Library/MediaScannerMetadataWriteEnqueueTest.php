@@ -103,11 +103,11 @@ final class MediaScannerMetadataWriteEnqueueTest extends TestCase
         $this->assertInstanceOf(MetadataWriteJob::class, $job);
         $this->assertSame(
             'id-1',
-            $job?->itemId,
+            $job->itemId,
             'The queued job must carry the newly indexed item id (deferred write-back) ['
             . self::SURVIVAL_TOKEN . '].'
         );
-        $this->assertSame('lib-1', $job?->libraryId, 'The job carries its library for scoping.');
+        $this->assertSame('lib-1', $job->libraryId, 'The job carries its library for scoping.');
     }
 
     /**

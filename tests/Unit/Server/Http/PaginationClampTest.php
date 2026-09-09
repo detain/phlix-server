@@ -43,7 +43,11 @@ final class PaginationClampTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @return list<array{0: mixed, 1: int}>
+     * Named cases, not a list — the keys are what PHPUnit prints as the data-set
+     * name in a failure (S186: the old `list<...>` annotation contradicted the
+     * literal string keys returned below).
+     *
+     * @return array<string, array{0: mixed, 1: int}>
      */
     public static function clampCases(): array
     {

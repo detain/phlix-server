@@ -2014,7 +2014,14 @@ class DockerEntrypointTest extends TestCase
             'PINNED_GATE_VERDICT_SITES must cover exactly the pinned checks, in the same order'
         );
 
-        foreach (self::PINNED_GATE_VERDICT_SITES as $id => $expected) {
+        // The table is read through constant() on purpose: the loop's first check
+        // is that every pinned verdict CAN redden (pass >= 1 and fail >= 1), and
+        // that guard only stays real if the analyser sees ints instead of
+        // pre-evaluating the literal entries into a tautology.
+        /** @var array<string,array{pass:int,fail:int}> $pinnedVerdictSites */
+        $pinnedVerdictSites = constant(self::class . '::PINNED_GATE_VERDICT_SITES');
+
+        foreach ($pinnedVerdictSites as $id => $expected) {
             self::assertTrue(
                 $expected['pass'] >= 1 && $expected['fail'] >= 1,
                 "PINNED_GATE_VERDICT_SITES[{$id}] pins pass={$expected['pass']} fail={$expected['fail']}"

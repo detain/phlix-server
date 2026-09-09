@@ -58,7 +58,6 @@ final class ParentalControlsCrossProfileRealDbTest extends TestCase
 
         $this->db = $this->requireRealDatabase('skipping S208 cross-profile real-DB test. Runs in CI.');
         $db = $this->db;
-        $this->assertNotNull($db);
 
         $this->userId = Uuid::v4();
         $this->profileOne = Uuid::v4();

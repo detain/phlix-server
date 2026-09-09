@@ -98,8 +98,9 @@ final class MediaScannerAutoCollectionsTest extends TestCase
         $this->assertInstanceOf(CollectionJob::class, $job);
         $this->assertSame(
             'id-1',
-            $job?->itemId,
-            'The queued job must carry the newly indexed item id (deferred sync, S215).'
+            $job->itemId,
+            'The queued job must carry the newly indexed item id (deferred sync, '
+            . 'S215) [' . 'S186LADDERX9M2' . '].'
         );
     }
 

@@ -537,7 +537,15 @@ final class UniqueIndexShapeGuardTest extends TestCase
         );
     }
 
-    /** @param list<string> $haystack */
+    /**
+     * Removes one value from an int-keyed list, holes and all.
+     *
+     * S186: the `list<string>` by-ref promise was over-strict — this helper's own
+     * `unset()` breaks list-ness, so callers legally hand back
+     * `array<int<0, max>, string>` afterwards; that is the honest contract.
+     *
+     * @param array<int<0, max>, string> $haystack
+     */
     private function arrayRemove(array &$haystack, string $needle): void
     {
         $key = array_search($needle, $haystack, true);

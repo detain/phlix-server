@@ -654,7 +654,6 @@ final class CallbackUrlTest extends TestCase
     {
         $derived = CallbackUrl::resolve('', '[::1]:8096', null, '/auth/oidc/callback', '[::1]:8096');
         $this->assertSame('https://[::1]:8096/auth/oidc/callback', $derived);
-        $this->assertIsString($derived);
         $this->assertTrue(
             CallbackUrl::isReplayable($derived, '', '[::1]:8096'),
             'the replay check must be live for an IPv6 literal, not dead-and-fail-safe',

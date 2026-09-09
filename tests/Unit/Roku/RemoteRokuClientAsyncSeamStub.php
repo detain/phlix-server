@@ -20,13 +20,13 @@ final class RemoteRokuClientAsyncSeamStub extends RemoteRokuClient
         return true;
     }
 
-    protected function httpPostAsync(string $url, string $body): ?string
+    protected function httpPostAsync(string $url, string $body): string
     {
         $this->asyncCalled = true;
         return 'ok';
     }
 
-    protected function httpPostBlocking(string $url, string $body): ?string
+    protected function httpPostBlocking(string $url, string $body): string
     {
         $this->blockingCalled = true;
         return 'ok';

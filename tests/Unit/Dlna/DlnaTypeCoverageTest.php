@@ -97,9 +97,11 @@ final class DlnaTypeCoverageTest extends TestCase
     public function test_every_enum_member_has_a_deliberate_answer(): void
     {
         foreach (MediaItemType::ALL as $type) {
-            $mime = DlnaMimeTypes::TYPE_FALLBACK_MIME[$type] ?? null;
-
-            self::assertIsString($mime, "No DLNA MIME answer for type '{$type}'.");
+            // Direct offset: a member ever missing from the map is caught at
+            // build time by PHPStan's offset check on the literal key union —
+            // a strictly earlier gate than this test could ever be. The live
+            // assertions below still pin that every answer is deliberate.
+            $mime = DlnaMimeTypes::TYPE_FALLBACK_MIME[$type];
             self::assertNotSame('', $mime, "Empty DLNA MIME answer for type '{$type}'.");
             self::assertTrue(
                 $mime === DlnaMimeTypes::FALLBACK || DlnaMimeTypes::isMediaType($mime),

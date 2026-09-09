@@ -217,7 +217,6 @@ final class RouterPathParamDecodingTest extends TestCase
         $router->dispatch($request);
 
         $this->assertInstanceOf(Request::class, $requestSeen);
-        $this->assertNotNull($requestSeen);
         $this->assertSame(['mbid' => 'Abbey Road'], $requestSeen->pathParams);
         $this->assertSame('Abbey Road', $requestSeen->pathParam('mbid'));
     }

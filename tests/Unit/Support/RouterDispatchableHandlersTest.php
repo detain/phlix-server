@@ -722,6 +722,13 @@ class RouterDispatchFixtureController extends RouterDispatchFixtureBase
         throw new LogicException('fixture bodies are never executed');
     }
 
+    // This fixture method's very EXISTENCE (and non-visibility) is the subject under
+    // test: testNonPublicMethodsAreNotEnumerated asserts the router's reflection
+    // enumeration omits 'privateHandler'. PHPStan's method.unused cannot see that the
+    // enumeration is reflection-driven (getMethods()), so it reports the fixture as
+    // unused — a real false positive. Removing/renaming the method would delete the
+    // thing being guarded. Scoped ignore with its identifier, per repo idiom.
+    // @phpstan-ignore method.unused
     private function privateHandler(Request $request, array $params): Response
     {
         throw new LogicException('fixture bodies are never executed');

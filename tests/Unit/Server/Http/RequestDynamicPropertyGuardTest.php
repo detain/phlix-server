@@ -113,9 +113,11 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         // Declared members are all initialized by defaults, so existence
         // tests behave exactly as before the guard (except nullable-nulls,
         // which `isset` correctly answers false for — pre-existing PHP
-        // semantics, untouched).
-        $this->assertTrue(isset($request->method));
-        $this->assertTrue(isset($request->body));
+        // semantics, untouched). The dynamic name form is the guard's own
+        // access shape, so `isset()` reaching a declared member still fails here.
+        foreach (['method', 'body'] as $declaredName) {
+            $this->assertTrue(isset($request->{$declaredName}), "isset(\${$declaredName}) on a declared member");
+        }
     }
 
     /**
@@ -137,12 +139,18 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         ];
 
         foreach ($declared as $name) {
-            try {
-                $value = $request->{$name};
-            } catch (\LogicException $e) {
-                $this->fail("declared member \$$name must never reach the dynamic guard: " . $e->getMessage());
-            }
-            $this->assertTrue(true, "read of \$$name bypassed the guard");
+            // S186: this loop previously wrapped the read in try/catch(LogicException).
+            // Level 4 correctly proves the arm is dead — a DECLARED, default-initialized
+            // member read never reaches __get, so nothing analysable throws today. That
+            // is exactly the point: the try/catch was a tripwire for a FUTURE regression
+            // (a removed default → uninitialized-typed Error; a guard that wrongly fires
+            // on a declared name → LogicException), and such a throw already reddens this
+            // test uncaught, with the property name in the engine's own message. Same
+            // reasoning as ForkInventoryGuard's dropped `=== false`: a guard that can
+            // never fire protects nothing; the natural throw path is the louder guard.
+            $value = $request->{$name};
+            unset($value); // read itself is the point (must not throw); silence resultUnused
+            $this->addToAssertionCount(1); // read bypassed the guard
         }
     }
 

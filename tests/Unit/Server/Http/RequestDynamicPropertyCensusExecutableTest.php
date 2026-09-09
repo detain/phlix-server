@@ -840,7 +840,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
                     }
                     break;
                 }
-                if (is_array($q) && in_array($q[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
+                if (in_array($q[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
                     $fqn = ltrim($q[1], '\\');
                     $as = self::nextSignificant($tokens, $j + 1);
                     if ($as !== null && is_array($tokens[$as]) && $tokens[$as][0] === T_AS) {

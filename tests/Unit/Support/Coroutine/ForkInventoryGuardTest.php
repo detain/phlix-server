@@ -203,7 +203,13 @@ final class ForkInventoryGuardTest extends TestCase
             $code = php_strip_whitespace($tmp);
             unlink($tmp);
 
-            if ($code === false || $code === '') {
+            // S186: the `=== false` arm was provably dead — PHPStan models
+            // php_strip_whitespace() as returning string, and a false return would
+            // mean the temp file we just wrote is unreadable, i.e. a broken harness
+            // that must NOT be silently `continue`d past (a skipped file would
+            // shrink the census without a finding). An empty strip result is a real
+            // occurrence (a file with no code) and the skip stays.
+            if ($code === '') {
                 continue;
             }
 

@@ -56,7 +56,13 @@ final class DashRouteRemovalTest extends TestCase
 
     public function testRealDashHandlersAreStillPresent(): void
     {
-        self::assertTrue(method_exists(DashController::class, 'getManifest'));
-        self::assertTrue(method_exists(DashController::class, 'serveFile'));
+        self::assertTrue(
+            (new \ReflectionClass(DashController::class))->hasMethod('getManifest'),
+            'The real DASH surface must keep getManifest().',
+        );
+        self::assertTrue(
+            (new \ReflectionClass(DashController::class))->hasMethod('serveFile'),
+            'The real DASH surface must keep serveFile().',
+        );
     }
 }

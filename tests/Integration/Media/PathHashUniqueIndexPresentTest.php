@@ -36,9 +36,6 @@ final class PathHashUniqueIndexPresentTest extends TestCase
 
     private ?Connection $db = null;
 
-    /** @var list<string> media_items ids seeded by a test, removed in tearDown. */
-    private array $seededItemIds = [];
-
     private string $libraryId = '';
 
     protected function setUp(): void
@@ -66,7 +63,6 @@ final class PathHashUniqueIndexPresentTest extends TestCase
         }
 
         $this->db = null;
-        $this->seededItemIds = [];
         $this->libraryId = '';
 
         parent::tearDown();
@@ -134,7 +130,6 @@ final class PathHashUniqueIndexPresentTest extends TestCase
             'INSERT INTO media_items (id, library_id, name, type, path) VALUES (?, ?, ?, ?, ?)',
             [$firstId, $this->libraryId, 'S152 keeper', 'movie', $path],
         );
-        $this->seededItemIds[] = $firstId;
 
         $threw = false;
         $message = '';

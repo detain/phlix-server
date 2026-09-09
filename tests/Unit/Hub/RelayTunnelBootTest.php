@@ -185,7 +185,7 @@ final class RelayTunnelBootTest extends TestCase
         // READ side: HealthController is constructed in Application.php with
         // exactly this expression over the same config array.
         $hubConfig = ['config_dir' => $this->dir];
-        $configDir = is_string($hubConfig['config_dir'] ?? null) ? $hubConfig['config_dir'] : 'config';
+        $configDir = $hubConfig['config_dir'];
         $controller = new HealthController(null, $configDir);
 
         $response = $controller->relayHealth(new Request(), []);

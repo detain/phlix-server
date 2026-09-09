@@ -3953,9 +3953,9 @@ final class TaggedScanner extends MusicLibraryScanner
 
     /**
      * @param string $path Absolute filesystem path.
-     * @return array<string, mixed>|null
+     * @return array<string, mixed>
      */
-    protected function probeViaGetId3(string $path): ?array
+    protected function probeViaGetId3(string $path): array
     {
         return ($this->tagger)($path);
     }
@@ -3994,7 +3994,7 @@ final class CountingConnection extends Connection
      * @param string $query SQL statement.
      * @param array<array-key, mixed>|null $params Bound parameters.
      * @param int $fetchmode PDO fetch mode (unused).
-     * @return array<int, mixed>|int|string Rows for SELECT, else an affected-row stand-in.
+      * @return array<int, mixed>|int Rows for SELECT, else an affected-row stand-in.
      */
     public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {

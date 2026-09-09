@@ -72,7 +72,10 @@ final class ThemingIslandRemovedTest extends TestCase
         self::assertInstanceOf(\Composer\Autoload\ClassLoader::class, $loader, 'composer autoloader not registered');
 
         foreach (self::ISLAND_CLASSES as $symbol) {
-            self::assertFalse(class_exists($symbol, false), $symbol . ' is loaded again');
+            // A deleted class is never *loaded* in a clean process, so an in-memory
+            // class_exists() probe is statically vacuous here (level 4 proves it).
+            // The authoritative guard against resurrection is autoload resolution:
+            // a restored source file or a stale classmap entry is caught by findFile().
             $file = $loader->findFile($symbol);
             self::assertTrue($file === false || !is_file($file), $symbol . ' resolves again via autoload');
         }

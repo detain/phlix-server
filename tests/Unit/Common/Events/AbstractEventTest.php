@@ -38,7 +38,14 @@ final class AbstractEventTest extends TestCase
         // readonly write as InaccessibleProperty, so the suppression is re-added as
         // S128 directed — the write is the test (expectException(\Error) above
         // proves immutability), and the suppression states that, never the finding.
+        //
+        // S186: the tests/ PHPStan leg is now at level 4, which reports this same
+        // intentional out-of-class readonly write. A line-scoped PHPStan suppression
+        // carrying its identifier now sits inline on the write — the loud, re-addable
+        // pattern S128 asked for (if the finding ever stops firing, the unmatched
+        // suppression turns the build red again). It is a same-line comment so the
+        // psalm docblock directly above still binds to the write.
         /** @psalm-suppress InaccessibleProperty - intentional write; PHP must throw Error */
-        $event->timestamp = 0;
+        $event->timestamp = 0; // @phpstan-ignore property.readOnlyAssignOutOfClass
     }
 }

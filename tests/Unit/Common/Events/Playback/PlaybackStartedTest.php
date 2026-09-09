@@ -45,7 +45,12 @@ final class PlaybackStartedTest extends TestCase
         // It has: Psalm 6 at the tests/ level reports the intentional readonly write
         // as InaccessibleProperty, so it is suppressed here with its identifier —
         // exactly the loud re-add S128 asked for (the write IS the assertion).
+        //
+        // S186: the tests/ PHPStan leg is now at level 4 and reports this same
+        // intentional out-of-class readonly write, so a line-scoped PHPStan
+        // suppression with its identifier sits inline on the write — same-line so the
+        // psalm docblock above still binds, and loud-if-it-stops-matching.
         /** @psalm-suppress InaccessibleProperty - intentional write; PHP must throw Error */
-        $event->positionTicks = 2;
+        $event->positionTicks = 2; // @phpstan-ignore property.readOnlyAssignOutOfClass
     }
 }

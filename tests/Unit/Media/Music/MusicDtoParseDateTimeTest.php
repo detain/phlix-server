@@ -76,7 +76,7 @@ final class MusicDtoParseDateTimeTest extends TestCase
     /**
      * All three DTOs, keyed by FQCN so a data-set name identifies its subject.
      *
-     * @return array<string, array{class-string}>
+     * @return array<string, array{class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>}>
      */
     public static function dtoProvider(): array
     {
@@ -96,7 +96,7 @@ final class MusicDtoParseDateTimeTest extends TestCase
      * zero-date families reach the parser by different routes (blank → "now",
      * zero date → year -1). One plant is not coverage.
      *
-     * @return array<string, array{class-string, string}>
+     * @return array<string, array{class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>, string}>
      */
     public static function degenerateTimestampProvider(): array
     {
@@ -257,7 +257,9 @@ final class MusicDtoParseDateTimeTest extends TestCase
      * the one being fixed. These cases prove real timestamps still parse to the
      * instant they name.
      *
-     * @return array<string, array{class-string, string, string}>
+     * @return array<string, array{
+     *     class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack>, string, string
+     * }>
      */
     public static function realTimestampProvider(): array
     {
@@ -340,7 +342,7 @@ final class MusicDtoParseDateTimeTest extends TestCase
      * `match` without a `default` on purpose: a fourth music DTO makes this throw
      * `UnhandledMatchError` instead of silently testing two of three.
      *
-     * @param class-string         $dtoClass
+     * @param class-string<MusicArtist>|class-string<MusicAlbum>|class-string<MusicTrack> $dtoClass
      * @param array<string, mixed> $row
      */
     private function fromRow(string $dtoClass, array $row): MusicArtist|MusicAlbum|MusicTrack

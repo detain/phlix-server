@@ -137,7 +137,7 @@ class StatsCollectorTest extends TestCase
         $collector->recordStorageSnapshot('movie', 1, 1);
 
         // Reaching here at all IS the assertion: nothing propagated.
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     /**

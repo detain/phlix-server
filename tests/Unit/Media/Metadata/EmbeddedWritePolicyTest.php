@@ -32,7 +32,9 @@ final class EmbeddedWritePolicyTest extends TestCase
     {
         // The DEFAULT-OFF promise is this constant; flipping it to true here
         // would silently enable embedded writing for every fresh install.
-        $this->assertFalse(EmbeddedWritePolicy::DEFAULT_EMBEDDED_WRITE);
+        // Read through constant() so the pin holds at RUNTIME: the analyser
+        // pre-computes the direct form, turning the guard into a tautology.
+        $this->assertFalse((bool) constant(EmbeddedWritePolicy::class . '::DEFAULT_EMBEDDED_WRITE'));
     }
 
     public function test_a_settings_store_outage_degrades_off_never_on(): void

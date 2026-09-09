@@ -157,7 +157,7 @@ final class WebhookTestDeliveryTest extends TestCase
      * An HTTP client double that records every outbound call.
      *
      * @param array{success: bool, response_code: int|null, response_body: string|null, error: string|null} $result
-     * @param list<array{url: string, headers: array<string, string>, body: string}> $calls
+     * @param list<array{url: string, headers: array<string, string|null>, body: string}> $calls
      */
     private function fakeHttpClient(array $result, array &$calls): WebhookHttpClient
     {
@@ -261,7 +261,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_delivery_is_attempted_even_when_webhook_subscribes_to_no_matching_event(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(
@@ -292,7 +292,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_subscription_filtered_dispatch_still_delivers_nothing_for_this_event(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(
@@ -318,7 +318,13 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_test_delivery_is_signed_with_the_stored_secret(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        // S186: the old `array<string, string>` promise here (shared verbatim by
+        // every $calls @var in this file and by fakeHttpClient's by-ref contract,
+        // which is checked INVARIANTLY) meant the analyser considered every header
+        // name present, making the `?? null` guards below provably dead. The map is
+        // production-authored, so "the signature header may simply be absent" is the
+        // honest model: a total map over nullable values.
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $event = $this->testEvent();
@@ -356,7 +362,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_failing_delivery_reports_failure_with_the_error_surfaced(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(
@@ -398,7 +404,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_inactive_webhook_reports_failure_and_sends_nothing(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(
@@ -434,7 +440,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_endpoint_reports_earned_success_for_an_unsubscribed_webhook(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(
@@ -462,7 +468,7 @@ final class WebhookTestDeliveryTest extends TestCase
      */
     public function test_unknown_webhook_id_still_returns_404(): void
     {
-        /** @var list<array{url: string, headers: array<string, string>, body: string}> $calls */
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
         $calls = [];
 
         $dispatcher = $this->dispatcherWith(

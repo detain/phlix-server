@@ -721,6 +721,54 @@ final class EmbeddedMetadataWriterTest extends TestCase
         }
     }
 
+    public function test_whitespace_only_fields_count_as_empty_behind_both_guards(): void
+    {
+        // S345 rule 1 for the round-1 guards: '   ' must reach the SAME refusal
+        // as '' (asString() does not trim — measured), or blank tags would ride
+        // a full destructive rewrite of the operator's file.
+        $dir = $this->tempDir('blankmeta');
+        $video = $this->fakeMedia($dir, 'w.mkv');
+        $audio = $this->fakeMedia($dir, 'w.mp3');
+        $runner = new S89ScriptedRunner();
+
+        try {
+            $this->writer($runner)->write($this->item($video), ['name' => '   '], $dir);
+            $this->fail('whitespace-only title must count as no embeddable video fields');
+        } catch (EmbeddedWriteFailedException $e) {
+            $this->assertStringContainsString('no embeddable video fields', $e->getMessage());
+        }
+
+        try {
+            $this->writer($runner)
+                ->write($this->item($audio, ['name' => '   '], 'track'), ['name' => '   '], $dir);
+            $this->fail('whitespace-only title must count as no embeddable audio fields');
+        } catch (EmbeddedWriteFailedException $e) {
+            $this->assertStringContainsString('no embeddable audio fields', $e->getMessage());
+        }
+
+        $this->assertSame([], $runner->calls);
+        $this->assertSame('ORIGINAL-BYTES', file_get_contents($video));
+        $this->assertSame('ORIGINAL-BYTES', file_get_contents($audio));
+    }
+
+    public function test_publish_never_propagates_setuid_or_sticky_bits(): void
+    {
+        // Removal-guard for the `& 0777` publish mask (S345 rule 3): the other
+        // mode arm uses 0642, which passes under the old `& 07777` too — this
+        // one cannot.
+        $dir = $this->tempDir('setuid');
+        $media = $this->fakeMedia($dir, 's.mkv');
+        self::assertTrue(chmod($media, 04644));
+        $runner = new S89ScriptedRunner([S89ScriptedRunner::writeToStage($media, 'NEW')]);
+
+        $this->writer($runner)->write($this->item($media), ['name' => 'S'], $dir);
+
+        $perms = fileperms($media);
+        $this->assertSame(0, $perms & 07000, 'setuid/setgid/sticky must not survive the publish');
+        $this->assertSame(0644, $perms & 0777);
+        $this->assertNoStageResidue($media);
+    }
+
     // ── worker-visible contract (R1: deny is never a warning) ─────────────
 
     public function test_worker_sees_a_policy_skip_as_success_and_a_write_failure_as_warning(): void

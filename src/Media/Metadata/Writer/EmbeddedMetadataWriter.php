@@ -43,14 +43,14 @@ use Throwable;
  *    file. (Marker-presence is the detectable candidate ruling R2 allowed;
  *    an NFO the sidecar writer itself emitted carries the marker — verified
  *    at `SidecarWriter::renderNfo()`.)
-     *  - **Atomic-rename discipline.** Every mutation stages into an exclusively
-     *    created (`fopen 'xb'`) sibling temp file in the media directory — the
-     *    media itself must be a regular file; a symlink at the media path is
-     *    refused rather than dereferenced — and only then `rename()`s over the
-     *    original.
-     *    A remux interrupted at any point — killed binary, codec refusal, failed
-     *    publish — leaves the ORIGINAL bytes intact; the staged temp is removed
-     *    best-effort and the failure throws (the worker logs it and continues).
+ *  - **Atomic-rename discipline.** Every mutation stages into an exclusively
+ *    created (`fopen 'xb'`) sibling temp file in the media directory — the
+ *    media itself must be a regular file; a symlink at the media path is
+ *    refused rather than dereferenced — and only then `rename()`s over the
+ *    original.
+ *    A remux interrupted at any point — killed binary, codec refusal, failed
+ *    publish — leaves the ORIGINAL bytes intact; the staged temp is removed
+ *    best-effort and the failure throws (the worker logs it and continues).
  *
  * Registered through the SAME `MetadataWriterRegistry` DI seam S88 established
  * (ruling R4) — NOT the PluginLoader capability arm; zero routes, zero
@@ -638,7 +638,11 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
 
         $flags = [];
         foreach ($fields as $key => $value) {
-            if ($value !== '') {
+            // Whitespace-only values count as empty (same trim rule as
+            // isContentFrameHit): a blank -metadata is exactly the
+            // "stamps nothing worth stamping" rewrite the guard exists for.
+            // The value that DOES ship stays raw — trim judges, never mutates.
+            if (trim($value) !== '') {
                 $flags[] = sprintf('-metadata %s=%s', $key, escapeshellarg($value));
             }
         }
@@ -659,17 +663,17 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
         $data = [];
 
         $title = MetadataValue::asString($canonicalMetadata['name'] ?? null);
-        if ($title !== '') {
+        if (trim($title) !== '') {
             $data['TITLE'] = [$title];
         }
 
         $artist = MetadataValue::asString($canonicalMetadata['artist'] ?? null);
-        if ($artist !== '') {
+        if (trim($artist) !== '') {
             $data['ARTIST'] = [$artist];
         }
 
         $album = MetadataValue::asString($canonicalMetadata['album'] ?? null);
-        if ($album !== '') {
+        if (trim($album) !== '') {
             $data['ALBUM'] = [$album];
         }
 
@@ -679,7 +683,7 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
         }
 
         $year = MetadataValue::asString($canonicalMetadata['year'] ?? null);
-        if ($year !== '') {
+        if (trim($year) !== '') {
             $data['YEAR'] = [$year];
         }
 
@@ -694,17 +698,17 @@ final class EmbeddedMetadataWriter implements MetadataWriterInterface
     /**
      * @param mixed $value raw canonical value
      *
-     * @return list<string> non-empty strings only
+     * @return list<string> non-blank strings only, entries kept raw
      */
     private function stringList(mixed $value): array
     {
         if (!is_array($value)) {
-            return is_string($value) && $value !== '' ? [$value] : [];
+            return is_string($value) && trim($value) !== '' ? [$value] : [];
         }
 
         $out = [];
         foreach ($value as $entry) {
-            if (is_string($entry) && $entry !== '') {
+            if (is_string($entry) && trim($entry) !== '') {
                 $out[] = $entry;
             }
         }

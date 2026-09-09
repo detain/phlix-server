@@ -12,11 +12,15 @@ use Phlix\LiveTv\Recording\RecordingScheduler;
 use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\MockObject\MockObject;
+use ReflectionProperty;
 use Workerman\MySQL\Connection;
 use Workerman\Worker;
 
 class RecordingSchedulerTest extends TestCase
 {
+    /** @var array<int, Worker> */
+    private array $savedWorkers = [];
+
     private RecordingScheduler $scheduler;
     /** @var Connection&MockObject */
     private $mockDb;
@@ -30,6 +34,12 @@ class RecordingSchedulerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // S266: snapshot the process-global Worker registry BEFORE registering
+        // our bare worker, so tearDown hands it back untouched. A leaked Worker
+        // is what made Workerman\Timer::add() order-dependent for the six
+        // LiveTv/Relay cases across the estate (±6 skips between seeds).
+        $this->savedWorkers = Worker::getAllWorkers();
 
         // Workerman\Timer::add() (used by the SV-3.1c per-recording stop timer)
         // throws unless at least one Worker exists in the process. Construct a
@@ -50,6 +60,14 @@ class RecordingSchedulerTest extends TestCase
             $this->mockLiveTvManager,
             $this->mockLogger
         );
+    }
+
+    protected function tearDown(): void
+    {
+        $workers = new ReflectionProperty(Worker::class, 'workers');
+        $workers->setAccessible(true);
+        $workers->setValue(null, $this->savedWorkers);
+        parent::tearDown();
     }
 
     /**

@@ -241,10 +241,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
         * (tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php, the
         * real-MySQL proof for migration 105 — NULL-distinctness, the 1138
         * refusal, merge arithmetic and the accumulating upsert are observable
-        * only against a live server); the write path is an edit, not a file.
-        * The guard names no Request.
-        */
-    private const EXPECTED_PHP_FILES = 1835;
+         * only against a live server); the write path is an edit, not a file.
+         * The guard names no Request.
+         * Re-pinned 1835→1836 by S266: the Timer-probe determinism fix adds exactly
+         * one first-party file (tests/Support/Workerman/WorkermanTimerFixture.php,
+         * the shared fixture that makes the six LiveTv/Relay Timer cases always
+         * run); the polluter save/restore edits and the gate removals touch no
+         * file counts. The guard names no Request.
+         */
+    private const EXPECTED_PHP_FILES = 1836;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

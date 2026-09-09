@@ -368,7 +368,7 @@ final class MusicScanPrefetcherTest extends TestCase
         self::assertIsResource($proc);
 
         $status = proc_get_status($proc);
-        $pid = is_array($status) ? (int) ($status['pid'] ?? 0) : 0;
+        $pid = (int) $status['pid'];
         self::assertGreaterThan(0, $pid);
 
         $ioFile = '/proc/' . $pid . '/io';

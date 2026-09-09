@@ -416,7 +416,7 @@ final class CoroutineSocketGuardTest extends TestCase
                     break;
                 }
                 if (str_replace('\\', '', strtolower($name)) === 'swoolecoroutinesocket') {
-                    $sites[] = self::relative($file) . ':' . (is_array($token) ? $token[2] : 0) . ':*';
+                    $sites[] = self::relative($file) . ':' . $token[2] . ':*';
                 }
             }
         }

@@ -228,7 +228,7 @@ final class TraktSyncBootRealDbTest extends TestCase
             . "[S340]   FIX sweep Timer::add(1s) + stale last-run -> sync_runs=%d, persisted last_run=%d\n",
             $controlFired,
             $syncRuns,
-            is_array($row) ? (int) $row['value'] : -1,
+            (int) $row['value'],
         ));
     }
 

@@ -30,3 +30,4 @@ subbefore	2424	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, A
 subbefore	2525	count=3	six_skipped=3	phpunit_exit=0	secs=14	summary=Tests: 87, Assertions: 289, Skipped: 3.
 subafter	101	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=
 subafter	202	count=0	six_skipped=0	phpunit_exit=0	secs=14	summary=
+subafter	303	count=0	six_skipped=0	phpunit_exit=0	secs=13	summary=

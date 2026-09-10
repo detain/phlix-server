@@ -343,7 +343,11 @@ final class StaticAnalysisScopeTest extends TestCase
     {
         $src = $this->phpstanSrcDirectives();
 
-        self::assertMatchesRegularExpression('/^\s*level:\s*9\s*$/m', $src, 'the production corpus must stay at level 9');
+        self::assertMatchesRegularExpression(
+            '/^\s*level:\s*9\s*$/m',
+            $src,
+            'the production corpus must stay at level 9',
+        );
         self::assertMatchesRegularExpression('/^\s*paths:\s*$/m', $src);
 
         // S256-residual: assertSame over the EXACT corpus, not assertContains over one
@@ -1242,7 +1246,7 @@ final class StaticAnalysisScopeTest extends TestCase
 
         self::assertGreaterThan(
             500,
-            $files,
+            count($files),
             'tests/ collapsed below 500 PHP files — the analysers would go green over a shrunk corpus',
         );
     }
@@ -1273,7 +1277,7 @@ final class StaticAnalysisScopeTest extends TestCase
 
         self::assertGreaterThan(
             40,
-            $files,
+            count($files),
             'scripts/ collapsed below 40 PHP files — the analysers would go green over a '
             . 'shrunk corpus (S256-residual measured 43)',
         );

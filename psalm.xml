@@ -36,16 +36,19 @@
     the hub's S248 shape. The level ladder above was measured over src/ only and
     is UNCHANGED by this step; the scripts/ addition was measured separately:
     Psalm 6.5.0 reported 10 level-5 findings across scripts/ (43 PHP files
-    enumerated at the time of writing), and every one was fixed at the source —
-    two boot-blocking TypeError constructors (backfill-chapters.php passed the
-    raw Connection to MarkerCandidateRepository, run-media-asset-worker.php to
-    FfmpegRunner), a wrong config key (backfill-streams.php read 'probe_path',
-    so a custom ffprobe binary was silently ignored), a collect() name collision
-    with crell/tukio's global (add-headers.php), a ParadoxicalCondition from a
-    ternary that re-read an offset after narrowing (ci-browser-e2e-prereqs.php),
-    and 4 UndefinedClass reports for Swoole\\Coroutine\\WaitGroup resolved by the
-    <stubs> entry below — the same drift-tested declaration phpstan scanFiles and
-    psalm-tests.xml load. No baseline, no ignoreErrors, no IssueHandler, zero
+    enumerated at the time of writing), and every one was fixed at the source.
+    Five were live runtime defects: two boot-blocking constructor failures
+    (backfill-chapters.php passed the raw Connection to MarkerCandidateRepository,
+    run-media-asset-worker.php passed it to FfmpegRunner — whose review follow-up
+    also gave it the ConnectionPool::init() every sibling script has), a wrong
+    config key (backfill-streams.php read 'probe_path', so a custom ffprobe binary
+    was silently ignored), a collect() name collision with the global crell/fp
+    ships (add-headers.php), and a ParadoxicalCondition from a ternary that
+    re-read an offset after narrowing (ci-browser-e2e-prereqs.php). The remaining
+    findings were type honesty — chiefly 4 UndefinedClass reports for
+    Swoole\\Coroutine\\WaitGroup resolved by the <stubs> entry below (the same
+    drift-tested declaration the phpstan configs scanFiles) — and the add-headers
+    rewrite. No baseline, no ignoreErrors, no IssueHandler, zero
     <file> exclusions here. tests/ is NOT part of this config; it keeps its own
     measured-L5 file, psalm-tests.xml (S306). Scope is asserted, with negative
     fuzz, by tests/Unit/Support/StaticAnalysisScopeTest.php.

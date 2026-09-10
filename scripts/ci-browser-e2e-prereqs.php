@@ -285,7 +285,7 @@ if ($skipBinaries) {
 
 // ⚠ ffmpeg spells it `-version`, with ONE dash; `--version` is unrecognised and exits
 // non-zero. Chrome and node want two. Getting this wrong does not break the check (the
-// executable test above is what decides) but it does print "(version query failed)" for
+// executable test below is what decides) but it does print "(version query failed)" for
 // a perfectly good binary, which is exactly the sort of noise that gets a step deleted.
 $describe = static function (string $binary, string $flag = '--version'): string {
     /** @var list<string> $out */

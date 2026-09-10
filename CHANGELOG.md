@@ -25,7 +25,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   constructs that userland-inside-the-binary class behind an `extension_loaded` guard.
   PHPStan measured 47 findings and Psalm 10 across `scripts/`; every one was fixed at
   the source — no baseline, no `ignoreErrors`, no `excludePaths`, no suppressions
-  (five of the findings were live runtime defects, listed under Fixed).
+  (five of the   findings were live runtime defects, listed under Fixed; the review pass on this
+  same work added a sixth: `run-media-asset-worker.php` never initialised the
+  `ConnectionPool` either, so even after its `FfmpegRunner` fix it could not boot —
+  no analyser sees that class of defect).
   `tests/Unit/Support/StaticAnalysisScopeTest.php` now pins the exact production paths
   allow-lists for both tools, the `scanFiles`/`stubs` allow-lists, the byte-identity of
   the two phpstan production configs, the new verbatim CI command with its forbidden
@@ -136,13 +139,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   line; `run-media-asset-worker.php` passed the connection as `FfmpegRunner`'s first
   parameter, which is the ffmpeg **binary path** (string) — the worker could never
   have started from this entry point, and it now builds its runner from
-  `config/ffmpeg.php` like every sibling does; `add-headers.php` skipped an excluded
+  `config/ffmpeg.php` like every sibling does, with the `ConnectionPool::init()` call
+  the review pass found still missing from it (without it, `getConnection()` throws);
+  `add-headers.php` skipped an excluded
   directory by `continue`ing on the directory entry itself, which prunes nothing — the
   traversal descended anyway and rewrote headers inside `node_modules/` and
   `generated/`, the exact subtrees its own docblock promised to leave alone — while
   its mid-iteration `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` lands on the
   inner `FilesystemIterator`, where 16 means something else entirely, and its named
-  `collect()` would fatal on redeclaration against `crell/tukio`'s global the moment an
+  `collect()` would fatal on redeclaration against `crell/fp`'s global the moment an
   autoloader entered the process (the hub's S248 rewrite of this same file is now
   ported); `backfill-streams.php` read a config key `probe_path` that does not exist —
   the real key is `ffprobe_path`, so a custom ffprobe binary was silently ignored and
@@ -150,7 +155,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   as positional arguments to `Connection::query()`, binding the line number as PDO's
   fetch mode, while the `--limit` it documents was interpolated into a SQL string that
   was then thrown away in favour of an inline batch query — `--limit` never applied
-  (the batching loop now honours it as its usage block advertises). The remaining
+  (the batching loop now honours it as its usage block advertises, and because the
+  `--execute` candidate set shrinks under every successful upsert, the loop pages by
+  primary key rather than by advancing offset: offset paging would have silently
+  skipped roughly one still-missing candidate for every row the run fixed). The remaining
   findings were type honesty: mixed-from-`json_decode`/row envelopes parsed into
   asserted shapes at the boundary instead of offset-cast blindly
   (`dump-syncplay-envelope-pin-vectors.php`, `backfill-ratings.php`), `$_SERVER['argv']`

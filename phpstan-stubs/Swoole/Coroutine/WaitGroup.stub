@@ -38,8 +38,12 @@ namespace Swoole\Coroutine;
  *
  * ## ⚠ HOW IT IS REGISTERED: `scanFiles`, NOT `stubFiles`
  *
- * This file lives under a directory called `phpstan-stubs/`, but it is registered in
- * `phpstan-tests.neon` under **`scanFiles:`**. That distinction is load-bearing and was
+ * This file lives under a directory called `phpstan-stubs/`, but it is registered
+ * under **`scanFiles:`** — in `phpstan-tests.neon` since S128, and in BOTH
+ * production configs (`phpstan.neon`/`phpstan.neon.dist`) since S256-residual,
+ * because `scripts/bench/coroutine_bench.php` constructs this class. Psalm loads
+ * the same declaration via `<stubs>` in `psalm.xml` (prod, since S256-residual)
+ * and `psalm-tests.xml`. That distinction is load-bearing and was
  * measured, not assumed:
  *
  *     stubFiles: [this file]   swoole absent -> STILL 10 class.notFound errors
@@ -55,8 +59,8 @@ namespace Swoole\Coroutine;
  *
  * Because it is only ever READ and never executed or autoloaded, it keeps the `.stub`
  * extension: nothing can `require` it by accident, PHPUnit cannot collect it, and neither
- * gate treats it as a project file (`phpcs` reads `src/` and `tests/`; PHPStan's `paths`
- * are `src` and `tests`).
+ * gate treats it as a project file (`phpcs` reads `src/` and `tests/`; the production
+ * PHPStan `paths` are `src` and `scripts`, `phpstan-tests.neon` owns `tests`).
  *
  * ## Why a stub, and not the two other things this repo already does
  *
@@ -64,12 +68,12 @@ namespace Swoole\Coroutine;
  *    production code hand-rolls a two-channel join rather than use `WaitGroup`, purely
  *    because of this stub gap. That works, but it is a permanent tax on every future
  *    file. A stub removes the constraint instead of routing around it.
- *    ⚠ This file is deliberately registered in `phpstan-tests.neon` ONLY. `src/` does
- *    not use `WaitGroup` today, so adding it to `phpstan.neon` would change nothing and
- *    the src config stays untouched — verified: the src gate is `[OK] No errors` both
- *    with and without the extension. If production ever wants `WaitGroup`, adding this
- *    same file to `phpstan.neon`'s `scanFiles` is what makes MediaScanner's workaround
- *    optional — that is the forward path, recorded here rather than guessed at later.
+ *    Since S256-residual this file is registered in the production configs too — not
+ *    because `src/` uses `WaitGroup` (it still does not; MediaScanner's workaround
+ *    stands on its own documented reasons) but because `scripts/` joined the
+ *    production corpus and `scripts/bench/coroutine_bench.php` constructs the class.
+ *    The forward path this section used to describe has happened; the registration is
+ *    allow-list-pinned by `StaticAnalysisScopeTest`.
  * 2. **`phpstan.neon` used to use `excludePaths`** for two Swoole-using `src/` files and
  *    no longer does. S343 deleted both entries after measuring that the files need no
  *    exclusion at all (`src/` at level 9 is `[OK]` with and without the extension, both

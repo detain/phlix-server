@@ -30,6 +30,11 @@ use Monolog\Level;
 
 $config = require $baseDir . '/config/media_asset_jobs.php';
 
+// Same init the sibling backfill scripts do: ConnectionPool::getConnection() throws
+// RuntimeException when the pool has no config path, and this file — uniquely among
+// the DB-connected scripts/ — never set one. PHPStan/Psalm cannot see that defect
+// (the throw is runtime-only), the S256-residual review caught it by reading.
+ConnectionPool::init(__DIR__ . '/../config/database.php');
 $db = ConnectionPool::getConnection('mysql');
 $itemRepo = new ItemRepository($db);
 

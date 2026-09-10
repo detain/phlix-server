@@ -3,7 +3,8 @@
 /**
  * Idempotent copyright-header insertion script for phlix-server.
  *
- * Finds all PHP files under src/ (excluding vendor/, .git/, node_modules/, generated/)
+ * Finds all PHP files under src/ (excluding vendor/, .git/, node_modules/, generated/,
+ * .phpunit.cache/)
  * that do not yet carry the @copyright 2026 Joe Huss <detain@interserver.net> line,
  * and inserts a file-level docblock in the required format.
  *
@@ -25,13 +26,16 @@ declare(strict_types=1);
  * docblock says it excludes. It then called
  * `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` mid-iteration, where the
  * call lands on the INNER `FilesystemIterator` (RecursiveIteratorIterator proxies
- * unknown methods to it), and the value 16 means `KEY_AS_PATHNAME` there, not
- * "catch get child" — PHPStan level 9 reports that as `argument.invalidConstant`.
+ * unknown methods to it), and the value 16 in that flag position is
+ * `FilesystemIterator::CURRENT_AS_SELF` — a coincidental equal of the outer
+ * iterator's `CATCH_GET_CHILD` — so the call silently changed what the inner
+ * iterator yields and caught nothing — PHPStan level 9 reports that as
+ * `argument.invalidConstant`.
  *
  * Declared as a closure (estate convention, and the shape the hub's S248 rewrite
  * of this same script shipped) so the file stays free of named functions: a named
- * `collect()` here would collide with the global `collect()` that `crell/tukio`'s
- * autoloader ships, and a named function in a script that also executes logic
+ * `collect()` here would collide with the global `collect()` that `crell/fp` ships
+ * (arrived via `crell/tukio`'s autoloader), and a named function in a script that also executes logic
  * trips PSR1.Files.SideEffects. The walk itself recurses through
  * {@see RecursiveIteratorIterator}, so the closure needs no self-reference.
  *
@@ -64,7 +68,8 @@ $collect = /** @param list<string> $files */ static function (string $dir, array
 };
 
 /**
- * Recursively collect all .php files under src/, excluding vendor/, .git/, generated, node_modules.
+ * Recursively collect all .php files under src/, excluding vendor/, .git/, generated/,
+ * node_modules/ and .phpunit.cache/.
  *
  * @return list<string> Absolute file paths.
  */

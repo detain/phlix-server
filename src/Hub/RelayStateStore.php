@@ -356,14 +356,18 @@ final class RelayStateStore
         // happen given the single-writer discipline) cannot corrupt the tmp.
         $tmp = $path . '.' . getmypid() . '.tmp';
         if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
-            @unlink($tmp);
+            if (is_file($tmp)) {  // S457: don't unlink an absent tmp (recorded warning under paraunit)
+                @unlink($tmp);
+            }
             return false;
         }
 
         @chmod($tmp, 0600);
 
         if (!@rename($tmp, $path)) {
-            @unlink($tmp);
+            if (is_file($tmp)) {  // S457: don't unlink an absent tmp (recorded warning under paraunit)
+                @unlink($tmp);
+            }
             return false;
         }
 

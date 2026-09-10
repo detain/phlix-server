@@ -373,7 +373,10 @@ class HttpInstaller
                 $sourceUrl,
             ));
         } finally {
-            @unlink($localFile);
+            // S457: failure paths above may already have removed it (recorded warning).
+            if (is_file($localFile)) {
+                @unlink($localFile);
+            }
         }
     }
 
@@ -434,7 +437,9 @@ class HttpInstaller
         $expected = strtolower(trim($expectedSha256));
         $actual = hash_file('sha256', $localFile);
         if (!is_string($actual) || !hash_equals($expected, strtolower($actual))) {
-            @unlink($localFile);
+            if (is_file($localFile)) {  // S457: unreadable digests can mean the file is already gone
+                @unlink($localFile);
+            }
             throw new PluginInstallException(sprintf(
                 'Plugin artifact digest mismatch — refusing install (expected sha256 %s, got %s).',
                 $expected,
@@ -598,7 +603,9 @@ class HttpInstaller
             // filename, which can otherwise pin the `.tar` open and defeat the
             // unlink on some platforms (B6).
             unset($phar, $tar);
-            @unlink($tarPath);
+            if (is_file($tarPath)) {  // S457: a failed compress/move path may leave nothing behind
+                @unlink($tarPath);
+            }
         }
 
         $this->flattenSingleRoot($targetDir);

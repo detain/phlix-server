@@ -161,13 +161,19 @@
     CoverageMetadataPolicyTest's allow-list, and that test FAILS once the
     annotation is gone, so the exception cannot rot into a permanent hole.
   -->
-  <coverage>
-    <report>
-      <html outputDirectory="coverage-report"/>
-      <clover outputFile="coverage.xml"/>
-      <text outputFile="php://stdout" showUncoveredFiles="true" showOnlySummary="true"/>
-    </report>
-  </coverage>
+  <!--
+    S457 — this config deliberately carries NO coverage report targets. Parallel
+    children all share the repo root as CWD, so the inherited clover/html/stdout
+    targets of phpunit.xml would have every child clobber coverage.xml, coverage-report/
+    and the text stream. Coverage is collected per child into serialized PHP objects
+    (paraunit's own `coverage` command: pcov enabled per child + a unique
+    coverage-php temp file, merged by its CoverageMerger, emitted via its php
+    processor), and scripts/parallel/merge-coverage.php unions the per-suite PHP
+    objects into coverage.xml with php-code-coverage's own CloverGenerator —
+    byte-compatible format, exact metrics. The serial E2E tail reuses THIS config for
+    the same reason: its coverage-php and log-junit artifacts are named explicitly on
+    the CLI, so there are no report targets to fight with.
+  -->
   <extensions>
     <!--
       S120 — reports any test where a failed assertion did not decide the test's

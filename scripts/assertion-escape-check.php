@@ -39,25 +39,48 @@
  * this script happily prints "no escapes reported". That asymmetry is the reason the
  * wiring test exists.
  *
- * Run this immediately after PHPUnit. Exits 0 when the report is absent (the normal
- * case) and 1 when it is present.
+ * Run this immediately after PHPUnit. Exits 0 when no report exists (the normal case)
+ * and 1 when any does.
+ *
+ * S457 — the family, not one file. Parallel children share the repo root as CWD and
+ * each writes `.phpunit-assertion-escapes.<chunk-id>.json` (see the extension's
+ * reportPath()); the serial fixed name is also matched by the glob. Every report in
+ * the family is read and the union is the verdict — a single escaping child fails the
+ * run regardless of which worker finished last. Reports are unlinked after being read
+ * so a stale child report cannot haunt the next run (the same job the fixed-name
+ * unlink-at-bootstrap does for serial runs).
  *
  * Usage: php scripts/assertion-escape-check.php
  */
 
 declare(strict_types=1);
 
-$report = dirname(__DIR__) . '/.phpunit-assertion-escapes.json';
+$reports = glob(dirname(__DIR__) . '/.phpunit-assertion-escapes*.json') ?: [];
 
-if (!is_file($report)) {
+$violations = [];
+$unreadable = [];
+
+foreach ($reports as $report) {
+    $raw = (string) file_get_contents($report);
+    @unlink($report);
+
+    /** @var mixed $decoded */
+    $decoded = json_decode($raw, true);
+
+    if (is_array($decoded)) {
+        foreach ($decoded as $violation) {
+            $violations[] = $violation;
+        }
+    } else {
+        $unreadable[] = $report . ': ' . $raw;
+    }
+}
+
+if ($reports === []) {
     fwrite(STDOUT, "S120 assertion-escape guard: no escapes reported.\n");
 
     exit(0);
 }
-
-$raw = (string) file_get_contents($report);
-/** @var mixed $violations */
-$violations = json_decode($raw, true);
 
 fwrite(STDERR, "S120 assertion-escape guard: FAILED — an assertion failed without failing its test.\n");
 fwrite(STDERR, "An assertion inside a callback is being swallowed between the assertion and\n");
@@ -66,21 +89,21 @@ fwrite(STDERR, "so catch (\\Throwable), catch (\\Exception) and catch (\\Runtime
 fwrite(STDERR, "it — and so does a `return` inside a `finally`, with no catch involved at all.\n");
 fwrite(STDERR, "Remedy: have the callback RECORD what it saw and assert OUTSIDE the callback.\n\n");
 
-if (is_array($violations)) {
-    foreach ($violations as $violation) {
-        if (!is_array($violation)) {
-            continue;
-        }
-
-        fwrite(STDERR, sprintf(
-            "  %s\n    outcome=%s  %s\n",
-            is_string($violation['test'] ?? null) ? $violation['test'] : '?',
-            is_string($violation['outcome'] ?? null) ? $violation['outcome'] : '?',
-            is_string($violation['kind'] ?? null) ? $violation['kind'] : '?',
-        ));
+foreach ($violations as $violation) {
+    if (!is_array($violation)) {
+        continue;
     }
-} else {
-    fwrite(STDERR, $raw);
+
+    fwrite(STDERR, sprintf(
+        "  %s\n    outcome=%s  %s\n",
+        is_string($violation['test'] ?? null) ? $violation['test'] : '?',
+        is_string($violation['outcome'] ?? null) ? $violation['outcome'] : '?',
+        is_string($violation['kind'] ?? null) ? $violation['kind'] : '?',
+    ));
+}
+
+foreach ($unreadable as $complaint) {
+    fwrite(STDERR, '  unparseable report — ' . $complaint . "\n");
 }
 
 exit(1);

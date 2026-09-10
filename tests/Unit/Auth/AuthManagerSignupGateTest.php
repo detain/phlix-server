@@ -50,7 +50,13 @@ final class AuthManagerSignupGateTest extends TestCase
         unset($_SERVER['REMOTE_ADDR']);
         // S439: every silentLogger() mints a fresh stream path — sweep them all.
         foreach ($this->mintedLogPaths as $path) {
-            @unlink($path);
+            // S457: Monolog opens stream handlers lazily, so a logger that never
+            // wrote has no file on disk — and even an @-suppressed unlink of it
+            // records a PHP warning event that paraunit surfaces (serial printers
+            // hide suppressed events). Remove only what was actually created.
+            if (is_file($path)) {
+                @unlink($path);
+            }
         }
         $this->mintedLogPaths = [];
         parent::tearDown();

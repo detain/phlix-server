@@ -79,7 +79,9 @@ final class ApplicationCoreUpdateTimerTest extends TestCase
         foreach (glob($this->tempDir . '/config/*') ?: [] as $file) {
             @unlink($file);
         }
-        @rmdir($this->tempDir . '/config');
+        if (is_dir($this->tempDir . '/config')) {  // S457: absent config dir is normal (recorded rmdir warning)
+            @rmdir($this->tempDir . '/config');
+        }
         @rmdir($this->tempDir);
 
         parent::tearDown();

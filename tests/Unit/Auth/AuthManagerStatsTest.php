@@ -37,7 +37,13 @@ final class AuthManagerStatsTest extends TestCase
         parent::tearDown();
         // S439: sweep every stream path minted by silentLogger().
         foreach ($this->mintedLogPaths as $path) {
-            @unlink($path);
+            // S457: Monolog opens stream handlers lazily, so a logger that never
+            // wrote has no file on disk — and even an @-suppressed unlink of it
+            // records a PHP warning event that paraunit surfaces (serial printers
+            // hide suppressed events). Remove only what was actually created.
+            if (is_file($path)) {
+                @unlink($path);
+            }
         }
         $this->mintedLogPaths = [];
     }

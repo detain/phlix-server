@@ -487,8 +487,11 @@ final class SegmentProcessRegistryTest extends TestCase
             $this->assertFileExists($siblingTmp, 'a sibling worker’s live temp must survive');
             $this->assertFileDoesNotExist($final, 'the final published file is never touched by cleanup');
         } finally {
-            @unlink($final . '.part-aaaaaaaa');
-            @unlink($final . '.part-bbbbbbbb');
+            foreach (['.part-aaaaaaaa', '.part-bbbbbbbb'] as $shard) {
+                if (is_file($final . $shard)) {  // S457: kill() reaps its own temp; the sibling must survive
+                    @unlink($final . $shard);
+                }
+            }
             @rmdir($dir);
         }
     }

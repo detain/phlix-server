@@ -125,7 +125,13 @@ if grep -Eq '[1-9][0-9]* files with (ERRORS|FAILURES)' "$log"; then
     exit 1
 fi
 
-warn_line="$(grep -E '^[0-9]+ files with WARNINGS' "$log" | tail -1)"
+# `|| true` is load-bearing, not cosmetics: this script runs under `set -euo pipefail`,
+# and grep exits 1 when it matches nothing. A CLEAN lane has no "files with WARNINGS"
+# line at all, so without the guard the substitution returns 1, pipefail propagates it,
+# and set -e kills the script with exit 1 on a run that passed (PR 758 CI run 3: Unit
+# survived only because it had 33 warning files to match; Integration had 0 and died here
+# with paraunit itself having exited 0 — note paraunit only ever returns 0 or 10).
+warn_line="$(grep -E '^[0-9]+ files with WARNINGS' "$log" | tail -1 || true)"
 if [ -n "$warn_line" ]; then
     echo "run-suite: ${warn_line} — recorded PHP warnings (see WARNINGS block above); fatal classes are ERRORS/FAILURES only."
 fi

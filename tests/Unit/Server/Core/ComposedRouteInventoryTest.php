@@ -25,27 +25,34 @@ use function DI\factory;
  *
  * ## What this pins
  *
- * The single route table the server actually serves is the one `Application::loadRoutes()`
- * composes at boot. This harness composes that table **in-process against the real PHP-DI
- * container** and pins it, method+path for method+path, to a committed artifact
+ * The route table `Application::loadRoutes()` composes at boot — the server's primary API
+ * surface — is pinned here, method+path for method+path, against a committed artifact
  * ({@see tests/Fixtures/Routes/composed-route-inventory.json}). Any legitimate change to a
  * route must be mirrored in the artifact in the same commit or this gate reddens; an
  * illegitimate (era-2 / accidental) change reddens too. It is a whole-table tripwire, not
  * per-route spot coverage (cf. `MusicTracksRouteReachabilityTest`) and not a single-registrar
  * pin (cf. `RouterMediaRoutesTest`).
  *
+ * SCOPE: `WebPortalRouter` is a SEPARATE, container-built 404-fallback surface (`HttpHandler`
+ * falls through to it for unmatched paths) whose routes are NOT produced by `loadRoutes()` and
+ * are therefore NOT part of, and NOT pinned by, this gate. This harness bounds exactly the
+ * `loadRoutes()` composition and makes no claim about the portal surface.
+ *
  * ## Why a REAL container and not a stub
  *
  * A hand-built `Router` (or a literal-null / unbound container) is a hub-style shortcut that
  * does not describe production: with a null container `loadRoutes()` falls through to legacy
- * hand-wire paths that reach a real MySQL socket (`PDOException 1045`), so it silently proves
- * nothing about the DI-composed table. Only the real `ContainerFactory` graph yields the served
- * set. The `HealthRoutesAuthGuardTest` pattern is followed exactly — the MySQL `Connection` is
- * the ONLY doubled collaborator (its constructor opens a socket, so it is created with
- * `createMock`, which skips the constructor); every other service is the production definition.
- * The container is real enough that an UNBOUND stub demonstrably cannot compose the table —
- * see {@see self::testUnboundStubContainerCannotComposeProductionRoutes()}, which is the control
- * that proves this harness is doing real DI work and not echoing an empty table.
+ * hand-wire paths that build a real MySQL connection and reach a live socket, so it silently
+ * proves nothing about the DI-composed table. Only the real `ContainerFactory` graph yields the
+ * composed set. The `HealthRoutesAuthGuardTest` container idiom is reused — the MySQL
+ * `Connection` is the ONLY doubled collaborator (its constructor opens a socket, so it is made
+ * with `createMock`, which skips the constructor); every other service is the production
+ * definition. Unlike that reference (which memoizes a shared `Application`), this harness
+ * deliberately RE-COMPOSES a fresh instance per phase: the planted-drift test mutates one
+ * throwaway router while a second, untouched build proves the revert — memoization would blur
+ * the two. The container is real enough that an UNBOUND stub demonstrably cannot compose the
+ * table — see {@see self::testUnboundStubContainerCannotComposeProductionRoutes()}, the control
+ * that proves this harness does real DI work and is not echoing an empty table.
  *
  * ## Era-2 content invariance
  *
@@ -139,9 +146,8 @@ final class ComposedRouteInventoryTest extends TestCase
         );
 
         // Direction A: something committed is no longer composed (a route was removed/renamed).
-        $missing = array_values(array_diff($committed, $composed));
         // Direction B: something composed is not committed (a route was added/renamed).
-        $extra = array_values(array_diff($composed, $committed));
+        [$missing, $extra] = $this->gateDiff($committed, $composed);
 
         $this->assertSame(
             [],
@@ -174,9 +180,20 @@ final class ComposedRouteInventoryTest extends TestCase
         $routes = $decoded['routes'] ?? null;
         $this->assertIsArray($routes);
         $this->assertSame($total, count($routes), 'artifact total must equal count(routes)');
+        // The "365" is only honest if the list is a set — a duplicated row must not slip past the pin.
+        $this->assertCount(
+            count($routes),
+            array_unique($routes),
+            'artifact routes array must be duplicate-free.'
+        );
 
         $byMethod = $decoded['byMethod'] ?? null;
         $this->assertIsArray($byMethod);
+        $this->assertSame(
+            $total,
+            array_sum($byMethod),
+            'artifact byMethod counts must sum to the declared total.'
+        );
         $expected = $byMethod;
         ksort($expected);
 
@@ -213,15 +230,16 @@ final class ComposedRouteInventoryTest extends TestCase
         $plantRouter->get(self::PLANTED_PATH, static fn (): string => 's64-planted-drift-control');
         $plantedRows = $this->rowsFrom($plantRouter);
 
-        // RED: the both-directions gate must now see an EXTRA route.
+        // RED: the both-directions gate must now see an EXTRA route — same gateDiff() the pin uses.
         $this->assertContains($plantedRow, $plantedRows, 'the planted route must be live in the mutated router');
+        [$redMissing, $redExtra] = $this->gateDiff($committed, $plantedRows);
         $this->assertNotEmpty(
-            array_diff($plantedRows, $committed),
+            $redExtra,
             'PLANTED-DRIFT PROOF: adding a route must turn the extra-direction gate RED.'
         );
         $this->assertSame(
             [],
-            array_diff($committed, $plantedRows),
+            $redMissing,
             'a single add produces an EXTRA, never a MISSING (sanity of the diff pair)'
         );
 
@@ -232,9 +250,10 @@ final class ComposedRouteInventoryTest extends TestCase
             $revertedRows,
             'the throwaway plant must not leak across router instances'
         );
+        [$greenMissing, $greenExtra] = $this->gateDiff($committed, $revertedRows);
         $this->assertSame(
             [],
-            array_merge(array_diff($committed, $revertedRows), array_diff($revertedRows, $committed)),
+            array_merge($greenMissing, $greenExtra),
             'REVERT PROOF: a freshly composed router matches the pin again — the drift was in-memory only.'
         );
     }
@@ -376,6 +395,25 @@ final class ComposedRouteInventoryTest extends TestCase
         ksort($counts);
 
         return $counts;
+    }
+
+    /**
+     * THE load-bearing comparison — used identically by the both-directions pin and the
+     * planted-drift/revert proof, so the drift test can never validate a different gate than
+     * the one that runs in CI.
+     *
+     * @param list<string> $committed
+     * @param list<string> $composed
+     *
+     * @return array{0: list<string>, 1: list<string>} [missing, extra] —
+     *         missing = committed & not composed; extra = composed & not committed
+     */
+    private function gateDiff(array $committed, array $composed): array
+    {
+        return [
+            array_values(array_diff($committed, $composed)),
+            array_values(array_diff($composed, $committed)),
+        ];
     }
 
     /**

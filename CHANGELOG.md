@@ -52,7 +52,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   reddens the diff, and re-greenings on a fresh composition (nothing is persisted); an **unbound-stub**
   control builds `Application` over a container whose `get()` throws, and the exact message
   `unbound: Phlix\Server\Http\Controllers\AuthController` proves the real PHP-DI container — not a
-  hand-wire fallback — is what composes the table. Token `S64INVENTORYX7D3` is code-resident. Tests and
+  hand-wire fallback — is what composes the table. The inventory token is code-resident (a `const`
+  in the harness). Tests and
   a JSON fixture only: no routes added or changed, no `src/`, no migrations, no behavior change — the
   hub half of the original step stays CLOSED (its bijection is already enforced by
   `OpenApiSpecMatchesRouterTest`).

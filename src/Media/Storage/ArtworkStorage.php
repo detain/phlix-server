@@ -658,12 +658,12 @@ class ArtworkStorage
      * Validates the id with EXACTLY the pre-extraction ruleset — every character
      * outside `[a-zA-Z0-9-]` (slash, backslash, dot, whitespace, control byte,
      * NUL, anything) rejects the WHOLE id with
-     * {@see \InvalidArgumentException} BEFORE any path is resolved, so no
-     * sanitized-but-different id can ever reach a read or delete path. The
-     * generic write-side service ({@see ImageResizer::targetDir()}) strips such
-     * characters instead of rejecting; this method is the byte-for-byte
-     * pre-S71 gate every read/delete/write on this class has always gone
-     * through, and stays so by design.
+     * {@see \InvalidArgumentException} BEFORE any path is resolved. The generic
+     * write-side service ({@see ImageResizer::targetDir()}) applies the
+     * identical exact-match gate with service-flavoured wording ('Invalid
+     * target key for image storage'); this method keeps the historical
+     * item-ID wording as the first-line gate, so every read or delete on this
+     * class rejects malformed ids exactly as it did before S71.
      */
     private function itemDir(string $itemId): string
     {

@@ -179,13 +179,20 @@ class ImageResizer
      *
      * @param string $targetKey Flat target key (see {@see targetDir()}).
      * @param string $filename  File name inside the key directory (e.g. 'logo.png').
+     *                          Must be a plain basename — path separators, dot
+     *                          segments and NUL bytes are rejected before any
+     *                          filesystem call, exactly like the key itself.
      * @param string $bytes     Raw bytes to store.
      * @return string|null      Full path to the stored file, or null on empty
      *                          bytes or any I/O failure.
-     * @throws \InvalidArgumentException if the key is unusable.
+     * @throws \InvalidArgumentException if the key or filename is unusable.
      */
     public function storeBytes(string $targetKey, string $filename, string $bytes): ?string
     {
+        if ($filename === '' || $filename !== basename($filename) || str_contains($filename, "\0")) {
+            throw new \InvalidArgumentException('Invalid filename for image storage');
+        }
+
         if ($bytes === '') {
             return null;
         }

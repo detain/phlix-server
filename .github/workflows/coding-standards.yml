@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314. THE canonical extension list, derived once from phlix-server's
@@ -35,6 +35,17 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — the `extensions:` list above is NOT the gate. shivammathur/setup-php's
+        # fail_fast defaults to false, so an extension it cannot install is a red cross in
+        # the log and a GREEN step. This is the executed assertion the audit calls
+        # load-bearing (plan_updates.md:6258-6260): it reads
+        # scripts/required-php-extensions.php — the S314 derived contract, a single list,
+        # never re-derived here — and fails the job, naming the missing extension, when any
+        # required ext is absent, incl. the security-critical sodium (HubJwtValidator,
+        # SodiumTokenCipher) and hash (SignedUrl, JwtHandler).
+        run: php scripts/assert-php-extensions.php
 
       - name: Assert PHPCS is actually installed
         run: |
@@ -98,7 +109,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical list (see the phpcs job's comment and
@@ -109,6 +120,13 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). Consumes the
+        # S314 contract scripts/required-php-extensions.php; fails naming any absent ext
+        # (incl. sodium/hash). plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Assert no phpstan baseline file
         run: |
@@ -205,7 +223,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S146. This job used to declare `extensions: json` only. Psalm resolves
@@ -234,6 +252,15 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion (setup-php fail_fast defaults false; naming != gate).
+        # Checks the S314 contract scripts/required-php-extensions.php. The swoole/ffi/mysql
+        # this job also lists in `extensions:` are TOOL-resolution conveniences, not
+        # server-source needs, so they are deliberately NOT gated here (mysql is a legacy
+        # no-op spelling of mysqli); only the contract — the set the source actually calls —
+        # is asserted. Fails naming any absent ext incl. sodium/hash. plan_updates.md:6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Assert Psalm is actually installed
         run: |
@@ -294,9 +321,16 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
+          # S304 — deliberately NO `extensions:` list and NO assert-php-extensions step
+          # here: this job runs `composer validate` only. It never includes
+          # vendor/autoload.php and never loads phlix-server source, so none of the
+          # extensions in scripts/required-php-extensions.php (the S314 contract that
+          # every server-source job DOES name) are exercised. Composer's own runtime
+          # needs are satisfied by setup-php's default build — asserting the app contract
+          # here would gate on extensions this job provably does not need.
 
       - name: Validate Composer
         run: composer validate --strict --no-check-publish
@@ -310,9 +344,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
+          # S304 — deliberately NO `extensions:` list and NO assert-php-extensions step
+          # here: this job runs `composer audit` against composer.lock plus
+          # scripts/security-audit-check.php, which parses that lock as JSON with PHP's
+          # always-present json_* — it does not include vendor/autoload.php and does not
+          # load phlix-server source. The app extension contract
+          # (scripts/required-php-extensions.php) therefore does not apply to this job.
 
       # NOTE: there is deliberately no `composer install` in this job any more.
       # The audit runs against composer.lock (`--locked`) and needs no vendor/ at

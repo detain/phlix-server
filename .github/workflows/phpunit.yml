@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical contract from
@@ -80,6 +80,16 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — naming is NOT a gate: setup-php's fail_fast defaults to false, so an
+        # extension it cannot install leaves a red cross in the log and a GREEN step
+        # (plan_updates.md:6258). This executed assertion consumes the S314 contract
+        # (scripts/required-php-extensions.php — one list, never re-derived) and fails
+        # the job, naming any absent extension — including the security-critical sodium
+        # (HubJwtValidator, SodiumTokenCipher) and hash (SignedUrl, JwtHandler) that
+        # this job's suite reaches through vendor/autoload.php. plan_updates.md:6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Install the browser E2E prerequisites (S305)
         # Puts hls.js on disk and REFUSES to continue without a browser, node >= 22 and
@@ -306,7 +316,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical contract from
@@ -332,6 +342,14 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). Consumes the
+        # S314 contract scripts/required-php-extensions.php; fails naming any absent ext
+        # (incl. sodium/hash). This job boots server source via tests/Unit/Server/.
+        # plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Run Server-specific tests
         run: ./vendor/bin/phpunit tests/Unit/Server/
@@ -431,7 +449,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # Same list as the `test` job. pcov is kept even though every probe run
@@ -450,6 +468,13 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). The probe
+        # audit requires vendor/autoload.php, so this job runs server source. Consumes the
+        # S314 contract; fails naming any absent ext (incl. sodium/hash). plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Apply database migrations
         env:

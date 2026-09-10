@@ -9,6 +9,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **CI now proves the PHP extension contract instead of naming it (`S304`).** Every
+  server-source job ran `Setup PHP` with an `extensions:` list, but naming is not a
+  gate: `shivammathur/setup-php` defaults `fail_fast` to false, so an extension it
+  cannot install is a red cross in the log and a GREEN step — and two of the listed
+  names (`sodium`, guarding the hub enrollment JWT and the Trakt token-at-rest
+  cipher; `hash`, guarding signed media URLs and JWTs) had no executed check
+  anywhere. Each job that loads server source now runs a new
+  `scripts/assert-php-extensions.php` step that consumes the S314 derived contract
+  (one list, never re-derived), fails the job naming any absent extension, and
+  refuses to trust itself unless its own absence-detector demonstrably detects a
+  guaranteed-absent sentinel as absent — the no-op-gate class this repo has been
+  burned by repeatedly. The two composer-only jobs are annotated with why the
+  contract does not apply to them. All `setup-php` actions are now pinned to a full
+  commit SHA (v2.37.2) instead of the floating `@v2` tag, so the toolchain that
+  decides "which extensions exist" can no longer change underneath a green run.
+
 - **The served SPA bundle is now gated against its source (`S253`, server half).** The Web UI
   workflow ran `npm ci && npm run build` but never compared the result with the committed
   `public/assets/app/` tree, and its `paths:` filter ignored that tree entirely — so a commit that

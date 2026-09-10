@@ -250,6 +250,24 @@ class LibraryMetadataMatcher
     private array $logoPathCache = [];
 
     /**
+     * Scan-scoped map of S72 person artwork key (`people-{tmdbPersonId}`, or
+     * `people-{sha1(profilePath)}` when the id is absent) => the signed local
+     * w185 profile URL produced the FIRST time that person was cached this run
+     * ({@see cachePeopleLocally()}). Cast members recur across movies/series —
+     * unlike {@see $artworkPathCache} (keyed by TMDB path) this is keyed by the
+     * PERSON itself, which is the point of the shared cache: the same person
+     * resolves to the same flat directory across every item. Reset per
+     * {@see matchLibrary()} run so URLs never leak across libraries — the
+     * single-item {@see applyMatch()} path reuses the map exactly like the
+     * sibling path caches, and a carried-over (expired-signature) URL is
+     * harmless: MediaItemShaper re-mints artwork signatures on every response
+     * (the 2026-07-19 incident class).
+     *
+     * @var array<string, string>
+     */
+    private array $peopleOverrideCache = [];
+
+    /**
      * The image types (M5) enabled for the CURRENT match run/item, used to gate
      * the flat `poster_url` / `backdrop_url` metadata keys in
      * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
@@ -510,6 +528,7 @@ class LibraryMetadataMatcher
         // download's local URLs and reuse them instead of re-fetching.
         $this->artworkPathCache = [];
         $this->logoPathCache = [];
+        $this->peopleOverrideCache = [];
 
         // Progress denominator: the count of top-level items (movies + series)
         // the flat pass visits. Reported via $onProgress so the worker can stamp
@@ -571,6 +590,7 @@ class LibraryMetadataMatcher
         // later run for a different library and its memory is reclaimed.
         $this->artworkPathCache = [];
         $this->logoPathCache = [];
+        $this->peopleOverrideCache = [];
 
         return ['matched' => $matched, 'processed' => $processed];
     }
@@ -2392,6 +2412,14 @@ class LibraryMetadataMatcher
         // rewrite `logo_url` to the local served URL (independent of the poster).
         $merged = $this->cacheLogoLocally($id, $merged);
 
+        // S72: cache cast/crew profile photos ONCE PER PERSON, not once per item.
+        // People entries carry the TMDB person `id` plumbed through from the
+        // provider; the cache key is flat `people-{id}` (fallback: content hash of
+        // the TMDB profile path) so the same actor across N items shares one on-disk
+        // directory and one network fetch. Best-effort; a null/absent download just
+        // keeps the remote profile_url.
+        $merged = $this->cachePeopleLocally($id, $merged);
+
         $this->items->update($id, [
             'metadata_json' => $merged,
             'metadata_refreshed_at' => date('Y-m-d H:i:s'),
@@ -2609,6 +2637,184 @@ class LibraryMetadataMatcher
         }
 
         return $matches[1];
+    }
+
+    /**
+     * Flat cache-key prefix for person (cast/crew) profile photos (S72).
+     *
+     * The shared artwork store accepts any flat `[a-zA-Z0-9-]+` key (the
+     * {@see \Phlix\Media\Storage\ImageResizer::targetDir()} gate S71 extracted),
+     * so a person directory sits SIDE BY SIDE with the per-item UUID directories
+     * under one root — `people-{tmdbPersonId}` — with no nested path (the `/` in
+     * `people/{id}` would be refused) and no change to the storage layer.
+     */
+    private const PEOPLE_KEY_PREFIX = 'people-';
+
+    /**
+     * Served variant of a localized profile photo — the SAME TMDB size step
+     * (`w185`) {@see TmdbProvider::profileUrl()} advertised remotely, so the
+     * local swap is pixel-equivalent, and a member of
+     * {@see ArtworkStorage::WIDTHS}, so the existing serving-route size gate
+     * accepts it without any widening.
+     */
+    private const PERSON_PROFILE_SIZE = 'w185';
+
+    /**
+     * Sane digit budget for a TMDB person id (real ids are ~7 digits). A
+     * longer "id" is provider noise: fall back to the content hash so a
+     * megabyte-long directory name can never reach mkdir. The gate is cost-
+     * free hygiene in front of the charset-validated storage key.
+     */
+    private const MAX_PERSON_ID_DIGITS = 12;
+
+    /**
+     * Build the flat shared-cache key for one person (S72).
+     *
+     * Primary key is the TMDB person id (`people-62`). When a people entry
+     * carries no usable id (non-TMDB source, older stored metadata), the key
+     * falls back to a content hash of the TMDB profile path — deterministic for
+     * the same photo, so the single-fetch-per-subject contract holds either way.
+     * Both forms are `[a-zA-Z0-9-]`-only and pass the storage key gate.
+     *
+     * @param mixed  $personId   Raw `id` field from the people entry (int/string from TMDB).
+     * @param string $profilePath TMDB profile path fragment, e.g. `/abc.jpg`.
+     */
+    private static function personArtworkKey(mixed $personId, string $profilePath): string
+    {
+        $id = MetadataValue::asNullableString($personId);
+        if (
+            $id !== null
+            && strlen($id) <= self::MAX_PERSON_ID_DIGITS
+            && preg_match('/^\d+$/', $id) === 1
+        ) {
+            return self::PEOPLE_KEY_PREFIX . $id;
+        }
+
+        return self::PEOPLE_KEY_PREFIX . sha1($profilePath);
+    }
+
+    /**
+     * Download each TMDB cast/crew profile photo ONCE PER PERSON and rewrite the
+     * people entries to local URLs (S72 — the step's headline AC).
+     *
+     * Posters/logos dedup by TMDB path within a run, but every cache directory
+     * was still keyed by a media-item UUID: an actor in 30 titles was stored 30
+     * times. People are shared assets, so this caches them under the flat
+     * {@see self::PEOPLE_KEY_PREFIX} person key via the SAME
+     * {@see ArtworkStorage::downloadAndStore()} pipeline S71 generalized (its
+     * all-variants-present early return is what makes the SECOND item for the
+     * same person do zero network work, even across runs; the in-run
+     * {@see $peopleOverrideCache} additionally skips the disk re-scan).
+     *
+     * The download keeps the poster path's shape EXACTLY: a TMDB *path fragment*
+     * is handed to ArtworkStorage, which builds the URL itself from its fixed
+     * CDN base. No arbitrary-URL seam is opened here — that surface is owed to
+     * S73's SSRF allowlist, not to this step.
+     *
+     * Rewrites per successful person: `profile_url` => signed local
+     * `/api/v1/artwork/people-{key}?size=w185…`, `profile_path` => raw TMDB path
+     * (mirrors the poster's `poster_path` repair handle). Both extra keys are
+     * kept out of the VALIDATED top-level `cast`/`crew` blocks:
+     * {@see \Phlix\Media\Library\MediaItemShaper} whitelists those to
+     * `{name, role|job, profile_url}` and re-mints the stored signature on every
+     * response (same expired-signature class as poster/logo). The raw
+     * `metadata` passthrough inside the detail blob still carries every stored
+     * field (pre-existing estate behavior shared with `poster_path`/`external_ids`
+     * — narrowing it is its own cross-surface change, not this step's). The
+     * served `w185` variant is inside {@see ArtworkStorage::WIDTHS}, so no
+     * size-gate widening and no serving change is required (the width-ladder
+     * rule travels with the first backdrop write, deferred with it to the
+     * backdrop step).
+     *
+     * Best-effort like every artwork choke point: downloads off / storage
+     * unwired / non-TMDB URLs / failures all leave the remote URL untouched;
+     * a failure logs per attempt and never aborts the persist (same no-negative-
+     * caching shape as the poster path — a later item may retry the person).
+     *
+     * @param string               $id     Media item UUID (context for the log line only —
+     *                                     the CACHE key never uses it; that is the point).
+     * @param array<string, mixed> $merged Current merged metadata (holds `cast`/`crew`).
+     * @return array<string, mixed> Metadata with localized `profile_url`s (or unchanged).
+     */
+    private function cachePeopleLocally(string $id, array $merged): array
+    {
+        // Skip if ArtworkStorage is not wired (same no-op contract as the poster/logo gates).
+        if ($this->artworkStorage === null) {
+            return $merged;
+        }
+
+        // Same operator gate as cacheArtworkLocally()/cacheLogoLocally(): downloads
+        // off means nothing new is fetched and the remote profile_url stays.
+        if (!$this->artworkDownloadPolicy->downloadsEnabled()) {
+            return $merged;
+        }
+
+        foreach (['cast', 'crew'] as $group) {
+            $people = $merged[$group] ?? null;
+            if (!is_array($people)) {
+                continue;
+            }
+
+            foreach ($people as $index => $person) {
+                if (!is_array($person)) {
+                    continue;
+                }
+                $profileUrl = $person['profile_url'] ?? null;
+                if (!is_string($profileUrl) || $profileUrl === '') {
+                    continue;
+                }
+
+                // Only TMDB-anchored profile URLs are localized (exact same
+                // extractor as posters — both are `/t/p/{size}/{file}` shapes);
+                // a non-TMDB or already-local URL passes through untouched.
+                $profilePath = $this->extractTmdbPosterPath($profileUrl);
+                if ($profilePath === null) {
+                    continue;
+                }
+
+                $personKey = self::personArtworkKey($person['id'] ?? null, $profilePath);
+
+                $localUrl = $this->peopleOverrideCache[$personKey] ?? null;
+                if ($localUrl === null) {
+                    try {
+                        // THE shared-cache call: flat person key, not the item UUID.
+                        // Idempotent on disk — a second item for the same person
+                        // (same or later run) early-returns the stored variants
+                        // without touching the network.
+                        $variants = $this->artworkStorage->downloadAndStore($personKey, $profilePath);
+                        if ($variants === []) {
+                            continue;
+                        }
+                        $relative = $this->artworkStorage->relativePath($personKey, self::PERSON_PROFILE_SIZE);
+                        if ($relative === null) {
+                            continue;
+                        }
+                        $signed = $this->artworkStorage->url($personKey, self::PERSON_PROFILE_SIZE, $relative);
+                        if ($signed === null) {
+                            continue;
+                        }
+                        $localUrl = $signed;
+                        $this->peopleOverrideCache[$personKey] = $localUrl;
+                    } catch (\Throwable $e) {
+                        // Artwork caching is best-effort - log and continue (poster-path parity).
+                        $this->logger->warning('Failed to cache person artwork locally', [
+                            'item_id'    => $id,
+                            'person_key' => $personKey,
+                            'error'      => $e->getMessage(),
+                        ]);
+                        continue;
+                    }
+                }
+
+                $person['profile_url'] = $localUrl;
+                $person['profile_path'] = $profilePath;
+                $people[$index] = $person;
+            }
+
+            $merged[$group] = $people;
+        }
+
+        return $merged;
     }
 
     /**

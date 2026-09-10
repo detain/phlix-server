@@ -421,12 +421,12 @@ class TmdbProviderTest extends TestCase
             ],
             'credits' => [
                 'cast' => [
-                    ['name' => 'Keanu Reeves', 'character' => 'Neo', 'order' => 0, 'profile_path' => '/keanu.jpg'],
+                    ['name' => 'Keanu Reeves', 'character' => 'Neo', 'order' => 0, 'profile_path' => '/keanu.jpg', 'id' => 287],
                     ['name' => 'Carrie-Anne Moss', 'character' => 'Trinity', 'order' => 1, 'profile_path' => null],
                     ['name' => '', 'character' => 'Extra', 'order' => 2], // skipped (no name)
                 ],
                 'crew' => [
-                    ['name' => 'Lana Wachowski', 'job' => 'Director', 'profile_path' => '/lana.jpg'],
+                    ['name' => 'Lana Wachowski', 'job' => 'Director', 'profile_path' => '/lana.jpg', 'id' => 1032820],
                     ['name' => 'Lana Wachowski', 'job' => 'Director'], // dup name+job → de-duped
                     ['name' => 'Lilly Wachowski', 'job' => 'Writer', 'profile_path' => null],
                     ['name' => 'Joel Silver', 'job' => 'Producer'],
@@ -451,11 +451,14 @@ class TmdbProviderTest extends TestCase
             'name' => 'Keanu Reeves',
             'role' => 'Neo',
             'profile_url' => 'https://image.tmdb.org/t/p/w185/keanu.jpg',
+            // S72: the TMDB person id rides along (int coerced to string), the
+            // stable key for the shared people-photo cache.
+            'id' => '287',
         ], $cast[0]);
         $this->assertNull($cast[1]['profile_url']);
 
         // Crew: key jobs only, deduped by name+job.
-        /** @var list<array{name: string, job: string, profile_url: string|null}> $crew */
+        /** @var list<array{name: string, job: string, profile_url: string|null, id: string|null}> $crew */
         $crew = $details['crew'];
         $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $crew);
         $this->assertSame(
@@ -463,6 +466,8 @@ class TmdbProviderTest extends TestCase
             $crewKeys,
         );
         $this->assertSame('https://image.tmdb.org/t/p/w185/lana.jpg', $crew[0]['profile_url']);
+        // S72: crew rides the person id too (key-crew path through filterKeyCrew).
+        $this->assertSame('1032820', $crew[0]['id']);
         $this->assertNull($crew[1]['profile_url']);
         // Non-key job (Director of Photography) excluded — assert it is absent.
         $this->assertNotContains('Bill Pope/Director of Photography', $crewKeys);
@@ -606,6 +611,7 @@ class TmdbProviderTest extends TestCase
                         'profile_path' => '/kiefer.jpg',
                         'roles' => [['character' => 'Jack Bauer']],
                         'order' => 0,
+                        'id' => 119068,
                     ],
                     ['name' => '', 'roles' => [['character' => 'X']]], // skipped
                 ],
@@ -629,10 +635,12 @@ class TmdbProviderTest extends TestCase
             'name' => 'Kiefer Sutherland',
             'role' => 'Jack Bauer',
             'profile_url' => 'https://image.tmdb.org/t/p/w185/kiefer.jpg',
+            // S72: aggregate-credits cast rides the person id too.
+            'id' => '119068',
         ], $cast[0]);
 
         // Crew: created_by mapped to Creator + key-job crew from aggregate_credits.
-        /** @var list<array{name: string, job: string, profile_url: string|null}> $crew */
+        /** @var list<array{name: string, job: string, profile_url: string|null, id: string|null}> $crew */
         $crew = $details['crew'];
         $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $crew);
         $this->assertSame(

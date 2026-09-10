@@ -235,8 +235,8 @@ class SeriesMetadataResolver
      *         air_date: string|null,
      *         runtime: int|null,
      *         vote_average: float|null,
-     *         cast: list<array{name: string, role: string, profile_url: string|null}>,
-     *         crew: list<array{name: string, job: string, profile_url: string|null}>
+     *         cast: list<array{name: string, role: string, profile_url: string|null, id: string|null}>,
+     *         crew: list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      *     }>
      * } Empty `episodes` when the season is unknown.
      */
@@ -616,12 +616,14 @@ class SeriesMetadataResolver
     }
 
     /**
-     * Narrow a raw episode cast value to the canonical shape the media-item shaper
-     * renders — `{name, role, profile_url}`. Entries without a name are dropped;
-     * profile URLs are already full TMDB URLs from {@see \Phlix\Media\Metadata\TmdbProvider}.
+     * Narrow a raw episode cast value to the canonical shape the media-item
+     * shaper renders — `{name, role, profile_url}` — plus the metadata-internal
+     * S72 `id` (TMDB person id; the shaper whitelists it away on the response).
+     * Entries without a name are dropped; profile URLs are already full TMDB URLs
+     * from {@see \Phlix\Media\Metadata\TmdbProvider}.
      *
      * @param mixed $value Raw cast list from `getTvSeason()`.
-     * @return list<array{name: string, role: string, profile_url: string|null}>
+     * @return list<array{name: string, role: string, profile_url: string|null, id: string|null}>
      */
     private function castList(mixed $value): array
     {
@@ -631,6 +633,7 @@ class SeriesMetadataResolver
                 'name' => MetadataValue::asString($entry['name'] ?? null),
                 'role' => MetadataValue::asString($entry['role'] ?? null),
                 'profile_url' => MetadataValue::asNullableString($entry['profile_url'] ?? null),
+                'id' => MetadataValue::asNullableString($entry['id'] ?? null),
             ];
         }
         return $out;
@@ -638,10 +641,12 @@ class SeriesMetadataResolver
 
     /**
      * Narrow a raw episode crew value to the canonical shape the media-item shaper
-     * renders — `{name, job, profile_url}`. Entries without a name are dropped.
+     * renders — `{name, job, profile_url}` — plus the metadata-internal S72 `id`
+     * (TMDB person id; the shaper whitelists it away on the response).
+     * Entries without a name are dropped.
      *
      * @param mixed $value Raw crew list from `getTvSeason()`.
-     * @return list<array{name: string, job: string, profile_url: string|null}>
+     * @return list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      */
     private function crewList(mixed $value): array
     {
@@ -651,6 +656,7 @@ class SeriesMetadataResolver
                 'name' => MetadataValue::asString($entry['name'] ?? null),
                 'job' => MetadataValue::asString($entry['job'] ?? null),
                 'profile_url' => MetadataValue::asNullableString($entry['profile_url'] ?? null),
+                'id' => MetadataValue::asNullableString($entry['id'] ?? null),
             ];
         }
         return $out;

@@ -29,7 +29,10 @@ namespace Phlix\Media\Storage;
  * - Size variants are re-encoded as JPEG at 85% quality (stripping EXIF);
  *   {@see storeBytes()} stores caller-supplied bytes verbatim for formats that
  *   must not be re-encoded (e.g. transparency-safe PNG logos).
- * - Target directories are jailed under the base directory by the key charset.
+ * - A target key must match the flat `[a-zA-Z0-9-]+` charset EXACTLY (empty,
+ *   nested, dotted, and traversal keys are refused before any filesystem
+ *   call), which keeps every resolved directory one level under the base
+ *   directory — this is a key-syntax gate, not a realpath() jail.
  * - Every write goes through a temp-then-rename in the SAME directory, so a
  *   concurrent reader never observes a truncated file.
  *

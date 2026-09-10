@@ -176,7 +176,11 @@ class ArtworkStorage
             throw new \InvalidArgumentException('Logo path cannot be empty');
         }
 
-        // Idempotent — skip the network fetch when already cached.
+        // Idempotent — skip the network fetch when already cached. Note: like
+        // every read path on this class, logoFilePath() gates on
+        // itemDir()/variantPath(), so the whole-directory is_file() check below
+        // matches a real stored logo only for the canonical (charset-valid)
+        // directory a write could actually have produced.
         $existing = $this->logoFilePath($itemId);
         if ($existing !== null) {
             return $existing;
@@ -199,8 +203,10 @@ class ArtworkStorage
                 return null;
             }
 
-            $this->ensureItemDirExists($itemId);
-
+            // No directory is created for a rejected non-PNG source — the
+            // pre-extraction pipeline reached directory creation only after
+            // the PNG gate. storeLogoPng() → ImageResizer::storeBytes() creates
+            // the directory itself via the same call.
             return $this->storeLogoPng($itemId, $tmpPath);
         } finally {
             if (is_file($tmpPath)) {
@@ -649,29 +655,25 @@ class ArtworkStorage
     /**
      * Get the storage directory for a specific item.
      *
-     * Thin translation delegate onto the generic {@see ImageResizer::targetDir()}:
-     * the item key is charset-filtered there (the same alnum+hyphen filter this
-     * method has always applied), and only the caller-facing wording differs.
+     * Validates the id with EXACTLY the pre-extraction ruleset — every character
+     * outside `[a-zA-Z0-9-]` (slash, backslash, dot, whitespace, control byte,
+     * NUL, anything) rejects the WHOLE id with
+     * {@see \InvalidArgumentException} BEFORE any path is resolved, so no
+     * sanitized-but-different id can ever reach a read or delete path. The
+     * generic write-side service ({@see ImageResizer::targetDir()}) strips such
+     * characters instead of rejecting; this method is the byte-for-byte
+     * pre-S71 gate every read/delete/write on this class has always gone
+     * through, and stays so by design.
      */
     private function itemDir(string $itemId): string
     {
-        try {
-            return $this->resizer->targetDir($itemId);
-        } catch (\InvalidArgumentException $e) {
-            throw new \InvalidArgumentException('Invalid item ID for artwork storage', 0, $e);
+        // Sanitize item ID to prevent path traversal
+        $sanitizedId = preg_replace('/[^a-zA-Z0-9\-]/', '', $itemId);
+        if ($sanitizedId === '' || $sanitizedId !== $itemId) {
+            throw new \InvalidArgumentException('Invalid item ID for artwork storage');
         }
-    }
 
-    /**
-     * Ensure the storage directory for an item exists.
-     */
-    private function ensureItemDirExists(string $itemId): void
-    {
-        try {
-            $this->resizer->ensureTargetDirExists($itemId);
-        } catch (\InvalidArgumentException $e) {
-            throw new \InvalidArgumentException('Invalid item ID for artwork storage', 0, $e);
-        }
+        return $this->resizer->targetDir($sanitizedId);
     }
 
     /**

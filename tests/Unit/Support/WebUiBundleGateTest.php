@@ -59,6 +59,13 @@ final class WebUiBundleGateTest extends TestCase
 
     private const WORKFLOW = __DIR__ . '/../../../.github/workflows/web-ui.yml';
 
+    /** The gate's precondition lives here, not in the workflow — pin it at its source. */
+    private const VITE_CONFIG = __DIR__ . '/../../../web-ui/vite.config.ts';
+
+    private const VITE_OUT_DIR_LITERAL = "outDir: resolve(__dirname, '../public/assets/app')";
+
+    private const VITE_EMPTY_OUTDIR_LITERAL = 'emptyOutDir: true';
+
     private const BUILD_STEP = 'Build SPA (vue-tsc --noEmit && vite build)';
 
     private const CORPUS_STEP = 'Report bundle corpus size';
@@ -361,6 +368,16 @@ final class WebUiBundleGateTest extends TestCase
             && !str_contains($run, 'exit 1');
     }
 
+    /**
+     * The precondition predicate: the build must emit INTO the tracked tree and
+     * must empty it first, or the compare step grades a tree it never wrote.
+     */
+    private function buildWritesIntoTrackedTree(string $config): bool
+    {
+        return str_contains($config, self::VITE_OUT_DIR_LITERAL)
+            && str_contains($config, self::VITE_EMPTY_OUTDIR_LITERAL);
+    }
+
     // ---------------------------------------------------------------- mutants
     // Structured edits of the PARSED array, each one exactly one member of the
     // silent-regression class the pins exist for.
@@ -593,6 +610,39 @@ final class WebUiBundleGateTest extends TestCase
             $this->diagnosticNeverVerdict($this->parsedWorkflow()),
             'the name-status step exists so a red run prints the diverged files; adding --exit-code would '
             . 'make it a second verdict and split the single gate across two competing steps',
+        );
+    }
+
+    /**
+     * The precondition the whole gate rests on, pinned at its source: `vite build`
+     * writes INTO the tracked tree. If `outDir` ever pointed at a scratch directory
+     * again, a clean `git diff` would prove nothing about a bundle the build never
+     * wrote there — the vacuity door S253 exists to close.
+     */
+    public function testTheBuildWritesIntoTheTrackedTree(): void
+    {
+        $config = (string) file_get_contents(self::VITE_CONFIG);
+        self::assertNotSame('', $config, 'the vite config must be readable — an empty read vacates both pins');
+        self::assertTrue(
+            $this->buildWritesIntoTrackedTree($config),
+            'web-ui/vite.config.ts must keep writing the bundle directly into public/assets/app/: the '
+            . 'gate compares that tree against the build, so the build has to land there',
+        );
+
+        $mutant = str_replace(self::VITE_OUT_DIR_LITERAL, "resolve(__dirname, 'dist')", $config);
+        self::assertNotSame($config, $mutant, 'the outDir mutant must actually bite the config text');
+        self::assertFalse(
+            $this->buildWritesIntoTrackedTree($mutant),
+            'pointing outDir at a scratch tree must violate the precondition pin — that is the exact shape '
+            . 'of the old job, which built, compared nothing, and passed green',
+        );
+
+        $mutant = str_replace(self::VITE_EMPTY_OUTDIR_LITERAL, 'emptyOutDir: false', $config);
+        self::assertNotSame($config, $mutant, 'the emptyOutDir mutant must actually bite the config text');
+        self::assertFalse(
+            $this->buildWritesIntoTrackedTree($mutant),
+            'leaving stale hashed chunks in the tree must violate the pin too — the set check would then '
+            . 'report committed-but-not-emitted for files vite simply never deleted',
         );
     }
 

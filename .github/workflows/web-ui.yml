@@ -4,9 +4,10 @@ name: Web UI
 # `build.outDir`) writes DIRECTLY into the committed tree `public/assets/app/`,
 # so after `npm ci && npm run build` the working tree must still be clean —
 # a dirty tree means the committed bundle was not regenerated from this
-# `web-ui/src` + lockfile. Reproducibility was measured on node v24.15.0
-# (repin #649): a second `vite build` of the same tree left
-# `git status public/assets/app` empty, hence a byte-exact `git diff` gate.
+# `web-ui/src` + lockfile. Byte-reproducibility was measured in #649 on
+# v24.15.0 and re-measured here on v24.20.0 (the pinned version): two
+# consecutive `vite build`s of the same tree are sha256-identical, hence a
+# byte-exact `git diff` gate is sound.
 on:
   push:
     branches: [ master, main, develop ]
@@ -38,7 +39,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '24'  # S253: pinned to the version the committed bundle is byte-reproducible under (#649, v24.15.0)
+          # S253: EXACT pin, not floating '24'. A byte-exact diff gate is only
+          # honest if the runner is the version the committed bundle was built
+          # with: #649 measured reproducibility on v24.15.0, hosted runners now
+          # resolve '24' to v24.20.0 (observed in run 33960185398), and the
+          # bundle committed here is a v24.20.0 build (two consecutive builds
+          # proved byte-identical). A floating pin would let the next node 24.x
+          # minor turn every PR red for nobody's fault.
+          node-version: '24.20.0'
           cache: 'npm'
           cache-dependency-path: web-ui/package-lock.json
 

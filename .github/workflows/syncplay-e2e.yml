@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical contract from

@@ -267,9 +267,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
          * zero-corpus tripwire, with negative fuzz proving the pins bite); the
          * rest of the step is YAML plus a rebuilt bundle, so no other
          * denominator moves — measured 1843 on this tree, not predicted. The
-         * guard names no Request.
-         */
-    private const EXPECTED_PHP_FILES = 1843;
+          * guard names no Request.
+          * Re-pinned 1843→1845 by S304: the executed PHP-extension contract gate
+          * adds exactly two first-party files (scripts/assert-php-extensions.php,
+          * the CI assertion itself, and tests/Unit/Support/PhpExtensionAssertGateTest.php,
+          * its executed guard test) — measured 1845 by CI on this tree (Server
+          * Component Tests red with "1845 is identical to 1843"), not predicted.
+          * Neither file names a Request property.
+          */
+    private const EXPECTED_PHP_FILES = 1845;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

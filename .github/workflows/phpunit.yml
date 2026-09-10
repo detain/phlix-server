@@ -197,10 +197,12 @@ jobs:
 
       - name: Run E2E suite (serial tail)
         # Serial on purpose (hardware-encoder contention, see above). Carries the
-        # Serialized suite too: the two MulticastJoin classes are excluded from the
-        # parallel Unit lane in phpunit-parallel.xml because their negative-arm
-        # sockets receive under 8-way multicast contention on the runner (CI run 1
-        # evidence), and pass in any serial lane — this one.
+        # Serialized suite too: the multicast-receive classes (Mdns/Ssdp MulticastJoin
+        # + SsdpMSearchListener) are excluded from the parallel Unit lane in
+        # phpunit-parallel.xml because their negative-arm sockets receive under 8-way
+        # multicast contention on the runner (CI runs 1 and 2 evidence), and pass in any
+        # serial lane — this one. Serialized membership lives in phpunit-parallel.xml, so
+        # adding a class there needs no edit to this command.
         # Loads phpunit-parallel.xml because it is the report-target-free copy of the config:
         # the CLI below owns coverage-e2e.covobj and junit-e2e.xml explicitly, exactly as
         # S305 owned junit.xml before this step existed.

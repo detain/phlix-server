@@ -63,21 +63,25 @@
   -->
   <testsuites>
     <!--
-      S457 - the two MulticastJoin classes are EXCLUDED from the parallel Unit
+      S457 - the multicast-receive classes are EXCLUDED from the parallel Unit
       lane here (and only here: phpunit.xml is untouched, so a developer's serial
-      run still gets them inside Unit). PR 758 CI run 1 proved why: their
-      negative-arm sockets (an intentionally malformed IP_ADD_MEMBERSHIP that
-      must NOT receive) pass serially on the GitHub runner but receive the
-      datagram when eight paraunit workers share the host's multicast stack.
-      They run instead in the Serialized suite below, executed by the serial
-      tail step. If the exclusion or the tail suite ever drifts apart, the two
-      lanes double-schedule these classes and merge-junit.php fails loudly on
-      the duplicate suite name.
+      run still gets them inside Unit). PR 758 CI runs 1 and 2 proved why: their
+      negative-arm sockets (an intentionally malformed IP_ADD_MEMBERSHIP, or a
+      group-join-less listener, that must NOT receive) pass serially on the GitHub
+      runner but receive the datagram when eight paraunit workers share the host's
+      multicast stack. Run 1: MdnsMulticastJoinTest + SsdpMulticastJoinTest. Run 2
+      added SsdpMSearchListenerTest (Arm A of its "only spelling that receives"
+      control asserts a no-join listener stays silent; under 8-way contention it
+      hears a sibling worker's loopback multicast). They run instead in the
+      Serialized suite below, executed by the serial tail step. If the exclusion or
+      the tail suite ever drifts apart, the two lanes double-schedule these classes
+      and merge-junit.php fails loudly on the duplicate suite name.
     -->
     <testsuite name="Unit">
       <directory suffix="Test.php">tests/Unit</directory>
       <exclude>tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php</exclude>
       <exclude>tests/Unit/Discovery/Ssdp/SsdpMulticastJoinTest.php</exclude>
+      <exclude>tests/Unit/Dlna/SsdpMSearchListenerTest.php</exclude>
     </testsuite>
     <testsuite name="Integration">
       <directory suffix="Test.php">tests/Integration</directory>
@@ -88,6 +92,7 @@
     <testsuite name="Serialized">
       <file>tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php</file>
       <file>tests/Unit/Discovery/Ssdp/SsdpMulticastJoinTest.php</file>
+      <file>tests/Unit/Dlna/SsdpMSearchListenerTest.php</file>
     </testsuite>
   </testsuites>
   <groups>

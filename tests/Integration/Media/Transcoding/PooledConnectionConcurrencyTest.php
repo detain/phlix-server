@@ -79,6 +79,14 @@ final class PooledConnectionConcurrencyTest extends TestCase
      */
     private const MAX_ACQUIRE_TIMEOUT = 3600.0;
 
+    /**
+     * S137 merge-trail token. It is embedded in the failure message of the
+     * hoisted fixed-shape assertion in {@see runChurn()} — the assertion that
+     * replaced the load-dependent per-iteration `assertIsArray()` — so the
+     * determinism fix is provably code-resident once it lands in `master`.
+     */
+    private const DETERMINISM_TOKEN = 'CS137POOLDETXX9P1';
+
     private string $host = '127.0.0.1';
     private int $port = 3306;
     private string $user = 'root';
@@ -379,6 +387,17 @@ final class PooledConnectionConcurrencyTest extends TestCase
     /**
      * Drive concurrent readers + writers against one real row and assert
      * coherence (see {@see testConcurrentReadWriteChurnStaysCoherentWithoutCorruptionOrErrors}).
+     *
+     * S137 — ASSERTION ARITHMETIC IS A CONTRACT, not an outcome. This method gates
+     * a fixed 10 assertions per call, identical whether the run is clean or every
+     * coroutine errored: per-iteration checks run INSIDE the coroutines as pure
+     * evidence collection ($missingRows/$badValues/$errors) and are gated once
+     * after the join over fixed-size shapes. An assert inside a coroutine throws,
+     * the catch aborts that coroutine's remaining iterations, and the run's total
+     * count silently rides machine timing — the exact defect (1461 clean vs 791
+     * degraded, measured 2026-09-10) this contract forbids. Do not add an
+     * assertion, or an early exit that skips one, anywhere below the
+     * Swoole\Coroutine\run() join boundary.
      */
     private function runChurn(
         int $poolSize,
@@ -426,6 +445,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $maxWritten = 0;
         $observed = [];           // every distinct error value a reader saw
         $badValues = [];          // reader values that were never written
+        $missingRows = [];        // S137 — reads whose entry was not an array (evidence, never an assert)
         $errors = [];             // any exception message from any coroutine
         $inFlight = 0;
         $peak = 0;
@@ -450,6 +470,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
             &$maxWritten,
             &$observed,
             &$badValues,
+            &$missingRows,
             &$errors,
             &$inFlight,
             &$peak,
@@ -502,6 +523,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
             for ($r = 0; $r < $readerCoros; $r++) {
                 $wg->add();
                 \Swoole\Coroutine::create(function () use (
+                    $r,
                     $pool,
                     $entry,
                     $manager,
@@ -509,6 +531,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                     $readsPer,
                     &$observed,
                     &$badValues,
+                    &$missingRows,
                     &$maxWritten,
                     &$errors,
                     &$inFlight,
@@ -524,7 +547,21 @@ final class PooledConnectionConcurrencyTest extends TestCase
                             $e = $entry->invoke($manager, $jobId);
                             $inFlight--;
                             $maxCreated = max($maxCreated, $pool->poolStats()['created']);
-                            $this->assertIsArray($e);
+                            // S137 — this coroutine may assert NOTHING. A throw inside a
+                            // reader aborts its remaining iterations (catch below), so the
+                            // run's total assertion count used to be decided by WHEN the
+                            // first failure landed (1461 clean vs 791 degraded — measured
+                            // 2026-09-10). Per-iteration evidence is COLLECTED here and
+                            // gated once after the join, over a fixed-size shape.
+                            if (!is_array($e)) {
+                                $missingRows[] = sprintf(
+                                    'reader %d iteration %d: entry() returned %s, expected the job row',
+                                    $r,
+                                    $i,
+                                    gettype($e)
+                                );
+                                continue;
+                            }
                             $raw = $e['row']['duration_seconds'] ?? null;
                             $val = is_numeric($raw) ? (int) $raw : -1;
                             $observed[$val] = true;
@@ -551,13 +588,44 @@ final class PooledConnectionConcurrencyTest extends TestCase
         });
 
         // No exception (2014 "commands out of sync", corruption, or otherwise)
-        // escaped any coroutine. Check the specific fingerprints first, then the
-        // catch-all empty assertion.
-        foreach ($errors as $msg) {
-            $this->assertStringNotContainsStringIgnoringCase('2014', $msg);
-            $this->assertStringNotContainsStringIgnoringCase('out of sync', $msg);
-        }
+        // escaped any coroutine. S137 — the fingerprints used to be checked with
+        // TWO asserts PER error inside `foreach ($errors as $msg)`, so the run's
+        // assertion count moved with how many coroutines errored. The whole array
+        // is now scanned ONCE per fingerprint: same detection, constant arithmetic
+        // whatever the load. Specific fingerprints still checked before the
+        // catch-all, so a 2014 regression names itself.
+        $errors2014 = array_values(array_filter(
+            $errors,
+            static fn (string $msg): bool => stripos($msg, '2014') !== false
+        ));
+        $errorsOutOfSync = array_values(array_filter(
+            $errors,
+            static fn (string $msg): bool => stripos($msg, 'out of sync') !== false
+        ));
+        $this->assertSame(
+            [],
+            $errors2014,
+            'error 2014 surfaced during the churn (the connection-sharing fingerprint): '
+            . implode(' | ', $errors2014)
+        );
+        $this->assertSame(
+            [],
+            $errorsOutOfSync,
+            '"commands out of sync" surfaced during the churn: ' . implode(' | ', $errorsOutOfSync)
+        );
         $this->assertSame([], $errors, 'concurrent churn raised errors: ' . implode(' | ', $errors));
+
+        // S137 — the hoisted replacement for the per-iteration assertIsArray($e):
+        // where the old assert could fire `readerCoros × readsPer` times or none
+        // (its throw aborting that reader's loop), this gates the identical
+        // invariant — every read resolved a job row — exactly once per run.
+        $this->assertSame(
+            [],
+            $missingRows,
+            'every read must resolve the cached job row (a non-array entry means the row vanished): '
+            . implode(' | ', $missingRows)
+            . ' [' . self::DETERMINISM_TOKEN . ']'
+        );
 
         // No corruption: every value a reader saw was one that had been written
         // by that point (seed 0 .. maxWritten).

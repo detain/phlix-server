@@ -7,6 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **The served SPA bundle is now gated against its source (`S253`, server half).** The Web UI
+  workflow ran `npm ci && npm run build` but never compared the result with the committed
+  `public/assets/app/` tree, and its `paths:` filter ignored that tree entirely — so a commit that
+  edited `web-ui/src` or bumped the `@phlix/ui` pin without rebuilding stayed green, and a commit
+  that touched only the bundle ran no job at all. The job now fails when the working tree is dirty
+  under `public/assets/app/` after the build, fails on emitted-but-uncommitted files (which
+  `git diff` alone is blind to), prints the number of tracked files it compared, and runs on
+  bundle-only commits too. Node is pinned to the exact runner minor the committed bundle was built
+  with, because a byte-exact gate is only honest when the runner version is fixed — the hazard is
+  not hypothetical: the pin bump to v0.99.1 landed without a rebuild, and this PR's rebuild is what
+  its own new gate demands.
+
 ### Removed
 
 - **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by

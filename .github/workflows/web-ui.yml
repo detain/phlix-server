@@ -1,15 +1,25 @@
 name: Web UI
 
+# S253: this job is the SPA bundle gate. `vite build` (web-ui/vite.config.ts
+# `build.outDir`) writes DIRECTLY into the committed tree `public/assets/app/`,
+# so after `npm ci && npm run build` the working tree must still be clean —
+# a dirty tree means the committed bundle was not regenerated from this
+# `web-ui/src` + lockfile. Byte-reproducibility was measured in #649 on
+# v24.15.0 and re-measured here on v24.20.0 (the pinned version): two
+# consecutive `vite build`s of the same tree are sha256-identical, hence a
+# byte-exact `git diff` gate is sound.
 on:
   push:
     branches: [ master, main, develop ]
     paths:
-      - 'web-ui/**'
+      - 'web-ui/**'  # covers web-ui/src, web-ui/package.json (the @phlix/ui pin) and web-ui/package-lock.json
+      - 'public/assets/app/**'  # S253: a bundle-only commit must run this gate too (previously fired nothing)
       - '.github/workflows/web-ui.yml'
   pull_request:
     branches: [ master, main, develop ]
     paths:
       - 'web-ui/**'
+      - 'public/assets/app/**'  # S253
       - '.github/workflows/web-ui.yml'
 
 # Least-privilege: a type-check + build needs no write scope and no secrets,
@@ -29,14 +39,80 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          # S253: EXACT pin, not floating '24'. A byte-exact diff gate is only
+          # honest if the runner is the version the committed bundle was built
+          # with: #649 measured reproducibility on v24.15.0, hosted runners now
+          # resolve '24' to v24.20.0 (observed in run 33960185398), and the
+          # bundle committed here is a v24.20.0 build (two consecutive builds
+          # proved byte-identical). A floating pin would let the next node 24.x
+          # minor turn every PR red for nobody's fault.
+          node-version: '24.20.0'
           cache: 'npm'
           cache-dependency-path: web-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci  # NPM_CONFIG_USERCONFIG has no effect on hosted runners; CI-faithful clean install per #649
         working-directory: web-ui
 
       - name: Build SPA (vue-tsc --noEmit && vite build)
         run: npm run build
         working-directory: web-ui
+
+      # S253 AC: the gate states how much it examined — a future paths change
+      # that silently narrows the compared corpus to zero must be visible.
+      - name: Report bundle corpus size
+        run: |
+          TRACKED="$(git ls-files -- public/assets/app | wc -l)"
+          ONDISK="$(find public/assets/app \( -type f -o -type l \) | wc -l)"
+          echo "Bundle gate compared corpus: ${TRACKED} tracked file(s) under public/assets/app/ (${ONDISK} present on disk after build)."
+          if [ "${TRACKED}" -eq 0 ]; then
+            echo "::error::bundle gate examined 0 tracked files under public/assets/app — an empty corpus must never read as success."
+            exit 1
+          fi
+
+      # Review finding 1: `git diff --exit-code` implies --quiet, so a red run
+      # would print NOTHING naming the diverged files. List both divergence
+      # kinds here; without --exit-code `git diff` exits 0 for any tree state
+      # (exit 2 is reserved for git's own usage/internal errors), and the
+      # `|| true` keeps a tool hiccup here from ever becoming the verdict —
+      # the two steps below own it.
+      - name: List bundle drift (diagnostic, never the verdict)
+        run: |
+          git diff --name-status -- public/assets/app/
+          DIVERGENT="$(LC_ALL=C comm -3 <(git ls-files -- public/assets/app | LC_ALL=C sort) <(find public/assets/app \( -type f -o -type l \) | LC_ALL=C sort))" || DIVERGENT=''
+          if [ -n "${DIVERGENT}" ]; then
+            echo "Set divergence (left column = committed-but-not-emitted, right = emitted-but-not-committed):"
+            printf '%s\n' "${DIVERGENT}"
+          fi
+
+      # S253 AC: this is the comparison the old job lacked — it built into the
+      # committed tree and threw the verdict away. `git diff --exit-code` fails
+      # on ANY modified or deleted tracked bundle file (vite `emptyOutDir:true`
+      # deletes stale hashed files, so renames surface as delete+untracked).
+      # The trailing marker on the next line is this step's premerge survival
+      # token (S306 precedent pattern) — LOAD-BEARING for the merge ritual, do
+      # not remove or move it onto its own line (whole-line comments are
+      # stripped by premerge.sh's .yml handling).
+      - name: Fail if the committed bundle is stale for this source
+        run: git diff --exit-code -- public/assets/app/  # S253SRPGATEX7H8
+
+      # Review finding 2: `git ls-files --others --exclude-standard` would go
+      # hollow the day a future ignore rule covers bundle output, so compare
+      # the INDEX against the DISK directly — gitignore cannot hide a file that
+      # is on disk but not tracked, nor one tracked but no longer emitted.
+      # LC_ALL=C on both sort and comm pins byte-order collation (GNU comm
+      # compares with strcmp while sort honors locale collation; under a
+      # non-C locale they can disagree and comm exits non-zero).
+      # `\( -type f -o -type l \)` matches `git ls-files`, which lists tracked
+      # symlinks; a bare -type f would make a symlink diverge spuriously.
+      - name: Fail if the emitted tree and the committed tree are not the same set
+        run: |
+          DIVERGENT="$(LC_ALL=C comm -3 <(git ls-files -- public/assets/app | LC_ALL=C sort) <(find public/assets/app \( -type f -o -type l \) | LC_ALL=C sort))"
+          if [ -n "${DIVERGENT}" ]; then
+            echo "::error::the built tree and the committed bundle are not the same file set (left column = committed-but-not-emitted, right = emitted-but-not-committed):"
+            printf '%s\n' "${DIVERGENT}"
+            exit 1
+          fi
+          echo "Bundle gate set check: emitted tree and committed bundle are the same file set."
+
+

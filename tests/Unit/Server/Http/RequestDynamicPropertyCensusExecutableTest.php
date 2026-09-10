@@ -286,10 +286,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
           * first-party file (tests/Integration/Media/Library/
           * OrphanMusicContainerReapIntegrationTest.php, the real-MySQL proof of the
           * CASCADE-safe reap and its four gates — the step changes src/ in place and
-          * needs no migration) — measured 1849 on this tree, not predicted. Neither
-          * file names a Request property.
-          */
-    private const EXPECTED_PHP_FILES = 1849;
+           * needs no migration) — measured 1849 on this tree, not predicted. Neither
+           * file names a Request property.
+           * Re-pinned 1849→1851 by S72: the person-keyed shared artwork cache adds
+           * exactly two first-party files (tests/Unit/Media/Metadata/
+           * LibraryMetadataMatcherPeopleCacheTest.php and tests/Unit/Media/Storage/
+           * PersonCacheSharedDirectoryTest.php) — measured 1851 on this tree, not
+           * predicted. The step ships no new src/ file (the cache rides the S71
+           * ImageResizer and existing ArtworkStorage unchanged); neither file names
+           * a Request property.
+           */
+    private const EXPECTED_PHP_FILES = 1851;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -701,8 +701,8 @@ class TmdbProvider implements MetadataProviderInterface
      *         air_date: string,
      *         runtime: int,
      *         vote_average: float,
-     *         cast: list<array{name: string, role: string, profile_url: string|null}>,
-     *         crew: list<array{name: string, job: string, profile_url: string|null}>
+     *         cast: list<array{name: string, role: string, profile_url: string|null, id: string|null}>,
+     *         crew: list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      *     }>
      * } Season details (empty `episodes` when the season is unknown).
      */
@@ -763,7 +763,7 @@ class TmdbProvider implements MetadataProviderInterface
      * unlike the series `aggregate_credits` shape ({@see self::buildTvCast()}).
      *
      * @param list<array<string, mixed>> $cast Raw TMDB cast/guest-star entries.
-     * @return list<array{name: string, role: string, profile_url: string|null}>
+     * @return list<array{name: string, role: string, profile_url: string|null, id: string|null}>
      */
     private function buildEpisodeCast(array $cast): array
     {
@@ -779,6 +779,10 @@ class TmdbProvider implements MetadataProviderInterface
                 'profile_url' => $this->profileUrl(
                     MetadataValue::asNullableString($member['profile_path'] ?? null),
                 ),
+                // S72: TMDB person id — the stable cache key for the shared
+                // people-photo cache. metadata_json-internal (the media-item
+                // shaper whitelists {name, role, profile_url} on the response).
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
         return $out;
@@ -789,9 +793,10 @@ class TmdbProvider implements MetadataProviderInterface
      * name (a guest star already listed as a regular is not repeated) and capping
      * at {@see self::MAX_CAST}.
      *
-     * @param list<array{name: string, role: string, profile_url: string|null}> $base  Season regulars.
-     * @param list<array{name: string, role: string, profile_url: string|null}> $guest Episode guest stars.
-     * @return list<array{name: string, role: string, profile_url: string|null}>
+     * @param list<array{name: string, role: string, profile_url: string|null, id: string|null}> $base  Season regulars.
+     * @param list<array{name: string, role: string, profile_url: string|null, id: string|null}> $guest
+     *             Episode guest stars.
+     * @return list<array{name: string, role: string, profile_url: string|null, id: string|null}>
      */
     private function mergeCast(array $base, array $guest): array
     {
@@ -820,7 +825,7 @@ class TmdbProvider implements MetadataProviderInterface
      * {@see self::KEY_CREW_JOBS}, de-duplicated and capped by {@see self::filterKeyCrew()}.
      *
      * @param list<array<string, mixed>> $crew Raw TMDB episode crew entries.
-     * @return list<array{name: string, job: string, profile_url: string|null}>
+     * @return list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      */
     private function buildEpisodeCrew(array $crew): array
     {
@@ -830,6 +835,7 @@ class TmdbProvider implements MetadataProviderInterface
                 'name' => MetadataValue::asString($member['name'] ?? null),
                 'job' => MetadataValue::asString($member['job'] ?? null),
                 'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
         return $this->filterKeyCrew($rows);
@@ -985,7 +991,7 @@ class TmdbProvider implements MetadataProviderInterface
      * (a recurring actor may play several characters across seasons).
      *
      * @param list<array<string, mixed>> $cast Raw TMDB aggregate cast entries.
-     * @return list<array{name: string, role: string, profile_url: string|null}>
+     * @return list<array{name: string, role: string, profile_url: string|null, id: string|null}>
      */
     private function buildTvCast(array $cast): array
     {
@@ -1003,6 +1009,8 @@ class TmdbProvider implements MetadataProviderInterface
                 'profile_url' => $this->profileUrl(
                     MetadataValue::asNullableString($member['profile_path'] ?? null),
                 ),
+                // S72: TMDB person id (see buildEpisodeCast).
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
         return $out;
@@ -1018,7 +1026,7 @@ class TmdbProvider implements MetadataProviderInterface
      *
      * @param list<array<string, mixed>> $crew      Raw TMDB aggregate crew entries.
      * @param list<array<string, mixed>> $createdBy Raw TMDB `created_by` entries.
-     * @return list<array{name: string, job: string, profile_url: string|null}>
+     * @return list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      */
     private function buildTvCrew(array $crew, array $createdBy): array
     {
@@ -1028,6 +1036,7 @@ class TmdbProvider implements MetadataProviderInterface
                 'name' => MetadataValue::asString($creator['name'] ?? null),
                 'job' => 'Creator',
                 'profile_path' => MetadataValue::asNullableString($creator['profile_path'] ?? null),
+                'id' => MetadataValue::asNullableString($creator['id'] ?? null),
             ];
         }
         foreach ($crew as $member) {
@@ -1037,17 +1046,18 @@ class TmdbProvider implements MetadataProviderInterface
                 'name' => MetadataValue::asString($member['name'] ?? null),
                 'job' => $job,
                 'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
         return $this->filterKeyCrew($normalized);
     }
 
     /**
-     * Filter/normalize a flat list of `{name, job, profile_path}` crew rows to
+     * Filter/normalize a flat list of `{name, job, profile_path, id}` crew rows to
      * the key-crew allow-list, de-duplicating by name+job and capping the count.
      *
-     * @param list<array{name: string, job: string, profile_path: string|null}> $rows
-     * @return list<array{name: string, job: string, profile_url: string|null}>
+     * @param list<array{name: string, job: string, profile_path: string|null, id: string|null}> $rows
+     * @return list<array{name: string, job: string, profile_url: string|null, id: string|null}>
      */
     private function filterKeyCrew(array $rows): array
     {
@@ -1068,6 +1078,8 @@ class TmdbProvider implements MetadataProviderInterface
                 'name' => $name,
                 'job' => $job,
                 'profile_url' => $this->profileUrl($row['profile_path']),
+                // S72: TMDB person id (see buildEpisodeCast).
+                'id' => $row['id'],
             ];
             if (count($out) >= self::MAX_CREW) {
                 break;
@@ -1335,6 +1347,8 @@ class TmdbProvider implements MetadataProviderInterface
                 'profile_url' => $this->profileUrl(
                     MetadataValue::asNullableString($member['profile_path'] ?? null),
                 ),
+                // S72: TMDB person id (see buildEpisodeCast).
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
 
@@ -1345,6 +1359,7 @@ class TmdbProvider implements MetadataProviderInterface
                 'name' => MetadataValue::asString($member['name'] ?? null),
                 'job' => MetadataValue::asString($member['job'] ?? null),
                 'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+                'id' => MetadataValue::asNullableString($member['id'] ?? null),
             ];
         }
         $crewObjects = $this->filterKeyCrew($crewRows);

@@ -213,11 +213,12 @@ final class SeriesMetadataResolverTest extends TestCase
                         [
                             'name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer',
                             'profile_url' => 'https://i/w185/k.jpg',
+                            'id' => '119068',
                         ],
                         ['name' => '', 'role' => 'X', 'profile_url' => null], // nameless dropped
                     ],
                     'crew' => [
-                        ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_url' => null],
+                        ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_url' => null, 'id' => '44950'],
                     ],
                 ],
                 [
@@ -242,7 +243,11 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertSame('Kiefer Sutherland', $season['episodes'][1]['cast'][0]['name']);
         $this->assertSame('Jack Bauer', $season['episodes'][1]['cast'][0]['role']);
         $this->assertSame('https://i/w185/k.jpg', $season['episodes'][1]['cast'][0]['profile_url']);
+        // S72: the TMDB person id rides through the canonical episode cast/crew
+        // shape (castList/crewList) so the shared people cache can key by it.
+        $this->assertSame('119068', $season['episodes'][1]['cast'][0]['id']);
         $this->assertSame('Director', $season['episodes'][1]['crew'][0]['job']);
+        $this->assertSame('44950', $season['episodes'][1]['crew'][0]['id']);
 
         // Episode 2: empty cast/crew + zero vote normalize to []/null.
         $this->assertSame([], $season['episodes'][2]['cast']);

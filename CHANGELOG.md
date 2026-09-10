@@ -38,6 +38,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   private ini scan dir), Psalm production 772 → 815 files (`No errors found!`, venue:
   the s306srv docker mirror of CI's php 8.3.33 + full extension set; the s444 image
   cannot boot this repo's platform_check), tests gates unchanged and re-green.
+- **Cast and crew profile photos are now cached once per person, shared across every item (`S72`).**
+  A person who appears in N titles used to leave N remote `image.tmdb.org/w185` profile URLs in the
+  clients' hands. Enrichment now localizes each TMDB profile picture exactly once under a flat
+  person key — `people-{tmdbPersonId}` (sha1 of the TMDB path when the id is absent) — through the
+  generic image service extracted in S71, so the same actor across a whole library costs one
+  download, not one per film. The key is deliberately flat and id-driven, not nested and not
+  item-derived: `ArtworkStorage` and the existing `/api/v1/artwork/{key}` serve route already
+  accept any `[A-Za-z0-9-]` key, so no storage, serving, or validation surface had to widen — the
+  served `w185` variant is inside the existing size gate. `TmdbProvider` and the episode resolvers
+  now carry TMDB person ids through the cast/crew rows (the shaper still whitelists the response
+  to `{name, role|job, profile_url}`, so internal keys never reach clients), the matcher rewrites
+  each localized profile to a signed artwork URL at the persist choke point, and everything stays
+  best-effort: a failed person download logs and keeps the remote URL, the operator
+  artwork-download policy disables the whole path, and non-TMDB profile URLs are never touched.
+  Eager backdrop download intentionally did not ride along (it needs a serving-side variant
+  discrimination that is the next step's scope), and no new remote-fetch endpoint surface was
+  opened. Two guard tests pin the single-fetch AC — one at the matcher call boundary (exact
+  `downloadAndStore` call set across three items), one on real disk across two storage instances —
+  and the executed-census estate count moved 1849→1851 with its mandated in-commit re-pin.
 
 - **The server test suite now runs in parallel lanes with the same evidence as serial (`S457`).**
   The `test` job's single serial PHPUnit invocation became three lanes: the Unit suite

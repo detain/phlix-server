@@ -1163,6 +1163,19 @@ final class SkippedTestNameReportingTest extends TestCase
             . 'the "testdox present but explains nothing" class — pick another filter',
         );
 
+        // And it must have RUN something: a run that executed nothing is just as silent
+        // about skips, and would quietly swap the input class being diagnosed here. The
+        // green summary is the stable half — testdox prettifies both class and method
+        // names (and strips the `Test` suffix from the class), so neither literal in this
+        // file appears in that output unchanged.
+        self::assertStringContainsString(
+            'OK (1 test',
+            $testdox,
+            'the filtered testdox run did not execute exactly one green test, so its silence about '
+            . 'skips proves nothing — ' . self::PROBE_PASSING_NAME . ' no longer names a single '
+            . 'passing test of ' . self::PROBE_CLASS . ". output was:\n" . $testdox,
+        );
+
         $result = $this->runScript($this->fixtureFile(
             'zero-skip-testdox.log',
             $testdox . "\n" . self::COUNT_ONLY,

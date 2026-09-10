@@ -493,30 +493,38 @@ class AudiobookControllerTest extends TestCase
         $baseDir = sys_get_temp_dir() . '/phlix_s453_' . uniqid();
         $libraryDir = $baseDir . '/library';
         $outsideDir = $baseDir . '/outside';
-        mkdir($libraryDir, 0755, true);
-        mkdir($outsideDir, 0755, true);
         $legitFile = $libraryDir . '/book.m4b';
         $secretFile = $outsideDir . '/secret.m4b';
-        file_put_contents($legitFile, 'legitimate audiobook bytes');
-        file_put_contents($secretFile, 'should never be served');
-
-        // A path that *contains* the jail root as a substring — exactly the shape the
-        // old str_contains() allowlist admitted — but realpath()s into its sibling
-        // `outside/` directory. No username, no assumption about where the temp dir
-        // lives: the escape is built from the same $baseDir as the jail.
-        $traversalPath = $libraryDir . '/../outside/secret.m4b';
-        $this->assertNotFalse(realpath($traversalPath));
-        $this->assertSame(
-            realpath($secretFile),
-            realpath($traversalPath),
-            'the fixture must resolve to the outside file, not to anything inside the jail'
-        );
-
+        // Read before the try: `getenv()` can neither fail nor leave anything behind, and
+        // keeping it out of the guarded block means `finally` never sees an unset variable.
         $previousRoots = getenv('PHLIX_LIBRARY_ROOTS');
-        putenv('PHLIX_LIBRARY_ROOTS=' . $libraryDir);
-        LibraryRootGuard::reset();
+        $jailPinned = false;
 
+        // Everything from the first mkdir onwards is guarded, so a failed premise assertion
+        // cannot leave a `phlix_s453_*` tree behind for the zero-residue census to point at
+        // on top of the real diagnosis.
         try {
+            mkdir($libraryDir, 0755, true);
+            mkdir($outsideDir, 0755, true);
+            file_put_contents($legitFile, 'legitimate audiobook bytes');
+            file_put_contents($secretFile, 'should never be served');
+
+            // A path that *contains* the jail root as a substring — exactly the shape the
+            // old str_contains() allowlist admitted — but realpath()s into its sibling
+            // `outside/` directory. No username, no assumption about where the temp dir
+            // lives: the escape is built from the same $baseDir as the jail.
+            $traversalPath = $libraryDir . '/../outside/secret.m4b';
+            $this->assertNotFalse(realpath($traversalPath));
+            $this->assertSame(
+                realpath($secretFile),
+                realpath($traversalPath),
+                'the fixture must resolve to the outside file, not to anything inside the jail'
+            );
+
+            putenv('PHLIX_LIBRARY_ROOTS=' . $libraryDir);
+            $jailPinned = true;
+            LibraryRootGuard::reset();
+
             // Positive control: with the jail pinned, a genuinely in-root file must be
             // served. Without it, a guard mutated to refuse everything would pass this
             // case as happily as one that admits an escape.
@@ -537,12 +545,16 @@ class AudiobookControllerTest extends TestCase
             $this->assertNotEquals(206, $response->statusCode);
             $this->assertStringNotContainsString('should never be served', $response->body);
         } finally {
-            if ($previousRoots === false) {
-                putenv('PHLIX_LIBRARY_ROOTS');
-            } else {
-                putenv('PHLIX_LIBRARY_ROOTS=' . $previousRoots);
+            // Only what this case actually changed gets put back: if the fixture failed
+            // before the jail was pinned, the environment and the guard were never touched.
+            if ($jailPinned) {
+                if ($previousRoots === false) {
+                    putenv('PHLIX_LIBRARY_ROOTS');
+                } else {
+                    putenv('PHLIX_LIBRARY_ROOTS=' . $previousRoots);
+                }
+                LibraryRootGuard::reset();
             }
-            LibraryRootGuard::reset();
 
             foreach ([$legitFile, $secretFile] as $file) {
                 if (is_file($file)) {

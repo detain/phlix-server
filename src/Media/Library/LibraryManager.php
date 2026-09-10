@@ -920,7 +920,11 @@ class LibraryManager
      *     and therefore every `user_item_data` / watch row that references it; then
      *  2. prunes ONLY the items whose source file no longer exists on disk (so
      *     genuinely-removed media is cleaned up), plus any series/season container
-     *     left empty by that pruning — see {@see self::pruneRemovedItems()}.
+     *     left empty by that pruning — see {@see self::pruneRemovedItems()}; then
+     *  3. S153 — for a MUSIC library whose scan saw zero failures, reaps the
+     *     `music_albums`/`music_artists` shells the healing re-parenting vacated, so
+     *     one pass leaves the hierarchy strictly cleaner (every gate and the
+     *     CASCADE-proof predicate: {@see self::reapOrphanMusicContainers()}).
      *
      * **S145 — for a MUSIC library this now reads every file, and that is the point.**
      * `rescan` passes `readEveryFile: true` down to
@@ -1021,17 +1025,35 @@ class LibraryManager
             $this->scanner->endAdoptionTracking();
         }
 
+        // S153 — a healing rescan re-parents tracks onto the album/artist their tags
+        // name and mints the tag-named rows when absent; the rows the tracks VACATED
+        // survive as zero-track shells (measured on production 2026-07-27: one
+        // successful full-read rescan grew `music_albums` by 61 rows and took empty
+        // artists from 13 to 16). Reap them in the same pass, but ONLY on a scan that
+        // read every file: `items_failed = 0` is the caller-side gate, because a
+        // shell can equally well be an album whose files were unreadable this round
+        // (unmounted vault, permissions fault) — deleting one of those would take its
+        // `music_tracks` rows with it via `fk_tracks_album ON DELETE CASCADE`.
+        // The library's roots are re-verified inside the pass (it must hold the same
+        // per-root presence discipline `pruneRemovedItems()` holds).
+        $reaped = $this->reapOrphanMusicContainers($library, $scan->failed);
+
         $after = $this->countLibraryItems($libraryId);
 
         // Items that existed before and were not pruned were re-scanned in place
         // (updated); the remainder of the new total are brand-new additions.
+        // ⚠ Deliberately computed from `$removed` ALONE: the reap pass deletes no
+        // `media_items` rows (out of S153's scope), and folding it into `$survivors`
+        // would inflate `added` by the reap count on every healing pass.
         $survivors = max(0, $before - $removed);
 
         $result = new ScanResult();
         $result->scanned = $after;
         $result->added = max(0, $after - $survivors);
         $result->updated = min($survivors, $after);
-        $result->removed = $removed;
+        // Honest "rows this run deleted" total for the job row (`items_removed`),
+        // containers included; the media_items math above is untouched by it.
+        $result->removed = $removed + $reaped;
         // S96(f): carried straight through from the inner scan — a rescan that
         // skipped files must not report clean success just because the row-count
         // deltas above happen to balance.
@@ -1052,8 +1074,18 @@ class LibraryManager
      * guard that refuses to bulk-delete a root with zero present items). Nothing
      * is scanned or re-fetched; this is purely the cleanup half of a rescan.
      *
+     * S153 — for a MUSIC library it additionally runs the orphan-container reap
+     * (the `prune` type from migration 084 is that pass's job home): `music_albums`
+     * rows with zero tracks and `music_artists` rows with zero tracks and zero
+     * albums, each deleted only with its predicate re-proven inside the DELETE.
+     * The standalone op has no fresh scan to consult, so it gates on the library's
+     * latest COMPLETED `scan`/`rescan` job row reporting `items_failed = 0` and on
+     * no `scan`/`rescan` row being live right now (see
+     * {@see self::reapOrphanMusicContainers()} — every gate refusal is logged).
+     *
      * @param string $libraryId The library's unique identifier.
-     * @return int Total number of rows pruned (gone leaves + emptied containers).
+     * @return int Total number of rows pruned (gone leaves + emptied containers
+     *             + reaped orphan music albums/artists).
      * @throws \InvalidArgumentException If the library does not exist.
      */
     public function pruneLibrary(string $libraryId): int
@@ -1068,12 +1100,17 @@ class LibraryManager
         // before deleting anything — identical safety to the rescan path.
         $removed = $this->pruneRemovedItems($libraryId, $library->paths);
 
+        // S153: the music container reap. `null` = no caller-observed scan, so the
+        // pass consults the job history for its failure evidence.
+        $reaped = $this->reapOrphanMusicContainers($library, null);
+
         $this->logger->info('Library prune complete', [
             'library_id' => $libraryId,
             'removed' => $removed,
+            'reaped_music_containers' => $reaped,
         ]);
 
-        return $removed;
+        return $removed + $reaped;
     }
 
     /**
@@ -1598,6 +1635,229 @@ class LibraryManager
         }
 
         return $removed;
+    }
+
+    /**
+     * S153 — reap the music container rows that healing scans leave behind.
+     *
+     * ## What this pass is, and why the tables need it
+     *
+     * A healing rescan re-parents a mis-filed track onto the album/artist its tags
+     * name and MINTS those container rows when absent. The rows the track came from
+     * are recounted (S148's vacated-album refresh) but never removed. Measured on
+     * production 2026-07-27: one complete, successful full-read rescan grew
+     * `music_albums` by 61 rows (11,535 → 11,596) and took zero-track artists from
+     * 13 to 16 while clearing only 50 shells. The repair is idempotent for track
+     * parentage but NOT for container rows, so retags that accumulate over months
+     * accumulate shells indefinitely. This pass is the other half of the heal.
+     *
+     * ## Why the selection predicate is proven INSIDE the DELETE, not just in SELECT
+     *
+     * 🔴 `music_tracks.album_id` → `music_albums.id` is `ON DELETE CASCADE`
+     * (migration 065), and so are `music_tracks.artist_id` → `music_artists.id` and
+     * `music_albums.artist_id` → `music_artists.id`. One over-selected row therefore
+     * destroys live tracks, not just the shell. A SELECT-then-DELETE pair has a
+     * window between the two statements; the per-id DELETE repeats the full
+     * zero-children predicate itself, so ANY row it deletes had provably zero
+     * `music_tracks` (and, for artists, zero `music_albums`) at the instant the
+     * statement ran — no execution of this pass can cascade a live track away.
+     * Albums are reaped first, so an artist whose shells were just reaped qualifies
+     * for the artist predicate in the same pass (a fixed point in two waves: no
+     * reaped row ever creates a new candidate, because reaping only removes rows
+     * that already have no children).
+     *
+     * ## Library scoping, given that the music tables have no `library_id`
+     *
+     * `music_albums`/`music_artists` carry no `library_id` (migration 065) — the
+     * only handle a zero-track shell has on a library is its `media_items` anchor
+     * (`SET NULL` FK direction runs container → media_items). So a row is a
+     * candidate only when it is anchored in THIS library, or anchored NOWHERE
+     * (`media_item_id IS NULL` — the mint-failure shape; a row no library's artwork
+     * can be pointing at, whose deletion cannot cascade any track by predicate).
+     * A row anchored in ANOTHER library is that library's business, and this pass
+     * has not verified that library's storage or read history.
+     *
+     * ## Gates (each refuses the whole pass, loudly, and has its own test case)
+     *
+     *  1. `type === 'music'` — the tables are the music hierarchy; a video
+     *     library's prune must not touch them.
+     *  2. EVERY configured root currently `is_dir()`. Stricter than
+     *     `pruneRemovedItems()`' per-root guard because these tables cannot be
+     *     attributed per root: an album on an unmounted second root can legitimately
+     *     read as a shell while the first root is present.
+     *  3. Failure evidence. A scan that could not read every file leaves rows that
+     *     LOOK orphaned but are files on temporarily unreadable storage. On the
+     *     rescan path the evidence is the caller's own fresh `$scanFailed`
+     *     (passed by {@see self::rescanLibrary()} — the pass only runs at all when
+     *     it is 0); on the standalone prune path there is no fresh scan, so the
+     *     LATEST COMPLETED `scan`/`rescan` job row's `items_failed` (column from
+     *     migration 095) is consulted, and no history at all is treated as
+     *     absence-of-evidence, not evidence-of-clean. A `scan`/`rescan` row still
+     *     `queued`/`running` refuses the pass too — parentage may be moving right
+     *     now (the prune's own row is type `prune` and never self-blocks).
+     *
+     * Deleting these rows never touches `media_items` (explicitly out of S153's
+     * scope): the anchor rows survive the containers that referenced them.
+     *
+     * @param LibraryRow|null $library     The library row (null refuses the pass).
+     * @param int|null        $scanFailed  Fresh `items_failed` from the caller's just-finished
+     *                                     scan (rescan path), or null to consult the job
+     *                                     history (standalone prune path).
+     * @return int Number of container rows reaped (albums + artists).
+     */
+    private function reapOrphanMusicContainers(?LibraryRow $library, ?int $scanFailed): int
+    {
+        if ($library === null || $library->type !== 'music') {
+            return 0;
+        }
+
+        clearstatcache(true);
+        if ($library->paths === []) {
+            $this->logger->warning(
+                'S153 music reap skipped — library has no configured roots to verify against',
+                ['library_id' => $library->id],
+            );
+
+            return 0;
+        }
+        foreach ($library->paths as $root) {
+            if (!is_string($root) || $root === '' || !is_dir($root)) {
+                // Gate 2: one absent root is enough — a shell may belong to it.
+                $this->logger->warning(
+                    'S153 music reap skipped — a configured root is not currently accessible; '
+                    . 'refusing to delete containers that may only be unreachable',
+                    ['library_id' => $library->id, 'root' => is_string($root) ? $root : ''],
+                );
+
+                return 0;
+            }
+        }
+
+        // Gate 3: the caller's fresh scan observation wins when present; the
+        // standalone prune path reads the job history instead.
+        $refused = $scanFailed === null
+            ? $this->musicReapJobHistoryRefuses($library->id)
+            : $scanFailed > 0;
+        if ($refused) {
+            $this->logger->warning(
+                'S153 music reap skipped — the library\'s read evidence is missing or reports failures',
+                [
+                    'library_id' => $library->id,
+                    'observed_items_failed' => $scanFailed,
+                ],
+            );
+
+            return 0;
+        }
+
+        $reaped = 0;
+
+        // Wave 1 — shell albums: anchored in this library (or nowhere), zero tracks.
+        $shellAlbums = $this->db->query(
+            'SELECT a.id FROM music_albums a'
+            . ' WHERE (a.media_item_id IS NULL'
+            . '        OR EXISTS (SELECT 1 FROM media_items mi'
+            . '                    WHERE mi.id = a.media_item_id AND mi.library_id = ?))'
+            . '   AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.album_id = a.id)',
+            [$library->id],
+        );
+        if (is_array($shellAlbums)) {
+            foreach ($shellAlbums as $row) {
+                if (!is_array($row) || !isset($row['id']) || !is_numeric($row['id'])) {
+                    continue;
+                }
+                // The CASCADE-proof re-proven predicate: this statement deletes at
+                // most rows that hold zero tracks AT EXECUTION TIME.
+                $deleted = $this->db->query(
+                    'DELETE FROM music_albums'
+                    . ' WHERE id = ?'
+                    . '   AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.album_id = music_albums.id)',
+                    [(int) $row['id']],
+                );
+                if (is_int($deleted) && $deleted > 0) {
+                    $reaped += $deleted;
+                }
+            }
+        }
+
+        // Wave 2 — empty artists: anchored in this library (or nowhere), zero
+        // tracks AND zero albums (wave 1 just removed this artist's shells, so the
+        // two-wave order is what makes one pass a fixed point).
+        $emptyArtists = $this->db->query(
+            'SELECT ar.id FROM music_artists ar'
+            . ' WHERE (ar.media_item_id IS NULL'
+            . '        OR EXISTS (SELECT 1 FROM media_items mi'
+            . '                    WHERE mi.id = ar.media_item_id AND mi.library_id = ?))'
+            . '   AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.artist_id = ar.id)'
+            . '   AND NOT EXISTS (SELECT 1 FROM music_albums a WHERE a.artist_id = ar.id)',
+            [$library->id],
+        );
+        if (is_array($emptyArtists)) {
+            foreach ($emptyArtists as $row) {
+                if (!is_array($row) || !isset($row['id']) || !is_numeric($row['id'])) {
+                    continue;
+                }
+                // Both CASCADE paths out of an artist are re-proven inside the DELETE:
+                // no music_albums (which would cascade their tracks) and no
+                // music_tracks pointing at the artist directly.
+                $deleted = $this->db->query(
+                    'DELETE FROM music_artists'
+                    . ' WHERE id = ?'
+                    . '   AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.artist_id = music_artists.id)'
+                    . '   AND NOT EXISTS (SELECT 1 FROM music_albums a WHERE a.artist_id = music_artists.id)',
+                    [(int) $row['id']],
+                );
+                if (is_int($deleted) && $deleted > 0) {
+                    $reaped += $deleted;
+                }
+            }
+        }
+
+        if ($reaped > 0) {
+            $this->logger->info(
+                'S153 reaped orphan music container rows',
+                ['library_id' => $library->id, 'reaped' => $reaped],
+            );
+        }
+
+        return $reaped;
+    }
+
+    /**
+     * Standalone-prune half of gate 3: read the library's job history.
+     *
+     * Returns TRUE (refuse the reap) when a `scan`/`rescan` row is still live —
+     * parentage may be moving mid-flight — or when the latest COMPLETED
+     * `scan`/`rescan` row reports a non-zero `items_failed`, or when no completed
+     * read pass exists to vouch for the last full read at all. The prune job's own
+     * `type = 'prune'` row is deliberately outside the live-scan query: this pass
+     * runs INSIDE it and must not self-block.
+     */
+    private function musicReapJobHistoryRefuses(string $libraryId): bool
+    {
+        $live = $this->db->query(
+            "SELECT id FROM library_scan_jobs"
+            . " WHERE library_id = ? AND type IN ('scan', 'rescan') AND status IN ('queued', 'running')"
+            . ' LIMIT 1',
+            [$libraryId],
+        );
+        if (is_array($live) && $live !== []) {
+            return true;
+        }
+
+        $latest = $this->db->query(
+            "SELECT items_failed FROM library_scan_jobs"
+            . " WHERE library_id = ? AND type IN ('scan', 'rescan') AND status = 'completed'"
+            . ' ORDER BY completed_at DESC, queued_at DESC, id DESC LIMIT 1',
+            [$libraryId],
+        );
+        if (!is_array($latest) || !isset($latest[0]) || !is_array($latest[0])) {
+            return true;
+        }
+
+        $failed = $latest[0]['items_failed'] ?? null;
+
+        return !is_numeric($failed) || (int) $failed > 0;
     }
 
     /**

@@ -98,7 +98,7 @@ return [
     ],
     'fileinfo' => [
         'symbol' => 'finfo_open(',
-        'source' => 'src/Media/Storage/ArtworkStorage.php',
+        'source' => 'src/Media/Storage/ImageResizer.php',
         'why' => 'Sniffing the real MIME type of uploaded/downloaded artwork instead of trusting '
             . 'the declared one — the check that stops a "poster" being served as HTML.',
     ],
@@ -111,7 +111,7 @@ return [
     ],
     'gd' => [
         'symbol' => 'imagecreatetruecolor(',
-        'source' => 'src/Media/Storage/ArtworkStorage.php',
+        'source' => 'src/Media/Storage/ImageResizer.php',
         'why' => 'Every poster/backdrop resize and re-encode. Unguarded.',
     ],
     'hash' => [

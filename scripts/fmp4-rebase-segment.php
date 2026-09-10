@@ -39,7 +39,14 @@ if (!is_array($argvList) || count($argvList) !== 4) {
     exit(2);
 }
 
-[, $segmentPath, $initPath, $rawStart] = array_map('strval', $argvList);
+[, $segmentPath, $initPath, $rawStart] = $argvList;
+
+// Parse at the boundary, trust internally: $_SERVER carries mixed, so each
+// operand is asserted to string before use instead of blindly strval-cast.
+if (!is_string($segmentPath) || !is_string($initPath) || !is_string($rawStart)) {
+    fwrite(STDERR, "usage: fmp4-rebase-segment.php <segment> <init> <startSeconds>\n");
+    exit(2);
+}
 
 if (!is_numeric($rawStart)) {
     fwrite(STDERR, "fmp4-rebase-segment: startSeconds must be numeric, got '{$rawStart}'\n");

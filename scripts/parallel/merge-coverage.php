@@ -69,7 +69,11 @@ foreach ($inputs as $input) {
     $merged->merge($coverage);
 }
 
-/** @var CodeCoverage $merged */
+// No @var tag and no null-guard needed: the usage check above exits on empty
+// $inputs and every miss inside the loop exits(1), so PHPStan's loop analysis
+// proves $merged is a CodeCoverage here — the old bare short-name `@var
+// CodeCoverage` claimed a class the analyser could not resolve at all
+// (class.notFound + varTag.nativeType + argument.type from one line).
 (new Clover())->process($merged, $target);
 
 $cloverXml = simplexml_load_file($target);

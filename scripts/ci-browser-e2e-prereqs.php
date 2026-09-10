@@ -122,9 +122,16 @@ if (!is_array($entry)) {
     ));
 }
 
-$version = is_string($entry['version'] ?? null) ? $entry['version'] : '';
-$resolved = is_string($entry['resolved'] ?? null) ? $entry['resolved'] : '';
-$integrity = is_string($entry['integrity'] ?? null) ? $entry['integrity'] : '';
+// Bind to a variable BEFORE the is_string() check: re-reading `$entry['version']`
+// inside the true arm of a ternary whose condition narrows the offset loses the
+// narrowing for Psalm (ParadoxicalCondition at the `=== $version` compare below),
+// while PHPStan happens to carry it. One shape that both analysers read identically.
+$versionRaw = $entry['version'] ?? null;
+$resolvedRaw = $entry['resolved'] ?? null;
+$integrityRaw = $entry['integrity'] ?? null;
+$version = is_string($versionRaw) ? $versionRaw : '';
+$resolved = is_string($resolvedRaw) ? $resolvedRaw : '';
+$integrity = is_string($integrityRaw) ? $integrityRaw : '';
 
 if ($version === '' || $resolved === '' || $integrity === '') {
     $fail(sprintf(
@@ -278,7 +285,7 @@ if ($skipBinaries) {
 
 // ⚠ ffmpeg spells it `-version`, with ONE dash; `--version` is unrecognised and exits
 // non-zero. Chrome and node want two. Getting this wrong does not break the check (the
-// executable test above is what decides) but it does print "(version query failed)" for
+// executable test below is what decides) but it does print "(version query failed)" for
 // a perfectly good binary, which is exactly the sort of noise that gets a step deleted.
 $describe = static function (string $binary, string $flag = '--version'): string {
     /** @var list<string> $out */

@@ -9,6 +9,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **`scripts/` is under static analysis in both tools — the server half of S256's
+  residual, mirroring the hub's S248 shape.** Until now phlix-server's `scripts/`
+  (43 first-party PHP files) was analysed by NOTHING: `phpstan.neon` carried
+  `paths: [src]`, `phpstan-tests.neon` merely *scanned* `scripts/bootstrap_env.php`
+  for its two function symbols, and `psalm.xml` was src-only — while the tests/
+  halves of the same step had already shipped. Widening `phpstan.neon` alone would
+  have been the S128 trap in a new costume: CI's production step passed `src/`
+  and `--level=9` on the command line, which override the config entirely, so the
+  step is now config-driven (`phpstan analyse` with no path and no level, the hub's
+  shape), `phpstan.neon` and `phpstan.neon.dist` carry `paths: [src, scripts]` at
+  level 9 and `psalm.xml` declares both directories at its measured level 5. Both
+  production configs additionally load the single drift-tested `Swoole\Coroutine\WaitGroup`
+  declaration (PHPStan `scanFiles`, Psalm `stubs`) because `scripts/bench/coroutine_bench.php`
+  constructs that userland-inside-the-binary class behind an `extension_loaded` guard.
+  PHPStan measured 47 findings and Psalm 10 across `scripts/`; every one was fixed at
+  the source — no baseline, no `ignoreErrors`, no `excludePaths`, no suppressions
+  (five of the   findings were live runtime defects, listed under Fixed; the review pass on this
+  same work added a sixth: `run-media-asset-worker.php` never initialised the
+  `ConnectionPool` either, so even after its `FfmpegRunner` fix it could not boot —
+  no analyser sees that class of defect).
+  `tests/Unit/Support/StaticAnalysisScopeTest.php` now pins the exact production paths
+  allow-lists for both tools, the `scanFiles`/`stubs` allow-lists, the byte-identity of
+  the two phpstan production configs, the new verbatim CI command with its forbidden
+  CLI overrides, a scripts-corpus floor, and a scripts-drop mutant on every corpus pin
+  in its negative fuzz. Corpus before/after: PHPStan production 772 → 815 files
+  (`[OK]`, both with and without ext-swoole — CI's no-swoole condition reproduced via a
+  private ini scan dir), Psalm production 772 → 815 files (`No errors found!`, venue:
+  the s306srv docker mirror of CI's php 8.3.33 + full extension set; the s444 image
+  cannot boot this repo's platform_check), tests gates unchanged and re-green.
+
 - **The server test suite now runs in parallel lanes with the same evidence as serial (`S457`).**
   The `test` job's single serial PHPUnit invocation became three lanes: the Unit suite
   (no database) and the Integration suite run under paraunit at parallel 8, the E2E suite
@@ -100,6 +130,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
 
 ### Fixed
+
+- **Five real defects in `scripts/`, surfaced by putting the directory under PHPStan
+  level 9 and Psalm (`S256` residual).** None of these files had ever been opened by
+  an analyser, and the tools were right five times: `backfill-chapters.php` passed the
+  raw MySQL connection where `MarkerCandidateRepository`'s constructor demands an
+  `ItemRepository` — a TypeError at boot, the script could never have run past that
+  line; `run-media-asset-worker.php` passed the connection as `FfmpegRunner`'s first
+  parameter, which is the ffmpeg **binary path** (string) — the worker could never
+  have started from this entry point, and it now builds its runner from
+  `config/ffmpeg.php` like every sibling does, with the `ConnectionPool::init()` call
+  the review pass found still missing from it (without it, `getConnection()` throws);
+  `add-headers.php` skipped an excluded
+  directory by `continue`ing on the directory entry itself, which prunes nothing — the
+  traversal descended anyway and rewrote headers inside `node_modules/` and
+  `generated/`, the exact subtrees its own docblock promised to leave alone — while
+  its mid-iteration `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` lands on the
+  inner `FilesystemIterator`, where 16 means something else entirely, and its named
+  `collect()` would fatal on redeclaration against `crell/fp`'s global the moment an
+  autoloader entered the process (the hub's S248 rewrite of this same file is now
+  ported); `backfill-streams.php` read a config key `probe_path` that does not exist —
+  the real key is `ffprobe_path`, so a custom ffprobe binary was silently ignored and
+  `/usr/bin/ffprobe` always won; and `backfill-ratings.php` passed `__LINE__, __FILE__`
+  as positional arguments to `Connection::query()`, binding the line number as PDO's
+  fetch mode, while the `--limit` it documents was interpolated into a SQL string that
+  was then thrown away in favour of an inline batch query — `--limit` never applied
+  (the batching loop now honours it as its usage block advertises, and because the
+  `--execute` candidate set shrinks under every successful upsert, the loop pages by
+  primary key rather than by advancing offset: offset paging would have silently
+  skipped roughly one still-missing candidate for every row the run fixed). The remaining
+  findings were type honesty: mixed-from-`json_decode`/row envelopes parsed into
+  asserted shapes at the boundary instead of offset-cast blindly
+  (`dump-syncplay-envelope-pin-vectors.php`, `backfill-ratings.php`), `$_SERVER['argv']`
+  members asserted as strings rather than `strval`-mapped (`fmp4-rebase-segment.php`),
+  a nullsafe parent lookup (`parallel/merge-junit.php`), a short-name `@var` that
+  resolved to a class the analyser could not see, deleted because the loop analysis
+  proves the variable's type without it (`parallel/merge-coverage.php`), and a ternary
+  that re-read an array offset after narrowing, which Psalm reads differently than
+  PHPStan (`ci-browser-e2e-prereqs.php`).
 
 - **A healing rescan now leaves the music hierarchy cleaner than it found it (`S153`).**
   The S145 repair re-parents a mis-filed track onto the album and artist its tags name and

@@ -55,7 +55,10 @@ if (!is_array($ffmpegConfig)) {
     $ffmpegConfig = [];
 }
 $ffmpegPath = is_string($ffmpegConfig['ffmpeg_path'] ?? null) ? $ffmpegConfig['ffmpeg_path'] : '/usr/bin/ffmpeg';
-$probePath = is_string($ffmpegConfig['probe_path'] ?? null) ? $ffmpegConfig['probe_path'] : '/usr/bin/ffprobe';
+// The config key is ffprobe_path (config/ffmpeg.php) — every sibling script reads
+// that name. Reading 'probe_path' here meant a custom ffprobe binary was silently
+// ignored and /usr/bin/ffprobe always won.
+$probePath = is_string($ffmpegConfig['ffprobe_path'] ?? null) ? $ffmpegConfig['ffprobe_path'] : '/usr/bin/ffprobe';
 $transcodeDir = is_string($ffmpegConfig['transcode_dir'] ?? null)
     ? $ffmpegConfig['transcode_dir']
     : sys_get_temp_dir();

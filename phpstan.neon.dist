@@ -1,9 +1,25 @@
+# S256-residual — the production corpus is src/ AND scripts/ at level 9, no baseline,
+# empty excludePaths and empty ignoreErrors (S343 invariant, extended to scripts/).
+# ⚠ CI runs `phpstan analyse` with NO path and NO --level: a CLI path overrides
+# `paths:` entirely — the S128 trap recorded in phpstan-tests.neon's header. The
+# scope (this file's paths list, the level, and the CI command) is asserted by
+# tests/Unit/Support/StaticAnalysisScopeTest.php.
 parameters:
     level: 9
     paths:
         - src
+        - scripts
     excludePaths: []
     bootstrapFiles:
         - vendor/autoload.php
+    # scripts/bench/coroutine_bench.php uses Swoole\Coroutine\WaitGroup behind an
+    # extension_loaded('swoole') guard. CI's phpstan job installs no swoole and
+    # WaitGroup is a USERLAND class swoole compiles into its binary, so bundled
+    # phpstorm-stubs structurally cannot ship it — the same measured trap
+    # phpstan-tests.neon documents (scanFiles introduces the symbol; stubFiles
+    # does not). Single source of truth, drift-tested in-suite by
+    # StaticAnalysisScopeTest::testTheWaitGroupDeclarationStillMatchesTheRealExtension.
+    scanFiles:
+        - phpstan-stubs/Swoole/Coroutine/WaitGroup.stub
     treatPhpDocTypesAsCertain: false
     ignoreErrors: []

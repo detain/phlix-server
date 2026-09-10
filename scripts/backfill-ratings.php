@@ -74,7 +74,19 @@ $itemRepository = new ItemRepository($db, null);
 
 // Build the candidate query: items with a TMDB external ID but no corresponding
 // metadata_ratings.tmdb entry. We use a LEFT JOIN to find items missing the rating.
-$limitClause = $limit !== null ? 'LIMIT ' . (int) $limit : '';
+//
+// The `{keyset}`/`{limit_clause}` placeholders are replaced per batch by the loop
+// below — the pre-batching code interpolated a LIMIT into $query but then executed a
+// DIFFERENT inline SQL string in the loop, so `--limit` was parsed, documented in the
+// usage block and silently never applied (PHPStan's `arguments.count` error on the old
+// 4-parameter query() call is what surfaced the whole dead construction).
+//
+// Pagination is KEYSET on the primary key (`m.id > ?` with `ORDER BY m.id`), NOT
+// OFFSET: under --execute every successful upsert REMOVES its row from the
+// `r.id IS NULL` candidate set, so an advancing OFFSET walks past the candidates that
+// shifted down into the window it just skipped — roughly one silently unprocessed row
+// per fixed row. Ordered keyset pages are immune whether the set shrinks or not, and
+// the dry-run (set never changes) gets the same stable order.
 $query = "
     SELECT m.id, m.metadata_json
     FROM media_items m
@@ -84,7 +96,9 @@ $query = "
         AND r.rating_type = 'user'
     WHERE r.id IS NULL
       AND JSON_EXTRACT(m.metadata_json, '$.external_ids.tmdb') IS NOT NULL
-    {$limitClause}
+      {keyset}
+    ORDER BY m.id
+    {limit_clause}
 ";
 
 // Fetch candidates in batches to avoid blowing up memory on large libraries.
@@ -92,35 +106,61 @@ $batchSize = 100;
 $processed = 0;
 $updated = 0;
 $failed = 0;
-$offset = 0;
 
 echo "Scanning for items missing TMDB ratings...\n";
 
-while (true) {
-    $batchQuery = preg_replace('/\{limit_clause\}/', "LIMIT {$batchSize} OFFSET {$offset}", $query);
-    // Manually apply offset since we're in a loop
-    $rows = $db->query(
-        "SELECT m.id, m.metadata_json
-         FROM media_items m
-         LEFT JOIN metadata_ratings r
-             ON r.media_item_id = m.id
-             AND r.source = 'tmdb'
-             AND r.rating_type = 'user'
-         WHERE r.id IS NULL
-           AND JSON_EXTRACT(m.metadata_json, '$.external_ids.tmdb') IS NOT NULL
-         LIMIT {$batchSize} OFFSET {$offset}",
-        [],
-        __LINE__,
-        __FILE__
-    );
+// $scanned counts ROWS SEEN, so `--limit` caps the run exactly as its usage line
+// advertises. $lastId is the keyset cursor — the id of the last FETCHED row.
+$scanned = 0;
+$lastId = null;
 
-    if ($rows === [] || ($rows[0] ?? []) === []) {
+while (true) {
+    $batch = $limit === null ? $batchSize : min($batchSize, $limit - $scanned);
+    if ($batch < 1) {
         break;
     }
 
+    $batchQuery = str_replace(
+        ['{keyset}', '{limit_clause}'],
+        [$lastId === null ? '' : 'AND m.id > ?', "LIMIT {$batch}"],
+        $query,
+    );
+
+    // Connection::query() takes (sql, params, fetchmode) — the old call passed
+    // __LINE__ as $fetchmode and __FILE__ as a fourth argument (a userland
+    // over-supply PHP tolerates at the signature but PDO then received 112-ish
+    // as the fetch mode). Level 9 read the signature and refused.
+    $rows = $db->query($batchQuery, $lastId === null ? [] : [$lastId]);
+    if (!is_array($rows)) {
+        $rows = [];
+    }
+
+    if ($rows === []) {
+        break;
+    }
+
+    // Advance the cursor from the last FETCHED row — media_items.id is the NOT NULL
+    // primary key, so a row whose id is not a non-empty string means the result shape
+    // broke and paging further would be a guess: halt loudly, never loop blind.
+    $tailRow = end($rows);
+    $tailId = is_array($tailRow) ? ($tailRow['id'] ?? null) : null;
+    if (!is_string($tailId) || $tailId === '') {
+        fwrite(STDERR, "ERROR: candidate row without a string media_items.id — cannot advance the keyset cursor.\n");
+        exit(1);
+    }
+    $lastId = $tailId;
+
     foreach ($rows as $row) {
-        $itemId = (string) $row['id'];
-        $metadataJson = (string) $row['metadata_json'];
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $itemId = $row['id'] ?? null;
+        $metadataJson = $row['metadata_json'] ?? null;
+        if (!is_string($itemId) || !is_string($metadataJson)) {
+            continue;
+        }
+
         $metadata = json_decode($metadataJson, true);
 
         if (!is_array($metadata)) {
@@ -137,15 +177,12 @@ while (true) {
             continue;
         }
 
-        // Fetch TMDB details to get vote_average and vote_count
+        // Fetch TMDB details to get vote_average and vote_count.
+        // No is_array() guard here on purpose: TmdbProvider::getDetails() declares
+        // `: array`, PHP enforces native return types at runtime, so the old guard
+        // could never fire (PHPStan L9: function.alreadyNarrowedType). A missing
+        // vote_average is the real failure mode and is handled below.
         $details = $tmdb->getDetails($tmdbId);
-
-        if (!is_array($details)) {
-            echo "FAILED to fetch TMDB {$tmdbId} for item {$itemId}\n";
-            $failed++;
-            $processed++;
-            continue;
-        }
 
         $score = $details['vote_average'] ?? null;
         $votes = $details['vote_count'] ?? null;
@@ -159,12 +196,15 @@ while (true) {
         $score = (float) $score;
         $votes = is_numeric($votes) ? (int) $votes : null;
 
+        // Each row increments EXACTLY ONE outcome counter: a failed upsert that
+        // also fell through to $updated would overstate the summary line.
         if ($dryRun) {
             echo "[DRY-RUN] Would upsert rating for item {$itemId}: tmdb/user {$score}";
             if ($votes !== null) {
                 echo " ({$votes} votes)";
             }
             echo "\n";
+            $updated++;
         } else {
             try {
                 $ratingService->upsert(
@@ -180,13 +220,13 @@ while (true) {
                     echo " ({$votes} votes)";
                 }
                 echo "\n";
+                $updated++;
             } catch (\Throwable $e) {
                 echo "FAILED to upsert rating for item {$itemId}: {$e->getMessage()}\n";
                 $failed++;
             }
         }
 
-        $updated++;
         $processed++;
 
         if ($processed % 100 === 0) {
@@ -194,12 +234,11 @@ while (true) {
         }
     }
 
-    // If we got fewer rows than batch size, we're done
-    if (count($rows) < $batchSize) {
+    // Fewer rows than the batch asked for = candidate set exhausted (keyset page ran dry).
+    $scanned += count($rows);
+    if (count($rows) < $batch) {
         break;
     }
-
-    $offset += $batchSize;
 }
 
 echo "\nDone. Processed: {$processed}, Updated: {$updated}, Failed: {$failed}\n";

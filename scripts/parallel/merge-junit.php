@@ -79,7 +79,10 @@ foreach ($files as $file) {
     $suites = $doc->getElementsByTagName('testsuite');
 
     foreach ($suites as $suite) {
-        if (!$suite instanceof DOMElement || $suite->parentNode->localName !== 'testsuites') {
+        // parentNode is `DOMNode|null` — a detached element would fatal on the
+        // property read. Nullsafe collapses that case to `null !== 'testsuites'`,
+        // i.e. skip, which is what "not an outer suite" already means here.
+        if (!$suite instanceof DOMElement || $suite->parentNode?->localName !== 'testsuites') {
             // Only the outer per-class suites; nested ones are testcases' own groups.
             continue;
         }

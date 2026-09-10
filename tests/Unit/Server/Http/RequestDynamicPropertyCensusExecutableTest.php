@@ -256,8 +256,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
          * (tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php, +1)
          * cancel out — measured on the rebased tree, not predicted. The guard
          * names no Request.
+         * Re-pinned 1840→1842 by S71: the generic image service extraction adds
+         * two first-party files (src/Media/Storage/ImageResizer.php and
+         * tests/Unit/Media/Storage/ImageResizerTest.php) — measured 1842 on this
+         * tree, not predicted. The new service names no Request property.
          */
-    private const EXPECTED_PHP_FILES = 1840;
+    private const EXPECTED_PHP_FILES = 1842;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

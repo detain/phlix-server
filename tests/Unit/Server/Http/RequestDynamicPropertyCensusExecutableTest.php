@@ -260,8 +260,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
          * two first-party files (src/Media/Storage/ImageResizer.php and
          * tests/Unit/Media/Storage/ImageResizerTest.php) — measured 1842 on this
          * tree, not predicted. The new service names no Request property.
+         * Re-pinned 1842→1843 by S253 on the rebased tree: the web-ui bundle
+         * gate adds exactly one first-party file
+         * (tests/Unit/Support/WebUiBundleGateTest.php, the permanent guard
+         * pinning the workflow's compare step, widened paths, exact node pin and
+         * zero-corpus tripwire, with negative fuzz proving the pins bite); the
+         * rest of the step is YAML plus a rebuilt bundle, so no other
+         * denominator moves — measured 1843 on this tree, not predicted. The
+         * guard names no Request.
          */
-    private const EXPECTED_PHP_FILES = 1842;
+    private const EXPECTED_PHP_FILES = 1843;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

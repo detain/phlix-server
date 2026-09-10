@@ -43,13 +43,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 - **CI-pinned composed-route inventory (server only) (`S64`).** A real-DI in-process harness
   (`tests/Unit/Server/Core/ComposedRouteInventoryTest.php`) composes `Application::loadRoutes()` — the
-  production route table, built from `ContainerFactory::defaultProviders()` with only the MySQL
+  primary production route surface, built from `ContainerFactory::defaultProviders()` with only the MySQL
   `Workerman\MySQL\Connection` doubled (a `createMock`, so no socket opens) — with no DB, no workers and
   no real network, then asserts the committed inventory (`tests/Fixtures/Routes/composed-route-inventory.json`)
   in BOTH directions (`array_diff` missing + extra, then `assertSame`), pinning **365** composed routes
-  (GET 192 · POST 124 · DELETE 26 · PUT 22 · PATCH 1) for the server. Two control proofs make the gate
-  honest rather than self-satisfying: a **planted-drift** test registers a throwaway in-memory route,
-  reddens the diff, and re-greenings on a fresh composition (nothing is persisted); an **unbound-stub**
+  (GET 192 · POST 124 · DELETE 26 · PUT 22 · PATCH 1) for the server. The container-built
+  `WebPortalRouter` 404-fallback surface is separate, is not produced by `loadRoutes()`, and is not
+  pinned by this gate. Two control proofs make the gate honest rather than self-satisfying: a
+  **planted-drift** test registers a throwaway in-memory route, reddens the diff, and proves the gate
+  greens again on a fresh composition (nothing is persisted); an **unbound-stub**
   control builds `Application` over a container whose `get()` throws, and the exact message
   `unbound: Phlix\Server\Http\Controllers\AuthController` proves the real PHP-DI container — not a
   hand-wire fallback — is what composes the table. The inventory token is code-resident (a `const`

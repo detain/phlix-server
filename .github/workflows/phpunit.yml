@@ -196,8 +196,12 @@ jobs:
         run: bash scripts/parallel/run-suite.sh Integration 8 8 --coverage coverage-integration.covobj
 
       - name: Run E2E suite (serial tail)
-        # Serial on purpose (hardware-encoder contention, see above). Loads
-        # phpunit-parallel.xml because it is the report-target-free copy of the config:
+        # Serial on purpose (hardware-encoder contention, see above). Carries the
+        # Serialized suite too: the two MulticastJoin classes are excluded from the
+        # parallel Unit lane in phpunit-parallel.xml because their negative-arm
+        # sockets receive under 8-way multicast contention on the runner (CI run 1
+        # evidence), and pass in any serial lane — this one.
+        # Loads phpunit-parallel.xml because it is the report-target-free copy of the config:
         # the CLI below owns coverage-e2e.covobj and junit-e2e.xml explicitly, exactly as
         # S305 owned junit.xml before this step existed.
         #
@@ -212,7 +216,7 @@ jobs:
         # Compare NAME SETS via scripts/skipped-test-names.sh over `gh run view --log`,
         # never the `Skipped: N` count — the count cannot tell "a test started skipping"
         # from "a skipped test became a failure" from "a test disappeared".
-        run: ./vendor/bin/phpunit --configuration=phpunit-parallel.xml --testsuite E2E --coverage-php coverage-e2e.covobj --log-junit .phpunit-junit/junit-e2e.xml
+        run: ./vendor/bin/phpunit --configuration=phpunit-parallel.xml --testsuite E2E,Serialized --coverage-php coverage-e2e.covobj --log-junit .phpunit-junit/junit-e2e.xml
 
       - name: Merge parallel coverage and JUnit artifacts
         # Produces the two artifacts every downstream step already expects:

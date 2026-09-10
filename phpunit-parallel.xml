@@ -62,14 +62,32 @@
     fails if it is removed from this file.
   -->
   <testsuites>
+    <!--
+      S457 - the two MulticastJoin classes are EXCLUDED from the parallel Unit
+      lane here (and only here: phpunit.xml is untouched, so a developer's serial
+      run still gets them inside Unit). PR 758 CI run 1 proved why: their
+      negative-arm sockets (an intentionally malformed IP_ADD_MEMBERSHIP that
+      must NOT receive) pass serially on the GitHub runner but receive the
+      datagram when eight paraunit workers share the host's multicast stack.
+      They run instead in the Serialized suite below, executed by the serial
+      tail step. If the exclusion or the tail suite ever drifts apart, the two
+      lanes double-schedule these classes and merge-junit.php fails loudly on
+      the duplicate suite name.
+    -->
     <testsuite name="Unit">
       <directory suffix="Test.php">tests/Unit</directory>
+      <exclude>tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php</exclude>
+      <exclude>tests/Unit/Discovery/Ssdp/SsdpMulticastJoinTest.php</exclude>
     </testsuite>
     <testsuite name="Integration">
       <directory suffix="Test.php">tests/Integration</directory>
     </testsuite>
     <testsuite name="E2E">
       <directory suffix="Test.php">tests/E2E</directory>
+    </testsuite>
+    <testsuite name="Serialized">
+      <file>tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php</file>
+      <file>tests/Unit/Discovery/Ssdp/SsdpMulticastJoinTest.php</file>
     </testsuite>
   </testsuites>
   <groups>

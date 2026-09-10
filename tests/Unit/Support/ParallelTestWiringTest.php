@@ -133,8 +133,8 @@ final class ParallelTestWiringTest extends TestCase
             $document->getElementsByTagName('coverage')->length,
             'Every paraunit child shares the repo root as CWD. An inherited <coverage><report>'
             . ' makes each child write coverage.xml/coverage-report/ and the stdout text stream —'
-            . ' a last-writer-wins clobber of the artifact the merge step owns. Strip the block:',
-            'scripts/parallel/merge-coverage.php is the only writer of coverage.xml now.',
+            . ' a last-writer-wins clobber of the artifact the merge step owns. Strip the block:'
+            . ' scripts/parallel/merge-coverage.php is the only writer of coverage.xml now.',
         );
 
         $bootstraps = [];
@@ -143,11 +143,13 @@ final class ParallelTestWiringTest extends TestCase
             $bootstraps[] = $bootstrap->getAttribute('class');
         }
 
-        foreach ([
+        foreach (
+            [
             'Phlix\Tests\Support\AssertionEscape\AssertionEscapeGuardExtension',
             'Phlix\Tests\Support\ResidueCensus\ZeroResidueCensusExtension',
             'Paraunit\Configuration\ParaunitExtension',
-        ] as $required) {
+            ] as $required
+        ) {
             $this->assertContains(
                 $required,
                 $bootstraps,
@@ -182,8 +184,23 @@ final class ParallelTestWiringTest extends TestCase
         $merge = $indexOf('scripts/parallel/merge-coverage.php');
         $gate = $indexOf('scripts/assert-browser-e2e-ran.php');
 
-        foreach (['clone shards' => $clone, 'unit' => $unit, 'integration' => $integration,
-                  'e2e tail' => $e2e, 'merge' => $merge, 'browser gate' => $gate] as $label => $index) {
+        // A found step is a valid list offset; -1 (not found) must never reach an index. Fail
+        // fast on the missing step so the ordering assertions below compare real positions.
+        $stepAt = static function (int $index, string $label) use ($steps): array {
+            if ($index < 0) {
+                throw new \RuntimeException("phpunit.yml lost the {$label} step.");
+            }
+
+            /** @var array<string, mixed> $step */
+            $step = $steps[$index];
+
+            return $step;
+        };
+
+        $labels = ['clone shards' => $clone, 'unit' => $unit, 'integration' => $integration,
+                   'e2e tail' => $e2e, 'merge' => $merge, 'browser gate' => $gate];
+
+        foreach ($labels as $label => $index) {
             $this->assertGreaterThanOrEqual(0, $index, "phpunit.yml lost the {$label} step.");
         }
 
@@ -195,13 +212,15 @@ final class ParallelTestWiringTest extends TestCase
 
         $this->assertSame(
             '8',
-            $steps[$clone]['env']['PHLIX_TEST_DB_SHARDS'] ?? null,
+            $stepAt($clone, 'clone shards')['env']['PHLIX_TEST_DB_SHARDS'] ?? null,
             'run-suite.sh refuses Integration when shards < parallel; the clone literal and the'
             . ' Integration step literal (8) must move together.',
         );
 
-        $this->assertStringContainsString('--configuration=phpunit-parallel.xml', (string) $steps[$e2e]['run']);
-        $this->assertStringContainsString('--log-junit .phpunit-junit/junit-e2e.xml', (string) $steps[$e2e]['run']);
+        $e2eRun = (string) $stepAt($e2e, 'e2e tail')['run'];
+
+        $this->assertStringContainsString('--configuration=phpunit-parallel.xml', $e2eRun);
+        $this->assertStringContainsString('--log-junit .phpunit-junit/junit-e2e.xml', $e2eRun);
     }
 
     public function testTheVendorPhpunitInvocationSitesStayAtTheCountTheCensusDocuments(): void
@@ -240,14 +259,16 @@ final class ParallelTestWiringTest extends TestCase
     {
         $script = (string) file_get_contents(self::RUN_SUITE);
 
-        foreach ([
+        foreach (
+            [
             'PATH="$repo_root/scripts/parallel:$PATH"' => 'per-worker TMPDIR needs the shim on PATH',
             '--pass-through=--do-not-cache-result' => 'children must not race on .phpunit.cache',
             self::JUNIT_TOKEN => 'per-child JUnit evidence',
             'shards' => 'Integration shard claiming',
             '--php=' => 'coverage mode emits the merged php-code-coverage object',
             'files with (ERRORS|FAILURES)' => 'paraunit may exit 0 around recorded ERRORS/FAILURES; the wrapper must not',
-        ] as $needle => $why) {
+            ] as $needle => $why
+        ) {
             $this->assertStringContainsString($needle, $script, "run-suite.sh lost a seam ({$why}).");
         }
 

@@ -1,15 +1,24 @@
 name: Web UI
 
+# S253: this job is the SPA bundle gate. `vite build` (web-ui/vite.config.ts
+# `build.outDir`) writes DIRECTLY into the committed tree `public/assets/app/`,
+# so after `npm ci && npm run build` the working tree must still be clean —
+# a dirty tree means the committed bundle was not regenerated from this
+# `web-ui/src` + lockfile. Reproducibility was measured on node v24.15.0
+# (repin #649): a second `vite build` of the same tree left
+# `git status public/assets/app` empty, hence a byte-exact `git diff` gate.
 on:
   push:
     branches: [ master, main, develop ]
     paths:
-      - 'web-ui/**'
+      - 'web-ui/**'  # covers web-ui/src, web-ui/package.json (the @phlix/ui pin) and web-ui/package-lock.json
+      - 'public/assets/app/**'  # S253: a bundle-only commit must run this gate too (previously fired nothing)
       - '.github/workflows/web-ui.yml'
   pull_request:
     branches: [ master, main, develop ]
     paths:
       - 'web-ui/**'
+      - 'public/assets/app/**'  # S253
       - '.github/workflows/web-ui.yml'
 
 # Least-privilege: a type-check + build needs no write scope and no secrets,
@@ -29,14 +38,46 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24'  # S253: pinned to the version the committed bundle is byte-reproducible under (#649, v24.15.0)
           cache: 'npm'
           cache-dependency-path: web-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci  # NPM_CONFIG_USERCONFIG has no effect on hosted runners; CI-faithful clean install per #649
         working-directory: web-ui
 
       - name: Build SPA (vue-tsc --noEmit && vite build)
         run: npm run build
         working-directory: web-ui
+
+      # S253 AC: the gate states how much it examined — a future paths change
+      # that silently narrows the compared corpus to zero must be visible.
+      - name: Report bundle corpus size
+        run: |
+          TRACKED="$(git ls-files -- public/assets/app | wc -l)"
+          ONDISK="$(find public/assets/app -type f | wc -l)"
+          echo "Bundle gate compared corpus: ${TRACKED} tracked file(s) under public/assets/app/ (${ONDISK} present on disk after build)."
+          if [ "${TRACKED}" -eq 0 ]; then
+            echo "::error::bundle gate examined 0 tracked files under public/assets/app — an empty corpus must never read as success."
+            exit 1
+          fi
+
+      # S253 AC: this is the comparison the old job lacked — it built into the
+      # committed tree and threw the verdict away. `git diff --exit-code` fails
+      # on ANY modified or deleted tracked bundle file (vite `emptyOutDir:true`
+      # deletes stale hashed files, so renames surface as delete+untracked).
+      - name: Fail if the committed bundle is stale for this source
+        run: git diff --exit-code -- public/assets/app/  # S253SRPGATEX7H8
+
+      # `git diff` is blind to files the build EMITS that are not committed, so
+      # check them explicitly — otherwise "add a chunk, forget to commit it"
+      # would build fine, diff clean, and ship without the chunk.
+      - name: Fail if the build emitted files absent from the committed bundle
+        run: |
+          UNTRACKED="$(git ls-files --others --exclude-standard -- public/assets/app)"
+          if [ -n "${UNTRACKED}" ]; then
+            echo "::error::vite build emitted file(s) that are not committed under public/assets/app:"
+            printf '%s\n' "${UNTRACKED}"
+            exit 1
+          fi
+          echo "Bundle gate untracked check: no emitted-but-uncommitted files."

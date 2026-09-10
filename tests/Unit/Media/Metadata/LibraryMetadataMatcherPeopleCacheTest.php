@@ -49,7 +49,7 @@ final class LibraryMetadataMatcherPeopleCacheTest extends TestCase
      * Lane survival token (this step's premerge `--token` assertion strips
      * comments before matching, so the string must live in CODE, not prose).
      */
-    private const LANE_TOKEN = 'CS72PEOPLECACHEX9Q';
+    private const LANE_TOKEN = 'CS72PEOPLECACHEX9E';
 
     private const SIGNED_287 = '/api/v1/artwork/people-287?size=w185&exp=2000000000&sig=deadbeef';
 
@@ -168,7 +168,7 @@ final class LibraryMetadataMatcherPeopleCacheTest extends TestCase
      */
     private function runMatchWithCalls(
         array $peopleById,
-        ArtworkStorage $artwork,
+        ?ArtworkStorage $artwork,
         ?ArtworkDownloadPolicy $policy = null
     ): array {
         $rows = [];
@@ -219,13 +219,14 @@ final class LibraryMetadataMatcherPeopleCacheTest extends TestCase
 
     /**
      * No-op contract (sibling of the poster/logo unwired guards): with storage
-     * unwired, people entries keep the remote TMDB URL and gain no fields.
+     * unwired (ctor arg null — the real gate, not an empty-returning mock),
+     * people entries keep the remote TMDB URL and gain no fields.
      */
     public function testUnwiredStorageKeepsRemoteProfileUrls(): void
     {
         $updates = $this->runMatchWithCalls(
             ['m1' => ['cast' => [self::castMember('Keanu Reeves', 'Neo', 'keanu.jpg', '287')]]],
-            $this->createMock(ArtworkStorage::class),
+            null,
             null
         );
 
@@ -440,11 +441,14 @@ final class LibraryMetadataMatcherPeopleCacheTest extends TestCase
     }
 
     /**
-     * Client-boundary contract: `id` and `profile_path` are metadata-internal.
-     * The detail shape whitelists {name, role|job, profile_url} for cast AND
-     * crew, so the S72 plumbing can never change any client payload.
+     * Client-boundary contract (scoped honestly): `id` and `profile_path` are
+     * stripped from the VALIDATED top-level cast/crew blocks the shaper rebuilds
+     * — those stay exactly {name, role|job, profile_url}. The raw `metadata`
+     * passthrough block inside the same detail response keeps every stored
+     * field, as it always has for poster_path/external_ids (pre-existing estate
+     * surface; narrowing it is its own cross-surface change).
      */
-    public function testPersonIdAndProfilePathNeverReachTheClientShape(): void
+    public function testPersonIdAndProfilePathNeverReachTheValidatedClientBlocks(): void
     {
         $castEntry = self::castMember('Keanu Reeves', 'Neo', 'keanu.jpg', '287');
         $castEntry['profile_path'] = '/keanu.jpg';

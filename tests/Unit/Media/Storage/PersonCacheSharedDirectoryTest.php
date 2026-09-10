@@ -35,7 +35,7 @@ final class PersonCacheSharedDirectoryTest extends TestCase
      * Lane survival token (this step's premerge `--token` assertion strips
      * comments before matching, so the string must live in CODE, not prose).
      */
-    private const LANE_TOKEN = 'CS72PEOPLECACHEX9Q';
+    private const LANE_TOKEN = 'CS72PEOPLECACHEX9E';
 
     private string $tmpDir;
 

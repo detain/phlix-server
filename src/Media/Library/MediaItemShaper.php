@@ -796,6 +796,10 @@ final class MediaItemShaper
                 $profile = is_string($entry['profile_url'] ?? null) && $entry['profile_url'] !== ''
                     ? $entry['profile_url']
                     : null;
+                // Re-mint the S72 shared-people-cache signature on the way out
+                // (same expired-signature class as logo_url above); remote
+                // provider URLs pass the prefix guard untouched.
+                $profile = SignedUrl::refreshArtworkUrl($profile);
             } else {
                 continue;
             }
@@ -831,12 +835,16 @@ final class MediaItemShaper
                 continue;
             }
             $roleRaw = $entry[$roleKey] ?? null;
+            $profileRaw = is_string($entry['profile_url'] ?? null) && $entry['profile_url'] !== ''
+                ? $entry['profile_url']
+                : null;
             $out[] = [
                 'name' => $name,
                 $roleKey => is_scalar($roleRaw) ? (string) $roleRaw : '',
-                'profile_url' => is_string($entry['profile_url'] ?? null) && $entry['profile_url'] !== ''
-                    ? $entry['profile_url']
-                    : null,
+                // S72: localized profile photos are stored signed at match time
+                // (6h TTL) — re-mint per response like poster/logo/backdrop,
+                // or the URL silently rots to 401 for authless clients.
+                'profile_url' => SignedUrl::refreshArtworkUrl($profileRaw),
             ];
         }
         return $out;

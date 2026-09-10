@@ -257,7 +257,11 @@ class LibraryMetadataMatcher
      * unlike {@see $artworkPathCache} (keyed by TMDB path) this is keyed by the
      * PERSON itself, which is the point of the shared cache: the same person
      * resolves to the same flat directory across every item. Reset per
-     * {@see matchLibrary()} run so URLs never leak across libraries.
+     * {@see matchLibrary()} run so URLs never leak across libraries — the
+     * single-item {@see applyMatch()} path reuses the map exactly like the
+     * sibling path caches, and a carried-over (expired-signature) URL is
+     * harmless: MediaItemShaper re-mints artwork signatures on every response
+     * (the 2026-07-19 incident class).
      *
      * @var array<string, string>
      */
@@ -2656,6 +2660,14 @@ class LibraryMetadataMatcher
     private const PERSON_PROFILE_SIZE = 'w185';
 
     /**
+     * Sane digit budget for a TMDB person id (real ids are ~7 digits). A
+     * longer "id" is provider noise: fall back to the content hash so a
+     * megabyte-long directory name can never reach mkdir. The gate is cost-
+     * free hygiene in front of the charset-validated storage key.
+     */
+    private const MAX_PERSON_ID_DIGITS = 12;
+
+    /**
      * Build the flat shared-cache key for one person (S72).
      *
      * Primary key is the TMDB person id (`people-62`). When a people entry
@@ -2670,7 +2682,11 @@ class LibraryMetadataMatcher
     private static function personArtworkKey(mixed $personId, string $profilePath): string
     {
         $id = MetadataValue::asNullableString($personId);
-        if ($id !== null && preg_match('/^\d+$/', $id) === 1) {
+        if (
+            $id !== null
+            && strlen($id) <= self::MAX_PERSON_ID_DIGITS
+            && preg_match('/^\d+$/', $id) === 1
+        ) {
             return self::PEOPLE_KEY_PREFIX . $id;
         }
 
@@ -2698,11 +2714,17 @@ class LibraryMetadataMatcher
      * Rewrites per successful person: `profile_url` => signed local
      * `/api/v1/artwork/people-{key}?size=w185…`, `profile_path` => raw TMDB path
      * (mirrors the poster's `poster_path` repair handle). Both extra keys are
-     * metadata-internal: {@see \Phlix\Media\Library\MediaItemShaper} whitelists
-     * `{name, role|job, profile_url}` for the response, and the served `w185`
-     * variant is inside {@see ArtworkStorage::WIDTHS}, so no size-gate widening
-     * and no serving change is required (the width-ladder rule travels with the
-     * first backdrop write, deferred with it to the backdrop step).
+     * kept out of the VALIDATED top-level `cast`/`crew` blocks:
+     * {@see \Phlix\Media\Library\MediaItemShaper} whitelists those to
+     * `{name, role|job, profile_url}` and re-mints the stored signature on every
+     * response (same expired-signature class as poster/logo). The raw
+     * `metadata` passthrough inside the detail blob still carries every stored
+     * field (pre-existing estate behavior shared with `poster_path`/`external_ids`
+     * — narrowing it is its own cross-surface change, not this step's). The
+     * served `w185` variant is inside {@see ArtworkStorage::WIDTHS}, so no
+     * size-gate widening and no serving change is required (the width-ladder
+     * rule travels with the first backdrop write, deferred with it to the
+     * backdrop step).
      *
      * Best-effort like every artwork choke point: downloads off / storage
      * unwired / non-TMDB URLs / failures all leave the remote URL untouched;

@@ -47,8 +47,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   item-derived: `ArtworkStorage` and the existing `/api/v1/artwork/{key}` serve route already
   accept any `[A-Za-z0-9-]` key, so no storage, serving, or validation surface had to widen — the
   served `w185` variant is inside the existing size gate. `TmdbProvider` and the episode resolvers
-  now carry TMDB person ids through the cast/crew rows (the shaper still whitelists the response
-  to `{name, role|job, profile_url}`, so internal keys never reach clients), the matcher rewrites
+  now carry TMDB person ids through the cast/crew rows (the shaper still whitelists the top-level
+  cast/crew response blocks to `{name, role|job, profile_url}` and re-mints each stored signature
+  per response — the raw detail-metadata passthrough is pre-existing estate behavior), the
+  matcher rewrites
   each localized profile to a signed artwork URL at the persist choke point, and everything stays
   best-effort: a failed person download logs and keeps the remote URL, the operator
   artwork-download policy disables the whole path, and non-TMDB profile URLs are never touched.

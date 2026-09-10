@@ -448,6 +448,70 @@ final class MediaItemShaperTest extends TestCase
         $this->assertNull($shaped['logo_url']);
     }
 
+    public function testShapeDetailReMintsExpiredInternalProfileUrlOnCastAndCrew(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=shaper-people-secret');
+        SignedUrl::resetSharedForTesting();
+        $signer = SignedUrl::fromEnv();
+
+        // S72: a localized person photo is served from the shared people-{id}
+        // directory, signed at MATCH time — hours later the stored token is
+        // expired. The shaper must re-mint cast AND crew profile_urls exactly
+        // like logo_url, or authless image loaders 401 (the 2026-07-19
+        // incident class).
+        $expiredExp = time() - 3600;
+        $expiredSig = $signer->signature('/api/v1/artwork/people-287', $expiredExp);
+        $stale = '/api/v1/artwork/people-287?size=w185&exp=' . $expiredExp . '&sig=' . $expiredSig;
+
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => [
+                'cast' => [['name' => 'Keanu Reeves', 'role' => 'Neo', 'profile_url' => $stale]],
+                'crew' => [['name' => 'Lana Wachowski', 'job' => 'Director', 'profile_url' => $stale]],
+            ],
+        ], []);
+
+        foreach (['cast', 'crew'] as $group) {
+            $url = $shaped[$group][0]['profile_url'];
+            $this->assertIsString($url, $group . ': profile_url kept');
+            $this->assertNotSame($stale, $url, $group . ': the stale signature is re-minted');
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+            /** @var array<string, string> $q */
+            $this->assertSame('w185', $q['size'], $group . ': the size descriptor survives');
+            $this->assertGreaterThan(time(), (int) $q['exp']);
+            $this->assertTrue(
+                $signer->verify('/api/v1/artwork/people-287', $q['exp'], $q['sig']),
+                $group . ': the re-minted profile_url verifies with a fresh signature'
+            );
+        }
+        $this->assertSame(['name', 'role', 'profile_url'], array_keys($shaped['cast'][0]));
+        $this->assertSame(['name', 'job', 'profile_url'], array_keys($shaped['crew'][0]));
+
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        SignedUrl::resetSharedForTesting();
+    }
+
+    public function testShapeDetailLeavesRemoteProfileUrlUnchanged(): void
+    {
+        // A person photo never localized (storage unwired, policy off, or a
+        // non-TMDB source) stays the public remote URL — the re-mint's prefix
+        // guard must not touch it.
+        $remote = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => [
+                'cast' => [['name' => 'Keanu Reeves', 'role' => 'Neo', 'profile_url' => $remote]],
+                'actors' => [['name' => 'Carrie-Anne Moss', 'character' => 'Trinity', 'profile_url' => $remote]],
+            ],
+        ], []);
+
+        $this->assertSame($remote, $shaped['cast'][0]['profile_url']);
+    }
+
     public function testShapeDetailExposesNormalizedCastCrewCompaniesAndStudio(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

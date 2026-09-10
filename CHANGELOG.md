@@ -206,6 +206,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The pool-concurrency soak's assertion count is now a fixed 27, whatever the load does (S137).**
+  `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php` asserted INSIDE its reader
+  coroutines: `assertIsArray($e)` ran once per successful reader iteration (up to 1,440 times per run), a
+  failing one threw into the coroutine's own `catch (Throwable)` which aborted that reader's remaining
+  iterations, and the post-join error check added two asserts per recorded error — so the run's total rode
+  machine timing. Measured on this box: `OK (3 tests, 1461 assertions)` clean versus 791 assertions when
+  readers were forced to abort early. A count that moves with load means a run that exercised barely half
+  the invariants could still report green. The per-iteration check is now pure evidence collection inside
+  the coroutine — the reader records which reader id and iteration number saw a non-array entry — gated
+  ONCE after the join over a fixed-size shape, and the error list is scanned once per fingerprint
+  (error 2014, "commands out of sync") instead of twice per error. The class is constant at
+  `OK (3 tests, 27 assertions)` across five consecutive runs and under 48× CPU oversubscription with a
+  second concurrent client hammering the same MySQL; a forced-degraded run through the existing
+  `PHLIX_S106_POOL_ACQUIRE_TIMEOUT` override fails deterministically at the same 16 assertions every
+  time where the old code swung. Detection is unchanged, mutation-proven against `src/` with each
+  mutation reverted after: a pool that never returns its leases reddens the soak on the pool-exhaustion
+  error; an injected `2014 Commands out of sync` failure reddens the named fingerprint assert ahead of
+  the catch-all; a no-op cache invalidation reddens the epoch-guard convergence assert; every read
+  returning null reddens the hoisted row gate; and a fabricated never-written value reddens the
+  corruption gate — several of those REDS also showing the count stay put. The structural
+  lease-lifetime half of the step had already been closed on this base by the per-query-borrow change
+  and the timeout contract of the two earlier pool steps, and with them the assertion-escape
+  probe-baseline exclusion for this file — which this change makes moot again: the file now contains no
+  assertion-bearing closure at all, so the prober can never flip its verdict with the pool's behaviour.
+  Test-only: no `src/`, no config, no baseline edit.
+
 - **Three tests that could only ever report the wrong thing now report the truth (S452, S453, S454).** All three were
   re-derived at tip `75431da6`; all three fixes are test-side — no route, OpenAPI, `src/` or composer file is touched.
 

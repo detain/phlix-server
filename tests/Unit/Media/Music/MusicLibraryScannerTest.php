@@ -28,18 +28,41 @@ use Workerman\MySQL\Connection;
 final class MusicLibraryScannerTest extends TestCase
 {
     /**
-     * Retained bytes per buffered file, for the memory ceiling below.
+     * Retained bytes per buffered file, for the COARSE absolute tripwire the memory
+     * case applies on top of its in-run calibration.
      *
-     * MEASURED, not guessed: one `['file' => SplFileInfo, 'meta' => [...]]` entry
-     * costs **1,463 B** on PHP 8.3.6 with ~60-character paths — 11,656,488 B
-     * observed with 7,968 entries buffered simultaneously. 1,700 leaves ~16 %
-     * headroom for a different PHP build or a longer temp path without letting a
-     * genuine regression through: the pre-S95 whole-tree map needs **≈24.3 MB** on
-     * this exact fixture (24,336,768 B measured, independently re-measured at
-     * 24,308,904 B — 3,051 B per file for all 14,000 of them), i.e. **≈79 % over**
-     * the 13,600,000 B ceiling this constant produces.
+     * This is a wide safety margin, not a measurement pin: the per-entry cost of one
+     * `['file' => SplFileInfo, 'meta' => [...]]` window entry drifts with the PHP
+     * build's zval sizes and with the length of the temp path the fixture lives on.
+     * Re-measured on the same fixture: **1,463 B/entry** when the constant was first
+     * written, **1,724 B/entry** on this box's PHP 8.3.6 (which is what made the old
+     * 1,700 B/entry ceiling a deterministic red with no leak in the tree), and a
+     * lower figure again on CI's newer 8.3.x. 2,400 clears the widest of those by
+     * ~39 % while staying far below the ≈3,050 B/file a whole-tree map needs on this
+     * fixture — so the shape this guards against is still over the line, and the
+     * precise, drift-immune question ("does memory scale with the tree?") is decided
+     * by {@see self::WINDOW_SCALING_SLACK} instead of by a byte count.
      */
-    private const BYTES_PER_BUFFERED_FILE = 1700;
+    private const MAX_BYTES_PER_BUFFERED_FILE = 2400;
+
+    /**
+     * How much more than the bounded window's own in-run cost a tree 1.76x its size
+     * may retain before the memory case calls it a leak.
+     *
+     * Both sides are measured on the same runtime in the same process, so allocator
+     * and path-length drift cancel out — which is the whole point of S454. A window
+     * that stays bounded costs the same whatever follows it. Reproducing the pre-S95
+     * shape (MAX_OPEN_ALBUMS 32 → 20000, so the window retains everything) measures
+     * **2.089x** here — 24,686,928 B over 11,815,384 B, byte-identical across runs —
+     * and the file-count ratio 14,000 / 7,968 = 1.757x alone already clears this slack.
+     *
+     * MEASURED, not guessed, on PHP 8.3.6 — bounded ratios: **1.135x** single-file
+     * (byte-identical over three runs, under both the default TMPDIR and TMPDIR=/tmp),
+     * **1.156x** with TMPDIR under /home (longer retained paths), **1.155–1.158x**
+     * inside a full run of this class. 1.3 sits above the widest of those with room
+     * to spare and still well under the leak it exists to catch.
+     */
+    private const WINDOW_SCALING_SLACK = 1.3;
 
     /** @var list<string> Temp files/dirs to remove in tearDown. */
     private array $cleanup = [];
@@ -1127,8 +1150,67 @@ final class MusicLibraryScannerTest extends TestCase
     }
 
     /**
-     * Memory must not scale with the size of the tree, and the documented ceiling
-     * must be the one the WORST case actually reaches.
+     * Builds the calibration fixture for
+     * {@see self::testMemoryStaysBoundedAcrossALargeTree()}: the bounded window
+     * assembled in isolation — 32 album keys x 249 files, one short of
+     * MAX_TRACKS_PER_FLUSH so no key chunk-flushes and the window never overflows —
+     * and NOTHING else. Measuring the same window without the eviction-forcing tail
+     * gives the runtime's own price for a full window, which is the only honest
+     * baseline for "adding 6,032 more files must not add memory".
+     *
+     * @return array{0: string, 1: int, 2: int} `[root, totalFiles, simultaneouslyBufferedEntries]`
+     */
+    private function buildWindowCalibrationTree(): array
+    {
+        $keys = 32;
+        $perKey = 249;          // MAX_TRACKS_PER_FLUSH (250) minus one
+        $buffered = $keys * $perKey;
+
+        $root = $this->tempDir();
+        mkdir($root . '/interleaved', 0777, true);
+        $this->cleanup[] = $root . '/interleaved';
+
+        for ($i = 0; $i < $buffered; $i++) {
+            $this->touchFile($root . '/interleaved', sprintf('i%05d.mp3', $i));
+        }
+
+        return [$root, $buffered, $buffered];
+    }
+
+    /**
+     * Walks $dir with a path-derived tagger and reports the bytes retained above an
+     * in-run baseline, sampled on every progress tick, plus the rows the scan wrote.
+     *
+     * The baseline is taken after `gc_collect_cycles()` and after the fixture exists,
+     * so neither the tree's own path strings nor an earlier walk's leftovers count
+     * toward the reported peak.
+     *
+     * @param \Closure(string): array<string, mixed> $tagger
+     *
+     * @return array{peak: int, inserts: array<string, int>}
+     */
+    private function measureWalkRetainedBytes(string $dir, \Closure $tagger): array
+    {
+        $db = new CountingConnection();
+        $scanner = $this->taggedScanner($db, $tagger);
+
+        gc_collect_cycles();
+        $baseline = memory_get_usage();
+        $peak = 0;
+
+        // Sampled on EVERY tick: the worst case is reached at file 7,968, which no
+        // fixed stride is guaranteed to land on.
+        $scanner->scanDirectory($dir, static function () use ($baseline, &$peak): void {
+            $peak = max($peak, memory_get_usage() - $baseline);
+        }, 'lib-s95');
+
+        return ['peak' => $peak, 'inserts' => $db->inserts];
+    }
+
+    /**
+     * Memory must not scale with the size of the tree, and the bound must be one the
+     * runtime can be held to anywhere — not a byte count that drifts with the PHP
+     * build's allocator.
      *
      * The pre-S95 map retained one `['file' => SplFileInfo, 'meta' => [...]]` entry
      * per audio file for the whole walk, so a 14,000-file tree held ≈ 20 MB and the
@@ -1151,15 +1233,28 @@ final class MusicLibraryScannerTest extends TestCase
      *
      * `RecursiveIteratorIterator` walks one directory at a time, so the peak is the
      * same whichever of the two it happens to visit first.
+     *
+     * ## Why the ceiling is calibrated IN THIS RUN (S454)
+     *
+     * This case used to compare the walk-time delta against a fixed 13,600,000 B
+     * budget (32 × 250 × 1,700 B per entry). That constant was itself a snapshot of
+     * one PHP build's zval sizes: the same unchanged code measured 11,656,488 B when
+     * it was written and 13,732,640 B on this box's PHP 8.3.6 — a deterministic red
+     * with nothing leaked, and green in CI on a newer 8.3.x. A byte budget cannot be
+     * both precise enough to catch a leak and loose enough to survive an allocator.
+     *
+     * So the primary assertion is now a RATIO: the cost of the full window measured
+     * in this very process against the cost of the worst-case tree in the same
+     * process. Drift cancels; a whole-tree retention cannot hide, because 1.76x the
+     * files under a leak means 1.76x the bytes. The absolute figure survives only as
+     * the deliberately coarse tripwire in {@see self::MAX_BYTES_PER_BUFFERED_FILE},
+     * which catches the one thing a ratio cannot see — the window itself becoming
+     * expensive per entry.
      */
     public function testMemoryStaysBoundedAcrossALargeTree(): void
     {
-        [$dir, $total, $buffered] = $this->buildWorstCaseBufferTree();
-        $this->assertSame(14000, $total);
-        $this->assertSame(7968, $buffered, '32 keys x 249 files stay buffered simultaneously');
-
-        $db = new CountingConnection();
-        $scanner = $this->taggedScanner($db, static function (string $path): array {
+        // One tagger for both walks, so the two peaks price identical entries.
+        $tagger = static function (string $path): array {
             $base = basename($path, '.mp3');
             // 'i…' → one of 32 interleaved albums; 't…' → a unique album per file.
             $n = (int) substr($base, 1);
@@ -1174,46 +1269,75 @@ final class MusicLibraryScannerTest extends TestCase
                 'year' => 2001,
                 'genre' => 'Rock',
             ];
-        });
+        };
 
-        gc_collect_cycles();
-        $baseline = memory_get_usage();
-        $peak = 0;
+        // 1. CALIBRATION — the bounded window alone: 7,968 files, all buffered.
+        [$windowDir, $windowTotal, $buffered] = $this->buildWindowCalibrationTree();
+        $this->assertSame(7968, $windowTotal);
+        $this->assertSame(7968, $buffered, '32 keys x 249 files stay buffered simultaneously');
+        $window = $this->measureWalkRetainedBytes($windowDir, $tagger);
 
-        // Sampled on EVERY tick: the worst case is reached at file 7,968, which no
-        // fixed stride is guaranteed to land on.
-        $scanner->scanDirectory($dir, static function () use ($baseline, &$peak): void {
-            $peak = max($peak, memory_get_usage() - $baseline);
-        }, 'lib-s95');
+        // 2. THE CASE — the same window plus 6,032 eviction-forcing files.
+        [$dir, $total, $worstCaseBuffered] = $this->buildWorstCaseBufferTree();
+        $this->assertSame(14000, $total);
+        $this->assertSame($buffered, $worstCaseBuffered, 'the worst case fills the same window, no more');
+        $walk = $this->measureWalkRetainedBytes($dir, $tagger);
 
-        $ceiling = 32 * 250 * self::BYTES_PER_BUFFERED_FILE;
+        // 3. THE BOUND — 1.76x the files, one unchanged window ⇒ unchanged bytes.
+        $scaling = $walk['peak'] / max(1, $window['peak']);
         $this->assertLessThan(
-            $ceiling,
-            $peak,
+            self::WINDOW_SCALING_SLACK,
+            $scaling,
             sprintf(
-                'Walk-time memory must stay within MAX_OPEN_ALBUMS x MAX_TRACKS_PER_FLUSH entries; '
-                . 'peaked at %d bytes (%.0f B/entry over %d buffered) across %d files, ceiling %d. '
-                . 'The pre-S95 whole-tree map would hold ~%d bytes here.',
-                $peak,
-                $peak / $buffered,
-                $buffered,
+                'Walk-time memory must not scale with the tree: the worst case (%d files) retained %d bytes '
+                . 'against %d bytes for the same full window on its own (%d files) — a %.3fx ratio, slack %.2fx. '
+                . 'Retaining every entry instead of only the open albums is exactly %.3fx here.',
                 $total,
-                $ceiling,
-                $total * self::BYTES_PER_BUFFERED_FILE,
+                $walk['peak'],
+                $window['peak'],
+                $windowTotal,
+                $scaling,
+                self::WINDOW_SCALING_SLACK,
+                $total / $windowTotal,
             ),
         );
 
-        // The bound is only meaningful if the fixture really did fill the window:
-        // a peak far below it would mean the worst case was never assembled.
-        $this->assertGreaterThan(
-            $buffered * 1000,
-            $peak,
-            'the fixture must actually buffer 7,968 entries — otherwise the ceiling proves nothing',
+        // 4. THE COARSE FLOOR THE RATIO CANNOT SEE — per-entry inflation of the
+        //    window itself moves both sides together, so keep a deliberately wide
+        //    absolute budget as well (see the constant's rationale).
+        $ceiling = 32 * 250 * self::MAX_BYTES_PER_BUFFERED_FILE;
+        $this->assertLessThan(
+            $ceiling,
+            $walk['peak'],
+            sprintf(
+                'Walk-time memory must stay within MAX_OPEN_ALBUMS x MAX_TRACKS_PER_FLUSH entries; '
+                . 'peaked at %d bytes (%.0f B/entry over %d buffered) across %d files, coarse ceiling %d. '
+                . 'The pre-S95 whole-tree map would hold ~%d bytes at this runtime\'s measured entry cost.',
+                $walk['peak'],
+                $walk['peak'] / $buffered,
+                $buffered,
+                $total,
+                $ceiling,
+                (int) round($window['peak'] / $buffered * $total),
+            ),
         );
 
-        // Sanity: it really did index the whole tree while staying flat.
-        $this->assertSame(32 + ($total - $buffered), $db->inserts['music_albums'] ?? 0);
-        $this->assertSame($total, $db->inserts['music_tracks'] ?? 0);
+        // 5. The bound is only meaningful if the fixtures really did fill the window:
+        //    a peak far below it would mean the worst case was never assembled.
+        $this->assertGreaterThan(
+            $buffered * 1000,
+            $window['peak'],
+            'the calibration fixture must actually buffer 7,968 entries — otherwise the baseline proves nothing',
+        );
+        $this->assertGreaterThan(
+            $buffered * 1000,
+            $walk['peak'],
+            'the worst-case fixture must actually buffer 7,968 entries — otherwise the ceiling proves nothing',
+        );
+
+        // 6. Sanity: it really did index the whole tree while staying flat.
+        $this->assertSame(32 + ($total - $buffered), $walk['inserts']['music_albums'] ?? 0);
+        $this->assertSame($total, $walk['inserts']['music_tracks'] ?? 0);
     }
 
     /**

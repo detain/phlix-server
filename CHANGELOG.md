@@ -175,6 +175,61 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Three tests that could only ever report the wrong thing now report the truth (S452, S453, S454).** All three were
+  re-derived at tip `75431da6`; all three fixes are test-side — no route, OpenAPI, `src/` or composer file is touched.
+
+- **`BackupManagerTest::testCreateBackupGeneratesIdAndPath` ran for real instead of skipping forever (S452).**
+  The case opened with an unconditional `markTestSkipped('createBackup requires actual filesystem and mysqldump …')`,
+  so it skipped on every machine — CI included, where the name sits in the skip set of run 34390345172 — while the
+  job stayed green. Its stated reason was also false: `BackupManager::createDatabaseDump()` throws only when
+  `returnCode !== 0` **and** the dump file does not exist, and the shell `>` redirect creates that file whatever
+  `mysqldump` does, so the step is tolerant by construction and `tar` is the sole external it truly needs. The case
+  now drives `createBackup()` end to end in its own process (`@runInSeparateProcess` + `@preserveGlobalState disabled`,
+  because `PHLIX_CONFIG_DIR`/`PHLIX_DATA_DIR` are constants — the same venue `BackupConfigRecursionTest` and
+  `BackupControllerBodyPersistenceTest` already use), against a scratch config whose `backup.php` points
+  `local_path` at a temp sink and a `database.php` built from `phpunit.xml`'s own `DB_*` env, with the `backups`
+  table mocked. It pins a real RFC-4122 v4 `backup_id`, an archive that exists inside the configured sink under the
+  label prefix, a `tar tzf` listing that contains `database.sql` and `config/backup.php`, `size_bytes` equal to the
+  `filesize()` of that archive, and the S439 staging-directory sweep. Measured on this box before and after:
+  `Tests: 14, Assertions: 23, Skipped: 1` → `OK (14 tests, 35 assertions)`; `scripts/skipped-test-names.sh` over a run
+  of the file now prints zero names. The forced coupling was repaired in the same commit — `SkippedTestNameReportingTest`
+  borrowed that permanent skip as its "exactly one skip" fixture (10 of its 47 cases went red the moment the skip died),
+  and now mints its own one-skip probe into the run's scratch dir, so a guard of the skip-reporting mechanism can never
+  again depend on an unrelated case staying dead. The estate gains no new skip: a full 11,129-test suite run on this box
+  lists ten skips, nine for a missing Chrome/Chromium binary and one for a missing FFI extension, and zero occurrences
+  of `BackupManager`.
+
+- **The audiobook traversal test pinned the host's directory layout instead of the path jail (S453).**
+  `AudiobookControllerTest::testStreamAudiobookRejectsPathTraversalEscapingRoot` planted its secret file in
+  `sys_get_temp_dir()` and depended on `LibraryRootGuard::FALLBACK_ROOTS` containing `/home` to keep it outside, with
+  the raw traversal path hardcoding the username `my`. That premise is host-shaped, not code-shaped: with `TMPDIR`
+  under `/home/...` the planted file lands *inside* the fallback jail, the guard answers true, the controller serves
+  it, and the expected refusal becomes a 200 — deterministic red on this box (`Failed asserting that an array contains
+  200`), green in CI only because `HOME=/home/runner` happens to share the prefix. Jail and escape are now both built
+  inside one directory the test owns and pinned explicitly through `PHLIX_LIBRARY_ROOTS` + `LibraryRootGuard::reset()`
+  (the guard's documented test seam, already used by `PhotoControllerTest` and `BookControllerTest`), with the previous
+  env value restored and the guard reset in a `finally`. The traversal path still carries the jail root as a literal
+  substring while `realpath()`-ing out of it — exactly the shape the pre-guard `str_contains()` allowlist admitted —
+  and an in-jail positive control now proves the guard is not simply refusing everything, so a guard weakened to refuse
+  all and a guard weakened to admit substrings both redden the case. Assertion semantics are unchanged; no username
+  appears anywhere. Green under the default `TMPDIR`, `TMPDIR=/tmp` and a `TMPDIR` under `/home` (7 assertions each),
+  and red again with `LibraryRootGuard`'s containment check reverted to the raw-substring form.
+
+- **The music-scanner memory ceiling stopped pinning one PHP build's zval sizes (S454).**
+  `MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree` compared retained bytes with a fixed 13,600,000 B
+  budget derived from a hardcoded 1,700 B per buffered entry. That figure was a snapshot of the machine that measured
+  it: the same unchanged scanner code retained 11,656,488 B when the constant was written and 13,732,640 B on this box's
+  PHP 8.3.6 — a deterministic red, alone and at 13,983,120 B inside a full suite run, with nothing leaked, green in CI.
+  The primary bound is now a ratio measured in-run: a calibration walk over the bounded window alone (32 albums × 249
+  files, one short of `MAX_TRACKS_PER_FLUSH`) followed by the 14,000-file worst case in the same process, with the worst
+  case allowed 1.3× the window's own retained bytes. Allocator and temp-path drift cancel between the two measurements,
+  which is what removes the venue dependency; the absolute figure survives only as a deliberately coarse 2,400 B/entry
+  tripwire against per-entry inflation a ratio cannot see, with the pre-S95 whole-tree estimate recomputed from this
+  runtime's measured entry cost rather than a remembered one. Bounded ratios measured here: 1.135× single-file
+  (byte-identical across three runs under both temp dirs), 1.156× with `TMPDIR` under `/home`, 1.155–1.158× inside a
+  full run of the class. Reproducing the pre-S95 retention (`MAX_OPEN_ALBUMS` 32 → 20000) reddens at 2.089× — 24,686,928 B
+  against 11,815,512 B — so the case still fails loudly on a real leak, and no skip was added anywhere.
+
 - **The `tests/` PHPStan gate now runs at level 4, every finding fixed at source (S186).**
   `phpstan-tests.neon` was raised from level 2 to level 4; re-derivation at tip `5986b61d` found 85
   level-4 findings — not the ~34 the plan had claimed. Every finding was triaged with per-error

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# S457 (prototype) — PATH shim giving every parallel PHPUnit child a private
+# TMPDIR BEFORE PHP starts (sys_get_temp_dir() binds TMPDIR once at process
+# startup; a later putenv() is provably inert — measured on PHP 8.3.6).
+# paraunit launches children as argv `php <phpunit-bin> …` found via PATH and
+# exports PARAUNIT_PROCESS_UNIQUE_ID (md5 of the chunk's test files) per child.
+# Usage: PATH="<repo>/scripts/parallel:$PATH" vendor/bin/paraunit run …
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real_php="${PHLIX_REAL_PHP:-}"
+if [ -z "$real_php" ]; then
+    # Resolve php with THIS directory removed from PATH — otherwise the exec
+    # below finds the shim itself and recurses forever.
+    trimmed_path="$(printf '%s' "$PATH" | tr ':' '\n' | awk -v d="$here" '$0!=d' | paste -sd:)"
+    real_php="$(PATH="$trimmed_path" command -v php)" || {
+        echo "php-shim: no real php found on PATH (after removing $here)" >&2
+        exit 127
+    }
+fi
+tmp_base="${PHLIX_TEST_TMP_BASE:-/tmp}"
+worker_id="${PARAUNIT_PROCESS_UNIQUE_ID:-$$}"
+export TMPDIR="${tmp_base}/worker-${worker_id}"
+mkdir -p "$TMPDIR"
+exec "$real_php" "$@"

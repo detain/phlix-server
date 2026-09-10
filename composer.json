@@ -55,6 +55,7 @@
         "codeception/codeception": "^5.3",
         "codeception/module-asserts": "^3.2",
         "detain/phlix-tokens": "v0.2.0",
+        "facile-it/paraunit": "^2.0",
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^10.0",

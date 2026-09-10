@@ -47,7 +47,10 @@ foreach ($argv as $arg) {
 ConnectionPool::init(__DIR__ . '/../config/database.php');
 $db = ConnectionPool::getConnection('mysql');
 $repo = new ItemRepository($db);
-$candidateRepo = new MarkerCandidateRepository($db);
+// MarkerCandidateRepository takes the ItemRepository, not the raw connection —
+// run-marker-detection-worker.php:41 wires the same pair. Passing $db here was a
+// TypeError at boot (the script could never have run past this line).
+$candidateRepo = new MarkerCandidateRepository($repo);
 
 // Build the FFprobe runner from config/ffmpeg.php so the CLI probes with the
 // same binaries the live scanner uses.

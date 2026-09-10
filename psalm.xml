@@ -31,6 +31,24 @@
 
     phpVersion is pinned to the version CI and production analyse against, so
     the result does not drift with whatever PHP the runner happens to ship.
+
+    S256-residual (2026-09-10) — scripts/ joined the production corpus, mirroring
+    the hub's S248 shape. The level ladder above was measured over src/ only and
+    is UNCHANGED by this step; the scripts/ addition was measured separately:
+    Psalm 6.5.0 reported 10 level-5 findings across scripts/ (43 PHP files
+    enumerated at the time of writing), and every one was fixed at the source —
+    two boot-blocking TypeError constructors (backfill-chapters.php passed the
+    raw Connection to MarkerCandidateRepository, run-media-asset-worker.php to
+    FfmpegRunner), a wrong config key (backfill-streams.php read 'probe_path',
+    so a custom ffprobe binary was silently ignored), a collect() name collision
+    with crell/tukio's global (add-headers.php), a ParadoxicalCondition from a
+    ternary that re-read an offset after narrowing (ci-browser-e2e-prereqs.php),
+    and 4 UndefinedClass reports for Swoole\\Coroutine\\WaitGroup resolved by the
+    <stubs> entry below — the same drift-tested declaration phpstan scanFiles and
+    psalm-tests.xml load. No baseline, no ignoreErrors, no IssueHandler, zero
+    <file> exclusions here. tests/ is NOT part of this config; it keeps its own
+    measured-L5 file, psalm-tests.xml (S306). Scope is asserted, with negative
+    fuzz, by tests/Unit/Support/StaticAnalysisScopeTest.php.
 -->
 <psalm
     errorLevel="5"
@@ -44,8 +62,20 @@
 >
     <projectFiles>
         <directory name="src" />
+        <directory name="scripts" />
         <ignoreFiles>
             <directory name="vendor" />
         </ignoreFiles>
     </projectFiles>
+
+    <!-- S256-residual: same single-source-of-truth stub the tests config and
+         phpstan-tests.neon load. scripts/bench/coroutine_bench.php constructs a
+         Swoole\Coroutine\WaitGroup behind an extension_loaded('swoole') guard;
+         it is a userland class the swoole binary compiles in, invisible to
+         file-based analysis even when the extension is loaded (measured in
+         S306). The declaration is drift-tested against the real extension by
+         StaticAnalysisScopeTest::testTheWaitGroupDeclarationStillMatchesTheRealExtension. -->
+    <stubs>
+        <file name="phpstan-stubs/Swoole/Coroutine/WaitGroup.stub" />
+    </stubs>
 </psalm>

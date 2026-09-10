@@ -87,7 +87,13 @@ if (!is_file($contractsVectorsPath)) {
     fwrite(STDERR, "FAIL: {$contractsVectorsPath} not found.\n");
     exit(1);
 }
-$contractsVectors = json_decode((string) file_get_contents($contractsVectorsPath), true, 512, JSON_THROW_ON_ERROR);
+/** @var mixed $contractsVectorsDecoded */
+$contractsVectorsDecoded = json_decode((string) file_get_contents($contractsVectorsPath), true, 512, JSON_THROW_ON_ERROR);
+if (!is_array($contractsVectorsDecoded)) {
+    fwrite(STDERR, "FAIL: {$contractsVectorsPath} does not decode to a JSON object.\n");
+    exit(1);
+}
+$contractsVectors = $contractsVectorsDecoded;
 
 // --- Venue: identical construction to the pin test, generator doubles instead
 // --- of TestCase helpers (the harness owns the SQL routing; nothing drifts).
@@ -134,7 +140,15 @@ $assert200 = static function (array $rail, string $name) use ($fail): void {
     ['name' => 'Movie Night', 'memberId' => 'pin_host', 'memberName' => 'Host One'],
     'pin_host'
 );
-$groupId = (string) ($created['group']['group_id'] ?? '');
+// drive() is typed array{0:int, 1:array<string,mixed>}: every value inside the
+// decoded envelope is mixed, so each shape step is asserted here instead of
+// blindly offset-cast (the pre-parse reads also kill PHPStan L9's mixed chain).
+$createdGroup = $created['group'] ?? null;
+if (!is_array($createdGroup)) {
+    $fail('createGroup rail returned no group object — nothing downstream can run.');
+}
+$groupIdRaw = $createdGroup['group_id'] ?? null;
+$groupId = is_string($groupIdRaw) ? $groupIdRaw : '';
 if ($groupId === '') {
     $fail('createGroup rail returned no group_id — nothing downstream can run.');
 }
@@ -234,20 +248,25 @@ if ($err404Status !== 404 || array_keys($err404Body) !== ['error']) {
 if (array_keys($createRail['body']) !== ['success', 'group']) {
     $fail('create envelope changed.');
 }
-if (array_keys($created['group']) !== SyncPlayEnvelopePinHarness::GROUP_STATE_KEYS) {
+if (array_keys($createdGroup) !== SyncPlayEnvelopePinHarness::GROUP_STATE_KEYS) {
     $fail(
         'getState() key order changed — the S415 authority ruling must be re-measured '
         . 'BEFORE this fixture regenerates.'
     );
 }
-if (!is_array($created['group']['members']) || array_keys($created['group']['members']) !== ['pin_host']) {
+$createdMembers = $createdGroup['members'] ?? null;
+if (!is_array($createdMembers) || array_keys($createdMembers) !== ['pin_host']) {
     $fail('members is not a dict keyed by member id.');
 }
-$firstMember = $created['group']['members']['pin_host'] ?? [];
+$firstMember = $createdMembers['pin_host'] ?? [];
 if (!is_array($firstMember) || array_keys($firstMember) !== SyncPlayEnvelopePinHarness::MEMBER_VALUE_KEYS) {
     $fail('member value shape changed.');
 }
-if ($getBody['group']['queue'] !== []) {
+$getGroupPayload = $getBody['group'] ?? null;
+if (!is_array($getGroupPayload)) {
+    $fail('the getGroup RAIL seed did not emit a group object.');
+}
+if ($getGroupPayload['queue'] !== []) {
     $fail('the getGroup RAIL seed must carry the empty queue (mirrors the contracts getGroup rail).');
 }
 
@@ -255,9 +274,11 @@ if ($getBody['group']['queue'] !== []) {
 // Fail-fast on the POPULATED witness specifically: it is the one arm whose
 // queue-item shape (media_id, media_info, added_at, added_by) the pin cares
 // about — the empty-queue getGroup rail cannot cover it.
+$groupQueue = is_array($groupState['queue'] ?? null) ? $groupState['queue'] : [];
+$groupQueueItem = is_array($groupQueue[0] ?? null) ? $groupQueue[0] : [];
 if (
     array_keys($groupState) !== SyncPlayEnvelopePinHarness::GROUP_STATE_KEYS
-    || array_keys($groupState['queue'][0] ?? []) !== ['media_id', 'media_info', 'added_at', 'added_by']
+    || array_keys($groupQueueItem) !== ['media_id', 'media_info', 'added_at', 'added_by']
     || $groupState['playback_state'] !== 'playing'
 ) {
     $fail('the populated getState() witness shape drifted from the pinned 12-key + queue-item spelling.');
@@ -270,12 +291,29 @@ foreach ($rails as $name => $rail) {
 $liveDigestRails['groupState'] = SyncPlayEnvelopePinHarness::abstractKeyPaths($groupState);
 
 $contractsDigestRails = [];
-foreach ($contractsVectors['rails'] as $name => $record) {
-    $contractsDigestRails[(string) $name] = SyncPlayEnvelopePinHarness::abstractKeyPaths($record['response']);
+$contractsRails = $contractsVectors['rails'] ?? null;
+if (!is_array($contractsRails)) {
+    $fail('the contracts vectors have no "rails" object.');
 }
-$contractsDigestRails['groupState'] = SyncPlayEnvelopePinHarness::abstractKeyPaths(
-    $contractsVectors['groupState']['state']
-);
+foreach ($contractsRails as $name => $record) {
+    if (!is_array($record)) {
+        $fail("contracts vector rail '{$name}' is not an object.");
+    }
+    $recordResponse = $record['response'] ?? null;
+    if (!is_array($recordResponse)) {
+        $fail("contracts vector rail '{$name}' has no response object.");
+    }
+    $contractsDigestRails[(string) $name] = SyncPlayEnvelopePinHarness::abstractKeyPaths($recordResponse);
+}
+$contractsGroup = $contractsVectors['groupState'] ?? null;
+if (!is_array($contractsGroup)) {
+    $fail('the contracts vectors have no "groupState" object.');
+}
+$contractsGroupState = $contractsGroup['state'] ?? null;
+if (!is_array($contractsGroupState)) {
+    $fail('the contracts vectors groupState has no "state" object.');
+}
+$contractsDigestRails['groupState'] = SyncPlayEnvelopePinHarness::abstractKeyPaths($contractsGroupState);
 
 if (array_keys($liveDigestRails) !== array_keys($contractsDigestRails)) {
     $fail(

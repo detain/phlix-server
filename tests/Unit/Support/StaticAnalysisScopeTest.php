@@ -53,27 +53,61 @@ use Symfony\Component\Yaml\Yaml;
  *
  * ## S306 — the same trick, one tool over: `tests/` under Psalm
  *
- * Server Psalm was src-only (`psalm.xml` directory `src`), while PHPStan already
- * covered `tests/` — the S128 defect half-ported to the second analyser. Mirroring the
- * hub's S444 precedent (#274): because Psalm 6 admits exactly one `errorLevel` per
- * config file, `tests/` gets a second shipped config, `psalm-tests.xml`, at the
- * measured level 5 (ladder L1 4236 → L8 79 recorded in that file's header; all 290
- * L5 findings fixed at the source except one exclusion), plus a second CI step and
- * the verbatim pins below. Unlike the hub, `psalm.xml` is NOT touched — the server
- * never widened it, so its src-only L5 shape is asserted here rather than restored.
- * One written-why exclusion (`tests/codeception/acceptance/SyncPlayCest.php`) and one
- * `<stubs>` entry (the drift-tested WaitGroup declaration, single source of truth
- * shared with PHPStan) are allow-listed exactly; both configs keep an absent
- * `ignoreErrors` block, no IssueHandler and no baseline, and the negative fuzz at the
- * bottom proves every one of these pins bites on a silent-scope mutant.
- */
+     * Server Psalm was src-only (`psalm.xml` directory `src`), while PHPStan already
+     * covered `tests/` — the S128 defect half-ported to the second analyser. Mirroring the
+     * hub's S444 precedent (#274): because Psalm 6 admits exactly one `errorLevel` per
+     * config file, `tests/` gets a second shipped config, `psalm-tests.xml`, at the
+     * measured level 5 (ladder L1 4236 → L8 79 recorded in that file's header; all 290
+     * L5 findings fixed at the source except one exclusion), plus a second CI step and
+     * the verbatim pins below. (At S306 time `psalm.xml` itself was NOT touched — the
+     * server never widened it the way the hub did; S256-residual later added scripts/
+     * to it, and the corpus pin below moved with it, exact-listed.)
+     * One written-why exclusion (`tests/codeception/acceptance/SyncPlayCest.php`) and one
+     * `<stubs>` entry (the drift-tested WaitGroup declaration, single source of truth
+     * shared with PHPStan) are allow-listed exactly; both configs keep an absent
+     * `ignoreErrors` block, no IssueHandler and no baseline, and the negative fuzz at the
+     * bottom proves every one of these pins bites on a silent-scope mutant.
+     *
+     * ## S256-residual — `scripts/` joins the PRODUCTION corpus in both tools
+     *
+     * The tests/ halves closed S256's other leg; the measured residual was that
+     * phlix-server's `scripts/` (43 PHP files) was analysed by NOTHING: phpstan.neon
+     * had paths=[src], phpstan-tests.neon only *scanned* scripts/bootstrap_env.php
+     * for its two function symbols, and psalm.xml was src-only. The hub closed this
+     * same gap for its own scripts/ under S248; this mirrors that shape.
+     *
+     * The trap is the S128 trap wearing a new costume: CI's production PHPStan step
+     * was `analyze src/ --level=9`, and a CLI path/level overrides the config
+     * entirely — widening `paths:` alone would have left CI analysing exactly src/
+     * behind a green gate. So the step is now `./vendor/bin/phpstan analyse
+     * --no-progress --error-format=github` (no path, no level — the hub's shape),
+     * phpstan.neon carries the corpus, and the verbatim pins below are what make
+     * that arrangement unbreakable-by-accident: the config's exact paths list, the
+     * config's scanFiles allow-list, psalm.xml's exact <directory> set and stub set,
+     * the byte-identity of phpstan.neon and phpstan.neon.dist, and the CI command
+     * itself. All 47 PHPStan-L9 and all 10 Psalm-L5 findings scripts/ produced were
+     * fixed at the source (five of them were real runtime defects: two boot-blocking
+     * wrong-constructor-argument TypeErrors, an invalid constant applied mid-iteration,
+     * a silently ignored --limit, and a wrong config key); the only config additions are
+     * the two path entries and the shared WaitGroup declaration in each tool's sanctioned
+     * slot. No baseline, no ignoreErrors, no exclusions.
+     */
 final class StaticAnalysisScopeTest extends TestCase
 {
     /**
-     * S306 survival token — code-resident only, never in markdown. The merge ritual
-     * verifies this literal survives into master's copy of this exact file.
+     * S306 survival token — code-resident only, never in markdown. The merge
+     * ritual verifies this literal survives into master's copy of this exact file.
      */
     public const SURVIVAL_TOKEN = 'S306SRVPALMGATEX5T2';
+
+    /**
+     * S256-residual survival token — code-resident only, never in markdown
+     * (this file is the PHP corpus; 0 occurrences in any .md anywhere at commit
+     * time, and 0 in any other checkout repo-wide — verified before embedding).
+     * The merge ritual verifies this literal survives into master's copy of
+     * this exact file.
+     */
+    public const SCRIPTS_SCOPE_TOKEN = 'CS256SCRIPTSSCOPEX9S';
 
     private const REPO = __DIR__ . '/../../..';
 
@@ -215,6 +249,15 @@ final class StaticAnalysisScopeTest extends TestCase
     /**
      * The new gates must be ADDITIONS. A change that widened coverage by REPLACING the
      * src/ steps would satisfy the two tests above and quietly lower the bar.
+     *
+     * S256-residual changed the SHAPE of the production PHPStan step (the CLI path and
+     * level became config-driven — see the step's own comment and the class docblock),
+     * so the old `analyze src/ --level=9` fragment pin is replaced by the stronger one
+     * below: the exact command, verbatim, carrying NO path and NO level. What has to
+     * stay untouched is the src/ PHPCS gate and the production corpus itself — and
+     * "untouched" is now asserted against a step that cannot silently shrink it,
+     * because testTheProductionConfigKeepsLevelNine... below pins the paths list
+     * exactly and nothing on the command line can override it any more.
      */
     public function testTheSrcGatesAreStillThereUnchanged(): void
     {
@@ -224,23 +267,97 @@ final class StaticAnalysisScopeTest extends TestCase
             'the src/ phpcs gate must still run unmodified PSR-12 over src/',
         );
 
+        $hits = $this->stepsRunning('phpstan analyse --no-progress');
         self::assertCount(
             1,
-            $this->stepsRunning('phpstan', 'src/', '--level=9'),
-            'the src/ phpstan gate must still run at level 9 over src/',
+            $hits,
+            'exactly one CI step must run the production PHPStan analysis config-driven '
+            . '(no path, no level on the command line — S256-residual)',
         );
+
+        self::assertSame(
+            './vendor/bin/phpstan analyse --no-progress --error-format=github',
+            trim($hits[0]),
+            'the production PHPStan step is pinned verbatim; every escape hatch below is '
+            . 're-asserted here even if a fragment search misses',
+        );
+
+        foreach (['--level', 'src/', 'scripts/', 'tests/', '-c '] as $override) {
+            self::assertStringNotContainsString(
+                $override,
+                $hits[0],
+                "a CLI {$override} on the production step overrides the shipped config — "
+                . 'that is the S128 trap: the gate would go green over a corpus the config '
+                . 'no longer describes',
+            );
+        }
+
+        foreach ([' || true', '|| exit 0', 'continue-on-error'] as $escape) {
+            self::assertStringNotContainsString($escape, $hits[0], 'a gate that cannot fail is not a gate');
+        }
+    }
+
+    /**
+     * `phpstan.neon` / `phpstan.neon.dist` with their comment lines removed, so every
+     * directive-level "must not contain" runs against DIRECTIVES only — the rule the
+     * `phpstanTestsDirectives()` twin documents (fourth-detector lesson): this config's
+     * own comments legitimately name `scanFiles`, `stubFiles` and `--level`.
+     */
+    private function phpstanSrcDirectives(string $path = self::PHPSTAN_SRC): string
+    {
+        $raw = file_get_contents($path);
+        self::assertIsString($raw);
+
+        $kept = [];
+        foreach (explode("\n", $raw) as $line) {
+            if (str_starts_with(ltrim($line), '#')) {
+                continue;
+            }
+
+            $kept[] = $line;
+        }
+
+        $directives = implode("\n", $kept);
+
+        // Anti-vacuity: stripping must not have eaten the file.
+        self::assertStringContainsString('level:', $directives, 'comment stripping ate the config');
+        self::assertStringContainsString('paths:', $directives, 'comment stripping ate the config');
+
+        return $directives;
+    }
+
+    /**
+     * @return list<string> the exact `paths:` entries of a phpstan neon directives string
+     */
+    private function phpstanPaths(string $directives): array
+    {
+        preg_match('/^\s*paths:\s*$(?<body>(?:\n\s*-\s*\S+)*)/m', $directives, $m);
+        self::assertArrayHasKey('body', $m, 'the production phpstan config must declare paths');
+
+        preg_match_all('/^\s*-\s*(\S+)\s*$/m', $m['body'], $entries);
+
+        return $entries[1];
     }
 
     public function testSrcKeepsLevelNineWithNoBaselineAndNoIgnoreList(): void
     {
-        $src = file_get_contents(self::PHPSTAN_SRC);
-        self::assertIsString($src);
+        $src = $this->phpstanSrcDirectives();
 
-        self::assertMatchesRegularExpression('/^\s*level:\s*9\s*$/m', $src, 'src/ must stay at level 9');
+        self::assertMatchesRegularExpression('/^\s*level:\s*9\s*$/m', $src, 'the production corpus must stay at level 9');
         self::assertMatchesRegularExpression('/^\s*paths:\s*$/m', $src);
-        self::assertMatchesRegularExpression('/^\s*-\s*src\s*$/m', $src, 'src/ must be in the src config paths');
 
-        // S128's hardest rule: never a baseline for src/.
+        // S256-residual: assertSame over the EXACT corpus, not assertContains over one
+        // entry. Dropping either directory must redden the suite, not just lose
+        // coverage silently, and a third path needs the same commit that widens CI.
+        self::assertSame(
+            ['src', 'scripts'],
+            $this->phpstanPaths($src),
+            'the production phpstan corpus is exactly [src, scripts]. scripts/ joined in '
+            . 'S256-residual; a silent narrowing back to src/ is the '
+            . 'gate-that-proves-nothing defect this class exists to stop.',
+        );
+
+        // S128's hardest rule: never a baseline for the production corpus.
         foreach (['phpstan-baseline.neon', 'psalm-baseline.xml'] as $baseline) {
             self::assertFileDoesNotExist(
                 self::REPO . '/' . $baseline,
@@ -287,6 +404,74 @@ final class StaticAnalysisScopeTest extends TestCase
             . 'silently disappears from analysis; the two entries S343 deleted excused '
             . 'nothing. To exclude a path, fix the errors at the source and justify the '
             . 'exclusion in review.',
+        );
+    }
+
+    /**
+     * phpstan.neon and phpstan.neon.dist both exist, so PHPStan picks the local one
+     * and the dist one is the shipped default. Two copies of the same law are only a
+     * law while they are byte-identical — the day they diverge, which corpus a run
+     * covered depends on which file the runner happened to see. S256-residual widened
+     * BOTH; this pin is what keeps the next change from widening one.
+     */
+    public function testTheTwoProductionPhpstanConfigsAreByteIdentical(): void
+    {
+        $local = file_get_contents(self::PHPSTAN_SRC);
+        $dist = file_get_contents(self::PHPSTAN_SRC . '.dist');
+
+        self::assertIsString($local);
+        self::assertIsString($dist);
+        self::assertSame(
+            $local,
+            $dist,
+            'phpstan.neon and phpstan.neon.dist must stay byte-identical.',
+        );
+    }
+
+    /**
+     * The production config's scanFiles is the same allow-listed mechanism
+     * phpstan-tests.neon documents at length. It is NOT a mute: it introduces a symbol
+     * the analysing environment genuinely lacks — swoole's USERLAND WaitGroup class,
+     * invisible to bundled phpstorm-stubs because stubs describe EXTENSION classes.
+     * scripts/bench/coroutine_bench.php is why the production corpus needs it too: it
+     * constructs a WaitGroup behind an extension_loaded('swoole') guard, and CI's
+     * phpstan job runs without swoole. The declaration stays honest through
+     * testTheWaitGroupDeclarationStillMatchesTheRealExtension (phpunit job, swoole ON).
+     */
+    public function testTheProductionConfigScansOnlyTheDocumentedSymbolFiles(): void
+    {
+        $cfg = $this->phpstanSrcDirectives();
+
+        preg_match('/^\s*scanFiles:\s*$(?<body>(?:\n\s*-\s*\S+)*)/m', $cfg, $m);
+        self::assertArrayHasKey('body', $m, 'phpstan.neon must declare scanFiles (the WaitGroup entry)');
+
+        preg_match_all('/^\s*-\s*(\S+)\s*$/m', $m['body'], $entries);
+        $scanned = $entries[1];
+        sort($scanned);
+
+        self::assertSame(
+            [self::WAITGROUP_STUB],
+            $scanned,
+            'phpstan.neon may scan exactly the drift-tested WaitGroup declaration. Each '
+            . 'scanFiles entry teaches PHPStan about a symbol it would otherwise reject, '
+            . 'so adding one needs its reason in that config and a change to this '
+            . 'assertion in the same commit.',
+        );
+
+        foreach ($scanned as $rel) {
+            self::assertFileExists(self::REPO . '/' . $rel);
+        }
+
+        // Same measured trap as the tests config: a stub only OVERRIDES a class
+        // reflection can already find, it cannot INTRODUCE an unknown one — moving
+        // this entry to stubFiles would silently reopen the CI no-swoole failure
+        // while a local run with ext-swoole stayed green.
+        self::assertStringNotContainsString(
+            'stubFiles:',
+            $cfg,
+            'do not move the scanFiles entry to stubFiles: a stub cannot introduce an '
+            . 'unknown class, so the no-swoole CI job would go back to class.notFound '
+            . 'errors on Swoole\\Coroutine\\WaitGroup while a local run stayed green.',
         );
     }
 
@@ -701,6 +886,22 @@ final class StaticAnalysisScopeTest extends TestCase
         );
     }
 
+    /**
+     * S256-residual survival token. Same ritual as the S306 one above: code-resident
+     * only (this file is in the PHP corpus the analysers read; the literal appears in
+     * ZERO .md files, and was collision-checked against every checkout under
+     * /home/sites/phlix before being embedded), verified to survive into master.
+     */
+    public function testTheScriptsScopeTokenIsResidentAndIntact(): void
+    {
+        self::assertSame(
+            'CS256SCRIPTSSCOPEX9S',
+            self::SCRIPTS_SCOPE_TOKEN,
+            'the S256-residual scripts-scope token must stay exactly this literal in this '
+            . "file — the merge ritual greps master's copy of THIS path for it",
+        );
+    }
+
     public function testCiPsalmSrcStepRunsPsalmXmlVerbatim(): void
     {
         $run = $this->workflowStepRun('Run Psalm');
@@ -755,23 +956,29 @@ final class StaticAnalysisScopeTest extends TestCase
         }
     }
 
-    public function testPsalmConfigStaysSrcOnlyAtTheMeasuredLevel(): void
+    /**
+     * S256-residual: psalm.xml is the production psalm corpus — src/ AND scripts/ at
+     * the measured L5 (the level rationale lives in that file's header; the scripts/
+     * leg's own measurement — 10 findings, all fixed — is recorded beside it).
+     */
+    public function testPsalmConfigAnalysesSrcAndScriptsAtTheMeasuredLevel(): void
     {
         $config = $this->psalmConfigText(self::PSALM_CONFIG);
 
         self::assertMatchesRegularExpression(
             '/errorLevel="5"/',
             $config,
-            'the production corpus is a measured L5 (its own header records the ladder); this lane '
-            . 'must not have touched it — the server never widened psalm.xml the way the hub did',
+            'the production corpus is a measured L5 (its own header records the ladder); '
+            . 'changing the level means re-measuring and re-documenting, not editing this pin',
         );
 
         $projectFiles = $this->xmlBlock($config, 'projectFiles');
 
         self::assertSame(
-            ['src'],
+            ['src', 'scripts'],
             $this->xmlDirectoryNames($projectFiles),
-            'dropping src from psalm.xml must redden the suite, not just lose coverage silently',
+            'the production psalm corpus is exactly [src, scripts] — dropping either '
+            . 'must redden the suite, not just lose coverage silently',
         );
 
         self::assertSame(
@@ -780,6 +987,21 @@ final class StaticAnalysisScopeTest extends TestCase
             'the production config carries zero <file> exclusions — the one written-why exclusion '
             . 'lives under tests/ and belongs to psalm-tests.xml; anything added here is a new mute',
         );
+
+        // The WaitGroup stub in the PRODUCTION config gets the same exact-list
+        // treatment as psalm-tests.xml's: a second entry here would be an
+        // unresolvable-symbol mute wearing a <stubs> costume.
+        $stubs = $this->xmlBlock($config, 'stubs');
+        preg_match_all('#<file name="([^"]+)"\s*/>#s', $stubs[0], $entries);
+
+        self::assertSame(
+            [self::WAITGROUP_STUB],
+            $entries[1],
+            'psalm.xml may load exactly the drift-tested WaitGroup declaration — the same '
+            . 'single source of truth phpstan.neon scans and psalm-tests.xml loads.',
+        );
+
+        self::assertFileExists(self::REPO . '/' . self::WAITGROUP_STUB);
     }
 
     public function testPsalmTestsConfigAnalysesTestsAtMeasuredLevelFive(): void
@@ -914,9 +1136,31 @@ final class StaticAnalysisScopeTest extends TestCase
         $mutant = str_replace('<directory name="src" />', '', $main);
         self::assertNotSame($main, $mutant, 'the src-directory mutant must actually bite the text');
         self::assertNotSame(
-            ['src'],
+            ['src', 'scripts'],
             $this->xmlDirectoryNames($this->xmlBlock($mutant, 'projectFiles')),
             'dropping src/ from psalm.xml would go unnoticed — the corpus pin is a paper tiger',
+        );
+
+        // S256-residual twin: silently narrowing the PRODUCTION psalm corpus back to
+        // src/ (deleting the scripts entry from the shipped config) must bite too.
+        $mutant = str_replace('<directory name="scripts" />', '', $main);
+        self::assertNotSame($main, $mutant, 'the scripts-directory mutant must actually bite the text');
+        self::assertNotSame(
+            ['src', 'scripts'],
+            $this->xmlDirectoryNames($this->xmlBlock($mutant, 'projectFiles')),
+            'dropping scripts/ from psalm.xml would go unnoticed — the corpus pin is a paper tiger',
+        );
+
+        // S256-residual, phpstan side: the same silent narrowing of the production
+        // paths list — which, unlike psalm, CI can no longer override from the CLI,
+        // so this config IS the scope.
+        $phpstan = $this->phpstanSrcDirectives();
+        $mutant = (string) preg_replace('/^\s*-\s*scripts\s*$/m', '', $phpstan, 1);
+        self::assertNotSame($phpstan, $mutant, 'the phpstan scripts-path mutant must actually bite the text');
+        self::assertNotSame(
+            ['src', 'scripts'],
+            $this->phpstanPaths($mutant),
+            'dropping scripts/ from phpstan.neon would go unnoticed — the paths pin is a paper tiger',
         );
 
         $mutant = str_replace('<directory name="tests" />', '', $tests);
@@ -1000,6 +1244,38 @@ final class StaticAnalysisScopeTest extends TestCase
             500,
             $files,
             'tests/ collapsed below 500 PHP files — the analysers would go green over a shrunk corpus',
+        );
+    }
+
+    /**
+     * S256-residual twin: scripts/ is in both production corpora now (43 PHP files at
+     * the time of writing). Same reason as the tests/ floor above — the analysers would
+     * go GREEN over a shrunk corpus, so the corpus itself needs a floor that fails when
+     * files leave without the configs noticing.
+     */
+    public function testTheScriptsCorpusIsActuallyPopulated(): void
+    {
+        $files = [];
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(
+            self::REPO . '/scripts',
+            \FilesystemIterator::SKIP_DOTS,
+        ));
+
+        foreach ($iterator as $file) {
+            if (!$file instanceof \SplFileInfo) {
+                continue;
+            }
+
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                $files[] = $file->getPathname();
+            }
+        }
+
+        self::assertGreaterThan(
+            40,
+            $files,
+            'scripts/ collapsed below 40 PHP files — the analysers would go green over a '
+            . 'shrunk corpus (S256-residual measured 43)',
         );
     }
 }

@@ -74,7 +74,12 @@ $itemRepository = new ItemRepository($db, null);
 
 // Build the candidate query: items with a TMDB external ID but no corresponding
 // metadata_ratings.tmdb entry. We use a LEFT JOIN to find items missing the rating.
-$limitClause = $limit !== null ? 'LIMIT ' . (int) $limit : '';
+//
+// The `{limit_clause}` placeholder is replaced per batch by the loop below — the
+// pre-batching code interpolated a LIMIT into $query but then executed a DIFFERENT
+// inline SQL string in the loop, so `--limit` was parsed, documented in the usage
+// block and silently never applied (PHPStan's `arguments.count` error on the old
+// 4-parameter query() call is what surfaced the whole dead construction).
 $query = "
     SELECT m.id, m.metadata_json
     FROM media_items m
@@ -84,7 +89,7 @@ $query = "
         AND r.rating_type = 'user'
     WHERE r.id IS NULL
       AND JSON_EXTRACT(m.metadata_json, '$.external_ids.tmdb') IS NOT NULL
-    {$limitClause}
+    {limit_clause}
 ";
 
 // Fetch candidates in batches to avoid blowing up memory on large libraries.
@@ -96,31 +101,44 @@ $offset = 0;
 
 echo "Scanning for items missing TMDB ratings...\n";
 
-while (true) {
-    $batchQuery = preg_replace('/\{limit_clause\}/', "LIMIT {$batchSize} OFFSET {$offset}", $query);
-    // Manually apply offset since we're in a loop
-    $rows = $db->query(
-        "SELECT m.id, m.metadata_json
-         FROM media_items m
-         LEFT JOIN metadata_ratings r
-             ON r.media_item_id = m.id
-             AND r.source = 'tmdb'
-             AND r.rating_type = 'user'
-         WHERE r.id IS NULL
-           AND JSON_EXTRACT(m.metadata_json, '$.external_ids.tmdb') IS NOT NULL
-         LIMIT {$batchSize} OFFSET {$offset}",
-        [],
-        __LINE__,
-        __FILE__
-    );
+// $scanned counts ROWS SEEN, so `--limit` caps the run exactly as its usage line
+// advertises; $offset only ever advances by what the batch actually returned.
+$scanned = 0;
 
-    if ($rows === [] || ($rows[0] ?? []) === []) {
+while (true) {
+    $batch = $limit === null ? $batchSize : min($batchSize, $limit - $scanned);
+    if ($batch < 1) {
+        break;
+    }
+
+    $batchQuery = str_replace('{limit_clause}', "LIMIT {$batch} OFFSET {$offset}", $query);
+
+    // Connection::query() takes (sql, params, fetchmode) — the old call passed
+    // __LINE__ as $fetchmode and __FILE__ as a fourth argument (a userland
+    // over-supply PHP tolerates at the signature but PDO then received 112-ish
+    // as the fetch mode). Level 9 read the signature and refused.
+    $rows = $db->query($batchQuery, []);
+    if (!is_array($rows)) {
+        $rows = [];
+    }
+
+    if ($rows === []) {
         break;
     }
 
     foreach ($rows as $row) {
-        $itemId = (string) $row['id'];
-        $metadataJson = (string) $row['metadata_json'];
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $itemIdRaw = $row['id'] ?? null;
+        $metadataRaw = $row['metadata_json'] ?? null;
+        if (!is_string($itemIdRaw) || !is_string($metadataRaw)) {
+            continue;
+        }
+
+        $itemId = $itemIdRaw;
+        $metadataJson = $metadataRaw;
         $metadata = json_decode($metadataJson, true);
 
         if (!is_array($metadata)) {
@@ -137,15 +155,12 @@ while (true) {
             continue;
         }
 
-        // Fetch TMDB details to get vote_average and vote_count
+        // Fetch TMDB details to get vote_average and vote_count.
+        // No is_array() guard here on purpose: TmdbProvider::getDetails() declares
+        // `: array`, PHP enforces native return types at runtime, so the old guard
+        // could never fire (PHPStan L9: function.alreadyNarrowedType). A missing
+        // vote_average is the real failure mode and is handled below.
         $details = $tmdb->getDetails($tmdbId);
-
-        if (!is_array($details)) {
-            echo "FAILED to fetch TMDB {$tmdbId} for item {$itemId}\n";
-            $failed++;
-            $processed++;
-            continue;
-        }
 
         $score = $details['vote_average'] ?? null;
         $votes = $details['vote_count'] ?? null;
@@ -194,12 +209,13 @@ while (true) {
         }
     }
 
-    // If we got fewer rows than batch size, we're done
-    if (count($rows) < $batchSize) {
+    // If we got fewer rows than the batch asked for, the candidate set is exhausted.
+    $scanned += count($rows);
+    if (count($rows) < $batch) {
         break;
     }
 
-    $offset += $batchSize;
+    $offset += count($rows);
 }
 
 echo "\nDone. Processed: {$processed}, Updated: {$updated}, Failed: {$failed}\n";

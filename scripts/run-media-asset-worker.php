@@ -32,7 +32,22 @@ $config = require $baseDir . '/config/media_asset_jobs.php';
 
 $db = ConnectionPool::getConnection('mysql');
 $itemRepo = new ItemRepository($db);
-$ffmpeg = new FfmpegRunner($db);
+
+// Build the FFprobe runner from config/ffmpeg.php so the worker uses the same
+// binaries the live scanner uses (mirrors backfill-chapters.php). FfmpegRunner's
+// first ctor parameter is the ffmpeg BINARY PATH (string) — `new FfmpegRunner($db)`
+// was a TypeError at boot; the worker could never have started with this file.
+$ffmpegConfig = @include $baseDir . '/config/ffmpeg.php';
+if (!is_array($ffmpegConfig)) {
+    $ffmpegConfig = [];
+}
+$ffmpegPath = is_string($ffmpegConfig['ffmpeg_path'] ?? null) ? $ffmpegConfig['ffmpeg_path'] : '/usr/bin/ffmpeg';
+$ffprobePath = is_string($ffmpegConfig['ffprobe_path'] ?? null) ? $ffmpegConfig['ffprobe_path'] : '/usr/bin/ffprobe';
+$transcodeDir = is_string($ffmpegConfig['transcode_dir'] ?? null)
+    ? $ffmpegConfig['transcode_dir']
+    : sys_get_temp_dir();
+
+$ffmpeg = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir);
 
 $jobStore = new MediaAssetJobStore($config['job_queue_dir']);
 $jobProcessor = new MediaAssetGenerationJob($ffmpeg, $itemRepo, $db);

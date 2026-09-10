@@ -122,9 +122,16 @@ if (!is_array($entry)) {
     ));
 }
 
-$version = is_string($entry['version'] ?? null) ? $entry['version'] : '';
-$resolved = is_string($entry['resolved'] ?? null) ? $entry['resolved'] : '';
-$integrity = is_string($entry['integrity'] ?? null) ? $entry['integrity'] : '';
+// Bind to a variable BEFORE the is_string() check: re-reading `$entry['version']`
+// inside the true arm of a ternary whose condition narrows the offset loses the
+// narrowing for Psalm (ParadoxicalCondition at the `=== $version` compare below),
+// while PHPStan happens to carry it. One shape that both analysers read identically.
+$versionRaw = $entry['version'] ?? null;
+$resolvedRaw = $entry['resolved'] ?? null;
+$integrityRaw = $entry['integrity'] ?? null;
+$version = is_string($versionRaw) ? $versionRaw : '';
+$resolved = is_string($resolvedRaw) ? $resolvedRaw : '';
+$integrity = is_string($integrityRaw) ? $integrityRaw : '';
 
 if ($version === '' || $resolved === '' || $integrity === '') {
     $fail(sprintf(

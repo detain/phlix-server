@@ -41,6 +41,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Generic keyed image service extracted from the poster pipeline (`S71`).** New
+  `src/Media/Storage/ImageResizer.php` carries the validation, width-variant resize and
+  temp-then-rename atomic-write guarantees that previously lived inside `ArtworkStorage` —
+  moved verbatim — but addressed by a flat, media-item-agnostic target KEY (a UUID,
+  `people-42`, or a content hash; anything matching the exact `[a-zA-Z0-9-]+` gate, refused
+  before any filesystem call otherwise) under a configurable base directory, so backdrops and
+  people photos (S72/S73) can reuse the same guarantees without a second resize implementation.
+  `storeBytes()` is the verbatim-bytes path for formats that must not be re-encoded (the
+  transparency-safe title-logo PNG). `ArtworkStorage` keeps its entire public API and behavior:
+  it now delegates internally, its item-id gate still rejects exactly the pre-extraction id set
+  with the historical message, and its TMDB path-fragment download seam is deliberately NOT
+  widened to arbitrary URLs — that is the SSRF surface owed to S73's allowlist. `AvatarStorage`
+  and `PhotoController::generateThumbnail` remain separate consolidations (S456). The service
+  ships with 47 new unit executions covering flat-key resizing, exact exception wording on every
+  unusable key/filename shape, and mutation-proven spy pins on each delegation seam. No DB
+  migration, no config change, no new dependencies.
+
 - **CI-pinned composed-route inventory (server only) (`S64`).** A real-DI in-process harness
   (`tests/Unit/Server/Core/ComposedRouteInventoryTest.php`) composes `Application::loadRoutes()` — the
   primary production route surface, built from `ContainerFactory::defaultProviders()` with only the MySQL

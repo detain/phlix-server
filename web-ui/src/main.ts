@@ -77,6 +77,3 @@ const app = createPhlixApp({
     ],
 });
 app.mount('#phlix-app');
-
-// S253 DEMO A (temporary): a web-ui/src edit with NO bundle rebuild — the new gate must go red.
-(window as unknown as Record<string, string>).__S253_BUNDLE_GATE_PROBE__ = "red";

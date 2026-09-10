@@ -179,9 +179,14 @@ class ImageResizer
      *
      * @param string $targetKey Flat target key (see {@see targetDir()}).
      * @param string $filename  File name inside the key directory (e.g. 'logo.png').
-     *                          Must be a plain basename — path separators, dot
-     *                          segments and NUL bytes are rejected before any
-     *                          filesystem call, exactly like the key itself.
+     *                          Must be a plain basename — path separators and NUL
+     *                          bytes are rejected before any filesystem call,
+     *                          exactly like the key itself. Names that pass
+     *                          basename() yet resolve to the directory itself
+     *                          ('.', '..') are inert: the atomic writer fails its
+     *                          rename, cleans its sibling temp, and the store
+     *                          returns null (measured on Linux; never bytes or a
+     *                          temp file outside the key directory either way).
      * @param string $bytes     Raw bytes to store.
      * @return string|null      Full path to the stored file, or null on empty
      *                          bytes or any I/O failure.
@@ -287,7 +292,9 @@ class ImageResizer
      * and keyed writes only early-return when ALL variants already exist — so a
      * retry after a partial prior failure would otherwise do an in-place
      * `file_put_contents()` overwrite, exposing a truncated/0-byte JPEG (and a
-     * mid-write ETag/Last-Modified) to a concurrent reader. The temp file is
+     * mid-write ETag/Last-Modified) to a concurrent reader. The temp name is
+     * suffixed to the final path, so even targets that resolve to a directory
+     * ('.', '..') leak no temp file beyond the key directory; the temp file is
      * removed on any write or rename failure so no orphaned `.tmp` files leak.
      *
      * Mirrors {@see \Phlix\Media\Storage\AvatarStorage::store()}'s temp-then-rename idiom.

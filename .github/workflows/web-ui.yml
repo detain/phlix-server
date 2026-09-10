@@ -70,22 +70,35 @@ jobs:
             exit 1
           fi
 
+      # Review finding 1: `git diff --exit-code` implies --quiet, so a red run
+      # would print NOTHING naming the diverged files. List them first; without
+      # --exit-code `git diff` always exits 0, so this step can never itself
+      # fail the job — the gate below stays the single verdict.
+      - name: List bundle drift (diagnostic, never the verdict)
+        run: git diff --name-status -- public/assets/app/
+
       # S253 AC: this is the comparison the old job lacked — it built into the
       # committed tree and threw the verdict away. `git diff --exit-code` fails
       # on ANY modified or deleted tracked bundle file (vite `emptyOutDir:true`
       # deletes stale hashed files, so renames surface as delete+untracked).
+      # The trailing marker on the next line is this step's premerge survival
+      # token (S306 precedent pattern) — LOAD-BEARING for the merge ritual, do
+      # not remove or move it onto its own line (whole-line comments are
+      # stripped by premerge.sh's .yml handling).
       - name: Fail if the committed bundle is stale for this source
         run: git diff --exit-code -- public/assets/app/  # S253SRPGATEX7H8
 
-      # `git diff` is blind to files the build EMITS that are not committed, so
-      # check them explicitly — otherwise "add a chunk, forget to commit it"
-      # would build fine, diff clean, and ship without the chunk.
-      - name: Fail if the build emitted files absent from the committed bundle
+      # Review finding 2: `git ls-files --others --exclude-standard` would go
+      # hollow the day a future ignore rule covers bundle output, so compare
+      # the INDEX against the DISK directly — gitignore cannot hide a file that
+      # is on disk but not tracked, nor one tracked but no longer emitted.
+      - name: Fail if the emitted tree and the committed tree are not the same set
         run: |
-          UNTRACKED="$(git ls-files --others --exclude-standard -- public/assets/app)"
-          if [ -n "${UNTRACKED}" ]; then
-            echo "::error::vite build emitted file(s) that are not committed under public/assets/app:"
-            printf '%s\n' "${UNTRACKED}"
+          DIVERGENT="$(comm -3 <(git ls-files -- public/assets/app | sort) <(find public/assets/app -type f | sort))"
+          if [ -n "${DIVERGENT}" ]; then
+            echo "::error::the built tree and the committed bundle are not the same file set (left column = committed-but-not-emitted, right = emitted-but-not-committed):"
+            printf '%s\n' "${DIVERGENT}"
             exit 1
           fi
-          echo "Bundle gate untracked check: no emitted-but-uncommitted files."
+          echo "Bundle gate set check: emitted tree and committed bundle are the same file set."
+

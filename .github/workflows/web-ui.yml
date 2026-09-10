@@ -63,7 +63,7 @@ jobs:
       - name: Report bundle corpus size
         run: |
           TRACKED="$(git ls-files -- public/assets/app | wc -l)"
-          ONDISK="$(find public/assets/app -type f | wc -l)"
+          ONDISK="$(find public/assets/app \( -type f -o -type l \) | wc -l)"
           echo "Bundle gate compared corpus: ${TRACKED} tracked file(s) under public/assets/app/ (${ONDISK} present on disk after build)."
           if [ "${TRACKED}" -eq 0 ]; then
             echo "::error::bundle gate examined 0 tracked files under public/assets/app — an empty corpus must never read as success."
@@ -71,11 +71,19 @@ jobs:
           fi
 
       # Review finding 1: `git diff --exit-code` implies --quiet, so a red run
-      # would print NOTHING naming the diverged files. List them first; without
-      # --exit-code `git diff` always exits 0, so this step can never itself
-      # fail the job — the gate below stays the single verdict.
+      # would print NOTHING naming the diverged files. List both divergence
+      # kinds here; without --exit-code `git diff` exits 0 for any tree state
+      # (exit 2 is reserved for git's own usage/internal errors), and the
+      # `|| true` keeps a tool hiccup here from ever becoming the verdict —
+      # the two steps below own it.
       - name: List bundle drift (diagnostic, never the verdict)
-        run: git diff --name-status -- public/assets/app/
+        run: |
+          git diff --name-status -- public/assets/app/
+          DIVERGENT="$(LC_ALL=C comm -3 <(git ls-files -- public/assets/app | LC_ALL=C sort) <(find public/assets/app \( -type f -o -type l \) | LC_ALL=C sort))" || DIVERGENT=''
+          if [ -n "${DIVERGENT}" ]; then
+            echo "Set divergence (left column = committed-but-not-emitted, right = emitted-but-not-committed):"
+            printf '%s\n' "${DIVERGENT}"
+          fi
 
       # S253 AC: this is the comparison the old job lacked — it built into the
       # committed tree and threw the verdict away. `git diff --exit-code` fails
@@ -92,13 +100,19 @@ jobs:
       # hollow the day a future ignore rule covers bundle output, so compare
       # the INDEX against the DISK directly — gitignore cannot hide a file that
       # is on disk but not tracked, nor one tracked but no longer emitted.
+      # LC_ALL=C on both sort and comm pins byte-order collation (GNU comm
+      # compares with strcmp while sort honors locale collation; under a
+      # non-C locale they can disagree and comm exits non-zero).
+      # `\( -type f -o -type l \)` matches `git ls-files`, which lists tracked
+      # symlinks; a bare -type f would make a symlink diverge spuriously.
       - name: Fail if the emitted tree and the committed tree are not the same set
         run: |
-          DIVERGENT="$(comm -3 <(git ls-files -- public/assets/app | sort) <(find public/assets/app -type f | sort))"
+          DIVERGENT="$(LC_ALL=C comm -3 <(git ls-files -- public/assets/app | LC_ALL=C sort) <(find public/assets/app \( -type f -o -type l \) | LC_ALL=C sort))"
           if [ -n "${DIVERGENT}" ]; then
             echo "::error::the built tree and the committed bundle are not the same file set (left column = committed-but-not-emitted, right = emitted-but-not-committed):"
             printf '%s\n' "${DIVERGENT}"
             exit 1
           fi
           echo "Bundle gate set check: emitted tree and committed bundle are the same file set."
+
 

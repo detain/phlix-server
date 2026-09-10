@@ -89,7 +89,7 @@ jobs:
         # the job, naming any absent extension — including the security-critical sodium
         # (HubJwtValidator, SodiumTokenCipher) and hash (SignedUrl, JwtHandler) that
         # this job's suite reaches through vendor/autoload.php. plan_updates.md:6260.
-        run: php scripts/assert-php-extensions.php
+        run: php scripts/assert-php-extensions.php --require=this_ext_does_not_exist # S304 NEGATIVE CONTROL — revert in next commit
 
       - name: Install the browser E2E prerequisites (S305)
         # Puts hls.js on disk and REFUSES to continue without a browser, node >= 22 and

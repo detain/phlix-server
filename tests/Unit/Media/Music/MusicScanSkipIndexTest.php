@@ -31,7 +31,9 @@ final class MusicScanSkipIndexTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->files as $file) {
-            @unlink($file);
+            if (is_file($file)) {  // S457: vanished-file tests unlink during the test; don't record a second failed unlink
+                @unlink($file);
+            }
         }
         $this->files = [];
 
@@ -160,7 +162,9 @@ final class MusicScanSkipIndexTest extends TestCase
         $index = $this->loaded([[$file->getPathname(), $file->getMTime(), $file->getSize()]]);
         self::assertTrue($index->isUnchanged($file));
 
-        @unlink($file->getPathname());
+        if (is_file($file->getPathname())) {
+            @unlink($file->getPathname());
+        }
         clearstatcache();
         $gone = new SplFileInfo($file->getPathname());
 

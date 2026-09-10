@@ -10,6 +10,8 @@ use Phlix\Network\PortForwardService;
 use Phlix\Network\StunClient;
 use Phlix\Network\UpnpIgdClient;
 use Psr\Log\NullLogger;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 
 class PortForwardServiceTest extends TestCase
 {
@@ -23,10 +25,18 @@ class PortForwardServiceTest extends TestCase
 
     protected function tearDown(): void
     {
-        $configFile = $this->tmpDir . '/config/port-forward.json';
-        if (file_exists($configFile)) {
-            @unlink($configFile);
+        // S457: the service may leave the config/ subdirectory (or other
+        // artifacts) behind; a bare rmdir then records a "Directory not empty"
+        // warning under paraunit. Sweep the tree we minted in setUp.
+        $walker = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($this->tmpDir, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST,
+        );
+
+        foreach ($walker as $entry) {
+            $entry->isDir() ? @rmdir($entry->getPathname()) : @unlink($entry->getPathname());
         }
+
         if (is_dir($this->tmpDir)) {
             @rmdir($this->tmpDir);
         }

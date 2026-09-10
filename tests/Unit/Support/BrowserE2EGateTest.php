@@ -74,10 +74,24 @@ final class BrowserE2EGateTest extends TestCase
     // Layer 1 — the wiring.
     // -----------------------------------------------------------------------
 
+    /**
+     * S457 reshaped this: the suite is no longer one serial `phpunit` invocation with
+     * `--log-junit junit.xml`. The per-case record is now produced by the serial E2E
+     * tail (`./vendor/bin/phpunit … --testsuite E2E … --log-junit …`) plus the
+     * per-worker JUnit files the paraunit children write, and
+     * "Merge parallel coverage and JUnit artifacts" folds them all into the junit.xml
+     * this gate reads. The invariants that matter are unchanged — SOME step still has
+     * to write JUnit per case, and exactly one owns it — so the predicate moved with
+     * the shape instead of the guarantee moving out from under it. The merge step and
+     * its position before the gate are pinned by
+     * tests/Unit/Support/ParallelTestWiringTest.php.
+     */
     public function testTheSuiteStepWritesAJUnitReportForTheGateToRead(): void
     {
         $step = $this->stepMatching(
-            static fn (string $run): bool => str_contains($run, 'vendor/bin/phpunit --coverage-clover'),
+            static fn (string $run): bool => str_contains($run, './vendor/bin/phpunit')
+                && str_contains($run, '--testsuite E2E'),
+            'the serial E2E tail',
         );
 
         $this->assertStringContainsString(

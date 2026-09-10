@@ -58,10 +58,38 @@ final class AssertionEscapeGuardExtension implements Extension
 {
     public const REPORT_FILE = '.phpunit-assertion-escapes.json';
 
+    /**
+     * Env var paraunit exports into every child (md5 of the chunk's test files).
+     * Referenced by literal name on purpose: PHPUnit bootstraps extensions before
+     * any dev-dependency autoload is reachable from here.
+     */
+    private const PARALLEL_ID_ENV = 'PARAUNIT_PROCESS_UNIQUE_ID';
+
+    /**
+     * S457 — per-process report path.
+     *
+     * Serial runs keep the fixed `.phpunit-assertion-escapes.json` (every existing
+     * pin of it stays true). Parallel children share the repo root as CWD, and each
+     * child's ExecutionFinished handler would overwrite the previous child's report —
+     * the LAST worker to finish alone decides whether an escape anywhere else in the
+     * run is visible. With a chunk id set, the report is written to
+     * `.phpunit-assertion-escapes.<id>.json`; scripts/assertion-escape-check.php
+     * GLOBS the family and aggregates.
+     */
+    public static function reportPath(): string
+    {
+        $chunkId = getenv(self::PARALLEL_ID_ENV);
+        $fileName = is_string($chunkId) && $chunkId !== ''
+            ? substr(self::REPORT_FILE, 0, -strlen('.json')) . '.' . $chunkId . '.json'
+            : self::REPORT_FILE;
+
+        return dirname(__DIR__, 3) . '/' . $fileName;
+    }
+
     public function bootstrap(Configuration $configuration, Facade $facade, ParameterCollection $parameters): void
     {
         $collector = new EscapeCollector();
-        $reportPath = dirname(__DIR__, 3) . '/' . self::REPORT_FILE;
+        $reportPath = self::reportPath();
 
         if (is_file($reportPath)) {
             @unlink($reportPath);

@@ -434,7 +434,9 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
             'F1+Chunk2: onClose reap invalidates the reservation so the next requester re-launches',
         );
 
-        @rmdir($segmentDir . '/job');
+        if (is_dir($segmentDir . '/job')) {  // S457: the reaper under test may have removed it (recorded rmdir warning)
+            @rmdir($segmentDir . '/job');
+        }
         @rmdir($segmentDir);
     }
 }

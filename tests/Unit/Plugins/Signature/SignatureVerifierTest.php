@@ -30,7 +30,9 @@ final class SignatureVerifierTest extends TestCase
     {
         parent::tearDown();
         if (is_dir($this->tmpDir)) {
-            @unlink($this->tmpDir . '/plugin.json');
+            if (is_file($this->tmpDir . '/plugin.json')) {  // S457: extraction paths move it away (recorded unlink warning)
+                @unlink($this->tmpDir . '/plugin.json');
+            }
             @rmdir($this->tmpDir);
         }
     }

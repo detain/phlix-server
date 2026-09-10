@@ -9,6 +9,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The server test suite now runs in parallel lanes with the same evidence as serial (`S457`).**
+  The `test` job's single serial PHPUnit invocation became three lanes: the Unit suite
+  (no database) and the Integration suite run under paraunit at parallel 8, the E2E suite
+  keeps a serial tail step because parallel E2E contends for the hardware encoder and the
+  accelerator probe flakes under load. Integration workers no longer share one schema —
+  `tests/bootstrap.php` gained an opt-in slot seam (when shard count is set, each worker
+  flock-claims one of `phlix_test_w1..wN`, cloned from the migrated template by
+  `scripts/parallel-test-db.sh`), because tests that assert global row counts corrupt
+  each other on a shared database. Every parallel child gets a private TMPDIR through a
+  PATH shim (`sys_get_temp_dir()` binds at process start; a later `putenv` is provably
+  inert), which is what keeps the zero-residue census meaningful per worker. The
+  assertion-escape guard writes per-worker report files that the CI check now globs and
+  unions, fixing a latent last-writer-wins clobber of its own evidence under parallel
+  runs. Artifacts are reconstituted to the old contracts: per-child JUnit logs merge into
+  `junit.xml` (the browser gate still sees one full-run report with every testcase
+  counted once — duplicate class detection included), and coverage is merged at the
+  php-code-coverage OBJECT level — never by Clover arithmetic — into a `coverage.xml`
+  that is byte-format-identical and metrically exact, so the threshold gate, codecov and
+  Codacy consume it unchanged. The wrapper treats paraunit-reported ERRORS/FAILURES as
+  fatal (paraunit's exit code alone was not trustworthy enough to build on); recorded
+  PHP warnings are printed but not fatal, because a meaningful fraction of them are the
+  failure paths under test (`@fsockopen` against unroutable hosts, corrupt-fixture
+  `@getimagesize`, Monolog's lazy-stream stat before first write) — the genuine test-debt
+  warnings in that set (unconditional unlinks of never-opened or already-moved paths
+  across the auth, installer, relay, scanner and logger suites) were fixed at the source,
+  guarded by the same commit. Local developers keep the old single-process path; every
+  seam is opt-in. `tests/Unit/Support/ParallelTestWiringTest.php` executes the merge
+  scripts' failure modes and pins the workflow shape, and the executed-census estate
+  count moved 1845→1848 with its mandated in-commit re-pin.
+
 - **CI now proves the PHP extension contract instead of naming it (`S304`).** Every
   server-source job ran `Setup PHP` with an `extensions:` list, but naming is not a
   gate: `shivammathur/setup-php` defaults `fail_fast` to false, so an extension it

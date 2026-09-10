@@ -37,6 +37,13 @@ junit.xml
 .phpunit.result.cache
 # S120 assertion-escape guard report (written only when a run has violations)
 .phpunit-assertion-escapes.json
+# S120 × S457 — per-paraunit-worker variants of the same report (chunk-id suffix);
+# scripts/assertion-escape-check.php globs and consumes the whole family.
+.phpunit-assertion-escapes.*.json
+# S457 parallel run artifacts: per-worker JUnit corpus dir and the per-suite
+# serialized php-code-coverage objects that merge-coverage.php unions into coverage.xml.
+.phpunit-junit/
+coverage-*.covobj
 
 # PHP-DI compiled container
 var/cache/

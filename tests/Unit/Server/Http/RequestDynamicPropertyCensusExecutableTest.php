@@ -274,8 +274,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
           * its executed guard test) — measured 1845 by CI on this tree (Server
           * Component Tests red with "1845 is identical to 1843"), not predicted.
           * Neither file names a Request property.
+          * Re-pinned 1845→1848 by S457: parallelizing the suite adds exactly three
+          * first-party PHP files (scripts/parallel/merge-junit.php and
+          * scripts/parallel/merge-coverage.php, the artifact reconstitution pair, and
+          * tests/Unit/Support/ParallelTestWiringTest.php, their executed guard) —
+          * measured 1848 by the paraunit p8 run on this tree, not predicted. The
+          * scripts/parallel/php PATH shim and the shell scripts carry no .php suffix
+          * and were already outside the scan's extension filter. None names a Request
+          * property.
           */
-    private const EXPECTED_PHP_FILES = 1845;
+    private const EXPECTED_PHP_FILES = 1848;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

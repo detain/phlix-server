@@ -103,8 +103,9 @@ $reportPath = $argv[1] ?? (dirname(__DIR__) . '/coverage.xml');
 if (!is_file($reportPath)) {
     fail(
         sprintf('Coverage report "%s" does not exist — the coverage gate cannot run.', $reportPath),
-        'The "Run PHPUnit tests" step passes --coverage-clover coverage.xml, so a missing file',
-        'means that step did not write one. Fix the run; do not skip the gate.',
+        'The "Merge parallel coverage and JUnit artifacts" step writes coverage.xml from the',
+        'per-suite coverage objects (S457), so a missing file means a suite or the merge failed.',
+        'Fix the run; do not skip the gate.',
     );
 }
 

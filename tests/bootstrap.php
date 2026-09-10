@@ -71,8 +71,20 @@ require __DIR__ . '/../vendor/autoload.php';
     // parallel launcher, TMPDIR (and therefore sys_get_temp_dir()) is already
     // per-worker by the time this runs, so the base env var is the shared root;
     // PHLIX_TEST_TMP_BASE is exported to every child for exactly this reason.
+    //
+    // Falling back to sys_get_temp_dir() here would be quietly catastrophic: with the
+    // shim active that value is already the PER-WORKER directory, so every process
+    // would get a private lock dir, all claim slot w1, and several workers would share
+    // one schema — precisely the S47-class global-COUNT corruption this seam exists to
+    // prevent, and it would happen with no error at all. Refuse instead.
     $tmpBase = getenv('PHLIX_TEST_TMP_BASE');
-    $sharedRoot = $tmpBase !== false && $tmpBase !== '' ? rtrim($tmpBase, '/') : sys_get_temp_dir();
+    if ($tmpBase === false || $tmpBase === '') {
+        throw new RuntimeException(
+            'PHLIX_TEST_DB_SHARDS is set but PHLIX_TEST_TMP_BASE is not: workers would each lock a'
+            . ' private slot directory and share one schema. Launch through scripts/parallel/run-suite.sh.'
+        );
+    }
+    $sharedRoot = rtrim($tmpBase, '/');
     $lockDir = $sharedRoot . '/phlix-test-db-slots';
     if (!is_dir($lockDir) && !mkdir($lockDir, 0777, true) && !is_dir($lockDir)) {
         throw new RuntimeException("PHLIX_TEST_DB_SHARDS: cannot create slot lock dir {$lockDir}");
@@ -90,7 +102,13 @@ require __DIR__ . '/../vendor/autoload.php';
                 // Hold the handle (and therefore the lock) in $GLOBALS for the
                 // lifetime of the process; closing it would release the slot.
                 $GLOBALS['phlix_test_db_slot_lock'] = $lockHandle;
-                putenv('DB_DATABASE=phlix_test_w' . $slot);
+                // Derive the shard name from the configured template instead of repeating
+                // the 'phlix_test' literal: scripts/parallel-test-db.sh clones
+                // "${DB_DATABASE}_wK", so a template rename must not silently desync the
+                // schema a worker connects to from the schemas that were actually cloned.
+                $template = getenv('DB_DATABASE');
+                $template = $template === false || $template === '' ? 'phlix_test' : $template;
+                putenv('DB_DATABASE=' . $template . '_w' . $slot);
                 return;
             }
             fclose($lockHandle);

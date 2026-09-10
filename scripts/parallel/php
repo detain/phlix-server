@@ -16,10 +16,17 @@ if [ -z "$real_php" ]; then
         exit 127
     }
 fi
-tmp_base="${PHLIX_TEST_TMP_BASE:-/tmp}"
-worker_id="${PARAUNIT_PROCESS_UNIQUE_ID:-$$}"
-export TMPDIR="${tmp_base}/worker-${worker_id}"
-mkdir -p "$TMPDIR"
+# S457 — BOTH seams are gated on the chunk id, so the shim is fully inert for anyone else.
+# run-suite.sh sets TMPDIR to the shared base for the paraunit PARENT and exports
+# PARAUNIT_PROCESS_UNIQUE_ID only in each child; a plain `php` (or the parent) must leave
+# TMPDIR exactly as inherited and argv untouched. Redirecting unconditionally would litter
+# ${PHLIX_TEST_TMP_BASE:-/tmp}/worker-$$ and, with the base unset, /tmp itself — and would
+# silently re-point the parent's TMPDIR away from the base run-suite.sh chose for it.
+if [ -n "${PARAUNIT_PROCESS_UNIQUE_ID:-}" ]; then
+    tmp_base="${PHLIX_TEST_TMP_BASE:-/tmp}"
+    export TMPDIR="${tmp_base}/worker-${PARAUNIT_PROCESS_UNIQUE_ID}"
+    mkdir -p "$TMPDIR"
+fi
 
 # S457 — per-child JUnit seam. run-suite.sh passes
 #   --pass-through=--log-junit=.phpunit-junit/junit-__PHLIX_WORKER__.xml
@@ -28,7 +35,7 @@ mkdir -p "$TMPDIR"
 # PARAUNIT_PROCESS_UNIQUE_ID (md5 of the chunk) per child, so the shim — which already
 # sits on PATH for every child — rewrites the token to that id. The parent paraunit
 # process and any non-parallel invocation have the variable unset and pass through
-# untouched.
+# untouched (argv AND environment).
 if [ -n "${PARAUNIT_PROCESS_UNIQUE_ID:-}" ]; then
     expanded=()
     for arg in "$@"; do

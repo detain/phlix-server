@@ -38,6 +38,21 @@ if ($files === []) {
     exit(1);
 }
 
+// Tripwire for a collapsed seam: scripts/parallel/php rewrites __PHLIX_WORKER__ to the
+// child's chunk id so every worker writes its OWN file. If paraunit ever stops launching
+// children through the PATH shim (an absolute PHP_BINARY, a changed process model), all
+// children write the single literal `junit-__PHLIX_WORKER__.xml` and clobber each other —
+// one file survives, the duplicate-suite check below can never fire, and the merge would
+// silently publish roughly 1/8 of the evidence. Refuse to launder that into a green run.
+foreach ($files as $file) {
+    if (str_contains(basename($file), '__PHLIX_WORKER__')) {
+        fwrite(STDERR, "merge-junit: {$file} still carries the unexpanded __PHLIX_WORKER__ token —"
+            . " the per-child JUnit seam did not fire, so workers wrote the same file and the merged"
+            . " evidence is whatever the last child left. Not merging.\n");
+        exit(1);
+    }
+}
+
 $root = new DOMDocument('1.0', 'UTF-8');
 $rootSuites = $root->createElement('testsuites');
 $root->appendChild($rootSuites);

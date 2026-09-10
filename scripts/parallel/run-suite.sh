@@ -77,8 +77,11 @@ case "$suite" in
     shards="${shards:-$parallel}"
     (( shards >= parallel )) || { echo "shards ($shards) must be >= parallel ($parallel)" >&2; exit 2; }
     export PHLIX_TEST_DB_SHARDS="$shards"
-    mysqladmin --protocol=tcp -h 127.0.0.1 -P 3306 -u root -proot status >/dev/null \
-      || { echo "MySQL not reachable at 127.0.0.1:3306 - run scripts/parallel-test-db.sh create first" >&2; exit 1; }
+    # Credentials come from the same DB_* env phpunit.xml exports for the serial lane;
+    # hardcoding root/root here would probe a server the run does not actually use.
+    mysqladmin --protocol=tcp -h "${DB_HOST:-127.0.0.1}" -P "${DB_PORT:-3306}" \
+      -u "${DB_USER:-root}" "-p${DB_PASSWORD:-root}" status >/dev/null \
+      || { echo "MySQL not reachable at ${DB_HOST:-127.0.0.1}:${DB_PORT:-3306} - run scripts/parallel-test-db.sh create first" >&2; exit 1; }
     ;;
   *)
     unset PHLIX_TEST_DB_SHARDS || true

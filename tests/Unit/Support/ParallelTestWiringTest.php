@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Support;
 
 use DOMDocument;
+use DOMElement;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -55,6 +56,21 @@ final class ParallelTestWiringTest extends TestCase
     private const WORKFLOW = self::REPO . '/.github/workflows/phpunit.yml';
 
     private const PARALLEL_CONFIG = self::REPO . '/phpunit-parallel.xml';
+
+    private const SERIAL_CONFIG = self::REPO . '/phpunit.xml';
+
+    /**
+     * The exact classes that must be excluded from the parallel Unit lane and re-hosted in the
+     * Serialized suite. A literal on purpose (this repo's "derived-from-subject self-adjusts"
+     * doctrine): adding or dropping a member is an explicit, reviewable edit, not a silent set drift.
+     *
+     * @var list<string>
+     */
+    private const SERIALIZED_CLASSES = [
+        'tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php',
+        'tests/Unit/Discovery/Ssdp/SsdpMulticastJoinTest.php',
+        'tests/Unit/Dlna/SsdpMSearchListenerTest.php',
+    ];
 
     private const RUN_SUITE = self::REPO . '/scripts/parallel/run-suite.sh';
 
@@ -272,11 +288,23 @@ final class ParallelTestWiringTest extends TestCase
             $this->assertStringContainsString($needle, $script, "run-suite.sh lost a seam ({$why}).");
         }
 
-        $this->assertStringContainsString(
-            'serial tail step',
-            $script,
-            'the wrapper must REFUSE to parallelize E2E (hardware-encoder contention flakes HwaccelE2ETest).',
-        );
+        // The 'serial tail step' refusal and the 'shards' guard are EXECUTED in
+        // testTheRunSuiteWrapperRefusesE2EAndUnderShardedIntegration — greps for those words
+        // would stay green even after someone deleted the exit-fast branches, so they are not
+        // asserted here.
+    }
+
+    public function testTheRunSuiteWrapperRefusesE2EAndUnderShardedIntegration(): void
+    {
+        // Both refusals exit before any side effect, so invoking the wrapper directly is safe.
+        $e2e = $this->runBash(self::RUN_SUITE, ['E2E', '8']);
+        $this->assertSame(2, $e2e['exit'], 'E2E must be refused (serial tail only): ' . $e2e['output']);
+        $this->assertStringContainsString('serial tail step', $e2e['output']);
+
+        // parallel=8, shards=2 -> the "shards >= parallel" branch must refuse before the MySQL probe.
+        $undersharded = $this->runBash(self::RUN_SUITE, ['Integration', '8', '2']);
+        $this->assertSame(2, $undersharded['exit'], 'Integration must refuse when shards < parallel: ' . $undersharded['output']);
+        $this->assertStringContainsString('must be >=', $undersharded['output']);
     }
 
     // -----------------------------------------------------------------------
@@ -296,7 +324,11 @@ final class ParallelTestWiringTest extends TestCase
         $this->assertStringContainsString('junit-cafe1234.xml', $parallel['output']);
         $this->assertDirectoryExists($scratch . '/worker-cafe1234');
 
-        $serial = $this->runShim($scratch, [], ['-r', 'echo $argv[1] ?? "";', '--', 'junit-__PHLIX_WORKER__.xml']);
+        $workersBefore = glob($scratch . '/worker-*') ?: [];
+
+        $serial = $this->runShim($scratch, ['TMPDIR' => $scratch . '/inherited-tmp'], [
+            '-r', 'echo getenv("TMPDIR"), "\n", $argv[1] ?? "";', '--', 'junit-__PHLIX_WORKER__.xml',
+        ]);
 
         $this->assertSame(0, $serial['exit'], $serial['output']);
         $this->assertStringContainsString(
@@ -304,6 +336,23 @@ final class ParallelTestWiringTest extends TestCase
             $serial['output'],
             'without a chunk id the seam must be inert — a developer running plain `php` through'
             . ' this PATH entry (or paraunit itself as parent) must see their argv untouched.',
+        );
+        // argv inertness is not enough: an unconditional TMPDIR rewrite would send the
+        // paraunit PARENT (and any plain `php`) into a `worker-$$` dir and litter the base
+        // root with empty dirs. TMPDIR must be byte-identical to whatever was inherited.
+        $this->assertStringContainsString(
+            $scratch . '/inherited-tmp',
+            $serial['output'],
+            'without a chunk id the shim must leave TMPDIR exactly as inherited, not mint a worker dir.',
+        );
+        $this->assertDirectoryDoesNotExist(
+            $scratch . '/worker-' . getmypid(),
+            'the inert path must not create a worker temp directory.',
+        );
+        $this->assertSame(
+            $workersBefore,
+            glob($scratch . '/worker-*') ?: [],
+            'with no chunk id the shim must create no new worker-* directory under the base.',
         );
     }
 
@@ -364,6 +413,116 @@ final class ParallelTestWiringTest extends TestCase
         $this->assertSame(2, $usage['exit'], $usage['output']);
 
         $this->assertFileDoesNotExist($dir . '/out.xml', 'a refused merge must leave no half-written coverage.xml');
+    }
+
+    // -----------------------------------------------------------------------
+    // 7 — the Serialized suite and the Unit exclusions must be IDENTICAL and exact.
+    //     This is the "runs exactly once" invariant merge-junit cannot see (it only
+    //     catches the >1 side; a class in neither lane runs 0 times and CI stays green).
+    // -----------------------------------------------------------------------
+
+    public function testEveryExcludedClassIsReScheduledInSerializedAndViceVersa(): void
+    {
+        $document = $this->parseXml(self::PARALLEL_CONFIG);
+
+        $unitExcludes = [];
+        $serializedFiles = [];
+        $suiteNames = [];
+
+        foreach ($document->getElementsByTagName('testsuite') as $suite) {
+            if (!$suite instanceof DOMElement) {
+                continue;
+            }
+
+            $name = $suite->getAttribute('name');
+            $suiteNames[] = $name;
+
+            foreach ($suite->getElementsByTagName('exclude') as $exclude) {
+                $unitExcludes[] = trim($exclude->textContent);
+            }
+
+            if ($name === 'Serialized') {
+                foreach ($suite->getElementsByTagName('file') as $file) {
+                    $serializedFiles[] = trim($file->textContent);
+                }
+            }
+        }
+
+        $expected = self::SERIALIZED_CLASSES;
+        sort($expected);
+        sort($unitExcludes);
+        sort($serializedFiles);
+
+        $this->assertSame(
+            $expected,
+            $unitExcludes,
+            'the parallel Unit lane must exclude EXACTLY the multicast-receive classes — one more'
+            . ' silently loses coverage, one less re-introduces the 8-way contention that reddened CI.',
+        );
+        $this->assertSame(
+            $expected,
+            $serializedFiles,
+            'the Serialized suite must carry EXACTLY the classes excluded from Unit. An excluded class'
+            . ' with no Serialized entry runs ZERO times in CI and the job still passes.',
+        );
+        $this->assertSame(
+            $unitExcludes,
+            $serializedFiles,
+            'Unit <exclude> and Serialized <file> must be the same set — the only guard against a class'
+            . ' running 0 times (dropped from both) is that neither list can drift from the other.',
+        );
+
+        foreach ($serializedFiles as $relative) {
+            $this->assertStringEndsWith('Test.php', $relative, 'a Serialized member must be a test file');
+            $this->assertFileExists(self::REPO . '/' . $relative, $relative . ' is listed but does not exist');
+        }
+
+        // The developer's SERIAL config must still run all three inside Unit: it carries no
+        // exclusion for them and no Serialized suite. This is the only machine check that a
+        // plain `vendor/bin/phpunit` still exercises each multicast class exactly once.
+        $serial = $this->parseXml(self::SERIAL_CONFIG);
+        $serialExcludes = [];
+        $serialSuiteNames = [];
+
+        foreach ($serial->getElementsByTagName('testsuite') as $suite) {
+            if (!$suite instanceof DOMElement) {
+                continue;
+            }
+
+            $serialSuiteNames[] = $suite->getAttribute('name');
+
+            foreach ($suite->getElementsByTagName('exclude') as $exclude) {
+                $serialExcludes[] = trim($exclude->textContent);
+            }
+        }
+
+        $this->assertNotContains('Serialized', $serialSuiteNames, 'phpunit.xml must not host the Serialized suite');
+        $this->assertSame(
+            [],
+            array_values(array_intersect($expected, $serialExcludes)),
+            'phpunit.xml must NOT exclude the multicast classes — that exclusion belongs only to the'
+            . ' parallel config; a serial developer run must still cover each class inside Unit.',
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 8 — merge-junit refuses a collapsed seam. Executed (MAJOR-2a).
+    //     If the __PHLIX_WORKER__ token never expands, all children clobber ONE file;
+    //     the duplicate-class check above cannot fire (only one file exists), so the
+    //     merge would publish ~1/8 of the evidence under a green S305 gate.
+    // -----------------------------------------------------------------------
+
+    public function testMergeJUnitRefusesAnUnexpandedWorkerToken(): void
+    {
+        $dir = $this->scratchDir();
+
+        file_put_contents($dir . '/junit-__PHLIX_WORKER__.xml', $this->junitFixture('CollapsedSuite', 2, 2, 0, 0, 0, 0.1));
+
+        $result = $this->runPhp(self::MERGE_JUNIT, [$dir, $dir . '/merged.xml']);
+
+        $this->assertSame(1, $result['exit'], $result['output']);
+        $this->assertStringContainsString('__PHLIX_WORKER__', $result['output']);
+        $this->assertFileDoesNotExist($dir . '/merged.xml', 'a collapsed seam must not produce merged evidence');
     }
 
     // -----------------------------------------------------------------------
@@ -478,6 +637,29 @@ final class ParallelTestWiringTest extends TestCase
     private function runPhp(string $script, array $args): array
     {
         $command = array_merge([PHP_BINARY, $script], $args);
+        $output = [];
+        $exit = 0;
+
+        exec(
+            implode(' ', array_map('escapeshellarg', $command)) . ' 2>&1',
+            $output,
+            $exit,
+        );
+
+        return ['exit' => $exit, 'output' => implode("\n", $output)];
+    }
+
+    /**
+     * Invoke a bash script with argv and capture combined output + exit code. Used to EXECUTE
+     * run-suite.sh's guard rails (both refuse before any side effect) rather than grep for them.
+     *
+     * @param list<string> $args
+     *
+     * @return array{exit:int, output:string}
+     */
+    private function runBash(string $script, array $args): array
+    {
+        $command = array_merge(['/usr/bin/env', 'bash', $script], $args);
         $output = [];
         $exit = 0;
 

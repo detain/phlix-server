@@ -99,6 +99,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `tests/`-style fixtures ship inside the same guard; an empty scan tree fails fast instead of passing.
   No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
 
+### Fixed
+
+- **A healing rescan now leaves the music hierarchy cleaner than it found it (`S153`).**
+  The S145 repair re-parents a mis-filed track onto the album and artist its tags name and
+  mints those container rows when absent, but the rows the tracks came from were only ever
+  recounted — never removed. Measured on production during the first post-S151 full-read
+  rescan: one complete, successful pass grew `music_albums` from 11,535 rows to 11,596 and
+  took zero-track artists from 13 to 16 while clearing only 50 shell albums. Each healing
+  pass therefore filled shells and minted new ones, so retags accumulate shells
+  indefinitely. The prune pass now also reaps `music_albums` rows with no tracks and
+  `music_artists` rows with no tracks and no albums, attributed to the library through the
+  container's own `media_items` anchor (the `music_*` tables carry no `library_id`), with
+  the zero-children predicate re-proven inside each `DELETE` so no execution of the pass
+  can cascade a live track away through the `ON DELETE CASCADE` foreign keys of migration
+  065 — a shell album and a populated album that differ by exactly one track is the pinned
+  fixture. A `rescan` runs the same pass automatically when it saw zero read failures, and
+  a standalone `prune` job runs it only when the library's latest completed scan reports
+  zero failures, no scan is live, and every configured root is present right now, because
+  a shell can also be storage that is merely dark; every refusal is logged. `media_items`
+  container rows are deliberately out of scope and survive the containers they anchored.
+  No migration — the `prune` job type and both lookup indexes already exist.
+
 ### Added
 
 - **Generic keyed image service extracted from the poster pipeline (`S71`).** New

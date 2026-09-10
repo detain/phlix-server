@@ -1007,7 +1007,10 @@ class ScanJobRepository
      *    LOWER BOUND (music streams new tracks only, not the artist/album containers); at
      *    completion a `rescan` raises it to the exact all-types delta. It never goes down
      *    ({@see self::MONOTONIC_FINAL_COLUMNS});
-     *  - `items_removed` rows pruned because their file is gone from disk;
+     *  - `items_removed` rows pruned because their file is gone from disk — and since
+     *    S153, on a music library's rescan/prune, plus the orphan `music_albums` /
+     *    `music_artists` container rows the reap pass deleted (media_items rows are
+     *    never part of this count — see `LibraryManager::reapOrphanMusicContainers()`);
      *  - `items_failed`  files the scan READ and could not index (errors only — never a
      *    policy skip, and never an unchanged file).
      *

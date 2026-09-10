@@ -378,8 +378,18 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * triple, multi-table UPDATE/DELETE JOINs over grouped derived tables, and the
      * ledger's checksum of the applied file. A mocked Connection models none of
      * them, so every acceptance clause is pinned against real MySQL.
+     *
+     * 57 since S153's
+     * `tests/Integration/Media/Library/OrphanMusicContainerReapIntegrationTest.php`:
+     * the S153 claim — a healing rescan's vacated `music_albums`/`music_artists`
+     * shells are reaped only while every predicate holds AT DELETE TIME, so no
+     * execution of the pass can cascade a live track through `fk_tracks_album` /
+     * `fk_tracks_artist` / `fk_albums_artist` (all ON DELETE CASCADE, migration
+     * 065) — is a property of live InnoDB referential actions; an in-memory double
+     * cannot express a cascade, so every acceptance clause is pinned against real
+     * MySQL.
      */
-    private const EXPECTED_ADOPTERS = 56;
+    private const EXPECTED_ADOPTERS = 57;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

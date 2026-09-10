@@ -282,8 +282,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
           * scripts/parallel/php PATH shim and the shell scripts carry no .php suffix
           * and were already outside the scan's extension filter. None names a Request
           * property.
+          * Re-pinned 1848→1849 by S153: the orphan-container reap adds exactly one
+          * first-party file (tests/Integration/Media/Library/
+          * OrphanMusicContainerReapIntegrationTest.php, the real-MySQL proof of the
+          * CASCADE-safe reap and its four gates — the step changes src/ in place and
+          * needs no migration) — measured 1849 on this tree, not predicted. Neither
+          * file names a Request property.
           */
-    private const EXPECTED_PHP_FILES = 1848;
+    private const EXPECTED_PHP_FILES = 1849;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

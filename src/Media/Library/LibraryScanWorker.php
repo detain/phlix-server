@@ -228,7 +228,9 @@ class LibraryScanWorker
                 // worker only forwards the progress sink; the empty $paths arg is
                 // for signature parity with the media-specific subclass managers.
                 $rescan = $this->libraries->rescanLibrary($libraryId, [], $this->scanProgressSink($jobId));
-                // Final counters. `items_removed` is the prune count, which was
+                // Final counters. `items_removed` is the prune count — leaf/empty-container
+                // prunes plus, on a music library, the S153 reaped orphan
+                // music_albums/music_artists rows — which was
                 // computed and then DISCARDED before S96 — a rescan that pruned rows
                 // reported 0 removed. `items_updated` is deliberately absent: that
                 // column doubles as the progress numerator (processed files), so

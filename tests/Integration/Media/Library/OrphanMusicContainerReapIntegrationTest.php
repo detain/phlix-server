@@ -211,8 +211,20 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         self::assertSame(
             1,
             $this->countRunArtists(),
-            'RED pre-fix: empty artists went UP (13 → 16) on the measured production run — the vacated '
-            . 'artist survives with zero tracks and zero reaped-shell albums under it'
+            'RED pre-fix: the production run took ZERO-TRACK artists from 13 to 16 — the vacated '
+            . 'artist X loses every track to Y and only the reap (wave 1 first, then wave 2) removes '
+            . 'it; pre-fix it survives holding the shell album the pass just emptied'
+        );
+        self::assertSame(
+            0,
+            $this->countArtistsWithZeroTracks(),
+            'the production metric itself — artists with zero tracks, whatever they still own — '
+            . 'RED pre-fix for the same reason'
+        );
+        self::assertSame(
+            0,
+            $this->countEmptyArtists(),
+            'strictest reading: no artist of this run is left with neither tracks nor albums'
         );
         self::assertSame(
             0,
@@ -269,6 +281,10 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
 
         $shellAnchor = $this->seedMediaItem('album', $this->prefix . 'Shell Anchor');
         $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', $shellAnchor);
+        // The UNANCHORED shape (media_item_id NULL — the mint-failure row S96(e)
+        // heals) is pinned only here: it is reap-eligible for any qualifying pass,
+        // so it stays out of the gate cases' seeds.
+        $unanchoredShellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell Unanchored', null);
 
         $emptyArtistAnchor = $this->seedMediaItem('artist', $this->prefix . 'Empty Artist Anchor');
         $emptyArtistId = $this->seedArtist($this->prefix . 'Empty Artist', $emptyArtistAnchor);
@@ -285,10 +301,10 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         $removed = $this->manager()->pruneLibrary($this->libraryId);
 
         self::assertSame(
-            2,
+            3,
             $removed,
-            'the prune total now includes reaped music containers: shell S + empty artist E '
-            . '(the job row items_removed must not silently undercount what the pass deleted)'
+            'the prune total now includes reaped music containers: shell S + unanchored shell + empty '
+            . 'artist E (the job row items_removed must not silently undercount what the pass deleted)'
         );
 
         self::assertSame(
@@ -310,6 +326,11 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
 
         self::assertSame(0, $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$shellId]));
         self::assertSame(0, $this->countRows('SELECT id FROM music_artists WHERE id = ?', [$emptyArtistId]));
+        self::assertSame(
+            0,
+            $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$unanchoredShellId]),
+            'the unanchored (media_item_id NULL) mint-failure shape is reaped too'
+        );
         self::assertSame(
             1,
             $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$foreignShellId]),
@@ -341,7 +362,8 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         );
 
         $artistX = $this->artistIdByName($this->prefix . 'Measured Artist');
-        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', null);
+        $shellAnchor = $this->seedMediaItem('album', $this->prefix . 'Shell Anchor');
+        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', $shellAnchor);
 
         $this->seedCompletedScanJob(3);
 
@@ -386,7 +408,8 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         ]);
 
         $artistX = $this->artistIdByName($this->prefix . 'Measured Artist');
-        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', null);
+        $shellAnchor = $this->seedMediaItem('album', $this->prefix . 'Shell Anchor');
+        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', $shellAnchor);
         $this->seedCompletedScanJob(0);
 
         $manager = $this->manager();
@@ -431,10 +454,11 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         );
 
         $artistX = $this->artistIdByName($this->prefix . 'Measured Artist');
-        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', null);
+        $shellAnchor = $this->seedMediaItem('album', $this->prefix . 'Shell Anchor');
+        $shellId = $this->seedShellAlbum($artistX, $this->prefix . 'Shell', $shellAnchor);
 
         $this->seedCompletedScanJob(0);
-        $this->seedJob('rescan', 'running', 0);
+        $this->seedJob($this->libraryId, 'rescan', 'running', 0);
 
         self::assertSame(
             0,
@@ -517,9 +541,66 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         self::assertSame(2, $this->countTracksScoped(), 'indexed set settled at both real files');
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Fixture plumbing
-    // ─────────────────────────────────────────────────────────────────────────
+    /**
+     * The two silent refusals no other case exercises: gate 1 (`type === 'music'`)
+     * and the `paths === []` half of gate 2. Both refuse the whole pass even with
+     * everything else perfectly clean — completed zero-failure job row, the seeds
+     * ATTRIBUTED to the pruning library (so attribution is not what saves them):
+     * a video library's prune must never touch the music hierarchy at all, and a
+     * music library that has no roots has no observable storage to vouch for its
+     * evidence.
+     */
+    public function testReapRefusesANonMusicLibraryAndAMusicLibraryWithoutRoots(): void
+    {
+        $videoLibrary = Uuid::v4();
+        $this->extraLibraryIds[] = $videoLibrary;
+        $videoRoot = $this->root . '-video';
+        mkdir($videoRoot, 0o777, true);
+        $this->cleanupDirs[] = $videoRoot;
+        $this->db()->query(
+            "INSERT INTO libraries (id, name, type, paths) VALUES (?, 'S153 IT Video', 'video', ?)",
+            [$videoLibrary, json_encode([$videoRoot])],
+        );
+
+        $rootlessLibrary = Uuid::v4();
+        $this->extraLibraryIds[] = $rootlessLibrary;
+        $this->insertLibrary($rootlessLibrary, []);
+
+        $artistId = $this->seedArtist(
+            $this->prefix . 'Refused-pass Artist',
+            $this->seedMediaItem('artist', $this->prefix . 'Refused Artist Anchor', $videoLibrary)
+        );
+        $videoShellId = $this->seedShellAlbum(
+            $artistId,
+            $this->prefix . 'Video Library Shell',
+            $this->seedMediaItem('album', $this->prefix . 'Video Shell Anchor', $videoLibrary)
+        );
+        $rootlessShellId = $this->seedShellAlbum(
+            $artistId,
+            $this->prefix . 'Rootless Library Shell',
+            $this->seedMediaItem('album', $this->prefix . 'Rootless Shell Anchor', $rootlessLibrary)
+        );
+        $this->seedJob($videoLibrary, 'scan', 'completed', 0);
+        $this->seedJob($rootlessLibrary, 'scan', 'completed', 0);
+
+        $manager = $this->manager();
+
+        self::assertSame(
+            0,
+            $manager->pruneLibrary($videoLibrary),
+            'RED if gate 1 (type === music) is removed: a video prune would delete music hierarchy rows'
+        );
+        self::assertSame(
+            0,
+            $manager->pruneLibrary($rootlessLibrary),
+            'RED if the empty-roots refusal is removed: nothing on disk was ever verified'
+        );
+        self::assertSame(1, $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$videoShellId]));
+        self::assertSame(1, $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$rootlessShellId]));
+        self::assertSame(1, $this->countRows('SELECT id FROM music_artists WHERE id = ?', [$artistId]));
+    }
+
+
 
     private function db(): Connection
     {
@@ -654,7 +735,14 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         return (int) $this->db()->lastInsertId();
     }
 
-    /** A zero-track album under $artistId — returns its id. */
+    /**
+     * A zero-track album under $artistId — returns its id.
+     *
+     * ⚠ `$mediaItemId = null` puts the row in the suite-GLOBAL unanchored bucket
+     * (any qualifying music pass of any library may reap it) — pass null only where
+     * that branch is the thing under test; gate cases anchor to their own library so
+     * a leaked or racing seed cannot skew them.
+     */
     private function seedShellAlbum(int $artistId, string $title, ?string $mediaItemId = null): int
     {
         $this->db()->query(
@@ -667,15 +755,15 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
 
     private function seedCompletedScanJob(int $itemsFailed): void
     {
-        $this->seedJob('scan', 'completed', $itemsFailed);
+        $this->seedJob($this->libraryId, 'scan', 'completed', $itemsFailed);
     }
 
-    private function seedJob(string $type, string $status, int $itemsFailed): void
+    private function seedJob(string $libraryId, string $type, string $status, int $itemsFailed): void
     {
         $this->db()->query(
             'INSERT INTO library_scan_jobs (id, library_id, type, status, items_failed, completed_at)
              VALUES (?, ?, ?, ?, ?, NOW())',
-            [Uuid::v4(), $this->libraryId, $type, $status, $itemsFailed],
+            [Uuid::v4(), $libraryId, $type, $status, $itemsFailed],
         );
     }
 
@@ -709,6 +797,17 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         return $this->countRows(
             'SELECT a.id FROM music_albums a JOIN music_artists ar ON ar.id = a.artist_id'
             . ' WHERE ar.name LIKE ? AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.album_id = a.id)',
+            [$this->prefix . '%'],
+        );
+    }
+
+    /** Artists of this run holding ZERO tracks — the production 13 → 16 metric, albums ignored. */
+    private function countArtistsWithZeroTracks(): int
+    {
+        return $this->countRows(
+            'SELECT ar.id FROM music_artists ar'
+            . ' WHERE ar.name LIKE ?'
+            . ' AND NOT EXISTS (SELECT 1 FROM music_tracks t WHERE t.artist_id = ar.id)',
             [$this->prefix . '%'],
         );
     }

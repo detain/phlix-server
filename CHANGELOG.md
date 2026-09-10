@@ -41,6 +41,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **CI-pinned composed-route inventory (server only) (`S64`).** A real-DI in-process harness
+  (`tests/Unit/Server/Core/ComposedRouteInventoryTest.php`) composes `Application::loadRoutes()` — the
+  production route table, built from `ContainerFactory::defaultProviders()` with only the MySQL
+  `Workerman\MySQL\Connection` doubled (a `createMock`, so no socket opens) — with no DB, no workers and
+  no real network, then asserts the committed inventory (`tests/Fixtures/Routes/composed-route-inventory.json`)
+  in BOTH directions (`array_diff` missing + extra, then `assertSame`), pinning **365** composed routes
+  (GET 192 · POST 124 · DELETE 26 · PUT 22 · PATCH 1) for the server. Two control proofs make the gate
+  honest rather than self-satisfying: a **planted-drift** test registers a throwaway in-memory route,
+  reddens the diff, and re-greenings on a fresh composition (nothing is persisted); an **unbound-stub**
+  control builds `Application` over a container whose `get()` throws, and the exact message
+  `unbound: Phlix\Server\Http\Controllers\AuthController` proves the real PHP-DI container — not a
+  hand-wire fallback — is what composes the table. Token `S64INVENTORYX7D3` is code-resident. Tests and
+  a JSON fixture only: no routes added or changed, no `src/`, no migrations, no behavior change — the
+  hub half of the original step stays CLOSED (its bijection is already enforced by
+  `OpenApiSpecMatchesRouterTest`).
+
 - **CLI user/admin management (`S61`).** Seven new `bin/phlix` commands mirroring `user:reset-password`:
   `user:list [--status=]`, `user:create {username} --email= --password=`, `user:promote {user} [--revoke]`,
   `user:delete {user} [--force]` and the server-only status-flow trio `user:approve`/`user:disable`/`user:reject`.

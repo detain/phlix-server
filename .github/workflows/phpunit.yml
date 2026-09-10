@@ -343,6 +343,14 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). Consumes the
+        # S314 contract scripts/required-php-extensions.php; fails naming any absent ext
+        # (incl. sodium/hash). This job boots server source via tests/Unit/Server/.
+        # plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
+
       - name: Run Server-specific tests
         run: ./vendor/bin/phpunit tests/Unit/Server/
 
@@ -460,6 +468,13 @@ jobs:
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). The probe
+        # audit requires vendor/autoload.php, so this job runs server source. Consumes the
+        # S314 contract; fails naming any absent ext (incl. sodium/hash). plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
 
       - name: Apply database migrations
         env:

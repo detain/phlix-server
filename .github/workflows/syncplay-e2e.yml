@@ -68,6 +68,14 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Assert required PHP extensions loaded (S304)
+        # S304 — executed assertion, not the `extensions:` line, is the gate (setup-php
+        # fail_fast defaults false → a failed install is still a green step). This job boots
+        # real server source for the E2E suite. Consumes the S314 contract; fails naming any
+        # absent ext (incl. sodium/hash — the hub JWT and Trakt cipher depend on them under
+        # TLS). plan_updates.md:6258-6260.
+        run: php scripts/assert-php-extensions.php
+
       - name: Apply database migrations
         # ⚠ S159 — this step is a GATE: run-migrations.php exits 1 when a
         # migration genuinely fails. An "already applied" replay is still 0,

@@ -1,7 +1,9 @@
 <?php
 
 /**
- * S304 — the EXECUTED assertion behind every CI `Setup PHP` step (token CS304CIEXTX9K2).
+ * S304 — the EXECUTED assertion behind every CI `Setup PHP` step (survival token: see
+ * the `S304_SURVIVAL_TOKEN` const below — code-resident on purpose, a docblock would not
+ * survive `php -w` tokenization).
  *
  * ## Why this exists (and why the `extensions:` line alone is not the gate)
  *
@@ -22,9 +24,12 @@
  *     truth S314 derived from phlix-server's own call sites. A second list here
  *     would be the exact drift this estate keeps repeating (see the header of
  *     that file). We `require` it; we do not copy from it.
- *   - **Executed on every server-source job**, before the slow `composer install`,
- *     so the failure names the missing extension in seconds, not after a solver
- *     error three steps later.
+ *   - **Executed on every server-source job** (seven across phpunit.yml,
+ *     coding-standards.yml and syncplay-e2e.yml), immediately after `composer
+ *     install` and before any test or analysis step, so the failure names the
+ *     missing extension instead of surfacing as a solver or boot error later.
+ *     The two composer-only jobs carry in-file justification comments for why
+ *     the contract does not apply to them.
  *   - **Self-proving against the no-op failure mode.** The whole hazard of an
  *     extension gate is that it can pass while checking nothing (S146's Psalm job,
  *     S146's coverage gate, this repo's old `if [ -f ... ]` guards). Before it
@@ -46,7 +51,10 @@
  *   php scripts/assert-php-extensions.php --require=swoole --require=ffi
  *
  * `--require=<ext>` (repeatable) adds a name the CALLER's job also depends on but
- * that is not a server-source contract entry (e.g. the psalm/e2e jobs' swoole). It
+ * that is not a server-source contract entry — a hypothetical FFI-consuming job, say.
+ * NOTE: the psalm/e2e jobs list swoole/ffi in their `extensions:` but deliberately do
+ * NOT pass `--require` for them: those are tool-resolution conveniences, not
+ * server-source needs (see the per-step comments in coding-standards.yml). It
  * is deliberately additive to, never a replacement for, the contract set. It doubles
  * as the documented negative-control knob: `--require=this_ext_does_not_exist`
  * reddens exactly the job that carries it, which is the AC's "forced assertion flip"

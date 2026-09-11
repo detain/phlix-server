@@ -34,10 +34,11 @@ use Symfony\Component\Yaml\Yaml;
  * It is a WIRING change-detector over the workflow YAML. Deleting the
  * immutable half of the emitted list, inlining the tag back to the bare
  * matrix form, shortening the sha (which would make two commits that share a
- * short prefix collide), or quietly pointing the boot gate at registry tags
- * each turn RED here — in `vendor/bin/phpunit`, without waiting for a real
- * publish. It CANNOT prove the registry received the tags: that proof is the
- * post-merge anonymous tags/list receipt naming `<merge-sha>-{latest,intel,nvidia}`.
+ * short prefix collide), stripping the step's `set -euo pipefail`, or quietly
+ * pointing the boot gate at registry tags each turn RED here — in
+ * `vendor/bin/phpunit`, without waiting for a real publish. It CANNOT prove
+ * the registry received the tags: that proof is the post-merge anonymous
+ * tags/list receipt naming `<merge-sha>-{latest,intel,nvidia}`.
  *
  * If you intentionally change the tag scheme, update this test AND its
  * negative-control needles in the same diff — the mutations below are written
@@ -114,9 +115,12 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
     {
         $matches = [];
         foreach (self::stepsOf($job) as $step) {
-            $uses = (string) ($step['uses'] ?? '');
+            $uses = $step['uses'] ?? null;
+            if (!is_string($uses) || !str_starts_with($uses, 'docker/build-push-action@')) {
+                continue;
+            }
             $with = (array) ($step['with'] ?? []);
-            if (str_starts_with($uses, 'docker/build-push-action@') && array_key_exists('push', $with)) {
+            if (array_key_exists('push', $with)) {
                 $matches[] = $step;
             }
         }
@@ -160,13 +164,16 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
         }
 
         $with = (array) ($publish['with'] ?? []);
-        if (($with['tags'] ?? null) !== self::EXPECTED_CONSUMED_TAGS) {
+        $tags = $with['tags'] ?? null;
+        if (!is_string($tags) || $tags !== self::EXPECTED_CONSUMED_TAGS) {
             return false;
         }
-        if (($with['push'] ?? null) !== self::EXPECTED_PUSH_GATE) {
+        $push = $with['push'] ?? null;
+        if (!is_string($push) || $push !== self::EXPECTED_PUSH_GATE) {
             return false;
         }
-        if (!str_contains((string) ($with['labels'] ?? ''), 'steps.meta.outputs.labels')) {
+        $labels = $with['labels'] ?? null;
+        if (!is_string($labels) || !str_contains($labels, 'steps.meta.outputs.labels')) {
             return false;
         }
 
@@ -178,18 +185,23 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
         if (($env['MATRIX_TAG'] ?? null) !== '${{ matrix.tag }}') {
             return false;
         }
+        $run = $compute['run'] ?? null;
+        if (!is_string($run)) {
+            return false;
+        }
 
-        return self::runBodyEmitsBothTagForms((string) ($compute['run'] ?? ''));
+        return self::runBodyEmitsBothTagForms($run);
     }
 
     /**
-     * The compute step's shell body must build the mutable tag, build the
-     * FULL-sha variant suffixed with the SAME per-leg matrix tag, and emit
-     * both comma-joined, mutable first.
+     * The compute step's shell body must fail fast on unset variables, build
+     * the mutable tag, build the FULL-sha variant suffixed with the SAME
+     * per-leg matrix tag, and emit both comma-joined, mutable first.
      */
     private static function runBodyEmitsBothTagForms(string $runBody): bool
     {
         $patterns = [
+            '/^set -euo pipefail$/m',
             '/MUTABLE="\$\{REGISTRY\}\/\$\{IMAGE_NAME\}:\$\{MATRIX_TAG\}"/',
             '/IMMUTABLE="\$\{REGISTRY\}\/\$\{IMAGE_NAME\}:\$\{GITHUB_SHA\}-\$\{MATRIX_TAG\}"/',
             '/echo "tags=\$\{MUTABLE\},\$\{IMMUTABLE\}" >> "\$GITHUB_OUTPUT"/',
@@ -280,6 +292,12 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
 
         $run = (string) ($compute['run'] ?? '');
         self::assertMatchesRegularExpression(
+            '/^set -euo pipefail$/m',
+            $run,
+            'the compute step must fail fast: without set -u an unset MATRIX_TAG or GITHUB_OUTPUT'
+                . ' would emit an empty-string tag entry instead of a hard step failure'
+        );
+        self::assertMatchesRegularExpression(
             '/MUTABLE="\$\{REGISTRY\}\/\$\{IMAGE_NAME\}:\$\{MATRIX_TAG\}"/',
             $run,
             'the mutable tag form <registry>/<image>:<variant> is no longer constructed — it must keep'
@@ -354,17 +372,34 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
 
         foreach (self::stepsOf($boot) as $step) {
             $with = (array) ($step['with'] ?? []);
-            self::assertNotSame(
-                true,
-                $with['push'] ?? null,
-                'the boot gate builds locally and boots what it built; a push:true there would'
-                    . ' start shipping unvalidated artefacts to the registry'
+            if (!array_key_exists('push', $with)) {
+                continue;
+            }
+            // Strict bool false — NOT an assertNotSame(true, …) denial:
+            // build-push-action inputs arrive as STRINGS, so `push: "true"`
+            // or a truthy expression string publishes just as loudly as
+            // `push: true` and must not sail through here.
+            self::assertSame(
+                false,
+                $with['push'],
+                'the boot gate builds locally and boots what it built; any other push: value there'
+                    . ' would start shipping unvalidated artefacts to the registry'
             );
         }
 
         foreach (self::stringsIn($boot) as $string) {
             self::assertStringNotContainsString('env.REGISTRY', $string);
             self::assertStringNotContainsString('env.IMAGE_NAME', $string);
+            // …and no registry coordinate hard-coded either: pointing the boot
+            // gate at ghcr.io images (mutable OR immutable) would silently
+            // swap "boots what it just built" for "boots whatever the registry
+            // hands back", which this step's contract forbids.
+            self::assertStringNotContainsString(
+                'ghcr.io',
+                $string,
+                'the boot gate consumes ZERO registry tags — a hard-coded ghcr.io reference in'
+                    . ' docker-boot-gate would make it boot published images instead of local builds'
+            );
         }
     }
 
@@ -387,6 +422,14 @@ final class ServerRuntimeImmutableTagsWiringTest extends TestCase
             'sha-shortened-to-seven' => [
                 '${GITHUB_SHA}-${MATRIX_TAG}',
                 '${GITHUB_SHA::7}-${MATRIX_TAG}',
+            ],
+            'fail-fast-line-stripped' => [
+                // Content swap, not line deletion: removing the whole line would
+                // shift the block scalar's detected indent and fail YAML parsing
+                // instead of the judge. `true` is a shell no-op — the step keeps
+                // running but has lost fail-fast on unset variables.
+                "set -euo pipefail\n          MUTABLE=",
+                "true\n          MUTABLE=",
             ],
         ];
 

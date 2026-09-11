@@ -325,10 +325,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
             * guard that parses the workflow YAML and pins the clone to an immutable SHA,
             * failing if any site drifts back to unpinned); measured on this tree, not
             * predicted (CI computed 1860). The new test reads/writes no Request property (it
-            * touches only YAML + Dockerfile text), so every other census denominator is
-            * unchanged.
-            */
-    private const EXPECTED_PHP_FILES = 1860;
+             * touches only YAML + Dockerfile text), so every other census denominator is
+             * unchanged.
+             * Re-pinned 1860→1861 by S474: the docker immutable-tags wiring guard adds
+             * exactly one first-party PHP file (tests/Unit/Support/
+             * ServerRuntimeImmutableTagsWiringTest.php — the change-detector that parses
+             * docker.yml and pins the sha-suffixed immutable tag list on the runtime
+             * publish path, with mutation negative controls); measured on this tree, not
+             * predicted (phpunit computed 1861). The new test reads/writes no Request
+             * property (it touches only workflow YAML text), so every other census
+             * denominator is unchanged.
+             */
+    private const EXPECTED_PHP_FILES = 1861;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -168,6 +168,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   not hypothetical: the pin bump to v0.99.1 landed without a rebuild, and this PR's rebuild is what
   its own new gate demands.
 
+- **Every server runtime image now publishes a deterministic immutable tag alongside its
+  mutable one (`S474`).** The `docker` workflow pushed only `latest`, `intel` and `nvidia` —
+  the metadata action computed sha/semver tags but only its labels output was ever consumed,
+  and its bare-sha form could not distinguish the three legs anyway — so the anonymous
+  registry listing held no pinned tag at all and consumers (the Helm chart's appVersion
+  fallback, the example compose files) pointed at a tag that had never existed or rode the
+  mutable one. Each leg now also pushes `<full-commit-sha>-<variant>` via a computed explicit
+  tag list following the base job's own precedent, so the three legs can never collide
+  last-write-wins and mutable publishing is unchanged. `tests/Unit/Support/
+  ServerRuntimeImmutableTagsWiringTest.php` pins the wiring (with mutation negative controls);
+  the registry-side proof is the anonymous tags listing after the next master run. The release
+  workflow's dead image env block — zero references, implying a publish step it does not
+  perform — is gone with it.
+
 ### Changed
 
 - **Avatar and photo-route resizing now delegate to the shared image service (`S456`).**

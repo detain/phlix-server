@@ -262,6 +262,31 @@ jobs:
         run: |
           echo "::warning::Fork PR: GITHUB_TOKEN cannot write packages, so the base built from this commit could not be published. Skipping the ${{ matrix.tag }} image build (docker/Dockerfile is the only one that builds FROM the base) rather than building it against a stale base. The boot gate still builds and BOOTS all three images."
 
+      # S474 — every runtime leg ALSO publishes a deterministic immutable tag
+      # `<full-sha>-<variant>` alongside its mutable matrix tag. (Finding 5 of
+      # the S471 sweep: the registry held only latest|intel|nvidia — the
+      # metadata-action above computes branch/semver/sha tags but ONLY its
+      # `.labels` output was consumed; its `.tags` was wired to nothing, and its
+      # bare-sha form could not distinguish the three legs anyway, so consumers
+      # (helm chart, example composes) had nothing immutable to pin.)
+      # Explicit comma-list via a computed step, mirroring the base job above:
+      # no conditional lines inside `tags: |`, so there is never an empty entry
+      # whose handling depends on the action's input parsing. The sha is the
+      # FULL GITHUB_SHA and is suffixed per-variant (`-latest`, `-intel`,
+      # `-nvidia`) so the three legs can never collide last-write-wins.
+      # Mutable matrix tags keep publishing exactly as before; `push:` on the
+      # step below still gates every publish on non-PR, so PR runs push nothing.
+      - name: Compute runtime image tags
+        id: runtimetags
+        env:
+          MATRIX_TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          MUTABLE="${REGISTRY}/${IMAGE_NAME}:${MATRIX_TAG}"
+          IMMUTABLE="${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}-${MATRIX_TAG}"
+          echo "tags=${MUTABLE},${IMMUTABLE}" >> "$GITHUB_OUTPUT"
+          echo "publishing: ${MUTABLE} and ${IMMUTABLE}"
+
       - name: Build and push
         if: ${{ !matrix.needs_base || needs.docker-base.outputs.base_ref != '' }}
         uses: docker/build-push-action@v7
@@ -270,7 +295,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
+          tags: ${{ steps.runtimetags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Dedicated cache tag (not the image tag) — see the base job's note.
           # `ignore-error=true` for the same reason as the base job: the two

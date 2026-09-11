@@ -165,8 +165,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `git diff` alone is blind to), prints the number of tracked files it compared, and runs on
   bundle-only commits too. Node is pinned to the exact runner minor the committed bundle was built
   with, because a byte-exact gate is only honest when the runner version is fixed — the hazard is
-   not hypothetical: the pin bump to v0.99.1 landed without a rebuild, and this PR's rebuild is what
-   its own new gate demands.
+  not hypothetical: the pin bump to v0.99.1 landed without a rebuild, and this PR's rebuild is what
+  its own new gate demands.
 
 - **Every server runtime image now publishes a deterministic immutable tag alongside its
   mutable one (`S474`).** The `docker` workflow pushed only `latest`, `intel` and `nvidia` —

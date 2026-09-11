@@ -60,6 +60,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `downloadAndStore` call set across three items), one on real disk across two storage instances —
   and the executed-census estate count moved 1849→1851 with its mandated in-commit re-pin.
 
+- **Artwork serving became lazy resize-then-cache, and every artwork fetch became two-layer gated (`S73`).**
+  A request for a registered width variant that was never downloaded used to answer a flat 404, and the
+  download pipeline only ever produced the widths it fetched — so a person or backdrop cached at one size
+  was unserveable at every other until a fresh remote fetch happened. A miss on the serve path now resizes
+  locally from the stored original, writes the new ladder variant atomically, and serves it like any
+  prefetched file; a miss with no source on disk still 404s with the same body, and the serve path never
+  touches the network. The new `GET /api/v1/people/{personId}/photo?w=` route serves the person-keyed cache
+  from the previous step through that same byte responder, with the whole conditional-GET block — stat,
+  strong ETag, Last-Modified, If-None-Match taking authority over If-Modified-Since, bodiless 304s under a
+  one-year immutable cache header — extracted verbatim so artwork, avatars and people photos keep
+  byte-identical caching semantics in one implementation. Size validation runs before any path lookup, the
+  width ladder was deliberately not widened (every serveable people width is inside the existing gate), and
+  anonymous callers must carry a signed URL for the person resource exactly as they do for artwork. On the
+  fetch side every download now passes two layers before a socket opens: a host allowlist anchored on the
+  provider URL shape already pinned elsewhere in the estate — exact https host, known path prefix, userinfo,
+  subdomain-suffix, scheme-downgrade and foreign-path spoofs refused by the regex — followed by
+  `SsrfGuard::assertPublicUrl` re-checked on every URL the code is about to fetch, including each redirect
+  hop. Vendor automatic redirect following was removed from both transports (blocking curl runs
+  `FOLLOWLOCATION=false` under a bounded manual loop; the async client is called with a redirect cap of
+  zero, against its default of five silent follows), hops are resolved per RFC 3986, re-guarded per hop, and
+  the budget is three. The acceptance tests prove the ordering rather than asserting it in prose: an
+  unallowlisted host throws with the DNS resolver's call counter still at zero, and a redirect chain aimed
+  at link-local, private, or foreign hosts stops at the hop that pointed there — deleting either guard layer,
+  the per-hop re-check, or the async redirect cap turns those tests red. The router wire-path manifests and the
+  executed estate census moved inside the same commit, per their in-file protocols.
+
 - **The server test suite now runs in parallel lanes with the same evidence as serial (`S457`).**
   The `test` job's single serial PHPUnit invocation became three lanes: the Unit suite
   (no database) and the Integration suite run under paraunit at parallel 8, the E2E suite

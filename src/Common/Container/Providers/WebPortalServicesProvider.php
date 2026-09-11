@@ -187,6 +187,17 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $themeSourceRegistry = $c->get(ThemeSourceRegistry::class);
                     $themesController = new ThemesController($themeSourceRegistry);
 
+                    // S73: people-photo endpoint serves the flat `people-{id}`
+                    // artwork cache; the guard uses the same autowired instance
+                    // (rootless dataDir resolution happens inside ArtworkStorage).
+                    $artworkStorage = null;
+                    if ($c->has(\Phlix\Media\Storage\ArtworkStorage::class)) {
+                        $resolvedStorage = $c->get(\Phlix\Media\Storage\ArtworkStorage::class);
+                        $artworkStorage = $resolvedStorage instanceof \Phlix\Media\Storage\ArtworkStorage
+                            ? $resolvedStorage
+                            : null;
+                    }
+
                     $settingsRepo = null;
                     if ($c->has(\Phlix\Admin\SettingsRepository::class)) {
                         $resolved = $c->get(\Phlix\Admin\SettingsRepository::class);
@@ -222,6 +233,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         // Backs the `subtitles.default_language` server-wide default.
                         $settingsRepo,
                         $themesController,
+                        $artworkStorage,
                     );
                 }
             ),

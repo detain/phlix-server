@@ -36,7 +36,9 @@ use PHPUnit\Framework\TestCase;
  * ## COVERAGE STATE (measured 2026-08-25 on master d198f9e0 + this branch)
  *
  * 26 fork files / 32 arm-fork sites (26/32 measured 2026-08-25; S215 adds a 27th —
- * `src/Media/CollectionWorker.php`, covered by `CollectionWorkerCoroutineForkTest`), of which:
+ * `src/Media/CollectionWorker.php`, covered by `CollectionWorkerCoroutineForkTest`;
+ * S73 adds a 28th file / 33rd site — `src/Common/Net/ProviderUrlAllowlist.php`,
+ * the coroutine-native SSRF resolver arm, covered by `ProviderUrlAllowlistTest`), of which:
  *  - 14 files newly covered by S196 fork tests (each driven through the REAL
  *    fork decision inside `RunsInCoroutine` with observed branch identity;
  *    each mutation-proven — see the S196 PR body);
@@ -69,6 +71,7 @@ final class ForkInventoryGuardTest extends TestCase
      */
     private const COVERING_TESTS = [
         'src/Admin/S3Client.php' => ['tests/Unit/Admin/S3ClientCoroutineForkTest.php'],
+        'src/Common/Net/ProviderUrlAllowlist.php' => ['tests/Unit/Common/Net/ProviderUrlAllowlistTest.php'],
         'src/Hub/HttpClient.php' => ['tests/Unit/Hub/HttpClientCoroutineForkTest.php'],
         'src/Hub/RelayConsumer.php' => ['tests/Unit/Hub/RelayConsumerCoroutineForkTest.php'],
         'src/LiveTv/ComskipRunner.php' => ['tests/Unit/LiveTv/ComskipRunnerCoroutineForkTest.php'],

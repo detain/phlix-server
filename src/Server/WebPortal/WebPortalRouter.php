@@ -49,7 +49,9 @@ use Phlix\Server\Http\Controllers\MediaRatingsController;
 use Phlix\Server\Http\Controllers\ThemesController;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
+use Phlix\Server\Http\FastPath\ArtworkByteResponder;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -125,6 +127,14 @@ class WebPortalRouter
      *      the two routes answer 503 rather than a misleadingly empty list.
      */
     private ?ThemesController $themesController;
+
+    /**
+     * @var ArtworkStorage|null S73 — serves S72's flat `people-{tmdbPersonId}`
+     *      cache through GET /api/v1/people/{personId}/photo. Null when not
+     *      wired, in which case the route answers 503 instead of a 404 that
+     *      would read as "person has no photo".
+     */
+    private ?ArtworkStorage $artworkStorage;
 
     /**
      * Admin settings store, used for the server-wide defaults applied to users
@@ -229,7 +239,8 @@ class WebPortalRouter
         ?MusicLibraryService $musicLibraryService = null,
         ?StreamProbeBackfill $streamBackfill = null,
         ?\Phlix\Admin\SettingsRepository $settings = null,
-        ?ThemesController $themesController = null
+        ?ThemesController $themesController = null,
+        ?ArtworkStorage $artworkStorage = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -252,6 +263,7 @@ class WebPortalRouter
         $this->mediaRatingsController = $mediaRatingsController;
         $this->transcodeController = $transcodeController;
         $this->themesController = $themesController;
+        $this->artworkStorage = $artworkStorage;
         $this->settings = $settings;
         $this->similarityService = $similarityService;
         $this->recommendationService = $recommendationService;
@@ -292,6 +304,16 @@ class WebPortalRouter
 
         // Public media-item ratings endpoint (P1-S1): no auth required.
         $this->router->get('/api/v1/media/{id}/ratings', [$this, 'getRatings']);
+
+        // S73: person photo bytes from the flat `people-{tmdbPersonId}` cache.
+        // Registered outside the auth group like the public ratings rail, but
+        // NOT anonymous: the handler gates every reply through
+        // ArtworkByteResponder::rejectUnlessSigned() (session userId or a valid
+        // scan-time signature), same contract as /api/v1/artwork/{key}.
+        $this->router->get(
+            '/api/v1/people/{personId}/photo',
+            [$this, 'getPersonPhoto']
+        );
 
         $this->router->group('', function (Router $r): void {
             // P4-S1: similar items endpoint — wrapped in its own auth group
@@ -2492,6 +2514,73 @@ class WebPortalRouter
         }
 
         return $this->themesController->show($request, $params);
+    }
+
+    /**
+     * Serves person-photo bytes from S72's flat artwork cache (S73).
+     *
+     * `GET /api/v1/people/{personId}/photo?w=185` — `personId` is the TMDB
+     * person id, which is exactly the flat cache key suffix S72's
+     * `PersonCacher::cachePeopleLocally()` writes (`people-{tmdbPersonId}`).
+     * `w` is REQUIRED and must be one of {@see ArtworkStorage::WIDTHS};
+     * both checks run BEFORE any filesystem lookup — the same
+     * 400-precedes-lookup ordering the artwork rail uses, so an unsupported
+     * width can never masquerade as a missing photo. Every width is ≤780, so
+     * the width ladder needs no widening for this endpoint.
+     *
+     * Auth and cache semantics are shared byte-for-byte with
+     * `/api/v1/artwork/{key}` through {@see ArtworkByteResponder}: session
+     * user or valid scan-time signature, ETag/Last-Modified validators, 304,
+     * `Cache-Control: public, max-age=31536000, immutable`, and lazy
+     * resize-then-cache on variant miss from the stored original.
+     *
+     * @param Request               $request HTTP request with required `w`.
+     * @param array<string, string> $params  Route params: `personId`.
+     *
+     * @return Response 200/304 image bytes, or 400/401/404/503 JSON/text error.
+     *
+     * @api_endpoint GET /api/v1/people/{personId}/photo
+     *
+     * @requires Authentication (session user, or a valid signed URL)
+     */
+    public function getPersonPhoto(Request $request, array $params): Response
+    {
+        if ($this->artworkStorage === null) {
+            return (new Response())->status(503)->json(['error' => 'Artwork storage is not configured']);
+        }
+
+        $personId = $params['personId'] ?? '';
+        if ($personId === '' || !ctype_digit($personId)) {
+            return (new Response())->status(400)->json(['error' => 'Invalid person id']);
+        }
+
+        $wRaw = $request->query['w'] ?? '';
+        $rawWidth = is_string($wRaw) ? $wRaw : '';
+        $size = $rawWidth !== '' && ctype_digit($rawWidth) ? (int) $rawWidth : 0;
+        if (!in_array($size, ArtworkStorage::WIDTHS, true)) {
+            // 400 BEFORE storage lookup, like the artwork rail's `size` check.
+            return ArtworkByteResponder::invalidSize();
+        }
+
+        // Same gate as the artwork fast path: session user, or a valid
+        // signature over the canonical (query-less) resource path.
+        $denied = ArtworkByteResponder::rejectUnlessSigned(
+            $request,
+            '/api/v1/people/' . $personId . '/photo'
+        );
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        $photoKey = 'people-' . $personId;
+        $width = 'w' . $size;
+        $path = $this->artworkStorage->variantPath($photoKey, $width)
+            ?? $this->artworkStorage->ensureVariant($photoKey, $width);
+        if ($path === null) {
+            return ArtworkByteResponder::notFound();
+        }
+
+        return ArtworkByteResponder::serve($request, $path, $width);
     }
 
     /**

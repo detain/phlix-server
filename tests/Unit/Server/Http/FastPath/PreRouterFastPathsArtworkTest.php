@@ -545,4 +545,23 @@ final class PreRouterFastPathsArtworkTest extends TestCase
         self::assertSame(404, $resp->getStatusCode());
         self::assertStringContainsString('Artwork not found', $resp->rawBody());
     }
+
+    public function testVariantMissIsOfferedTheLazyResizeArmBefore404(): void
+    {
+        // S73: the serve path consults ensureVariant() on a variantPath() miss
+        // and serves what it produces (resize-then-cache from the local
+        // original). Deleting that arm reddens this test — the pre-S73 code
+        // went straight to 404 and would 404 here despite the file existing.
+        $storage = $this->createMock(ArtworkStorage::class);
+        $storage->method('variantPath')->willReturn(null);
+        $storage->method('ensureVariant')->willReturn($this->artworkPath);
+        $fastPaths = new PreRouterFastPaths($storage, $this->createMock(AvatarStorage::class));
+
+        $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-lazy', 'w500'), 'user-1');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(200, $resp->getStatusCode());
+        self::assertNotNull($resp->file);
+        self::assertSame($this->artworkPath, $resp->file['file']);
+    }
 }

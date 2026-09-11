@@ -171,6 +171,37 @@ class ImageResizer
     }
 
     /**
+     * Generate exactly ONE width variant from an ALREADY-STORED local source.
+     *
+     * The lazy resize-then-cache arm of S73: when a request asks for a variant
+     * the pre-generation pass never wrote, the stored `original.jpg` is resized
+     * to that one width on the spot and cached for every later request. No
+     * download, no other widths — a serve-path write is local CPU only, so the
+     * resident worker never blocks on the network here (the reason SsrfGuard's
+     * own docblock bans DNS on this path also bans fetching on it).
+     *
+     * Same validate → ensure-dir → generate pipeline the batch pass runs per
+     * width, including the never-upscale rule and the atomic temp-then-rename
+     * write, so a concurrent reader can never observe a partial variant.
+     *
+     * @param string  $targetKey  Flat target key (see {@see targetDir()}).
+     * @param string  $sourcePath Path to the stored local source image.
+     * @param int     $width      Target width in pixels.
+     * @return string|null        Path to the stored variant, or null when the
+     *                            source is unreadable or encoding fails.
+     * @throws \InvalidArgumentException if the source fails validation or the
+     *                                   key is unusable.
+     * @throws \RuntimeException        if the target directory cannot be created.
+     */
+    public function resizeOneWidth(string $targetKey, string $sourcePath, int $width): ?string
+    {
+        $this->validateImageFile($sourcePath);
+        $this->ensureTargetDirExists($targetKey);
+
+        return $this->generateVariant($targetKey, $sourcePath, $width);
+    }
+
+    /**
      * Store caller-supplied bytes verbatim (NO re-encode) as a named file under
      * the key's directory, via the same atomic writer the JPEG variants use.
      *

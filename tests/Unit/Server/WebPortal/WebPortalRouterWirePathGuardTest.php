@@ -149,6 +149,10 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
         'GET /api/v1/media/{id}/playback -> WebPortalRouter::getPlaybackInfo [AuthMiddleware]',
         'GET /api/v1/media/{id}/posters -> MediaPosterController::listPosters [AdminMiddleware]',
         'GET /api/v1/media/{id}/ratings -> WebPortalRouter::getRatings []',
+        // S73: person-photo bytes from the flat people artwork cache. Registered
+        // outside the auth group (handler-side signed/session gate), so the
+        // middleware list renders empty like the public ratings rail above.
+        'GET /api/v1/people/{personId}/photo -> WebPortalRouter::getPersonPhoto []',
         'GET /api/v1/media/{id}/similar -> WebPortalRouter::getSimilarItems [AuthMiddleware,AuthMiddleware]',
         'GET /api/v1/themes -> WebPortalRouter::listThemes [AuthMiddleware]',
         'GET /api/v1/themes/{id} -> WebPortalRouter::getTheme [AuthMiddleware]',

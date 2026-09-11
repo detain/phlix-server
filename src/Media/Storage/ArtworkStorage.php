@@ -13,6 +13,7 @@ namespace Phlix\Media\Storage;
 
 use Phlix\Auth\SignedUrl;
 use Phlix\Common\Http\EventLoopTls;
+use Phlix\Common\Net\ProviderUrlAllowlist;
 use Phlix\Common\Runtime\WorkerContext;
 use Psr\Http\Message\ResponseInterface;
 use Workerman\Http\Client;
@@ -70,6 +71,16 @@ class ArtworkStorage
 
     /** Connect timeout for downloading poster from TMDB (seconds). */
     private const CONNECT_TIMEOUT = 10;
+
+    /**
+     * Maximum redirect hops followed on either download path (S73). The
+     * blocking path used to hand this to cURL (`CURLOPT_MAXREDIRS = 3`) while
+     * the async path used the vendor default of 5 — an enabled, UNGUARDED
+     * follow, so a 302 to `169.254.169.254` was fetched today. Now BOTH paths
+     * send `FollowLocation: false` / `allow_redirects.max = 0`, and this loop
+     * bound applies the two-layer allowlist PER HOP, closing the asymmetry.
+     */
+    private const MAX_REDIRECT_HOPS = 3;
 
     /** @var Client|null Async HTTP client instance (lazy initialized). */
     private ?Client $asyncClient = null;
@@ -268,6 +279,66 @@ class ArtworkStorage
     }
 
     /**
+     * Resolve a variant path, RESIZING-THEN-CACHING from the stored original on a
+     * miss (S73 — the lazy arm; the pre-generation pass in
+     * {@see downloadAndStore()} stays the normal producer).
+     *
+     * The serve path may only ever do LOCAL work: resize the already-stored
+     * `original.jpg` to exactly ONE requested width and atomically cache it. It
+     * never downloads — SsrfGuard's own contract bans per-request DNS on hot
+     * paths, and a serve-time fetch would turn every client into an open proxy.
+     * When the original itself is missing, or the source proves unresizable,
+     * this returns null and the caller answers with the standard flat 404 JSON,
+     * exactly the pre-S73 miss behavior.
+     *
+     * Width discipline (the 400-before-lookup landmine): only sizes in
+     * {@see self::WIDTHS} are ever produced here, so no serve path can grow the
+     * cache beyond the pre-pinned ladder. Today's ladder tops out at 780px, so
+     * WIDTHS needs no widening and {@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::isValidArtworkSize()}
+     * keeps rejecting everything else with 400 BEFORE this method is consulted.
+     *
+     * @param string $itemId Media item key (flat, e.g. a poster UUID or S72's 'people-{tmdbPersonId}').
+     * @param string $size   Variant name already validated by the caller (e.g. 'w500').
+     * @return string|null   Path to the (possibly just-written) variant, or null on miss.
+     */
+    public function ensureVariant(string $itemId, string $size): ?string
+    {
+        $existing = $this->variantPath($itemId, $size);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        // 'logo' is a stored PNG (never JPEG-derived) and 'original' IS the
+        // source — neither can be lazily produced from anything else.
+        if ($size === self::LOGO_SIZE || $size === self::ORIGINAL) {
+            return null;
+        }
+
+        if (preg_match('/^w(\d+)$/', $size, $m) !== 1) {
+            return null;
+        }
+
+        /** @var int $width */
+        $width = (int) $m[1];
+        if (!in_array($width, self::WIDTHS, true)) {
+            return null;
+        }
+
+        $original = $this->variantPath($itemId, self::ORIGINAL);
+        if ($original === null) {
+            return null;
+        }
+
+        try {
+            return $this->resizer->resizeOneWidth($itemId, $original, $width);
+        } catch (\InvalidArgumentException | \RuntimeException) {
+            // Corrupt source or unwritable cache — a miss is a miss; the next
+            // metadata rescan's downloadAndStore() re-validates and self-heals.
+            return null;
+        }
+    }
+
+    /**
      * Get all stored variant sizes for an item.
      *
      * @param string $itemId Media item UUID
@@ -453,6 +524,14 @@ class ArtworkStorage
     /**
      * Download a file from URL to a temp location.
      *
+     * S73 — TWO-LAYER SSRF GATE, FIRST ACT, BEFORE ANY I/O:
+     * {@see ProviderUrlAllowlist::assertFetchable()} runs before the temp file
+     * is even created, so a non-allowlisted host produces zero filesystem
+     * writes, zero DNS lookups, zero sockets. Every redirect hop the two
+     * download paths follow re-enters the same gate (see
+     * {@see downloadToTempBlocking()} / {@see downloadToTempAsync()}), because
+     * a guard only on the initial URL is bypassed by one 302.
+     *
      * SV-3.4: this class is reachable from an interactive HTTP handler
      * (`MediaMatchController::apply()` → `LibraryMetadataMatcher::applyMatch()`
      * → … → `downloadAndStore()`), so the network fetch must never block the
@@ -468,19 +547,32 @@ class ArtworkStorage
      * shared {@see WorkerContext} helper (introduced by SV-0.3/SV-0.4) so we do
      * not hand-roll a fresh context check.
      *
+     * Public so the S73 AC test can drive the gate directly with a hostile URL
+     * and prove nothing was fetched; the in-package callers are the two
+     * download entry points ({@see downloadAndStore()} /
+     * {@see downloadAndStoreLogo()}).
+     *
      * @param string $url Full URL to download
      * @return string     Path to temp file
-     * @throws \RuntimeException if download fails
+     * @throws \InvalidArgumentException if the URL fails the allowlist or SsrfGuard
+     * @throws \RuntimeException        if download fails
      */
-    private function downloadToTemp(string $url): string
+    public function downloadToTemp(string $url): string
     {
+        ProviderUrlAllowlist::assertFetchable($url);
+
         $tmpFile = tempnam(sys_get_temp_dir(), 'artwork_');
         if ($tmpFile === false) {
             throw new \RuntimeException('Failed to create temp file for artwork download');
         }
 
-        // CURLOPT_URL / the async client both require a non-empty URL.
-        assert($url !== '');
+        // Fail fast (S73): the two download paths feed this value straight into
+        // CURLOPT_URL / the async client, where an empty URL is a silent misfire.
+        // An `assert()` would vanish under production ini and leave the non-empty
+        // type unfounded for static analysis; a real guard holds in both worlds.
+        if ($url === '') {
+            throw new \InvalidArgumentException('Artwork fetch refused: URL is empty.');
+        }
 
         if ($this->shouldUseBlockingDownload($url)) {
             return $this->downloadToTempBlocking($url, $tmpFile);
@@ -532,12 +624,64 @@ class ArtworkStorage
      * Download via the non-blocking async client, waiting cooperatively on a
      * Swoole coroutine Channel (yields to the event loop, never busy-spins).
      *
-     * @param non-empty-string $url     Full URL to download.
+     * S73 redirect discipline: `allow_redirects.max = 0` is MANDATORY, not an
+     * optimisation. The vendored workerman/http-client follows 3xx by DEFAULT
+     * (its `Request::$maxRedirects` starts at 5), so without this option a
+     * hostile-stored `Location` would be fetched inside the vendor, entirely
+     * outside this class's per-hop guard — and the fake client in tests would
+     * not even see the intermediate hop. With `max = 0` the 3xx is delivered to
+     * the success callback untouched, and {@see followableLocation()} decides
+     * whether the NEXT guarded request happens.
+     *
+     * @param non-empty-string $url     Full URL to download (already allowlist-gated by the caller).
      * @param string           $tmpFile Pre-created temp file to write the body into.
      * @return string          Path to the temp file on success.
+     * @throws \InvalidArgumentException when a redirect hop targets a non-allowlisted
+     *                                   or non-public URL (the temp file is removed).
      * @throws \RuntimeException on timeout, transport error, non-200, or write failure.
      */
     private function downloadToTempAsync(string $url, string $tmpFile): string
+    {
+        $current = $url;
+
+        // 1 initial request + MAX_REDIRECT_HOPS follow-ups (S73: the hop budget
+        // the old CURLOPT_MAXREDIRS / vendor default spent UNGUARDED is now
+        // spent here, per-hop, through the two-layer gate).
+        for ($hop = 0; $hop <= self::MAX_REDIRECT_HOPS; $hop++) {
+            $response = $this->requestOnceAsync($current);
+
+            if ($response->getStatusCode() === 200) {
+                $body = (string) $response->getBody();
+                if ($body === '' || file_put_contents($tmpFile, $body) === false) {
+                    $this->cleanupTemp($tmpFile);
+                    throw new \RuntimeException('Failed to write downloaded artwork to temp file');
+                }
+
+                return $tmpFile;
+            }
+
+            try {
+                $current = $this->followableLocation($response, $current, $hop);
+            } catch (\Throwable $failure) {
+                $this->cleanupTemp($tmpFile);
+                throw $failure;
+            }
+        }
+
+        // Fail-fast safety net: every non-200 inside the loop either returns or
+        // throws, so this is unreachable today — but the compiler (and the next
+        // reader) must not have to prove that to trust the contract.
+        throw new \RuntimeException('Failed to download artwork from TMDB: redirect loop exited without a result');
+    }
+
+    /**
+     * One guarded async exchange: fire the request, park on the Channel until a
+     * callback pushes or the download timeout fires.
+     *
+     * @param non-empty-string $url Absolute URL to request (guard already applied).
+     * @throws \RuntimeException on transport error or timeout.
+     */
+    private function requestOnceAsync(string $url): ResponseInterface
     {
         $channel = new \Swoole\Coroutine\Channel(1);
 
@@ -549,6 +693,8 @@ class ArtworkStorage
 
         $this->getAsyncClient()->request($url, [
             'method' => 'GET',
+            // S73: never let the vendor follow a hop this class has not gated.
+            'allow_redirects' => ['max' => 0],
             'success' => function (ResponseInterface $response) use (&$state, $channel): void {
                 $state['response'] = $response;
                 $channel->push(true);
@@ -566,16 +712,37 @@ class ArtworkStorage
         $response = $state['response'];
 
         if ($state['error'] !== null || !$response instanceof ResponseInterface) {
-            $this->cleanupTemp($tmpFile);
             throw new \RuntimeException(sprintf(
                 'Failed to download artwork from TMDB (async): %s',
                 $state['error'] instanceof \Throwable ? $state['error']->getMessage() : 'timeout',
             ));
         }
 
+        return $response;
+    }
+
+    /**
+     * Interpret a non-200 download response: either it is a redirect hop this
+     * many-request may continue to, or it is a terminal failure.
+     *
+     * Every candidate hop re-enters the FULL two-layer gate
+     * ({@see ProviderUrlAllowlist::resolveRedirect()} +
+     * {@see ProviderUrlAllowlist::assertFetchable()}) BEFORE the next request is
+     * issued — hostname AND resolved-IP — so neither a `Location: http://169.254.169.254/`
+     * nor a scheme trick (`file:`, userinfo spoof) survives one hop.
+     *
+     * @throws \RuntimeException   on non-3xx, missing Location, or hop-budget exhaustion
+     *                             (same message shapes the pre-S73 code produced).
+     * @throws \InvalidArgumentException when the hop target is refused by the gate.
+     *
+     * @return non-empty-string The absolute, gate-passing URL for the next hop.
+     */
+    private function followableLocation(ResponseInterface $response, string $from, int $hop): string
+    {
         $httpCode = $response->getStatusCode();
-        if ($httpCode !== 200) {
-            $this->cleanupTemp($tmpFile);
+        $location = trim($response->getHeaderLine('Location'));
+
+        if ($hop >= self::MAX_REDIRECT_HOPS || $httpCode < 300 || $httpCode >= 400 || $location === '') {
             throw new \RuntimeException(sprintf(
                 'Failed to download artwork from TMDB: HTTP %d - %s',
                 $httpCode,
@@ -583,13 +750,7 @@ class ArtworkStorage
             ));
         }
 
-        $body = (string) $response->getBody();
-        if ($body === '' || file_put_contents($tmpFile, $body) === false) {
-            $this->cleanupTemp($tmpFile);
-            throw new \RuntimeException('Failed to write downloaded artwork to temp file');
-        }
-
-        return $tmpFile;
+        return $this->guardedNextHop($from, $location);
     }
 
     /**
@@ -597,49 +758,148 @@ class ArtworkStorage
      * test contexts and for the https-under-Swoole TLS-stall case. cURL is
      * excluded from the coroutine hook mask, so this is a plain blocking call.
      *
-     * @param non-empty-string $url     Full URL to download.
+     * S73 redirect discipline: `CURLOPT_FOLLOWLOCATION` is deliberately FALSE
+     * here. The pre-S73 code combined it with `CURLOPT_MAXREDIRS = 3`, i.e.
+     * cURL followed up to three UNVERIFIED `Location` headers itself — the
+     * enabled, unguarded follow the plan audit flagged. The loop below replays
+     * that same 3-hop budget explicitly, re-entering the full two-layer gate
+     * before every hop request.
+     *
+     * @param non-empty-string $url     Full URL to download (already allowlist-gated by the caller).
      * @param string           $tmpFile Pre-created temp file to write the body into.
      * @return string          Path to the temp file on success.
-     * @throws \RuntimeException on init/open/transport error or non-200.
+     * @throws \InvalidArgumentException when a redirect hop targets a non-allowlisted
+     *                                   or non-public URL (the temp file is removed).
+     * @throws \RuntimeException on init/open/transport error, hop-budget exhaustion, or non-200.
      */
     private function downloadToTempBlocking(string $url, string $tmpFile): string
+    {
+        $current = $url;
+
+        // 1 initial request + MAX_REDIRECT_HOPS follow-ups (S73: the hop budget
+        // the old unguarded CURLOPT_MAXREDIRS spent is now spent here, per-hop,
+        // through the two-layer gate).
+        for ($hop = 0; $hop <= self::MAX_REDIRECT_HOPS; $hop++) {
+            /** @var array{code: int, location: string} $result */
+            $result = $this->fetchOnceBlocking($current, $tmpFile);
+            $httpCode = $result['code'];
+
+            if ($httpCode === 200) {
+                return $tmpFile;
+            }
+
+            if ($hop >= self::MAX_REDIRECT_HOPS || $httpCode < 300 || $httpCode >= 400 || $result['location'] === '') {
+                $this->cleanupTemp($tmpFile);
+                throw new \RuntimeException(
+                    sprintf('Failed to download artwork from TMDB: HTTP %d - %s', $httpCode, 'Unknown error'),
+                );
+            }
+
+            try {
+                $current = $this->guardedNextHop($current, $result['location']);
+            } catch (\Throwable $failure) {
+                $this->cleanupTemp($tmpFile);
+                throw $failure;
+            }
+        }
+
+        // Fail-fast safety net: every non-200 inside the loop either returns or
+        // throws, so this is unreachable today — but the compiler (and the next
+        // reader) must not have to prove that to trust the contract.
+        throw new \RuntimeException('Failed to download artwork from TMDB: redirect loop exited without a result');
+    }
+
+    /**
+     * Parse-and-gate one redirect hop: absolutise the `Location` against the URL
+     * that produced it, then run the FULL two-layer allowlist + SsrfGuard check
+     * on the result. The caller only ever issues the next request with the URL
+     * this returns, so no hop — initial or followed — bypasses the gate.
+     *
+     * Shared by both download paths; async passes its PSR-7 header value here
+     * after the same status triage.
+     *
+     * @throws \InvalidArgumentException when the hop target is refused.
+     *
+     * @return non-empty-string The absolute, gate-passing URL to fetch next.
+     */
+    private function guardedNextHop(string $from, string $location): string
+    {
+        $next = ProviderUrlAllowlist::resolveRedirect($from, trim($location));
+        if ($next === null || $next === '') {
+            throw new \InvalidArgumentException(
+                'Artwork redirect refused: target is not an http(s) URL.',
+            );
+        }
+
+        ProviderUrlAllowlist::assertFetchable($next);
+
+        return $next;
+    }
+
+    /**
+     * One blocking cURL exchange: GET `$url`, stream the body into `$tmpFile`,
+     * capture the (single) `Location` header, return status + location.
+     *
+     * Transport-level failures keep the historical message shape. Protected so
+     * the SSRF hop tests can script redirect chains without a network — the
+     * recorded fetch list plus the thrown refusal is the AC evidence that an
+     * unallowlisted hop is rejected BEFORE the socket.
+     *
+     * @param non-empty-string $url     Absolute URL already through the gate.
+     * @param string           $tmpFile Pre-created temp file to write the body into.
+     * @return array{code: int, location: string} HTTP status and the last
+     *                                            `Location` header value ('' when absent).
+     * @throws \RuntimeException on init/open/transport error.
+     */
+    protected function fetchOnceBlocking(string $url, string $tmpFile): array
     {
         // Use cURL for reliable download with timeout
         $ch = curl_init();
         if ($ch === false) {
-            $this->cleanupTemp($tmpFile);
             throw new \RuntimeException('Failed to initialize cURL');
         }
 
         $fp = fopen($tmpFile, 'wb');
         if ($fp === false) {
-            $this->cleanupTemp($tmpFile);
+            curl_close($ch);
             throw new \RuntimeException('Failed to open temp file for artwork download');
         }
+
+        $location = '';
 
         // Use individual curl_setopt calls to avoid PHPStan array type strictness.
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         curl_setopt($ch, CURLOPT_TIMEOUT, self::DOWNLOAD_TIMEOUT);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, self::CONNECT_TIMEOUT);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_FILE, $fp);
+        curl_setopt(
+            $ch,
+            CURLOPT_HEADERFUNCTION,
+            /** @param resource $ch */ function ($ch, string $line) use (&$location): int {
+                if (preg_match('#^location:\s*(.*?)\s*$#i', $line, $m) === 1) {
+                    $location = $m[1];
+                }
+
+                return strlen($line);
+            }
+        );
 
         $success = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
+        curl_close($ch);
         fclose($fp);
 
-        if (!$success || $httpCode !== 200) {
-            $this->cleanupTemp($tmpFile);
+        if (!$success) {
             throw new \RuntimeException(
                 sprintf('Failed to download artwork from TMDB: HTTP %d - %s', $httpCode, $error ?: 'Unknown error'),
             );
         }
 
-        return $tmpFile;
+        return ['code' => $httpCode, 'location' => $location];
     }
 
     /**

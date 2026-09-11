@@ -25,7 +25,6 @@ use Psr\Container\ContainerInterface;
 use Throwable;
 
 use function filesize;
-use function gmdate;
 use function hash;
 use function in_array;
 use function is_file;
@@ -34,10 +33,8 @@ use function is_string;
 use function json_encode;
 use function pathinfo;
 use function preg_match;
-use function sprintf;
 use function stat;
 use function strtolower;
-use function strtotime;
 use function substr;
 
 /**
@@ -279,12 +276,12 @@ final class PreRouterFastPaths
         $rawSize = $request->query['size'] ?? null;
         $size = is_string($rawSize) ? $rawSize : 'original';
 
-        // Validate size parameter
+        // Validate size parameter — BEFORE auth and BEFORE any storage lookup:
+        // an unknown size must never reach a filesystem path build (400-before-
+        // lookup ordering, S71/S72 lineage; the width ladder itself lives in
+        // {@see ArtworkStorage::WIDTHS}).
         if (!self::isValidArtworkSize($size)) {
-            return (new Response())
-                ->status(400)
-                ->header('Content-Type', 'application/json; charset=utf-8')
-                ->body(json_encode(['error' => 'Invalid size parameter']) ?: '{"error":"Invalid size parameter"}');
+            return ArtworkByteResponder::invalidSize();
         }
 
         // Authorise: resolved session OR valid signed-URL token.
@@ -306,7 +303,7 @@ final class PreRouterFastPaths
         // change to `canonicalResource()` that DOES bind the query keeps working
         // here unchanged. Do not "simplify" it away, and do not write a test that
         // asserts the size is signed — it is not, and never was.
-        $unauthorized = $this->rejectUnlessSigned(
+        $unauthorized = ArtworkByteResponder::rejectUnlessSigned(
             $request,
             '/api/v1/artwork/' . $itemId . '?size=' . $size,
         );
@@ -314,80 +311,32 @@ final class PreRouterFastPaths
             return $unauthorized;
         }
 
-        $artworkPath = $this->artworkStorage->variantPath($itemId, $size);
+        // S73: resize-then-cache on a miss. A stored variant answers directly;
+        // otherwise the stored `original.jpg` is resized to exactly the ONE
+        // requested, already-validated width and atomically cached. The pass
+        // never downloads (see {@see ArtworkStorage::ensureVariant()}).
+        // A miss without a local source still yields the same flat 404 JSON.
+        $artworkPath = $this->artworkStorage->variantPath($itemId, $size)
+            ?? $this->artworkStorage->ensureVariant($itemId, $size);
 
         if ($artworkPath === null || !is_file($artworkPath) || !is_readable($artworkPath)) {
-            return (new Response())
-                ->status(404)
-                ->header('Content-Type', 'application/json; charset=utf-8')
-                ->body(json_encode(['error' => 'Artwork not found']) ?: '{"error":"Artwork not found"}');
+            return ArtworkByteResponder::notFound();
         }
 
-        // Compute the validators for conditional caching (SV-2.5 pattern).
-        // ETag is the existing "<size>-<mtime>" hex tag (immutable-cache is kept);
-        // Last-Modified is derived from the same stat so both stay consistent.
-        $stat = stat($artworkPath);
-        $mtime = $stat !== false ? (int) $stat['mtime'] : 0;
-        $etag = $stat !== false ? sprintf('"%x-%x"', $stat['size'], $stat['mtime']) : '';
-        $lastModified = $mtime > 0 ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : '';
-
-        // Honor conditional GET AFTER auth + size validation + the 404 existence
-        // check above — freshness is only ever decided for a request that would
-        // otherwise be served. If-None-Match (ETag) is authoritative; If-Modified-Since
-        // (Last-Modified) is the fallback for clients that don't send an ETag.
-        $ifNoneMatch = $request->getHeader('if-none-match');
-        $ifModifiedSince = $request->getHeader('if-modified-since');
-        $etagMatch = $etag !== '' && $ifNoneMatch === $etag;
-        $imsTs = is_string($ifModifiedSince) && $ifModifiedSince !== ''
-            ? strtotime($ifModifiedSince)
-            : false;
-        $notModified = ($ifNoneMatch === null || $ifNoneMatch === '')
-            && $mtime > 0
-            && $imsTs !== false
-            && $imsTs >= $mtime;
-
-        if ($etagMatch || $notModified) {
-            // 304 carries the validators but NO body (do not attach the file).
-            $notModifiedResponse = (new Response())
-                ->status(304)
-                ->header('Cache-Control', 'public, max-age=31536000, immutable');
-            if ($etag !== '') {
-                $notModifiedResponse->header('ETag', $etag);
-            }
-            if ($lastModified !== '') {
-                $notModifiedResponse->header('Last-Modified', $lastModified);
-            }
-
-            return $notModifiedResponse;
-        }
-
-        $response = (new Response())
-            ->status(200)
-            // The title logo (`size=logo`) is a transparency-preserving PNG; the
-            // poster variants are JPEG.
-            ->header('Content-Type', $size === ArtworkStorage::LOGO_SIZE ? 'image/png' : 'image/jpeg')
-            ->header('Cache-Control', 'public, max-age=31536000, immutable');
-        if ($etag !== '') {
-            $response->header('ETag', $etag);
-        }
-        if ($lastModified !== '') {
-            $response->header('Last-Modified', $lastModified);
-        }
-
-        return $response->withFile($artworkPath);
+        // Conditional-GET byte serve — ETag/Last-Modified/304/immutable semantics
+        // shared verbatim with the people-photo endpoint via the single
+        // {@see ArtworkByteResponder} implementation (S73 extraction, no drift).
+        return ArtworkByteResponder::serve($request, $artworkPath, $size);
     }
 
     /**
      * The shared inline authorisation both endpoints use.
      *
-     * A request that already carries a resolved user is admitted. Otherwise the
-     * `exp`/`sig` query pair must be a valid signature over `$signedResource` —
-     * this is what lets `<img src="...">` work without an Authorization header.
-     *
-     * ⚠ `$signedResource` is canonicalised by {@see SignedUrl::canonicalResource()}
-     * before hashing, which strips any query string. Passing a resource WITH a
-     * query is therefore harmless but not load-bearing — see the measured note in
-     * {@see serveArtwork()}. The PATH is what binds.
+     * S73 moved the implementation VERBATIM into
+     * {@see ArtworkByteResponder::rejectUnlessSigned()} so the people-photo
+     * endpoint authorises through the same code, not a copy; this thin delegate
+     * keeps the avatar/stream call sites (and their extensive measured notes —
+     * read the responder's docblock, the PATH is what binds) unchanged.
      *
      * @param Request $request        The request being authorised.
      * @param string  $signedResource The resource spelling the URL was minted
@@ -397,20 +346,7 @@ final class PreRouterFastPaths
      */
     private function rejectUnlessSigned(Request $request, string $signedResource): ?Response
     {
-        $userId = $request->userId;
-        if ($userId !== null && $userId !== '') {
-            return null;
-        }
-
-        $signer = SignedUrl::fromEnv();
-        $exp = $request->query['exp'] ?? null;
-        $sig = $request->query['sig'] ?? null;
-
-        if ($signer->verify($signedResource, is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
-            return null;
-        }
-
-        return (new Response())->status(401)->text('Unauthorized');
+        return ArtworkByteResponder::rejectUnlessSigned($request, $signedResource);
     }
 
     /**

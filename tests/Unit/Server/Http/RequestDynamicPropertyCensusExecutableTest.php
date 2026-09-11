@@ -295,8 +295,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
            * predicted. The step ships no new src/ file (the cache rides the S71
            * ImageResizer and existing ArtworkStorage unchanged); neither file names
            * a Request property.
+           * Re-pinned 1851→1857 by S73: the lazy-resize/SSRF step adds six
+           * first-party files — src/Common/Net/ProviderUrlAllowlist.php and
+           * src/Server/Http/FastPath/ArtworkByteResponder.php (the shared
+           * conditional-GET responder extracted from serveArtwork), plus
+           * tests/Unit/Common/Net/ProviderUrlAllowlistTest.php,
+           * tests/Unit/Media/Storage/ArtworkFetchSsrfTest.php,
+           * tests/Unit/Media/Storage/ArtworkLazyVariantTest.php and
+           * tests/Unit/Server/WebPortal/WebPortalRouterPersonPhotoTest.php —
+           * measured 1857 on this tree, not predicted. None names a Request
+           * property (the responder reads only declared members).
            */
-    private const EXPECTED_PHP_FILES = 1851;
+    private const EXPECTED_PHP_FILES = 1857;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -306,8 +316,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * `$request->body` (a declared-member read) — identity is now the JWT subject
      * `$request->userId` (already read for the empty-guard), so the mutation reads
      * one fewer Request member. The other four rails are unchanged.
+     * Re-pinned 390→391 by S73: the conditional-GET responder extracted out of
+     * `PreRouterFastPaths::serveArtwork()` into
+     * `src/Server/Http/FastPath/ArtworkByteResponder.php` is VERBATIM — its
+     * Request-member reads (`userId`, `query` ×2 for the signed-URL arms) moved
+     * with the code, so the extraction nets zero. The +1 is the new
+     * `$request->query['w']` read in `WebPortalRouter::getPersonPhoto()`.
+     * Every read stays on a declared property (S427 license — the
+     * undeclared-read test in this file, not this number, guards that).
      */
-    private const EXPECTED_DECLARED_READS = 390;
+    private const EXPECTED_DECLARED_READS = 391;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -325,8 +343,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * four declared Request members directly (method/path/userId/body) — the same
      * S438 shape, S427 license intact. The SyncPlayController identity change itself
      * adds no write sites (it reads $request->userId, already a declared read).
+     * Re-pinned 960→964 by S73: tests/Unit/Server/WebPortal/
+     * WebPortalRouterPersonPhotoTest.php's request() helper assigns four declared
+     * Request members directly (method/path/userId/query) — the same S438/S289
+     * shape, S427 license intact. The src/ change adds no write site.
      */
-    private const EXPECTED_DECLARED_WRITES = 960;
+    private const EXPECTED_DECLARED_WRITES = 964;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

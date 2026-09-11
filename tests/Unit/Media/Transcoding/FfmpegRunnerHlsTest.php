@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Throwable;
 
 /**
  * Covers the HLS-muxing additions to {@see FfmpegRunner}: the native-HLS command
@@ -71,13 +72,30 @@ class FfmpegRunnerHlsTest extends TestCase
 
         $survivors = [];
         foreach ($registered as $dir => $pid) {
-            $stuckWriter = '';
-            if (is_int($pid) && $pid > 0 && $this->awaitDetachedProcessExit($pid)) {
-                $stuckWriter = sprintf(' [wrapper pid %d was still alive at the exit deadline]', $pid);
-            }
-            $this->removeDir($dir);
-            if (is_dir($dir)) {
-                $survivors[] = $dir . $stuckWriter;
+            $note = '';
+            try {
+                if (is_int($pid) && $pid > 0) {
+                    if ($this->awaitDetachedProcessExit($pid)) {
+                        $note = sprintf(
+                            ' [a process with the tracked wrapper pid %d was still running (live, not zombie) at the exit deadline]',
+                            $pid,
+                        );
+                    }
+                } else {
+                    $note = ' [no positive wrapper pid was tracked, so no exit wait was possible for this dir]';
+                }
+                $this->removeDir($dir);
+                if (is_dir($dir)) {
+                    $survivors[] = $dir . $note;
+                }
+            } catch (Throwable $t) {
+                // Per-dir isolation (S460 review, F5): one poisoned dir must never
+                // strand the rest of the registry — and a raw throw escaping here
+                // would be swallowed silently by PHPUnit whenever the test body
+                // already failed (TestCase.php:798 only records it if !$e), so the
+                // leak would surface only as an anonymous census failure later.
+                // Reporting it through $survivors keeps it loud and attributed.
+                $survivors[] = $dir . ' [drain threw: ' . $t->getMessage() . ']';
             }
         }
 
@@ -85,9 +103,10 @@ class FfmpegRunnerHlsTest extends TestCase
 
         if ($survivors !== []) {
             // TRUE for every input reaching it: each listed path was observed to
-            // still be a directory immediately before this line executed.
+            // still be a directory immediately before this line executed, and each
+            // per-dir note states exactly what remediation that dir actually got.
             $this->fail(sprintf(
-                '%s CLEANUP FAILED: scratch dirs survived bounded wait-and-remove: %s',
+                '%s CLEANUP FAILED: scratch dirs were not removed by the bounded teardown: %s',
                 self::S460_LANE_SENTINEL,
                 implode(', ', $survivors),
             ));
@@ -305,14 +324,20 @@ class FfmpegRunnerHlsTest extends TestCase
             // only ever claimed to have RUN when a positive pid exists (S345 r1).
             $pid = $this->scratchDirs[$dir] ?? null;
             $tracked = is_int($pid) && $pid > 0 ? (string) $pid : 'not tracked';
-            $alive = is_int($pid) && $pid > 0 && $this->runner()->isProcessRunning($pid);
+            $alive = is_int($pid) && $pid > 0 && $this->wrapperMayStillWrite($pid);
             $probe = $tracked === 'not tracked'
-                ? 'not run (no positive pid was tracked for this dir)'
+                ? 'not run (no positive pid was tracked for this dir, so the wrapper fate is unknown)'
                 : ($alive
-                    ? 'yes — the writer may still produce the file'
-                    : 'no — the process-alive probe did not find a live process with that pid');
+                    ? 'yes — a live (non-zombie) process still holds that pid and may produce the file'
+                    : 'no — no live, non-zombie process holds that pid');
 
-            $entries = array_map('basename', glob("{$dir}/*") ?: []);
+            // Awaited name is excluded from the listing: between the absence check
+            // above and this glob a genuinely-slow writer could create it, and the
+            // message must never contradict its own "was not present" claim (F3).
+            $entries = array_values(array_filter(
+                array_map('basename', glob("{$dir}/*") ?: []),
+                static fn (string $entry): bool => $entry !== $name,
+            ));
             foreach (['.complete', '.failed'] as $marker) {
                 if ($marker !== $name && is_file("{$dir}/{$marker}")) {
                     $entries[] = $marker;
@@ -340,18 +365,47 @@ class FfmpegRunnerHlsTest extends TestCase
     }
 
     /**
+     * WRITER-liveness, not bare pid-liveness: the tracked wrapper is orphaned the
+     * moment the launching shell exits, and on a non-reaping container init (no
+     * --init/sandboxee — a common way to run this suite) its corpse lingers as a
+     * ZOMBIE that both posix_kill($pid, 0) and /proc/{pid} report as "alive" even
+     * though every write it will ever do has happened. Trusting the raw probe
+     * there would burn DETACHED_EXIT_TIMEOUT_SECONDS per dir on every HEALTHY run
+     * and let the stuck-writer note assert something false (S460 review, F1).
+     * A zombie is therefore treated as exited; where procfs does not exist at all
+     * we fall back to the production probe rather than guess.
+     */
+    private function wrapperMayStillWrite(int $pid): bool
+    {
+        $stat = @file_get_contents("/proc/{$pid}/stat");
+
+        if (!is_string($stat)) {
+            return $this->runner()->isProcessRunning($pid);
+        }
+
+        // Field 3 of /proc/pid/stat is the state char, after the LAST ')' — the
+        // comm field (2) may itself contain spaces and parentheses.
+        if (preg_match('/.*\) (\S)/', $stat, $m) !== 1) {
+            return $this->runner()->isProcessRunning($pid);
+        }
+
+        return $m[1] !== 'Z';
+    }
+
+    /**
      * Bounded wait in tearDown for the wrapper process to exit. Every file the
-     * chain can write lands before the tracked pid exits, so once it is gone the
-     * dir is final and removeDir() cannot race a late write. Returns true only
-     * when the probe still reported the pid alive at the deadline — the caller
-     * proceeds with removal and reports it loudly if removal then leaves a
-     * survivor; the S439 census stays the outer backstop either way.
+     * chain can write lands before the tracked pid exits (and a zombie has by
+     * definition written everything), so once it is gone the dir is final and
+     * removeDir() cannot race a late write. Returns true only when a live,
+     * non-zombie process still held the pid at the deadline — the caller proceeds
+     * with removal and reports it loudly if removal then leaves a survivor; the
+     * S439 census stays the outer backstop either way.
      */
     private function awaitDetachedProcessExit(int $pid): bool
     {
         $deadline = microtime(true) + self::DETACHED_EXIT_TIMEOUT_SECONDS;
 
-        while ($this->runner()->isProcessRunning($pid)) {
+        while ($this->wrapperMayStillWrite($pid)) {
             if (microtime(true) >= $deadline) {
                 return true;
             }

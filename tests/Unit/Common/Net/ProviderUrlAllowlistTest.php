@@ -189,4 +189,93 @@ final class ProviderUrlAllowlistTest extends TestCase
             ProviderUrlAllowlist::resolveRedirect('https://image.tmdb.org/t/p/original/a.jpg', ''),
         );
     }
+
+    // -----------------------------------------------------------------
+    // Layer two under a live coroutine (the S73 CI-probe hang)
+    //
+    // swoole 6.2.2 routes the default resolver's dns_get_record() through its
+    // RemoteObject subsystem — each call SPAWNS a detached php subprocess that
+    // inherits the supervisor's stdout pipe (measured: 131 servers, one hung
+    // assertion-escape audit). Inside a coroutine the gate must therefore
+    // resolve via swoole's native coroutine resolver instead — while NEVER
+    // replacing an explicitly injected one (that is every unit test's seam),
+    // and restoring the default afterwards so the swap cannot leak.
+    // -----------------------------------------------------------------
+
+    private function requireSwoole(): void
+    {
+        if (!\extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('ext-swoole required for the coroutine resolver arm');
+        }
+    }
+
+    public function testUsesDefaultResolverReflectsTheInjectionSeam(): void
+    {
+        self::assertTrue(SsrfGuard::usesDefaultResolver(), 'no resolver injected yet');
+
+        $this->watchResolver();
+        self::assertFalse(SsrfGuard::usesDefaultResolver(), 'an injected resolver is observable');
+
+        SsrfGuard::setResolver(null);
+        self::assertTrue(SsrfGuard::usesDefaultResolver(), 'reset returns to the default');
+    }
+
+    public function testExplicitlyInjectedResolverIsNeverReplacedInsideACoroutine(): void
+    {
+        $this->requireSwoole();
+        $this->watchResolver();
+
+        \Swoole\Coroutine\run(function (): void {
+            ProviderUrlAllowlist::assertFetchable('https://image.tmdb.org/t/p/w500/abc.jpg');
+        });
+
+        self::assertSame(
+            1,
+            $this->resolverCalls,
+            'a test/boot-injected resolver must be honoured verbatim even inside a coroutine',
+        );
+    }
+
+    public function testLayerOneStillRefusesBeforeResolutionInsideACoroutine(): void
+    {
+        $this->requireSwoole();
+        $this->watchResolver();
+
+        $refused = null;
+        \Swoole\Coroutine\run(function () use (&$refused): void {
+            try {
+                ProviderUrlAllowlist::assertFetchable('https://evil.example.org/t/p/w500/x.jpg');
+            } catch (\InvalidArgumentException $e) {
+                $refused = $e;
+            }
+        });
+
+        self::assertInstanceOf(\InvalidArgumentException::class, $refused);
+        self::assertSame(0, $this->resolverCalls, 'the coroutine arm must not weaken layer one');
+    }
+
+    public function testDefaultResolverInsideACoroutineUsesTheNativeArmAndRestores(): void
+    {
+        $this->requireSwoole();
+        if (gethostbyname('image.tmdb.org') === 'image.tmdb.org') {
+            self::markTestSkipped('no outbound DNS on this box for the provider host');
+        }
+
+        // Default resolver in effect: inside a coroutine the gate swaps to
+        // swoole's native resolver (no dns_get_record, no spawned servers).
+        \Swoole\Coroutine\run(function (): void {
+            ProviderUrlAllowlist::assertFetchable('https://image.tmdb.org/t/p/w185/z.jpg');
+        });
+
+        self::assertTrue(
+            SsrfGuard::usesDefaultResolver(),
+            'the coroutine resolver swap must be released after assertFetchable returns',
+        );
+
+        // And the default arm is genuinely restored: a fresh injected spy is
+        // used again outside the coroutine.
+        $this->watchResolver();
+        ProviderUrlAllowlist::assertFetchable('https://image.tmdb.org/t/p/w185/z.jpg');
+        self::assertSame(1, $this->resolverCalls);
+    }
 }

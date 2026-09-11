@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Net;
 
 use InvalidArgumentException;
+use Phlix\Common\Runtime\WorkerContext;
 
 /**
  * The two-layer SSRF gate for every provider-image URL the server fetches (S73).
@@ -82,7 +83,55 @@ final class ProviderUrlAllowlist
 
         // Layer two: the hostname is allowlisted, but a poisoned resolver can
         // still point it at a loopback/link-local/metadata address.
-        SsrfGuard::assertPublicUrl($url);
+        self::assertPublicAddress($url);
+    }
+
+    /**
+     * Layer two, coroutine-safely.
+     *
+     * {@see SsrfGuard::assertPublicUrl()}'s DEFAULT resolver is blocking core
+     * PHP DNS (`gethostbyname` + `dns_get_record`). Downloading provider art
+     * legitimately runs inside a live coroutine on the async path — and under
+     * swoole 6.2.2's runtime hooks, `dns_get_record()` is routed through the
+     * RemoteObject subsystem, which SPAWNS detached `remote-object-server.php`
+     * php subprocesses per call (measured locally: one probe run left 131 of
+     * them). Those children inherit the parent's stdout, so any supervising
+     * `exec()`/pipe reader — CI's assertion-escape prober among them — blocks
+     * forever even after the test process itself exits. The hook-stall class
+     * that already forces blocking-curl for TLS ({@see \Phlix\Common\Http\EventLoopTls})
+     * applies to DNS too, so inside a coroutine we swap in swoole's native
+     * coroutine resolver, which yields cooperatively and forks nothing.
+     *
+     * An explicitly injected resolver ({@see SsrfGuard::setResolver()} — how
+     * every unit test pins DNS) is NEVER replaced: it is a closure, no
+     * blocking syscall is involved, and silently overriding it would move the
+     * test seam out from under the assertion that installed it.
+     */
+    private static function assertPublicAddress(string $url): void
+    {
+        $swapForCoroutine = WorkerContext::inCoroutine() && SsrfGuard::usesDefaultResolver();
+
+        if ($swapForCoroutine) {
+            SsrfGuard::setResolver(static function (string $host): array {
+                /** @var list<string> $addresses */
+                $addresses = [];
+                foreach ([AF_INET, AF_INET6] as $family) {
+                    $ip = \Swoole\Coroutine::gethostbyname($host, $family, 5.0);
+                    if (is_string($ip) && $ip !== '') {
+                        $addresses[] = $ip;
+                    }
+                }
+                return $addresses;
+            });
+        }
+
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } finally {
+            if ($swapForCoroutine) {
+                SsrfGuard::setResolver(null);
+            }
+        }
     }
 
     /**

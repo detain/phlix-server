@@ -174,6 +174,22 @@ final class SsrfGuard
     }
 
     /**
+     * True while the DEFAULT (blocking core-PHP DNS) resolver is in effect.
+     *
+     * Callers that must not touch blocking DNS — e.g. anything resolving a
+     * provider host from inside a live coroutine, where swoole's runtime hook
+     * would route `dns_get_record()` through its RemoteObject subsystem and
+     * spawn detached php subprocesses (measured: 131 `remote-object-server.php`
+     * processes from one probe run on swoole 6.2.2) — consult this BEFORE
+     * injecting an environment-appropriate resolver, so an explicitly injected
+     * test/boot resolver is never silently replaced.
+     */
+    public static function usesDefaultResolver(): bool
+    {
+        return self::$resolver === null;
+    }
+
+    /**
      * Explicitly sets the CIDR allowlist (boot/test seam), overriding the
      * `PHLIX_SSRF_ALLOW_CIDRS` env var. Pass null to restore env resolution.
      *

@@ -51,8 +51,9 @@ use Symfony\Component\Yaml\Yaml;
  * file that matches that enumeration — a future chart is policed only once it
  * is enumerated ON PURPOSE, which the set assertion forces (an un-enumerated
  * new chart reddens before anyone can copy from it). Split-form references in
- * Markdown prose (e.g. `k8s/README.md`, until its docs are updated) remain a
- * disclosed KNOWN LIMIT policed by review, not by this guard.
+ * Markdown prose remain a disclosed KNOWN LIMIT policed by review, not by this
+ * guard (`k8s/README.md` was brought in line with the required-tag law in the
+ * same step, but Markdown remains outside this guard's structural reach).
  *
  * ## Anti-vacuity (S345 law 3)
  *
@@ -78,11 +79,11 @@ use Symfony\Component\Yaml\Yaml;
  * "immutable" does not apply to them the same way.
  *
  * Split-form `latest` references in Markdown prose are a second disclosed
- * limit: `k8s/README.md` still pairs `repository: ghcr.io/detain/phlix-server`
- * with `tag: latest` on the next line and lists `latest` as the `image.tag`
- * default in its values table. The adjacency census cannot see a reference
- * split across lines, and the YAML values legs do not read Markdown. The prose
- * is policed by review until it is updated — not silently by this guard.
+ * limit: the adjacency census cannot see a reference split across lines
+ * (`repository:` on one line, `tag: latest` on another — the exact shape
+ * `k8s/README.md` shipped before S475 corrected it), and the YAML values legs
+ * do not read Markdown. Such prose is policed by review, not silently by this
+ * guard; do not mistake a green census here for Markdown being machine-checked.
  *
  * @see tests/Unit/Support/ThirdPartyClonePinGuardTest.php (house style for pin guards)
  * @see tests/Unit/Support/WorkflowToolGateTest.php (house style for text-shape guards)

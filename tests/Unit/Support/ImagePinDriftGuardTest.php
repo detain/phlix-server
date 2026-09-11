@@ -36,21 +36,32 @@ use Symfony\Component\Yaml\Yaml;
  * `helm template`/`helm install` aborts with a message naming the deterministic
  * tag form. The examples interpolate `${PHLIX_SERVER_IMAGE:?…}` /
  * `${PHLIX_HUB_IMAGE:?…}`, so `docker compose config` exits non-zero naming the
- * variable and the required form. This test keeps it that way: a closed walk
- * over `k8s/` and `docker/examples/` forbids any `ghcr.io/…:latest` literal
- * anywhere (census leg — catches NEW files, not just edits to old ones), then
- * per-file legs assert the values/template/compose shapes that make the failure
- * loud.
+ * variable and the required form. This test keeps it that way: a walk over
+ * `k8s/` and `docker/examples/` rejects ADJACENT `ghcr.io/<path>:latest`
+ * literals in every file beneath those roots (census leg — catches NEW files,
+ * not just edits to old ones), then per-file legs assert the
+ * values/template/compose shapes that make the failure loud. The census regex
+ * needs the repository and `:latest` next to each other, so split-form
+ * references — `repository:` on one line, `tag: latest` on another — are
+ * invisible to it; in YAML those are caught by the chart values legs, now
+ * glob-scoped over EVERY chart under `k8s/helm/` (both `values.yaml` and
+ * `values.example.yaml`), while split-form references in Markdown prose
+ * (e.g. `k8s/README.md`, until its docs are updated) are a disclosed KNOWN
+ * LIMIT policed by review, not by this guard.
  *
  * ## Anti-vacuity (S345 law 3)
  *
  * {@see self::testThePredicatesRejectEveryHistoricalDriftShape()} feeds the
  * predicates the exact pre-S475 shapes — bare `:latest` compose value, mutable
- * `tag: "latest"`, the old `| default .Chart.AppVersion` template line, a
+ * `tag: "latest"`, the never-published `tag: "v1.0.0"` default the example
+ * values files shipped, the old `| default .Chart.AppVersion` template line, a
  * `required` line missing the immutable form string, a `${VAR}` interpolation
- * missing the `:?` clause, and a hub service pinned to the server variable —
- * and asserts each is judged DRIFT. A predicate that accepts any of them makes
- * this test fail loudly by name.
+ * missing the `:?` clause, a `:?` message whose body lost the immutable form,
+ * and a hub service pinned to the server variable — and asserts each is judged
+ * DRIFT. Mirrored positive controls (the shipped files, and a `required` line
+ * that merely spells the word "default" inside its message prose) assert the
+ * predicates do not over-reject. Any shape read the wrong way fails this test
+ * loudly by name.
  *
  * ## Known limits (honest scope)
  *
@@ -59,6 +70,13 @@ use Symfony\Component\Yaml\Yaml;
  * the `Dockerfile` base-image ARG are build-time references, deliberately out
  * of scope: they resolve on the developer's machine, not from a registry, so
  * "immutable" does not apply to them the same way.
+ *
+ * Split-form `latest` references in Markdown prose are a second disclosed
+ * limit: `k8s/README.md` still pairs `repository: ghcr.io/detain/phlix-server`
+ * with `tag: latest` on the next line and lists `latest` as the `image.tag`
+ * default in its values table. The adjacency census cannot see a reference
+ * split across lines, and the YAML values legs do not read Markdown. The prose
+ * is policed by review until it is updated — not silently by this guard.
  *
  * @see tests/Unit/Support/ThirdPartyClonePinGuardTest.php (house style for pin guards)
  * @see tests/Unit/Support/WorkflowToolGateTest.php (house style for text-shape guards)
@@ -90,8 +108,25 @@ final class ImagePinDriftGuardTest extends TestCase
     /** A compose image value that loudly demands a pinned env var. */
     private const COMPOSE_PIN_PATTERN = '/^\$\{(PHLIX_SERVER_IMAGE|PHLIX_HUB_IMAGE):\?(.+)\}$/';
 
+    /**
+     * Loose, enumeration-free shape of a loud compose pin — used by the
+     * file-discovered pin census to count pin sites straight off the parsed
+     * files, independent of the COMPOSE_PINS list below.
+     */
+    private const COMPOSE_PIN_DISCOVERY_PATTERN = '/^\$\{PHLIX_(?:SERVER|HUB)_IMAGE:\?.*\}$/';
+
     /** The one container-image line of a Helm deployment template. */
     private const IMAGE_LINE_PATTERN = '/^[ \t]*image:[ \t]*["\x27].*\.Values\.image\.repository.*["\x27][ \t]*$/m';
+
+    /**
+     * Silent-fallback veto #1, anchored on Go-template SYNTAX: a `| default`
+     * pipe. Prose inside the `required` message may legally spell the word
+     * "default" (e.g. "there is no default"); only the pipe is a fallback path.
+     */
+    private const TEMPLATE_DEFAULT_PIPE_PATTERN = '/\|\s*default\b/';
+
+    /** Silent-fallback veto #2: any reference to `.Chart.AppVersion` (never-published tags). */
+    private const TEMPLATE_APP_VERSION_PATTERN = '/\.Chart\.AppVersion\b/';
 
     /**
      * The consumer files this guard is responsible for (closed set).
@@ -106,6 +141,21 @@ final class ImagePinDriftGuardTest extends TestCase
         'docker/examples/server-only/docker-compose.yml',
         'docker/examples/server-hub/docker-compose.yml',
         'docker/examples/full-stack/docker-compose.yml',
+    ];
+
+    /**
+     * Closed set of chart values files the glob values leg must discover — each
+     * chart dir under `k8s/helm` contributing its shipped defaults and its
+     * annotated example (sorted; a NEW chart appearing is a deliberate
+     * enumeration change to this list, never an accident the guard shrugs off).
+     *
+     * @var list<string>
+     */
+    private const EXPECTED_CHART_VALUES_FILES = [
+        'k8s/helm/phlix-hub/values.example.yaml',
+        'k8s/helm/phlix-hub/values.yaml',
+        'k8s/helm/phlix/values.example.yaml',
+        'k8s/helm/phlix/values.yaml',
     ];
 
     /**
@@ -230,6 +280,56 @@ final class ImagePinDriftGuardTest extends TestCase
         }
     }
 
+    /**
+     * Glob-scoped values leg: EVERY chart values file under `k8s/helm` —
+     * shipped `values.yaml` and annotated `values.example.yaml` alike — that
+     * points its image block at a ghcr.io/detain/phlix repository must ship
+     * `tag: ""`. Round 1's blind spot was exactly the example files: no leg
+     * read them, so they carried a never-published `tag: "v1.0.0"` an operator
+     * would copy straight into a failing `helm install`. The discovery glob
+     * closes that hole AND refuses silent chart growth: a new chart appearing
+     * under `k8s/helm` reddens the set assertion until it is enumerated on
+     * purpose.
+     */
+    public function testEveryChartValuesFileUnderK8sShipsAnEmptyTag(): void
+    {
+        $discovered = self::chartValuesFilesUnderK8s();
+        $expected = self::EXPECTED_CHART_VALUES_FILES;
+        sort($expected);
+
+        self::assertSame(
+            $expected,
+            $discovered,
+            'The chart values files discoverable under k8s/helm (values.yaml + values.example.yaml '
+            . 'per chart) no longer match the closed enumeration. A new chart must be added to '
+            . self::class . '::EXPECTED_CHART_VALUES_FILES deliberately — and its values files then '
+            . 'held to the same empty-required-tag law. [' . self::STEP_MARK . ']'
+        );
+
+        foreach ($discovered as $rel) {
+            $document = self::parseYamlDocument($rel);
+            $image = $document['image'] ?? null;
+
+            if (!is_array($image)) {
+                continue; // No top-level image mapping: nothing here names an image at all.
+            }
+
+            $repository = $image['repository'] ?? null;
+
+            if (!is_string($repository) || !str_starts_with($repository, 'ghcr.io/detain/phlix')) {
+                continue; // Not a ghcr.io/detain/phlix consumer.
+            }
+
+            self::assertTrue(
+                self::chartTagIsForcedExplicit($image['tag'] ?? null),
+                "image.tag in {$rel} must be exactly \"\" so the template's required gate fires "
+                . 'loudly — a pre-filled example tag promises a value that was never published '
+                . '(the v1.0.0-style semver tags never reached ghcr). Offending value: '
+                . var_export($image['tag'] ?? null, true) . ' [' . self::STEP_MARK . ']'
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // Template legs: the image line fails loudly and names the form
     // ------------------------------------------------------------------
@@ -246,9 +346,9 @@ final class ImagePinDriftGuardTest extends TestCase
                 self::deploymentImageLineIsLoud($line, $chart['form']),
                 "The image line in {$chart['template']} must use `{{ required '…' .Values.image.tag }}` "
                 . 'naming the immutable form `' . $chart['form'] . '`, and must not contain '
-                . '`default` or `.Chart.AppVersion` — a silent fallback re-introduces the S471 '
-                . 'never-published-tag defect. Offending line: ' . $line
-                . ' [' . self::STEP_MARK . ']'
+                . 'a `| default` pipe fallback or a `.Chart.AppVersion` reference — a silent '
+                . 'fallback re-introduces the S471 never-published-tag defect. Offending line: '
+                . $line . ' [' . self::STEP_MARK . ']'
             );
         }
     }
@@ -312,6 +412,33 @@ final class ImagePinDriftGuardTest extends TestCase
             'The loud-pin census expects exactly ' . self::EXPECTED_PIN_SITES . ' interpolation sites '
             . 'across the example composes. [' . self::STEP_MARK . ']'
         );
+
+        // Second, INDEPENDENT census: count every parsed service image across
+        // every example compose that looks like a loud `${PHLIX_*_IMAGE:?…}`
+        // pin — discovered from the files themselves, never from the
+        // COMPOSE_PINS enumeration above. A sixth pin site nobody enumerated
+        // (or one silently deleted from the enumeration) reddens here, where
+        // the enumeration loop alone would keep nodding along.
+        $discoveredPinSites = 0;
+
+        foreach (self::globRequired(self::ROOT . '/docker/examples/*/docker-compose.yml') as $absolute) {
+            $composeRel = substr($absolute, strlen(self::ROOT) + 1);
+
+            foreach (self::serviceImageStrings(self::parseYamlDocument($composeRel), $composeRel) as $image) {
+                if (preg_match(self::COMPOSE_PIN_DISCOVERY_PATTERN, $image) === 1) {
+                    $discoveredPinSites++;
+                }
+            }
+        }
+
+        self::assertSame(
+            self::EXPECTED_PIN_SITES,
+            $discoveredPinSites,
+            'The file-discovered loud-pin census expects exactly ' . self::EXPECTED_PIN_SITES
+            . ' `${PHLIX_(SERVER|HUB)_IMAGE:?…}` interpolations across the example composes. This count '
+            . 'comes from the parsed files, not the COMPOSE_PINS list — a sixth un-enumerated pin site '
+            . 'or a silently deleted one reddens here. [' . self::STEP_MARK . ']'
+        );
     }
 
     // ------------------------------------------------------------------
@@ -320,8 +447,10 @@ final class ImagePinDriftGuardTest extends TestCase
 
     /**
      * Feed each predicate the exact pre-S475 shapes it exists to reject, plus
-     * one near-miss (required without the form) and the variable-swap hazard.
-     * Any shape that slips through names itself in the failure.
+     * near-misses (required without the form, a :? body stripped of the form,
+     * the never-published semver default the example values shipped) and the
+     * variable-swap hazard. Any shape that slips through — in either direction,
+     * drift-accepted or loud-rejected — names itself in the failure.
      */
     public function testThePredicatesRejectEveryHistoricalDriftShape(): void
     {
@@ -346,6 +475,11 @@ final class ImagePinDriftGuardTest extends TestCase
         // 2c. A missing tag key (null) is not the same as an explicit empty one.
         if (self::chartTagIsForcedExplicit(null)) {
             $slipped[] = 'absent values tag (null) accepted as forced-explicit';
+        }
+
+        // 2d. The never-published semver default the values.example files shipped.
+        if (self::chartTagIsForcedExplicit('v1.0.0')) {
+            $slipped[] = 'never-published example-values tag `v1.0.0` accepted as forced-explicit';
         }
 
         // 3. The pre-S475 template line: silent `default .Chart.AppVersion` fallback.
@@ -378,6 +512,28 @@ final class ImagePinDriftGuardTest extends TestCase
             . self::SERVER_IMMUTABLE_FORM . '}';
         if (self::composeImageValueIsPinned($serverShapedPin, self::HUB_IMAGE_VAR, self::HUB_IMMUTABLE_FORM)) {
             $slipped[] = 'server-variable pin accepted for a hub service (variable swap)';
+        }
+
+        // 7. Correct variable, but the immutable form DELETED from the `:?`
+        //    message body — the pin still fails loudly yet no longer names the
+        //    only value that would satisfy it.
+        $formlessComposePin = '${PHLIX_SERVER_IMAGE:?PHLIX_SERVER_IMAGE must be set}';
+        if (self::composeImageValueIsPinned($formlessComposePin, self::SERVER_IMAGE_VAR, self::SERVER_IMMUTABLE_FORM)) {
+            $slipped[] = 'compose pin whose :? message body lost the immutable form accepted as pinned';
+        }
+
+        // 8. Positive control for the syntax-anchored fallback veto: a required
+        //    line whose MESSAGE merely spells the word "default" (no `| default`
+        //    pipe, no `.Chart.AppVersion` reference) is still loud. A veto that
+        //    matches prose instead of syntax would reject the very fix it
+        //    guards, so this shape must be accepted.
+        $proseDefaultTemplateLine = '          image: "{{ .Values.image.repository }}:'
+            . '{{ required "there is no default; form: ghcr.io/detain/phlix-server:'
+            . '<full-sha>-<latest|intel|nvidia>" .Values.image.tag }}"';
+        if (!self::deploymentImageLineIsLoud($proseDefaultTemplateLine, self::SERVER_IMMUTABLE_FORM)) {
+            $slipped[] = 'required line spelling "default" only inside its message prose judged as drift '
+                . '(fallback veto collided with prose instead of anchoring on `| default` pipe / '
+                . '`.Chart.AppVersion` syntax)';
         }
 
         self::assertSame(
@@ -422,11 +578,17 @@ final class ImagePinDriftGuardTest extends TestCase
 
     /**
      * The template law: a `{{ required … }}` gate on `.Values.image.tag` whose
-     * message names the immutable form — and NO silent `default`/AppVersion path.
+     * message names the immutable form — and NO silent fallback PATH: neither a
+     * `| default` pipe nor a `.Chart.AppVersion` reference may appear. Both
+     * vetoes anchor on Go-template SYNTAX, never on a bare word: a required
+     * message is free to explain "there is no default" in prose (plant 8).
      */
     private static function deploymentImageLineIsLoud(string $line, string $immutableForm): bool
     {
-        if (str_contains($line, 'default') || str_contains($line, '.Chart.AppVersion')) {
+        $fallsBackThroughPipe = preg_match(self::TEMPLATE_DEFAULT_PIPE_PATTERN, $line) === 1;
+        $fallsBackToAppVersion = preg_match(self::TEMPLATE_APP_VERSION_PATTERN, $line) === 1;
+
+        if ($fallsBackThroughPipe || $fallsBackToAppVersion) {
             return false;
         }
 
@@ -468,6 +630,47 @@ final class ImagePinDriftGuardTest extends TestCase
         }
 
         return $contents;
+    }
+
+    /**
+     * Sorted repo-relative paths of every chart values file discoverable under
+     * `k8s/helm` — each chart's shipped `values.yaml` and annotated
+     * `values.example.yaml`. Globbed, never hardcoded from the CHARTS map, so a
+     * new chart surfaces here before it can slip an unpoliced tag into a
+     * production copy-paste.
+     *
+     * @return list<string>
+     */
+    private static function chartValuesFilesUnderK8s(): array
+    {
+        $defaults = self::globRequired(self::ROOT . '/k8s/helm/*/values.yaml');
+        $examples = self::globRequired(self::ROOT . '/k8s/helm/*/values.example.yaml');
+
+        $discovered = [];
+
+        foreach (array_merge($defaults, $examples) as $absolute) {
+            $discovered[] = substr($absolute, strlen(self::ROOT) + 1);
+        }
+
+        sort($discovered);
+
+        return $discovered;
+    }
+
+    /**
+     * glob() that fails fast instead of yielding false to a foreach.
+     *
+     * @return list<string>
+     */
+    private static function globRequired(string $pattern): array
+    {
+        $matches = glob($pattern);
+
+        if (!is_array($matches)) {
+            throw new RuntimeException('Image-pin guard: filesystem glob failed for pattern ' . $pattern);
+        }
+
+        return $matches;
     }
 
     /**

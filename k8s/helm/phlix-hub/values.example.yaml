@@ -6,7 +6,11 @@ replicaCount: 3
 
 image:
   repository: ghcr.io/detain/phlix-hub
-  tag: "v1.0.0"
+  # Image tag — REQUIRED, there is no default; the chart fails `helm install`
+  # loudly while it is empty. The hub publishes short-SHA immutable tags
+  #   ghcr.io/detain/phlix-hub:<sha12>
+  # (its `:latest` is frozen/stale). Set this to an immutable <sha12> before installing.
+  tag: ""
   pullPolicy: IfNotPresent
 
 ingress:

@@ -5,9 +5,10 @@ on:
     tags:
       - 'v*.*.*'
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/detain/phlix-server
+# S474 (S471 Finding 7): a dead workflow-level image env block lived here with
+# zero references in the file — it implied a container publish step this
+# workflow does not perform (it packages Helm charts as release assets).
+# Removed; the real publishers are in docker.yml.
 
 jobs:
   verify-chart-version:

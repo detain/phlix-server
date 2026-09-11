@@ -255,9 +255,15 @@ phlix_ensure_env_key() {
 #
 # Workerman's coroutine event loop (and the runtime feature-detect added in
 # step 0.2) wants the Swoole and php-uv extensions. The Docker images build
-# both from source with a specific Swoole ./configure flag set — see
-# docker/Dockerfile.base and docker/README.md ("Swoole build flags"). On bare
-# metal (apt-based Debian/Ubuntu) we mirror that exact build here.
+# both from source with a specific Swoole ./configure flag set AND pinned
+# source refs — see docker/Dockerfile.base and docker/README.md ("Swoole build
+# flags"). On bare metal (apt-based Debian/Ubuntu) we mirror that exact build
+# here: the same flag set AND the same refs (S482 — the flags were always
+# verbatim, but the refs used to float with each repo's default branch, so the
+# "exact build" claim was false). swoole tracks Dockerfile.base's
+# ARG SWOOLE_REF tag and php-uv tracks its ARG PHP_UV_REF commit;
+# tests/Unit/Support/ThirdPartyClonePinGuardTest.php reddens CI if the two
+# files' pins ever drift apart.
 #
 # These functions are idempotent: if `php -m` already lists the extension we
 # skip the (slow) recompile entirely, so re-running install.sh is a no-op for
@@ -308,17 +314,28 @@ phlix_build_swoole() {
     info "Swoole already loaded — skipping build."
     return 0
   fi
-  local confd tmp
+  local confd tmp swoole_head
   confd="$(phlix_php_confd_dir)"
   [ -n "$confd" ] || die "Could not determine PHP conf.d directory for Swoole."
   tmp="$(mktemp -d)"
   log "Building Swoole from source (this can take several minutes)"
-  git clone --depth=1 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+  # Pinned (S482) to the same release tag as docker/Dockerfile.base
+  # ARG SWOOLE_REF. `--depth=1 --branch <tag>` is safe where S309 rejected
+  # `--depth=1` + bare SHA: a tag always resolves to its own commit even in a
+  # shallow clone. The rev-parse check makes a force-moved tag fail the
+  # install LOUD before anything is compiled — if you hit it, re-verify the
+  # tag upstream, then re-pin here AND docker/Dockerfile.base together (the
+  # guard test holds the recorded SHA too and must move in the same commit).
+  git clone --depth=1 --branch v6.2.1 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+  swoole_head="$(git -C "$tmp/swoole" rev-parse HEAD)"
+  test "$swoole_head" = 163f173caa7b1e2391d5dfec5969a12d8c76cc02 \
+    || die "swoole-src tag v6.2.1 resolved to $swoole_head, not the pinned commit 163f173caa7b1e2391d5dfec5969a12d8c76cc02 — upstream moved the tag; verify it before compiling."
   (
     cd "$tmp/swoole"
     phpize
     # Flags copied verbatim from docker/Dockerfile.base — do not change here;
-    # change them there (the source of truth) and re-sync. --enable-iouring /
+    # change them there (the source of truth) and re-sync, refs included.
+    # --enable-iouring /
     # --enable-uring-socket build on any kernel but only activate at RUNTIME on
     # Linux kernel >= 5.6; older kernels silently fall back to epoll.
     #
@@ -367,9 +384,17 @@ phlix_build_uv() {
   [ -n "$confd" ] || die "Could not determine PHP conf.d directory for php-uv."
   tmp="$(mktemp -d)"
   log "Building php-uv from source"
-  git clone --depth=1 https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
+  # Pinned (S482) to the exact commit docker/Dockerfile.base ARG PHP_UV_REF
+  # compiles, in S309's durable form: FULL clone (NOT --depth=1 — a shallow
+  # clone reaches only the tip, so the fixed SHA would go uncheckoutable the
+  # moment the 0.3.x branch moves), detached checkout, and a rev-parse
+  # self-verify so a bad pin fails loud before anything is installed.
+  git clone https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
   (
     cd "$tmp/php-uv"
+    git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
+    test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21 \
+      || die "php-uv did not detach to the pinned commit 670a609efc36c9043be37bae4126f06ed30fde21."
     phpize
     ./configure --with-uv
     make -j"$(nproc)"

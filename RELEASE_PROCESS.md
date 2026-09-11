@@ -41,9 +41,17 @@ Example: `v1.2.3` where:
 - May contain breaking changes
 
 ### Nightly (dev)
-- Automated builds from `master` branch
-- No stability guarantees
-- Tagged with `nightly-YYYYMMDD` format
+- Continuous builds from `master` by the `Docker Build & Push` workflow
+  (runs on every push to `master`): three legs publish mutable `latest`,
+  `intel` and `nvidia` tags plus deterministic immutable
+  `<full-sha>-<variant>` tags.
+- No stability guarantees.
+- ⚠ `nightly-YYYYMMDD` image tags are **NOT-YET-PUBLISHED** — no nightly
+  workflow exists and the registry serves none (S483DOCTRUTHX9P2,
+  measured against `ghcr.io/v2/detain/phlix-server/tags/list` 2026-09-11).
+  The `master`-push regime above is the real continuous-build channel;
+  date-stamped nightly tagging awaits the owner's S274 release-authority
+  decision and should not be relied on until it ships.
 
 ## Release Schedule
 
@@ -132,20 +140,51 @@ git push origin v1.2.0
 ```
 
 GitHub Actions will:
-1. Run all tests
-2. Build Docker images
-3. Push to GHCR with tags `v1.2.0`, `v1.2`, `latest`
-4. Create GitHub release
-5. Build and push Helm chart
+1. `Release` workflow (trigger `v*.*.*`): assert both Helm charts'
+   `appVersion` and `composer.json`'s `version` match the tag, lint and
+   package the charts, and create the GitHub release with the chart
+   `.tgz` files attached as **release assets**
+2. `Docker Build & Push` workflow (trigger `v*`): rebuild and publish the
+   three runtime image legs with mutable `latest`/`intel`/`nvidia` tags
+   plus the immutable `<full-sha>-<variant>` tags for that commit
+
+**Not yet true (S483, pending the owner's S274 release-authority decision):**
+no workflow pushes GHCR tags named `v1.2.0` or `v1.2` (the registry serves
+zero semver image tags — see the tag table below), and nothing "pushes" a
+Helm chart to any repository — charts ship only as release assets. Steps 3–4
+as previously worded here described an intended flow that has never run.
 
 ## Docker Image Tagging
 
+Published today (S474 regime — measured against the live registry, see the
+recipe below):
+
 | Tag | Description | Example |
 |-----|-------------|---------|
-| `latest` | Most recent stable release | `ghcr.io/detain/phlix-server:latest` |
-| `v1.2.3` | Specific version | `ghcr.io/detain/phlix-server:v1.2.3` |
-| `v1.2` | Minor version alias | `ghcr.io/detain/phlix-server:v1.2` |
-| `nightly-YYYYMMDD` | Nightly build | `ghcr.io/detain/phlix-server:nightly-20240518` |
+| `<full-sha>-latest` / `-intel` / `-nvidia` | **Deterministic immutable tag per commit and leg** — the form to pin | `ghcr.io/detain/phlix-server:<full-sha>-latest` |
+| `latest` / `intel` / `nvidia` | Mutable convenience tags, repushed by every `master` (and `v*`) build — may be stale or move under you | `ghcr.io/detain/phlix-server:latest` |
+| `buildcache-latest` / `-intel` / `-nvidia` | BuildKit registry cache, not runnable app images | — |
+
+**Not-yet-published** (no workflow produces them; the registry serves zero of
+these; re-check with the recipe below before trusting any change here):
+
+| Tag | Status |
+|-----|--------|
+| `v1.2.3` (semver image tags) | NOT-YET-PUBLISHED — pending the owner's S274 release-authority decision |
+| `v1.2` (minor alias) | NOT-YET-PUBLISHED — same |
+| `nightly-YYYYMMDD` | NOT-YET-PUBLISHED — no nightly workflow exists |
+
+To find the tags that actually exist right now (anonymous, no login):
+
+```bash
+curl -s "https://ghcr.io/token?scope=repository:detain/phlix-server:pull" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])' >/tmp/ghcr.token
+curl -s -H "Authorization: Bearer $(cat /tmp/ghcr.token)" \
+  "https://ghcr.io/v2/detain/phlix-server/tags/list" | python3 -m json.tool
+```
+
+Never bake a `<full-sha>` into docs or manifests by hand — query the list and
+pick the commit you want.
 
 ## Hub/Server Compatibility
 
@@ -168,13 +207,26 @@ GitHub Actions will:
 
 ### Docker Image Rollback
 
+Rollback targets the immutable `<full-sha>-<variant>` tag of the previous
+known-good commit — precise because the S474 regime publishes one per build
+(never `latest`: it is mutable and may already be the broken build). Find the
+current tag list with the anonymous recipe in "Docker Image Tagging" above,
+pick the previous run's full SHA, then:
+
 ```bash
-# Rollback to previous version
-docker pull ghcr.io/detain/phlix-server:v1.2.2
+# Rollback to the previous good build's immutable tag
+PREV_SHA=<full-sha-of-last-good-master-build>   # from tags/list, see above
+docker pull ghcr.io/detain/phlix-server:${PREV_SHA}-latest
 
 # Update deployment
-kubectl set image deployment/phlix phlix=ghcr.io/detain/phlix-server:v1.2.2
+kubectl set image deployment/phlix phlix=ghcr.io/detain/phlix-server:${PREV_SHA}-latest
 ```
+
+(`-intel` / `-nvidia` for the hardware-accelerated legs. The Helm chart has
+**no default `image.tag`** — an unset value fails rendering via `required`
+with this exact immutable form named in the error; the chart does not
+mechanically reject a hand-set mutable `latest`, but pinning one defeats
+rollback, so don't.)
 
 ### Database Migration Rollback
 

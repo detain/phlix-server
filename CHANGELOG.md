@@ -168,6 +168,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   not hypothetical: the pin bump to v0.99.1 landed without a rebuild, and this PR's rebuild is what
   its own new gate demands.
 
+### Changed
+
+- **Avatar and photo-route resizing now delegate to the shared image service (`S456`).**
+  S71's plan block recorded three resize implementations in the estate — the poster pipeline
+  (moved into `ImageResizer` by S71 and grown further by the merged S72/S73 work), the avatar
+  square cover-fit crop, and the photo-library thumbnail cover/contain fit. This closes the
+  remaining two: the avatar crop arithmetic moved verbatim into
+  `ImageResizer::renderSquareCoverJpeg()` and the photo-thumbnail arithmetic moved verbatim
+  into `ImageResizer::renderFitJpeg()`. `AvatarStorage` and `PhotoController` keep their own
+  public APIs, validation rules (including the avatar path's stricter upload-size cap and its
+  distinct failure messages), storage layout and HTTP response shapes — only the pixel work
+  moved, so stored avatars and served photo thumbnails are byte-identical to before. A new
+  census guard pins `ImageResizer` as the estate's only file containing a GD pixel-resample
+  call, and two golden-byte tests re-run each moved algorithm inline and demand the live paths
+  match, reddening by name if a future change forks the arithmetic again.
+
 ### Removed
 
 - **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by

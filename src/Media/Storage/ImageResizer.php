@@ -36,6 +36,15 @@ namespace Phlix\Media\Storage;
  * - Every write goes through a temp-then-rename in the SAME directory, so a
  *   concurrent reader never observes a truncated file.
  *
+ * S456 completes the consolidation S71 began: the two remaining GD resize
+ * bodies — {@see AvatarStorage}'s square cover-fit crop and the photo-library
+ * thumbnail's cover/contain fit (formerly {@see
+ * \Phlix\Server\Http\Controllers\PhotoController::generateThumbnail()}) — now
+ * live here as the in-memory {@see renderSquareCoverJpeg()} /
+ * {@see renderFitJpeg()} primitives. Their callers keep their own storage,
+ * validation and HTTP layers; no resize arithmetic exists anywhere else under
+ * src/ (pinned by ResizeImplementationCensusGuardTest).
+ *
  * KNOWN LIMIT (by design): this service validates and transforms LOCAL files.
  * Fetching bytes from a remote source stays in the callers — {@see
  * ArtworkStorage} keeps its TMDB path-fragment download seam untouched, because
@@ -58,12 +67,27 @@ class ImageResizer
     private const FORBIDDEN_MIME = 'application/x-httpd-php';
 
     /** Accepted image types keyed by their {@see IMAGETYPE_*} value. */
-    private const ACCEPTED_TYPES = [
+    public const ACCEPTED_TYPES = [
         IMAGETYPE_JPEG => 'image/jpeg',
         IMAGETYPE_PNG  => 'image/png',
         IMAGETYPE_WEBP => 'image/webp',
         IMAGETYPE_GIF  => 'image/gif',
     ];
+
+    /** Failure reason: the source file could not be read as an image. */
+    public const REASON_UNREADABLE = 'unreadable';
+
+    /** Failure reason: GD could not decode the source into an image resource. */
+    public const REASON_DECODE_FAILED = 'decode-failed';
+
+    /** Failure reason: the target canvas could not be created (memory pressure). */
+    public const REASON_CANVAS_FAILED = 'canvas-failed';
+
+    /** Failure reason: imagecopyresampled() failed. */
+    public const REASON_RESAMPLE_FAILED = 'resample-failed';
+
+    /** Failure reason: imagejpeg() produced no bytes while capturing to the buffer. */
+    public const REASON_ENCODE_FAILED = 'encode-failed';
 
     public function __construct(
         private string $baseDir = '/var/images/',
@@ -199,6 +223,204 @@ class ImageResizer
         $this->ensureTargetDirExists($targetKey);
 
         return $this->generateVariant($targetKey, $sourcePath, $width);
+    }
+
+    /**
+     * Render one SIZE×SIZE JPEG byte string using the avatar cover-fit rule:
+     * scale to COVER the frame, center-crop, re-encode at {@see JPEG_QUALITY}.
+     *
+     * S456 moved this arithmetic VERBATIM out of
+     * {@see AvatarStorage::resizeToAvatar()} (the one caller, kept there only as
+     * its storage/validation shell) so this service is the estate's single home
+     * for GD resize math. Note this rule is NOT the proportional-width rule
+     * {@see generateVariant()} applies to posters: the crop window here is a
+     * SIZE×SIZE square sampled from the already-scaled coordinates, and the
+     * transparency flags are set for BOTH PNG and WebP sources. Pure in-memory:
+     * no target directory, no filesystem write — the caller stores the bytes.
+     *
+     * Divergence parameters stay with the caller on purpose: AvatarStorage
+     * enforces its own 5 MB upload cap and 'Avatar …' validation messages that
+     * {@see validateImageFile()} does not carry, and its flat
+     * `<userId>.jpg` layout predates the keyed-directory convention.
+     *
+     * @param string $sourcePath Path to the source image.
+     * @param positive-int $size   Square edge in pixels (the avatar TARGET_SIZE).
+     * @return array{bytes: string|null, reason: string|null} Exactly one member
+     *                            is non-null: the encoded JPEG bytes (which may
+     *                            be '' — the caller's original rule treats an
+     *                            empty capture as its own encode failure) or the
+     *                            REASON_* constant naming the failed step.
+     */
+    public function renderSquareCoverJpeg(string $sourcePath, int $size): array
+    {
+        /** @var array{0: int, 1: int, 2: int}|false */
+        $imageInfo = @getimagesize($sourcePath);
+        if ($imageInfo === false) {
+            return ['bytes' => null, 'reason' => self::REASON_UNREADABLE];
+        }
+
+        /** @var int */
+        $sourceWidth = $imageInfo[0];
+        /** @var int */
+        $sourceHeight = $imageInfo[1];
+        /** @var int */
+        $sourceType = $imageInfo[2];
+
+        $source = $this->createImageFromType($sourcePath, $sourceType);
+        if ($source === false) {
+            return ['bytes' => null, 'reason' => self::REASON_DECODE_FAILED];
+        }
+
+        // Cover fit: compute scale so the image covers the square target
+        $ratio = max(
+            $size / $sourceWidth,
+            $size / $sourceHeight,
+        );
+
+        $scaledWidth  = (int) round($sourceWidth * $ratio);
+        $scaledHeight = (int) round($sourceHeight * $ratio);
+
+        // Center crop: start coords in the scaled image
+        $srcX = max(0, (int) (($scaledWidth - $size) / 2));
+        $srcY = max(0, (int) (($scaledHeight - $size) / 2));
+
+        $canvas = @imagecreatetruecolor($size, $size);
+        if ($canvas === false) {
+            return ['bytes' => null, 'reason' => self::REASON_CANVAS_FAILED];
+        }
+
+        // Preserve transparency for PNG and WebP
+        if ($sourceType === IMAGETYPE_PNG || $sourceType === IMAGETYPE_WEBP) {
+            imagealphablending($canvas, false);
+            imagesavealpha($canvas, true);
+        }
+
+        $resampled = imagecopyresampled(
+            $canvas,
+            $source,
+            0,       // dstX
+            0,       // dstY
+            $srcX,   // srcX
+            $srcY,   // srcY
+            $size,   // dstW
+            $size,   // dstH
+            $size,   // srcW (crop to target size)
+            $size,   // srcH (crop to target size)
+        );
+
+        if ($resampled === false) {
+            return ['bytes' => null, 'reason' => self::REASON_RESAMPLE_FAILED];
+        }
+
+        // Capture JPEG (strips EXIF)
+        ob_start();
+        imagejpeg($canvas, null, self::JPEG_QUALITY);
+        $jpegData = ob_get_clean();
+
+        if ($jpegData === false) {
+            return ['bytes' => null, 'reason' => self::REASON_ENCODE_FAILED];
+        }
+
+        return ['bytes' => $jpegData, 'reason' => null];
+    }
+
+    /**
+     * Render one WIDTH×HEIGHT JPEG byte string using the photo-library
+     * thumbnail cover/contain fit rule.
+     *
+     * S456 moved this arithmetic VERBATIM out of
+     * {@see \Phlix\Server\Http\Controllers\PhotoController::generateThumbnail()}
+     * (its one caller, now a thin delegation). The rule differs from both other
+     * pipelines on purpose and the differences are pinned by tests: the frame is
+     * an arbitrary WIDTH×HEIGHT rectangle (not a square), the source crop window
+     * is the SCALED dimensions (not the frame size), the geometry uses
+     * truncating (int) casts (not round()), 'contain' is any $fit value other
+     * than 'cover', transparency is preserved for PNG only (not WebP), and a
+     * zero/negative dimension still gets a max(1, …) canvas while the resample
+     * receives the raw width/height. Pure in-memory, like
+     * {@see renderSquareCoverJpeg()}.
+     *
+     * @param string $sourcePath Path to the source image.
+     * @param int    $width      Target width in pixels (raw, as the old caller passed it).
+     * @param int    $height     Target height in pixels (raw, as the old caller passed it).
+     * @param string $fit        'cover' crops to fill; any other value scales to fit.
+     * @return array{bytes: string|null, reason: string|null} Exactly one member
+     *                            is non-null: the encoded JPEG bytes (which may
+     *                            be '' — the old caller returned that verbatim)
+     *                            or the REASON_* constant naming the failed step.
+     */
+    public function renderFitJpeg(string $sourcePath, int $width, int $height, string $fit): array
+    {
+        /** @var array{0: int, 1: int, 2: int}|false */
+        $imageInfo = @getimagesize($sourcePath);
+        if ($imageInfo === false) {
+            return ['bytes' => null, 'reason' => self::REASON_UNREADABLE];
+        }
+
+        /** @var int */
+        $sourceWidth = $imageInfo[0];
+        /** @var int */
+        $sourceHeight = $imageInfo[1];
+        /** @var int */
+        $sourceType = $imageInfo[2];
+
+        $source = $this->createImageFromType($sourcePath, $sourceType);
+        if ($source === false) {
+            return ['bytes' => null, 'reason' => self::REASON_DECODE_FAILED];
+        }
+
+        // Calculate dimensions
+        $ratio = $fit === 'cover'
+            ? max($width / $sourceWidth, $height / $sourceHeight)
+            : min($width / $sourceWidth, $height / $sourceHeight);
+        $newWidth = (int)($sourceWidth * $ratio);
+        $newHeight = (int)($sourceHeight * $ratio);
+        $srcX = $fit === 'cover' ? max(0, (int)(($newWidth - $width) / 2)) : 0;
+        $srcY = $fit === 'cover' ? max(0, (int)(($newHeight - $height) / 2)) : 0;
+
+        // Create thumbnail
+        /** @var positive-int */
+        $thumbWidth = max(1, $width);
+        /** @var positive-int */
+        $thumbHeight = max(1, $height);
+        $thumb = @imagecreatetruecolor($thumbWidth, $thumbHeight);
+        if ($thumb === false) {
+            return ['bytes' => null, 'reason' => self::REASON_CANVAS_FAILED];
+        }
+
+        // Preserve transparency for PNG
+        if ($sourceType === IMAGETYPE_PNG) {
+            imagealphablending($thumb, false);
+            imagesavealpha($thumb, true);
+        }
+
+        $resampleResult = imagecopyresampled(
+            $thumb,
+            $source,
+            0,
+            0,
+            $srcX,
+            $srcY,
+            $width,
+            $height,
+            $newWidth,
+            $newHeight
+        );
+
+        if ($resampleResult === false) {
+            return ['bytes' => null, 'reason' => self::REASON_RESAMPLE_FAILED];
+        }
+
+        // Capture output
+        ob_start();
+        imagejpeg($thumb, null, self::JPEG_QUALITY);
+        $data = ob_get_clean();
+
+        if ($data === false) {
+            return ['bytes' => null, 'reason' => self::REASON_ENCODE_FAILED];
+        }
+
+        return ['bytes' => $data, 'reason' => null];
     }
 
     /**

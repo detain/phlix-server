@@ -22,6 +22,13 @@ use Phlix\Auth\SignedUrl;
  * re-encoded as JPEG at 85% quality (stripping EXIF), and atomically renamed
  * into place.
  *
+ * S456: the resize step itself delegates to {@see ImageResizer::
+ * renderSquareCoverJpeg()} — the estate's single home for GD resize arithmetic
+ * — while everything Avatar-specific stays here, byte-for-byte: the stricter
+ * 5 MB upload cap, the 'Avatar …' validation messages, the flat `<userId>.jpg`
+ * layout (a deliberate divergence from the keyed-directory convention, so no
+ * target-key/base-dir assertion applies), and the temp-then-rename store.
+ *
  * Security guarantees:
  * - MIME type is verified via both {@see getimagesize()} and {@see finfo_file()}
  *   so a file cannot bypass the image validator by renaming a PHP script.
@@ -64,6 +71,7 @@ class AvatarStorage
 
     public function __construct(
         private string $storageDir = self::STORAGE_DIR,
+        private readonly ImageResizer $resizer = new ImageResizer(),
     ) {
         // Normalize path to always have exactly one trailing slash
         $this->storageDir = rtrim($this->storageDir, '/') . '/';
@@ -244,6 +252,11 @@ class AvatarStorage
     /**
      * Resize an image to a 256×256 JPEG avatar using cover fit.
      *
+     * S456: the GD arithmetic lives in {@see ImageResizer::renderSquareCoverJpeg()};
+     * this method only maps its granular failure reasons back onto the exact
+     * exception types and messages this class has always thrown, and applies the
+     * original empty-capture rule ('' is an encode failure here).
+     *
      * @param string $tmpPath
      * @return string Binary JPEG data
      * @throws \InvalidArgumentException
@@ -251,95 +264,31 @@ class AvatarStorage
      */
     private function resizeToAvatar(string $tmpPath): string
     {
-        /** @var array{0: int, 1: int, 2: int}|false */
-        $imageInfo = @getimagesize($tmpPath);
-        if ($imageInfo === false) {
+        /** @var array{bytes: string|null, reason: string|null} $rendered */
+        $rendered = $this->resizer->renderSquareCoverJpeg($tmpPath, self::TARGET_SIZE);
+        $bytes = $rendered['bytes'];
+        $reason = $rendered['reason'];
+
+        if ($reason === ImageResizer::REASON_UNREADABLE) {
             throw new \InvalidArgumentException('Cannot read image for avatar resizing');
         }
 
-        /** @var int */
-        $sourceWidth = $imageInfo[0];
-        /** @var int */
-        $sourceHeight = $imageInfo[1];
-        /** @var int */
-        $sourceType = $imageInfo[2];
-
-        $source = $this->createImageFromType($tmpPath, $sourceType);
-        if ($source === false) {
-            throw new \RuntimeException('Failed to create image resource from avatar tmp file');
+        if ($bytes === null) {
+            throw match ($reason) {
+                ImageResizer::REASON_DECODE_FAILED => new \RuntimeException(
+                    'Failed to create image resource from avatar tmp file',
+                ),
+                ImageResizer::REASON_CANVAS_FAILED => new \RuntimeException('Failed to create avatar canvas'),
+                ImageResizer::REASON_RESAMPLE_FAILED => new \RuntimeException('Failed to resample avatar image'),
+                default => new \RuntimeException('Failed to encode avatar as JPEG'),
+            };
         }
 
-        // Cover fit: compute scale so the image covers the 256×256 target
-        $ratio = max(
-            self::TARGET_SIZE / $sourceWidth,
-            self::TARGET_SIZE / $sourceHeight,
-        );
-
-        $scaledWidth  = (int) round($sourceWidth * $ratio);
-        $scaledHeight = (int) round($sourceHeight * $ratio);
-
-        // Center crop: start coords in the scaled image
-        $srcX = max(0, (int) (($scaledWidth - self::TARGET_SIZE) / 2));
-        $srcY = max(0, (int) (($scaledHeight - self::TARGET_SIZE) / 2));
-
-        $canvas = @imagecreatetruecolor(self::TARGET_SIZE, self::TARGET_SIZE);
-        if ($canvas === false) {
-            throw new \RuntimeException('Failed to create avatar canvas');
-        }
-
-        // Preserve transparency for PNG and WebP
-        if ($sourceType === IMAGETYPE_PNG || $sourceType === IMAGETYPE_WEBP) {
-            imagealphablending($canvas, false);
-            imagesavealpha($canvas, true);
-        }
-
-        $resampled = imagecopyresampled(
-            $canvas,
-            $source,
-            0,       // dstX
-            0,       // dstY
-            $srcX,   // srcX
-            $srcY,   // srcY
-            self::TARGET_SIZE,  // dstW
-            self::TARGET_SIZE,  // dstH
-            self::TARGET_SIZE,  // srcW (crop to target size)
-            self::TARGET_SIZE,  // srcH (crop to target size)
-        );
-
-        if ($resampled === false) {
-            throw new \RuntimeException('Failed to resample avatar image');
-        }
-
-        // Capture JPEG at 85% quality (strips EXIF)
-        ob_start();
-        imagejpeg($canvas, null, 85);
-        $jpegData = ob_get_clean();
-
-        if ($jpegData === false || $jpegData === '') {
+        if ($bytes === '') {
             throw new \RuntimeException('Failed to encode avatar as JPEG');
         }
 
-        return $jpegData;
-    }
-
-    /**
-     * Create a GD image resource from file path and IMAGETYPE constant.
-     *
-     * @param string $path Image file path
-     * @param int    $type IMAGETYPE_* constant
-     * @return \GdImage|false
-     */
-    private function createImageFromType(string $path, int $type): \GdImage|false
-    {
-        return match ($type) {
-            IMAGETYPE_JPEG => imagecreatefromjpeg($path),
-            IMAGETYPE_PNG  => imagecreatefrompng($path),
-            IMAGETYPE_GIF  => imagecreatefromgif($path),
-            IMAGETYPE_WEBP => imagecreatefromwebp($path),
-            default        => throw new \InvalidArgumentException(
-                sprintf('Unsupported image type %d for avatar processing', $type),
-            ),
-        };
+        return $bytes;
     }
 
     /**

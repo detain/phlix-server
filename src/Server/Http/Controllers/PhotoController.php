@@ -16,6 +16,7 @@ use Phlix\Common\Fs\LibraryRootGuard;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Metadata\ExifProvider;
+use Phlix\Media\Storage\ImageResizer;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -38,11 +39,15 @@ class PhotoController
      * @param ItemRepository $itemRepo Repository for media item access
      * @param PhotoLibraryManager $photoManager Photo library manager
      * @param ExifProvider $exifProvider EXIF metadata provider
+     * @param ImageResizer $resizer S456: sole home of the thumbnail GD math
+     *     (in-memory {@see ImageResizer::renderFitJpeg()}); defaulted for the
+     *     explicit `new PhotoController(...)` call sites and autowiring alike.
      */
     public function __construct(
         private readonly ItemRepository $itemRepo,
         private readonly PhotoLibraryManager $photoManager,
-        private readonly ExifProvider $exifProvider
+        private readonly ExifProvider $exifProvider,
+        private readonly ImageResizer $resizer = new ImageResizer()
     ) {
     }
 
@@ -566,11 +571,19 @@ class PhotoController
     /**
      * Generates a thumbnail image.
      *
+     * S456: the GD cover/contain arithmetic moved VERBATIM to
+     * {@see ImageResizer::renderFitJpeg()} (the estate's single resize home).
+     * This wrapper keeps the route layer's exact contract: an unsupported image
+     * type — one whose decode the old match()'s `default => imagecreatefromjpeg()`
+     * arm always failed on anyway — and every pipeline failure still collapse to
+     * a null return (the caller answers 500); an empty-but-present JPEG capture
+     * is still returned verbatim, exactly like the old `$data !== false` test.
+     *
      * @param string $path Original image path
      * @param int $width Target width (1-2000)
      * @param int $height Target height (1-2000)
      * @param string $fit Fit mode ('cover' or 'contain')
-     * @return string|null Base64-encoded thumbnail or null on failure
+     * @return string|null JPEG thumbnail bytes or null on failure
      *
      * @since 0.16.0
      */
@@ -583,85 +596,17 @@ class PhotoController
         }
 
         /** @var int */
-        $sourceWidth = $imageInfo[0];
-        /** @var int */
-        $sourceHeight = $imageInfo[1];
-        /** @var int */
         $sourceType = $imageInfo[2];
-
-        // Create source image resource
-        $source = $this->createImageFromType($path, $sourceType);
-        if ($source === false) {
+        if (!array_key_exists($sourceType, ImageResizer::ACCEPTED_TYPES)) {
+            // The old `default => imagecreatefromjpeg($path)` arm could never
+            // decode a non-JPEG-bytes file of an unhandled type; collapsing it
+            // to null here is observably identical (both yield the 500 path).
             return null;
         }
 
-        // Calculate dimensions
-        $ratio = $fit === 'cover'
-            ? max($width / $sourceWidth, $height / $sourceHeight)
-            : min($width / $sourceWidth, $height / $sourceHeight);
-        $newWidth = (int)($sourceWidth * $ratio);
-        $newHeight = (int)($sourceHeight * $ratio);
-        $srcX = $fit === 'cover' ? max(0, (int)(($newWidth - $width) / 2)) : 0;
-        $srcY = $fit === 'cover' ? max(0, (int)(($newHeight - $height) / 2)) : 0;
+        /** @var array{bytes: string|null, reason: string|null} $rendered */
+        $rendered = $this->resizer->renderFitJpeg($path, $width, $height, $fit);
 
-        // Create thumbnail
-        /** @var positive-int */
-        $thumbWidth = max(1, $width);
-        /** @var positive-int */
-        $thumbHeight = max(1, $height);
-        $thumb = @imagecreatetruecolor($thumbWidth, $thumbHeight);
-        if ($thumb === false) {
-            return null;
-        }
-
-        // Preserve transparency for PNG
-        if ($sourceType === IMAGETYPE_PNG) {
-            imagealphablending($thumb, false);
-            imagesavealpha($thumb, true);
-        }
-
-        $resampleResult = imagecopyresampled(
-            $thumb,
-            $source,
-            0,
-            0,
-            $srcX,
-            $srcY,
-            $width,
-            $height,
-            $newWidth,
-            $newHeight
-        );
-
-        if ($resampleResult === false) {
-            return null;
-        }
-
-        // Capture output
-        ob_start();
-        imagejpeg($thumb, null, 85);
-        $data = ob_get_clean();
-
-        return $data !== false ? $data : null;
-    }
-
-    /**
-     * Creates an image resource from file path and type.
-     *
-     * @param string $path Image file path
-     * @param int $type Image type constant
-     * @return \GdImage|false Image resource or false on failure
-     *
-     * @since 0.16.0
-     */
-    private function createImageFromType(string $path, int $type): \GdImage|false
-    {
-        return match ($type) {
-            IMAGETYPE_JPEG => imagecreatefromjpeg($path),
-            IMAGETYPE_PNG => imagecreatefrompng($path),
-            IMAGETYPE_GIF => imagecreatefromgif($path),
-            IMAGETYPE_WEBP => imagecreatefromwebp($path),
-            default => imagecreatefromjpeg($path),
-        };
+        return $rendered['bytes'];
     }
 }

@@ -9,6 +9,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **A machine-readable OpenAPI description of the entire served route surface, kept
+  honest by a currency guard that recomposes the real routers.** `openapi.yaml` (repo
+  root) now documents every operation `start.php` actually answers — 402 operations across
+  340 path templates, the union of `Application`'s 365 routes and the container-composed
+  `WebPortalRouter`'s 48 (the +1 WebPortalRouter route is S73's
+  `GET /api/v1/people/{personId}/photo`), with `Application` winning every method+path both expose (because
+  `HttpHandler` dispatches `Application` first and only falls through to `WebPortalRouter` on
+  its 404, the four shadowed divergences — the `[]` from `Application` on
+  `GET /api/v1/libraries`, `GET /api/v1/libraries/{id}`, `GET /api/v1/media/{id}/posters` and
+  `PUT /api/v1/media/{id}/poster` rather than `WebPortalRouter`'s gated chains — are documented
+  exactly as served). Every operation carries an `x-phlix-middleware` chain, by class short
+  name, in registration order. The file is **hand-maintained and never regenerated in CI** — a
+  self-adjusting derived spec cannot go red, which is the S204 phantom-route defect this closes.
+  `tests/Unit/Server/Contracts/OpenapiSpecCurrencyTest.php` is the other half: it drives the
+  production container, recomposes BOTH routers live, parses the committed YAML with the same
+  narrow line-wise reader the phlix-hub S66 guard uses, and fails on any route present in one
+  artefact and not the other or on any middleware-chain mismatch; it also executes three planted
+  drifts (a phantom path, a deleted served route, a re-gated chain) and asserts each is caught by
+  name, so the guard is never a green that has not been seen red. A new pinned
+  `openapi` CI job lints the document with `@redocly/cli@2.30.5` against `redocly.yaml`
+  (`recommended`, with only `no-ambiguous-paths` and `no-server-example.com` disabled, each with
+  its reason). `RequestDynamicPropertyCensusExecutableTest` re-pins its estate denominator
+  1851→1852 for the one new PHP file.
+
 - **`scripts/` is under static analysis in both tools — the server half of S256's
   residual, mirroring the hub's S248 shape.** Until now phlix-server's `scripts/`
   (43 first-party PHP files) was analysed by NOTHING: `phpstan.neon` carried

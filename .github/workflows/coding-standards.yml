@@ -412,3 +412,25 @@ jobs:
         # red for reasons unrelated to the code gets switched off — which is how
         # the no-op above came to exist. See the script header for the full table.
         run: php scripts/security-audit-check.php
+
+  openapi:
+    name: OpenAPI Description
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # S65. This job answers ONE question — is openapi.yaml a structurally valid
+      # OpenAPI 3.1 document that conforms to Redocly's `recommended` ruleset — and
+      # nothing else. Whether it still MATCHES the server's composed route registry
+      # is a different question, answered by
+      # tests/Unit/Server/Contracts/OpenapiSpecCurrencyTest.php in the phpunit Unit
+      # suite; a valid document that describes routes nobody registers is exactly the
+      # S204 defect, and a linter cannot see it. Both gates must pass.
+      #
+      # The version is pinned, not floating: `recommended` is a moving ruleset, so
+      # `@latest` would let an upstream release turn this red with no change here.
+      # Rule deviations live in redocly.yaml, each with its written reason.
+      - name: Lint openapi.yaml
+        run: npx --yes @redocly/cli@2.30.5 lint openapi.yaml

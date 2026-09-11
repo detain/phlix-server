@@ -135,7 +135,9 @@ final class ImagePinDriftGuardTest extends TestCase
      * Silent-fallback veto #1b — the same `default` action in its OTHER Go
      * syntax: the parenthesized call form `(default "…" .Values.image.tag)`.
      * The pipe veto cannot see it, yet it falls back just as silently. Anchored
-     * on `(` before the word, so prose spelling "default" stays legal.
+     * on `(` before the word, so prose spelling the bare word "default" stays
+     * legal; a message gloss written as "(default …)" would be judged drift
+     * (conservative, disclosed).
      */
     private const TEMPLATE_DEFAULT_CALL_PATTERN = '/\(\s*default\b/';
 

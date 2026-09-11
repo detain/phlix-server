@@ -218,6 +218,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The detached-launch tests in `tests/Unit/Media/Transcoding/FfmpegRunnerHlsTest.php`
+  raced their own cleanup, and a mid-test failure handed the residue to the whole suite
+  (`S460`).** Each launch test mints a `phlix_*` scratch dir under sys temp and lets
+  `FfmpegRunner::startDetached()` run its `if … then touch .complete; trailing…; else
+  touch .failed; fi` chain in a detached `nohup` wrapper; the tests then removed the dir
+  inline with no wait. The wrapper writes the marker *after* the primary command exits
+  (and, for the CMAF trailing case, writes `trailing-ran` only *after* `.complete`
+  appeared, which the bare assertion sampled with no poll), so removal could land first —
+  the wrapper recreated the dir under temp, and the S439 `ZeroResidueCensus` extension
+  (snapshot at bootstrap, diff of `/phlix_*` at `ExecutionFinished`) failed the entire
+  suite for it. That is what crashed W59's first master-CI attempt; the class has been
+  latent since #253 and multiplies under the S457 paraunit shard fan-out. The file now
+  polls the one file each wrapper is contractually expected to write, with a bounded wait
+  and a loud, named timeout failure whose every clause (dir existence, tracked wrapper
+  pid, process-alive probe, observed entries) is re-observed at failure time; scratch
+  dirs are registered per-test and reclaimed in `tearDown()` — so a mid-test failure
+  cleans up too, and removal first waits for the tracked wrapper pid, which under the
+  `nohup`→`timeout`→`sh` chain exits strictly after the last write. Mutation-checked in
+  both directions on this machine: the old shape with a forced mid-test failure leaks the
+  dir and reddens the census; the new shape with the same forced failure leaves zero
+  residue and the census stays silent. Production `FfmpegRunner` is untouched.
+
 - **Five real defects in `scripts/`, surfaced by putting the directory under PHPStan
   level 9 and Psalm (`S256` residual).** None of these files had ever been opened by
   an analyser, and the tools were right five times: `backfill-chapters.php` passed the

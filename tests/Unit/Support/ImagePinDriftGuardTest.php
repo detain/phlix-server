@@ -43,11 +43,16 @@ use Symfony\Component\Yaml\Yaml;
  * values/template/compose shapes that make the failure loud. The census regex
  * needs the repository and `:latest` next to each other, so split-form
  * references — `repository:` on one line, `tag: latest` on another — are
- * invisible to it; in YAML those are caught by the chart values legs, now
- * glob-scoped over EVERY chart under `k8s/helm/` (both `values.yaml` and
- * `values.example.yaml`), while split-form references in Markdown prose
- * (e.g. `k8s/README.md`, until its docs are updated) are a disclosed KNOWN
- * LIMIT policed by review, not by this guard.
+ * invisible to it; in YAML those are caught by the chart values legs, which
+ * hold EVERY file in the closed glob enumeration over `k8s/helm/` (each
+ * chart's `values.yaml` and `values.example.yaml`) to a ghcr.io/detain/phlix
+ * `image.repository` plus an empty, therefore required, `tag`. The claim
+ * honestly covers a split-form reference in any current or future chart values
+ * file that matches that enumeration — a future chart is policed only once it
+ * is enumerated ON PURPOSE, which the set assertion forces (an un-enumerated
+ * new chart reddens before anyone can copy from it). Split-form references in
+ * Markdown prose (e.g. `k8s/README.md`, until its docs are updated) remain a
+ * disclosed KNOWN LIMIT policed by review, not by this guard.
  *
  * ## Anti-vacuity (S345 law 3)
  *
@@ -57,11 +62,12 @@ use Symfony\Component\Yaml\Yaml;
  * values files shipped, the old `| default .Chart.AppVersion` template line, a
  * `required` line missing the immutable form string, a `${VAR}` interpolation
  * missing the `:?` clause, a `:?` message whose body lost the immutable form,
- * and a hub service pinned to the server variable — and asserts each is judged
- * DRIFT. Mirrored positive controls (the shipped files, and a `required` line
- * that merely spells the word "default" inside its message prose) assert the
- * predicates do not over-reject. Any shape read the wrong way fails this test
- * loudly by name.
+ * a hub service pinned to the server variable, and the silent fallback in its
+ * parenthesized Go call form `(default "1.2.3" .Values.image.tag)` — and asserts
+ * each is judged DRIFT. Mirrored positive controls (both shipped deployment
+ * templates, the shipped compose pins, and a `required` line that merely spells
+ * the word "default" inside its message prose) assert the predicates do not
+ * over-reject. Any shape read the wrong way fails this test loudly by name.
  *
  * ## Known limits (honest scope)
  *
@@ -124,6 +130,14 @@ final class ImagePinDriftGuardTest extends TestCase
      * "default" (e.g. "there is no default"); only the pipe is a fallback path.
      */
     private const TEMPLATE_DEFAULT_PIPE_PATTERN = '/\|\s*default\b/';
+
+    /**
+     * Silent-fallback veto #1b — the same `default` action in its OTHER Go
+     * syntax: the parenthesized call form `(default "…" .Values.image.tag)`.
+     * The pipe veto cannot see it, yet it falls back just as silently. Anchored
+     * on `(` before the word, so prose spelling "default" stays legal.
+     */
+    private const TEMPLATE_DEFAULT_CALL_PATTERN = '/\(\s*default\b/';
 
     /** Silent-fallback veto #2: any reference to `.Chart.AppVersion` (never-published tags). */
     private const TEMPLATE_APP_VERSION_PATTERN = '/\.Chart\.AppVersion\b/';
@@ -282,14 +296,18 @@ final class ImagePinDriftGuardTest extends TestCase
 
     /**
      * Glob-scoped values leg: EVERY chart values file under `k8s/helm` —
-     * shipped `values.yaml` and annotated `values.example.yaml` alike — that
-     * points its image block at a ghcr.io/detain/phlix repository must ship
-     * `tag: ""`. Round 1's blind spot was exactly the example files: no leg
-     * read them, so they carried a never-published `tag: "v1.0.0"` an operator
-     * would copy straight into a failing `helm install`. The discovery glob
-     * closes that hole AND refuses silent chart growth: a new chart appearing
-     * under `k8s/helm` reddens the set assertion until it is enumerated on
-     * purpose.
+     * shipped `values.yaml` and annotated `values.example.yaml` alike — must
+     * carry an `image:` mapping whose `repository` is a ghcr.io/detain/phlix
+     * string and whose `tag` is empty. Round 1's blind spot was exactly the
+     * example files: no leg read them, so they carried a never-published
+     * `tag: "v1.0.0"` an operator would copy straight into a failing
+     * `helm install`. The discovery glob closes that hole AND refuses silent
+     * chart growth: a new chart appearing under `k8s/helm` reddens the set
+     * assertion until it is enumerated on purpose. Because the enumerated files
+     * are all ghcr consumers BY DEFINITION, a missing or malformed
+     * `image.repository` here is not a skip condition but a failure: it is
+     * precisely how a split-form pin (a tag with no repository to make it
+     * adjacent) would dodge both this leg and the adjacency census.
      */
     public function testEveryChartValuesFileUnderK8sShipsAnEmptyTag(): void
     {
@@ -308,16 +326,16 @@ final class ImagePinDriftGuardTest extends TestCase
 
         foreach ($discovered as $rel) {
             $document = self::parseYamlDocument($rel);
-            $image = $document['image'] ?? null;
+            $image = self::imageBlock($document, $rel);
+            $repository = self::stringKey($image, 'repository', $rel);
 
-            if (!is_array($image)) {
-                continue; // No top-level image mapping: nothing here names an image at all.
-            }
-
-            $repository = $image['repository'] ?? null;
-
-            if (!is_string($repository) || !str_starts_with($repository, 'ghcr.io/detain/phlix')) {
-                continue; // Not a ghcr.io/detain/phlix consumer.
+            if (!str_starts_with($repository, 'ghcr.io/detain/phlix')) {
+                throw new RuntimeException(
+                    'Image-pin guard: ' . $rel . ' is an enumerated ghcr consumer, so `image.repository` '
+                    . 'must be a string starting ghcr.io/detain/phlix — found: ' . var_export($repository, true)
+                    . '. A repository this leg cannot read is how a tag-only (split-form) pin escapes '
+                    . 'both this law and the adjacency census.'
+                );
             }
 
             self::assertTrue(
@@ -536,6 +554,18 @@ final class ImagePinDriftGuardTest extends TestCase
                 . '`.Chart.AppVersion` syntax)';
         }
 
+        // 9. The silent fallback in its OTHER Go syntax: the parenthesized call
+        //    form `(default "1.2.3" .Values.image.tag)` wrapped around a
+        //    `required` line that carries every other loud marker. A veto
+        //    anchored only on the `| default` pipe accepts this line as loud
+        //    while the chart still resolves a never-published tag.
+        $callFormDefaultTemplateLine = '          image: "{{ .Values.image.repository }}:'
+            . '{{ required "form: ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>" '
+            . '(default "1.2.3" .Values.image.tag) }}"';
+        if (self::deploymentImageLineIsLoud($callFormDefaultTemplateLine, self::SERVER_IMMUTABLE_FORM)) {
+            $slipped[] = 'parenthesized `(default …)` call fallback inside a required line accepted as loud';
+        }
+
         self::assertSame(
             [],
             $slipped,
@@ -543,15 +573,19 @@ final class ImagePinDriftGuardTest extends TestCase
             . 'would run vacuously today: ' . implode('; ', $slipped) . ' [' . self::STEP_MARK . ']'
         );
 
-        // Positive controls: the shipped files satisfy the same predicates.
-        $shippedServerLine = self::extractDeploymentImageLine(
-            self::readRequiredFile('k8s/helm/phlix/templates/deployment.yaml'),
-            'k8s/helm/phlix/templates/deployment.yaml'
-        );
-        self::assertTrue(
-            self::deploymentImageLineIsLoud($shippedServerLine, self::SERVER_IMMUTABLE_FORM),
-            'ANTI-VACUITY: the shipped phlix image line fails its own predicate. [' . self::STEP_MARK . ']'
-        );
+        // Positive controls: the shipped files satisfy the same predicates — both
+        // deployment templates, not just the one the defect story is told around.
+        foreach (self::CHARTS as $chart) {
+            $shippedLine = self::extractDeploymentImageLine(
+                self::readRequiredFile($chart['template']),
+                $chart['template']
+            );
+            self::assertTrue(
+                self::deploymentImageLineIsLoud($shippedLine, $chart['form']),
+                'ANTI-VACUITY: the shipped image line in ' . $chart['template'] . ' fails its own '
+                . 'predicate. [' . self::STEP_MARK . ']'
+            );
+        }
 
         $shippedComposeImage = self::serviceImageStrings(
             self::parseYamlDocument('docker/examples/server-hub/docker-compose.yml'),
@@ -579,16 +613,19 @@ final class ImagePinDriftGuardTest extends TestCase
     /**
      * The template law: a `{{ required … }}` gate on `.Values.image.tag` whose
      * message names the immutable form — and NO silent fallback PATH: neither a
-     * `| default` pipe nor a `.Chart.AppVersion` reference may appear. Both
-     * vetoes anchor on Go-template SYNTAX, never on a bare word: a required
-     * message is free to explain "there is no default" in prose (plant 8).
+     * `| default` pipe, a `(default …)` call, nor a `.Chart.AppVersion`
+     * reference may appear. Every veto anchors on Go-template SYNTAX, never on a
+     * bare word: a required message is free to explain "there is no default" in
+     * prose (plant 8) while both real fallback spellings — pipe (plant 3) and
+     * parenthesized call (plant 9) — are rejected.
      */
     private static function deploymentImageLineIsLoud(string $line, string $immutableForm): bool
     {
         $fallsBackThroughPipe = preg_match(self::TEMPLATE_DEFAULT_PIPE_PATTERN, $line) === 1;
+        $fallsBackThroughCall = preg_match(self::TEMPLATE_DEFAULT_CALL_PATTERN, $line) === 1;
         $fallsBackToAppVersion = preg_match(self::TEMPLATE_APP_VERSION_PATTERN, $line) === 1;
 
-        if ($fallsBackThroughPipe || $fallsBackToAppVersion) {
+        if ($fallsBackThroughPipe || $fallsBackThroughCall || $fallsBackToAppVersion) {
             return false;
         }
 

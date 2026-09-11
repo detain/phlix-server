@@ -338,8 +338,8 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * Re-pinned 1861→1862 by S475: adds exactly one first-party PHP file
              * (tests/Unit/Support/ImagePinDriftGuardTest.php — the helm/example
              * `:latest` drift guard); measured on this tree, not predicted. It
-             * reads/writes no Request property (it touches only YAML + compose
-             * text), so every other census denominator is unchanged.
+             * reads/writes no Request property (it touches only YAML, compose and
+             * doc text), so every other census denominator is unchanged.
              */
     private const EXPECTED_PHP_FILES = 1862;
 

@@ -249,6 +249,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`scripts/install.sh` compiled Swoole and php-uv from floating default-branch HEADs
+  while claiming verbatim parity with the pinned `docker/Dockerfile.base` (`S482`).** The
+  bare-metal installer is the one build path an operator's PHP receives third-party source
+  from, and it was the residual S309 explicitly left open outside CI scope: both clones ran
+  `--depth=1` with no ref, so whatever each repo's HEAD was that day got compiled and
+  `make install`ed into the host. Swoole now clones `--branch v6.2.1` — the same release tag
+  the base image's `ARG SWOOLE_REF` names — with a `git rev-parse HEAD` self-verify against
+  the tag's recorded commit, so a force-moved tag fails the install loudly before anything
+  is compiled; shallow-plus-tag is safe where S309 rejected shallow-plus-bare-SHA because a
+  tag always resolves to its own commit. php-uv now uses S309's durable form verbatim: full
+  clone, `git checkout --quiet --detach` onto the same 40-hex commit as the base image's
+  `ARG PHP_UV_REF`, rev-parse self-verify. `ThirdPartyClonePinGuardTest` no longer stops
+  at `.github/workflows/*.yml`: it walks install.sh line-by-line (comments stripped, the
+  existing precedent), sweeps each clone site inside its own shell-function region (one
+  file carries two different pins), asserts the per-site pin forms, counts the clone sites,
+  flags the pre-S482 floating shapes as the anti-vacuity control, and holds
+  install.sh ↔ `Dockerfile.base` refs string-equal — mutation-proven red at each site
+  separately, green at tip. Alongside, `RELEASE_PROCESS.md` was trued against the shipped
+  S474 registry regime (folding in the phlix-server half of `S483`): the promised
+  `v1.2.0`/`v1.2`/`nightly-YYYYMMDD` image tags and the "build and push Helm chart" step
+  never existed, and are now marked NOT-YET-PUBLISHED pending the owner's S274
+  release-authority decision; rollback documentation moved from a phantom `v1.2.2` image
+  tag to the real `<full-sha>-<variant>` immutable form with an anonymous `tags/list`
+  recipe for finding current SHAs.
+
 - **The detached-launch tests in `tests/Unit/Media/Transcoding/FfmpegRunnerHlsTest.php`
   raced their own cleanup, and a mid-test failure handed the residue to the whole suite
   (`S460`).** Each launch test mints a `phlix_*` scratch dir under sys temp and lets

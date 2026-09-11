@@ -305,8 +305,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
            * tests/Unit/Server/WebPortal/WebPortalRouterPersonPhotoTest.php —
            * measured 1857 on this tree, not predicted. None names a Request
            * property (the responder reads only declared members).
+           * Re-pinned 1857→1858 by S65: the machine-readable OpenAPI spec adds exactly
+           * one first-party PHP file (tests/Unit/Server/Contracts/OpenapiSpecCurrencyTest.php,
+           * the currency guard that recomposes both routers live and fails on any drift
+           * between openapi.yaml and the served route registry) — measured on this
+           * tree, not predicted. openapi.yaml and redocly.yaml are not PHP and so never
+           * enter the estate count. The new test reads/writes no Request property (it
+           * touches only the static RequestContext setters and the two Router objects),
+           * so every other census denominator is unchanged.
            */
-    private const EXPECTED_PHP_FILES = 1857;
+    private const EXPECTED_PHP_FILES = 1858;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

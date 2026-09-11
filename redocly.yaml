@@ -1,0 +1,33 @@
+# Redocly configuration for phlix-server's OpenAPI description (S65).
+#
+#   npx @redocly/cli@2.30.5 lint openapi.yaml
+#
+# Everything stays on Redocly's `recommended` ruleset except the two rules below,
+# which are style opinions that contradict what this server's routers actually do.
+# Nothing here silences a correctness rule.
+extends:
+  - recommended
+
+rules:
+  # The composed surface carries both a literal and a parametric sibling at the
+  # same depth (e.g. `/api/v1/media/index` alongside `/api/v1/media/{id}`, and
+  # `/api/v1/libraries/{id}/scan-status`), which Redocly's ambiguity heuristic
+  # flags even though `Router` resolves them by literal-before-parametric match
+  # order at dispatch. These are real, distinct registered rails; omitting them
+  # would make the specification disagree with the running service — exactly the
+  # drift OpenapiSpecCurrencyTest exists to prevent — so the rule is off rather
+  # than the paths being dropped.
+  no-ambiguous-paths: off
+
+  # Redocly's `no-server-example.com` rule rejects any server `url` pointing at
+  # example.com OR localhost. This spec deliberately carries both kinds of
+  # intentional, non-production address: `http://localhost:8096` is the real
+  # unproxied Workerman worker `start.php` binds (what a developer actually calls
+  # against a local server), and the `https://{host}` production template has an
+  # RFC-6761-reserved placeholder default (`phlix.example.com`) because the spec
+  # ships with no single canonical deployment hostname. Neither is a shipped
+  # production URL, so the style rule is off rather than the true local/dev
+  # address being disguised as something it is not. (Empirically verified: with
+  # the rule on, `lint openapi.yaml` emits exactly
+  # "Server `url` should not point to example.com or localhost.")
+  no-server-example.com: off

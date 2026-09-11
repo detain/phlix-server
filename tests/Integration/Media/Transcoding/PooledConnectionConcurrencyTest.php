@@ -87,6 +87,23 @@ final class PooledConnectionConcurrencyTest extends TestCase
      */
     private const DETERMINISM_TOKEN = 'CS137POOLDETXX9P1';
 
+    /**
+     * S469 (NIT-1 of the S137 review) — upper bound on the `$missingRows` evidence
+     * collector in {@see runChurn()}. The pathological run the W56 review flagged
+     * is a row that vanishes early and stays vanished: unbounded, the array grows
+     * to readerCoros × readsPer strings (720 in the soak config) and the post-join
+     * gate implodes all of them into one failure message. Only the first entries
+     * are informative, so keep the first N and count the rest in the message.
+     */
+    private const MISSING_ROWS_EVIDENCE_CAP = 10;
+
+    /**
+     * S469 merge-trail token. Code-resident proof the evidence cap landed in
+     * `master`; the gate message carries it in the `+K more` truncation note, so a
+     * red run that hit the cap names the bound that shaped its evidence.
+     */
+    private const MISSING_ROWS_CAP_TOKEN = 'S469ROWCAPX9L2';
+
     private string $host = '127.0.0.1';
     private int $port = 3306;
     private string $user = 'root';
@@ -446,6 +463,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
         $observed = [];           // every distinct error value a reader saw
         $badValues = [];          // reader values that were never written
         $missingRows = [];        // S137 — reads whose entry was not an array (evidence, never an assert)
+        $missingRowsBeyond = 0;   // S469 — misses past the evidence cap; keeps the array bounded
         $errors = [];             // any exception message from any coroutine
         $inFlight = 0;
         $peak = 0;
@@ -471,6 +489,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
             &$observed,
             &$badValues,
             &$missingRows,
+            &$missingRowsBeyond,
             &$errors,
             &$inFlight,
             &$peak,
@@ -532,6 +551,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
                     &$observed,
                     &$badValues,
                     &$missingRows,
+                    &$missingRowsBeyond,
                     &$maxWritten,
                     &$errors,
                     &$inFlight,
@@ -553,9 +573,15 @@ final class PooledConnectionConcurrencyTest extends TestCase
                             // first failure landed (1461 clean vs 791 degraded — measured
                             // 2026-09-10). Per-iteration evidence is COLLECTED here and
                             // gated once after the join, over a fixed-size shape.
+                            // S469 — "fixed-size" now covers the collector itself:
+                            // recordMissingRowEvidence() keeps the first
+                            // MISSING_ROWS_EVIDENCE_CAP entries and counts the rest,
+                            // so the pathological run cannot grow the array (or the
+                            // post-join implode) to readerCoros × readsPer strings.
                             if (!is_array($e)) {
-                                $missingRows[] = sprintf(
-                                    'reader %d iteration %d: entry() returned %s, expected the job row',
+                                self::recordMissingRowEvidence(
+                                    $missingRows,
+                                    $missingRowsBeyond,
                                     $r,
                                     $i,
                                     gettype($e)
@@ -619,12 +645,13 @@ final class PooledConnectionConcurrencyTest extends TestCase
         // where the old assert could fire `readerCoros × readsPer` times or none
         // (its throw aborting that reader's loop), this gates the identical
         // invariant — every read resolved a job row — exactly once per run.
+        // S469 — the asserted value is now bounded by MISSING_ROWS_EVIDENCE_CAP;
+        // missingRowsGateMessage() is byte-identical to the old message whenever
+        // nothing was truncated, and appends a `+K more` note when it was.
         $this->assertSame(
             [],
             $missingRows,
-            'every read must resolve the cached job row (a non-array entry means the row vanished): '
-            . implode(' | ', $missingRows)
-            . ' [' . self::DETERMINISM_TOKEN . ']'
+            self::missingRowsGateMessage($missingRows, $missingRowsBeyond)
         );
 
         // No corruption: every value a reader saw was one that had been written
@@ -701,6 +728,69 @@ final class PooledConnectionConcurrencyTest extends TestCase
             $cachedValue,
             'the epoch-guarded cache must converge on the final written value (no stale row stuck without a TTL)'
         );
+    }
+
+    /**
+     * S469 — bounded push for the `$missingRows` evidence collector (NIT-1 of the
+     * S137 review). Keeps the first {@see MISSING_ROWS_EVIDENCE_CAP} entries and
+     * counts every further miss in `$missingRowsBeyond`, so a pathological churn
+     * run (row vanishes early, stays vanished) cannot grow the collector — or the
+     * post-join `implode` — to readerCoros × readsPer strings. The sprintf is
+     * deferred: past the cap only an int moves. Both collectors are shared with
+     * the reader coroutines, hence by-ref. Deterministic: the survivors are
+     * always the first N pushes in per-coroutine iteration order, i.e. exactly
+     * the head of what the unbounded collector used to hold, so the gate names
+     * the same representative misses a ≤cap run would.
+     *
+     * @param list<string> $missingRows
+     */
+    private static function recordMissingRowEvidence(
+        array &$missingRows,
+        int &$missingRowsBeyond,
+        int $reader,
+        int $iteration,
+        string $entryType
+    ): void {
+        if (count($missingRows) >= self::MISSING_ROWS_EVIDENCE_CAP) {
+            $missingRowsBeyond++;
+
+            return;
+        }
+
+        $missingRows[] = sprintf(
+            'reader %d iteration %d: entry() returned %s, expected the job row',
+            $reader,
+            $iteration,
+            $entryType
+        );
+    }
+
+    /**
+     * S469 — failure message for the post-join `$missingRows` gate. Byte-identical
+     * to the pre-cap message whenever nothing was truncated (the green run and any
+     * ≤cap failure), so the gate keeps its exact meaning; past the cap it appends
+     * the `+K more` counter with the truncation token. At least one representative
+     * miss is always named when the run missed at all: `$missingRowsBeyond` can
+     * only grow once the array already holds {@see MISSING_ROWS_EVIDENCE_CAP} ≥ 1
+     * entries, and a non-empty array implodes to its survivors.
+     *
+     * @param list<string> $missingRows
+     */
+    private static function missingRowsGateMessage(array $missingRows, int $missingRowsBeyond): string
+    {
+        $message = 'every read must resolve the cached job row (a non-array entry means the row vanished): '
+            . implode(' | ', $missingRows);
+
+        if ($missingRowsBeyond > 0) {
+            $message .= sprintf(
+                ' (+%d more missed beyond the first %d shown; cap token %s)',
+                $missingRowsBeyond,
+                self::MISSING_ROWS_EVIDENCE_CAP,
+                self::MISSING_ROWS_CAP_TOKEN
+            );
+        }
+
+        return $message . ' [' . self::DETERMINISM_TOKEN . ']';
     }
 
     /**

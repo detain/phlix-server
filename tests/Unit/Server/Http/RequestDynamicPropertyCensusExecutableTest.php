@@ -335,8 +335,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * predicted (phpunit computed 1861). The new test reads/writes no Request
              * property (it touches only workflow YAML text), so every other census
              * denominator is unchanged.
+             * Re-pinned 1861→1862 by S475: adds exactly one first-party PHP file
+             * (tests/Unit/Support/ImagePinDriftGuardTest.php — the helm/example
+             * `:latest` drift guard); measured on this tree, not predicted.
              */
-    private const EXPECTED_PHP_FILES = 1861;
+    private const EXPECTED_PHP_FILES = 1862;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   phlix-hub:
-    image: ghcr.io/detain/phlix-hub:latest
+    image: "${PHLIX_HUB_IMAGE:?PHLIX_HUB_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-hub:<sha12> — the published hub :latest is frozen/stale}"
     container_name: phlix-hub
     ports:
       - "3443:443"
@@ -26,7 +26,7 @@ services:
       - phlix_network
 
   phlix-server:
-    image: ghcr.io/detain/phlix-server:latest
+    image: "${PHLIX_SERVER_IMAGE:?PHLIX_SERVER_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia> — the mutable :latest tag drifts and is never a reproducible example}"
     container_name: phlix-server
     # S163: 8096 = HTTP (REST + SPA + static + WS upgrade), 8097 = SyncPlay WS.
     ports:

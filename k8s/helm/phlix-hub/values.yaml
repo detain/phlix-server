@@ -7,8 +7,13 @@ image:
   # Container image repository for phlix-hub
   repository: ghcr.io/detain/phlix-hub
   pullPolicy: IfNotPresent
-  # Image tag — defaults to .Chart.AppVersion if empty
-  tag: "latest"
+  # Image tag — REQUIRED, there is no default. The published :latest is frozen/stale
+  # (unchanged since 2026-08-31), and the old fallback to .Chart.AppVersion pointed at a
+  # tag never published to ghcr, so neither produced a reproducible deployment. The hub
+  # publishes short-SHA tags; the immutable form is
+  #   ghcr.io/detain/phlix-hub:<sha12>
+  # Leaving it empty fails `helm template`/`helm install` loudly (see templates/deployment.yaml).
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""

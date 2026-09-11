@@ -313,8 +313,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
            * enter the estate count. The new test reads/writes no Request property (it
            * touches only the static RequestContext setters and the two Router objects),
            * so every other census denominator is unchanged.
+           * Re-pinned 1858→1859 by S456: the resize-consolidation census adds exactly
+           * one first-party PHP file (tests/Unit/Media/Storage/
+           * ResizeImplementationCensusGuardTest.php — the guard pinning ImageResizer as
+           * the estate's sole imagecopyresampled()/imagecopyresized() home, plus the two
+           * golden-byte delegation pins); measured on this tree, not predicted. Its one
+           * Request write (`$request->query = […]`, a declared member, the S427 license
+           * intact) lifts EXPECTED_DECLARED_WRITES by one in this same commit.
            */
-    private const EXPECTED_PHP_FILES = 1858;
+    private const EXPECTED_PHP_FILES = 1859;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -355,8 +362,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * WebPortalRouterPersonPhotoTest.php's request() helper assigns four declared
      * Request members directly (method/path/userId/query) — the same S438/S289
      * shape, S427 license intact. The src/ change adds no write site.
+     * Re-pinned 964→965 by S456: tests/Unit/Media/Storage/
+     * ResizeImplementationCensusGuardTest.php's photo golden-byte pin assigns one
+     * declared Request member directly ($request->query = […]) — the same
+     * S438/S289/S73 shape, S427 license intact. The consolidation itself moves GD
+     * resize arithmetic into ImageResizer and touches no Request property.
      */
-    private const EXPECTED_DECLARED_WRITES = 964;
+    private const EXPECTED_DECLARED_WRITES = 965;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

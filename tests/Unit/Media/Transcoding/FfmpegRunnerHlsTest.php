@@ -238,13 +238,16 @@ class FfmpegRunnerHlsTest extends TestCase
      */
     private function makeScratchDir(string $prefix): string
     {
-        $dir = sys_get_temp_dir() . '/' . $prefix . uniqid();
+        // Random suffix, not uniqid(): two paraunit workers minting in the same
+        // microsecond on one host would otherwise collide on one dir, and the
+        // loser's tearDown would rmdir the winner's live scratch.
+        $dir = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(8));
 
         // Register before mkdir: a partially-created path is still residue and
         // must still be drained by tearDown.
         $this->scratchDirs[$dir] = null;
 
-        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
             $this->fail(sprintf(
                 '%s SETUP FAILED: could not create scratch dir %s',
                 self::S460_LANE_SENTINEL,
@@ -257,8 +260,9 @@ class FfmpegRunnerHlsTest extends TestCase
 
     /**
      * Attaches the wrapper pid reported by the launch to its registered dir, so
-     * tearDown can wait for the writer to exit before removing it. A pid of 0
-     * (launch produced nothing parseable) is stored but never waited on.
+     * tearDown can wait for the writer to exit before removing it. A pid ≤ 0
+     * means the launch produced nothing usable: it is stored, never waited on,
+     * and the timeout message reports it as untracked (never "probed and dead").
      */
     private function trackDetachedPid(string $dir, int $pid): void
     {
@@ -296,11 +300,14 @@ class FfmpegRunnerHlsTest extends TestCase
             // Timeout arm: every clause below is re-observed right here, so the
             // message is true for ALL inputs reaching it — it never blames a cause
             // the observations cannot support (S345 rule 1).
+            // startDetached()'s contract: 0 means the launch produced no usable
+            // pid, so pid<=0 is reported as "not tracked" — the alive probe is
+            // only ever claimed to have RUN when a positive pid exists (S345 r1).
             $pid = $this->scratchDirs[$dir] ?? null;
-            $tracked = is_int($pid) ? (string) $pid : 'not tracked';
+            $tracked = is_int($pid) && $pid > 0 ? (string) $pid : 'not tracked';
             $alive = is_int($pid) && $pid > 0 && $this->runner()->isProcessRunning($pid);
-            $probe = !is_int($pid)
-                ? 'not run (no pid was tracked for this dir)'
+            $probe = $tracked === 'not tracked'
+                ? 'not run (no positive pid was tracked for this dir)'
                 : ($alive
                     ? 'yes — the writer may still produce the file'
                     : 'no — the process-alive probe did not find a live process with that pid');

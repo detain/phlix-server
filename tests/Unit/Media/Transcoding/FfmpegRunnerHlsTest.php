@@ -6,13 +6,113 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Throwable;
 
 /**
  * Covers the HLS-muxing additions to {@see FfmpegRunner}: the native-HLS command
  * builder and the detached-launch / process-probe helpers.
+ *
+ * S460 — detached-launch cleanup is race-free. These tests launch real `nohup`
+ * wrappers that write `.complete` / `.failed` markers (and, for the trailing-
+ * command cases, post-marker files) into a scratch dir under sys temp. The old
+ * shape polled nothing before its final assertion and cleaned up inline, so a
+ * mid-test failure skipped the cleanup entirely and the S439 zero-residue census
+ * failed the whole SUITE for reasons the failing test already named — the W59
+ * master-CI crash. Now: every expected post-launch file is awaited through a
+ * bounded poll that fails loudly and by name ({@see waitForDetachedFile()}),
+ * every scratch dir is registered in {@see $scratchDirs}, and removal happens
+ * in tearDown — which runs on every exit path (pass, failure, exception) — only
+ * after the wrapper process itself is gone.
  */
 class FfmpegRunnerHlsTest extends TestCase
 {
+    /**
+     * Bounded wait for a detached wrapper to write an expected file. The
+     * commands under test complete in ≤0.2 s; 15 s is scheduler headroom for
+     * 8-way paraunit load, not a licence to hang.
+     */
+    private const DETACHED_FILE_TIMEOUT_SECONDS = 15.0;
+
+    /** Bounded wait in tearDown for the wrapper process to exit before removal. */
+    private const DETACHED_EXIT_TIMEOUT_SECONDS = 10.0;
+
+    /** Poll interval shared by both bounded waits, in microseconds. */
+    private const DETACHED_POLL_INTERVAL_US = 20000;
+
+    /** Attempts removeDir() makes before declaring a scratch dir unremovable. */
+    private const REMOVE_DIR_ATTEMPTS = 3;
+
+    /**
+     * Lane sentinel (P-1, same shape as ZeroResidueCensusTest::LANE_SENTINEL):
+     * lives only in executable code and in failure messages built from it, never
+     * in any *.md file. It is what the merge ritual's tokenized-source proof greps.
+     */
+    private const S460_LANE_SENTINEL = 'S460DETACHEDPOLLX9K1';
+
+    /**
+     * Scratch dirs minted by the current test → pid of the detached wrapper
+     * launched into it (null until a launch is tracked). tearDown drains it.
+     *
+     * @var array<string, int|null>
+     */
+    private array $scratchDirs = [];
+
+    /**
+     * Drains every scratch dir registered by the test that just ran — on the pass
+     * path AND on every failure/exception path (PHPUnit always calls tearDown).
+     * Each dir is emptied only after its tracked wrapper process is gone, so no
+     * late marker/post-marker write can land in a dir we are removing; anything
+     * that survives the bounded retries fails loudly here, naming the lane, and
+     * the suite-level census remains the outer backstop.
+     */
+    protected function tearDown(): void
+    {
+        $registered = $this->scratchDirs;
+        $this->scratchDirs = [];
+
+        $survivors = [];
+        foreach ($registered as $dir => $pid) {
+            $note = '';
+            try {
+                if (is_int($pid) && $pid > 0) {
+                    if ($this->awaitDetachedProcessExit($pid)) {
+                        $note = sprintf(
+                            ' [exit of the tracked wrapper pid %d was not confirmed by the deadline — procfs still saw it live, or could not tell live from zombie]',
+                            $pid,
+                        );
+                    }
+                } else {
+                    $note = ' [no positive wrapper pid was tracked, so no exit wait was possible for this dir]';
+                }
+                $this->removeDir($dir);
+                if (is_dir($dir)) {
+                    $survivors[] = $dir . $note;
+                }
+            } catch (Throwable $t) {
+                // Per-dir isolation (S460 review, F5): one poisoned dir must never
+                // strand the rest of the registry — and a raw throw escaping here
+                // would be swallowed silently by PHPUnit whenever the test body
+                // already failed (TestCase.php:798 only records it if !$e), so the
+                // leak would surface only as an anonymous census failure later.
+                // Reporting it through $survivors keeps it loud and attributed.
+                $survivors[] = $dir . ' [drain threw: ' . $t->getMessage() . ']';
+            }
+        }
+
+        parent::tearDown();
+
+        if ($survivors !== []) {
+            // TRUE for every input reaching it: each listed path was observed to
+            // still be a directory immediately before this line executed, and each
+            // per-dir note states exactly what remediation that dir actually got.
+            $this->fail(sprintf(
+                '%s CLEANUP FAILED: scratch dirs were not removed by the bounded teardown: %s',
+                self::S460_LANE_SENTINEL,
+                implode(', ', $survivors),
+            ));
+        }
+    }
+
     private function runner(): FfmpegRunner
     {
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
@@ -28,39 +128,30 @@ class FfmpegRunnerHlsTest extends TestCase
 
     public function testStartDetachedReturnsPidAndIsNonBlocking(): void
     {
-        $dir = sys_get_temp_dir() . '/phlix_detached_' . uniqid();
-        mkdir($dir, 0755, true);
+        $dir = $this->makeScratchDir('phlix_detached_');
 
         // A trivial backgrounded command: returns a real pid, writes .complete.
         $pid = $this->runner()->startDetached('sleep 0.2', $dir);
+        $this->trackDetachedPid($dir, $pid);
 
         $this->assertGreaterThan(0, $pid);
 
-        // Poll for the completion marker the wrapper writes on success.
-        $deadline = microtime(true) + 5.0;
-        while (microtime(true) < $deadline && !file_exists("{$dir}/.complete")) {
-            usleep(50000);
-        }
-        $this->assertFileExists("{$dir}/.complete");
+        // Bounded wait for the completion marker the wrapper writes on success.
+        $this->waitForDetachedFile($dir, '.complete');
         $this->assertFileDoesNotExist("{$dir}/.failed");
 
-        $this->removeDir($dir);
+        // Removal lives in tearDown (S460): it runs on every exit path, after the
+        // wrapper is gone — no inline removeDir racing a still-live writer.
     }
 
     public function testStartDetachedWritesFailedMarkerOnNonZeroExit(): void
     {
-        $dir = sys_get_temp_dir() . '/phlix_detached_fail_' . uniqid();
-        mkdir($dir, 0755, true);
+        $dir = $this->makeScratchDir('phlix_detached_fail_');
 
-        $this->runner()->startDetached('false', $dir);
+        $pid = $this->runner()->startDetached('false', $dir);
+        $this->trackDetachedPid($dir, $pid);
 
-        $deadline = microtime(true) + 5.0;
-        while (microtime(true) < $deadline && !file_exists("{$dir}/.failed")) {
-            usleep(50000);
-        }
-        $this->assertFileExists("{$dir}/.failed");
-
-        $this->removeDir($dir);
+        $this->waitForDetachedFile($dir, '.failed');
     }
 
     public function testStartDetachedWritesFailedMarkerWithTrailingCmds(): void
@@ -69,46 +160,39 @@ class FfmpegRunnerHlsTest extends TestCase
         // command must write .failed even when trailing (subtitle) commands are
         // present and succeed. The old `cmd && extract || true && touch .complete`
         // chain wrote .complete here; the if/then/else form must not.
-        $dir = sys_get_temp_dir() . '/phlix_detached_subfail_' . uniqid();
-        mkdir($dir, 0755, true);
+        $dir = $this->makeScratchDir('phlix_detached_subfail_');
 
         // Primary fails; trailing extract group is the always-succeeding form.
-        $this->runner()->startDetached('false', $dir, ['( true ) || true']);
+        $pid = $this->runner()->startDetached('false', $dir, ['( true ) || true']);
+        $this->trackDetachedPid($dir, $pid);
 
-        $deadline = microtime(true) + 5.0;
-        while (microtime(true) < $deadline && !file_exists("{$dir}/.failed")) {
-            usleep(50000);
-        }
-        $this->assertFileExists("{$dir}/.failed");
+        $this->waitForDetachedFile($dir, '.failed');
+        // The if/then/else is branch-exclusive: once `.failed` exists the wrapper
+        // has taken the else-arm and no later write can create `.complete`.
         $this->assertFileDoesNotExist("{$dir}/.complete");
-
-        $this->removeDir($dir);
     }
 
     public function testStartDetachedRunsTrailingCmdsOnlyOnSuccessAndKeepsComplete(): void
     {
         // A SUCCESSFUL primary command writes .complete, then runs the trailing
         // commands; a FAILING trailing command must NOT flip the job to .failed.
-        $dir = sys_get_temp_dir() . '/phlix_detached_subok_' . uniqid();
-        mkdir($dir, 0755, true);
+        $dir = $this->makeScratchDir('phlix_detached_subok_');
         $marker = $dir . '/trailing-ran';
 
-        $this->runner()->startDetached(
+        $pid = $this->runner()->startDetached(
             'true',
             $dir,
             ['( false ) || true', 'touch ' . escapeshellarg($marker)]
         );
+        $this->trackDetachedPid($dir, $pid);
 
-        $deadline = microtime(true) + 5.0;
-        while (microtime(true) < $deadline && !file_exists("{$dir}/.complete")) {
-            usleep(50000);
-        }
-        $this->assertFileExists("{$dir}/.complete");
+        $this->waitForDetachedFile($dir, '.complete');
+        // The trailing `touch` lands AFTER `.complete` — the old bare
+        // assertFileExists($marker) right after the marker poll raced it and the
+        // resulting mid-test failure leaked the dir into the S439 census (W59).
+        // Await the post-marker file through the same bounded poll instead.
+        $this->waitForDetachedFile($dir, 'trailing-ran');
         $this->assertFileDoesNotExist("{$dir}/.failed");
-        // Trailing command ran (after .complete) despite an earlier failing group.
-        $this->assertFileExists($marker);
-
-        $this->removeDir($dir);
     }
 
     public function testBuildDetachedCommandGuardsCompleteWithIfThenElse(): void
@@ -140,24 +224,22 @@ class FfmpegRunnerHlsTest extends TestCase
         // (Named for startCmafTranscodeWithSubtitles() until S59 deleted that
         // orphan; the behaviour under test is buildDetachedCommand()'s, and it
         // is the chain TranscodeManager::ensureHlsJob() still launches.)
-        $dir = sys_get_temp_dir() . '/phlix_cmaf_subfail_' . uniqid();
-        mkdir($dir, 0755, true);
+        $dir = $this->makeScratchDir('phlix_cmaf_subfail_');
 
         // Build the full chain exactly as production does, then swap the real
         // encode command for `false` to simulate a failure deterministically.
         $runner = $this->runner();
         $extract = '( true ) || true';
         $full = $runner->buildDetachedCommand('false', $dir, [$extract]);
-        shell_exec($full);
 
-        $deadline = microtime(true) + 5.0;
-        while (microtime(true) < $deadline && !file_exists("{$dir}/.failed")) {
-            usleep(50000);
-        }
-        $this->assertFileExists("{$dir}/.failed");
+        // The launch string ends in `& echo $!`, so shell_exec returns the
+        // wrapper's pid — track it so tearDown waits for the writer to exit.
+        $launchOut = shell_exec($full);
+        $this->trackDetachedPid($dir, is_string($launchOut) ? (int) trim($launchOut) : 0);
+
+        $this->waitForDetachedFile($dir, '.failed');
+        // Branch-exclusive chain: `.failed` present ⇒ `.complete` can never follow.
         $this->assertFileDoesNotExist("{$dir}/.complete");
-
-        $this->removeDir($dir);
     }
 
     public function testIsProcessRunningForSelfAndBogusPid(): void
@@ -168,22 +250,220 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertFalse($runner->isProcessRunning(-5));
     }
 
+    /**
+     * Mints a `phlix_*` scratch dir under sys temp and registers it so tearDown
+     * removes it on EVERY exit path (S460) — a mid-test failure can no longer
+     * strand residue for the S439 census to attribute to the whole suite.
+     */
+    private function makeScratchDir(string $prefix): string
+    {
+        // Random suffix, not uniqid(): two paraunit workers minting in the same
+        // microsecond on one host would otherwise collide on one dir, and the
+        // loser's tearDown would rmdir the winner's live scratch.
+        $dir = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(8));
+
+        // Register before mkdir: a partially-created path is still residue and
+        // must still be drained by tearDown.
+        $this->scratchDirs[$dir] = null;
+
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            $this->fail(sprintf(
+                '%s SETUP FAILED: could not create scratch dir %s',
+                self::S460_LANE_SENTINEL,
+                $dir,
+            ));
+        }
+
+        return $dir;
+    }
+
+    /**
+     * Attaches the wrapper pid reported by the launch to its registered dir, so
+     * tearDown can wait for the writer to exit before removing it. A pid ≤ 0
+     * means the launch produced nothing usable: it is stored, never waited on,
+     * and the timeout message reports it as untracked (never "probed and dead").
+     */
+    private function trackDetachedPid(string $dir, int $pid): void
+    {
+        if (!array_key_exists($dir, $this->scratchDirs)) {
+            $this->fail(sprintf(
+                '%s BOOKKEEPING ERROR: pid tracked for unregistered dir %s',
+                self::S460_LANE_SENTINEL,
+                $dir,
+            ));
+        }
+
+        $this->scratchDirs[$dir] = $pid;
+    }
+
+    /**
+     * Bounded poll for one file the detached wrapper is expected to write.
+     *
+     * Loud, named, and TRUE for every input that reaches the timeout: each
+     * interpolated clause is re-observed at failure time, and none of them
+     * claims a cause the observation cannot support.
+     */
+    private function waitForDetachedFile(string $dir, string $name): void
+    {
+        $path = $dir . '/' . $name;
+        $deadline = microtime(true) + self::DETACHED_FILE_TIMEOUT_SECONDS;
+
+        while (!file_exists($path)) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+            usleep(self::DETACHED_POLL_INTERVAL_US);
+        }
+
+        if (!file_exists($path)) {
+            // Timeout arm: every clause below is re-observed right here, so the
+            // message is true for ALL inputs reaching it — it never blames a cause
+            // the observations cannot support (S345 rule 1).
+            // startDetached()'s contract: 0 means the launch produced no usable
+            // pid, so pid<=0 is reported as "not tracked" — the alive probe is
+            // only ever claimed to have RUN when a positive pid exists (S345 r1).
+            $pid = $this->scratchDirs[$dir] ?? null;
+            $tracked = is_int($pid) && $pid > 0 ? (string) $pid : 'not tracked';
+            $may = is_int($pid) && $pid > 0 ? $this->wrapperMayStillWrite($pid) : null;
+            $probe = $tracked === 'not tracked'
+                ? 'not run (no positive pid was tracked for this dir, so the wrapper fate is unknown)'
+                : ($may === true
+                    ? 'yes — procfs observed a live, non-zombie process holding that pid; it may still produce the file'
+                    : ($may === null
+                        ? 'inconclusive — the bare pid probe saw the pid, but procfs yielded no usable state char, so live vs zombie is undeterminable here; the writer may or may not still produce the file'
+                        : (is_dir('/proc')
+                            ? 'no — procfs observed the pid gone or as a zombie awaiting reap; it holds no further write capacity'
+                            : 'no — the bare pid probe found no process with that pid; it holds no further write capacity')));
+
+            // Awaited name is excluded from the listing: between the absence check
+            // above and this glob a genuinely-slow writer could create it, and the
+            // message must never contradict its own "was not present" claim (F3).
+            $entries = array_values(array_filter(
+                array_map('basename', glob("{$dir}/*") ?: []),
+                static fn (string $entry): bool => $entry !== $name,
+            ));
+            foreach (['.complete', '.failed'] as $marker) {
+                if ($marker !== $name && is_file("{$dir}/{$marker}")) {
+                    $entries[] = $marker;
+                }
+            }
+            $listing = $entries === [] ? 'none' : implode(', ', $entries);
+
+            $this->fail(sprintf(
+                '%s DETACHED-MARKER TIMEOUT: "%s" was not present in %s after %.1f s. '
+                . 'Observed at timeout — dir: %s; wrapper pid: %s; process-alive probe: %s; other entries: %s.',
+                self::S460_LANE_SENTINEL,
+                $name,
+                $dir,
+                self::DETACHED_FILE_TIMEOUT_SECONDS,
+                is_dir($dir) ? 'exists' : 'does NOT exist',
+                $tracked,
+                $probe,
+                $listing,
+            ));
+        }
+
+        // Success arm: registered as an assertion so every caller performs at
+        // least one PHPUnit-visible assertion (failOnRisky would flag otherwise).
+        $this->assertFileExists($path);
+    }
+
+    /**
+     * WRITER-liveness, not bare pid-liveness: the tracked wrapper is orphaned the
+     * moment the launching shell exits, and on a non-reaping container init (no
+     * --init/sandboxee — a common way to run this suite) its corpse lingers as a
+     * ZOMBIE that both posix_kill($pid, 0) and /proc/{pid} report as "alive" even
+     * though every write it will ever do has happened. Trusting the raw probe
+     * there would burn DETACHED_EXIT_TIMEOUT_SECONDS per dir on every HEALTHY run
+     * and let the stuck-writer note assert something false (S460 review, F1).
+     *
+     * Tri-state (S460 review round 3): true = procfs OBSERVED a live non-zombie;
+     * false = it can hold no more writes (pid absent, or observed as a zombie);
+     * null = the bare probe saw the pid but zombie status was NOT determinable
+     * (no procfs, or an unparseable stat line). null is waited on like true and
+     * reported like an unknown — it is never rendered as "non-zombie", because
+     * the observation behind it cannot support that claim (S345 rule 1).
+     */
+    private function wrapperMayStillWrite(int $pid): ?bool
+    {
+        $stat = @file_get_contents("/proc/{$pid}/stat");
+
+        if (is_string($stat)) {
+            $state = self::procState($stat);
+
+            return $state === null ? null : $state !== 'Z';
+        }
+
+        // No procfs for this pid (never on Linux CI; possible elsewhere, or in the
+        // instant a pid dies mid-read): the raw probe is true for zombies too, so
+        // a positive result is inconclusive, never "live, not zombie".
+        return $this->runner()->isProcessRunning($pid) ? null : false;
+    }
+
+    /**
+     * Pure parser for the /proc/pid/stat state char (field 3): the character
+     * after the LAST ')' — the comm field (2) may itself contain spaces and
+     * parentheses. Returns the one-char state, or null when unparseable.
+     */
+    private static function procState(string $stat): ?string
+    {
+        return preg_match('/.*\) (\S)/', $stat, $m) === 1 ? $m[1] : null;
+    }
+
+    /**
+     * Bounded wait in tearDown for the wrapper process to exit. Every file the
+     * chain can write lands before the tracked pid exits (and a zombie has by
+     * definition written everything), so once it is gone the dir is final and
+     * removeDir() cannot race a late write. Returns true when a live process was
+     * still held confirmed at the deadline, OR exit could not be confirmed
+     * (tri-state null) — the caller proceeds with removal and reports it loudly
+     * as "not confirmed exited", never as a proven live writer; the S439 census
+     * stays the outer backstop either way.
+     */
+    private function awaitDetachedProcessExit(int $pid): bool
+    {
+        $deadline = microtime(true) + self::DETACHED_EXIT_TIMEOUT_SECONDS;
+
+        while ($this->wrapperMayStillWrite($pid) !== false) {
+            if (microtime(true) >= $deadline) {
+                return true;
+            }
+            usleep(self::DETACHED_POLL_INTERVAL_US);
+        }
+
+        return false;
+    }
+
+    /**
+     * Empties and removes one scratch dir, retrying a bounded number of times.
+     * Called only from tearDown, only after the tracked writer is gone (or its
+     * exit wait timed out — the census then catches anything the writer recreates).
+     */
     private function removeDir(string $dir): void
     {
-        $files = glob("{$dir}/*") ?: [];
-        foreach ($files as $f) {
-            if (is_file($f)) {
-                unlink($f);
+        for ($attempt = 1; $attempt <= self::REMOVE_DIR_ATTEMPTS; $attempt++) {
+            if (!is_dir($dir)) {
+                return;
             }
-        }
-        // Hidden markers
-        foreach (['.complete', '.failed'] as $marker) {
-            if (is_file("{$dir}/{$marker}")) {
-                unlink("{$dir}/{$marker}");
+
+            $files = glob("{$dir}/*") ?: [];
+            foreach ($files as $f) {
+                if (is_file($f)) {
+                    @unlink($f);
+                }
             }
-        }
-        if (is_dir($dir)) {
-            rmdir($dir);
+            // Hidden markers — glob skips dotfiles by design, name them explicitly.
+            foreach (['.complete', '.failed'] as $marker) {
+                if (is_file("{$dir}/{$marker}")) {
+                    @unlink("{$dir}/{$marker}");
+                }
+            }
+
+            if (@rmdir($dir)) {
+                return;
+            }
+
+            usleep(100000);
         }
     }
 

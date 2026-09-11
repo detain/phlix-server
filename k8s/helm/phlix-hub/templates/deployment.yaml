@@ -32,7 +32,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: '{{ .Values.image.repository }}:{{ required "phlix-hub chart: image.tag is REQUIRED — nothing falls back silently. The published :latest is frozen/stale (unchanged since 2026-08-31) and the old AppVersion fallback was never published to ghcr. Set image.tag to an immutable short-sha tag, form: ghcr.io/detain/phlix-hub:<sha12>" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

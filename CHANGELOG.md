@@ -184,6 +184,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Helm charts and example composes now demand immutable image pins loudly (`S475`).**
+  Both charts stopped defaulting `image.tag`: the server chart shipped mutable `latest` (every
+  workflow push silently re-points such a deployment at different bytes) and its template fell back
+  to `.Chart.AppVersion` — a tag never published to ghcr; the hub chart carried the same silent
+  shape. Both now ship `image.tag: ""` with the templates wrapping it in `required`, so an empty tag
+  aborts `helm install`/`helm template` with a message naming the deterministic immutable form each
+  workflow publishes — `ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>`,
+  `ghcr.io/detain/phlix-hub:<sha12>` (the hub's published `:latest` is currently frozen/stale). The
+  five ghcr references across the three `docker/examples/` composes became required-env
+  interpolations (`${PHLIX_SERVER_IMAGE:?…}` / `${PHLIX_HUB_IMAGE:?…}`) with the same form guidance
+  in their failure messages. `pullPolicy: IfNotPresent` is retained — correct for tags whose bytes
+  can never change. Chart `version`/`appVersion` deliberately not bumped; the release process owns
+  those. Guard: `tests/Unit/Support/ImagePinDriftGuardTest.php` walks the `k8s/` +
+  `docker/examples/` consumer surface — zero adjacent `ghcr.io/…:latest` literals (census + YAML
+  values legs), loud-marker pins on the `required` gate and `:?` interpolations, and an anti-vacuity
+  leg demanding every pre-fix shape be judged drift.
+
 - **Avatar and photo-route resizing now delegate to the shared image service (`S456`).**
   S71's plan block recorded three resize implementations in the estate — the poster pipeline
   (moved into `ImageResizer` by S71 and grown further by the merged S72/S73 work), the avatar

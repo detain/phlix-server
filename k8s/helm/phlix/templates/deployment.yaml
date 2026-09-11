@@ -35,7 +35,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: '{{ .Values.image.repository }}:{{ required "phlix chart: image.tag is REQUIRED — nothing falls back silently. Mutable :latest drifts and the old AppVersion fallback (1.2.3) was never published to ghcr. Set image.tag to a deterministic immutable tag, form: ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

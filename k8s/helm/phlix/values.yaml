@@ -10,8 +10,13 @@ image:
   repository: ghcr.io/detain/phlix-server
   # Pull policy: Always | IfNotPresent | Never
   pullPolicy: IfNotPresent
-  # Image tag — defaults to .Chart.AppVersion if empty
-  tag: "latest"
+  # Image tag — REQUIRED, there is no default. The old fallback to .Chart.AppVersion
+  # pointed at a tag (1.2.3) that was never published to ghcr, and a mutable "latest"
+  # drifts with every push, so neither ever produced a reproducible deployment. Set this
+  # to an immutable tag; the deterministic form the docker workflow publishes is
+  #   ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>
+  # Leaving it empty fails `helm template`/`helm install` loudly (see templates/deployment.yaml).
+  tag: ""
 
 # imagePullSecrets used when pulling from a private registry
 imagePullSecrets: []

@@ -5,12 +5,16 @@ This directory contains example docker-compose stacks for different deployment s
 ## Quick Start
 
 1. Copy `.env.example` to `.env` and fill in your values
-2. Choose a scenario:
+2. Set the two image pins — `PHLIX_SERVER_IMAGE` and `PHLIX_HUB_IMAGE` — in `.env`
+   (forms in the table below). The composes hard-fail without them, by design:
+   loud over silent — mutable tags drift, so the examples refuse to resolve a
+   moving image and stay reproducible.
+3. Choose a scenario:
    - `server-only/` — Standalone phlix-server with MySQL
    - `server-hub/` — Phlix server + phlix hub for remote access
    - `full-stack/` — Complete setup with Traefik reverse proxy
 
-3. Start with `docker-compose up -d`
+4. Start with `docker-compose up -d`
 
 ## Scenarios
 
@@ -42,6 +46,8 @@ Production setup with Traefik handling HTTPS, WebSocket relay, and routing. Incl
 
 | Variable | Description | Required |
 |----------|-------------|----------|
+| `PHLIX_SERVER_IMAGE` | Server image pin — immutable tag, form `ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>` | **Yes** |
+| `PHLIX_HUB_IMAGE` | Hub image pin — immutable tag, form `ghcr.io/detain/phlix-hub:<sha12>`; the published hub `:latest` is currently stale, so pin explicitly | **Yes** |
 | `MYSQL_ROOT_PASSWORD` | MySQL root password | Yes |
 | `PHLIX_DB_PASSWORD` | Phlix server database password | Yes |
 | `HUB_DB_PASSWORD` | Phlix hub database password | Yes |

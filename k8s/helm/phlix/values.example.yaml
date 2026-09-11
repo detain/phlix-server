@@ -6,8 +6,12 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/detain/phlix-server
-  # Pin to an immutable tag in production rather than `latest`
-  tag: "v1.0.0"
+  # Image tag — REQUIRED, there is no default. The chart fails `helm install`
+  # loudly while this is empty (see templates/deployment.yaml). A v1.0.0-style semver
+  # tag was NEVER published to ghcr; the only tags that exist are the immutable
+  #   <full-sha>-<latest|intel|nvidia>
+  # forms the docker workflow pushes. Set this to one of those before installing.
+  tag: ""
   pullPolicy: IfNotPresent
 
 # Use TLS via cert-manager + Let's Encrypt

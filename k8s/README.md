@@ -16,8 +16,10 @@ This directory contains a Helm chart for deploying Phlix Media Server on Kuberne
 helm repo add phlix https://charts.phlix.media
 helm repo update
 
-# Install the chart
+# Install the chart — image.tag is REQUIRED and must be an immutable tag; a mutable `latest`
+# exists on the registry but drifts with every push, while the <full-sha>-… forms are published per run
 helm install phlix phlix/phlix \
+  --set image.tag=<full-sha>-latest \
   --set config.database_password=your_password \
   --set config.secret_key=your_secret \
   --set ingress.enabled=true \
@@ -33,7 +35,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/detain/phlix-server
-  tag: latest
+  tag: ""  # REQUIRED — immutable tag, form: ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>
   pullPolicy: IfNotPresent
 
 ingress:
@@ -110,7 +112,7 @@ config:
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
 | `image.repository` | Docker image repository | `ghcr.io/detain/phlix-server` |
-| `image.tag` | Docker image tag | `latest` |
+| `image.tag` | Docker image tag — REQUIRED, set to an immutable tag (`<full-sha>-<latest|intel|nvidia>`); no default | `""` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
 | `service.http.port` | HTTP port | `80` |
 | `service.websocket.port` | WebSocket port | `3473` |

@@ -45,10 +45,19 @@ jobs:
           coverage: pcov
 
       - name: Build and enable php-uv
+        # S309 — this clone is PINNED to an immutable commit: the SAME full SHA the
+        # production base image compiles (docker/Dockerfile.base, PHP_UV_REF). An
+        # unpinned --depth=1 HEAD here was a supply-chain surface, and a third-party
+        # TLS hiccup reddened an unrelated PR (#666). Do NOT float it back to HEAD:
+        # --depth=1 keeps a single commit, so it can only ever track whatever the tip
+        # is at fetch time — a full clone is what makes the fixed SHA durably reachable.
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
-          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
-          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv
+          git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
+          test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21
+          phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 
       - name: Verify swoole + uv loaded
@@ -369,10 +378,19 @@ jobs:
           coverage: pcov
 
       - name: Build and enable php-uv
+        # S309 — this clone is PINNED to an immutable commit: the SAME full SHA the
+        # production base image compiles (docker/Dockerfile.base, PHP_UV_REF). An
+        # unpinned --depth=1 HEAD here was a supply-chain surface, and a third-party
+        # TLS hiccup reddened an unrelated PR (#666). Do NOT float it back to HEAD:
+        # --depth=1 keeps a single commit, so it can only ever track whatever the tip
+        # is at fetch time — a full clone is what makes the fixed SHA durably reachable.
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
-          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
-          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv
+          git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
+          test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21
+          phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 
       - name: Verify swoole + uv loaded

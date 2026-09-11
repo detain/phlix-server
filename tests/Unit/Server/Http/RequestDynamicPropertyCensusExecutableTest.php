@@ -317,11 +317,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
            * one first-party PHP file (tests/Unit/Media/Storage/
            * ResizeImplementationCensusGuardTest.php — the guard pinning ImageResizer as
            * the estate's sole imagecopyresampled()/imagecopyresized() home, plus the two
-           * golden-byte delegation pins); measured on this tree, not predicted. Its one
-           * Request write (`$request->query = […]`, a declared member, the S427 license
-           * intact) lifts EXPECTED_DECLARED_WRITES by one in this same commit.
-           */
-    private const EXPECTED_PHP_FILES = 1859;
+            * golden-byte delegation pins); measured on this tree, not predicted. Its one
+            * Request write (`$request->query = […]`, a declared member, the S427 license
+            * intact) lifts EXPECTED_DECLARED_WRITES by one in this same commit.
+            * Re-pinned 1859→1860 by S309: pinning the php-uv CI clones adds exactly one
+            * first-party PHP file (tests/Unit/Support/ThirdPartyClonePinGuardTest.php — the
+            * guard that parses the workflow YAML and pins the clone to an immutable SHA,
+            * failing if any site drifts back to unpinned); measured on this tree, not
+            * predicted (CI computed 1860). The new test reads/writes no Request property (it
+            * touches only YAML + Dockerfile text), so every other census denominator is
+            * unchanged.
+            */
+    private const EXPECTED_PHP_FILES = 1860;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

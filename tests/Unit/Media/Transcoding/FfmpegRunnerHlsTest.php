@@ -77,7 +77,7 @@ class FfmpegRunnerHlsTest extends TestCase
                 if (is_int($pid) && $pid > 0) {
                     if ($this->awaitDetachedProcessExit($pid)) {
                         $note = sprintf(
-                            ' [a process with the tracked wrapper pid %d was still running (live, not zombie) at the exit deadline]',
+                            ' [exit of the tracked wrapper pid %d was not confirmed by the deadline — procfs still saw it live, or could not tell live from zombie]',
                             $pid,
                         );
                     }
@@ -324,12 +324,16 @@ class FfmpegRunnerHlsTest extends TestCase
             // only ever claimed to have RUN when a positive pid exists (S345 r1).
             $pid = $this->scratchDirs[$dir] ?? null;
             $tracked = is_int($pid) && $pid > 0 ? (string) $pid : 'not tracked';
-            $alive = is_int($pid) && $pid > 0 && $this->wrapperMayStillWrite($pid);
+            $may = is_int($pid) && $pid > 0 ? $this->wrapperMayStillWrite($pid) : null;
             $probe = $tracked === 'not tracked'
                 ? 'not run (no positive pid was tracked for this dir, so the wrapper fate is unknown)'
-                : ($alive
-                    ? 'yes — a live (non-zombie) process still holds that pid and may produce the file'
-                    : 'no — no live, non-zombie process holds that pid');
+                : ($may === true
+                    ? 'yes — procfs observed a live, non-zombie process holding that pid; it may still produce the file'
+                    : ($may === null
+                        ? 'inconclusive — the bare pid probe saw the pid, but procfs yielded no usable state char, so live vs zombie is undeterminable here; the writer may or may not still produce the file'
+                        : (is_dir('/proc')
+                            ? 'no — procfs observed the pid gone or as a zombie awaiting reap; it holds no further write capacity'
+                            : 'no — the bare pid probe found no process with that pid; it holds no further write capacity')));
 
             // Awaited name is excluded from the listing: between the absence check
             // above and this glob a genuinely-slow writer could create it, and the
@@ -372,40 +376,55 @@ class FfmpegRunnerHlsTest extends TestCase
      * though every write it will ever do has happened. Trusting the raw probe
      * there would burn DETACHED_EXIT_TIMEOUT_SECONDS per dir on every HEALTHY run
      * and let the stuck-writer note assert something false (S460 review, F1).
-     * A zombie is therefore treated as exited; where procfs does not exist at all
-     * we fall back to the production probe rather than guess.
+     *
+     * Tri-state (S460 review round 3): true = procfs OBSERVED a live non-zombie;
+     * false = it can hold no more writes (pid absent, or observed as a zombie);
+     * null = the bare probe saw the pid but zombie status was NOT determinable
+     * (no procfs, or an unparseable stat line). null is waited on like true and
+     * reported like an unknown — it is never rendered as "non-zombie", because
+     * the observation behind it cannot support that claim (S345 rule 1).
      */
-    private function wrapperMayStillWrite(int $pid): bool
+    private function wrapperMayStillWrite(int $pid): ?bool
     {
         $stat = @file_get_contents("/proc/{$pid}/stat");
 
-        if (!is_string($stat)) {
-            return $this->runner()->isProcessRunning($pid);
+        if (is_string($stat)) {
+            $state = self::procState($stat);
+
+            return $state === null ? null : $state !== 'Z';
         }
 
-        // Field 3 of /proc/pid/stat is the state char, after the LAST ')' — the
-        // comm field (2) may itself contain spaces and parentheses.
-        if (preg_match('/.*\) (\S)/', $stat, $m) !== 1) {
-            return $this->runner()->isProcessRunning($pid);
-        }
+        // No procfs for this pid (never on Linux CI; possible elsewhere, or in the
+        // instant a pid dies mid-read): the raw probe is true for zombies too, so
+        // a positive result is inconclusive, never "live, not zombie".
+        return $this->runner()->isProcessRunning($pid) ? null : false;
+    }
 
-        return $m[1] !== 'Z';
+    /**
+     * Pure parser for the /proc/pid/stat state char (field 3): the character
+     * after the LAST ')' — the comm field (2) may itself contain spaces and
+     * parentheses. Returns the one-char state, or null when unparseable.
+     */
+    private static function procState(string $stat): ?string
+    {
+        return preg_match('/.*\) (\S)/', $stat, $m) === 1 ? $m[1] : null;
     }
 
     /**
      * Bounded wait in tearDown for the wrapper process to exit. Every file the
      * chain can write lands before the tracked pid exits (and a zombie has by
      * definition written everything), so once it is gone the dir is final and
-     * removeDir() cannot race a late write. Returns true only when a live,
-     * non-zombie process still held the pid at the deadline — the caller proceeds
-     * with removal and reports it loudly if removal then leaves a survivor; the
-     * S439 census stays the outer backstop either way.
+     * removeDir() cannot race a late write. Returns true when a live process was
+     * still held confirmed at the deadline, OR exit could not be confirmed
+     * (tri-state null) — the caller proceeds with removal and reports it loudly
+     * as "not confirmed exited", never as a proven live writer; the S439 census
+     * stays the outer backstop either way.
      */
     private function awaitDetachedProcessExit(int $pid): bool
     {
         $deadline = microtime(true) + self::DETACHED_EXIT_TIMEOUT_SECONDS;
 
-        while ($this->wrapperMayStillWrite($pid)) {
+        while ($this->wrapperMayStillWrite($pid) !== false) {
             if (microtime(true) >= $deadline) {
                 return true;
             }

@@ -133,9 +133,6 @@ class ConnectionPoolTestConnection implements ConnectionInterface
     public function sendMessage(string $type, array $data = []): void
     {
     }
-    public function sendFlat(string $type, array $payload): void
-    {
-    }
     public function updateActivity(): void
     {
         $this->lastActivity = time();

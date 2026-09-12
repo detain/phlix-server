@@ -184,6 +184,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Every outbound SyncPlay frame is now stamped by the `Messages` factory — the wire
+  format the spec pins, finally the wire format we send (`S417`).** The factory's
+  canonical envelope `{type, protocol_version: 1, timestamp: <ms>, ...payload}` existed
+  but only `time_pong` routed through it; all other emit sites hand-merged
+  `['timestamp' => time()]` — a SECONDS value with no `protocol_version` — on every
+  broadcast and every direct reply (22 sites across `SyncPlayManager`, `MessageHandler`
+  and the dormant `SyncPlayRoom`). All of them now build their frames with
+  `Messages::frame()` (or the typed `Messages::error()` / `Messages::info()`
+  constructors, which share the same stamping): the factory owns `type`,
+  `protocol_version` and `timestamp` and strips any payload copies, so no site can leak
+  a seconds timestamp or omit the version. Conformance is additive-visible: the
+  consumer libs decode on `type` alone, so old clients keep working and gain the
+  missing fields. The leave ack moved from the nested `{type, data}` envelope to the
+  flat canonical shape, and the `chat_message` payload dropped its dead seconds-level
+  `timestamp` duplicate (the envelope key is now the single authoritative value). The
+  transport-level offender — `Connection::sendFlat()` and its interface declaration —
+  is removed outright; zero callers remain. Payload-level `server_time` keys are
+  untouched (they are protocol semantics, not envelope). Guard:
+  `tests/Unit/Session/SyncPlay/OutboundFrameShapeGuardTest.php` drives every named site
+  through the real codepath and asserts per-frame `protocol_version` + millisecond
+  timestamp + flatness, pins the `sendFlat` removal structurally, and carries source
+  tripwires against the exact bypass spellings — a re-planted hand-merged frame turns
+  the site's own test red (mutation-proven). `RequestDynamicPropertyCensusExecutableTest`
+  re-pins its estate denominator 1863→1864 for the one new PHP file.
+
 - **Helm charts and example composes now demand immutable image pins loudly (`S475`).**
   Both charts stopped defaulting `image.tag`: the server chart shipped mutable `latest` (every
   workflow push silently re-points such a deployment at different bytes) and its template fell back

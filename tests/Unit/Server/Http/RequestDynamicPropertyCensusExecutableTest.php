@@ -348,8 +348,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * controls); measured on this tree, not predicted. It reads/writes no
              * Request property (it touches only scratch files and subprocesses),
              * so every other census denominator is unchanged.
+             * Re-pinned 1863→1864 by S417: the outbound frame-shape conformance adds
+             * exactly one first-party PHP file (tests/Unit/Session/SyncPlay/
+             * OutboundFrameShapeGuardTest.php — the per-site guard pinning every
+             * outbound SyncPlay frame to the Messages factory envelope
+             * {protocol_version, timestamp:ms}, with planted-bypass mutation proof and
+             * source tripwires against the retired seconds-based sendFlat spellings);
+             * measured on this tree, not predicted. It reads/writes no Request property
+             * (it drives WebSocket connections only), so every other census denominator
+             * is unchanged.
              */
-    private const EXPECTED_PHP_FILES = 1863;
+    private const EXPECTED_PHP_FILES = 1864;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

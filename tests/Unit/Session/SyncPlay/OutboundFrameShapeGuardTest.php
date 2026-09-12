@@ -393,7 +393,7 @@ final class OutboundFrameShapeGuardTest extends TestCase
      * Second net against the exact bypass spellings: the seconds-based flat
      * merges that made the wire format non-conformant.
      *
-     * @return array<string, list<string>>
+     * @return array<string, array{0: string, 1: list<string>}>
      */
     public static function tripwireProvider(): array
     {

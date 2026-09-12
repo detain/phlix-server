@@ -52,11 +52,13 @@ class MessageHandlerTest extends TestCase
         $errorCode = null;
         $connection = $this->createMock(Connection::class);
         $connection->method('isAuthenticated')->willReturn(false);
-        $connection->method('sendFlat')->willReturnCallback(
-            function (string $type, array $data) use (&$errorCode): void {
-                if ($type === Messages::TYPE_ERROR) {
-                    $errorCode = $data['error_code'] ?? null;
+        $connection->method('send')->willReturnCallback(
+            /** @param string|array<array-key, mixed> $frame */
+            function (string|array $frame) use (&$errorCode): bool {
+                if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
+                    $errorCode = $frame['error_code'] ?? null;
                 }
+                return true;
             }
         );
 
@@ -94,11 +96,13 @@ class MessageHandlerTest extends TestCase
         $errorCode = null;
         $connection = $this->createMock(Connection::class);
         $connection->method('isAuthenticated')->willReturn(false);
-        $connection->method('sendFlat')->willReturnCallback(
-            function (string $type, array $data) use (&$errorCode): void {
-                if ($type === Messages::TYPE_ERROR) {
-                    $errorCode = $data['error_code'] ?? null;
+        $connection->method('send')->willReturnCallback(
+            /** @param string|array<array-key, mixed> $frame */
+            function (string|array $frame) use (&$errorCode): bool {
+                if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
+                    $errorCode = $frame['error_code'] ?? null;
                 }
+                return true;
             }
         );
 
@@ -152,11 +156,13 @@ class MessageHandlerTest extends TestCase
         $connection = $this->createMock(Connection::class);
         $connection->method('isAuthenticated')->willReturn(false);
         $connection->method('getId')->willReturn('conn-pub');
-        $connection->method('sendFlat')->willReturnCallback(
-            function (string $type) use (&$errorSent): void {
-                if ($type === Messages::TYPE_ERROR) {
+        $connection->method('send')->willReturnCallback(
+            /** @param string|array<array-key, mixed> $frame */
+            function (string|array $frame) use (&$errorSent): bool {
+                if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
                     $errorSent = true;
                 }
+                return true;
             }
         );
 

@@ -55,11 +55,6 @@ class TestConnection implements ConnectionInterface
         $this->sentMessages[] = ['type' => $type, 'data' => $data];
     }
 
-    public function sendFlat(string $type, array $payload): void
-    {
-        $this->sentMessages[] = ['type' => $type, 'payload' => $payload];
-    }
-
     public function close(): void
     {
         $this->closed = true;
@@ -127,7 +122,10 @@ class TestConnection implements ConnectionInterface
     }
 
     /**
-     * Get all messages sent via send() or sendMessage()/sendFlat().
+     * Get all messages sent via send() or sendMessage().
+     *
+     * Flat canonical frames (Messages::frame) arrive through send() and are
+     * captured verbatim; sendMessage() frames carry the nested 'data' key.
      *
      * @return list<array<array-key, mixed>>
      */
@@ -137,19 +135,17 @@ class TestConnection implements ConnectionInterface
     }
 
     /**
-     * Get messages of a specific type sent via sendFlat.
+     * Get all captured frames of a specific top-level type (flat or nested).
      *
      * @param string $type Message type to filter by
-     * @return list<array<string, mixed>>
+     * @return list<array<array-key, mixed>>
      */
-    public function getSentFlatMessages(string $type): array
+    public function framesOfType(string $type): array
     {
         $messages = [];
         foreach ($this->sentMessages as $msg) {
             if (($msg['type'] ?? '') === $type) {
-                /** @var array<string, mixed> $payload */
-                $payload = $msg['payload'] ?? $msg;
-                $messages[] = $payload;
+                $messages[] = $msg;
             }
         }
 

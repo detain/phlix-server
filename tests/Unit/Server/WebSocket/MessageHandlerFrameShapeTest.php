@@ -26,7 +26,7 @@ class MessageHandlerFrameShapeTest extends TestCase
     /**
      * Creates a Connection with a mock TcpConnection that captures sent data.
      */
-    private function createConnection(): Connection
+    private function createConnection(bool $authenticated = true): Connection
     {
         $mockTcp = $this->createMock(TcpConnection::class);
         $mockTcp->method('send')->willReturnCallback(function ($data) {
@@ -43,9 +43,9 @@ class MessageHandlerFrameShapeTest extends TestCase
         };
 
         // These frame-shape / protocol tests exercise dispatch, not the SV-4.7
-        // auth gate — authenticate so privileged SyncPlay events pass the gate
-        // and reach the shape/protocol logic under test.
-        $connection->setAuthenticated(true, 'frame-shape-user');
+        // auth gate — authenticate by default so privileged SyncPlay events pass
+        // the gate and reach the shape/protocol logic under test.
+        $connection->setAuthenticated($authenticated, $authenticated ? 'frame-shape-user' : null);
 
         return $connection;
     }
@@ -66,34 +66,39 @@ class MessageHandlerFrameShapeTest extends TestCase
         parent::tearDown();
     }
 
-    public function testSendFlatProducesFlatCanonicalEnvelope(): void
+    /**
+     * S417: the auth-gate rejection wire site must emit a flat canonical frame
+     * carrying protocol_version and a millisecond timestamp. This replaces the
+     * pre-S417 test that exercised Connection::sendFlat directly — the seconds-based
+     * flat-merge transport method no longer exists.
+     */
+    public function testAuthGateRejectionProducesFlatCanonicalEnvelope(): void
     {
-        $connection = $this->createConnection();
+        $handler = $this->createMessageHandler();
+        $connection = $this->createConnection(false);
 
-        $connection->sendFlat('syncplay_group_state', [
-            'group' => ['group_id' => 'sp_abc123', 'name' => 'Test Group'],
-            'your_id' => 'member_1',
-        ]);
+        $handler->handle($connection, (string) json_encode([
+            'type' => 'syncplay_group_create',
+            'protocol_version' => 1,
+        ], JSON_THROW_ON_ERROR));
 
         $this->assertCount(1, $this->sentMessages);
         $sent = $this->sentMessages[0];
 
         // Must have type at top level
-        $this->assertEquals('syncplay_group_state', $sent['type']);
+        $this->assertSame(Messages::TYPE_ERROR, $sent['type']);
+
+        // S417 envelope conformance
+        $this->assertSame(1, $sent['protocol_version'] ?? null);
+        $this->assertIsInt($sent['timestamp'] ?? null);
+        $this->assertGreaterThanOrEqual(1_000_000_000_000, $sent['timestamp'] ?? 0, 'timestamp must be milliseconds');
 
         // Must have payload keys at top level (NOT under 'data')
-        $this->assertArrayHasKey('group', $sent);
-        $this->assertArrayHasKey('your_id', $sent);
-        $this->assertArrayHasKey('timestamp', $sent);
-
-        // Must NOT have 'data' key
+        $this->assertArrayHasKey('error_code', $sent);
+        $this->assertArrayHasKey('message', $sent);
         $this->assertArrayNotHasKey('data', $sent);
 
-        // Verify group and your_id are correct
-        /** @var array<string, mixed> $group */
-        $group = $sent['group'];
-        $this->assertEquals('sp_abc123', $group['group_id']);
-        $this->assertEquals('member_1', $sent['your_id']);
+        $this->assertSame('NOT_AUTHENTICATED', $sent['error_code']);
     }
 
     public function testSendMessageProducesDeprecatedEnvelope(): void
@@ -203,11 +208,16 @@ class MessageHandlerFrameShapeTest extends TestCase
         // Handler should NOT be called
         $this->assertNull($receivedPayload);
 
-        // Error should be sent with error_code (not 'code')
+        // Error should be sent with error_code (not 'code') — and since S417 with
+        // the full flat canonical envelope (protocol_version + ms timestamp).
         $this->assertCount(1, $this->sentMessages);
         $errorMsg = $this->sentMessages[0];
         $this->assertEquals(Messages::TYPE_ERROR, $errorMsg['type']);
         $this->assertArrayHasKey('error_code', $errorMsg);
         $this->assertEquals('PROTOCOL_VERSION_MISMATCH', $errorMsg['error_code']);
+        $this->assertSame(1, $errorMsg['protocol_version'] ?? null);
+        $this->assertIsInt($errorMsg['timestamp'] ?? null);
+        $this->assertGreaterThanOrEqual(1_000_000_000_000, $errorMsg['timestamp'] ?? 0, 'timestamp must be milliseconds');
+        $this->assertArrayNotHasKey('data', $errorMsg);
     }
 }

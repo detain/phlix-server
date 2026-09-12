@@ -232,18 +232,19 @@ class WsAuthenticationTest extends TestCase
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
 
-        // Track if sendFlat was called with error
+        // Track if an error frame was sent
         $errorSent = false;
         $errorCode = '';
 
         // Create an unauthenticated mock connection
         $mockConnection = $this->createMock(Connection::class);
         $mockConnection->method('isAuthenticated')->willReturn(false);
-        $mockConnection->method('sendFlat')->willReturnCallback(function (string $type, array $data) use (&$errorSent, &$errorCode) {
-            if ($type === Messages::TYPE_ERROR) {
+        $mockConnection->method('send')->willReturnCallback(function (string|array $frame) use (&$errorSent, &$errorCode): bool {
+            if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
                 $errorSent = true;
-                $errorCode = $data['error_code'] ?? '';
+                $errorCode = is_string($frame['error_code'] ?? null) ? $frame['error_code'] : '';
             }
+            return true;
         });
         $mockConnection->method('sendMessage')->willReturnCallback(function () {
         });
@@ -267,18 +268,19 @@ class WsAuthenticationTest extends TestCase
     {
         $syncPlayManager = $this->createTestableSyncPlayManager();
 
-        // Track if sendFlat was called with error
+        // Track if an error frame was sent
         $errorSent = false;
         $errorCode = '';
 
         // Create an unauthenticated mock connection
         $mockConnection = $this->createMock(Connection::class);
         $mockConnection->method('isAuthenticated')->willReturn(false);
-        $mockConnection->method('sendFlat')->willReturnCallback(function (string $type, array $data) use (&$errorSent, &$errorCode) {
-            if ($type === Messages::TYPE_ERROR) {
+        $mockConnection->method('send')->willReturnCallback(function (string|array $frame) use (&$errorSent, &$errorCode): bool {
+            if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
                 $errorSent = true;
-                $errorCode = $data['error_code'] ?? '';
+                $errorCode = is_string($frame['error_code'] ?? null) ? $frame['error_code'] : '';
             }
+            return true;
         });
         $mockConnection->method('sendMessage')->willReturnCallback(function () {
         });
@@ -308,10 +310,11 @@ class WsAuthenticationTest extends TestCase
         // Create an unauthenticated mock connection
         $mockConnection = $this->createMock(Connection::class);
         $mockConnection->method('isAuthenticated')->willReturn(false);
-        $mockConnection->method('sendFlat')->willReturnCallback(function (string $type, array $data) use (&$errorCount) {
-            if ($type === Messages::TYPE_ERROR) {
+        $mockConnection->method('send')->willReturnCallback(function (string|array $frame) use (&$errorCount): bool {
+            if (is_array($frame) && ($frame['type'] ?? '') === Messages::TYPE_ERROR) {
                 $errorCount++;
             }
+            return true;
         });
         $mockConnection->method('sendMessage')->willReturnCallback(function () {
         });
@@ -391,11 +394,11 @@ class WsAuthenticationTest extends TestCase
         ]);
 
         // The playback command should succeed because the authenticated user is the host
-        $sentFlatMessages = $testConnection->getSentFlatMessages(Messages::TYPE_PLAYBACK_PLAY);
-        $this->assertNotEmpty($sentFlatMessages, 'Playback play should succeed for host');
+        $playbackFrames = $this->framesOfType($testConnection, Messages::TYPE_PLAYBACK_PLAY);
+        $this->assertNotEmpty($playbackFrames, 'Playback play should succeed for host');
 
-        // The member_id in the broadcast should be the server-derived userId
-        $playbackData = $sentFlatMessages[0] ?? [];
+        // The member_id in the flat frame is the server-derived userId
+        $playbackData = $this->frameData($playbackFrames[0]);
         $this->assertEquals(
             'authenticated-user',
             $playbackData['member_id'] ?? '',
@@ -622,20 +625,18 @@ class WsAuthenticationTest extends TestCase
     }
 
     /**
-     * A `sendFlat` frame nests its fields under `payload`; a `send()` broadcast frame
-     * is already flat. Normalise both to the field map.
+     * Field map of a captured outbound frame.
+     *
+     * Since S417 every SyncPlay frame on the wire is flat canonical
+     * (Messages::frame), so the frame itself is the field map. The nested
+     * 'payload' unwrap of the retired sendFlat capture is gone: a frame that
+     * is not flat no longer silently normalises.
      *
      * @param array<array-key, mixed> $frame
      * @return array<array-key, mixed>
      */
     private function frameData(array $frame): array
     {
-        if (isset($frame['payload']) && is_array($frame['payload'])) {
-            /** @var array<array-key, mixed> $payload */
-            $payload = $frame['payload'];
-            return $payload;
-        }
-
         return $frame;
     }
 }

@@ -74,10 +74,6 @@ class SyncPlayE2ETest extends TestCase
             $this->sentMessagesByConnectionId[$id][] = $data;
             return true;
         });
-        $mock->method('sendFlat')->willReturnCallback(function ($type, $payload) use ($id) {
-            $frame = array_merge(['type' => $type], $payload, ['timestamp' => time()]);
-            $this->sentMessagesByConnectionId[$id][] = $frame;
-        });
         $mock->method('sendMessage')->willReturnCallback(function ($type, $data) use ($id) {
             $this->sentMessagesByConnectionId[$id][] = ['type' => $type, 'data' => $data, 'timestamp' => time()];
         });

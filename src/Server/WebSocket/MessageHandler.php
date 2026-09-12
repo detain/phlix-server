@@ -145,10 +145,7 @@ class MessageHandler
         // connected) always pass. This is the coarse connection-level gate; the
         // per-event SyncPlay handlers keep their own finer-grained checks.
         if (WebSocketEvents::isPrivileged($event) && !$connection->isAuthenticated()) {
-            $connection->sendFlat(\Phlix\Session\SyncPlay\Messages::TYPE_ERROR, [
-                'error_code' => 'NOT_AUTHENTICATED',
-                'message' => 'Authentication required',
-            ]);
+            $connection->send(\Phlix\Session\SyncPlay\Messages::error('NOT_AUTHENTICATED', 'Authentication required'));
             return;
         }
 
@@ -180,10 +177,10 @@ class MessageHandler
         if (!$hasDataKey && isset($message['protocol_version'])) {
             $protocolVersion = $message['protocol_version'];
             if (!is_int($protocolVersion) || $protocolVersion > \Phlix\Session\SyncPlay\Messages::PROTOCOL_VERSION) {
-                $connection->sendFlat(\Phlix\Session\SyncPlay\Messages::TYPE_ERROR, [
-                    'error_code' => 'PROTOCOL_VERSION_MISMATCH',
-                    'message' => 'Unsupported protocol version',
-                ]);
+                $connection->send(\Phlix\Session\SyncPlay\Messages::error(
+                    'PROTOCOL_VERSION_MISMATCH',
+                    'Unsupported protocol version'
+                ));
                 return;
             }
         }

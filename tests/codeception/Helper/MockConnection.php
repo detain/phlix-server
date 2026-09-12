@@ -64,15 +64,6 @@ class MockConnection implements ConnectionInterface
         ]);
     }
 
-    public function sendFlat(string $type, array $payload): void
-    {
-        $this->send(array_merge(
-            ['type' => $type],
-            $payload,
-            ['timestamp' => time()]
-        ));
-    }
-
     public function close(): void
     {
         $this->open = false;

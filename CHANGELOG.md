@@ -277,6 +277,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   run, the exact CI pair) comes back clean; mutation-checking both directions, reintroducing the old
   blind loops reproduces the CI warning text verbatim and removing the marker poll reopens the race.
 
+- **`scripts/parallel/run-suite.sh` graded paraunit's exit status exactly instead of
+  re-exiting any non-zero verbatim (`S485`).** paraunit 2.11.0 maps every test verdict to
+  exactly 0 or 10 (`Runner::onProcessParsingCompleted` — any worker exiting non-zero ⇒ 10),
+  and children run under `failOnWarning=true`, so a warnings-only Integration tail exited 10
+  and killed CI (run 34651283031 attempt-1: the identical chmod/unlink warning text had
+  passed with exit 0 twice before) while the wrapper's own comment claimed warnings were
+  non-fatal — the comment was the intent, the code was the flake. The verdict is now derived
+  from the artifacts paraunit produces, via a new `paraunit_verdict()` function shared by the
+  run path and a `verdict <status> <log> <junit-dir>` subcommand: statuses outside {0,10}
+  are console/config failures that never reached a child (measured exit 1) and propagate
+  verbatim; under status 10 the lane is fatal when the recap records ERRORS, FAILURES,
+  ABNORMAL TERMINATIONS or RISKY OUTCOME, when the WARNINGS block carries a ` [UNKNOWN]`
+  entry — paraunit's own attribution for runner-level warnings, which is how the S439
+  zero-residue census lands and it stays red in the parallel lanes — when any JUnit tail
+  holds an `<error>`/`<failure>` element (a PHP warning can never appear in JUnit, so this
+  is the backstop against recap wording drift), or when no JUnit tail exists at all (a gate
+  that cannot read results must not report success); otherwise the warnings-only lane passes
+  deterministically with the warning note still echoed.
+  `tests/Unit/Support/ParaunitVerdictExactnessTest.php` executes the mechanism: five real
+  paraunit scratch runs (warnings, failure, error, clean, census) whose artifact shape is
+  pinned before the verdict is graded — so format drift screams instead of silently
+  demoting — plus two mutation controls on a copy of the script proving the narrowing and
+  the `[UNKNOWN]` route are each load-bearing (reverting either flips exactly the verdict
+  it guards). The file-count census moved 1862→1863 with it.
 - **`scripts/install.sh` compiled Swoole and php-uv from floating default-branch HEADs
   while claiming verbatim parity with the pinned `docker/Dockerfile.base` (`S482`).** The
   bare-metal installer is the one build path an operator's PHP receives third-party source

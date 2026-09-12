@@ -904,6 +904,19 @@ final class Messages
     }
 
     /**
+     * Current wall-clock time in milliseconds — the SAME clock the frame
+     * factory stamps into `timestamp`.
+     *
+     * S446 exposes it so per-member position ingestion and the nudge cooldown
+     * stamp against the identical millisecond clock as the wire envelope,
+     * instead of each caller re-deriving microtime().
+     */
+    public static function nowMs(): int
+    {
+        return self::getCurrentTimestamp();
+    }
+
+    /**
      * Get current timestamp in milliseconds.
      *
      * @return int Current Unix timestamp in milliseconds

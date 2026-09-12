@@ -9,6 +9,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Out-of-sync members are now NUDGED, never force-seeked — the decided S446 member sync
+  policy.** The per-member periodic `playback_sync` report finally has a consumer:
+  `SyncPlayManager::handlePlaybackSync()` stores the reporter's own position (ms, as frames
+  have carried since S417) on the live `GroupState` and judges it with `isInSync` — the
+  predicate S291 removed as runtime-proved dead code, revived with exactly the liveness its
+  removal note demanded (per-member position storage plus a written policy). Per the owner
+  ruling of 2026-09-12 the reaction is a NUDGE: one corrective frame on the existing
+  `playback_sync` family carrying additive soft guidance (`nudge: {drift_ms, direction,
+  suggested_rate, tolerance_ms, cooldown_ms}`) aimed at the drifting member only — never a
+  seek; seek frames stay reserved for host commands. The emission is cooldown-bounded per
+  member (one round-trip envelope, derived from `TimeSync::MAX_ACCEPTABLE_RTT`) and
+  idempotent per ingest tick via an atomic slot claim; positions are worker-local live state
+  that the S445 write-through bridge can neither fabricate nor clobber, and the guard test
+  that pinned the predicate dead is retired in the same commit by its named replacement pair
+  (out-of-sync report → exactly one bounded nudge; in-sync report → none). Thresholds are all
+  derived from existing constants: the 2000ms `POSITION_TOLERANCE` window, the 300s
+  stale-connection budget, and TimeSync's own 0.1 drift-correction factor as the rate step.
+
 - **Music artist/album detail now also resolves by name on a query parameter (`S240`).**
   `GET /api/v1/music/artist?name=<name>` and `GET /api/v1/music/album?name=<title>[&artist=<name>]`
   are additive twins of the existing `{mbid}` path detail routes — same auth group, same lookup,
@@ -19,7 +37,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   percent-decodes them exactly once, so the library service receives the literal name. The
   historical path routes are untouched — shipped clients keep working — and the singular static
   segments shadow nothing on the router.
-
 - **The default (stable) plugin channel installs again — the official catalog pin rolled
   from `v2.3.0` to `v2.4.0` (`S420`).** The pinned `detain/phlix-plugins` tag predated the
   `phlix-plugin-sample-theme` entry commit, so with zero env overrides the audited default

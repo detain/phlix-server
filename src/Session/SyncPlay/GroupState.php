@@ -36,6 +36,41 @@ namespace Phlix\Session\SyncPlay;
  * playback position is "in sync" with the group. Members outside this
  * tolerance may need to seek to catch up.
  *
+ * ## S446 — Member Sync Policy: NUDGE, never force-seek
+ *
+ * The group records each member's LAST SELF-REPORTED playback position in
+ * milliseconds ({@see recordMemberPosition()}), fed by the live
+ * playback_sync ingest in SyncPlayManager::handlePlaybackSync(). On that
+ * report the server evaluates {@see isMemberInSync()} — the predicate S291
+ * removed as unreachably dead and whose liveness this storage makes
+ * legitimate — and the DECIDED out-of-sync reaction is a NUDGE: one soft,
+ * corrective playback_sync directive (drift + rate guidance keys) aimed at
+ * the drifting member only. Per the owner ruling (2026-09-12) the server
+ * NEVER issues a hostile seek in response to a member's own report: a
+ * force-seek is hostile UX and seek frames stay reserved for host commands.
+ *
+ * Thresholds are DERIVED, never invented:
+ * - sync window: {@see POSITION_TOLERANCE} (2000ms), the constant already
+ *   documented for exactly this purpose;
+ * - nudge cooldown: {@see NUDGE_COOLDOWN_MS} (1000ms) — the sync
+ *   subsystem's own round-trip bound, TimeSync::MAX_ACCEPTABLE_RTT, so a
+ *   second directive is never emitted before the member could plausibly
+ *   have acted on the first;
+ * - report staleness: {@see MEMBER_POSITION_STALENESS_MS} (300s) — the
+ *   estate's existing stale-connection budget (config server.php
+ *   'stale_connection_timeout' => 300, mirrored by the WS worker's 300s
+ *   SyncPlay group-cleanup tick);
+ * - guidance rate step: {@see NUDGE_RATE_STEP} (0.1) — the same 0.1 factor
+ *   TimeSync already uses for drift correction (DRIFT_CORRECTION_FACTOR).
+ *
+ * Position storage is LIVE-ONLY worker state (mirrored in nothing): it is
+ * absent from getState(), serialize()/deserialize() and the bridge merge,
+ * so a write-through mirror frame (S445) can replace membership/host facets
+ * but can neither fabricate nor clobber a member's reported position. Only
+ * the wholesale paths that replace the GroupState object itself (adopt of
+ * an unseen group, bridge delete) reset it — legitimately, because the live
+ * reports died with the object.
+ *
  * @author Phlix Development Team
  * @copyright 2024 Phlix Media Server
  * @license Proprietary
@@ -78,6 +113,49 @@ class GroupState
      */
     public const POSITION_TOLERANCE = 2000;
 
+    /**
+     * S446 — sentinel proving this class is the code home of the decided
+     * out-of-sync policy (NUDGE over force-seek, owner ruling 2026-09-12).
+     * The companion test-home sentinel lives in
+     * tests/Unit/Session/SyncPlay/SyncPlayMemberSyncNudgeTest.php; the two
+     * together are the token's only code homes.
+     */
+    public const SYNC_NUDGE_POLICY_ID = 'S446NUDGEPOIX9Q4';
+
+    /**
+     * S446 — minimum spacing between two corrective nudges to the SAME
+     * member, in milliseconds.
+     *
+     * DERIVED, not invented: equal to TimeSync::MAX_ACCEPTABLE_RTT (1000ms)
+     * — the sync subsystem's own bound for one full round trip. Re-issuing
+     * a directive faster than the member could possibly have acknowledged
+     * the previous one would be spam, so one round-trip envelope is the
+     * natural rate floor.
+     */
+    public const NUDGE_COOLDOWN_MS = 1000;
+
+    /**
+     * S446 — age past which a member's stored position is no longer
+     * actionable, in milliseconds.
+     *
+     * DERIVED, not invented: equal to the estate's existing stale-connection
+     * budget — config/server.php 'websocket.stale_connection_timeout' => 300
+     * seconds, the same figure the WS worker's SyncPlay group-cleanup tick
+     * runs on. A position older than that belongs to a member the server
+     * would already treat as disconnected, so it must never trigger a nudge.
+     */
+    public const MEMBER_POSITION_STALENESS_MS = 300_000;
+
+    /**
+     * S446 — soft speed-up / slow-down delta the nudge recommends, as a
+     * fraction of normal rate (1 + 0.1 / 1 - 0.1).
+     *
+     * DERIVED, not invented: 0.1 is the correction factor the SyncPlay time
+     * authority already applies to clock drift (TimeSync::DRIFT_CORRECTION_FACTOR).
+     * It is guidance only — the client may ignore it; it is not a seek.
+     */
+    public const NUDGE_RATE_STEP = 0.1;
+
     /** @var string Unique group identifier (format: sp_*) */
     private string $id;
 
@@ -119,6 +197,26 @@ class GroupState
 
     /** @var int Position tolerance in milliseconds for sync detection */
     private int $positionTolerance;
+
+    /**
+     * S446 — last self-reported playback position per member, LIVE-ONLY.
+     *
+     * Keyed by member ID; `position` is milliseconds (frames have carried ms
+     * since S417), `at_ms` is the wall-clock millisecond stamp the report was
+     * ingested at. Never serialized, never mirrored over the S445 bridge,
+     * never part of getState() — see the class policy docblock.
+     *
+     * @var array<string, array{position: int, at_ms: int}>
+     */
+    private array $memberPositions = [];
+
+    /**
+     * S446 — wall-clock millisecond stamp of the last nudge slot claimed per
+     * member ({@see claimNudgeSlot()}). LIVE-ONLY like {@see $memberPositions}.
+     *
+     * @var array<string, int>
+     */
+    private array $lastNudgeAtMs = [];
 
     public function __construct(
         string $id,
@@ -272,6 +370,9 @@ class GroupState
         }
 
         unset($this->members[$memberId]);
+        // S446 — a departed member's live position and nudge stamp die with it;
+        // stale entries must never be handed to a re-joining identity.
+        unset($this->memberPositions[$memberId], $this->lastNudgeAtMs[$memberId]);
 
         // If host left, elect new host
         if ($this->hostId === $memberId) {
@@ -468,6 +569,11 @@ class GroupState
         $this->currentMediaDuration = $duration;
         $this->playbackPosition = 0;
         $this->playbackState = self::STATE_STOPPED;
+        // S446 — reported positions are meaningless across a media change
+        // (they measure a different timeline); drop them with the position
+        // they were relative to. Fresh reports re-populate on the next tick.
+        $this->memberPositions = [];
+        $this->lastNudgeAtMs = [];
         $this->lastActivityAt = time();
     }
 
@@ -497,6 +603,130 @@ class GroupState
     {
         $this->playbackPosition = $position;
         $this->lastActivityAt = time();
+    }
+
+    // -----------------------------------------------------------------
+    // S446 — per-member reported position storage + the live sync predicate
+    // -----------------------------------------------------------------
+
+    /**
+     * Record a member's self-reported playback position (LIVE-ONLY state).
+     *
+     * Fed by the playback_sync ingest in SyncPlayManager. Only existing,
+     * active members can hold a position; a report for an unknown member is
+     * rejected with false rather than silently fabricating live state — the
+     * caller has already resolved server-derived identity, so false means a
+     * race (member left concurrently) and the report is simply dropped.
+     *
+     * @param string $memberId  Server-derived member identity
+     * @param int    $positionMs Reported playback position in milliseconds
+     * @param int    $nowMs      Wall-clock milliseconds of ingestion (caller-supplied
+     *                           so the predicate is a pure function of injected time)
+     * @return bool True when stored, false for a non-member
+     */
+    public function recordMemberPosition(string $memberId, int $positionMs, int $nowMs): bool
+    {
+        if (!isset($this->members[$memberId])) {
+            return false;
+        }
+
+        $this->memberPositions[$memberId] = [
+            'position' => $positionMs,
+            'at_ms' => $nowMs,
+        ];
+
+        return true;
+    }
+
+    /**
+     * Read back a member's stored live position, if any.
+     *
+     * @return array{position: int, at_ms: int}|null Null when the member never reported
+     */
+    public function getMemberPosition(string $memberId): ?array
+    {
+        return $this->memberPositions[$memberId] ?? null;
+    }
+
+    /**
+     * The sync predicate S291 removed as unreachable dead code — revived with
+     * the liveness that removal was waiting for: per-member position storage
+     * ({@see recordMemberPosition()}) and a decided out-of-sync reaction
+     * (NUDGE, see the class policy docblock and SyncPlayManager::
+     * handlePlaybackSync()).
+     *
+     * Semantics are S291's verbatim: a group that is not actively PLAYING is
+     * trivially in sync (drift does not accumulate against a stopped clock),
+     * and any candidate position within the group's position tolerance of the
+     * authoritative playback position is in sync.
+     *
+     * @param int $memberPosition A candidate member position in milliseconds
+     * @return bool True when in sync (or when there is nothing to sync to)
+     */
+    public function isInSync(int $memberPosition): bool
+    {
+        if ($this->playbackState !== self::STATE_PLAYING) {
+            return true;
+        }
+
+        return abs($memberPosition - $this->playbackPosition) <= $this->positionTolerance;
+    }
+
+    /**
+     * Predicate over the member's STORED live position — the consumption
+     * site the policy docblock exists for.
+     *
+     * Unknown (never reported) or too-old-to-act-on (past
+     * {@see MEMBER_POSITION_STALENESS_MS}) positions answer "in sync":
+     * the server never nudges on absence of evidence, only on evidence of
+     * drift. A rewound clock likewise cannot manufacture extra nudges —
+     * staleness ages only forward.
+     *
+     * @param string $memberId Server-derived member identity
+     * @param int    $nowMs    Wall-clock milliseconds (injected for determinism)
+     * @return bool True when the member must NOT be nudged
+     */
+    public function isMemberInSync(string $memberId, int $nowMs): bool
+    {
+        $stored = $this->memberPositions[$memberId] ?? null;
+        if ($stored === null) {
+            return true;
+        }
+
+        if (($nowMs - $stored['at_ms']) > self::MEMBER_POSITION_STALENESS_MS) {
+            return true;
+        }
+
+        return $this->isInSync($stored['position']);
+    }
+
+    /**
+     * Atomically claim this member's nudge slot if the cooldown has elapsed.
+     *
+     * Check-and-set in one call, so the same ingest tick can never emit two
+     * directives and back-to-back reports inside the cooldown window can
+     * never emit more than one. Callers MUST evaluate isMemberInSync() first
+     * and only claim in order to actually send: a claim burns the slot even
+     * if the send afterwards fails, which is deliberate — the slot rate-limits
+     * the reaction channel, not a successful write.
+     *
+     * Boundary: exactly NUDGE_COOLDOWN_MS after the previous claim the slot
+     * is available again (>= semantics).
+     *
+     * @param string $memberId Server-derived member identity
+     * @param int    $nowMs    Wall-clock milliseconds (injected for determinism)
+     * @return bool True when the caller owns the slot and may send one nudge
+     */
+    public function claimNudgeSlot(string $memberId, int $nowMs): bool
+    {
+        $last = $this->lastNudgeAtMs[$memberId] ?? null;
+        if ($last !== null && ($nowMs - $last) < self::NUDGE_COOLDOWN_MS) {
+            return false;
+        }
+
+        $this->lastNudgeAtMs[$memberId] = $nowMs;
+
+        return true;
     }
 
     /**

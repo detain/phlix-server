@@ -159,6 +159,28 @@ return [
         'jwt_secret' => getenv('JWT_SECRET') ?: '',
     ],
 
+    // S445 write-through publish bridge: private unix socket the 14 HTTP
+    // workers write one NDJSON mutation frame per REST create/join/leave
+    // (AFTER durably persisting to syncplay_snapshots) and the single WS
+    // worker (:8097, count=1) listens on, applying frames to its live
+    // SyncPlayManager so REST-mutated rooms are visible to WebSocket
+    // clients without a restart. The WS worker never becomes a DB reader.
+    // Not a network service: no host/port, no public exposure - access is
+    // the socket file's 0600 mode (the supervisor topology forks all
+    // workers from one master, one user). Publish is bounded (default
+    // 250 ms) and fire-and-forget; a failed publish is logged, never
+    // degrades the REST response, and self-heals on the group's next
+    // mutation. Full model + loss posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md
+    'syncplay_bridge' => [
+        // SYNCPLAY_BRIDGE=0 disables both ends (HTTP publishes nothing, WS
+        // listens nowhere) - rail then stays persist-only.
+        'enabled' => getenv('SYNCPLAY_BRIDGE') !== '0',
+        // SYNCPLAY_BRIDGE_SOCKET overrides the bind path (multi-instance boxes).
+        'socket_path' => getenv('SYNCPLAY_BRIDGE_SOCKET') ?: dirname(__DIR__) . '/var/syncplay-bridge.sock',
+        // Hard budget for one frame's connect+full-write in an HTTP worker.
+        'publish_timeout_ms' => (int) (getenv('SYNCPLAY_BRIDGE_TIMEOUT_MS') ?: 250),
+    ],
+
     // SV-4.15: per-surface rate limiting for the server's previously-UNLIMITED
     // auth surfaces (register / refresh / WebAuthn start+finish / public JWKS /
     // :8097 WS-connect). Each surface named in

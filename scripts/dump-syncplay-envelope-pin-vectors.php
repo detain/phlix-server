@@ -117,6 +117,8 @@ file_put_contents(
 $container = SyncPlayEnvelopePinHarness::buildContainer($connection, [
     'logger_config_path' => $loggerConfigPath,
     'db_config_path' => null,
+    // S445: match the test venue exactly — persist-only, no bridge publishes.
+    'syncplay_bridge' => ['enabled' => false],
 ]);
 SyncPlayEnvelopePinHarness::seedConnectionPool($connection);
 $application = SyncPlayEnvelopePinHarness::buildApplication($poolStub, $container);

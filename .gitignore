@@ -76,3 +76,6 @@ runs/.harness.lock
 
 # lane journals stay outside git
 PROGRESS.md
+
+# S445 write-through bridge socket (runtime artifact of the daemon; tests use temp paths)
+var/syncplay-bridge.sock

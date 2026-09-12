@@ -200,6 +200,60 @@ class SyncPlaySnapshotService
     }
 
     /**
+     * Load the raw serialized_state array for one group (no getState() reshape).
+     *
+     * S445 write-through: the REST rails read-modify-write over the snapshot
+     * store, so the mutation path needs the exact {@see GroupState::serialize()}
+     * payload back (password hash, member records with their persisted
+     * connection ids) to hydrate its worker-local manager before mutating.
+     * This is a REST-side read of the REST-owned durable store - the WS worker
+     * never calls it (it ingests bridge frames instead).
+     *
+     * @param string $groupId The group ID to load
+     * @return array<string, mixed>|null Serialized group state or null if absent/unreadable
+     */
+    public function loadSerialized(string $groupId): ?array
+    {
+        $db = $this->getDb();
+
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $db->query(
+            "SELECT serialized_state FROM syncplay_snapshots WHERE group_id = ?",
+            [$groupId]
+        );
+
+        if (empty($rows)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $firstRow */
+        $firstRow = $rows[0];
+        $serialized = $firstRow['serialized_state'] ?? null;
+        if (!is_string($serialized)) {
+            return null;
+        }
+
+        try {
+            /** @var mixed $decoded */
+            $decoded = json_decode($serialized, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        // A JSON object decodes (assoc) to a top-level array whose keys are
+        // always strings; the nested values are validated downstream by
+        // GroupState::deserialize.
+        /** @var array<string, mixed> $state */
+        $state = $decoded;
+
+        return $state;
+    }
+
+    /**
      * Get raw snapshot fields without full deserialization.
      *
      * Fallback when serialized_state cannot be deserialized.

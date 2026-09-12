@@ -43,6 +43,14 @@ use Phlix\Server\WebSocket\MessageHandler;
  * 4. Members leave or host leaves → group state updated
  * 5. Empty groups are automatically cleaned up
  *
+ * ## Cross-process ingestion (S445 write-through bridge)
+ *
+ * In the WS worker this manager is the single authority on live group state
+ * and never reads the DB; REST workers PUBLISH their persisted mutations as
+ * frames to applyBridgeFrame(). In an HTTP worker the same class serves the
+ * REST rails, which hydrate via adoptGroupFromSerialized() before mutating.
+ * Model, ordering and loss posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
+ *
  * @author Phlix Development Team
  * @copyright 2024 Phlix Media Server
  * @license Proprietary
@@ -99,6 +107,18 @@ class SyncPlayManager
 
     /** @var SyncPlaySnapshotService|null Snapshot service for DB publishing (SP5) */
     private ?SyncPlaySnapshotService $snapshotService = null;
+
+    /**
+     * S445 write-through bridge: last applied frame stamp per group id
+     * (group id → issued_at_ms of the newest applied/adopted bridge frame).
+     * Re-delivered or out-of-order frames carry an older-or-equal stamp and
+     * are dropped, which is what makes bridge application idempotent. An entry
+     * whose group id is absent from $groups is a DELETE tombstone; stale
+     * tombstones are pruned by cleanupStaleGroups().
+     *
+     * @var array<string, int>
+     */
+    private array $bridgeStamps = [];
 
     public function __construct(
         ?StructuredLogger $logger = null,
@@ -174,6 +194,272 @@ class SyncPlayManager
     private function removeSnapshot(string $groupId): void
     {
         $this->snapshotService?->removeGroup($groupId);
+    }
+
+    // -----------------------------------------------------------------
+    // S445 write-through bridge (REST → this manager)
+    //
+    // The WS worker (count=1) is the single authority on live in-memory
+    // group state; it never reads the DB. REST workers persist to the
+    // snapshot store and then PUBLISH one bridge frame per mutation; the
+    // frame arrives here already validated by SyncPlayBridge::parse() via
+    // SyncPlayBridgeListener. Application is idempotent (stamp-gated) and
+    // merge-conservative: an existing live group keeps its WS-owned
+    // facets (media, playback, queue, chat, live connection ids) and only
+    // adopts the REST-owned facets the publisher just wrote (membership
+    // set, host). A group the worker has never seen is adopted wholesale.
+    // See docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
+    // -----------------------------------------------------------------
+
+    /**
+     * Apply one validated bridge frame (listener applier entry point).
+     *
+     * @param array<string, mixed> $frame output of SyncPlayBridge::parse()
+     * @return bool true when the frame was applied or intentionally skipped
+     *              (stale/duplicate); false only on malformed content
+     */
+    public function applyBridgeFrame(array $frame): bool
+    {
+        $op = $frame['op'] ?? null;
+        $stamp = $frame['issued_at_ms'] ?? null;
+        if (!is_string($op) || !is_int($stamp)) {
+            return false;
+        }
+
+        if ($op === SyncPlayBridge::OP_GROUP_DELETE) {
+            $groupId = $frame['group_id'] ?? null;
+
+            return is_string($groupId) && $this->applyBridgeGroupDelete($groupId, $stamp);
+        }
+
+        if ($op === SyncPlayBridge::OP_GROUP_UPSERT) {
+            $group = $frame['group'] ?? null;
+            if (!is_array($group)) {
+                return false;
+            }
+
+            // Frames reach here via SyncPlayBridge::parse(), which decoded a
+            // JSON object — top-level keys are strings; GroupState::deserialize
+            // validates the shape on install.
+            /** @var array<string, mixed> $groupState */
+            $groupState = $group;
+
+            return $this->applyBridgeGroupUpsert($groupState, $stamp);
+        }
+
+        return false;
+    }
+
+    /**
+     * Install a group from serialized state as the base for a REST
+     * read-modify-write (HTTP side only — never called by the WS worker).
+     *
+     * The snapshot row is the REST-owned durable record; adopting it lets the
+     * local manager run its UNCHANGED join/leave logic (password check,
+     * capacity, idempotent re-join, host election) against live truth instead
+     * of a per-process phantom. Stamps are bridge-traffic bookkeeping and are
+     * deliberately untouched here.
+     *
+     * @param array<string, mixed> $serialized GroupState::serialize() shape
+     * @return bool true when the group is now present in the local table
+     */
+    public function adoptGroupFromSerialized(array $serialized): bool
+    {
+        return $this->installSerializedGroup($serialized, true);
+    }
+
+    /**
+     * Read the live GroupState object (persist/publish step of the REST rail
+     * needs the object, not just the public getState() shape).
+     */
+    public function getGroup(string $groupId): ?GroupState
+    {
+        return $this->groups[$groupId] ?? null;
+    }
+
+    /**
+     * Upsert semantics: merge REST-owned facets into the live group, or adopt
+     * wholesale when this worker has never seen it (also self-heals a frame
+     * lost while the WS worker was restarting, once ANY later mutation for
+     * that group lands).
+     *
+     * @param array<string, mixed> $serialized GroupState::serialize() shape from the frame
+     */
+    private function applyBridgeGroupUpsert(array $serialized, int $stamp): bool
+    {
+        $groupId = $serialized['id'] ?? null;
+        if (!is_string($groupId) || $groupId === '') {
+            return false;
+        }
+
+        $last = $this->bridgeStamps[$groupId] ?? null;
+        if ($last !== null && $stamp <= $last) {
+            // Duplicate or late-delivered frame — re-applying could resurrect
+            // facets a newer frame already superseded. Idempotent skip.
+            return true;
+        }
+
+        if (!isset($this->groups[$groupId]) && count($this->groups) >= self::MAX_GROUPS) {
+            // A bridge adopt of a NEW group is a join the live worker did not
+            // gate itself — honor MAX_GROUPS all the same so the bridge can
+            // never be a back door around the resource ceiling.
+            $this->log('warning', 'Bridge upsert refused: group limit reached', ['group_id' => $groupId]);
+
+            return false;
+        }
+
+        $applied = $this->installSerializedGroup($serialized, false);
+        if ($applied) {
+            $this->bridgeStamps[$groupId] = $stamp;
+        }
+
+        return $applied;
+    }
+
+    /**
+     * Delete semantics: drop the live group and its member/connection
+     * indexes, leaving a stamp as tombstone so a re-delivered (or reordered,
+     * publish-1-after-publish-2) upsert for the same instant cannot resurrect
+     * it through the staleness gate.
+     */
+    private function applyBridgeGroupDelete(string $groupId, int $stamp): bool
+    {
+        $last = $this->bridgeStamps[$groupId] ?? null;
+        if ($last !== null && $stamp <= $last) {
+            return true;
+        }
+
+        $group = $this->groups[$groupId] ?? null;
+        if ($group !== null) {
+            $this->unindexGroup($group, $groupId);
+            unset($this->groups[$groupId]);
+            $this->log('info', 'Group removed (bridge delete)', ['group_id' => $groupId]);
+        }
+
+        $this->bridgeStamps[$groupId] = $stamp;
+
+        return true;
+    }
+
+    /**
+     * Deserialize + install a group.
+     *
+     * On the WS-side apply path ($mergeIntoExisting = false) an already-live
+     * group is merged facet-wise (REST owns membership; the live worker owns
+     * playback and its own connection ids). On the REST-side hydrate path
+     * ($mergeIntoExisting = true) the snapshot row simply IS the truth the
+     * rail will modify, so it installs wholesale.
+     *
+     * @param array<string, mixed> $serialized
+     */
+    private function installSerializedGroup(array $serialized, bool $mergeIntoExisting): bool
+    {
+        try {
+            $incoming = GroupState::deserialize($serialized);
+        } catch (\Throwable $e) {
+            $this->log('warning', 'Bridge frame carries un-deserializable group', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        $groupId = $incoming->getId();
+        $existing = $this->groups[$groupId] ?? null;
+
+        if ($existing === null || $mergeIntoExisting) {
+            if ($existing !== null) {
+                $this->unindexGroup($existing, $groupId);
+            }
+            $this->groups[$groupId] = $incoming;
+            $this->indexGroup($incoming, $groupId);
+
+            return true;
+        }
+
+        // Merge: membership set + host are the REST-owned facets the publisher
+        // just durably wrote. Everything else (media, playback, queue, chat,
+        // activity clock, live connection ids) stays with the WS worker that
+        // owns the sockets.
+        foreach ($existing->getMembers() as $memberId => $member) {
+            $memberId = (string) $memberId;
+            if (!$incoming->hasMember($memberId)) {
+                $existing->removeMember($memberId);
+                unset($this->memberToGroup[$memberId]);
+                $connectionId = $member['connection_id'] ?? null;
+                if (is_string($connectionId) && ($this->connectionToMember[$connectionId] ?? null) === $memberId) {
+                    unset($this->connectionToMember[$connectionId]);
+                }
+            }
+        }
+
+        foreach ($incoming->getMembers() as $memberId => $member) {
+            $memberId = (string) $memberId;
+            $memberName = is_string($member['name'] ?? null) ? $member['name'] : 'Unknown';
+            $memberConnection = is_string($member['connection_id'] ?? null) ? $member['connection_id'] : null;
+
+            if ($existing->hasMember($memberId)) {
+                $liveConnection = $existing->getMember($memberId)['connection_id'] ?? null;
+                $updates = ['name' => $memberName, 'is_active' => true];
+                if (!is_string($liveConnection) && $memberConnection !== null) {
+                    $updates['connection_id'] = $memberConnection;
+                }
+                $existing->updateMember($memberId, $updates);
+                $this->memberToGroup[$memberId] = $groupId;
+                if (is_string($liveConnection)) {
+                    $this->connectionToMember[$liveConnection] = $memberId;
+                }
+
+                continue;
+            }
+
+            if ($existing->addMember($memberId, ['name' => $memberName, 'connection_id' => $memberConnection])) {
+                $this->memberToGroup[$memberId] = $groupId;
+                if ($memberConnection !== null) {
+                    $this->connectionToMember[$memberConnection] = $memberId;
+                }
+            }
+        }
+
+        $hostId = $incoming->getHostId();
+        if (is_string($hostId) && $existing->hasMember($hostId) && $existing->getHostId() !== $hostId) {
+            $existing->setHost($hostId);
+        }
+
+        return true;
+    }
+
+    /**
+     * Add a group's members (and known connections) to the reverse indexes.
+     */
+    private function indexGroup(GroupState $group, string $groupId): void
+    {
+        foreach ($group->getMembers() as $memberId => $member) {
+            $this->memberToGroup[(string) $memberId] = $groupId;
+            $connectionId = $member['connection_id'] ?? null;
+            if (is_string($connectionId)) {
+                $this->connectionToMember[$connectionId] = (string) $memberId;
+            }
+        }
+    }
+
+    /**
+     * Drop a group's members (and its members' connections) from the reverse
+     * indexes. Only removes a connection mapping that still points at this
+     * group's member, so a newer join elsewhere is never clobbered.
+     */
+    private function unindexGroup(GroupState $group, string $groupId): void
+    {
+        foreach ($group->getMembers() as $memberId => $member) {
+            $memberId = (string) $memberId;
+            if (($this->memberToGroup[$memberId] ?? null) === $groupId) {
+                unset($this->memberToGroup[$memberId]);
+            }
+            $connectionId = $member['connection_id'] ?? null;
+            if (is_string($connectionId) && ($this->connectionToMember[$connectionId] ?? null) === $memberId) {
+                unset($this->connectionToMember[$connectionId]);
+            }
+        }
     }
 
     /**
@@ -1376,6 +1662,16 @@ class SyncPlayManager
 
                 unset($this->groups[$id]);
                 $removed++;
+            }
+        }
+
+        // S445: prune DELETE tombstones once older than the same inactivity
+        // budget — past that a re-delivered frame for them would be older than
+        // any live truth anyway, and stamp-map growth stays bounded.
+        $stampFloor = $now * 1000 - $timeout * 1000;
+        foreach ($this->bridgeStamps as $stampedId => $stamp) {
+            if (!isset($this->groups[$stampedId]) && $stamp < $stampFloor) {
+                unset($this->bridgeStamps[$stampedId]);
             }
         }
 

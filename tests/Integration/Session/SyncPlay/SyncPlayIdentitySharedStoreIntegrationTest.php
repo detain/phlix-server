@@ -38,11 +38,13 @@ use Workerman\MySQL\Connection;
  *    the shared store holds the *snapshot*, but no live worker re-hydrates its
  *    authoritative membership table from it, so B cannot accept the join.
  *
- * That asymmetry — reads converge on the snapshot, mutations do NOT converge on any
- * live worker's membership table — is exactly the SP6 gap. It is pinned here rather
- * than silently half-fixed, because the S415 envelope pin deliberately forbids the
- * HTTP mutation path from touching the DB, and a snapshot the WS worker never
- * re-hydrates would only relocate the phantom.
+     * That asymmetry — reads converge on the snapshot, mutations do NOT converge on any
+     * live worker's membership table — was the SP6 gap. S445 closes it ABOVE this layer
+     * (the REST controller rail persists write-through and publishes a bridge frame to
+     * the WS worker); what this test keeps pinning is the layer itself: raw
+     * `SyncPlayManager`-to-`SyncPlayManager` with no rail and no bridge frame still does
+     * not converge — the snapshot is never re-hydrated into a live table by a bare
+     * manager call. S445's AC2 reddening test stands on exactly this invariant.
  *
  * ## The part S289 DOES fix, proved against the same store
  *

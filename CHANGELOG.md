@@ -9,6 +9,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Cross-process SyncPlay mutations are now visible to the serving WS worker without a
+  restart — the write-through publish bridge (`S445`).** Until now the 14 HTTP workers each
+  held a *private* `SyncPlayManager`, so a room created or joined through
+  `POST /api/v1/syncplay/groups…` was invisible to the single WS worker's live tables on
+  `:8097` (and its REST join/leave rails answered "Group not found" for any room the serving
+  side owned). Per the owner ruling the **REST side owns persistence** and the **WS worker
+  stays the sole authority on live in-memory state without ever becoming a DB reader**: each
+  of the three controller rails is now hydrate → mutate → **persist first**
+  (`SyncPlaySnapshotService`, with a new `loadSerialized()` read so join/leave modify the
+  fresh snapshot base instead of a stale local table) → **publish** one NDJSON frame over a
+  private unix socket (`var/syncplay-bridge.sock`, mode 0600 — same master, same user, no
+  new port), which the WS worker accepts on its live Workerman event loop
+  (`Worker::getEventLoop()->onReadable`, degrading to a poll timer) and applies via
+  `SyncPlayManager::applyBridgeFrame()`. The frame is a clearly-separate internal channel —
+  deliberately *not* a `Messages` type, which would make internal mutations
+  client-spoofable on the public socket — carrying a shared-secret constant
+  (`SyncPlayBridge::TOKEN`) as defense-in-depth behind the file permissions. Application is
+  idempotent: per-group monotonic `issued_at_ms` stamps drop re-delivery and late frames,
+  deletes tombstone against stale resurrection, and an upsert merged onto a live group
+  replaces only the REST-owned facets (members, host) while preserving the WS-owned ones
+  (media, playback, queue, chat). Loss posture is stated loud and honest:
+  **fire-and-forget** — no ack, no replay — sound because durability already lives in the
+  snapshot row, the WS worker has no boot hydration and a restart drops every live WebSocket
+  connection anyway, and the REST read-modify-write re-publishes full current state on the
+  next mutation, so a dropped frame self-heals. The publisher's single `fwrite` of a frame
+  capped at 160 KiB is registered as **Exception 3** in `docs/dev/BLOCKING_IO_EXCEPTIONS.md`
+  (≤250 ms bound, measured; a chunked select-retry design was proven to hang forever under
+  `SWOOLE_HOOK_UNIX` and rejected for it). The model lives in
+  `docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md`; proof is
+  `tests/Integration/Session/SyncPlay/SyncPlayWriteThroughBridgeTest.php` (two real managers,
+  real MySQL, real socket — asserting the **served** `group_list` frame end to end, plus the
+  named reddening test for REST-only mutations), the bridge unit pairs, and
+  `scripts/syncplay-bridge-smoke.php` (two real processes over fork). `RequestDynamicPropertyCensusExecutableTest`
+  re-pins the estate denominator 1864→1872 for the eight new PHP files and declared writes
+  965→969 for the AC helper's four `S427`-licensed assignments; the S415 envelope pin keeps
+  its exact bytes (the rails now persist, and the pin harness double enumerates precisely the
+  upsert/DELETE shapes, still throwing on anything else, publishing nowhere via
+  `syncplay_bridge.enabled=false`). Config knobs: `syncplay_bridge.{enabled,socket_path,publish_timeout_ms}`.
+
 - **A machine-readable OpenAPI description of the entire served route surface, kept
   honest by a currency guard that recomposes the real routers.** `openapi.yaml` (repo
   root) now documents every operation `start.php` actually answers — 402 operations across

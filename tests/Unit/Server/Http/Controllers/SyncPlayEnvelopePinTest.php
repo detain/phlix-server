@@ -40,11 +40,13 @@ use Workerman\MySQL\Connection;
  * Every rail below — success AND error arm — was dispatched through
  * `Application::dispatch()` (production router + real controller + real
  * manager + real snapshot service). No rail needed the documented
- * next-best venue: create/join/leave never touch the database in production
- * either (`SyncPlayManager::setSnapshotService()` has zero callers on the
- * HTTP path — SP5), and the two read rails run their REAL SQL against the
- * doubled `Connection`, which answers only the exact two snapshot SELECTs
- * those services emit (any other SQL throws — see the harness docblock).
+ * next-best venue: since S445 create/join/leave persist through the
+ * controller's write-through rail (the manager still has
+ * `setSnapshotService()` with zero callers on the HTTP path — SP5), and all
+ * three read rails run their REAL SQL against the doubled `Connection`,
+ * which answers only the exact snapshot SELECTs plus the write-through
+ * upsert/delete pair those services emit (any other SQL throws — see the
+ * harness docblock).
  *
  * ## Anti-vacuity
  *
@@ -131,6 +133,12 @@ final class SyncPlayEnvelopePinTest extends TestCase
         $container = SyncPlayEnvelopePinHarness::buildContainer($this->connection, [
             'logger_config_path' => $this->loggerConfigPath,
             'db_config_path' => null,
+            // S445: pin the venue deterministically persist-only. Without this,
+            // the write-through rail would attempt bridge publishes against
+            // whatever default socket happens to exist on the dev box (a live
+            // daemon would ingest pin phantom groups). Envelope bytes are
+            // unaffected either way — the publisher cannot fail a response.
+            'syncplay_bridge' => ['enabled' => false],
         ]);
         SyncPlayEnvelopePinHarness::seedConnectionPool($this->connection);
 

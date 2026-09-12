@@ -17,6 +17,8 @@ use Workerman\Timer;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Server\WebSocket\WebSocketServer;
+use Phlix\Session\SyncPlay\SyncPlayBridge;
+use Phlix\Session\SyncPlay\SyncPlayBridgeListener;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
@@ -90,6 +92,13 @@ class SyncPlayWorker
      * @var MessageHandler|null
      */
     private ?MessageHandler $messageHandler = null;
+
+    /**
+     * S445 write-through bridge listener (REST → this worker's manager).
+     *
+     * @var SyncPlayBridgeListener|null
+     */
+    private ?SyncPlayBridgeListener $bridgeListener = null;
 
     /**
      * Active timer IDs for cleanup on stop.
@@ -252,6 +261,37 @@ class SyncPlayWorker
         $this->server = new WebSocketServer($this->config, $this->messageHandler);
         $this->server->setSyncPlayManager($this->syncPlayManager);
 
+        // S445 write-through bridge (WS side, parity with the served start.php §4a
+        // bootstrap): ingest REST-worker mutations as frames on the private unix
+        // socket so the live tables here reflect HTTP-rail changes without a
+        // restart. This worker never becomes a DB reader; model + loss posture:
+        // docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md. A failure downgrades to a
+        // logged warning — never block :8097/8098 serving.
+        $bridgeConfigRaw = $this->config['syncplay_bridge'] ?? [];
+        $bridgeConfig = is_array($bridgeConfigRaw) ? $bridgeConfigRaw : [];
+        if (SyncPlayBridge::isEnabled($bridgeConfig)) {
+            try {
+                $listener = new SyncPlayBridgeListener(
+                    SyncPlayBridge::socketPathFromConfig($bridgeConfig),
+                    $logger
+                );
+                $listener->setApplier(function (array $frame): void {
+                    $this->syncPlayManager?->applyBridgeFrame($frame);
+                });
+                $listener->listen();
+                if (!$listener->attachToLoop($this->worker?->getEventLoop())) {
+                    $this->timerIds[] = Timer::add(0.1, static function () use ($listener): void {
+                        $listener->poll(64);
+                    });
+                }
+                $this->bridgeListener = $listener;
+            } catch (\Throwable $bridgeError) {
+                $logger->error('[SyncPlayBridge] listener unavailable in SyncPlayWorker', [
+                    'error' => $bridgeError->getMessage(),
+                ]);
+            }
+        }
+
         // Start cleanup timer for stale connections (every 60 seconds)
         $staleConnectionTimeout = $this->config['stale_connection_timeout'] ?? 300;
         $staleConnectionTimeout = is_numeric($staleConnectionTimeout) ? (int)$staleConnectionTimeout : 300;
@@ -365,6 +405,10 @@ class SyncPlayWorker
             Timer::del($timerId);
         }
         $this->timerIds = [];
+
+        // S445: release the bridge socket (file removed with it).
+        $this->bridgeListener?->close();
+        $this->bridgeListener = null;
 
         // Clear connection pool
         ConnectionPool::getInstance()->clear();

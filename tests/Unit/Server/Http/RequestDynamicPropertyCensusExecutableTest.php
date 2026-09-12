@@ -357,8 +357,20 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * measured on this tree, not predicted. It reads/writes no Request property
              * (it drives WebSocket connections only), so every other census denominator
              * is unchanged.
+             * Re-pinned 1864→1872 by S445: the write-through publish bridge adds eight
+             * first-party PHP files — src/Session/SyncPlay/{SyncPlayBridge,
+             * SyncPlayBridgePublisher,SyncPlayBridgeListener}.php (the internal envelope
+             * factory, the HTTP-side bounded publisher, the WS-side unix listener),
+             * scripts/syncplay-bridge-smoke.php (the two-process fork smoke),
+             * tests/Support/SyncPlay/InMemorySyncPlaySnapshotService.php (the DB-free
+             * store the identity-rest unit venue now injects), and the three bridge tests
+             * (Unit envelope/transport, Unit apply, Integration AC) — measured 1872 on
+             * this tree, not predicted (phpunit computed it). None reads or writes a
+             * Request property in src (the controller rails keep their existing reads;
+             * the leave rail's group id rides the router's $params array), so the read
+             * denominator is unchanged.
              */
-    private const EXPECTED_PHP_FILES = 1864;
+    private const EXPECTED_PHP_FILES = 1872;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -404,8 +416,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * declared Request member directly ($request->query = […]) — the same
      * S438/S289/S73 shape, S427 license intact. The consolidation itself moves GD
      * resize arithmetic into ImageResizer and touches no Request property.
+     * Re-pinned 965→969 by S445: tests/Integration/Session/SyncPlay/
+     * SyncPlayWriteThroughBridgeTest.php's httpRequest() helper assigns four declared
+     * Request members directly (method/path/userId/body) — the same S438/S289/S73
+     * shape, S427 license intact. The src/ bridge adds no Request write site.
      */
-    private const EXPECTED_DECLARED_WRITES = 965;
+    private const EXPECTED_DECLARED_WRITES = 969;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -388,8 +388,15 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * 065) — is a property of live InnoDB referential actions; an in-memory double
      * cannot express a cascade, so every acceptance clause is pinned against real
      * MySQL.
+     *
+     * 58 since S445's
+     * `tests/Integration/Session/SyncPlay/SyncPlayWriteThroughBridgeTest.php`: the
+     * write-through bridge AC asserts the served state a REST rail persisted —
+     * persistence is the durable half of the write-through ordering contract, and
+     * the rails' hydrate reads (`loadSerialized`) answer from real rows; the
+     * in-memory double cannot witness the order "durable first, published second".
      */
-    private const EXPECTED_ADOPTERS = 57;
+    private const EXPECTED_ADOPTERS = 58;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Session\SyncPlay\SyncPlayBridgePublisher;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Session\SyncPlay\SyncPlaySnapshotService;
 
@@ -41,22 +42,25 @@ use Phlix\Session\SyncPlay\SyncPlaySnapshotService;
  * whose most-recent connection receives broadcasts. The display `memberName`
  * still flows verbatim — only the identity SOURCE is pinned to the JWT subject.
  *
- * ## Membership topology (SP5, honest state)
+ * ## Membership topology (S445 — write-through publish bridge)
  *
  * The authoritative live membership table is the single WebSocket worker's
  * in-memory `SyncPlayManager` (count=1, :8097). The REST path here runs in one
  * of 14 HTTP workers (count=14, :8096), each with its OWN `SyncPlayManager`
- * instance that is NOT given a snapshot service — so the create/join/leave
- * mutations below mutate only THIS worker's per-process tables and are NOT
- * published to the shared `syncplay_snapshots` store or re-hydrated by the WS
- * worker. The read rails (`listGroups`, `getGroup`) DO come from the shared
- * snapshot the WS worker publishes. Cross-worker forwarding of membership
- * mutations to the authoritative WS process is the unwritten SP6 bridge and is
- * tracked as residual work; it is intentionally NOT half-implemented here
- * because writing a snapshot the live WS worker never re-hydrates would only
- * move the phantom, not remove it (a WS-side hydrate touches the S287/S290/S294
- * broadcast path and is its own step). What S289 fixes — the identity source —
- * is what makes that bridge, once built, converge on ONE member instead of two.
+ * instance that is NOT given a snapshot service (broadcast paths must stay
+ * inert here). As of S445 each mutation rail is a WRITE-THROUGH read-modify-
+ * publish cycle over the shared `syncplay_snapshots` store: join/leave first
+ * hydrate the worker-local manager from the snapshot row when this process has
+ * never seen the group (so password/capacity/idempotent-join/host-election run
+ * against live truth — a REST join into a WS-live room now works), the
+ * unchanged `SyncPlayManager` logic mutates locally, the result is DURABLY
+ * PERSISTED (`publishGroup`/`removeGroup`), and only THEN a frame is published
+ * on the private unix-socket bridge so the WS worker applies it to the live
+ * tables without restart — the WS worker itself never becomes a DB reader; it
+ * is fed by published deltas and remains the single authority on live state.
+ * The read rails (`listGroups`, `getGroup`) come from the same shared store.
+ * Loss posture, idempotency and the full model:
+ * `docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md`.
  *
  * @since 3.5
  */
@@ -65,19 +69,29 @@ class SyncPlayController
     /** @var SyncPlayManager The SyncPlay manager instance (for mutations) */
     private SyncPlayManager $syncPlayManager;
 
-    /** @var SyncPlaySnapshotService Reads from WS-published snapshots */
+    /** @var SyncPlaySnapshotService Owns REST-side persistence; reads shared snapshots */
     private SyncPlaySnapshotService $snapshotService;
+
+    /** @var SyncPlayBridgePublisher|null Post-persist publisher to the WS worker; null = local-only legacy rail */
+    private ?SyncPlayBridgePublisher $bridgePublisher;
 
     /**
      * Creates a new SyncPlayController instance.
      *
-     * @param SyncPlayManager        $syncPlayManager The SyncPlay manager (mutations)
-     * @param SyncPlaySnapshotService $snapshotService Reads from DB snapshots
+     * @param SyncPlayManager         $syncPlayManager The SyncPlay manager (mutations)
+     * @param SyncPlaySnapshotService $snapshotService REST-owned persistence + snapshot reads
+     * @param SyncPlayBridgePublisher|null $bridgePublisher Write-through publisher to the WS
+     *     worker (S445); null leaves the rail persist-only (the WS worker self-heals on that
+     *     group's next mutation) — used by legacy/no-container construction paths.
      */
-    public function __construct(SyncPlayManager $syncPlayManager, SyncPlaySnapshotService $snapshotService)
-    {
+    public function __construct(
+        SyncPlayManager $syncPlayManager,
+        SyncPlaySnapshotService $snapshotService,
+        ?SyncPlayBridgePublisher $bridgePublisher = null
+    ) {
         $this->syncPlayManager = $syncPlayManager;
         $this->snapshotService = $snapshotService;
+        $this->bridgePublisher = $bridgePublisher;
     }
 
     /**
@@ -135,6 +149,13 @@ class SyncPlayController
         if ($result['success'] === false) {
             return (new Response())->status(400)->json(['error' => $result['error']]);
         }
+
+        // S445 write-through: DURABLE PERSIST FIRST, publish second (ordering is
+        // the whole point — a published-but-unpersisted mutation would lie about
+        // surviving a WS-worker restart, and a persisted-but-unpublished one
+        // self-heals on the group's next mutation instead).
+        $groupId = is_string($result['group']['group_id'] ?? null) ? $result['group']['group_id'] : '';
+        $this->persistAndPublishUpsert($groupId);
 
         return (new Response())->json(['success' => true, 'group' => $result['group']]);
     }
@@ -200,11 +221,19 @@ class SyncPlayController
             ? $body['memberName']
             : 'Guest';
 
+        // S445 — REST owns persistence: hydrate this worker's manager from the
+        // shared snapshot row when we have never seen the group, so the join
+        // gates (password, capacity, idempotent re-join) run against live truth
+        // instead of this process's phantom table.
+        $this->hydrateFromSnapshot($groupId);
+
         $result = $this->syncPlayManager->joinGroup($groupId, $memberId, $memberName, $password);
 
         if ($result['success'] === false) {
             return (new Response())->status(400)->json(['error' => $result['error']]);
         }
+
+        $this->persistAndPublishUpsert($groupId);
 
         return (new Response())->json(['success' => true, 'group' => $result['group']]);
     }
@@ -231,15 +260,87 @@ class SyncPlayController
             return (new Response())->status(400)->json(['error' => 'Member ID is required']);
         }
 
+        // S445 — hydrate the routed group first: the member may exist only in
+        // the shared snapshot (created/joined through another worker or the WS
+        // transport), and legacy semantics keep the leave keyed on the MEMBER,
+        // so the route {id} is the hydrate target, not the leave target.
+        $routeGroupId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $this->hydrateFromSnapshot($routeGroupId);
+
+        $affectedGroupId = $this->syncPlayManager->getMemberGroup($memberId) ?? '';
+
         $result = $this->syncPlayManager->leaveGroup($memberId);
 
         if ($result['success'] === false) {
             return (new Response())->status(400)->json(['error' => $result['error']]);
         }
 
+        // Persist (delete when the leave emptied the group) THEN publish.
+        if ($affectedGroupId !== '') {
+            $this->persistAndPublishState($affectedGroupId);
+        }
+
         return (new Response())->json([
             'success' => true,
             'message' => $result['message'] ?? null,
         ]);
+    }
+
+    /**
+     * Install the shared snapshot row for a group into this worker's manager.
+     *
+     * Join/leave ALWAYS re-hydrate before mutating (when a row exists): the
+     * write-through publish replaces the live membership set wholesale, so a
+     * stale per-process base would silently drop members another worker (or
+     * the WS transport) added in the meantime. The mirror row IS the truth
+     * this rail modifies; re-adopting it is exactly one indexed SELECT.
+     */
+    private function hydrateFromSnapshot(string $groupId): void
+    {
+        if ($groupId === '') {
+            return;
+        }
+
+        $serialized = $this->snapshotService->loadSerialized($groupId);
+        if ($serialized !== null) {
+            $this->syncPlayManager->adoptGroupFromSerialized($serialized);
+        }
+    }
+
+    /**
+     * Write-through half of the rail: durably persist the group's new state to
+     * the snapshot store, THEN publish the frame to the WS worker. A snapshot
+     * write failure MUST surface (a 200 that lied about durability is worse
+     * than a 500); a bridge publish failure never does (fire-and-forget loss
+     * posture, docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md).
+     */
+    private function persistAndPublishUpsert(string $groupId): void
+    {
+        $group = $groupId === '' ? null : $this->syncPlayManager->getGroup($groupId);
+        if ($group === null) {
+            return;
+        }
+
+        $this->snapshotService->publishGroup($group);
+        $this->bridgePublisher?->publishUpsert($group);
+    }
+
+    /**
+     * Leave-rail twin of {@see persistAndPublishUpsert()}: the group may have
+     * just emptied, and "gone" is itself a state that must be persisted and
+     * published (delete frame / tombstone) before the response.
+     */
+    private function persistAndPublishState(string $groupId): void
+    {
+        $group = $this->syncPlayManager->getGroup($groupId);
+        if ($group === null) {
+            $this->snapshotService->removeGroup($groupId);
+            $this->bridgePublisher?->publishDelete($groupId);
+
+            return;
+        }
+
+        $this->snapshotService->publishGroup($group);
+        $this->bridgePublisher?->publishUpsert($group);
     }
 }

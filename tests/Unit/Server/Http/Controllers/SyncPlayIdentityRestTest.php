@@ -6,9 +6,9 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Session\SyncPlay\SyncPlayManager;
-use Phlix\Session\SyncPlay\SyncPlaySnapshotService;
 use Phlix\Server\Http\Controllers\SyncPlayController;
 use Phlix\Server\Http\Request;
+use Phlix\Tests\Support\SyncPlay\InMemorySyncPlaySnapshotService;
 
 /**
  * S289 — the REST transport derives a member's identity from the authenticated JWT
@@ -18,13 +18,15 @@ use Phlix\Server\Http\Request;
  *
  * This is the controller-boundary half of the AC. The transport-collapse half (the
  * same identity over both transports resolving to ONE member, plus reconnect and the
- * two-tabs model) lives in `SyncPlayE2ETest`; the cross-process phantom boundary
- * (REST writes are per-process until the SP6 bridge) is pinned against real MySQL in
- * `SyncPlayIdentitySharedStoreIntegrationTest`.
+ * two-tabs model) lives in `SyncPlayE2ETest`; the cross-process layer below the
+ * write-through rail (raw manager-to-manager never converges) is pinned against real
+ * MySQL in `SyncPlayIdentitySharedStoreIntegrationTest`.
  *
- * The manager and snapshot service here are the REAL classes; no mutation rail reads
- * the snapshot (create/join/leave only mutate the in-memory manager), so no database
- * is required and no double stands in for the logic under test.
+ * The manager is the REAL class. Since S445 the controller rails persist through the
+ * REST-owned snapshot store (write-through), so the store here is the shared
+ * {@see InMemorySyncPlaySnapshotService} — the unit venue keeps its no-database
+ * posture while still exercising the real hydrate→mutate→persist ordering; the
+ * store's SQL behavior is Integration-suite territory.
  */
 final class SyncPlayIdentityRestTest extends TestCase
 {
@@ -35,7 +37,7 @@ final class SyncPlayIdentityRestTest extends TestCase
     {
         parent::setUp();
         $this->manager = new SyncPlayManager();
-        $this->controller = new SyncPlayController($this->manager, new SyncPlaySnapshotService());
+        $this->controller = new SyncPlayController($this->manager, new InMemorySyncPlaySnapshotService());
     }
 
     /**

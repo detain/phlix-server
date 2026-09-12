@@ -1400,22 +1400,22 @@ class Application
     /**
      * Returns a SyncPlayController instance.
      *
-     * SP5/S289 — the truth of the two transports (the previous wording implied
-     * REST mutations were "delegated to the WS worker in SP6"; no such delegation
-     * exists and this is recorded honestly now):
+     * SP5/S289/S445 — the truth of the two transports:
      *  - The container's `SyncPlayManager` is NOT given a snapshot service on the
      *    HTTP path (only the single WebSocket worker calls `setSnapshotService()`,
-     *    in start.php). So the create/join/leave mutations this controller makes
-     *    mutate THIS HTTP worker's per-process tables and are neither published to
-     *    the shared `syncplay_snapshots` store nor re-hydrated by the WS worker.
-     *  - The read rails (`listGroups`, `getGroup`) DO come from the shared snapshot
-     *    the WS worker publishes.
-     * Cross-worker forwarding of membership mutations is the unwritten SP6 bridge,
-     * tracked as residual work; it is deliberately not half-built here (a snapshot
-     * the live WS worker never re-hydrates would only relocate the phantom). What
-     * S289 does fix — deriving the member identity from the authenticated JWT
-     * subject on BOTH transports — is the precondition that makes that bridge,
-     * once built, converge on one member rather than two.
+     *    in start.php). The REST rails persist THROUGH THE CONTROLLER instead:
+     *    S445 made create/join/leave a write-through read-modify-publish cycle —
+     *    hydrate from the shared `syncplay_snapshots` store when this worker has
+     *    never seen the group, mutate locally with the unchanged manager logic,
+     *    durably persist, then publish one frame on the private unix-socket
+     *    bridge ({@see \Phlix\Session\SyncPlay\SyncPlayBridgePublisher}) so the
+     *    authoritative WS worker applies it live without a restart and without
+     *    ever becoming a DB reader.
+     *  - The read rails (`listGroups`, `getGroup`) come from the same shared store.
+     *  - A null publisher (`syncplay_bridge.enabled => false`, or the legacy
+     *    no-container fallback) leaves the rail persist-only; the WS worker
+     *    self-heals that group on its next published mutation. Model and loss
+     *    posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
      *
      * @return SyncPlayController The controller instance.
      *
@@ -1436,7 +1436,10 @@ class Application
         $snapshotService = $this->container->get(\Phlix\Session\SyncPlay\SyncPlaySnapshotService::class);
         /** @var \Phlix\Session\SyncPlay\SyncPlayManager */
         $syncPlayManager = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayManager::class);
-        return new \Phlix\Server\Http\Controllers\SyncPlayController($syncPlayManager, $snapshotService);
+        /** @var \Phlix\Session\SyncPlay\SyncPlayBridgePublisher|null */
+        $bridgePublisher = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayBridgePublisher::class);
+
+        return new SyncPlayController($syncPlayManager, $snapshotService, $bridgePublisher);
     }
 
     /**

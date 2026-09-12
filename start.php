@@ -623,6 +623,50 @@ try {
         $snapshotService = $container->get(\Phlix\Session\SyncPlay\SyncPlaySnapshotService::class);
         $syncPlayManager->setSnapshotService($snapshotService);
 
+        // S445 write-through bridge (WS side): ingest REST-worker mutations as
+        // frames on the private unix socket so rooms created or mutated
+        // through the HTTP rails are reflected in THIS worker's live tables
+        // without a restart. The WS worker stays the single authority on live
+        // in-memory state and never becomes a DB reader — it is fed by the
+        // published deltas (persist-then-publish ordering on the REST side).
+        // A listener failure must NEVER stop :8097 from serving; a bind error
+        // or a missing event loop downgrades to a logged warning (model +
+        // loss posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md).
+        $bridgeConfigRaw = $config['syncplay_bridge'] ?? [];
+        $bridgeConfig = is_array($bridgeConfigRaw) ? $bridgeConfigRaw : [];
+        if (\Phlix\Session\SyncPlay\SyncPlayBridge::isEnabled($bridgeConfig)) {
+            try {
+                $bridgeListener = new \Phlix\Session\SyncPlay\SyncPlayBridgeListener(
+                    \Phlix\Session\SyncPlay\SyncPlayBridge::socketPathFromConfig($bridgeConfig),
+                    $logger
+                );
+                $bridgeListener->setApplier(static function (array $frame) use ($syncPlayManager): void {
+                    $syncPlayManager->applyBridgeFrame($frame);
+                });
+                $bridgeListener->listen();
+                if (!$bridgeListener->attachToLoop($w->getEventLoop())) {
+                    // No loop handle (unexpected inside onWorkerStart): drain on a timer.
+                    \Workerman\Timer::add(0.1, static function () use ($bridgeListener): void {
+                        $bridgeListener->poll(64);
+                    });
+                }
+                // Wrap — do not clobber — the worker-stop handler armed by
+                // ConnectionPool::armWorkerStopCleanup() (§4g, inherited pre-fork):
+                // DB-socket teardown must keep running.
+                $previousStop = $w->onWorkerStop;
+                $w->onWorkerStop = static function () use ($bridgeListener, $previousStop, $w): void {
+                    if (is_callable($previousStop)) {
+                        $previousStop($w);
+                    }
+                    $bridgeListener->close();
+                };
+            } catch (\Throwable $bridgeError) {
+                $logger->error('[SyncPlayBridge] listener unavailable; REST mutations will not reach this worker live', [
+                    'error' => $bridgeError->getMessage(),
+                ]);
+            }
+        }
+
         // Build and configure the WebSocket server with the shared manager.
         $wsConfigRaw = $config['websocket'] ?? null;
         $wsConfig = is_array($wsConfigRaw) ? $wsConfigRaw : [];

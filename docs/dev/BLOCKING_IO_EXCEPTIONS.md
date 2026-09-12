@@ -21,7 +21,7 @@ that worker is currently serving**, not just the caller's — one worker is ~1/1
 of HTTP capacity. The WS worker (`start.php:546`), the hub-heartbeat worker
 (`:711`), the background-timer worker (`:765`) and the relay-tunnel worker
 (`:813`) are all `count = 1`, so a stall there is a 100 % outage of that
-subsystem. Neither exception below runs in those workers.
+subsystem. No exception below runs in those workers — all three are HTTP-side.
 
 ---
 
@@ -162,9 +162,50 @@ not by failing.
 
 ---
 
+## Exception 3 — SyncPlay write-through bridge publish (unix socket, S445)
+
+| | |
+|---|---|
+| Site | `src/Session/SyncPlay/SyncPlayBridgePublisher.php::send()` — `stream_socket_client('unix://…')` + **one single** `fwrite()` |
+| Reached from | the three `SyncPlayController` mutation rails (create / join / leave), only *after* the durable snapshot write, on an HTTP worker |
+| Why it exists | S445 write-through publish: the REST side owns persistence and hands the mutated group to the single WS worker over a private unix socket (`docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md`). The WS worker receives only — it never runs this write. |
+| Bound | connect timeout `syncplay_bridge.publish_timeout_ms / 1000` (default **0.25 s**), and the write itself is structurally bounded: the frame is capped at `SyncPlayBridge::MAX_PUBLISH_FRAME_BYTES` (160 KiB) and sent in **one** `fwrite` — never chunked, never retried. |
+| Cost | ≤0.25 s of one HTTP worker in the pathological case; measured 0.1 ms in the normal case, missing listener, oversized frame, and against a wedged never-draining listener. |
+
+### Why a *single capped* write, not a write-until-done loop
+
+Measured on this venue under `SWOOLE_HOOK_UNIX` (the curated allowlist includes
+UNIX/UDG): on a fresh connection to a listener that accepts and then never
+drains, one non-blocking `fwrite` absorbed **219 264 bytes** into kernel
+buffers — and the *second* chunked `fwrite` blocked **forever**, despite
+`stream_set_blocking(false)` and a `select()` reporting the stream writable.
+A partial-write retry loop is therefore *unbounded* here, which is exactly what
+this register forbids. Capping the frame below the measured single-write
+absorption floor and writing it exactly once converts "retry until done" into
+"done or refused, instantly": oversize is rejected before any syscall.
+
+```
+normal frame → wedged listener : result=true  elapsed=0.1ms
+219264B chunk 1 (of 400KB)     : absorbed whole, then chunk 2 blocked forever  ← why no chunking
+oversized frame (200KB name)    : result=false elapsed=0.1ms  (refused, never sent)
+no listener (missing file)      : result=false elapsed=0.1ms
+```
+
+A 160 KiB cap is ≈3.3× the measured worst legitimate frame (a `MAX_MEMBERS`-full
+group serialize = 48 422 bytes), so legitimate publishes always fit under the
+bound; a group whose frame would not fit is a defect surfaced by a warning, not
+a silent stall. Loss posture (fire-and-forget, self-healing) is stated in the
+bridge model doc; failure of this write **never** fails the REST response.
+
+Regression guards: `tests/Unit/Session/SyncPlay/SyncPlayBridgeTest.php`
+(including the wedged-listener anti-hang pair).
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not
-measured. The two entries above were both wrong in their own source comments
+measured. Exceptions 1 and 2 were both wrong in their own source comments
 before they were measured: Exception 1 claimed a bound it did not have, and
-Exception 2 claimed a stall it does not cause.
+Exception 2 claimed a stall it does not cause. Exception 3 was measured before
+it was written down — the numbers in its table are its birth certificate.

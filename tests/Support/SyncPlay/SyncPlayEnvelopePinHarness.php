@@ -55,11 +55,13 @@ use function DI\factory;
  *    real `GroupState::serialize()` (clock fields then frozen so the fixture
  *    is stable across days) and does the real
  *    `json_decode → GroupState::deserialize()->getState()` emission itself.
- *  - The three mutation rails (create/join/leave) never touch the DB in this
- *    venue at all: `SyncPlayManager::setSnapshotService()` has no caller on
- *    the HTTP path (SP5: REST mutations are local, the WS worker owns
- *    publishing), so `publishSnapshot()` no-ops and the group comes straight
- *    out of the real in-memory manager.
+ *  - The three mutation rails (create/join/leave) go through the S445
+ *    write-through rail: the CONTROLLER (not the manager — setSnapshotService
+ *    still has no caller on the HTTP path) persists the post-mutation state
+ *    via the same doubled `Connection` (enumerated upsert/delete pair above)
+ *    and, in this venue, publishes nothing (the bridge publisher is null in
+ *    the test config; its own transport tests cover it). The group bytes come
+ *    straight out of the real in-memory manager, unchanged by S445.
  *
  * Any OTHER SQL reaching the double throws — an unrecognised query means the
  * dispatch path grew a new DB dependency this venue no longer describes, and
@@ -157,6 +159,21 @@ final class SyncPlayEnvelopePinHarness
                         return self::listRows();
                     }
 
+                    // S445 write-through: the REST rails now PERSIST before they
+                    // publish, so exactly this upsert/delete pair against
+                    // syncplay_snapshots is enumerated here (return value is
+                    // ignored by the service for writes). Anything else still
+                    // throws — the venue must keep describing production.
+                    if (
+                        str_contains($sql, 'INSERT INTO syncplay_snapshots')
+                        && str_contains($sql, 'ON DUPLICATE KEY UPDATE')
+                    ) {
+                        return [];
+                    }
+                    if (str_contains($sql, 'DELETE FROM syncplay_snapshots WHERE group_id = ?')) {
+                        return [];
+                    }
+
                     if (str_contains($sql, 'SELECT serialized_state FROM syncplay_snapshots')) {
                         $groupId = is_array($values) ? ($values[0] ?? null) : null;
                         if (is_string($groupId) && $groupId === self::SEEDED_GROUP_ID) {
@@ -175,9 +192,10 @@ final class SyncPlayEnvelopePinHarness
 
                     throw new \RuntimeException(sprintf(
                         "SyncPlayEnvelopePin venue: unexpected SQL reached the Connection double: %s\n"
-                        . 'This venue doubles ONLY MySQL and enumerates ONLY the two snapshot SELECTs the five '
-                        . 'rails emit. A new query on the dispatch path means the venue no longer describes '
-                        . 'production — re-measure before trusting any pin here.',
+                        . 'This venue doubles ONLY MySQL and enumerates ONLY the snapshot SELECTs plus the '
+                        . 'S445 write-through upsert/delete pair the rails emit. A new query on the dispatch '
+                        . 'path means the venue no longer describes production — re-measure before trusting '
+                        . 'any pin here.',
                         $sql
                     ));
                 }

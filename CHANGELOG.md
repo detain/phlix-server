@@ -255,6 +255,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The merged `merge-junit: … assertions=` total is now declared informational at the
+  emitter, and the one passing test that actually manufactured its run-to-run drift is
+  fixed (`S488`).** Two byte-identical source trees (differing only in `.md`/`.gitignore`)
+  reported `assertions=107654` and `assertions=107652` while `worker files`, `tests`,
+  `errors`, `failures` and `skipped` stayed byte-equal — because the estate quotes the
+  whole line as the CI-verbatim baseline, so a `−2` there reads as a causeless delta.
+  Reproducing the parallel lanes locally and diffing per-testcase JUnit `assertions`
+  attributed it: `CliScanJobVisibilityTest`'s `db()` accessor ran `assertInstanceOf()` on
+  EVERY `waitFor()` poll (once per 50 ms while the SIGTERM cases wait on a real OS-signal /
+  `SELECT SLEEP()` timing boundary), so its executed-assertion count equalled 7 + the poll
+  count and drifted ±1–2 with contention while the test itself stayed green. `db()` now
+  fail-fasts with a `RuntimeException` instead — identical safety (reaching it without a live
+  `Connection` still halts loudly), and the method's assertions are constant (verified 6×
+  under load). Broader than any single test, several Integration lanes legitimately execute a
+  data-driven number of assertions (per-segment loops over real ffmpeg output, per-poll
+  guards), so the emitter now records the known-limit in repo: baseline identity is
+  { worker-file count, tests, errors, failures, skipped } and `assertions=` is informational,
+  printed on the unchanged stdout line plus a new stderr declaration, pinned by
+  `ParallelTestWiringTest::testTheAssertionsCounterIsDeclaredInformationalAtTheEmitter`.
+
 - **The teardowns in `tests/Integration/Media/Library/OrphanMusicContainerReapIntegrationTest.php`
   and `tests/Integration/Media/Transcoding/HlsServingIntegrationTest.php` called `chmod()`/`unlink()`
   on paths that were already gone, and the parallel gate printed it (`S486`).** Two distinct

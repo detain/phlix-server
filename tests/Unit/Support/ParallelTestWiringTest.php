@@ -51,6 +51,12 @@ final class ParallelTestWiringTest extends TestCase
 {
     public const STEP_TOKEN = 'CS457PARAUNITX9C';
 
+    /**
+     * S488 — code-resident marker proving the merged `assertions=` counter is declared
+     * informational AT the emitter. Lives in exactly two code homes and in no prose.
+     */
+    public const ASSERTIONS_TOKEN = 'S488ASSERTFIXX9P6';
+
     private const REPO = __DIR__ . '/../../..';
 
     private const WORKFLOW = self::REPO . '/.github/workflows/phpunit.yml';
@@ -388,6 +394,97 @@ final class ParallelTestWiringTest extends TestCase
 
         $this->assertSame(1, $duplicate['exit'], 'the same class in two worker files means double-scheduling — fail loudly');
         $this->assertStringContainsString('SuiteA', $duplicate['output']);
+    }
+
+    // -----------------------------------------------------------------------
+    // 5b — S488: `assertions=` is declared INFORMATIONAL at the emitter, while the
+    //      identity counters (worker-files/tests/errors/failures/skipped) stay exact.
+    // -----------------------------------------------------------------------
+
+    public function testTheAssertionsCounterIsDeclaredInformationalAtTheEmitter(): void
+    {
+        $source = file_get_contents(self::MERGE_JUNIT);
+        $this->assertIsString($source, 'cannot read the merge-junit emitter');
+
+        // The known-limit is recorded IN REPO, in the emitter's own prose…
+        $this->assertStringContainsString('assertions=', $source);
+        $this->assertStringContainsString('informational', $source);
+        $this->assertStringContainsString('baseline identity', $source);
+        // …and as live code: a constant the emitter reads at runtime, not a comment.
+        $constPattern = '/const\s+MERGE_JUNIT_ASSERTIONS_INFORMATIONAL_TOKEN\s*=\s*\''
+            . preg_quote(self::ASSERTIONS_TOKEN, '/') . '\'/';
+        $this->assertMatchesRegularExpression(
+            $constPattern,
+            $source,
+            'the emitter must carry the S488 known-limit marker as a runtime-read constant',
+        );
+
+        // Executed: a fixture set whose ONLY differing counter is assertions — the wide
+        // swing a byte-identical CI run can legitimately produce — proves the identity
+        // counters merge exactly while assertions merely passes the arithmetic sum through.
+        $dir = $this->scratchDir();
+        file_put_contents($dir . '/junit-a.xml', $this->junitFixture('SuiteA', 2, 3, 0, 0, 0, 0.5));
+        file_put_contents($dir . '/junit-b.xml', $this->junitFixture('SuiteB', 1, 1000, 0, 0, 0, 0.25));
+
+        $out = $dir . '/merged.xml';
+        $result = $this->runPhp(self::MERGE_JUNIT, [$dir, $out]);
+        $this->assertSame(0, $result['exit'], $result['output']);
+
+        $document = $this->parseXml($out);
+        $root = $document->documentElement;
+        // Identity half — exact and independent of the assertion swing.
+        $this->assertSame('3', $root->getAttribute('tests'));
+        $this->assertSame('0', $root->getAttribute('errors'));
+        $this->assertSame('0', $root->getAttribute('failures'));
+        $this->assertSame('0', $root->getAttribute('skipped'));
+        // Informational half — passed through, never a gate.
+        $this->assertSame('1003', $root->getAttribute('assertions'));
+
+        // The stdout contract line keeps its exact shape for existing consumers…
+        $this->assertMatchesRegularExpression(
+            '/merge-junit: 2 worker files -> .+ \(tests=3 assertions=1003 errors=0 failures=0 skipped=0\)/',
+            $result['output'],
+        );
+        // …and the emitter declares which half is load-bearing identity vs informational.
+        $identityPhrase = 'baseline identity = worker-files/tests/errors/failures/skipped';
+        $this->assertStringContainsString($identityPhrase, $result['output']);
+        $this->assertStringContainsString('is informational', $result['output']);
+        $this->assertStringContainsString(self::ASSERTIONS_TOKEN, $result['output']);
+    }
+
+    public function testTheS488AssertionsTokenResidesOnlyInCodeAndInNoProse(): void
+    {
+        $needle = self::ASSERTIONS_TOKEN;
+        $this->assertSame(17, strlen($needle), 'the S488 marker has an exact length; a typo breaks the census');
+
+        $hits = [];
+
+        foreach ($this->trackedFiles() as $file) {
+            $contents = file_get_contents($file);
+
+            if ($contents === false) {
+                $this->fail('cannot read ' . $file);
+            }
+
+            $count = substr_count($contents, $needle);
+
+            if ($count > 0) {
+                $hits[$this->relative($file)] = $count;
+            }
+        }
+
+        ksort($hits);
+
+        $this->assertSame(
+            [
+                'scripts/parallel/merge-junit.php' => 1,
+                'tests/Unit/Support/ParallelTestWiringTest.php' => 1,
+            ],
+            $hits,
+            'The S488 known-limit marker must live in exactly its two code homes (the emitter'
+            . ' constant and this guard test) — once each — and in NO markdown, workflow, or'
+            . ' progress document. A CHANGELOG or docs occurrence would poison the corpus check.',
+        );
     }
 
     // -----------------------------------------------------------------------

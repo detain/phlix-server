@@ -210,11 +210,16 @@ final class SyncPlayBridgeListener
         }
 
         if ($this->server !== null) {
-            if ($this->loop !== null) {
-                $this->loop->offReadable($this->server);
-            }
-            @fclose($this->server);
+            // Hand the property back to null BEFORE closing: a closed resource
+            // must never be the property's value, not even for a statement
+            // (Psalm models fclose() as writing closed-resource through the
+            // property type; the ordering is also just honest).
+            $server = $this->server;
             $this->server = null;
+            if ($this->loop !== null) {
+                $this->loop->offReadable($server);
+            }
+            @fclose($server);
         }
 
         if ($this->socketPath !== '' && file_exists($this->socketPath)) {

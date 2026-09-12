@@ -752,9 +752,25 @@ PHP;
         return $path;
     }
 
+    /**
+     * The live connection, guarded for the static analysers.
+     *
+     * S488 — this accessor is called once per `waitFor()` poll, i.e. every 50 ms
+     * while the SIGTERM cases wait on a real OS signal / `SELECT SLEEP(2)` timing
+     * boundary. It MUST NOT carry a counted assertion: an `assertInstanceOf` here
+     * executed a number of times equal to the poll count, so the executed-assertion
+     * total drifted with wall-clock contention (the `merge-junit: … assertions=` line
+     * moved by the same amount CI reported as a causeless −2) even though every
+     * assertion passed. The connection is established in `setUp()` via
+     * {@see self::requireRealDatabase()} and typed `?Connection`; a fail-fast throw
+     * keeps the identical safety property — reaching here without a live Connection
+     * still halts loudly — without inflating the assertion count on a timing loop.
+     */
     private function db(): Connection
     {
-        $this->assertInstanceOf(Connection::class, $this->db);
+        if (!$this->db instanceof Connection) {
+            throw new RuntimeException('the S150 CLI scan test reached db() with no live MySQL Connection.');
+        }
 
         return $this->db;
     }

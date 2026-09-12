@@ -369,8 +369,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * Request property in src (the controller rails keep their existing reads;
              * the leave rail's group id rides the router's $params array), so the read
              * denominator is unchanged.
+             * Re-pinned 1872→1873 by S240: one file joined the tree —
+             * tests/Integration/Server/Http/MusicQueryParamRouteTest.php, the AC venue
+             * for the additive music name-on-query-param routes. Measured 1873 from the
+             * phpunit red, not predicted.
              */
-    private const EXPECTED_PHP_FILES = 1872;
+    private const EXPECTED_PHP_FILES = 1873;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -420,8 +424,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * SyncPlayWriteThroughBridgeTest.php's httpRequest() helper assigns four declared
      * Request members directly (method/path/userId/body) — the same S438/S289/S73
      * shape, S427 license intact. The src/ bridge adds no Request write site.
+     * Re-pinned 969→970 by S240: tests/Integration/Server/Http/MusicQueryParamRouteTest.php's
+     * dispatchWire() helper assigns one declared Request member directly
+     * ($request->userId — the entry-point identity stamp, same S435 lane shape,
+     * S427 license intact). The src/ handlers reach the name only through the
+     * queryString() method; the READS denominator is measured unchanged (green at
+     * the existing pin), and the zero-dynamic posture is untouched.
      */
-    private const EXPECTED_DECLARED_WRITES = 969;
+    private const EXPECTED_DECLARED_WRITES = 970;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -73,3 +73,6 @@ runs/*.xml
 runs/*.log
 runs/tmp/
 runs/.harness.lock
+
+# lane journals stay outside git
+PROGRESS.md

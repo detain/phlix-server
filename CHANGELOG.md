@@ -217,6 +217,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- **Untracked the repo-root `PROGRESS.md` lane journal; sandbox journals stay out of git (`S487`).**
+  The file was a lane's scratch progress log that entered the tracked tree with the two W71 merges and
+  belongs only under `.sandboxes/<lane>/`, outside every git working tree. Both authored versions remain
+  recoverable from history; the root `.gitignore` now carries a `PROGRESS.md` line so a future
+  `git add -A` can never re-track a repo-root journal. No routes, no behavior change, no census change.
+
 - **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by
   nothing on any published deployment artifact — re-measured at the step's tip: the Dockerfiles run
   php-cli only under supervisord's `start.php` program (the fpm/nginx binaries are removed from the

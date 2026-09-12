@@ -48,6 +48,27 @@ use Throwable;
  */
 class Application
 {
+    /**
+     * S240 — Decision marker for the music detail *query-parameter* route shape.
+     *
+     * Entity names now travel on a decoded `name` query parameter
+     * (`GET /api/v1/music/artist?name=` · `GET /api/v1/music/album?name=[&artist=]`,
+     * registered in {@see self::loadMusicRoutes()}) because the relay hub's
+     * path-traversal guard rejects percent-encoded slashes in the PATH (by design —
+     * S108b pins it and it must stay), which made slash-bearing names like "AC/DC"
+     * unreachable via `/api/v1/music/artists/{mbid}` through the relay. Query strings
+     * cross the bridge byte-for-byte and every Request entry point percent-decodes
+     * them ($_GET, Workerman `parse_str`, relay envelope `parse_str`), so the service
+     * receives the literal name. Additive: the existing `{mbid}` path routes are
+     * untouched — six shipped clients depend on them. The singular static segments
+     * shadow nothing (Router resolves statics before `{param}` patterns; the plural
+     * list routes never consume `name`).
+     *
+     * Mirrored as an executed assertion in
+     * {@see \Phlix\Tests\Integration\Server\Http\MusicQueryParamRouteTest}.
+     */
+    public const MUSIC_QUERY_PARAM_ROUTE_TOKEN = 'S240QRYPARAMX9Q5';
+
     /** @var Router The router instance for handling request dispatching */
     private Router $router;
 
@@ -2215,8 +2236,14 @@ class Application
      * Registers music library API routes.
      *
      * Wires endpoints for:
-     * - MusicController: listArtists, getArtist, listAlbums, getAlbum,
-     *   listTracks, getTrack, nowPlaying (7 routes)
+     * - MusicController: listArtists, getArtist, getArtistByNameQuery, listAlbums,
+     *   getAlbum, getAlbumByTitleQuery, listTracks, getTrack, nowPlaying (9 routes)
+     *
+     * **S240 shape note.** Detail-by-name has two spellings: the historical
+     * `{mbid}` path segment (kept — six clients depend on it) and the additive
+     * singular `?name=` query-param routes, the only spelling that reaches a name
+     * containing `/` through the relay. Rationale:
+     * {@see self::MUSIC_QUERY_PARAM_ROUTE_TOKEN}.
      *
      * @since 0.14.0
      */
@@ -2230,8 +2257,12 @@ class Application
             // Music library browsing routes
             $r->get('/api/v1/music/artists', [$controller, 'listArtists']);
             $r->get('/api/v1/music/artists/{mbid}', [$controller, 'getArtist']);
+            // S240 — name-on-query-param twins (see MUSIC_QUERY_PARAM_ROUTE_TOKEN):
+            // the spelling that survives the relay's path-segment traversal guard.
+            $r->get('/api/v1/music/artist', [$controller, 'getArtistByNameQuery']);
             $r->get('/api/v1/music/albums', [$controller, 'listAlbums']);
             $r->get('/api/v1/music/albums/{mbid}', [$controller, 'getAlbum']);
+            $r->get('/api/v1/music/album', [$controller, 'getAlbumByTitleQuery']);
             $r->get('/api/v1/music/tracks', [$controller, 'listTracks']);
             $r->get('/api/v1/music/tracks/{id}', [$controller, 'getTrack']);
 

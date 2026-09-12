@@ -181,6 +181,54 @@ class MusicController
             return (new Response())->status(400)->json(['error' => 'Artist name is required']);
         }
 
+        return $this->respondArtistByName($artistName);
+    }
+
+    /**
+     * Gets one artist whose name rides the `name` QUERY PARAMETER (S240).
+     *
+     * GET /api/v1/music/artist?name=<artist-name>
+     *
+     * Identical lookup and response shape to {@see self::getArtist()}; the only
+     * difference is where the name rides. The query string crosses the relay
+     * bridge byte-for-byte and every Request entry point percent-decodes it
+     * ($_GET-shape, Workerman `parse_str`, relay envelope `parse_str`), so a name
+     * containing `/` (e.g. "AC/DC") resolves here even though the hub's
+     * path-traversal guard refuses `%2F` inside a path segment. The name is used
+     * verbatim — no re-decoding here (Router::decodePathParams() covers path
+     * params; query params arrive decoded exactly once).
+     *
+     * @param Request $request The HTTP request; required query param `name`
+     *   (exact artist display name, percent-encoded on the wire)
+     * @param array<string, string> $params Route parameters (unused — static route)
+     * @return Response JSON artist detail, 400 when `name` is missing/empty, 404 when unknown
+     *
+     * @see \Phlix\Server\Core\Application::MUSIC_QUERY_PARAM_ROUTE_TOKEN For the shape decision
+     */
+    public function getArtistByNameQuery(Request $request, array $params): Response
+    {
+        unset($params);
+
+        $artistName = $request->queryString('name') ?? '';
+
+        if ($artistName === '') {
+            return (new Response())->status(400)->json(['error' => 'Artist name is required']);
+        }
+
+        return $this->respondArtistByName($artistName);
+    }
+
+    /**
+     * Looks one artist up by exact name and answers with its detail payload.
+     *
+     * Shared by the `{mbid}` path spelling and the S240 `?name=` spelling so both
+     * routes resolve through the identical service call and response shape.
+     *
+     * @param string $artistName Decoded literal artist display name
+     * @return Response JSON artist detail or 404 when unknown
+     */
+    private function respondArtistByName(string $artistName): Response
+    {
         $artist = $this->musicLibrary->findArtistByName($artistName);
         if ($artist === null) {
             return (new Response())->status(404)->json(['error' => 'Artist not found']);
@@ -332,8 +380,56 @@ class MusicController
             return (new Response())->status(400)->json(['error' => 'Album name is required']);
         }
 
+        return $this->respondAlbumByTitle($request, $albumName);
+    }
+
+    /**
+     * Gets one album whose title rides the `name` QUERY PARAMETER (S240).
+     *
+     * GET /api/v1/music/album?name=<album-title>[&artist=<artist-name>]
+     *
+     * Identical lookup and response shape to {@see self::getAlbum()}, including
+     * the optional `artist` disambiguator for shared titles. The query spelling
+     * is the only shape that reaches a title containing `/` through the relay,
+     * whose path-traversal guard refuses `%2F` inside a path segment; query
+     * strings cross byte-for-byte and arrive percent-decoded exactly once.
+     *
+     * @param Request $request The HTTP request; required query param `name`
+     *   (exact album title, percent-encoded on the wire), optional query param
+     *   `artist` (exact artist name disambiguating a shared title)
+     * @param array<string, string> $params Route parameters (unused — static route)
+     * @return Response JSON album detail, 400 when `name` is missing/empty, 404 when unknown
+     *
+     * @see \Phlix\Server\Core\Application::MUSIC_QUERY_PARAM_ROUTE_TOKEN For the shape decision
+     */
+    public function getAlbumByTitleQuery(Request $request, array $params): Response
+    {
+        unset($params);
+
+        $albumTitle = $request->queryString('name') ?? '';
+
+        if ($albumTitle === '') {
+            return (new Response())->status(400)->json(['error' => 'Album name is required']);
+        }
+
+        return $this->respondAlbumByTitle($request, $albumTitle);
+    }
+
+    /**
+     * Looks one album up by exact title and answers with its detail payload.
+     *
+     * Shared by the `{mbid}` path spelling and the S240 `?name=` spelling so both
+     * routes resolve through the identical service call (incl. the optional
+     * `?artist=` disambiguator) and response shape.
+     *
+     * @param Request $request Source of the optional `artist` disambiguator
+     * @param string $albumTitle Decoded literal album title
+     * @return Response JSON album detail or 404 when unknown
+     */
+    private function respondAlbumByTitle(Request $request, string $albumTitle): Response
+    {
         $album = $this->musicLibrary->findAlbumByTitle(
-            $albumName,
+            $albumTitle,
             $this->filterValue($request->queryString('artist')),
         );
         if ($album === null) {

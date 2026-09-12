@@ -9,6 +9,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Music artist/album detail now also resolves by name on a query parameter (`S240`).**
+  `GET /api/v1/music/artist?name=<name>` and `GET /api/v1/music/album?name=<title>[&artist=<name>]`
+  are additive twins of the existing `{mbid}` path detail routes — same auth group, same lookup,
+  same response shape — with the entity name riding the query string instead of a path segment.
+  The relay hub's path-traversal guard (by design) rejects percent-encoded slashes inside paths,
+  which made names like "AC/DC" unreachable through `/api/v1/music/artists/{mbid}` on relayed
+  deployments; query strings cross the bridge byte-for-byte and every request entry point
+  percent-decodes them exactly once, so the library service receives the literal name. The
+  historical path routes are untouched — shipped clients keep working — and the singular static
+  segments shadow nothing on the router.
+
 - **The default (stable) plugin channel installs again — the official catalog pin rolled
   from `v2.3.0` to `v2.4.0` (`S420`).** The pinned `detain/phlix-plugins` tag predated the
   `phlix-plugin-sample-theme` entry commit, so with zero env overrides the audited default

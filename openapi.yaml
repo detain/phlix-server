@@ -8240,6 +8240,44 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/music/album":
+    get:
+      operationId: "get_api_v1_music_album"
+      tags: ["Music & Books"]
+      summary: "Get album by name query param"
+      description: "Get album (get /api/v1/music/album). The album TITLE rides the required `name` query parameter, percent-encoded on the wire and decoded once by the request layer; the only spelling whose name can contain `/`, since the relay path guard rejects encoded slashes in the path segment. `artist` optionally disambiguates shared titles."
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "name"
+          in: query
+          required: true
+          description: "Album title."
+          schema:
+            type: string
+        - name: "artist"
+          in: query
+          required: false
+          description: "Artist name."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/music/albums":
     get:
       operationId: "get_api_v1_music_albums"
@@ -8275,6 +8313,38 @@ paths:
           in: path
           required: true
           description: "MusicBrainz id."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/music/artist":
+    get:
+      operationId: "get_api_v1_music_artist"
+      tags: ["Music & Books"]
+      summary: "Get artist by name query param"
+      description: "Get artist (get /api/v1/music/artist). The artist NAME rides the required `name` query parameter, percent-encoded on the wire and decoded once by the request layer; the only spelling whose name can contain `/`, since the relay path guard rejects encoded slashes in the path segment."
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "name"
+          in: query
+          required: true
+          description: "Artist name."
           schema:
             type: string
       security:

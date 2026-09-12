@@ -6,13 +6,22 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Net\SsrfGuard;
+use Phlix\Plugins\Catalog\CatalogEntry;
 use Phlix\Plugins\Catalog\CatalogFetchException;
+use Phlix\Plugins\Catalog\CatalogSourceResolver;
 use Phlix\Plugins\Catalog\PluginCatalogService;
+use Phlix\Plugins\Installer\SourceUrlResolver;
 use PHPUnit\Framework\TestCase;
 
 final class PluginCatalogServiceTest extends TestCase
 {
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
+
+    /** S420 survival marker — a code string literal, not a comment, so it survives `php -w`. */
+    private const STEP_MARK = 'S420STABLEINSTX9Q2';
+
+    /** The flagship first-party catalog entry the stable channel must serve. */
+    private const SAMPLE_THEME = 'phlix-plugin-sample-theme';
 
     protected function setUp(): void
     {
@@ -564,5 +573,172 @@ final class PluginCatalogServiceTest extends TestCase
             $elapsedMs,
             'a clean in-coroutine timeout must wait the window, not return immediately (the false-timeout bug).',
         );
+    }
+
+    /**
+     * S420 — the stable channel must ACTUALLY serve a verified install target
+     * with ZERO env overrides and ZERO catalog settings.
+     *
+     * ## The defect this closes
+     * The pin sat at v2.3.0 — a tag that PREDATES the sample-theme entry commit
+     * (282c5b3). Every offline mechanism stayed green (isolated live install →
+     * enable → index()=5 themes; catalog digest byte-identical) while a real
+     * default-channel install on the real network was REFUSED, because the
+     * pinned plugins.json simply did not contain the entry.
+     *
+     * ## What this asserts, over the network production itself uses
+     *  1. With `PHLIX_PLUGINS_CATALOG_REF` unset and no channel setting, the
+     *     stable channel resolves to {@see CatalogSourceResolver::OFFICIAL_PINNED_REF}
+     *     — an immutable release tag, never the moving `master`;
+     *  2. the catalog read from that tag ships the flagship
+     *     `phlix-plugin-sample-theme` **release entry v1.0.0, verified:true**,
+     *     with a full-SHA ref and a 64-hex artifact digest;
+     *  3. the service's own install-pin path (`pinFor()`) agrees with the entry;
+     *  4. re-hashing the artifact through the installer's own
+     *     {@see SourceUrlResolver} repo→`/archive/<ref>.tar.gz` rewrite — i.e.
+     *     codeload bytes, the estate's canonical hash source (api.github.com
+     *     tarballs are DIFFERENT bytes) — reproduces the catalog digest exactly.
+     *
+     * Planted-regression proof: re-pin the constant to v2.3.0 and claim (2)
+     * reddens — the entry is absent from that tag's catalog. This mirrors the
+     * blocking 'Plugin manifest schema' gate in phlix-plugins'
+     * validate-catalog.yml (hard-fail fetch, no vacuous skips).
+     *
+     * Marked with the repo's convention for runtime live-fetch tests
+     * (`@group network`): phpunit.xml excludes the group from the default
+     * suite so no uncontrolled remote sits on the load-bearing critical path
+     * (the S308/S309 lesson). Run explicitly: --group network.
+     *
+     * @group network
+     */
+    public function test_stable_channel_at_pinned_tag_serves_verified_sample_theme_install(): void
+    {
+        // Zero env overrides: the operator escape hatch must be ABSENT for the
+        // whole resolution, and restored exactly as found afterwards.
+        $overrideKey = CatalogSourceResolver::PINNED_REF_ENV;
+        $savedOverride = getenv($overrideKey);
+        putenv($overrideKey);
+
+        try {
+            // (1) Default-channel resolution: no env, stable channel → audited pin.
+            self::assertFalse(
+                getenv($overrideKey),
+                'the pinned-ref env override must be absent for this test. ' . self::STEP_MARK
+            );
+            $channelRef = CatalogSourceResolver::refForChannel(CatalogSourceResolver::CHANNEL_STABLE);
+            self::assertNull(
+                $channelRef,
+                'the stable channel carries no moving ref of its own — the pin IS the answer. ' . self::STEP_MARK
+            );
+            $pinned = CatalogSourceResolver::officialPinnedRef($channelRef);
+            self::assertSame(
+                CatalogSourceResolver::OFFICIAL_PINNED_REF,
+                $pinned,
+                'with zero overrides the stable channel must land on the audited pin. ' . self::STEP_MARK
+            );
+            self::assertNotSame(
+                CatalogSourceResolver::DEV_REF,
+                $pinned,
+                'the stable pin must never be the moving default branch. ' . self::STEP_MARK
+            );
+            self::assertSame(
+                1,
+                preg_match('/^v\d+\.\d+\.\d+$/', $pinned),
+                "the stable pin must be an immutable release tag (got {$pinned}). " . self::STEP_MARK
+            );
+            self::assertSame(
+                sprintf(
+                    'https://raw.githubusercontent.com/%s/%s/%s/%s',
+                    CatalogSourceResolver::OFFICIAL_OWNER,
+                    CatalogSourceResolver::OFFICIAL_REPO,
+                    $pinned,
+                    CatalogSourceResolver::CATALOG_FILE,
+                ),
+                CatalogSourceResolver::normalize(self::DEFAULT_SOURCE),
+                'the bare official repo URL must resolve to the pinned tag, not a branch. ' . self::STEP_MARK
+            );
+
+            // (2) The real service on the real network: production defaults
+            // (empty settings store) + the production fetcher.
+            $store = [];
+            $service = new PluginCatalogService($this->settings($store), PluginCatalogService::defaultFetcher());
+            $catalog = $service->fetchCatalog($service->defaultSource());
+
+            $release = null;
+            foreach ($catalog['plugins'] as $entry) {
+                if ($entry->name === self::SAMPLE_THEME && $entry->version === '1.0.0') {
+                    $release = $entry;
+                    break;
+                }
+            }
+
+            if (!$release instanceof CatalogEntry) {
+                self::fail(sprintf(
+                    'the official catalog at pin %s carries no %s v1.0.0 release entry — a default-channel '
+                    . 'install of the flagship plugin is REFUSED (this is the S420 defect). %s',
+                    $pinned,
+                    self::SAMPLE_THEME,
+                    self::STEP_MARK,
+                ));
+            }
+
+            self::assertTrue(
+                $release->verified(),
+                'the flagship release entry must be verified:true — an unverified entry keeps '
+                    . 'default-deny at install time. ' . self::STEP_MARK
+            );
+            self::assertSame(
+                1,
+                preg_match('/^[0-9a-f]{40}$/', $release->ref),
+                'the release entry must pin a full 40-hex commit: ' . $release->ref . '. ' . self::STEP_MARK
+            );
+            self::assertSame(
+                1,
+                preg_match('/^[0-9a-f]{64}$/', $release->artifactSha256),
+                'the release entry must carry a 64-hex artifact digest: ' . $release->artifactSha256 . '. '
+                    . self::STEP_MARK
+            );
+
+            // (3) The service's own install-pin path agrees with the entry.
+            [$pinSha, $pinRef] = $service->pinFor(self::SAMPLE_THEME);
+            self::assertSame(
+                $release->artifactSha256,
+                $pinSha,
+                'pinFor() and the fetched entry disagree on the artifact digest. ' . self::STEP_MARK
+            );
+            self::assertSame(
+                $release->ref,
+                $pinRef,
+                'pinFor() and the fetched entry disagree on the pinned ref. ' . self::STEP_MARK
+            );
+
+            // (4) Codeload re-hash: the exact URL HttpInstaller would fetch,
+            // fetched with the exact fetcher the catalog path uses.
+            $artifactUrl = SourceUrlResolver::normalize($release->repo, $release->ref);
+            self::assertSame(
+                rtrim($release->repo, '/') . '/archive/' . $release->ref . '.tar.gz',
+                $artifactUrl,
+                'the pinned ref must rewrite to the codeload-shaped archive URL the installer hashes. '
+                    . self::STEP_MARK
+            );
+            $fetcher = PluginCatalogService::defaultFetcher();
+            $artifactBytes = $fetcher($artifactUrl, 60);
+            self::assertSame(
+                $release->artifactSha256,
+                hash('sha256', $artifactBytes),
+                sprintf(
+                    'the codeload artifact at ref %s no longer hashes to the digest the catalog claims at '
+                    . 'pin %s — the pin is not byte-audited. ',
+                    $release->ref,
+                    $pinned,
+                ) . self::STEP_MARK
+            );
+        } finally {
+            if ($savedOverride === false) {
+                putenv($overrideKey);
+            } else {
+                putenv($overrideKey . '=' . $savedOverride);
+            }
+        }
     }
 }

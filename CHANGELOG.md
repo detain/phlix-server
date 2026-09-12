@@ -9,6 +9,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The default (stable) plugin channel installs again — the official catalog pin rolled
+  from `v2.3.0` to `v2.4.0` (`S420`).** The pinned `detain/phlix-plugins` tag predated the
+  `phlix-plugin-sample-theme` entry commit, so with zero env overrides the audited default
+  channel resolved a `plugins.json` that simply did not contain the flagship entry and every
+  catalog-driven install of it was REFUSED while every offline mechanism stayed green. The
+  live guarantee is now asserted, not assumed: a `@group network` test fetches the official
+  catalog through the production fetcher at the pinned tag, requires the sample-theme
+  release v1.0.0 entry to be present and `verified: true`, and re-hashes the codeload
+  artifact (`github.com/…/archive/<ref>.tar.gz` — the estate's canonical byte source) at the
+  entry's pinned ref against its `artifactSha256`; rolling the pin back to a
+  pre-entry tag reddens it loudly. Operators who set the `PHLIX_PLUGINS_CATALOG_REF`
+  override keep their override — only the zero-configuration default moves.
+
 - **Cross-process SyncPlay mutations are now visible to the serving WS worker without a
   restart — the write-through publish bridge (`S445`).** Until now the 14 HTTP workers each
   held a *private* `SyncPlayManager`, so a room created or joined through

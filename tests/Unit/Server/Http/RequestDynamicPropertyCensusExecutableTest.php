@@ -373,8 +373,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * tests/Integration/Server/Http/MusicQueryParamRouteTest.php, the AC venue
              * for the additive music name-on-query-param routes. Measured 1873 from the
              * phpunit red, not predicted.
+             * Re-pinned 1873→1874 by S446: the member-sync nudge policy adds exactly
+             * one first-party PHP file (tests/Unit/Session/SyncPlay/
+             * SyncPlayMemberSyncNudgeTest.php — the live end-to-end pair that retires
+             * S291's isInSync dead-code guard: out-of-sync report yields exactly one
+             * bounded nudge, in-sync yields none, plus cooldown, positionless-report
+             * inertness, frame-envelope conformance and the bridge non-clobber rule);
+             * measured on this tree by phpunit, not predicted. It reads/writes no
+             * Request property (it drives WebSocket connections and in-memory managers
+             * only), so every other census denominator is unchanged.
              */
-    private const EXPECTED_PHP_FILES = 1873;
+    private const EXPECTED_PHP_FILES = 1874;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

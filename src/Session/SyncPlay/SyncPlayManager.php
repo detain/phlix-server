@@ -1314,11 +1314,26 @@ class SyncPlayManager
      * to that behaviour; WsAuthenticationTest carries a case that reddens if the
      * send is ever narrowed back to a reply aimed only at the caller.
      *
+     * S446 — this is also the LIVE INGEST SITE for per-member positions: the
+     * reporter's own `position` (ms, frames have carried ms since S417) is no
+     * longer discarded. It is stored via GroupState::recordMemberPosition()
+     * and evaluated by the revived sync predicate; the DECIDED out-of-sync
+     * reaction is a NUDGE — one rate-limited, corrective playback_sync frame
+     * aimed at the drifting member carrying soft drift/rate guidance keys,
+     * never a seek (owner ruling 2026-09-12; see the policy docblock on
+     * GroupState). A payload without a usable numeric position stores nothing
+     * and can never trigger a reaction — absence of evidence is not evidence
+     * of drift, and legacy position-less sync requests keep their exact
+     * pre-S446 behaviour (pure state echo).
+     *
      * @param ConnectionInterface $connection The WebSocket connection
-     * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289)
+     * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289;
+     *                                       `position` ms is INGESTED — S446)
      * @return void
      *
      * @fires Messages::TYPE_PLAYBACK_SYNC Broadcast to every group member (not only the requester)
+     * @fires Messages::TYPE_PLAYBACK_SYNC One additional NUDGE-shaped frame to the
+     *         reporting member only, when out of sync and the cooldown slot is free (S446)
      */
     private function handlePlaybackSync(ConnectionInterface $connection, array $payload): void
     {
@@ -1345,6 +1360,14 @@ class SyncPlayManager
         $isPlaying = $group->isPlaying();
         $serverTime = time();
 
+        // S446 — ingest the reporter's own position before echoing state, so the
+        // predicate evaluates the freshest truth on the same injected clock tick.
+        $nowMs = Messages::nowMs();
+        $reportedPosition = self::reportedPositionMs($payload);
+        if ($reportedPosition !== null) {
+            $group->recordMemberPosition($memberId, $reportedPosition, $nowMs);
+        }
+
         // Broadcast current playback state from host to all members
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_SYNC, [
             'member_id' => $hostId,
@@ -1354,6 +1377,100 @@ class SyncPlayManager
             'is_playing' => $isPlaying,
             'server_time' => $serverTime,
         ]);
+
+        // S446 — out-of-sync policy, aimed at the reporter only, AFTER the
+        // unchanged group echo. Order of the guards is deliberate: no report →
+        // nothing to judge; in sync → nothing to say; slot claimed → already
+        // said it recently.
+        if ($reportedPosition !== null && !$group->isMemberInSync($memberId, $nowMs)) {
+            $this->sendOutOfSyncNudge($connection, $group, $memberId, $groupId, $nowMs, $reportedPosition);
+        }
+    }
+
+    /**
+     * S446 — emit the decided out-of-sync reaction: a NUDGE, never a seek.
+     *
+     * Rides the existing playback_sync frame family via the Messages factory
+     * (S417 outbound rule: {type, protocol_version: 1, ms timestamp}, additive
+     * keys only — the client decoder requires nothing but `type`, so a client
+     * that ignores the `nudge` object still sees the authoritative state echo).
+     * The claim of the cooldown slot happens here, atomically with the
+     * decision point, and gates the single send: at most one nudge per member
+     * per GroupState::NUDGE_COOLDOWN_MS window, at most one per ingest tick.
+     *
+     * @param ConnectionInterface $connection The drifting member's connection
+     * @param GroupState $group The live group state
+     * @param string $memberId Server-derived identity of the drifting member
+     * @param string $groupId The live group id
+     * @param int $nowMs Wall-clock ms, same stamp the position was ingested at
+     * @param int $reportedPositionMs The member's just-recorded position in ms
+     * @return void
+     */
+    private function sendOutOfSyncNudge(
+        ConnectionInterface $connection,
+        GroupState $group,
+        string $memberId,
+        string $groupId,
+        int $nowMs,
+        int $reportedPositionMs
+    ): void {
+        if (!$group->claimNudgeSlot($memberId, $nowMs)) {
+            return;
+        }
+
+        $driftMs = $group->getPlaybackPosition() - $reportedPositionMs;
+        $behind = $driftMs > 0;
+
+        $connection->send(Messages::frame(Messages::TYPE_PLAYBACK_SYNC, [
+            'member_id' => $memberId,
+            'group_id' => $groupId,
+            'current_media_id' => $group->getCurrentMediaId(),
+            'position' => $group->getPlaybackPosition(),
+            'is_playing' => $group->isPlaying(),
+            'server_time' => time(),
+            'nudge' => [
+                'drift_ms' => $driftMs,
+                'direction' => $behind ? 'behind' : 'ahead',
+                'suggested_rate' => $behind
+                    ? 1 + GroupState::NUDGE_RATE_STEP
+                    : 1 - GroupState::NUDGE_RATE_STEP,
+                'tolerance_ms' => $group->getPositionTolerance(),
+                'cooldown_ms' => GroupState::NUDGE_COOLDOWN_MS,
+            ],
+        ]));
+
+        $this->log('info', 'Sent out-of-sync nudge (S446)', [
+            'group_id' => $groupId,
+            'member_id' => $memberId,
+            'drift_ms' => $driftMs,
+        ]);
+    }
+
+    /**
+     * S446 — narrow a playback_sync payload's `position` to a usable ms int.
+     *
+     * Accepts ints and numeric scalars >= 0 (JSON integers arrive as int;
+     * tolerant clients may send floats or numeric strings). Anything else —
+     * missing, bool, negative, non-numeric — yields null: NO record, NO
+     * reaction. A member cannot be judged on a value that never was a report.
+     *
+     * @param array<string, mixed> $payload
+     * @return int|null Position in milliseconds, or null when not usable
+     */
+    private static function reportedPositionMs(array $payload): ?int
+    {
+        $raw = $payload['position'] ?? null;
+
+        $value = null;
+        if (is_int($raw)) {
+            $value = $raw;
+        } elseif (is_float($raw) && is_finite($raw)) {
+            $value = (int) $raw;
+        } elseif (is_string($raw) && is_numeric($raw)) {
+            $value = (int) $raw;
+        }
+
+        return ($value !== null && $value >= 0) ? $value : null;
     }
 
     /**

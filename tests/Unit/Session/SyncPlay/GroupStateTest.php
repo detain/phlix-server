@@ -302,31 +302,116 @@ class GroupStateTest extends TestCase
     }
 
     /**
-     * S291 — GroupState::isInSync() was REMOVED after a runtime proof that it was
-     * unreachable in production: instrumenting the method to throw left the entire
-     * behavioural SyncPlay surface (E2E + WsAuthentication + Manager + Integration +
-     * the other 33 GroupStateTest cases) green — only the method's own two unit
-     * callers tripped it. Wiring it would require an out-of-sync POLICY
-     * (nudge / force-seek / ignore) that the spec explicitly forbids inventing, and
-     * the group model stores no per-member position to feed it. This guard pins the
-     * removal so a re-introduction is a deliberate, policy-bearing decision.
+     * S446 — CONSCIOUS RETIREMENT of S291's dead-code guard
+     * (testIsInSyncRemainsRemovedAsUnreachableDeadCode).
      *
-     * @see S291 lane report for the recorded canary run.
+     * That guard pinned isInSync()/isMemberInSync() absent until the day
+     * someone re-introduces them "carrying a decided out-of-sync policy".
+     * That day is S446: per-member position storage exists
+     * (recordMemberPosition), the predicate is live again (isInSync /
+     * isMemberInSync), and the owner-ruled policy is NUDGE-over-force-seek
+     * (2026-09-12). The guard's precondition — "no policy, no storage" — is
+     * gone, so the guard is replaced HERE by the behavioural tests below,
+     * and its two AC directions are exercised end to end by
+     * SyncPlayMemberSyncNudgeTest::testOutOfSyncReportYieldsExactlyOneBoundedNudge
+     * and ::testInSyncReportYieldsNoNudge. Deleting the guard without the
+     * replacement tests, or vice versa, is the drift this note forbids.
      */
-    public function testIsInSyncRemainsRemovedAsUnreachableDeadCode(): void
+    public function testMemberPositionIsStoredPerMemberInMilliseconds(): void
     {
-        // Lane identity token (S291) — pinned as a string literal so the merge
-        // ritual can prove this step's work survived into the merged tree.
-        $laneToken = 'S291POSITIONX2M8';
-        $this->assertSame('S291POSITIONX2M8', $laneToken);
+        $group = new GroupState('group_123', 'Test Group');
+        $group->addMember('member_1', ['name' => 'One']);
+        $group->addMember('member_2', ['name' => 'Two']);
+
+        $this->assertTrue($group->recordMemberPosition('member_1', 5000, 111));
+        $this->assertTrue($group->recordMemberPosition('member_2', 7000, 222));
+
+        $this->assertSame(['position' => 5000, 'at_ms' => 111], $group->getMemberPosition('member_1'));
+        $this->assertSame(['position' => 7000, 'at_ms' => 222], $group->getMemberPosition('member_2'));
+
         $this->assertFalse(
-            method_exists(GroupState::class, 'isInSync'),
-            'isInSync() was removed as runtime-proved unreachable; re-adding it must carry a decided out-of-sync policy'
+            $group->recordMemberPosition('ghost', 1, 1),
+            'a report from a non-member must be refused, never fabricate live state'
         );
-        $this->assertFalse(
-            method_exists(GroupState::class, 'isMemberInSync'),
-            'the plan block referred to isMemberInSync(), which never existed — pin that name stays absent too'
+        $this->assertNull($group->getMemberPosition('ghost'));
+
+        $group->removeMember('member_1');
+        $this->assertNull(
+            $group->getMemberPosition('member_1'),
+            'a departed member position must die with the member, not haunt a re-join'
         );
+    }
+
+    public function testRevivedIsInSyncPredicateUsesTheExistingPositionTolerance(): void
+    {
+        $group = new GroupState('group_123', 'Test Group');
+        $group->setCurrentMedia('media_1', 60000);
+        $group->updatePlayback(GroupState::STATE_PLAYING, 10000);
+
+        // Window is the group's own tolerance (default POSITION_TOLERANCE=2000ms):
+        // boundary inclusive, 1ms past it out.
+        $this->assertTrue($group->isInSync(10000 + $group->getPositionTolerance()));
+        $this->assertTrue($group->isInSync(10000 - $group->getPositionTolerance()));
+        $this->assertFalse($group->isInSync(10000 + $group->getPositionTolerance() + 1));
+
+        // S291's verbatim semantics: a not-playing group has nothing to drift against.
+        $group->updatePlayback(GroupState::STATE_PAUSED, 10000);
+        $this->assertTrue($group->isInSync(0));
+    }
+
+    public function testIsMemberInSyncJudgesTheStoredPosition(): void
+    {
+        $group = new GroupState('group_123', 'Test Group');
+        $group->addMember('member_1', ['name' => 'One']);
+        $group->setCurrentMedia('media_1', 60000);
+        $group->updatePlayback(GroupState::STATE_PLAYING, 10000);
+
+        // No evidence at all is never evidence of drift.
+        $this->assertTrue($group->isMemberInSync('member_1', 50000));
+
+        $this->assertTrue($group->recordMemberPosition('member_1', 16000, 50000));
+        $this->assertFalse($group->isMemberInSync('member_1', 50000), '6s behind > 2s tolerance');
+
+        // Past the staleness budget the report is no longer actionable (fail-in-sync).
+        $this->assertTrue(
+            $group->isMemberInSync('member_1', 50000 + GroupState::MEMBER_POSITION_STALENESS_MS + 1),
+            'a stale report must never convict'
+        );
+    }
+
+    public function testNudgeSlotClaimIsBoundedPerMember(): void
+    {
+        $group = new GroupState('group_123', 'Test Group');
+        $group->addMember('member_1', ['name' => 'One']);
+        $group->addMember('member_2', ['name' => 'Two']);
+
+        $this->assertTrue($group->claimNudgeSlot('member_1', 100000));
+        $this->assertFalse($group->claimNudgeSlot('member_1', 100999), 'inside the cooldown window');
+        $this->assertTrue($group->claimNudgeSlot('member_1', 101000), 'boundary: exactly cooldown elapses');
+        // Cooldown is per member, not global.
+        $this->assertTrue($group->claimNudgeSlot('member_2', 101001));
+    }
+
+    public function testMemberPositionsAreLiveOnlyAndNeverSerialized(): void
+    {
+        $group = new GroupState('group_123', 'Test Group');
+        $group->addMember('member_1', ['name' => 'One']);
+        $group->setHost('member_1');
+        $group->recordMemberPosition('member_1', 5000, 123456);
+
+        // The bridge mirror and the public broadcast ride serialize()/getState();
+        // positions must be invisible to both (S446 worker-local live state rule).
+        $serialized = $group->serialize();
+        $this->assertArrayNotHasKey('member_positions', $serialized);
+        foreach ($serialized['members'] as $member) {
+            $this->assertArrayNotHasKey('position', $member);
+        }
+        $this->assertArrayNotHasKey('member_positions', $group->getState());
+
+        // A deserialize→serialize round trip (what a REST mirror does) cannot
+        // fabricate or smuggle positions either.
+        $roundTripped = GroupState::deserialize($serialized);
+        $this->assertNull($roundTripped->getMemberPosition('member_1'));
     }
 
     public function testGetStateReturnsCompleteState(): void

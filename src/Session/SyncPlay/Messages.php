@@ -210,6 +210,46 @@ final class Messages
     }
 
     /**
+     * Build the canonical outbound wire frame for a SyncPlay message type.
+     *
+     * SPEC §2 requires EVERY frame to carry {type, protocol_version, timestamp}
+     * with the timestamp in milliseconds. The typed constructors below emit
+     * that shape for fixed payloads; frame() is the generic stamping source
+     * for payloads assembled at the emit site (join notices, group snapshots,
+     * time-sync replies, …). Payload keys are preserved verbatim — nothing is
+     * reshaped — but `type`, `protocol_version` and `timestamp` are owned by
+     * the factory alone, so no emit site can leak a seconds-based timestamp
+     * or omit the protocol version.
+     *
+     * @param string $type Message type (one of the TYPE_* constants)
+     * @param array<string, mixed> $payload Flat payload fields for the frame
+     * @return array<string, mixed> Canonical frame {type, protocol_version, ...payload, timestamp:ms}
+     *
+     * @throws \InvalidArgumentException If $type is not a known SyncPlay message type
+     *
+     * @example
+     * ```php
+     * $frame = Messages::frame(Messages::TYPE_TIME_SYNC, ['member_id' => 'm1', 'server_time' => 1700000000]);
+     * ```
+     */
+    public static function frame(string $type, array $payload = []): array
+    {
+        if (!self::isValidType($type)) {
+            throw new \InvalidArgumentException('Unknown SyncPlay message type: ' . $type);
+        }
+
+        // The factory owns the envelope keys; strip any payload copies so a
+        // hand-built seconds timestamp can never survive to the wire.
+        unset($payload['type'], $payload['protocol_version'], $payload['timestamp']);
+
+        return array_merge(
+            ['type' => $type, 'protocol_version' => self::PROTOCOL_VERSION],
+            $payload,
+            ['timestamp' => self::getCurrentTimestamp()]
+        );
+    }
+
+    /**
      * Create a group creation request message.
      *
      * @param string $groupName The desired group name

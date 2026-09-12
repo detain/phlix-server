@@ -218,12 +218,9 @@ class SyncPlayRoom
     {
         $sentCount = 0;
 
-        // Build the flat canonical message frame (no 'data' wrapper)
-        $frame = array_merge(
-            ['type' => $type],
-            $data,
-            ['timestamp' => time()]
-        );
+        // Build the flat canonical message frame (no 'data' wrapper), routed
+        // through the Messages factory so it carries protocol_version + ms timestamp.
+        $frame = Messages::frame($type, $data);
 
         $this->logger?->debug('Broadcasting to room', [
             'room_id' => $this->roomId,
@@ -363,12 +360,7 @@ class SyncPlayRoom
         }
 
         try {
-            $frame = array_merge(
-                ['type' => $type],
-                $data,
-                ['timestamp' => time()]
-            );
-            $connection->send($frame);
+            $connection->send(Messages::frame($type, $data));
             return true;
         } catch (\Throwable $e) {
             $this->logger?->error('Failed to send to member', [

@@ -683,7 +683,7 @@ class SyncPlayManager
         ];
 
         // Send directly to host as confirmation of their command
-        $connection->sendFlat(Messages::TYPE_PLAYBACK_PLAY, $playbackFrame);
+        $connection->send(Messages::frame(Messages::TYPE_PLAYBACK_PLAY, $playbackFrame));
 
         // Broadcast to all OTHER members
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_PLAY, $playbackFrame, [$memberId]);
@@ -886,11 +886,13 @@ class SyncPlayManager
 
         $group->addChatMessage($memberId, $message);
 
+        // S417: the frame envelope carries the authoritative millisecond timestamp
+        // (Messages::frame via broadcastToGroup); the former seconds-level payload
+        // duplicate of that key was dropped.
         $this->broadcastToGroup($groupId, Messages::TYPE_CHAT_MESSAGE, [
             'member_id' => $memberId,
             'member_name' => $memberName,
             'message' => $message,
-            'timestamp' => time(),
         ]);
     }
 
@@ -1099,7 +1101,7 @@ class SyncPlayManager
 
         $timeStatus = $this->timeSync->getStatus();
 
-        $connection->sendFlat(Messages::TYPE_TIME_SYNC, [
+        $connection->send(Messages::frame(Messages::TYPE_TIME_SYNC, [
             'member_id' => $memberId,
             'group_id' => $groupId,
             'server_time' => time(),
@@ -1107,7 +1109,7 @@ class SyncPlayManager
             'latency_ms' => $timeStatus['latency'],
             'drift_rate' => $timeStatus['drift_rate'],
             'is_stable' => $timeStatus['is_stable'],
-        ]);
+        ]));
     }
 
     /**
@@ -1133,10 +1135,10 @@ class SyncPlayManager
 
         $groups = $this->listGroups();
 
-        $connection->sendFlat(Messages::TYPE_GROUP_LIST, [
+        $connection->send(Messages::frame(Messages::TYPE_GROUP_LIST, [
             'groups' => $groups,
             'count' => count($groups),
-        ]);
+        ]));
     }
 
     /**
@@ -1167,10 +1169,10 @@ class SyncPlayManager
         $result = $this->createGroup($groupName, $password, $memberId, $memberName, $connection->getId());
 
         if ($result['success'] === true) {
-            $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
+            $connection->send(Messages::frame(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
-            ]);
+            ]));
         } else {
             $this->sendError($connection, 'CREATE_FAILED', $result['error']);
         }
@@ -1202,10 +1204,10 @@ class SyncPlayManager
         $result = $this->joinGroup($groupId, $memberId, $memberName, $password, $connection->getId());
 
         if ($result['success'] === true) {
-            $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
+            $connection->send(Messages::frame(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
-            ]);
+            ]));
         } else {
             $this->sendError($connection, 'JOIN_FAILED', $result['error']);
         }
@@ -1233,9 +1235,8 @@ class SyncPlayManager
         $result = $this->leaveGroup($memberId);
 
         if ($result['success'] === true) {
-            $connection->sendMessage(Messages::TYPE_INFO, [
-                'message' => $result['message'] ?? 'Left group',
-            ]);
+            // S417: the leave ack joins the flat wire envelope (was nested sendMessage).
+            $connection->send(Messages::info($result['message'] ?? 'Left group'));
         } else {
             $this->sendError($connection, 'LEAVE_FAILED', $result['error']);
         }
@@ -1262,11 +1263,7 @@ class SyncPlayManager
             return;
         }
 
-        $flatFrame = array_merge(
-            ['type' => $type],
-            $data,
-            ['timestamp' => time()]
-        );
+        $flatFrame = Messages::frame($type, $data);
 
         foreach ($group->getMembers() as $memberId => $member) {
             if (in_array($memberId, $excludeIds, true)) {
@@ -1299,10 +1296,7 @@ class SyncPlayManager
      */
     private function sendError(ConnectionInterface $connection, string $code, string $message): void
     {
-        $connection->sendFlat(Messages::TYPE_ERROR, [
-            'error_code' => $code,
-            'message' => $message,
-        ]);
+        $connection->send(Messages::error($code, $message));
     }
 
     /**

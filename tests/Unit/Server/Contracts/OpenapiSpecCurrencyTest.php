@@ -46,7 +46,7 @@ use function DI\factory;
  * YAML. A derived spec regenerated in CI could never disagree with the code it derived
  * from; a hand-maintained one can, and that is precisely what fails loud here.
  *
- * ## The 402-tuple ground truth (W50 re-spec; re-derived on the S73 rebase)
+ * ## The 404-tuple ground truth (W50 re-spec; re-derived on the S73 rebase, S240)
  *
  * The served surface is the UNION of the two routers with `Application` taking
  * precedence on overlap: `HttpHandler` dispatches `Application` first and only falls
@@ -54,8 +54,8 @@ use function DI\factory;
  * (src/Server/Workerman/HttpHandler.php). So the effective middleware for a method+path
  * both routers expose is `Application`'s — the S349 "single real path" rule: the spec
  * documents the path the dispatcher actually serves, never a shadowed second opinion.
- * That yields 365 (Application) + 48 (WebPortalRouter, incl. S73's
- * GET /api/v1/people/{personId}/photo) − 11 overlap = 402 operations across 340 path
+ * That yields 367 (Application) + 48 (WebPortalRouter, incl. S73's
+ * GET /api/v1/people/{personId}/photo) − 11 overlap = 404 operations across 342 path
  * templates. The eleven overlaps are re-derived from the live routers
  * every run; four of them expose divergent chains (`GET /api/v1/libraries`,
  * `GET /api/v1/libraries/{id}`, `GET /api/v1/media/{id}/posters` and
@@ -511,8 +511,10 @@ final class OpenapiSpecCurrencyTest extends TestCase
         $this->assertSame('3.1.0', $doc['openapi'] ?? null, 'the spec must be OpenAPI 3.1.0');
         $this->assertIsArray($doc['paths'] ?? null, 'the spec must carry a paths object');
         // 339 at the S65 authoring; 340 after the S73 people-photo endpoint
-        // (GET /api/v1/people/{personId}/photo), re-measured on this rebase.
-        $this->assertCount(340, $doc['paths'], 'the served surface is 340 distinct path templates');
+        // (GET /api/v1/people/{personId}/photo), re-measured on this rebase; 342 after
+        // S240's additive music detail-by-name query routes (GET /api/v1/music/artist,
+        // GET /api/v1/music/album), re-measured from this phpunit red.
+        $this->assertCount(342, $doc['paths'], 'the served surface is 342 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

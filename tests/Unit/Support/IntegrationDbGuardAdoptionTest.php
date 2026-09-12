@@ -395,8 +395,15 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * persistence is the durable half of the write-through ordering contract, and
      * the rails' hydrate reads (`loadSerialized`) answer from real rows; the
      * in-memory double cannot witness the order "durable first, published second".
+     *
+     * 59 since S240's
+     * `tests/Integration/Server/Http/MusicQueryParamRouteTest.php`: the AC demands
+     * a space-named and a slash-named artist resolve end-to-end through the REAL
+     * composed route table into `findArtistByName()`'s `WHERE a.name = ?` — a
+     * recorded double cannot witness a literal `AC/DC` matching a real row, so
+     * every acceptance clause runs against real MySQL.
      */
-    private const EXPECTED_ADOPTERS = 58;
+    private const EXPECTED_ADOPTERS = 59;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

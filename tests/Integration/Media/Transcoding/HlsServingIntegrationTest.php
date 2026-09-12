@@ -49,6 +49,24 @@ use Workerman\MySQL\Connection;
  */
 class HlsServingIntegrationTest extends TestCase
 {
+    /**
+     * S486 — teardown-race sentinel (mirrors the S460 lane-sentinel shape in
+     * tests/Unit/Media/Transcoding/FfmpegRunnerHlsTest). Every cleanup failure
+     * this file raises names it, so a leftover `phlix_hls_ondemand_*` from the
+     * zero-residue census attributes to this class instead of surfacing as an
+     * anonymous directory several suites later.
+     */
+    private const S486_LANE_SENTINEL = 'S486FIXREAPX9P4';
+
+    /** Ceiling for the detached-writer quiescence poll below (S460 budget). */
+    private const DETACHED_MARKER_TIMEOUT_SECONDS = 15.0;
+
+    /** Poll cadence while waiting for `.part-*` markers to disappear. */
+    private const DETACHED_MARKER_POLL_INTERVAL_US = 20_000;
+
+    /** Bounded retries for the guarded recursive removal (late `rename()`s). */
+    private const REMOVE_DIR_ATTEMPTS = 3;
+
     private string $segmentDir;
     private FfmpegRunner $ffmpeg;
 
@@ -61,14 +79,131 @@ class HlsServingIntegrationTest extends TestCase
         if (!$this->ffmpeg->isAvailable()) {
             $this->markTestSkipped('ffmpeg binary not available');
         }
-        $this->segmentDir = sys_get_temp_dir() . '/phlix_hls_ondemand_' . uniqid();
-        mkdir($this->segmentDir, 0755, true);
+        // random_bytes, not uniqid(): two workers created in the same microsecond
+        // share a uniqid() name (S460 note), and a collision here would make one
+        // worker's teardown destroy the other's fixtures. Guarded `@mkdir` for the
+        // same reason — a collision must fail HERE with the path, not emit a raw
+        // `mkdir(): File exists` warning into the loud parallel printer.
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_hls_ondemand_' . bin2hex(random_bytes(8));
+        if (!@mkdir($this->segmentDir, 0755, true) && !is_dir($this->segmentDir)) {
+            $this->fail(self::S486_LANE_SENTINEL . ': setUp FAILED — could not create ' . $this->segmentDir);
+        }
     }
 
+    /**
+     * S486 — the race this replaces: `ensureSegment()` returns as soon as the
+     * published fragment EXISTS, but the wrapper that wrote it
+     * (`FfmpegRunner::startSegmentEncode`, fMP4 publish chain) deletes its
+     * `.part-*` marker + `.part-*.m3u8` sibling AFTER that moment. The old
+     * blind `rrmdir()` could scan the directory before the wrapper's trailing
+     * `rm -f` and then `unlink()` names that no longer exist — the
+     * `unlink(…seg-voriginal-00000.m4s.part-<hex>): No such file or directory`
+     * pair CI printed. Serial printers hide the suppressed events; the parallel
+     * gate's paraunit surfaces them, so `@` is not protection — only never
+     * calling `unlink()` on a gone path is.
+     *
+     * Fix, in order: (1) poll the expected post-condition — every
+     * `seg-*.part-*` marker under the job dirs is GONE, and the marker is the
+     * last thing the wrapper's write phase touches, so its disappearance means
+     * no detached writer can create or delete anything in here anymore;
+     * (2) guarded recursive removal — existence re-checked per path, bounded
+     * retries; (3) verification — a directory that survives fails loudly
+     * naming the lane sentinel. No global warning suppression added anywhere.
+     */
     protected function tearDown(): void
     {
-        if (isset($this->segmentDir) && is_dir($this->segmentDir)) {
-            $this->rrmdir($this->segmentDir);
+        $survivors = [];
+
+        if (isset($this->segmentDir) && $this->segmentDir !== '' && is_dir($this->segmentDir)) {
+            $this->waitForDetachedWriterQuiescence();
+            $this->removeDirectory($this->segmentDir, $survivors);
+        }
+
+        parent::tearDown();
+
+        if ($survivors !== []) {
+            $this->fail(
+                self::S486_LANE_SENTINEL . ': cleanup FAILED — ' . implode('; ', $survivors)
+                . ' (detached writer exceeded its ' . self::DETACHED_MARKER_TIMEOUT_SECONDS . 's '
+                . 'quiescence budget or files could not be unlinked)'
+            );
+        }
+    }
+
+    /**
+     * Poll until no `seg-*.part-*` marker remains in any job dir (the wrapper's
+     * trailing `rm -f` consumes the marker as its final step, so absence means
+     * the write phase is over), bounded by DETACHED_MARKER_TIMEOUT_SECONDS.
+     * On timeout the guarded removal below still runs — the timeout is reported
+     * only if something actually survives, because that is the only claim this
+     * lane can make from what it observed.
+     */
+    private function waitForDetachedWriterQuiescence(): void
+    {
+        $deadline = hrtime(true) + (int) (self::DETACHED_MARKER_TIMEOUT_SECONDS * 1_000_000_000);
+
+        while ($this->inFlightMarkerPaths() !== []) {
+            if (hrtime(true) > $deadline) {
+                return;
+            }
+            usleep(self::DETACHED_MARKER_POLL_INTERVAL_US);
+        }
+    }
+
+    /**
+     * @return list<string> every `.part-*` encode marker under the job dirs —
+     *         covers the bare marker plus its `.i`/`.s0`/`.m3u8` siblings, all
+     *         of which share the `seg-…part-…` stem and all of which the
+     *         wrapper's chain removes.
+     */
+    private function inFlightMarkerPaths(): array
+    {
+        return glob("{$this->segmentDir}/*/seg-*.part-*") ?: [];
+    }
+
+    /**
+     * Remove $dir recursively after re-checking each name; up to
+     * REMOVE_DIR_ATTEMPTS passes so a sibling that appears between a scan and
+     * its removal still gets one. A path still present after the last attempt
+     * is appended to $survivors for the loud report.
+     */
+    private function removeDirectory(string $dir, array &$survivors): void
+    {
+        for ($attempt = 1; $attempt <= self::REMOVE_DIR_ATTEMPTS; $attempt++) {
+            $this->removeTree($dir);
+            if (!is_dir($dir)) {
+                return;
+            }
+            usleep(self::DETACHED_MARKER_POLL_INTERVAL_US);
+        }
+
+        // Reached only when every attempt left the directory in place —
+        // fall-through IS the surviving state, so this reports unconditionally.
+        $leftover = array_values(array_filter(
+            scandir($dir) ?: [],
+            static fn (string $entry): bool => $entry !== '.' && $entry !== '..'
+        ));
+        $survivors[] = $dir . ' (entries left: '
+            . ($leftover === [] ? 'none — directory itself unremovable' : implode(', ', $leftover))
+            . ')';
+    }
+
+    private function removeTree(string $dir): void
+    {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path) && !is_link($path)) {
+                $this->removeTree($path);
+            } elseif (file_exists($path) || is_link($path)) {
+                @unlink($path);
+            }
+            // neither → vanished between the scan and the check; nothing to unlink
+        }
+        if (is_dir($dir)) {
+            @rmdir($dir);
         }
     }
 
@@ -347,17 +482,5 @@ class HlsServingIntegrationTest extends TestCase
             }
         );
         return $db;
-    }
-
-    private function rrmdir(string $dir): void
-    {
-        foreach (scandir($dir) ?: [] as $e) {
-            if ($e === '.' || $e === '..') {
-                continue;
-            }
-            $p = "{$dir}/{$e}";
-            is_dir($p) ? $this->rrmdir($p) : unlink($p);
-        }
-        rmdir($dir);
     }
 }

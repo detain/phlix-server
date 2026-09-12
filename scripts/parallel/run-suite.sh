@@ -30,20 +30,123 @@
 #   - The AssertionEscapeGuard writes per-child reports; assertion-escape-check.php
 #     globs the family. No action needed here.
 #
-# paraunit reports "N files with ERRORS/FAILURES" without guaranteeing a non-zero
-# exit code of its own; any non-zero ERRORS/FAILURES file count therefore fails this
-# script (S457). WARNINGS are surfaced but NOT fatal, deliberately: the recorded set
-# includes warnings that are the behavior under test (src failure-path @fsockopen /
-# @file_get_contents against unroutable URLs, corrupt-fixture @getimagesize/@exif,
-# Monolog's lazy-stream @fileinode before first write). They always fired — serial
-# printers hide suppressed PHP events, paraunit prints them. The file-system hygiene
-# warnings that were genuine test debt (unlink/rmdir/stat on paths a test knows may
-# be absent) are fixed; a growing WARNINGS block in CI is still loud and reviewable.
+# Verdict contract (S485). Measured on facile-it/paraunit 2.11.0 in this vendor tree:
+# the runner maps TEST VERDICTS to exactly two codes — 0 when every worker exited 0,
+# 10 when any worker exited non-zero (Runner::onProcessParsingCompleted). Because
+# children run with failOnWarning=true, a warnings-only lane ALSO exits 10: CI run
+# 34651283031 attempt-1 killed the Integration lane over the same chmod/unlink
+# warning text that had passed twice before. The old wrapper re-exited any non-zero
+# status verbatim (old :122-124) while its comment claimed warnings were non-fatal —
+# the comment was the intent, the code was the flake. Now paraunit_verdict() grades
+# the artifacts paraunit itself produced:
+#   - status outside {0,10}  never ran children to a verdict (console/config
+#                            failure, measured exit 1) — propagate verbatim;
+#   - ERRORS / FAILURES      recap count > 0 — fatal (the S457 gate, unchanged);
+#   - ABNORMAL TERMINATIONS  a worker died mid-test — fatal;
+#   - RISKY OUTCOME          failOnRisky=true says risky is a failure here — fatal;
+#   - WARNINGS block entry   ' [UNKNOWN]' — a runner-level warning not attributable
+#                            to any test file (paraunit Test::unknown()); this is
+#                            the S439 zero-residue-census / tooling warning class
+#                            and it STAYS RED;
+#   - JUnit tail holds       <error>/<failure> — fatal backstop against recap
+#     element                            wording drift (warnings can never appear
+#                                        in JUnit: JunitXmlLogger has no such node);
+#   - zero JUnit tails       under status 10 the workers produced no evidence —
+#                            a gate that cannot read results must not report
+#                            success (same doctrine as coverage-threshold-check);
+#   - anything else          deterministic NON-fatal: the warn note is echoed and
+#                            the lane passes. WARNINGS remain loud and reviewable;
+#                            the recorded set includes warnings that are the
+#                            behavior under test (src failure-path @fsockopen /
+#                            @file_get_contents against unroutable URLs,
+#                            corrupt-fixture @getimagesize/@exif, Monolog's
+#                            lazy-stream @fileinode before first write).
+# Known limit: a test-attributed PHPUnit warning is indistinguishable from a PHP
+# warning in the recap (paraunit collapses both onto the test file), so it is
+# demoted together with them; tooling warnings keep their fatal route via the
+# [UNKNOWN] marker. Console errors exit 1, never 10, so they can't hide in here.
 set -euo pipefail
 
 usage() {
     echo "usage: $0 <Unit|Integration> <parallel> [shards] [--coverage <out.covobj>]" >&2
+    echo "       $0 verdict <status> <paraunit-log> <junit-dir>  (S485 seam: grade artifacts without paraunit)" >&2
 }
+
+# paraunit_verdict <status> <log> <junit-dir> — the exit-status half of the
+# contract above. Echoes its reasoning; EXITS the script (0 pass, 1 fatal, or the
+# verbatim status when paraunit produced no test verdict). Test-attributed via
+# scripts/parallel/run-suite.sh's `verdict` subcommand by
+# tests/Unit/Support/ParaunitVerdictExactnessTest.php against REAL paraunit output.
+paraunit_verdict() {
+    local status="$1" log="$2" junit_dir="$3"
+
+    if [ "$status" != "0" ] && [ "$status" != "10" ]; then
+        echo "run-suite: paraunit exited $status without producing a test verdict — the runner maps verdicts to 0/10 only; console/config failures exit 1 (measured 2.11.0). Propagating verbatim." >&2
+        exit "$status"
+    fi
+
+    if grep -Eq '[1-9][0-9]* files with (ERRORS|FAILURES)' "$log"; then
+        echo "run-suite: paraunit reported files with ERRORS/FAILURES — see the block above." >&2
+        exit 1
+    fi
+
+    if [ "$status" = "10" ]; then
+        if grep -Eq '[1-9][0-9]* files with ABNORMAL TERMINATIONS' "$log"; then
+            echo "run-suite: paraunit exited 10 with ABNORMAL TERMINATIONS — a worker died mid-test. Failing." >&2
+            exit 1
+        fi
+
+        # Block-scoped: the literal line ' [UNKNOWN]' inside a WARNINGS recap block
+        # (header, then single-space-indented names, ended by the next blank line).
+        # An awk + variable, never a pipeline: under `set -o pipefail` a `grep -q`
+        # closing the pipe would SIGPIPE awk (exit 141) and flip the whole condition
+        # false — the same trap the `|| true` below documents.
+        local unknown_warning
+        unknown_warning="$(awk '/^[0-9]+ files with WARNINGS:/{b=1;next} b && /^ /{if ($0 == " [UNKNOWN]") {print; exit} next} b{b=0}' "$log")"
+        if [ -n "$unknown_warning" ]; then
+            echo "run-suite: paraunit exited 10 with a runner-level (non-test-attributable) [UNKNOWN] warning — the S439 census/tooling class; fatal. See the WARNINGS block above." >&2
+            exit 1
+        fi
+
+        if grep -Eq '[1-9][0-9]* files with RISKY OUTCOME' "$log"; then
+            echo "run-suite: paraunit exited 10 with RISKY OUTCOME — phpunit-parallel.xml sets failOnRisky=true; failing." >&2
+            exit 1
+        fi
+
+        local tails=( "$junit_dir"/*.xml )
+        if [ ! -e "${tails[0]}" ]; then
+            echo "run-suite: paraunit exited 10 but wrote no JUnit tails under $junit_dir — no evidence to grade, no pass." >&2
+            exit 1
+        fi
+        if grep -qE '<(error|failure)[ />]' "${tails[@]}"; then
+            echo "run-suite: paraunit exited 10 and a JUnit tail records an <error>/<failure> element (recap wording drift backstop) — failing." >&2
+            exit 1
+        fi
+    fi
+
+    # `|| true` is load-bearing, not cosmetics: this script runs under `set -euo pipefail`,
+    # and grep exits 1 when it matches nothing. A CLEAN lane has no "files with WARNINGS"
+    # line at all, so without the guard the substitution returns 1, pipefail propagates it,
+    # and set -e kills the script with exit 1 on a run that passed (PR 758 CI run 3: Unit
+    # survived only because it had 33 warning files to match; Integration had 0 and died here
+    # with paraunit itself having exited 0 — paraunit maps test verdicts to 0/10 only).
+    local warn_line
+    warn_line="$(grep -E '^[0-9]+ files with WARNINGS' "$log" | tail -1 || true)"
+    if [ -n "$warn_line" ]; then
+        echo "run-suite: ${warn_line} — recorded PHP warnings (see WARNINGS block above); fatal classes are ERRORS, FAILURES, ABNORMAL TERMINATIONS, RISKY OUTCOME and runner-level [UNKNOWN] warnings only."
+    fi
+    if [ "$status" = "10" ]; then
+        echo "run-suite: paraunit exited 10 on test-attributable warnings only — deterministic non-fatal verdict (S485)."
+    fi
+}
+
+if [ "${1:-}" = "verdict" ]; then
+    shift
+    [ "$#" -eq 3 ] || { usage; exit 2; }
+    [[ "$1" =~ ^[0-9]+$ ]] && [ -f "$2" ] && [ -d "$3" ] || { usage; exit 2; }
+    paraunit_verdict "$1" "$2" "$3"
+    exit 0
+fi
 
 suite="${1:-}"; parallel="${2:-}"
 case "$suite" in
@@ -119,22 +222,4 @@ TMPDIR="$PHLIX_TEST_TMP_BASE" php -d max_execution_time=0 vendor/bin/paraunit "$
     "${paraunit_args[@]}" >"$log" 2>&1 || status=$?
 cat "$log"
 
-if [ "$status" -ne 0 ]; then
-    exit "$status"
-fi
-
-if grep -Eq '[1-9][0-9]* files with (ERRORS|FAILURES)' "$log"; then
-    echo "run-suite: paraunit reported files with ERRORS/FAILURES — see the block above." >&2
-    exit 1
-fi
-
-# `|| true` is load-bearing, not cosmetics: this script runs under `set -euo pipefail`,
-# and grep exits 1 when it matches nothing. A CLEAN lane has no "files with WARNINGS"
-# line at all, so without the guard the substitution returns 1, pipefail propagates it,
-# and set -e kills the script with exit 1 on a run that passed (PR 758 CI run 3: Unit
-# survived only because it had 33 warning files to match; Integration had 0 and died here
-# with paraunit itself having exited 0 — note paraunit only ever returns 0 or 10).
-warn_line="$(grep -E '^[0-9]+ files with WARNINGS' "$log" | tail -1 || true)"
-if [ -n "$warn_line" ]; then
-    echo "run-suite: ${warn_line} — recorded PHP warnings (see WARNINGS block above); fatal classes are ERRORS/FAILURES only."
-fi
+paraunit_verdict "$status" "$log" "$repo_root/.phpunit-junit"

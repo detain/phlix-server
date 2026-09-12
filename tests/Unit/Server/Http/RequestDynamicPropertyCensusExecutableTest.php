@@ -340,8 +340,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * `:latest` drift guard); measured on this tree, not predicted. It
              * reads/writes no Request property (it touches only YAML, compose and
              * doc text), so every other census denominator is unchanged.
+             * Re-pinned 1862→1863 by S485: adds exactly one first-party PHP file
+             * (tests/Unit/Support/ParaunitVerdictExactnessTest.php — the guard that
+             * executes run-suite.sh's paraunit verdict against REAL paraunit 2.11.0
+             * artifacts: warnings-only non-fatal, ERRORS/FAILURES/[UNKNOWN]/RISKY/
+             * abnormal fatal, verbatim propagation, plus load-bearing mutation
+             * controls); measured on this tree, not predicted. It reads/writes no
+             * Request property (it touches only scratch files and subprocesses),
+             * so every other census denominator is unchanged.
              */
-    private const EXPECTED_PHP_FILES = 1862;
+    private const EXPECTED_PHP_FILES = 1863;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

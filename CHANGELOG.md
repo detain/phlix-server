@@ -249,6 +249,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The teardowns in `tests/Integration/Media/Library/OrphanMusicContainerReapIntegrationTest.php`
+  and `tests/Integration/Media/Transcoding/HlsServingIntegrationTest.php` called `chmod()`/`unlink()`
+  on paths that were already gone, and the parallel gate printed it (`S486`).** Two distinct
+  mechanisms, one shared blind spot: `@` hides a PHP warning from every serial printer — PHPUnit's
+  collector drops suppressed events — while the paraunit gate PRINTER surfaces them, so both defects
+  were invisible locally and loud in CI. OrphanMusic's was same-process and deterministic:
+  `testHealingRescan…` registers the renamed file in `$cleanupFiles` while its parent sits in
+  `$cleanupDirs`, and the old directory pass unlinked every child first, so the blind files pass that
+  ran after it always called `chmod()`/`unlink()` on a vanished path. HlsServing's was the S460 class
+  of race: `ensureSegment()` returns when the published fragment EXISTS, but the detached fMP4 wrapper
+  (`FfmpegRunner::startSegmentEncode`) deletes its `seg-*.part-*` marker and `.m3u8` sibling *after*
+  that, and the blind recursive `unlink()` could scan before the wrapper's trailing `rm -f` and warn
+  ENOENT on the names it lost. OrphanMusic now removes existence-guarded, registered-files-first, and
+  verifies every attempted removal with a fresh stat — a path it could not delete fails loudly naming
+  its lane sentinel instead of stranding a `phlix_s153_it_*` for the census to blame anonymously.
+  HlsServing now adopts the S460 shape: a bounded poll for the expected post-condition (every
+  `seg-*.part-*` marker GONE — the marker is the last thing the wrapper's write phase touches, so its
+  absence means no detached writer can create or delete anything under the job dirs anymore), then a
+  guarded recursive removal with bounded retries, then verification — a surviving directory fails
+  loudly with its entries named. Both `setUp()`s mint their temp dirs with `random_bytes` instead of
+  a name-collision-prone `uniqid()`/unguarded `mkdir()`. No global warning suppression was added
+  anywhere; production code is untouched. Proven on this machine: 10× loud-suppression runs of each
+  class and 3× the real paraunit gate shape (`--parallel=8` over `Integration/Media`) now print zero
+  `No such file or directory` lines and zero residue, while an `LD_PRELOAD` unlink-delay + slow-`rm`
+  venue that deterministically forces the wrapper-vs-teardown interleaving (pre-fix: 2 warnings per
+  run, the exact CI pair) comes back clean; mutation-checking both directions, reintroducing the old
+  blind loops reproduces the CI warning text verbatim and removing the marker poll reopens the race.
+
 - **`scripts/install.sh` compiled Swoole and php-uv from floating default-branch HEADs
   while claiming verbatim parity with the pinned `docker/Dockerfile.base` (`S482`).** The
   bare-metal installer is the one build path an operator's PHP receives third-party source

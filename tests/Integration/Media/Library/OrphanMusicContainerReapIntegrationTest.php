@@ -89,6 +89,14 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
 
     private const SKIP_REASON = 'skipping the S153 orphan-container reap test. Runs in CI.';
 
+    /**
+     * S486 — teardown-race sentinel. Names this lane in every cleanup failure
+     * this file raises, so a leftover `phlix_s153_it_*` from the zero-residue
+     * census (or a loud teardown `fail()`) attributes to this class and nobody
+     * has to guess which lane regressed. Mirrors the S460 lane-sentinel shape.
+     */
+    private const S486_LANE_SENTINEL = 'S486FIXREAPX9P4';
+
     private ?Connection $db = null;
 
     /** The music library under test. */
@@ -118,9 +126,11 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         $this->libraryId = Uuid::v4();
         $this->prefix = '!S153-' . substr(Uuid::v4(), 0, 8) . '-';
 
+        // S486: register BEFORE creating, and create guarded — a directory that
+        // exists is always on the cleanup list, and a `mkdir()` that loses a
+        // name collision can no longer emit its own unsuppressed warning.
         $this->root = sys_get_temp_dir() . '/phlix_s153_it_' . bin2hex(random_bytes(6));
-        mkdir($this->root, 0o777, true);
-        $this->cleanupDirs[] = $this->root;
+        $this->makeCleanupDirectory($this->root);
 
         $this->insertLibrary($this->libraryId, [$this->root]);
     }
@@ -139,6 +149,25 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
             }
         }
 
+        // S486 — teardown was racing itself. `testHealingRescan…` registers the
+        // renamed file in `$cleanupFiles` while its parent directory sits in
+        // `$cleanupDirs`, and the directory pass unlinks every child first. The
+        // old blind `@chmod()`/`@unlink()` over the files list then called both
+        // functions on a path that was already gone — under the serial printers
+        // the `@` hides that (PHPUnit's collector drops suppressed warnings), but
+        // the parallel gate's paraunit PRINTER surfaces suppressed PHP events,
+        // which is exactly the `chmod(): No such file or directory` +
+        // `unlink(…/s153-renamed-ok.mp3)` pair CI showed. There is no
+        // asynchronous remover in this class — the race was same-process,
+        // deterministic double-cleanup — so an existence guard is complete
+        // protection here, and every removal that is ATTEMPTED is verified
+        // afterwards: a file we could not delete fails loudly naming the lane
+        // sentinel instead of stranding a `phlix_s153_it_*` for the census to
+        // blame anonymously. Registered files first (children by name), then the
+        // directory sweep (whatever is left, then the directory itself).
+        foreach ($this->cleanupFiles as $file) {
+            $this->discardPath($file);
+        }
         foreach ($this->cleanupDirs as $dir) {
             if (!is_dir($dir)) {
                 continue;
@@ -147,15 +176,19 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
                 if ($entry === '.' || $entry === '..') {
                     continue;
                 }
-                $child = $dir . '/' . $entry;
-                @chmod($child, 0o644);
-                @unlink($child);
+                $this->discardPath($dir . '/' . $entry);
             }
-            @rmdir($dir);
-        }
-        foreach ($this->cleanupFiles as $file) {
-            @chmod($file, 0o644);
-            @unlink($file);
+            if (!@rmdir($dir) && $this->pathStillThere($dir)) {
+                // rmdir's own verdict is the signal; the re-check separates
+                // "someone else already removed it" (tolerate — that is the
+                // race) from "it is still here" (fail — a child is not a plain
+                // file, or the unlink genuinely failed). Silence here is what
+                // makes the census anonymous; it must name its cause.
+                $this->fail(
+                    self::S486_LANE_SENTINEL . ': cleanup FAILED — directory ' . $dir
+                    . ' could not be removed after its children were discarded (check ' . $dir . ')'
+                );
+            }
         }
 
         $this->cleanupDirs = [];
@@ -163,6 +196,62 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         $this->extraLibraryIds = [];
 
         parent::tearDown();
+    }
+
+    /**
+     * Register, then create — guarded. `@mkdir` plus the `is_dir` re-check on
+     * both sides means a pre-existing name is accepted, and a genuine failure
+     * fails HERE with the path instead of emitting a raw `mkdir(): File exists`
+     * warning and leaving later filesystem steps to stumble over it.
+     */
+    private function makeCleanupDirectory(string $dir): void
+    {
+        $this->cleanupDirs[] = $dir;
+
+        if (is_dir($dir)) {
+            return;
+        }
+        if (!@mkdir($dir, 0o777, true) && !is_dir($dir)) {
+            $this->fail(self::S486_LANE_SENTINEL . ': setUp FAILED — could not create ' . $dir);
+        }
+    }
+
+    /**
+     * Remove one path if it is there; verify the removal if it was.
+     *
+     * The entry guard is the race fix — `chmod()`/`unlink()` are never called on
+     * a path that does not exist, which is the only state this class's own
+     * double-registration produces. The post-attempt check is the census fix —
+     * a path that WAS there and is STILL there means the teardown genuinely
+     * failed, and that must name itself rather than surface as an anonymous
+     * leftover temp directory several suites later.
+     */
+    private function discardPath(string $path): void
+    {
+        if (!file_exists($path)) {
+            return; // already gone (double registration, or removed with its directory)
+        }
+        if (is_dir($path)) {
+            return; // left for the directory pass, which fails loudly if it cannot remove it
+        }
+        @chmod($path, 0o644);
+        @unlink($path);
+        if ($this->pathStillThere($path)) {
+            $this->fail(self::S486_LANE_SENTINEL . ': cleanup FAILED — ' . $path . ' still exists after unlink');
+        }
+    }
+
+    /**
+     * A deliberately fresh stat — PHP's own stat cache would otherwise let a
+     * pre-attempt `is_dir()` answer this question from memory instead of from
+     * the filesystem, and the point of the post-attempt check is to ask the
+     * filesystem.
+     */
+    private function pathStillThere(string $path): bool
+    {
+        clearstatcache(true, $path);
+
+        return is_dir($path) || is_file($path) || is_link($path);
     }
 
     /**
@@ -421,8 +510,7 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         );
         self::assertSame(1, $this->countRows('SELECT id FROM music_albums WHERE id = ?', [$shellId]));
 
-        mkdir($ghost, 0o777, true);
-        $this->cleanupDirs[] = $ghost;
+        $this->makeCleanupDirectory($ghost);
 
         self::assertSame(
             1,
@@ -555,8 +643,7 @@ final class OrphanMusicContainerReapIntegrationTest extends TestCase
         $videoLibrary = Uuid::v4();
         $this->extraLibraryIds[] = $videoLibrary;
         $videoRoot = $this->root . '-video';
-        mkdir($videoRoot, 0o777, true);
-        $this->cleanupDirs[] = $videoRoot;
+        $this->makeCleanupDirectory($videoRoot);
         $this->db()->query(
             "INSERT INTO libraries (id, name, type, paths) VALUES (?, 'S153 IT Video', 'video', ?)",
             [$videoLibrary, json_encode([$videoRoot])],

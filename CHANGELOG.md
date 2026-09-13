@@ -320,6 +320,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   call, and two golden-byte tests re-run each moved algorithm inline and demand the live paths
   match, reddening by name if a future change forks the arithmetic again.
 
+- **The `@phlix/ui` tarball pin `v0.99.1` → `v0.99.2`, served bundle regenerated under the S253
+  gate (`SRV-UIPIN`).** The v0.99.2 pin-alignment wave made the hub's UI Pin Skew gate measure
+  live skew, and this consumer was one of the four blocking rows. `web-ui/package.json` re-pins
+  the `@phlix/ui` dependency to the `v0.99.2` tag's tarball; `npm install` under the gate's exact
+  Node 24.20.0 refreshed `web-ui/package-lock.json` (the `resolved` URL in its root echo and in
+  the `node_modules/@phlix/ui` entry, and that entry's sha512 `integrity` all moved), and a fresh
+  `npm ci && npm run build` regenerated the committed `public/assets/app/` bundle so the
+  `Web UI Build` byte-diff gate sees this source and this bundle as one truth. The lock entry's
+  `version` field still reads `0.99.1` — that string is the stale field inside the tagged
+  package itself: the tag is the authority, the `resolved` URL and integrity are the proof.
+
 ### Removed
 
 - **Untracked the repo-root `PROGRESS.md` lane journal; sandbox journals stay out of git (`S487`).**

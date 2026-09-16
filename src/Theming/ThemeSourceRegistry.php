@@ -169,6 +169,29 @@ final class ThemeSourceRegistry
     }
 
     /**
+     * Drop every theme and every provenance entry, leaving the registry as
+     * freshly constructed.
+     *
+     * This is the rebuild primitive S498's fleet sync needs: a peer worker
+     * whose copy went stale across a plugin install/enable/disable/uninstall
+     * cannot diff its own map against the shared `plugins` table entry by
+     * entry (a source whose FILES were uninstalled can no longer report its
+     * own name to deregister by), so it clears and re-registers from durable
+     * truth instead. Validation stays on the only door in: every replacement
+     * re-enters through {@see register()} and its exhaustive validator —
+     * `clear()` removes bytes, it never admits any.
+     *
+     * @return void
+     *
+     * @since 0.44.0
+     */
+    public function clear(): void
+    {
+        $this->themes = [];
+        $this->idsBySource = [];
+    }
+
+    /**
      * Whether a theme id is registered.
      *
      * @param string $id Theme id.

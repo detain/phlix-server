@@ -371,6 +371,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **A plugin/theme registry mutation is now visible across the whole Workerman pool
+  without a restart (`S498`).** `ThemeSourceRegistry` is per-process by design and
+  `PluginLoader::enable()/disable()/uninstall()` mutate only the ONE worker that served
+  the admin request; a live W99 run measured ~6 of 30 sampled `GET /api/v1/themes`
+  responses still serving an uninstalled plugin's themes until a full service restart.
+  `ThemesController` now carries an optional `ThemeRegistryFleetSync`: before every
+  themes response it folds the shared `plugins` table (`name:enabled:version` per row)
+  into one stamp and, only when that stamp moved since this worker last served, rebuilds
+  this process's registry from durable truth — clear, then re-register the currently
+  enabled theme sources through the same validating door `register()` has always had.
+  The stamp is derived from the very rows every lifecycle mutation already writes, so
+  there is no separate epoch counter to race or lose; the check is one indexed read of a
+  tens-of-rows table on an auth-gated endpoint, and boot's `bootstrapEnabled()` wiring is
+  adopted as the baseline without churn. Convergence is the worker's next theme request
+  — bounded, pool-wide, restart-free — and the served shape is byte-identical (the
+  regression test asserts pooled equality with the pre-install baseline body). The
+  metadata/subtitle/writer registries keep their existing boot-time wiring untouched.
+
 - **The merged `merge-junit: … assertions=` total is now declared informational at the
   emitter, and the one passing test that actually manufactured its run-to-run drift is
   fixed (`S488`).** Two byte-identical source trees (differing only in `.md`/`.gitignore`)

@@ -845,4 +845,91 @@ class MediaItemControllerTest extends TestCase
     {
         return $this->baseItemRow((string) json_encode(['source' => $source]));
     }
+
+    // ---- S508 (AD-8): getPlaybackInfo add-only `playback_constraints` ------------
+
+    /**
+     * The top-level response keys a pre-S508 client sees. Pinned so the byte-identical
+     * regression claim is exact, not just "the new key is absent".
+     *
+     * @return list<string>
+     */
+    private const PRE_S508_PLAYBACK_KEYS = [
+        'item_id',
+        'intro_marker',
+        'outro_marker',
+        'chapters',
+        'skip_button_spec',
+        'quality_ladder',
+        'audio_tracks',
+        'subtitle_tracks',
+        'crossfade',
+    ];
+
+    /**
+     * Byte-identical control: with neither `?forceTranscode` nor `?excludeHevc` supplied
+     * the `playback_constraints` key is absent entirely and the response's key set is
+     * exactly the pre-S508 shape (add-only, never a null placeholder).
+     */
+    public function testGetPlaybackInfoOmitsPlaybackConstraintsWhenNoParams(): void
+    {
+        $controller = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
+
+        $body = json_decode($controller->getPlaybackInfo(new Request(), ['id' => 'ep-1'])->body, true);
+
+        $this->assertIsArray($body);
+        $this->assertArrayNotHasKey('playback_constraints', $body);
+        $keys = array_keys($body);
+        sort($keys);
+        $expected = self::PRE_S508_PLAYBACK_KEYS;
+        sort($expected);
+        $this->assertSame($expected, $keys, 'no constraints supplied → exactly the pre-S508 key set');
+    }
+
+    /**
+     * `?excludeHevc=1` is surfaced as an add-only `playback_constraints` block carrying
+     * ONLY the supplied key (parsed true), mirroring the option name selectQuality
+     * honors at stream time.
+     */
+    public function testGetPlaybackInfoSurfacesExcludeHevcConstraint(): void
+    {
+        $controller = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
+        $request = new Request();
+        $request->query = ['excludeHevc' => '1'];
+
+        $body = json_decode($controller->getPlaybackInfo($request, ['id' => 'ep-1'])->body, true);
+
+        $this->assertSame(['exclude_hevc' => true], $body['playback_constraints']);
+    }
+
+    /** `?forceTranscode=yes` parses truthy → force_transcode true, alone in the block. */
+    public function testGetPlaybackInfoSurfacesForceTranscodeConstraint(): void
+    {
+        $controller = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
+        $request = new Request();
+        $request->query = ['forceTranscode' => 'yes'];
+
+        $body = json_decode($controller->getPlaybackInfo($request, ['id' => 'ep-1'])->body, true);
+
+        $this->assertSame(['force_transcode' => true], $body['playback_constraints']);
+    }
+
+    /**
+     * Both params supplied → both keys present. A present-but-falsy value (`0`) parses
+     * false yet still counts as supplied, proving the "present" gate is separate from
+     * the truthy parse. `TRUE` is case-insensitive.
+     */
+    public function testGetPlaybackInfoSurfacesBothConstraintsWithFalsyParse(): void
+    {
+        $controller = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
+        $request = new Request();
+        $request->query = ['forceTranscode' => '0', 'excludeHevc' => 'TRUE'];
+
+        $body = json_decode($controller->getPlaybackInfo($request, ['id' => 'ep-1'])->body, true);
+
+        $this->assertSame(
+            ['force_transcode' => false, 'exclude_hevc' => true],
+            $body['playback_constraints'],
+        );
+    }
 }

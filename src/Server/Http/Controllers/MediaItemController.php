@@ -333,7 +333,7 @@ class MediaItemController
         // Build the quality ladder preview (url => null for each rung).
         $qualityLadder = $this->buildQualityLadder($item, $request);
 
-        return (new Response())->json([
+        $payload = [
             'item_id' => $itemId,
             'intro_marker' => $introMarker,
             'outro_marker' => $outroMarker,
@@ -348,8 +348,70 @@ class MediaItemController
                 'fade_out' => $playbackPrefs->crossfadeFadeOut,
                 'fade_in' => $playbackPrefs->crossfadeFadeIn,
             ],
-        ]);
+        ];
+
+        // S508 (AD-8): echo the caller's request-side playback constraints as an
+        // ADD-ONLY block. `?forceTranscode` / `?excludeHevc` mirror the option names
+        // QualitySelector::selectQuality honors at stream-creation time; surfacing the
+        // parsed values here lets a pre-flight UI reflect the active constraint without
+        // re-deriving it. When NEITHER query key is present the block is omitted
+        // entirely, so the response stays byte-identical for every pre-S508 client
+        // (same add-only discipline as `trickplay_bif_url` / `user_data`).
+        $constraints = $this->playbackConstraintsFromQuery($request);
+        if ($constraints !== null) {
+            $payload['playback_constraints'] = $constraints;
+        }
+
+        return (new Response())->json($payload);
     }
+
+    /**
+     * S508 (AD-8): read the request-side playback constraints from the query string.
+     *
+     * `?forceTranscode` / `?excludeHevc` mirror the `force_transcode` / `exclude_hevc`
+     * options of {@see \Phlix\Media\Streaming\QualitySelector::selectQuality()}, where
+     * the real honoring happens at stream-creation time (this pre-flight endpoint never
+     * probes or creates a job — it only acknowledges the constraint). Returns the
+     * parsed map carrying ONLY the keys whose query param was actually supplied, or
+     * `null` when neither is present so the caller omits the block byte-identically.
+     *
+     * @return array<string, bool>|null
+     */
+    private function playbackConstraintsFromQuery(Request $request): ?array
+    {
+        $constraints = [];
+        foreach (['forceTranscode' => 'force_transcode', 'excludeHevc' => 'exclude_hevc'] as $param => $key) {
+            if (array_key_exists($param, $request->query)) {
+                $constraints[$key] = self::queryTruthy($request->query[$param]);
+            }
+        }
+
+        return $constraints === [] ? null : $constraints;
+    }
+
+    /**
+     * S508 (AD-8): the canonical truthy parse for a playback-constraint query param.
+     *
+     * Mirrors the repo's boundary parser ({@see LibraryController::toBool()}) but uses
+     * the S508-truthy set `1`/`true`/`yes` (case-insensitive, trimmed). A present-but-
+     * unrecognised value (`0`, `false`, empty) parses to false yet still counts as
+     * "supplied"; anything non-scalar is false.
+     */
+    private static function queryTruthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            return in_array(strtolower(trim($value)), ['1', 'true', 'yes'], true);
+        }
+
+        return false;
+    }
+
 
     /**
      * Returns the lazy stream backfill, building it on first use when none was

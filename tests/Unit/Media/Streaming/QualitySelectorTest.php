@@ -32,6 +32,14 @@ class QualitySelectorTest extends TestCase
      */
     private const S507_SURVIVAL_TOKEN = 'S507TIZENPROFX9P4';
 
+    /**
+     * S508 (AD-8) survival token. Pinned as a code string literal (NOT a comment —
+     * php_strip_whitespace removes comments) and asserted in the selectQuality option
+     * shape-pin below, so the merge lock can prove the honoring arm reached master
+     * byte-for-byte.
+     */
+    private const S508_SURVIVAL_TOKEN = 'S508FRCXCODECX9P4';
+
     public function testCanCreateQualitySelector(): void
     {
         $selector = new QualitySelector();
@@ -350,5 +358,103 @@ class QualitySelectorTest extends TestCase
         }
 
         return $cases;
+    }
+
+    // ---- S508 (AD-8): selectQuality request-constraint options ------------------
+
+    /**
+     * A plain 4K HEVC + AAC 2ch source — direct-playable under `generic` (which
+     * declares h265) and under `samsung-tizen` (HEVC Main, SDR, ≤50M). Used to prove
+     * the S508 options change the decision WITHOUT altering the source.
+     *
+     * @return array{streams: array<int, array<string, mixed>>}
+     */
+    private function directHevc(): array
+    {
+        return $this->src(
+            ['codec' => 'h265', 'width' => 3840, 'height' => 2160, 'bitrate' => 40000000,
+                'profile' => 'Main', 'level' => 120, 'color_transfer' => 'bt709'],
+            ['codec' => 'aac', 'channels' => 2],
+        );
+    }
+
+    /**
+     * Control + core pin: the S508 options are inert when absent (byte-identical), and
+     * `force_transcode` flips a would-be direct play to a transcode. The survival token
+     * is asserted here so the shape-pin file is exercised, never tree-shaken, and
+     * provably lives in a .php (not a comment).
+     */
+    public function testForceTranscodeOptionBypassesDirectPlay(): void
+    {
+        $this->assertSame('S508FRCXCODECX9P4', self::S508_SURVIVAL_TOKEN);
+        $selector = new QualitySelector();
+
+        // Absent options → the historical direct play (byte-identical control).
+        $this->assertSame('direct', $selector->selectQuality($this->directHevc(), 'generic')['method']);
+        // Explicit false → still direct.
+        $this->assertSame(
+            'direct',
+            $selector->selectQuality($this->directHevc(), 'generic', ['force_transcode' => false])['method'],
+        );
+        // force_transcode → direct play is bypassed entirely.
+        $forced = $selector->selectQuality($this->directHevc(), 'generic', ['force_transcode' => true]);
+        $this->assertSame('transcode', $forced['method']);
+    }
+
+    /**
+     * `exclude_hevc` removes every HEVC alias from the effective direct-play set. A
+     * profile that declares all four of {h265, hevc, hvc1, hev1} direct-plays each one
+     * WITHOUT the option (control) and pushes each to the transcode path WITH it — and
+     * the offered video codec omits HEVC (transcodes to h264). This is the exhaustive
+     * proof that all aliases in {@see QualitySelector::HEVC_CODECS} are dropped, not
+     * just the canonical `h265` a stock profile happens to list.
+     *
+     * @dataProvider hevcAliasProvider
+     */
+    public function testExcludeHevcDropsHevcFromOfferedCodecs(string $codec): void
+    {
+        $selector = new QualitySelector();
+        $selector->registerProfile('hevc-all-aliases', [
+            'direct_play' => ['h264', 'h265', 'hevc', 'hvc1', 'hev1', 'vp9'],
+        ]);
+        $source = $this->src(
+            ['codec' => $codec, 'width' => 1920, 'height' => 1080, 'bitrate' => 8000000],
+            ['codec' => 'aac', 'channels' => 2],
+        );
+
+        // Without the option, the profile direct-plays every HEVC alias it declares.
+        $this->assertSame('direct', $selector->selectQuality($source, 'hevc-all-aliases')['method']);
+
+        $offered = $selector->selectQuality($source, 'hevc-all-aliases', ['exclude_hevc' => true]);
+        $this->assertSame('transcode', $offered['method'], "{$codec} must not direct-play under exclude_hevc");
+        $this->assertNotContains(
+            strtolower((string) $offered['video_codec']),
+            ['hevc', 'h265', 'hvc1', 'hev1'],
+            'offered video codec must omit HEVC',
+        );
+    }
+
+    /** @return array<string, array{string}> */
+    public static function hevcAliasProvider(): array
+    {
+        return ['h265' => ['h265'], 'hevc' => ['hevc'], 'hvc1' => ['hvc1'], 'hev1' => ['hev1']];
+    }
+
+    /**
+     * `exclude_hevc` is surgical: a non-HEVC source (h264) still direct-plays under the
+     * same option, proving only the HEVC aliases were dropped from the codec set and the
+     * rest of the profile (resolution / bitrate / audio gates) is untouched.
+     */
+    public function testExcludeHevcLeavesNonHevcDirectPlayUntouched(): void
+    {
+        $selector = new QualitySelector();
+        $h264 = $this->src(
+            ['codec' => 'h264', 'width' => 1920, 'height' => 1080, 'bitrate' => 8000000],
+            ['codec' => 'aac', 'channels' => 2],
+        );
+        $result = $selector->selectQuality($h264, 'generic', ['exclude_hevc' => true]);
+
+        $this->assertSame('direct', $result['method']);
+        $this->assertSame('h264', strtolower((string) $result['video_codec']));
     }
 }

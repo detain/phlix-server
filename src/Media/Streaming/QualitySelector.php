@@ -53,6 +53,17 @@ class QualitySelector
     private array $deviceProfiles;
 
     /**
+     * S508 (AD-8): the HEVC aliases — both the container fourcc tags (hvc1/hev1)
+     * and the ffmpeg decoder names (hevc/h265) — that {@see self::selectQuality()}
+     * drops from a profile's effective direct-play set when the caller passes the
+     * `exclude_hevc` option. Kept here (not on any one profile) so the exclusion is
+     * orthogonal to the per-profile `direct_play` declaration.
+     *
+     * @var array<int, string>
+     */
+    private const HEVC_CODECS = ['hevc', 'h265', 'hvc1', 'hev1'];
+
+    /**
      * Creates a new QualitySelector with optional custom profiles.
      *
      * @param array<string, array{
@@ -245,6 +256,13 @@ class QualitySelector
      *     - 'client_capabilities' (ClientCapabilities): Client decoder capabilities for
      *         play decisioning (SV-3.3). When provided, codecs the client cannot decode
      *         will force transcode instead of direct play.
+     *     - 'force_transcode' (bool): S508 (AD-8) request constraint. When true, the
+     *         direct-play verdict is bypassed and a transcode is always returned.
+     *         Absent/false preserves the historical decision (byte-identical).
+     *     - 'exclude_hevc' (bool): S508 (AD-8) request constraint. When true, HEVC
+     *         (h265/hevc/hvc1/hev1) is removed from the profile's effective
+     *         direct-play set, so an HEVC source transcodes instead of direct-playing
+     *         and the offered video codec omits HEVC. Absent/false preserves it.
      *
      * @return array{
      *     method: string,
@@ -276,10 +294,26 @@ class QualitySelector
         $rawCapabilities = $options['client_capabilities'] ?? null;
         $clientCapabilities = $rawCapabilities instanceof ClientCapabilities ? $rawCapabilities : null;
 
+        // S508 (AD-8): caller-driven request constraints, applied on top of the
+        // resolved profile. Both default false, so an options array that omits them
+        // (every existing call site) yields the byte-identical pre-S508 decision.
+        //   - force_transcode: skip the direct-play verdict entirely and transcode.
+        //   - exclude_hevc: treat the profile as if it never declared HEVC, so an
+        //     HEVC source falls through to the transcode path (which offers h264),
+        //     never direct-plays. The offered video codec therefore omits HEVC.
+        $forceTranscode = (bool)($options['force_transcode'] ?? false);
+        $excludeHevc = (bool)($options['exclude_hevc'] ?? false);
+
         $videoStream = $this->getVideoStream($sourceInfo);
         $audioStream = $this->getAudioStream($sourceInfo);
 
-        $canDirectPlay = $this->canDirectPlay($videoStream, $audioStream, $profile, $clientCapabilities);
+        $canDirectPlay = !$forceTranscode
+            && $this->canDirectPlay(
+                $videoStream,
+                $audioStream,
+                $excludeHevc ? $this->withoutHevc($profile) : $profile,
+                $clientCapabilities
+            );
 
         if ($canDirectPlay) {
             return [
@@ -304,6 +338,28 @@ class QualitySelector
             'max_bitrate' => min($profile['max_bitrate'], 8000000),
             'vendor' => $vendor,
         ];
+    }
+
+    /**
+     * S508 (AD-8): a copy of the profile whose `direct_play` codec set excludes the
+     * HEVC aliases ({@see self::HEVC_CODECS}). Used only when the caller passes the
+     * `exclude_hevc` option; every other profile key (resolution / bitrate / audio /
+     * S507 gate keys) is preserved, so the rest of the direct-play decision is
+     * byte-identical — only an otherwise-direct-playable HEVC source is pushed to the
+     * transcode path (which offers h264, never HEVC).
+     *
+     * @param array<string, mixed> $profile
+     *
+     * @return array<string, mixed>
+     */
+    private function withoutHevc(array $profile): array
+    {
+        $profile['direct_play'] = array_values(array_filter(
+            self::directPlayCodecs($profile),
+            static fn (string $codec): bool => !in_array($codec, self::HEVC_CODECS, true)
+        ));
+
+        return $profile;
     }
 
     /**

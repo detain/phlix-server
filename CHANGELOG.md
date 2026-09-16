@@ -9,6 +9,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Request-side playback constraints (`S508`, AD-8).**
+  `QualitySelector::selectQuality()` gains a caller-driven "profile arm" — two options
+  layered on top of whatever device profile was resolved: `force_transcode` skips the
+  direct-play verdict and returns a transcode, and `exclude_hevc` drops the HEVC aliases
+  (`h265`/`hevc`/`hvc1`/`hev1`) from the profile's effective direct-play set so an HEVC
+  source transcodes instead of direct-playing (the offered video codec omits HEVC).
+  `MediaItemController::getPlaybackInfo()` reads the matching `?forceTranscode` /
+  `?excludeHevc` query params (`1`/`true`/`yes`, case-insensitive) and surfaces the
+  parsed values as an **add-only** `playback_constraints` key carrying only the params
+  actually supplied. When neither is supplied the key is omitted entirely, so the
+  response stays byte-identical for every pre-existing client — the same add-only
+  discipline as `trickplay_bif_url` and `user_data`. No new route tuple: this edits the
+  existing `/media/{id}/playback-info` response shape only.
+
 - **Samsung Tizen now has its own playback quality profile, split from the Roku lump (`S507`, AD-8).**
   An `X-Phlix-Device-Type: samsung-tizen` (or bare `tizen`) request previously mapped to the shared
   `tv-4k` bucket that Roku uses, so a Tizen panel got a generic 4K-TV verdict with no Tizen-specific

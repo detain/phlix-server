@@ -436,7 +436,8 @@ class MediaItemController
      * on the device profile. A controller test asserts the two tables are identical.
      *
      * Mapping:
-     *   samsung-tizen, tizen, roku → tv-4k
+     *   samsung-tizen, tizen      → samsung-tizen  (AD-8 / S507 — its own profile)
+     *   roku                      → tv-4k
      *   android, ios               → mobile-high
      *   windows                    → generic
      *   (anything else / missing)  → web
@@ -448,7 +449,8 @@ class MediaItemController
     private function mapDeviceTypeToProfile(string $deviceType): string
     {
         return match (strtolower(trim($deviceType))) {
-            'samsung-tizen', 'tizen', 'roku' => 'tv-4k',
+            'samsung-tizen', 'tizen' => 'samsung-tizen',
+            'roku' => 'tv-4k',
             'android', 'ios' => 'mobile-high',
             'windows' => 'generic',
             default => 'web',

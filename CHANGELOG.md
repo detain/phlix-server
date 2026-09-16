@@ -9,6 +9,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Samsung Tizen now has its own playback quality profile, split from the Roku lump (`S507`, AD-8).**
+  An `X-Phlix-Device-Type: samsung-tizen` (or bare `tizen`) request previously mapped to the shared
+  `tv-4k` bucket that Roku uses, so a Tizen panel got a generic 4K-TV verdict with no Tizen-specific
+  intelligence. `QualitySelector` gains a dedicated `samsung-tizen` profile carrying the decoder gates
+  the bucket was missing — H.264 level ≤ 5.2, SDR-only direct play (HDR10/HLG sources transcode and are
+  tone-mapped rather than passed through), no anamorphic or interlaced direct play, HEVC Main-tier ≤
+  level 120, a VP9 bitrate + colour-range gate (previously blanket direct-played), an explicit 2-channel
+  audio budget, a per-profile audio allow-list (the global set is still the fallback for every other
+  profile), and per-device-tier bitrate ceilings (1080-class 20 Mbps vs UHD 50 Mbps) instead of one 50M
+  bucket. Both `mapDeviceTypeToProfile()` tables — `TranscodeController` and `MediaItemController` — are
+  split in lockstep and stay byte-identical (the reflection guard proves it). The gates are **opt-in
+  per-profile keys**, so the five pre-existing profiles are byte-identical. Already-encoded behaviour is
+  left untouched and re-asserted: DTS/TrueHD stay non-direct-playable (absent from the allow-list), the
+  transcode 2-channel downmix, the ≤2160p / 50M caps, the codec-name direct-play gate, and AV1's exclusion.
+  Playback-info now also marks every subtitle track `delivery: external` (a signed sidecar URL, never
+  muxed), the signal a Tizen panel needs to stop expecting in-container rendering of ass/ssa/pgssub.
+  No new endpoint: this edits the existing `/transcode` and `/media/{id}/playback-info` profile logic.
+
 - **Out-of-sync members are now NUDGED, never force-seeked — the decided S446 member sync
   policy.** The per-member periodic `playback_sync` report finally has a consumer:
   `SyncPlayManager::handlePlaybackSync()` stores the reporter's own position (ms, as frames

@@ -172,8 +172,9 @@ class TranscodeController
      * invariant — the controller test asserts each mapped profile is known.
      *
      * Mapping:
-     *   samsung-tizen, tizen, roku → tv-4k
-     *   android, ios               → mobile-high
+     *   samsung-tizen, tizen      → samsung-tizen  (AD-8 / S507 — its own profile)
+     *   roku                      → tv-4k
+     *   android, ios              → mobile-high
      *   windows                    → generic
      *   (anything else / missing)  → web
      *
@@ -184,7 +185,8 @@ class TranscodeController
     private function mapDeviceTypeToProfile(string $deviceType): string
     {
         return match (strtolower(trim($deviceType))) {
-            'samsung-tizen', 'tizen', 'roku' => 'tv-4k',
+            'samsung-tizen', 'tizen' => 'samsung-tizen',
+            'roku' => 'tv-4k',
             'android', 'ios' => 'mobile-high',
             'windows' => 'generic',
             default => 'web',

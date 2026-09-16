@@ -382,8 +382,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * measured on this tree by phpunit, not predicted. It reads/writes no
              * Request property (it drives WebSocket connections and in-memory managers
              * only), so every other census denominator is unchanged.
+             * Re-pinned 1877→1889 by S518: the quick-connect + telemetry bundle adds
+             * twelve first-party PHP files — src/Auth/{QuickConnectPair,
+             * QuickConnectStateStoreInterface,QuickConnectStateStore}.php,
+             * src/Stats/{ClientHeartbeatStoreInterface,ClientHeartbeatStore}.php,
+             * src/Server/Http/Controllers/Auth/QuickConnectController.php, and six test
+             * files (Unit store/controller/rate-limit/heartbeat, Integration real-DB
+             * store lifecycle + migration-106 upsert guard); measured 1889 from the
+             * phpunit red, not predicted. The controller adds four declared-member READS
+             * and the two test request builders ten declared WRITES — pinned below in
+             * this same commit, S427 license intact.
              */
-    private const EXPECTED_PHP_FILES = 1877;
+    private const EXPECTED_PHP_FILES = 1889;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -401,8 +411,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * `$request->query['w']` read in `WebPortalRouter::getPersonPhoto()`.
      * Every read stays on a declared property (S427 license — the
      * undeclared-read test in this file, not this number, guards that).
+     * Re-pinned 391→395 by S518: `QuickConnectController` adds exactly four
+     * declared-member reads — `$request->body` snapshotted once in each of
+     * approve/token/heartbeat and `$request->userId` in approve's auth gate
+     * (headers reach only through the `getHeader()` method, and the rate keys
+     * only through `getTrustedClientIp()` — neither is a property read).
      */
-    private const EXPECTED_DECLARED_READS = 391;
+    private const EXPECTED_DECLARED_READS = 395;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -456,8 +471,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tokenizer walk (identical under CI's PHP 8.3.16), not a change S508 introduces;
      * fixing the blind spot is out of scope and would move the denominator for code
      * S508 never touched.
+     * Re-pinned 973→983 by S518: the two new controller-test request builders and
+     * their per-case overrides assign ten declared Request members directly
+     * (QuickConnectControllerTest: userId/body/headers/remoteIp in request(), plus
+     * a query-override and a body-override site; QuickConnectControllerRateLimitTest:
+     * the same quartet in xffRequest()) — the S435/S438/S289 entry-point shape,
+     * S427 license intact. The src/ controller adds no write site.
      */
-    private const EXPECTED_DECLARED_WRITES = 973;
+    private const EXPECTED_DECLARED_WRITES = 983;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

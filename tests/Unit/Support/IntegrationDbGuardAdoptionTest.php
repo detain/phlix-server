@@ -402,8 +402,23 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * composed route table into `findArtistByName()`'s `WHERE a.name = ?` — a
      * recorded double cannot witness a literal `AC/DC` matching a real row, so
      * every acceptance clause runs against real MySQL.
+     *
+     * 60 since S518's
+     * `tests/Integration/Auth/QuickConnectStateStoreRealDbTest.php`: the pairing
+     * store's TTL math rides MySQL's own `FROM_UNIXTIME`/`UNIX_TIMESTAMP` pair,
+     * the approve/consume transitions take real `SELECT … FOR UPDATE` row locks,
+     * and the Workerman two-resident-workers posture is proven by committed rows
+     * visible from a SECOND Connection — none of which a recorded double models.
+     *
+     * 61 since S518's
+     * `tests/Integration/Stats/ClientHeartbeatsMigration106RealDbTest.php`: the
+     * fleet-bounded retention promise is structural only if the REAL migration
+     * file runs through the production MigrationRunner into a scratch database —
+     * PK-ness of `instance_id`, `ON DUPLICATE KEY UPDATE` freezing `first_seen_at`
+     * while `last_seen_at` rides, and CHAR(64) PAD SPACE equality are live-server
+     * properties the upsert depends on.
      */
-    private const EXPECTED_ADOPTERS = 59;
+    private const EXPECTED_ADOPTERS = 61;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

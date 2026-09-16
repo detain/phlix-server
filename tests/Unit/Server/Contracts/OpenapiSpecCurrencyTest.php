@@ -513,8 +513,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // 339 at the S65 authoring; 340 after the S73 people-photo endpoint
         // (GET /api/v1/people/{personId}/photo), re-measured on this rebase; 342 after
         // S240's additive music detail-by-name query routes (GET /api/v1/music/artist,
-        // GET /api/v1/music/album), re-measured from this phpunit red.
-        $this->assertCount(342, $doc['paths'], 'the served surface is 342 distinct path templates');
+        // GET /api/v1/music/album), re-measured from this phpunit red; 348 after
+        // S518's quick-connect pairing quartet (initiate + {code}/status + {code}/approve
+        // + {code}/token), the consent-gated telemetry heartbeat and its admin census read
+        // — 404→410 operations — re-measured from this phpunit red.
+        $this->assertCount(348, $doc['paths'], 'the served surface is 348 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

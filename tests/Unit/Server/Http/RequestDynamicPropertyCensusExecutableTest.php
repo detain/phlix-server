@@ -446,9 +446,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * The READS denominator stays pinned at 391 (green): the new `queryTruthy` reads in
      * `MediaItemController::playbackConstraintsFromQuery(Request $request): ?array`
      * are NOT counted for the same deterministic reason the pre-existing
-     * `resolveRatingFilter(Request $request): ?array` reads are not — `functionScopes()`
-     * does not register a single-param `?array`-returning private method's parameter as
-     * a Request root. This is a long-standing, version-independent property of the
+     * `resolveRatingFilter(Request $request): ?array` reads are not — the final-parameter
+     * branch of `rootsDeclaredInParams()` is dead: at the params-closing paren `$depth--`
+     * runs BEFORE the `$depth !== 1` segment-boundary check, so depth is already 0 when the
+     * boundary test fires and the last segment never registers. EVERY last parameter is
+     * thereby unregistered as a Request root — any arity, any type or return shape, not just
+     * single-param `?array` privates (`functionScopes()` itself does emit these method
+     * scopes). This is a long-standing, version-independent property of the
      * tokenizer walk (identical under CI's PHP 8.3.16), not a change S508 introduces;
      * fixing the blind spot is out of scope and would move the denominator for code
      * S508 never touched.

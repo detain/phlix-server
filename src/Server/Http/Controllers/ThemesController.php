@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Theming\BuiltInThemes;
@@ -87,13 +88,21 @@ use Phlix\Theming\TokenTheme;
 final class ThemesController
 {
     /**
-     * @param ThemeSourceRegistry $registry Process-scoped registry of
+     * @param ThemeSourceRegistry      $registry  Process-scoped registry of
      *        plugin-contributed token-map themes. MUST be the same instance
      *        {@see \Phlix\Plugins\PluginLoader} registers into — a second
      *        instance would answer "no plugin themes" forever.
+     * @param ThemeRegistryFleetSync|null $fleetSync S498 pool-freshness guard,
+     *        wired by the container in every resident HTTP worker. It re-checks
+     *        the shared plugin state before serving and rebuilds this worker's
+     *        registry when another worker's install/enable/disable/uninstall
+     *        moved it. `null` keeps the pre-S498 behavior (registry served as
+     *        this process last wrote it) and exists for single-worker unit
+     *        harnesses; production DI always supplies the instance.
      */
     public function __construct(
         private readonly ThemeSourceRegistry $registry,
+        private readonly ?ThemeRegistryFleetSync $fleetSync = null,
     ) {
     }
 
@@ -112,6 +121,8 @@ final class ThemesController
      */
     public function index(Request $request, array $params): Response
     {
+        $this->fleetSync?->flushIfStale();
+
         return (new Response())->json([
             'themes' => array_values($this->catalogue()),
         ]);
@@ -133,6 +144,8 @@ final class ThemesController
      */
     public function show(Request $request, array $params): Response
     {
+        $this->fleetSync?->flushIfStale();
+
         $id = $params['id'] ?? '';
         $catalogue = $this->catalogue();
 

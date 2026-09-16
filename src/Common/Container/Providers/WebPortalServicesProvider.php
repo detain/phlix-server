@@ -20,6 +20,8 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
@@ -185,7 +187,23 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     // "no plugin themes" for the life of the worker.
                     /** @var ThemeSourceRegistry $themeSourceRegistry */
                     $themeSourceRegistry = $c->get(ThemeSourceRegistry::class);
-                    $themesController = new ThemesController($themeSourceRegistry);
+                    // S498: pool freshness. Every resident worker's copy of the
+                    // registry is reconciled against the shared `plugins` table
+                    // on each theme request, so an install/enable/disable/
+                    // uninstall served by a PEER worker is visible here within
+                    // one request instead of one restart. The loader and the
+                    // registry must be this container's own instances — the
+                    // same ones bootstrapEnabled() wired at onWorkerStart.
+                    /** @var \Phlix\Plugins\PluginLoader $themesPluginLoader */
+                    $themesPluginLoader = $c->get(\Phlix\Plugins\PluginLoader::class);
+                    $themesController = new ThemesController(
+                        $themeSourceRegistry,
+                        new ThemeRegistryFleetSync(
+                            $themesPluginLoader,
+                            $themeSourceRegistry,
+                            LoggerFactory::get(LogChannels::PLUGINS),
+                        ),
+                    );
 
                     // S73: people-photo endpoint serves the flat `people-{id}`
                     // artwork cache; the guard uses the same autowired instance

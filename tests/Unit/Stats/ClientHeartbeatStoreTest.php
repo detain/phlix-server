@@ -101,7 +101,11 @@ final class ClientHeartbeatStoreTest extends TestCase
     }
 
     /**
-     * @param array{sql: string, params: list<mixed>}|null $captured
+     * Optional keys: callers initialise with `[]` (psalm's array<never,never> is
+     * not a subtype of a required-key shape), and the double fills the full
+     * {sql, params} pair on the statement it captures.
+     *
+     * @param array{sql?: string, params?: list<mixed>}|null $captured
      */
     private function db(
         mixed $insertResult = 1,

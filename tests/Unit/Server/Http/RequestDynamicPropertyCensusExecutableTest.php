@@ -439,8 +439,21 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * S427 license intact). The src/ handlers reach the name only through the
      * queryString() method; the READS denominator is measured unchanged (green at
      * the existing pin), and the zero-dynamic posture is untouched.
+     * Re-pinned 970→973 by S508: tests/Unit/Server/Http/Controllers/
+     * MediaItemControllerTest.php's three new playback-constraint pins each assign one
+     * declared Request member directly (`$request->query = [...]` — the S435/S438
+     * entry-point shape, S427 license intact). The src/ S508 change adds no write site.
+     * The READS denominator stays pinned at 391 (green): the new `queryTruthy` reads in
+     * `MediaItemController::playbackConstraintsFromQuery(Request $request): ?array`
+     * are NOT counted for the same deterministic reason the pre-existing
+     * `resolveRatingFilter(Request $request): ?array` reads are not — `functionScopes()`
+     * does not register a single-param `?array`-returning private method's parameter as
+     * a Request root. This is a long-standing, version-independent property of the
+     * tokenizer walk (identical under CI's PHP 8.3.16), not a change S508 introduces;
+     * fixing the blind spot is out of scope and would move the denominator for code
+     * S508 never touched.
      */
-    private const EXPECTED_DECLARED_WRITES = 970;
+    private const EXPECTED_DECLARED_WRITES = 973;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

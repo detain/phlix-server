@@ -51,10 +51,16 @@ use Throwable;
  *    source), and the served bytes re-converge pool-wide on the very next
  *    request each worker handles — far inside the bounded freshness window,
  *    with no restart and no new infrastructure.
- *  - First call per process only CAPTURES the stamp: boot already wired this
- *    worker via {@see PluginLoader::bootstrapEnabled()}; rebuilding before
- *    anything has actually changed would paper over boot failures instead of
- *    surfacing them once, and cost a full re-instantiation for nothing.
+ *  - First call per process reconciles too: the stamp starts as a sentinel
+ *    (`null`), and `stamp()` always yields a 40-hex sha1 that can never equal
+ *    it. Boot's {@see PluginLoader::bootstrapEnabled()} only reflects the
+ *    generation `onWorkerStart` happened to see, so a worker whose first theme
+ *    request lands AFTER a peer mutation would otherwise adopt that foreign
+ *    stamp as baseline and serve its stale boot generation stamp-equal forever
+ *    (S498's blind baseline capture; the S499 cold-worker hole). Rebuilding
+ *    from durable truth on that first call closes it at zero duplicate cost:
+ *    {@see rebuild()} clears then re-registers each enabled source once, so when
+ *    boot already equalled durable the extra rebuild is byte-idempotent.
  *
  * ## Why the stamp is derived from `plugins` itself (not a separate epoch row)
  *
@@ -91,7 +97,20 @@ final class ThemeRegistryFleetSync
     public const FLUSH_MARKER = 'S498WORKERFLUSHX9P3';
 
     /**
-     * Stamp this process last served against; null until the first check.
+     * Correlation marker added to the log context of the ONE flush per process
+     * that reconciled a COLD worker (see {@see flushIfStale()}). An operator
+     * grepping the live log tail proves that no worker ever baseline-captured a
+     * foreign-current stamp and then served a stale boot generation forever
+     * (the S499 F1 hole): every freshly booted worker's first theme request
+     * carries this marker exactly once.
+     */
+    public const BOOT_PRIME_MARKER = 'S499BOOTPRIMEX9P4';
+
+    /**
+     * Stamp this process last reconciled against; the sentinel {@see null}
+     * means "never reconciled". {@see stamp()} always returns a 40-hex sha1, so
+     * the sentinel can never equal a real stamp — which is precisely what makes
+     * the first check reconcile rather than adopt.
      */
     private ?string $stamp = null;
 
@@ -105,36 +124,48 @@ final class ThemeRegistryFleetSync
     /**
      * Rebuild this worker's theme registry if the shared plugin state moved.
      *
-     * @return bool True when a rebuild ran (the stamp changed), false when the
-     *              registry was already current (or this was the baseline
-     *              capture on the worker's first theme request).
+     * The stamp sentinel (see the property docblock) makes the worker's FIRST
+     * served call reconcile exactly like any later stamp move: boot's
+     * `bootstrapEnabled()` reflects whatever generation `onWorkerStart` saw, so
+     * adopting that stamp blind (S498's original baseline capture) would strand
+     * a worker whose registry predates a peer mutation that landed before its
+     * first request — stamp-equal, and stale, until the process recycled.
+     * Rebuilding from durable truth on that first call costs no duplicates:
+     * {@see rebuild()} clears then re-registers each enabled source once, and
+     * when boot already equalled durable the rebuild is byte-idempotent.
+     *
+     * @return bool True when a rebuild ran (the stamp moved, or this process had
+     *              never reconciled); false when the registry already matched the
+     *              current durable stamp.
      */
     public function flushIfStale(): bool
     {
         $current = $this->stamp();
-
-        if ($this->stamp === null) {
-            // Boot path already wired this worker; adopt the baseline without
-            // churning the registry (see class docblock).
-            $this->stamp = $current;
-
-            return false;
-        }
 
         if ($this->stamp === $current) {
             return false;
         }
 
         $previous = $this->stamp;
-        $this->stamp = $current;
         $this->rebuild();
+        // Commit the adopted stamp only AFTER the rebuild completes, so the
+        // invariant "stamp == current ⟹ this process is reconciled to it" holds
+        // even if a future runtime interleaves requests mid-rebuild (S499 F5).
+        $this->stamp = $current;
 
-        $this->logger->info('theme-source registry fleet flush', [
+        $context = [
             'marker' => self::FLUSH_MARKER,
             'from' => $previous,
             'to' => $current,
             'sources' => $this->registry->sourceNames(),
-        ]);
+        ];
+        if ($previous === null) {
+            // The cold-worker reconcile (F1 fix): tagged so the log alone proves
+            // no worker ever baseline-captured a foreign generation.
+            $context['boot_prime'] = self::BOOT_PRIME_MARKER;
+        }
+
+        $this->logger->info('theme-source registry fleet flush', $context);
 
         return true;
     }

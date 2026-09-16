@@ -383,7 +383,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * Request property (it drives WebSocket connections and in-memory managers
              * only), so every other census denominator is unchanged.
              */
-    private const EXPECTED_PHP_FILES = 1874;
+    private const EXPECTED_PHP_FILES = 1877;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -138,37 +138,60 @@ final class ThemeRegistryFleetSyncTest extends TestCase
     // Behaviour pins
     // -----------------------------------------------------------------
 
-    public function test_first_check_adopts_the_baseline_without_rebuilding(): void
+    public function test_a_cold_worker_reconciles_durable_truth_on_its_first_request(): void
     {
-        // Boot already wired this worker (bootstrapEnabled); the first theme
-        // request must NOT churn the registry just to "confirm" it.
-        $this->expect($this->loader, 'listInstalled')
-            ->twice()
-            ->andReturn([$this->row('phlix-plugin-acme', true)]);
-        $this->loader->shouldNotReceive('getEnabled');
-        $this->loader->shouldNotReceive('getEntryInstance');
+        // S499 AC1 — pins the exact path batch48 F1 found unpinned: a worker
+        // whose boot wiring (`bootstrapEnabled()`) reflects an OLDER generation
+        // than the durable table, because a peer lifecycle mutation landed
+        // before this worker's first theme request. The pre-populated FOREIGN
+        // registry below is that stale boot generation. The first served call
+        // MUST reconcile from durable truth, then adopt the stamp — it must NOT
+        // blindly adopt the foreign-current stamp (S498's original baseline
+        // capture) and then serve the stale generation stamp-equal forever.
+        $durable = [$this->row('phlix-plugin-acme', true)];
+        $this->expect($this->loader, 'listInstalled')->zeroOrMoreTimes()->andReturn($durable);
+        $this->expect($this->loader, 'getEnabled')->zeroOrMoreTimes()->andReturn($durable);
+        $this->expect($this->loader, 'getEntryInstance')
+            ->zeroOrMoreTimes()
+            ->with('phlix-plugin-acme')
+            ->andReturn($this->themeSource('acme-themes', 'acme-noir'));
 
-        $this->registry->register($this->themeSource('acme-themes', 'acme-noir'));
+        // Stale boot state: a theme from a generation the durable set no longer
+        // has. Under the fix the rebuild clears it; register()-idempotency (this
+        // path clears first, then adds each enabled source once) makes the extra
+        // boot-time rebuild free of duplicates.
+        $this->registry->register($this->themeSource('ghost-themes', 'ghost-noir'));
+        $this->assertSame(['ghost-noir'], $this->registry->ids(), 'foreign generation pre-seeded');
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline capture must not report a flush');
-        $this->assertFalse($sync->flushIfStale(), '…nor the next identical check');
-        $this->assertTrue($this->registry->has('acme-noir'), 'boot-wired state survives untouched');
-        $this->assertSame([], $this->logCalls, 'no rebuild, no log line');
+        $this->assertTrue(
+            $sync->flushIfStale(),
+            'a cold worker whose boot registry predates the durable stamp must rebuild on its FIRST request '
+            . '(S499 F1: never baseline-capture a foreign-current stamp)',
+        );
+        $this->assertSame(['acme-noir'], $this->registry->ids(), 'durable truth is now served');
+        $this->assertFalse($this->registry->has('ghost-noir'), 'the stale generation is flushed out');
+
+        // And the adopted stamp makes the next identical request do no work.
+        $this->assertFalse($sync->flushIfStale(), '…then a stable stamp never rebuilds again');
     }
 
     public function test_a_peer_workers_enable_becomes_visible_on_the_next_check(): void
     {
         $enabled = [$this->row('phlix-plugin-acme', true)];
+        // Boot/durable was empty, then a peer enabled. Three checks: cold
+        // reconcile on the empty durable, the enable bump, then a stable no-op.
         $this->expect($this->loader, 'listInstalled')
             ->andReturn([], $enabled, $enabled);
-        $this->expect($this->loader, 'getEnabled')->andReturn($enabled);
+        // getEnabled() is read on BOTH rebuilds (cold + enable); only the enable
+        // one has a source to instantiate.
+        $this->expect($this->loader, 'getEnabled')->andReturn([], $enabled);
         $this->expect($this->loader, 'getEntryInstance')
             ->with('phlix-plugin-acme')
             ->andReturn($this->themeSource('acme-themes', 'acme-noir'));
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline: nothing installed at boot');
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile: rebuilds from the (empty) durable set');
         $this->assertTrue($sync->flushIfStale(), 'peer enable bumped the stamp → rebuild');
 
         $this->assertSame(['acme-noir'], $this->registry->ids());
@@ -177,45 +200,58 @@ final class ThemeRegistryFleetSyncTest extends TestCase
             $this->logCalls,
             static fn (array $c): bool => str_contains($c['message'], 'fleet flush'),
         ));
-        $this->assertCount(1, $flushLogs, 'exactly one flush log line per rebuild');
-        $this->assertSame('info', $flushLogs[0]['level']);
+        $this->assertCount(2, $flushLogs, 'one rebuild per reconcile call');
+        $this->assertSame('info', $flushLogs[1]['level']);
         $this->assertSame(
             ThemeRegistryFleetSync::FLUSH_MARKER,
-            $flushLogs[0]['context']['marker'],
+            $flushLogs[1]['context']['marker'],
             'the flush marker constant must be carried on the rebuild log line',
+        );
+        $this->assertSame(
+            ThemeRegistryFleetSync::BOOT_PRIME_MARKER,
+            $flushLogs[0]['context']['boot_prime'] ?? null,
+            'the cold reconcile (first) flush is tagged with the boot-prime marker',
+        );
+        $this->assertArrayNotHasKey(
+            'boot_prime',
+            $flushLogs[1]['context'],
+            'a later stamp-move flush is NOT a boot prime',
         );
     }
 
     public function test_a_stable_stamp_never_rebuilds_twice(): void
     {
         $enabled = [$this->row('phlix-plugin-acme', true)];
-        $this->expect($this->loader, 'listInstalled')->andReturn([], $enabled, $enabled, $enabled);
+        // Boot/durable already [acme]; the cold reconcile is the one rebuild,
+        // every later check on the unchanged stamp does nothing.
+        $this->expect($this->loader, 'listInstalled')->andReturn($enabled, $enabled, $enabled, $enabled);
         $this->expect($this->loader, 'getEnabled')->once()->andReturn($enabled);
         $this->expect($this->loader, 'getEntryInstance')->once()->andReturn(
             $this->themeSource('acme-themes', 'acme-noir'),
         );
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale());
-        $this->assertTrue($sync->flushIfStale());
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile rebuilds once');
         $this->assertFalse($sync->flushIfStale(), 'same stamp → no work on the next request');
         $this->assertFalse($sync->flushIfStale(), '…nor the one after');
+        $this->assertFalse($sync->flushIfStale(), '…nor the one after that');
+        $this->assertSame(['acme-noir'], $this->registry->ids());
     }
 
     public function test_a_peer_workers_disable_or_uninstall_empties_the_source(): void
     {
         $enabled = [$this->row('phlix-plugin-acme', true)];
-        // Four checks: empty baseline → enabled (bump) → enabled (no bump) →
-        // row gone (bump). A disabled row reaches the same end state: the
-        // rebuild reads getEnabled(), so it contributes nothing either way.
+        // Four checks: cold reconcile on empty → enable (bump) → enabled (no
+        // bump) → row gone (bump). A disabled row reaches the same end state:
+        // the rebuild reads getEnabled(), so it contributes nothing either way.
         $this->expect($this->loader, 'listInstalled')->andReturn([], $enabled, $enabled, []);
-        $this->expect($this->loader, 'getEnabled')->andReturn($enabled, []);
+        $this->expect($this->loader, 'getEnabled')->andReturn([], $enabled, []);
         $this->expect($this->loader, 'getEntryInstance')->once()->andReturn(
             $this->themeSource('acme-themes', 'acme-noir'),
         );
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline');
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile on empty');
         $this->assertTrue($sync->flushIfStale(), 'enable bumps');
         $this->assertSame(['acme-noir'], $this->registry->ids());
         $this->assertFalse($sync->flushIfStale(), 'unchanged');
@@ -228,6 +264,7 @@ final class ThemeRegistryFleetSyncTest extends TestCase
     {
         $this->expect($this->loader, 'listInstalled')
             ->andReturn(
+                // cold reconcile on this first row; then the discriminating moves.
                 [$this->row('phlix-plugin-acme', true, '1.0.0')],
                 // enabled flipped by a peer disable → must bump.
                 [$this->row('phlix-plugin-acme', false, '1.0.0')],
@@ -239,7 +276,7 @@ final class ThemeRegistryFleetSyncTest extends TestCase
         $this->expect($this->loader, 'getEnabled')->andReturn([]);
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline');
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile (first check)');
         $this->assertTrue($sync->flushIfStale(), 'enable→disable bumps');
         $this->assertTrue($sync->flushIfStale(), 'version update bumps');
         $this->assertFalse($sync->flushIfStale(), 'unchanged state does not bump');
@@ -249,7 +286,7 @@ final class ThemeRegistryFleetSyncTest extends TestCase
     {
         $good = $this->row('phlix-plugin-good', true);
         $evil = $this->row('phlix-plugin-evil', true);
-        $this->expect($this->loader, 'listInstalled')->andReturn([], [$good, $evil]);
+        $this->expect($this->loader, 'listInstalled')->andReturn([$good, $evil]);
         $this->expect($this->loader, 'getEnabled')->andReturn([$good, $evil]);
         $this->expect($this->loader, 'getEntryInstance')
             ->with('phlix-plugin-good')
@@ -276,28 +313,30 @@ final class ThemeRegistryFleetSyncTest extends TestCase
             });
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline');
-        $this->assertTrue($sync->flushIfStale(), 'rebuild ran');
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile runs the rebuild');
 
         $this->assertSame(['good-theme'], $this->registry->ids(), 'the valid source still ships');
         $this->assertCount(1, $this->logCallsAt('error'), 'the refused source is logged, not swallowed');
+
+        $this->assertFalse($sync->flushIfStale(), '…and a stable stamp does not rebuild again');
     }
 
     public function test_a_broken_entry_instance_is_skipped_without_stalling_the_pool(): void
     {
         $broken = $this->row('phlix-plugin-broken', true);
-        $this->expect($this->loader, 'listInstalled')->andReturn([], [$broken]);
+        $this->expect($this->loader, 'listInstalled')->andReturn([$broken]);
         $this->expect($this->loader, 'getEnabled')->andReturn([$broken]);
         $this->expect($this->loader, 'getEntryInstance')->andThrow(
             new PluginNotFoundException('gone mid-loop'),
         );
 
         $sync = $this->sync();
-        $this->assertFalse($sync->flushIfStale(), 'baseline');
-        $this->assertTrue($sync->flushIfStale(), 'rebuild ran');
+        $this->assertTrue($sync->flushIfStale(), 'cold reconcile runs the rebuild');
 
         $this->assertSame([], $this->registry->ids());
         $this->assertCount(1, $this->logCallsAt('warning'), 'the unloadable entry is logged, not fatal');
+
+        $this->assertFalse($sync->flushIfStale(), '…then a stable stamp does not rebuild again');
     }
 
     // -----------------------------------------------------------------
@@ -319,6 +358,19 @@ final class ThemeRegistryFleetSyncTest extends TestCase
             "/'marker' => self::FLUSH_MARKER,/",
             $source,
             'the rebuild log line must carry the marker constant — dropping that reference is the regression',
+        );
+
+        // S499: the boot-prime marker is likewise code-resident and referenced.
+        $this->assertMatchesRegularExpression(
+            "/public const BOOT_PRIME_MARKER = '[A-Z0-9]+';/",
+            $source,
+            'the boot-prime marker must live on a code line (constant declaration)',
+        );
+        $this->assertMatchesRegularExpression(
+            "/self::BOOT_PRIME_MARKER/",
+            $source,
+            'flushIfStale() must tag the cold reconcile with the boot-prime marker — '
+            . 'dropping that reference is the S499 regression',
         );
     }
 

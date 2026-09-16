@@ -371,6 +371,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **A freshly booted worker now reconciles theme state on its first request instead of
+  recording a foreign stamp as its baseline (`S499`).** S498's cross-worker fleet sync adopts
+  the current `plugins`-table stamp on a worker's very first theme request and rebuilds only
+  on a later change — an assumption that holds only while nothing moved between that worker's
+  `bootstrapEnabled()` and its first served request. An audit found the cold-worker hole: when
+  a peer install/enable/disable/uninstall lands in that window, the new worker captures the
+  foreign-current stamp while its in-memory registry is still from the older boot generation,
+  so the two stamps then agree forever and it serves the stale catalogue until the process
+  recycles — the exact W99 symptom, minus the restart that would have hidden it. The stamp now
+  starts as an explicit "never reconciled" sentinel that a real (always-40-hex) stamp can never
+  equal, so the first served request falls through to the existing rebuild-from-durable path and
+  only then adopts the stamp; that boot reconcile is tagged on the log line so an operator can
+  prove, from the log alone, that no worker ever baseline-captured a foreign generation. The
+  extra rebuild cannot duplicate a theme: the rebuild clears then re-registers each enabled
+  source once (a worker that booted current just re-materialises the same bytes), reusing
+  `register()`'s existing replace-per-source idempotency unchanged. The adopted stamp is now
+  committed only after the rebuild completes — a one-line ordering hardening that keeps
+  "stamp equals current" meaning "this process is reconciled to it" under any future
+  request-interleaving model. The theme-arm scope is unchanged; version-unchanged content swaps
+  and settings-driven theme output still do not move the stamp, exactly as before S498.
+
 - **A plugin/theme registry mutation is now visible across the whole Workerman pool
   without a restart (`S498`).** `ThemeSourceRegistry` is per-process by design and
   `PluginLoader::enable()/disable()/uninstall()` mutate only the ONE worker that served

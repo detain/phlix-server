@@ -4644,6 +4644,21 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   false-reddened 11 `ReleaseScriptTest` cases; both the script and one test now ask the decoded
   JSON root instead of the raw text. No migration.
 
+### Fixed
+
+- **Two doc/comment corrections — zero behavior change.** The `AGENTS.md` S508 entry claimed
+  `MediaItemController::getPlaybackInfo()` "honors" `?forceTranscode`/`?excludeHevc` through
+  `QualitySelector::selectQuality()`; it does not — the pre-flight endpoint only **acknowledges**
+  the parsed values (the add-only `playback_constraints` echo, exactly as its own docblock says),
+  and no HTTP caller threads the options into `selectQuality()` yet. The `AGENTS.md` sentence now
+  matches the code. Separately, the READS re-pin note in
+  `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php` attributed the census
+  scanner's blind spot to `functionScopes()`; the actual mechanism is the dead final-parameter
+  branch in `rootsDeclaredInParams()` (`$depth--` runs before the `$depth !== 1` segment-boundary
+  check), which unregisters EVERY last parameter — any arity, any type or return shape. The
+  corrected comment names the real mechanism so future re-pinners don't misjudge counts; all
+  census pins (1877 files / 391 reads / 973 writes) are unchanged.
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

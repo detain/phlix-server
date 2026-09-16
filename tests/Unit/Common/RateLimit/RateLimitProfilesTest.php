@@ -12,18 +12,20 @@ use PHPUnit\Framework\TestCase;
  * exactly the previously-UNLIMITED server auth surfaces, with the documented
  * container ids, config keys, defaults, and backend classification. `login` is
  * DELIBERATELY absent (it keeps DbLoginRateLimitStore). S81 added the seventh
- * surface, `pin_verify` (the self-service PIN oracle closure).
+ * surface, `pin_verify` (the self-service PIN oracle closure); S518 added four
+ * more (`quick_connect_initiate` / `_status` / `_approve`, `telemetry_heartbeat`
+ * — the AD-25 pairing legs and the AD-27 client tick).
  */
 final class RateLimitProfilesTest extends TestCase
 {
     /**
-     * Exactly seven surfaces, no more, no fewer — and NO `login` profile.
+     * Exactly eleven surfaces, no more, no fewer — and NO `login` profile.
      */
-    public function testCatalogueHasExactlySevenSurfaces(): void
+    public function testCatalogueHasExactlyElevenSurfaces(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        self::assertCount(7, $defaults);
+        self::assertCount(11, $defaults);
 
         $ids = array_keys($defaults);
         self::assertContains(RateLimitProfiles::REGISTER, $ids);
@@ -33,6 +35,10 @@ final class RateLimitProfilesTest extends TestCase
         self::assertContains(RateLimitProfiles::JWKS, $ids);
         self::assertContains(RateLimitProfiles::WS_CONNECT, $ids);
         self::assertContains(RateLimitProfiles::PIN_VERIFY, $ids);
+        self::assertContains(RateLimitProfiles::QUICK_CONNECT_INITIATE, $ids);
+        self::assertContains(RateLimitProfiles::QUICK_CONNECT_STATUS, $ids);
+        self::assertContains(RateLimitProfiles::QUICK_CONNECT_APPROVE, $ids);
+        self::assertContains(RateLimitProfiles::TELEMETRY_HEARTBEAT, $ids);
 
         self::assertNotContains('rate_limiter.login', $ids);
     }
@@ -49,6 +55,13 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.jwks', RateLimitProfiles::JWKS);
         self::assertSame('rate_limiter.ws_connect', RateLimitProfiles::WS_CONNECT);
         self::assertSame('rate_limiter.pin_verify', RateLimitProfiles::PIN_VERIFY);
+        self::assertSame(
+            'rate_limiter.quick_connect_initiate',
+            RateLimitProfiles::QUICK_CONNECT_INITIATE
+        );
+        self::assertSame('rate_limiter.quick_connect_status', RateLimitProfiles::QUICK_CONNECT_STATUS);
+        self::assertSame('rate_limiter.quick_connect_approve', RateLimitProfiles::QUICK_CONNECT_APPROVE);
+        self::assertSame('rate_limiter.telemetry_heartbeat', RateLimitProfiles::TELEMETRY_HEARTBEAT);
     }
 
     /**
@@ -66,6 +79,12 @@ final class RateLimitProfilesTest extends TestCase
             RateLimitProfiles::PIN_VERIFY      => ['key' => 'pin_verify',      'max' => 5,   'window' => 300],
             RateLimitProfiles::JWKS            => ['key' => 'jwks',            'max' => 120, 'window' => 60],
             RateLimitProfiles::WS_CONNECT      => ['key' => 'ws_connect',      'max' => 30,  'window' => 60],
+            // S518: pairing legs span two devices/any worker (global budgets
+            // mandatory) and telemetry is public; rationale in RateLimitProfiles.
+            RateLimitProfiles::QUICK_CONNECT_INITIATE => ['key' => 'quick_connect_initiate', 'max' => 10,  'window' => 3600],
+            RateLimitProfiles::QUICK_CONNECT_STATUS   => ['key' => 'quick_connect_status',   'max' => 120, 'window' => 60],
+            RateLimitProfiles::QUICK_CONNECT_APPROVE  => ['key' => 'quick_connect_approve',  'max' => 30,  'window' => 3600],
+            RateLimitProfiles::TELEMETRY_HEARTBEAT    => ['key' => 'telemetry_heartbeat',    'max' => 20,  'window' => 3600],
         ];
 
         self::assertSame($expected, RateLimitProfiles::defaults());
@@ -87,10 +106,10 @@ final class RateLimitProfilesTest extends TestCase
     }
 
     /**
-     * The DB-backed subset is exactly the five brute-force / enumeration
-     * surfaces; jwks and ws_connect are NOT DB-backed.
+     * The DB-backed subset is exactly the nine brute-force / enumeration /
+     * cross-device surfaces; jwks and ws_connect are NOT DB-backed.
      */
-    public function testDbBackedSubsetIsTheFiveBruteForceSurfaces(): void
+    public function testDbBackedSubsetIsTheBruteForceSurfaces(): void
     {
         $dbBacked = RateLimitProfiles::dbBacked();
 
@@ -101,6 +120,10 @@ final class RateLimitProfilesTest extends TestCase
                 RateLimitProfiles::WEBAUTHN_START,
                 RateLimitProfiles::WEBAUTHN_FINISH,
                 RateLimitProfiles::PIN_VERIFY,
+                RateLimitProfiles::QUICK_CONNECT_INITIATE,
+                RateLimitProfiles::QUICK_CONNECT_STATUS,
+                RateLimitProfiles::QUICK_CONNECT_APPROVE,
+                RateLimitProfiles::TELEMETRY_HEARTBEAT,
             ],
             $dbBacked
         );

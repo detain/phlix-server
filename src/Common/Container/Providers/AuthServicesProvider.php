@@ -34,6 +34,7 @@ use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Media\RecommendationService;
 use Phlix\Server\Http\Controllers\AuthController;
+use Phlix\Server\Http\Controllers\Auth\QuickConnectController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\ProfilesController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
@@ -434,6 +435,30 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // limiters above (PHP-DI skips optional params during autowiring).
             ProfilesController::class => autowire()
                 ->constructorParameter('pinVerifyLimiter', get(RateLimitProfiles::PIN_VERIFY)),
+
+            // S518 (AD-25/AD-27): the quick-connect pairing + client telemetry
+            // controller. `db` is named explicitly so the controller builds its
+            // QuickConnectStateStore / ClientHeartbeatStore on the SHARED pooled
+            // connection (PHP-DI skips optional ctor params during autowiring —
+            // the exact silent-null hazard documented on every binding above:
+            // an unbound limiter would leave the pairing surfaces UNLIMITED).
+            // The four limiters bind to their own profile instances; the stores
+            // stay null in the container-less test venue, where handlers 503.
+            // `serverUrl` comes from the hub config so the paired TV is
+            // advertised the operator's absolute URL when one is configured
+            // ('' ⇒ per-request Host derivation, see the controller).
+            QuickConnectController::class => autowire()
+                ->constructorParameter('db', get(Connection::class))
+                ->constructorParameter('initiateLimiter', get(RateLimitProfiles::QUICK_CONNECT_INITIATE))
+                ->constructorParameter('statusLimiter', get(RateLimitProfiles::QUICK_CONNECT_STATUS))
+                ->constructorParameter('approveLimiter', get(RateLimitProfiles::QUICK_CONNECT_APPROVE))
+                ->constructorParameter('telemetryLimiter', get(RateLimitProfiles::TELEMETRY_HEARTBEAT))
+                ->constructorParameter('serverUrl', (static function () use ($appConfig): string {
+                    $hub = is_array($appConfig['hub'] ?? null) ? $appConfig['hub'] : [];
+                    $url = $hub['public_url'] ?? '';
+
+                    return is_string($url) ? $url : '';
+                })()),
         ]);
 
         $this->registerRateLimiters($builder, $appConfig);

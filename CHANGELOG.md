@@ -9,6 +9,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Quick-connect device pairing and consent-gated client telemetry (`S518`, AD-25/AD-27).**
+  Six route tuples join the composed table. The TV-side half of pairing:
+  `POST /api/v1/auth/quick-connect/initiate` (public, IP rate-limited) mints an
+  unambiguous 6-letter code plus a 256-bit secret and parks the pending pairing in
+  the existing `oauth_state_store` under provider `quick_connect` — no new table for
+  transient state, 10-minute uniform TTL, codes and secrets never mixed into one
+  surface. `GET /api/v1/auth/quick-connect/{code}/status` (public, generously polled
+  and rate-limited) answers `pending|approved|denied|expired` and nothing else; the
+  secret-bearing half stays separate: `POST .../{code}/approve` runs behind
+  `AuthMiddleware` (an authenticated phone, per-user keyed limiter, secret compared
+  with `hash_equals`, `SELECT … FOR UPDATE` so a second approver can never overwrite
+  the first), and `POST .../{code}/token` (public — the TV has no session yet) burns
+  the approved pairing one-shot under the same row lock and mints the full
+  access/refresh token pair, answering a uniform 404 for every failure class so the
+  endpoint is no oracle. The telemetry half: `POST /api/v1/telemetry/heartbeat`
+  (public — a heartbeat precedes any session) requires an explicit `consent: true`
+  opt-in in the body before anything is parsed further, bounds the payload to
+  instance id/version/client type/build token (no PII beyond the anonymous instance
+  id), and lands via `INSERT … ON DUPLICATE KEY UPDATE` in the new
+  `client_heartbeats` table (migration 106) — one row per consenting instance, so
+  the table is bounded by fleet size and carries no history to reap; every write
+  failure is swallowed to the log. `GET /api/v1/admin/telemetry/clients` (admin
+  scope, `AdminMiddleware`) reads the fleet census back for the dashboard. Four new
+  DB-backed rate-limit surfaces ride the shared `rate_limit_buckets` table.
+
 - **Request-side playback constraints (`S508`, AD-8).**
   `QualitySelector::selectQuality()` gains a caller-driven "profile arm" — two options
   layered on top of whatever device profile was resolved: `force_transcode` skips the

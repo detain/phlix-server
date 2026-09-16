@@ -90,6 +90,8 @@ tags:
     description: "Watch-together SyncPlay group and time-sync endpoints."
   - name: "System"
     description: "Server-level system and status endpoints."
+  - name: "Telemetry"
+    description: "Consent-gated client telemetry (S518/AD-27) — opt-in device heartbeats and the admin fleet census."
   - name: "Theming"
     description: "Appearance and theme endpoints."
   - name: "Transcoding"
@@ -3791,6 +3793,29 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/telemetry/clients":
+    get:
+      operationId: "get_api_v1_admin_telemetry_clients"
+      tags: ["Administration"]
+      summary: "List consenting client heartbeats"
+      description: "List consenting client heartbeats (get /api/v1/admin/telemetry/clients)."
+      x-phlix-middleware: [AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/admin/transcoding/accelerators":
     get:
       operationId: "get_api_v1_admin_transcoding_accelerators"
@@ -5015,6 +5040,121 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/quick-connect/initiate":
+    post:
+      operationId: "post_api_v1_auth_quick_connect_initiate"
+      tags: ["Authentication"]
+      summary: "Start a quick-connect pairing"
+      description: "Start a quick-connect pairing (post /api/v1/auth/quick-connect/initiate)."
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/quick-connect/{code}/approve":
+    post:
+      operationId: "post_api_v1_auth_quick_connect_code_approve"
+      tags: ["Authentication"]
+      summary: "Approve a quick-connect pairing"
+      description: "Approve a quick-connect pairing (post /api/v1/auth/quick-connect/{code}/approve)."
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "code"
+          in: path
+          required: true
+          description: "Quick-connect pairing code (6 unambiguous uppercase letters)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Pairing is not pending."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/quick-connect/{code}/status":
+    get:
+      operationId: "get_api_v1_auth_quick_connect_code_status"
+      tags: ["Authentication"]
+      summary: "Poll quick-connect pairing state"
+      description: "Poll quick-connect pairing state (get /api/v1/auth/quick-connect/{code}/status)."
+      x-phlix-middleware: []
+      parameters:
+        - name: "code"
+          in: path
+          required: true
+          description: "Quick-connect pairing code (6 unambiguous uppercase letters)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/quick-connect/{code}/token":
+    post:
+      operationId: "post_api_v1_auth_quick_connect_code_token"
+      tags: ["Authentication"]
+      summary: "Redeem an approved quick-connect pairing"
+      description: "Redeem an approved quick-connect pairing (post /api/v1/auth/quick-connect/{code}/token)."
+      x-phlix-middleware: []
+      parameters:
+        - name: "code"
+          in: path
+          required: true
+          description: "Quick-connect pairing code (6 unambiguous uppercase letters)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/refresh":
@@ -10126,6 +10266,26 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/telemetry/heartbeat":
+    post:
+      operationId: "post_api_v1_telemetry_heartbeat"
+      tags: ["Telemetry"]
+      summary: "Record a consented client heartbeat"
+      description: "Record a consented client heartbeat (post /api/v1/telemetry/heartbeat). Opt-in: body consent MUST be true; storage failures are swallowed into a 200 with recorded=false."
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/transcode/{jobId}/status":

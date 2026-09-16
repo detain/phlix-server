@@ -493,6 +493,61 @@ class Application
             (new \Phlix\Server\Http\AuthProviderRouteRegistrar())->register($this->router);
         }
 
+        // S518 (AD-25): quick-connect device pairing — the server half of the
+        // TV QR flow. Auth placement is decided per-leg and documented in full
+        // on \Phlix\Server\Http\Controllers\Auth\QuickConnectController; in one
+        // line: initiate/status/token are PUBLIC because the pairing device has
+        // no credential yet (each leg's bearer proof is the pairing secret or
+        // the limiter-bounded code), and approve is the ONLY route that sits
+        // behind AuthMiddleware — approval is an act of an existing session,
+        // mirroring the S45/S47 /auth/identities group registered just above.
+        // Every leg is rate-limited through the standard RateLimitProfiles
+        // seams (initiate/status+token per IP, approve per user).
+        $quickConnectController = $this->getQuickConnectController();
+        $this->router->post(
+            '/api/v1/auth/quick-connect/initiate',
+            [$quickConnectController, 'initiate']
+        );
+        $this->router->get(
+            '/api/v1/auth/quick-connect/{code}/status',
+            [$quickConnectController, 'status']
+        );
+        $this->router->post(
+            '/api/v1/auth/quick-connect/{code}/token',
+            [$quickConnectController, 'token']
+        );
+        $this->router->group(
+            '',
+            function (Router $r) use ($quickConnectController): void {
+                $r->post('/api/v1/auth/quick-connect/{code}/approve', [$quickConnectController, 'approve']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
+
+        // S518 (AD-27): the consent-gated CLIENT telemetry tick. Public on
+        // purpose — consenting clients heartbeat before (or without) pairing,
+        // and the opt-in flag in the body is the gate the handler enforces
+        // fail-fast; storage failures are swallowed into a 200 by contract.
+        // The admin census read that survey-c pairs with it sits in the same
+        // AdminMiddleware shape as every other /api/v1/admin surface.
+        $this->router->post('/api/v1/telemetry/heartbeat', [$quickConnectController, 'heartbeat']);
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $telemetryAdminMiddleware */
+                $telemetryAdminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($quickConnectController): void {
+                        $r->get('/api/v1/admin/telemetry/clients', [$quickConnectController, 'adminClients']);
+                    },
+                    [$telemetryAdminMiddleware],
+                );
+            } catch (\Throwable) {
+                // Admin middleware unavailable — route not registered (same
+                // posture as every other admin loader in this class).
+            }
+        }
+
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
             $controller = $this->getHubTokenController();
@@ -3411,6 +3466,54 @@ class Application
 
         /** @var \Phlix\Server\Http\Controllers\AuthController */
         $controller = $this->container->get(\Phlix\Server\Http\Controllers\AuthController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns the S518 quick-connect + telemetry controller.
+     *
+     * Container path first (DI binds the shared pooled Connection so the
+     * pairing store rides `oauth_state_store` and the heartbeat landing
+     * `client_heartbeats` — both multi-worker-safe — plus the four per-surface
+     * limiters, see AuthServicesProvider). The no-container fallback mirrors
+     * {@see self::getAuthController()}'s degraded venue: it builds the stores
+     * on the venue's localhost connection so the endpoints FUNCTION in that
+     * test harness, but WITHOUT limiters (the null-limiter no-op contract) —
+     * never in a real deployment, which always has the container.
+     */
+    private function getQuickConnectController(): \Phlix\Server\Http\Controllers\Auth\QuickConnectController
+    {
+        if ($this->container === null) {
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $userRepo = new \Phlix\Auth\UserRepository($db);
+            $auditLogger = new \Phlix\Common\Logger\AuditLogger(
+                new \Phlix\Common\Logger\StructuredLogger('audit', [])
+            );
+            $authManager = new \Phlix\Auth\AuthManager(
+                $userRepo,
+                new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
+                $auditLogger
+            );
+            return new \Phlix\Server\Http\Controllers\Auth\QuickConnectController(
+                $authManager,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                $db
+            );
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\Auth\QuickConnectController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\Auth\QuickConnectController::class);
         return $controller;
     }
 

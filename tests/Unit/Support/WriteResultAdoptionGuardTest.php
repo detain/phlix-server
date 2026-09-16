@@ -163,8 +163,15 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * landscape — new or removed `->query()` INSERT/REPLACE call — updates this
      * number in the same commit; that is the point (S126's EXPECTED_ADOPTERS
      * precedent).
+     * Re-pinned 95→97 by S518: two literal-first-argument INSERT sites join the
+     * tree — `QuickConnectStateStore::issue()` (the pairing INSERT into
+     * `oauth_state_store`, consumed through the helper so a zero-row insert can
+     * never hand a phantom pairing to a caller) and `ClientHeartbeatStore::record()`
+     * (the `INSERT … ON DUPLICATE KEY UPDATE` into `client_heartbeats`, consumed
+     * to surface a false `recorded` bit rather than a phantom write — the row's
+     * own freshness is the durable signal). Measured 97 from the phpunit red.
      */
-    private const EXPECTED_TOTAL_INSERT_CALLS = 95;
+    private const EXPECTED_TOTAL_INSERT_CALLS = 97;
 
     /**
      * The denominator, part 2: how many of those 95 consume their result.
@@ -172,8 +179,10 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * contribute a try arm and a retry arm; both arms feed one consumption).
      * All 15 must be consumed through `WriteResult::wroteNothing()` /
      * `statementWroteNothing()`.
+     * Re-pinned 15→17 by S518: both new sites above consume their result through
+     * `WriteResult::wroteNothing()` — measured 17 from the phpunit red.
      */
-    private const EXPECTED_CONSUMED_INSERT_RESULTS = 15;
+    private const EXPECTED_CONSUMED_INSERT_RESULTS = 17;
 
     /**
      * Helper call names whose first argument is the consumed result, plus the

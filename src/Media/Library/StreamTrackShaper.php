@@ -156,6 +156,13 @@ final class StreamTrackShaper
                     'label' => $title ?? $language ?? ('Subtitle ' . $emitted),
                     'codec' => strtolower(self::nonEmptyString($stream['codec'] ?? null) ?? 'webvtt'),
                     'source' => $source,
+                    // S507 (AD-8): every subtitle playback-info hands the player is
+                    // delivered EXTERNALLY (a signed sidecar URL a <track> loads
+                    // alongside the stream) — nothing is muxed into the container.
+                    // A client like a Samsung Tizen panel relies on this signal to
+                    // stop expecting in-container rendering of ass/ssa/pgssub and
+                    // fetch the sidecar instead.
+                    'delivery' => 'external',
                     'hearing_impaired' => self::isTruthy($stream['hearing_impaired'] ?? null),
                     'url' => ($itemId !== '' && $streamId !== null)
                         ? $signer->mint('/api/v1/media/' . $itemId . '/subtitles/external/' . $streamId)
@@ -185,6 +192,10 @@ final class StreamTrackShaper
                 'label' => $title ?? $language ?? ('Subtitle ' . $emitted),
                 'codec' => $codec,
                 'source' => null,
+                // S507 (AD-8): text subtitles are extracted to a WebVTT sidecar
+                // served by URL, i.e. delivered externally — see the class note
+                // above. Bitmap pgs/vobsub rows carry no text and are not emitted.
+                'delivery' => 'external',
                 'hearing_impaired' => self::isTruthy($stream['hearing_impaired'] ?? null),
                 'url' => $itemId !== ''
                     ? $signer->mint('/api/v1/media/' . $itemId . '/subtitles/' . $subOrdinal)

@@ -585,7 +585,7 @@ class MediaItemControllerTest extends TestCase
         ]));
 
         $request = new Request();
-        $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen']; // → tv-4k
+        $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen']; // → samsung-tizen (S507)
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
         /** @var array{quality_ladder: list<array{id: string}>} $body */
         $body = json_decode($response->body, true);
@@ -719,6 +719,10 @@ class MediaItemControllerTest extends TestCase
         $this->assertSame([3, 5], array_column($body['subtitle_tracks'], 'stream_index'));
         $this->assertSame(['eng', 'Signs'], array_column($body['subtitle_tracks'], 'label'));
         $this->assertSame(['subrip', 'ass'], array_column($body['subtitle_tracks'], 'codec'));
+        // S507 (AD-8): every subtitle is delivered EXTERNALLY (a signed sidecar URL),
+        // never muxed in-container — the signal a Tizen panel uses to stop expecting
+        // in-container rendering of ass/ssa/pgssub.
+        $this->assertSame(['external', 'external'], array_column($body['subtitle_tracks'], 'delivery'));
 
         foreach ([0 => 0, 1 => 2] as $pos => $ordinal) {
             $url = $body['subtitle_tracks'][$pos]['url'];

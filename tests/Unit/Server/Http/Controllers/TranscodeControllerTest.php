@@ -66,7 +66,7 @@ class TranscodeControllerTest extends TestCase
 
         $request = new Request();
         $request->query = ['profile' => 'mobile-low'];
-        // Header would map to tv-4k, but the explicit param must win.
+        // Header would map to samsung-tizen, but the explicit param must win.
         $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen'];
 
         $response = $controller->start($request, ['id' => 'media-1']);
@@ -108,8 +108,8 @@ class TranscodeControllerTest extends TestCase
     public static function deviceTypeProfileProvider(): array
     {
         return [
-            'samsung-tizen → tv-4k' => ['samsung-tizen', 'tv-4k'],
-            'tizen → tv-4k' => ['tizen', 'tv-4k'],
+            'samsung-tizen → samsung-tizen' => ['samsung-tizen', 'samsung-tizen'],
+            'tizen → samsung-tizen' => ['tizen', 'samsung-tizen'],
             'roku → tv-4k' => ['roku', 'tv-4k'],
             'android → mobile-high' => ['android', 'mobile-high'],
             'ios → mobile-high' => ['ios', 'mobile-high'],
@@ -117,7 +117,7 @@ class TranscodeControllerTest extends TestCase
             'unknown → web' => ['some-future-device', 'web'],
             'empty → web' => ['', 'web'],
             // Case-insensitivity.
-            'SAMSUNG-TIZEN (upper) → tv-4k' => ['SAMSUNG-TIZEN', 'tv-4k'],
+            'SAMSUNG-TIZEN (upper) → samsung-tizen' => ['SAMSUNG-TIZEN', 'samsung-tizen'],
             'Android (mixed) → mobile-high' => ['Android', 'mobile-high'],
             'Roku (mixed) → tv-4k' => ['Roku', 'tv-4k'],
             'iOS (mixed) → mobile-high' => ['iOS', 'mobile-high'],

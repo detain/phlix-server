@@ -19,9 +19,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   ships a deliberately EMPTY override, and ui's `mergeMessages` makes an empty override identical
   to an absent one, so English rendering is unchanged; the locale resolves once at config time
   (no runtime switcher, per estate doctrine). The `@phlix/ui` pin moves from the `v0.99.4` tag
-  tarball to the 40-hex sha `3017f443f33a4368cb7b94c67f47814fe0db0bff` on phlix-ui master (the
-  commit that ships the locale bundles); the committed `public/assets/app` bundle is rebuilt with
-  it and reproduced byte-identically by two consecutive builds on the CI-pinned node 24.20.0.
+  tarball to the `v0.99.5` tag tarball (peels to `3017f443f33a4368cb7b94c67f47814fe0db0bff` — the
+  commit that ships the locale bundles; pinned by release tag, not bare sha, because the estate's
+  ui-pin-skew grading accepts tag-form pins only); the committed `public/assets/app` bundle is
+  rebuilt with it and reproduced byte-identically by two consecutive builds on the CI-pinned
+  node 24.20.0.
   New `web-ui/tests/` suite runs under `node --test` with zero new dependencies: an end-to-end
   proof against the real `@phlix/ui` bundle that a client override reaches rendered strings
   (ZZZ-TEST pin, omitted-messages default pin, es-flip pin), the resolver table, merge-semantics

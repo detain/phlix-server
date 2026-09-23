@@ -8,10 +8,11 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
-    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v0.99.4.tar.gz"
+    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v0.99.5.tar.gz"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

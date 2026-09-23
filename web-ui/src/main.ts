@@ -21,8 +21,16 @@ import {
 } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
+import { messagesForLocale, resolveLocale } from './i18n';
 
 const app = createPhlixApp({
+    // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
+    // startup (VITE_PHLIX_LOCALE → navigator.language → 'en' — no runtime switcher
+    // per estate doctrine) and pass that locale's ui-catalog override map, which
+    // ui's mergeMessages lays OVER its English defaults. 'en' resolves to an
+    // EMPTY override, so English rendering is byte-identical to omitting the
+    // field entirely (see src/i18n/index.ts for the full law).
+    messages: messagesForLocale(resolveLocale()),
     // Top-bar nav. The shell replaces its default Browse/Settings links once a
     // `menu` is supplied, so they're restated here alongside the admin entry.
     // "Admin" is `requiresAdmin`, so the shell shows it only for an admin

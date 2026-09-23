@@ -1,0 +1,2 @@
+function e(e,t){let n,r;function i(){n=void 0;let t=r;r=void 0,t!==void 0&&e(...t)}let a=function(...e){r=e,n!==void 0&&clearTimeout(n),n=setTimeout(i,t)};return a.cancel=()=>{n!==void 0&&clearTimeout(n),n=void 0,r=void 0},a.flush=()=>{n!==void 0&&(clearTimeout(n),i())},Object.defineProperty(a,"pending",{get:()=>n!==void 0,enumerable:!0}),a}export{e as t};
+//# sourceMappingURL=debounce-BkSsZiXZ-0XrhJBo7.js.map

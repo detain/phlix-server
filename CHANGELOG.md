@@ -9,6 +9,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The `@phlix/ui` messages seam is now wired in the `/app` SPA.** `web-ui` booted
+  `createPhlixApp()` with no `messages` config — the config-time i18n seam was vendored but
+  unreachable from the server's own portal (estate i18n audit finding). New `web-ui/src/i18n/`
+  mirrors the proven Tizen client: priority explicit → `VITE_PHLIX_LOCALE` → `navigator.language`
+  → `'en'`, BCP-47 parsing with the region-aware `pt*` → `pt_BR` rule, and a locale registry over
+  the six estate bundles (`es`/`fr`/`de`/`it`/`pt_BR`/`ja`) that `@phlix/ui` now exports from its
+  main entry — no vendored copy needed here, so ui stays the catalog SSOT through the pin. `'en'`
+  ships a deliberately EMPTY override, and ui's `mergeMessages` makes an empty override identical
+  to an absent one, so English rendering is unchanged; the locale resolves once at config time
+  (no runtime switcher, per estate doctrine). The `@phlix/ui` pin moves from the `v0.99.4` tag
+  tarball to the 40-hex sha `3017f443f33a4368cb7b94c67f47814fe0db0bff` on phlix-ui master (the
+  commit that ships the locale bundles); the committed `public/assets/app` bundle is rebuilt with
+  it and reproduced byte-identically by two consecutive builds on the CI-pinned node 24.20.0.
+  New `web-ui/tests/` suite runs under `node --test` with zero new dependencies: an end-to-end
+  proof against the real `@phlix/ui` bundle that a client override reaches rendered strings
+  (ZZZ-TEST pin, omitted-messages default pin, es-flip pin), the resolver table, merge-semantics
+  pins, and a registry-parity drift guard against future ui locale additions.
+
 - **Quick-connect device pairing and consent-gated client telemetry (`S518`, AD-25/AD-27).**
   Six route tuples join the composed table. The TV-side half of pairing:
   `POST /api/v1/auth/quick-connect/initiate` (public, IP rate-limited) mints an

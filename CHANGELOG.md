@@ -361,6 +361,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The `@phlix/ui` tarball pin moves `v0.99.5` → `v0.99.6`; the served bundle now ships the ui
+  error-code catalog (the client-facing half of the `SRV-UIPIN` / W2-emit chain).** The v0.99.6 tag
+  (peels to `98a5bf389ad29701a4991986dea4cb264fb1f3ee`; pinned in tag form because the estate's
+  ui-pin-skew grading accepts tag-form pins only) carries detain/phlix-ui's error-catalog waves:
+  the contracts-code error catalog rendered in all 7 locales with code-first wiring through
+  login/signup/fetchUser (#422/#425) and the player's legacy-text match fix (#424). The lockfile
+  regen is minimal — `resolved` + `integrity`, plus the one transitive `@phlix/contracts`
+  declaration string following v0.99.6's own `#v0.5.1` pin; the nested version fields keep their
+  known repo-side skew (the tarball's `package.json` still reads `0.99.4`) and are deliberately
+  untouched. Rebuilt CI-faithful (`npm ci` + `npm run build` under the CI's npm 11.19.0 — npm 12's
+  git-dep handling poisons local dist builds — on node 24): two consecutive builds are
+  byte-identical across all 212 files and the committed `public/assets/app/` tree passes the S253
+  gate locally exactly as CI runs it (`git diff --exit-code` plus the index-vs-disk set check).
+  Bundle delta: 212 → 212 files, 8,544,311 → 8,841,861 bytes (+297,550), concentrated in the entry
+  chunk (`index-*.js` 302,683 → 430,416) — the 202-code × 7-locale catalog riding ui's prebuilt
+  dist is the feature; its auth/signup consumers are ui-visible string paths for every locale.
+  `web-ui`'s `node --test` suite is 31/31 including the registry-parity drift guard re-checked
+  against the new pin. Zero PHP is touched: the diff is exactly `web-ui/*`,
+  `public/assets/app/**`, and this file.
+
 - **Client-reachable failure paths now carry stable registered codes on the `code` field (`W2`).**
   The registry caveats on `stream.limit_exceeded`, `profile.not_found` and `access.scheduled`
   ("currently rides the error TEXT field; Wave-2 promotes to the code channel") land:

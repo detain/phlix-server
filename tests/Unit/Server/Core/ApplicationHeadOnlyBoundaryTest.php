@@ -110,12 +110,17 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
      */
     public function testAGlobalMiddlewareShortCircuitIsNowFlaggedHeadOnlyAtTheChainReturnSeam(): void
     {
-        $payload = ['error' => 'AccessScheduled', 'message' => 'Access denied during scheduled window'];
+        $payload = [
+            'error' => 'AccessScheduled',
+            'code' => 'access.scheduled',
+            'message' => 'Access denied during scheduled window',
+        ];
         $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
         $shortCircuit = function (Request $request, callable $next): Response {
             $result = (new Response())->status(403)->json([
                 'error' => 'AccessScheduled',
+                'code' => 'access.scheduled',
                 'message' => 'Access denied during scheduled window',
             ]);
 

@@ -85,16 +85,14 @@ final class StreamLimitMiddleware
             // unauthenticated or unprofiled users through the stream limit check.
             $profile = $this->profileManager->getActiveProfile($userId);
             if ($profile === null) {
-                return (new Response())->status(403)->json([
-                    'error' => 'StreamLimitExceeded',
+                return (new Response())->error(403, 'profile.not_found', 'StreamLimitExceeded', [
                     'denial_type' => 'profile_not_found',
                     'message' => 'Profile not found; access denied',
                 ]);
             }
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
-                return (new Response())->status(403)->json([
-                    'error' => 'StreamLimitExceeded',
+                return (new Response())->error(403, 'profile.not_found', 'StreamLimitExceeded', [
                     'denial_type' => 'profile_not_found',
                     'message' => 'Profile not found; access denied',
                 ]);
@@ -112,8 +110,7 @@ final class StreamLimitMiddleware
         // Try to register the stream
         $registered = $this->streamSessionService->registerStream($profileId, $deviceId, $sessionId);
         if (!$registered) {
-            return (new Response())->status(429)->json([
-                'error' => 'StreamLimitExceeded',
+            return (new Response())->error(429, 'stream.limit_exceeded', 'StreamLimitExceeded', [
                 'denial_type' => 'stream_limit_exceeded',
                 'message' => 'Maximum concurrent streams reached for this profile',
                 'profile_id' => $profileId,

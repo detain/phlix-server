@@ -138,6 +138,36 @@ class Response
     }
 
     /**
+     * Creates a canonical error response per the OpenAPI `Error` schema.
+     *
+     * Wire shape: `{ "error": <message>, "code": <registered code>, ...extra }`.
+     * The `code` MUST be a member of the @phlix/contracts error-code registry
+     * (vendored at tests/Fixtures/Contracts/error-codes.json); the
+     * ErrorCodesContractTest scans every call site of this method and reddens on
+     * an unregistered literal. The `error` field carries the human-readable
+     * message — or, at legacy wire sites whose clients still text-match the old
+     * machine token, that token verbatim (doctrine: error-code-first, text stays
+     * as debug fallback; see StreamLimitMiddleware for the pattern).
+     *
+     * @param int $status HTTP status code
+     * @param string $code registered dotted (or legacy SCREAMING) error code
+     * @param string $message value for the OpenAPI `error` field
+     * @param array<string, mixed> $extra additional top-level keys (denial_type, message, …)
+     * @return self For method chaining
+     *
+     * @throws \JsonException If JSON encoding fails
+     *
+     * @example
+     * ```php
+     * (new Response())->error(429, 'stream.limit_exceeded', 'Too many concurrent streams');
+     * ```
+     */
+    public function error(int $status, string $code, string $message, array $extra = []): self
+    {
+        return $this->json(['error' => $message, 'code' => $code] + $extra, $status);
+    }
+
+    /**
      * Creates an HTML response.
      *
      * @param string $html The HTML content

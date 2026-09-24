@@ -55,7 +55,11 @@ use PHPUnit\Framework\TestCase;
 final class AccessScheduleHeadNoBodyWireTest extends TestCase
 {
     /** The one refusal this proof needs: the blocked-schedule-window branch. */
-    private const ERROR = ['error' => 'AccessScheduled', 'message' => 'Access denied during scheduled window'];
+    private const ERROR = [
+        'error' => 'AccessScheduled',
+        'code' => 'access.scheduled',
+        'message' => 'Access denied during scheduled window',
+    ];
 
     private const PROFILE_ID = '11111111-2222-3333-4444-555555555555';
 
@@ -151,7 +155,7 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
         // ── the server-side corroboration: the flag is set, the entity is intact ──
         // (the wire assertions above are the "no body on the socket" proof; the log
         // measures the Response OBJECT, whose entity asHeadReply() deliberately keeps
-        // — BodylessResponse suppresses it at the encoder, so entityBytes stays 90.)
+        // — BodylessResponse suppresses it at the encoder, so entityBytes stays 122.)
         $log = $this->requestLog($server);
         self::assertSame('GET', $log[0]['method']);
         self::assertFalse($log[0]['headOnly'], 'a GET short-circuit is never flagged head-only');

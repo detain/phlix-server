@@ -392,8 +392,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * phpunit red, not predicted. The controller adds four declared-member READS
              * and the two test request builders ten declared WRITES — pinned below in
              * this same commit, S427 license intact.
+             * Re-pinned 1889→1892 by W2 (error-code emit lane): three first-party test
+             * files joined the tree — tests/Support/Contracts/ErrorCodeScan.php and
+             * tests/Unit/Contracts/{ErrorCodesContractTest,ErrorCodesOpenApiEnumContractTest}.php.
+             * None reads or writes a Request property (they tokenize src/, resolve class
+             * constants and parse the vendored registry), so every other census
+             * denominator is unchanged — the four sibling pins passing in the same run
+             * proves it. Measured 1892 from the phpunit red, not predicted.
              */
-    private const EXPECTED_PHP_FILES = 1889;
+    private const EXPECTED_PHP_FILES = 1892;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -204,8 +204,11 @@ class MessageHandler
                 // canonical error frame — the peer reached dispatch, so it is a
                 // protocol participant and gets the registered HANDLER_ERROR code
                 // (a legacy SCREAMING member of the @phlix/contracts registry).
-                // The `Handler error: ` message prefix is preserved byte-identical:
-                // console's SyncPlayService still text-matches it.
+                // The `Handler error: ` prefix in the free-text message is kept
+                // byte-identical as defense-in-depth, not for a known consumer:
+                // current clients localize via the HANDLER_ERROR error_code and
+                // none text-matches this prefix, but the message still surfaces
+                // verbatim in server logs and in unknown-code fallback rendering.
                 $connection->send(\Phlix\Session\SyncPlay\Messages::error(
                     'HANDLER_ERROR',
                     'Handler error: ' . $e->getMessage()

@@ -595,12 +595,12 @@ class SyncPlayManager
      * @param string|null $password Optional password to protect the group (null for open groups)
      * @param string|null $memberId The member ID of the group creator (null if not joining)
      * @param string|null $memberName The display name of the creator (defaults to 'Host')
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group
-     * state or error
-     *
-     * @example
-     * ```php
-     * // Create a group without password
+      * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string,
+      *     error_code?: string} Result with group state or error
+      *
+      * @example
+      * ```php
+      * // Create a group without password
      * $result = $manager->createGroup('Movie Night');
      *
      * // Create a protected group with the creator as host
@@ -615,7 +615,11 @@ class SyncPlayManager
         ?string $connectionId = null
     ): array {
         if (count($this->groups) >= self::MAX_GROUPS) {
-            return ['success' => false, 'error' => 'Maximum group limit reached'];
+            return [
+                'success' => false,
+                'error' => 'Maximum group limit reached',
+                'error_code' => 'syncplay.group_limit_reached',
+            ];
         }
 
         $groupId = $this->generateGroupId();
@@ -674,8 +678,8 @@ class SyncPlayManager
      * @param string $memberId Unique identifier for the member joining
      * @param string $memberName Display name for the member
      * @param string|null $password Optional password if group is protected
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group
-     * state or error
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string,
+     *     error_code?: string} Result with group state or error
      *
      * @example
      * ```php
@@ -695,7 +699,7 @@ class SyncPlayManager
         $group = $this->groups[$groupId] ?? null;
 
         if ($group === null) {
-            return ['success' => false, 'error' => 'Group not found'];
+            return ['success' => false, 'error' => 'Group not found', 'error_code' => 'syncplay.group_not_found'];
         }
 
         if ($group->hasMember($memberId)) {
@@ -734,11 +738,11 @@ class SyncPlayManager
 
         // New member: verify entry conditions before admitting.
         if ($group->hasPassword() && !$group->verifyPassword($password ?? '')) {
-            return ['success' => false, 'error' => 'Invalid password'];
+            return ['success' => false, 'error' => 'Invalid password', 'error_code' => 'syncplay.invalid_password'];
         }
 
         if ($group->getMemberCount() >= GroupState::MAX_MEMBERS) {
-            return ['success' => false, 'error' => 'Group is full'];
+            return ['success' => false, 'error' => 'Group is full', 'error_code' => 'syncplay.group_full'];
         }
 
         $memberData = [
@@ -1577,7 +1581,9 @@ class SyncPlayManager
                 'your_id' => $memberId,
             ]));
         } else {
-            $this->sendError($connection, 'CREATE_FAILED', $result['error']);
+            // W2 (error-code doctrine): promote the specific registered twin when the
+            // failure carries one; the coarse CREATE_FAILED wrap stays the fallback.
+            $this->sendError($connection, $result['error_code'] ?? 'CREATE_FAILED', $result['error']);
         }
     }
 
@@ -1612,7 +1618,9 @@ class SyncPlayManager
                 'your_id' => $memberId,
             ]));
         } else {
-            $this->sendError($connection, 'JOIN_FAILED', $result['error']);
+            // W2 (error-code doctrine): promote the specific registered twin when the
+            // failure carries one; the coarse JOIN_FAILED wrap stays the fallback.
+            $this->sendError($connection, $result['error_code'] ?? 'JOIN_FAILED', $result['error']);
         }
     }
 

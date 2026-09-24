@@ -568,6 +568,7 @@ final class PreRouterFastPaths
                 ->header('Content-Type', 'application/json; charset=utf-8')
                 ->body(json_encode([
                     'error' => 'StreamLimitExceeded',
+                    'code' => 'stream.limit_exceeded',
                     'denial_type' => 'stream_limit_exceeded',
                     'message' => 'Maximum concurrent streams reached for this profile',
                     'profile_id' => $profileId,
@@ -595,6 +596,7 @@ final class PreRouterFastPaths
             ->header('Content-Type', 'application/json; charset=utf-8')
             ->body(json_encode([
                 'error' => 'StreamLimitExceeded',
+                'code' => 'profile.not_found',
                 'denial_type' => 'profile_not_found',
                 'message' => 'Profile not found; access denied',
             ], JSON_THROW_ON_ERROR));

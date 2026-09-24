@@ -121,7 +121,7 @@ class SyncPlay extends Module
      * @param string $groupName The group name
      * @param string|null $password Optional group password
      * @param string|null $memberName The host's display name
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string, error_code?: string}
      */
     public function createGroup(
         string $connectionId,
@@ -154,7 +154,7 @@ class SyncPlay extends Module
      * @param string $groupId The group ID to join
      * @param string|null $password Optional group password
      * @param string|null $memberName The member's display name
-     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string, error_code?: string}
      */
     public function joinGroup(
         string $connectionId,

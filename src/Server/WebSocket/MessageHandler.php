@@ -130,6 +130,14 @@ class MessageHandler
         $message = json_decode($data, true);
 
         if (!is_array($message) || !isset($message['type']) || !is_string($message['type'])) {
+            // W2 doctrine decision (deliberate): this frame STAYS legacy. It answers
+            // input that never became a protocol message at all — the sender has not
+            // demonstrated it speaks (or can even parse) the flat canonical dialect,
+            // so the lowest-common-denominator deprecated envelope is the only
+            // response shape with a chance of being understood. The S417 modern
+            // error frame is reserved for errors raised after the peer committed to
+            // the protocol (auth gate, version check, dispatch) — see the handler
+            // catch below, which W2 converted.
             $connection->sendMessage('error', ['message' => 'Invalid message format']);
             return;
         }
@@ -192,9 +200,16 @@ class MessageHandler
             try {
                 ($this->callbacks[$event])($connection, $payload);
             } catch (\Throwable $e) {
-                $connection->sendMessage('error', [
-                    'message' => 'Handler error: ' . $e->getMessage(),
-                ]);
+                // W2 (error-code doctrine): the handler catch joins the flat
+                // canonical error frame — the peer reached dispatch, so it is a
+                // protocol participant and gets the registered HANDLER_ERROR code
+                // (a legacy SCREAMING member of the @phlix/contracts registry).
+                // The `Handler error: ` message prefix is preserved byte-identical:
+                // console's SyncPlayService still text-matches it.
+                $connection->send(\Phlix\Session\SyncPlay\Messages::error(
+                    'HANDLER_ERROR',
+                    'Handler error: ' . $e->getMessage()
+                ));
             }
         } elseif (isset($this->callbacks['*'])) {
             // Wildcard handler

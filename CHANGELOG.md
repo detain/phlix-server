@@ -9,6 +9,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Error-code-first emit doctrine: the vendored @phlix/contracts registry is now law (`W2`).**
+  `tests/Fixtures/Contracts/error-codes.json` is a byte-copy of `dist/error-codes.json` from the
+  @phlix/contracts `v0.5.1` tag (202 codes / 37 domains) with a sidecar pin file, guarded by
+  `tests/Unit/Contracts/ErrorCodesContractTest` on the hub's mcp-scopes vendoring pattern
+  (generator-marker honesty, anti-vacuity floor, hardcoded-tag lockstep). The new emit law runs a
+  POSITIONAL token scan (`tests/Support/Contracts/ErrorCodeScan`) over `src/` that inspects every
+  expression the source places on a wire `code`/`error_code` field — `'code' =>` / `'error_code' =>`
+  array keys, `Messages::error()` arg 0, `sendError()` arg 1, `Response::error()`/`jsonError()` arg 1
+  (an emitter table reflection-pinned from both sides: every listed signature is re-checked, and any
+  NEW int-first `string $code` builder returning Response/self must register itself) — and requires
+  every resolved literal to be a registry member; non-literal sites must appear in a live-checked
+  both-directions whitelist carrying a per-site reason, so the list cannot fossilize. A whole-tree
+  shape census was measured and rejected first: 174 non-registry dotted literals (config keys, codec
+  profiles, webhook events) are not error codes, which is why positional scanning needs no
+  deny-list. `Response::error(int $status, string $code, string $message, array $extra = [])` is the
+  canonical `{error, code}` builder in the existing fluent style. `openapi.yaml` `Error.code` gains a
+  closed enum — exactly the 51 codes the REST surface can emit (scanned literals and resolved class
+  constants, plus the three declared dynamic exception-carried auth codes), pinned by
+  `ErrorCodesOpenApiEnumContractTest` to the scan in registry order; SyncPlay WS codes live on the
+  `syncplay_error` envelope the SyncPlay wire spec governs and are deliberately not in this document.
 - **The `@phlix/ui` messages seam is now wired in the `/app` SPA.** `web-ui` booted
   `createPhlixApp()` with no `messages` config — the config-time i18n seam was vendored but
   unreachable from the server's own portal (estate i18n audit finding). New `web-ui/src/i18n/`
@@ -341,6 +361,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Client-reachable failure paths now carry stable registered codes on the `code` field (`W2`).**
+  The registry caveats on `stream.limit_exceeded`, `profile.not_found` and `access.scheduled`
+  ("currently rides the error TEXT field; Wave-2 promotes to the code channel") land:
+  `StreamLimitMiddleware` (3 sites) and `AccessScheduleMiddleware` (3 sites) answer through
+  `Response::error()`, and the `PreRouterFastPaths` raw-body fast paths gain the `code` key inline —
+  while every legacy machine token in `error` (`StreamLimitExceeded`, `AccessScheduled`) stays
+  byte-identical for text-matching clients through the rollout. The SyncPlay WS twin-split lands at
+  the four prose sites: `createGroup`/`joinGroup` failure returns grow an additive `error_code`
+  (`syncplay.group_limit_reached`, `syncplay.group_not_found`, `syncplay.invalid_password`,
+  `syncplay.group_full`) and the WS wraps forward it via `$result['error_code'] ?? 'CREATE_FAILED'`
+  (resp. `JOIN_FAILED`) — the human `message` prose is byte-identical, the coarse SCREAMING wraps
+  stay wherever no specific twin applies, and the reserved `syncplay.create_failed`/`join_failed`/
+  `leave_failed` twins remain unemitted. `MessageHandler`'s handler-catch frame becomes the modern
+  `Messages::error('HANDLER_ERROR', 'Handler error: …')` shape (text prefix preserved for the
+  console's `str_starts_with` consumer; the TS client finally sees handler failures at all — it has
+  no legacy-`error` case), while the JSON-parse-failure frame deliberately stays on the deprecated
+  legacy envelope: it answers pre-protocol bytes, where the lowest-common-denominator shape is the
+  correct reply. The four middlewares the audit named (`auth.required`, `auth.not_admin`,
+  `dlna.forbidden`, `casting.disabled`) were verified already code-bearing — no change needed.
 - **Every outbound SyncPlay frame is now stamped by the `Messages` factory — the wire
   format the spec pins, finally the wire format we send (`S417`).** The factory's
   canonical envelope `{type, protocol_version: 1, timestamp: <ms>, ...payload}` existed

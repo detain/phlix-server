@@ -96,8 +96,7 @@ final class AccessScheduleMiddleware
                 // P5: No profile exists for an authenticated user — fail closed (deny
                 // access) rather than allowing an unprofiled user through. The user
                 // should set up a profile before access schedules apply.
-                return (new Response())->status(403)->json([
-                    'error' => 'AccessScheduled',
+                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
                     'message' => 'No profile found; access denied',
                 ]);
             }
@@ -107,8 +106,7 @@ final class AccessScheduleMiddleware
             // unauthenticated or unprofiled users through the schedule check.
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
-                return (new Response())->status(403)->json([
-                    'error' => 'AccessScheduled',
+                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
                     'message' => 'Profile not found; access denied',
                 ]);
             }
@@ -116,8 +114,7 @@ final class AccessScheduleMiddleware
 
         // Check if access is allowed
         if (!$this->accessScheduleService->isAccessAllowed($profileId)) {
-            return (new Response())->status(403)->json([
-                'error' => 'AccessScheduled',
+            return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
                 'message' => 'Access denied during scheduled window',
             ]);
         }

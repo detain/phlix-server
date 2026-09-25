@@ -1,0 +1,31 @@
+# Enforce LF line endings in the working tree on every platform.
+#
+# WHY: this repo commits byte-faithful artifacts that CI hashes or re-derives
+# from checked-out bytes:
+#   - public/assets/app/... — the committed phlix-ui webui bundle (212 files),
+#     rebuilt on every Web UI CI run and byte-gated with
+#     `git diff --exit-code` plus an index-vs-disk file-set check (S253);
+#   - tests/Fixtures/Contracts/error-codes.json — vendored byte-copy of
+#     dist/error-codes.json from the @phlix/contracts tag named by its
+#     sidecar pin, equality-checked by ErrorCodesContractTest;
+#   - tests/Fixtures/Theming/themes-with-sample-plugin.golden.json —
+#     md5-pinned by SampleThemePluginTest::GOLDEN_MD5 and duplicated
+#     byte-for-byte in its phlix-ui twin;
+#   - tests/Fixtures/Media/Music/tagged-short.mp3 — probed by real ffmpeg in
+#     the music-scan integration tests, not a stub.
+# Git-for-Windows defaults to core.autocrlf=true, so a windows-latest checkout
+# would silently rewrite every LF text blob to CRLF on disk before those
+# hashes are taken — the exact poisoning class fixed in phlix-windows-client
+# PR #46 and shielded the same way in phlix-ui, phlix-hub and phlix-contracts.
+# .gitattributes takes precedence over core.autocrlf, so pins stay strict
+# (byte-exact) instead of having to tolerate CRLF.
+#
+# Census at adoption (master 273adfc1): 2508 tracked blobs. CR bytes existed in
+# exactly one text file — tests/Support/Dash/xlink.xsd, a verbatim CRLF fetch
+# from w3.org, renormalized to LF in this same commit (DOM-identical under XML
+# line-ending normalization; the DASH validation suite is green on both sides:
+# OK (46 tests, 226 assertions)) — and in the four binaries guarded below
+# (3 woff2 bundle fonts + 1 mp3 fixture). Zero other text-class CR.
+* text=auto eol=lf
+*.woff2 binary
+*.mp3 binary

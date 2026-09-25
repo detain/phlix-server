@@ -361,6 +361,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The `@phlix/ui` tarball pin moves `v0.99.6` → `v0.99.7`; the served bundle is byte-identical
+  (cascade-currency re-pin).** The v0.99.7 tag (annotated `da9f1625663f8ddb52213f8069d2a494cd1ceee2`
+  peeling to commit `bc1d29bf98cb0e847aca05e44733d41ef2381b10`, both verified via `ls-remote`;
+  pinned in tag form because the estate's ui-pin-skew gate accepts tag-form pins only) is the ui
+  release lane's cascade tag whose dist is zero-delta against v0.99.6: the tarball's only changes
+  are its embedded `package.json` version field — the long-standing `0.99.4` lag was fixed
+  upstream — and its transitive `@phlix/contracts` declaration moving to `#v0.5.2`. The lockfile
+  regen is minimal and honest, with two deliberate deviations from #795's three-field shape:
+  (1) `node_modules/@phlix/ui` now reads `version: 0.99.7` — holding the stale `0.99.4` would have
+  misrepresented the new tarball's bytes (the convention was always to echo the tarball, not to
+  preserve the skew); (2) the nested `@phlix/contracts` resolution had to move from the `#v0.5.1`
+  peel to the `#v0.5.2` peel (`7afb6a9171c33c18a2303716516572a4dfc405d9`, version field `0.5.2`),
+  because npm 11.19.0 treats existing nested git resolutions as authoritative — the documented
+  a8c13e14 pathology — so the proven surgical recipe (drop exactly the stale nested entry,
+  re-run `npm install` under node 24.20.0 / npm 11.19.0 / `npm_config_userconfig=/dev/null`)
+  re-resolved it from the echoed spec, leaving the lock self-consistent. Rebuilt CI-faithful:
+  `npm ci` passes and two consecutive `vite build`s are byte-identical across all 212 files —
+  and the emitted tree is **byte-identical to the bundle v0.99.6 already served** (8,841,861
+  bytes; entry chunk `index-Dp3Wb4b7.js` unchanged at 430,416 bytes). The dist zero-delta claim
+  held all the way through vite: `@phlix/contracts` has zero live import edges into the bundle
+  (a8c13e14's inertness proof) and neither the version field nor the declaration string reaches
+  any build input. The diff of this change is therefore exactly `web-ui/package.json`,
+  `web-ui/package-lock.json` and this file — `public/assets/app/` untouched, the S253 gate green
+  with zero bundle delta. `web-ui`'s `node --test` suite is 31/31 including the registry-parity
+  drift guard re-checked against the new pin. Zero PHP is touched.
+
 - **SyncPlay WS twin flip: the three coarse fallback `error_code` values are now their dotted
   registry twins (WIRE CHANGE).** `handleGroupCreate`/`handleGroupJoin` fallbacks emit
   `syncplay.create_failed`/`syncplay.join_failed` (in place of legacy `CREATE_FAILED`/`JOIN_FAILED`)

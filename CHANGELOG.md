@@ -377,6 +377,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   the wire, the still-winning promote arm, and (as a labeled legacy guard) the trio's absence from
   the emit scan. No REST surface changes; `openapi.yaml` never named the WS trio (Error.code is the
   REST-channel enum by design) and is untouched.
+- **A `.gitattributes` EOL shield lands over the byte-faithful pin surfaces, and the repo's only
+  CR-bearing text blob is renormalized (PR #797; `6018265c`, merge `1113c67d`).** Census at
+  adoption (master `273adfc1`): 2508 tracked blobs, CR bytes present in exactly one text file —
+  `tests/Support/Dash/xlink.xsd`, a verbatim CRLF fetch from w3.org (README provenance: 8 322
+  bytes as-fetched → 8 299 after the documented line-27 `schemaLocation` edit → 8 029 after this
+  LF normalization) — plus four binaries now explicitly guarded (`*.woff2` ×3 bundle fonts,
+  `*.mp3` ×1 ffmpeg-probed fixture). `* text=auto eol=lf` takes precedence over Git-for-Windows'
+  `core.autocrlf=true` default, so the strict pins stay strict instead of learning to tolerate
+  CRLF: the 212-file committed `public/assets/app` bundle (S253 rebuild + `git diff --exit-code`
+  gate), the tag-pinned `tests/Fixtures/Contracts/error-codes.json` byte-copy lockstep
+  (`ErrorCodesContractTest`), the `GOLDEN_MD5`-pinned theming fixture (byte-twin in phlix-ui) and
+  the real-ffmpeg-probed mp3. Same poisoning class fixed by phlix-windows-client PR #46; the
+  identical shield had already landed in phlix-ui, phlix-hub and phlix-contracts. The renormalize
+  was proven inert, not assumed: canonical C14N of the CRLF and LF renderings hashes identical —
+  `4db55730df9a2f174c7b78dbd7dea5f09e84d8e717d5d6757cb6235e45ef41b1` both sides (XML line-ending
+  normalization happens at parse time), `MpdSchemaTest` asserts existence/size/parseability and
+  the relative-import graph but never file bytes, and the DASH validation suite is green on both
+  sides (`OK (46 tests, 226 assertions)`, php 8.3.6). A whole-tree `git add --renormalize .`
+  rehearsal staged exactly these two files. The `core.autocrlf=true` simulation (fresh worktrees
+  of a /tmp clone) reproduced the poison on the unshielded control — CHANGELOG.md 6 509 CR lines,
+  package-lock.json 1 878, bundle index.html 49, disk sha256 ≠ blob sha256 — and came back clean
+  on the shielded tree: zero CR on every probe, each guarded artifact byte-identical to its blob
+  hash, xlink.xsd checking out LF despite autocrlf. This entry closes the doc gap deliberately
+  waived by the PR itself ("repo-tooling only, matching the hub precedent `fe2c088`") at owner
+  request after merge; nothing about the shipped content changes.
 - **The web-ui lockfile's stale nested git resolutions are healed — the documented inert debt is
   now gone (`@phlix/contracts` `f5d8962f` → v0.5.1 peel, `@phlix/syncplay` `2fdf70bf` → v0.1.5
   peel).** Since the `v0.99.6` re-pin, the lock's `@phlix/ui` entry echoed the tarball's

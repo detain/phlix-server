@@ -361,6 +361,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The web-ui lockfile's stale nested git resolutions are healed — the documented inert debt is
+  now gone (`@phlix/contracts` `f5d8962f` → v0.5.1 peel, `@phlix/syncplay` `2fdf70bf` → v0.1.5
+  peel).** Since the `v0.99.6` re-pin, the lock's `@phlix/ui` entry echoed the tarball's
+  dependency specs (`#v0.5.1` / `#v0.1.5`) while the two nested resolution entries stayed on
+  pre-tag commits with skewed version fields (`0.3.12` / `0.1.2`) — inert, because the shipped
+  `@phlix/ui` dist carries ZERO live `@phlix/*` import edges: the contracts registry and the
+  syncplay client were inlined at ui build time (`//#region node_modules/@phlix/syncplay/...`
+  provenance comments only); the remaining references are type-only `.d.ts` annotations and
+  source-map paths. Two facts discovered while fixing it: (1) a CI-faithful `npm install` with
+  the lock present does NOT self-heal — npm 11.19.0 treats the recorded nested git resolutions
+  as authoritative regardless of the parent's echoed tag spec (measured: zero lock diff); (2) a
+  lockfile-less full regen DOES re-resolve the nested pins but simultaneously carries ~40 honest
+  registry bumps (vite 8.2.0→8.3.1 — a rolldown 1.2.3→1.2.11 bundler-engine change — vue
+  3.5.41→3.5.43, hls.js 1.6.17→1.7.3, …) whose bundle churn is out of scope for an inertness
+  lane. The minimal honest regen is therefore surgical: delete exactly the two stale nested
+  entries and let `npm install` re-resolve only them from the echoed specs (node 24.20.0, npm
+  11.19.0 from /tmp/npm11, `npm_config_userconfig=/dev/null`, `--allow-git=all`). Lock diff is
+  exactly four fields — contracts `resolved` → `e3c14f07e8927224978a921e1f79406629ceb6c5` +
+  `version` → `0.4.7` (the v0.5.1 tag tree's own package.json field; tag name is the release
+  identity, the same documented skew ui carries), and syncplay `resolved` →
+  `b82d4f361e9b1e3097f37ee2d1dfedf337fd4107` + `version` → `0.1.5`; no keys added or removed, the
+  top-level `@phlix/ui` v0.99.6 tarball pin untouched. Inertness proven, not assumed: `vue-tsc
+  --noEmit && vite build` on the fresh nested tree type-checks against the v0.5.1 registry and
+  reproduces the committed `public/assets/app/` bundle byte-identically — twice (determinism) —
+  across all 212 files (sha256 manifest compare), with the S253 gates run exactly as CI runs them
+  (`git diff --exit-code -- public/assets/app/` clean, index-vs-disk set check same-file-set).
+  The estate memory's `server nested-contracts lock debt (inert)` residual is CLOSED by this entry.
+
 - **The `@phlix/ui` tarball pin moves `v0.99.5` → `v0.99.6`; the served bundle now ships the ui
   error-code catalog (the client-facing half of the `SRV-UIPIN` / W2-emit chain).** The v0.99.6 tag
   (peels to `98a5bf389ad29701a4991986dea4cb264fb1f3ee`; pinned in tag form because the estate's

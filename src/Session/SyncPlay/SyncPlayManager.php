@@ -1582,8 +1582,10 @@ class SyncPlayManager
             ]));
         } else {
             // W2 (error-code doctrine): promote the specific registered twin when the
-            // failure carries one; the coarse CREATE_FAILED wrap stays the fallback.
-            $this->sendError($connection, $result['error_code'] ?? 'CREATE_FAILED', $result['error']);
+            // failure carries one; the coarse syncplay.create_failed wrap stays the
+            // fallback. Twin flip: the legacy SCREAMING 'CREATE_FAILED' alias is no
+            // longer emitted — old clients map both shapes to one key.
+            $this->sendError($connection, $result['error_code'] ?? 'syncplay.create_failed', $result['error']);
         }
     }
 
@@ -1619,8 +1621,10 @@ class SyncPlayManager
             ]));
         } else {
             // W2 (error-code doctrine): promote the specific registered twin when the
-            // failure carries one; the coarse JOIN_FAILED wrap stays the fallback.
-            $this->sendError($connection, $result['error_code'] ?? 'JOIN_FAILED', $result['error']);
+            // failure carries one; the coarse syncplay.join_failed wrap stays the
+            // fallback. Twin flip: the legacy SCREAMING 'JOIN_FAILED' alias is no
+            // longer emitted — old clients map both shapes to one key.
+            $this->sendError($connection, $result['error_code'] ?? 'syncplay.join_failed', $result['error']);
         }
     }
 
@@ -1649,7 +1653,10 @@ class SyncPlayManager
             // S417: the leave ack joins the flat wire envelope (was nested sendMessage).
             $connection->send(Messages::info($result['message'] ?? 'Left group'));
         } else {
-            $this->sendError($connection, 'LEAVE_FAILED', $result['error']);
+            // Twin flip: the legacy SCREAMING 'LEAVE_FAILED' alias is no longer
+            // emitted; the dotted registry twin is the wire value. Message prose
+            // is byte-identical.
+            $this->sendError($connection, 'syncplay.leave_failed', $result['error']);
         }
     }
 

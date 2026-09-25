@@ -361,6 +361,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **SyncPlay WS twin flip: the three coarse fallback `error_code` values are now their dotted
+  registry twins (WIRE CHANGE).** `handleGroupCreate`/`handleGroupJoin` fallbacks emit
+  `syncplay.create_failed`/`syncplay.join_failed` (in place of legacy `CREATE_FAILED`/`JOIN_FAILED`)
+  and the `handleGroupLeave` wrap emits `syncplay.leave_failed` (in place of legacy `LEAVE_FAILED`).
+  The human `message` prose on all three frames is byte-identical; only the machine code value flips.
+  The dotted twins were already reserved members of the vendored @phlix/contracts `v0.5.1` registry
+  (contracts #84 wording: "flip pending at <site>; never emitted today" — now landed), so the
+  positional emit law holds unchanged with no re-vendor. Clients are PREPPED for both shapes:
+  console #167 maps SCREAMING and dotted to the same key, roku #90's census is EMITTED(16) ∪
+  RESERVED(3), the ui 202-catalog and mobile 19-code map already carry all dotted twins — old
+  servers keep speaking SCREAMING and those dual mappings keep both eras readable. The SCREAMING
+  aliases remain registered (legacy vocabulary), they are simply no longer emitted by this server;
+  `tests/Unit/Session/SyncPlay/SyncPlayTwinFlipErrorFrameTest.php` pins the flipped leave frame on
+  the wire, the still-winning promote arm, and (as a labeled legacy guard) the trio's absence from
+  the emit scan. No REST surface changes; `openapi.yaml` never named the WS trio (Error.code is the
+  REST-channel enum by design) and is untouched.
 - **The web-ui lockfile's stale nested git resolutions are healed — the documented inert debt is
   now gone (`@phlix/contracts` `f5d8962f` → v0.5.1 peel, `@phlix/syncplay` `2fdf70bf` → v0.1.5
   peel).** Since the `v0.99.6` re-pin, the lock's `@phlix/ui` entry echoed the tarball's

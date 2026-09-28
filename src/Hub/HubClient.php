@@ -47,6 +47,14 @@ class HubClient
     private const FIRST_HEARTBEAT_DELAY = 2;
     private const ENROLLMENT_FILE = 'hub-enrollment.json';
 
+    /**
+     * Shape gate for hub-issued claim IDs before they reach a URL path.
+     * Claim IDs are UUID-shaped opaque tokens; anything else (slashes, dot
+     * segments, whitespace, control bytes) must never be interpolated into
+     * the claim-poll path.
+     */
+    private const CLAIM_ID_PATTERN = '/^[A-Za-z0-9_-]+$/';
+
     /** @var int Enrollment JWT lifetime in seconds (7 days). */
     private const ENROLLMENT_TTL = 604800;
 
@@ -243,6 +251,17 @@ class HubClient
      */
     public function pollClaimStatus(string $claimId, string $hubUrl): ClaimStatusResult
     {
+        // The claim ID arrives from a (potentially hostile) hub response and is
+        // interpolated into the poll URL path — parse it at this boundary so
+        // only an opaque token-shaped ID can ever steer the request.
+        if (preg_match(self::CLAIM_ID_PATTERN, $claimId) !== 1) {
+            throw new HubClientException(
+                'Invalid claim ID: must match [A-Za-z0-9_-]+, got: ' . substr($claimId, 0, 64),
+                0,
+                'INVALID_CLAIM_ID',
+            );
+        }
+
         // Absolute URL — the injected client has an empty placeholder base.
         $response = $this->httpClient->get(
             rtrim($hubUrl, '/') . "/api/v1/server-claims/{$claimId}",
@@ -305,20 +324,57 @@ class HubClient
         $path = $this->getEnrollmentPath();
         $dir = dirname($path);
         if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+            // 0700: this directory holds the enrollment JWT (hub bearer token)
+            // and the Ed25519 signing key sibling state — never world-readable.
+            @mkdir($dir, 0700, true);
         }
 
         $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        if (@file_put_contents($path, $json, LOCK_EX) === false) {
-            throw new \RuntimeException('Failed to write enrollment file: ' . $path);
+        if (!is_string($json)) {
+            throw new \RuntimeException('Failed to encode enrollment JSON for: ' . $path);
         }
 
-        @chmod($path, 0600);
+        $this->writeEnrollmentAtomically($json, $path, $dir);
 
         $this->logger->info('Enrollment stored', [
             'server_id' => $serverId,
             'hub_base_url' => $hubBaseUrl,
         ]);
+    }
+
+    /**
+     * Writes the enrollment JSON through a 0600-from-birth temp file, then
+     * renames it into place.
+     *
+     * Mirrors {@see Ed25519KeyManager::writePrivateKeyAtomically()}:
+     * `tempnam()` creates the file mode-0600 regardless of umask, so the
+     * enrollment JWT is never world-readable between write and chmod —
+     * closing the TOCTOU window the old file_put_contents()+chmod() pair left.
+     *
+     * @param string $json Serialized enrollment payload.
+     * @param string $path Final enrollment file path.
+     * @param string $dir  Directory of the final path (temp shares its fs).
+     *
+     * @throws \RuntimeException If the temp file cannot be created, written, or moved.
+     */
+    private function writeEnrollmentAtomically(string $json, string $path, string $dir): void
+    {
+        $tmp = @tempnam($dir, 'hub-enrollment-');
+        if ($tmp === false) {
+            throw new \RuntimeException('Failed to create temp enrollment file in: ' . $dir);
+        }
+
+        if (@file_put_contents($tmp, $json) === false) {
+            @unlink($tmp);
+            throw new \RuntimeException('Failed to write enrollment file: ' . $path);
+        }
+
+        @chmod($tmp, 0600);
+
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            throw new \RuntimeException('Failed to move enrollment file into place: ' . $path);
+        }
     }
 
     /**
@@ -521,10 +577,12 @@ class HubClient
             // A failed request has no meaningful latency, so clear it rather
             // than report the time-to-error as if it were a healthy round-trip.
             $this->lastLatencyMs = null;
+            // NOTE: HeartbeatResult carries no HTTP status — the former
+            // 'http_status' key here logged the error-code string under a
+            // wrong label; 'error_code' (and the message) already convey it.
             $this->logger->warning('Heartbeat failed', [
                 'error' => $result->error,
                 'error_code' => $result->errorCode,
-                'http_status' => $result->errorCode,
                 'consecutive_failures' => $this->consecutiveFailures,
             ]);
         }

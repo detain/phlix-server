@@ -5,10 +5,79 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\HttpClient;
 use Phlix\Hub\HttpResponse;
 
 class HttpClientTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        putenv(HttpClient::ENV_TLS_VERIFY);
+        putenv(HttpClient::ENV_TLS_CAFILE);
+        parent::tearDown();
+    }
+
+    public function test_hub_http_client_verifies_tls_by_default(): void
+    {
+        $client = new HttpClient('https://hub.example.com');
+
+        $this->assertTrue($client->isTlsVerifyEnabled());
+
+        $ssl = $client->tlsContext()['ssl'];
+        $this->assertTrue($ssl['verify_peer']);
+        $this->assertTrue($ssl['verify_peer_name']);
+        $this->assertArrayNotHasKey('allow_self_signed', $ssl);
+    }
+
+    public function test_hub_tls_verify_can_be_opted_out_via_env(): void
+    {
+        putenv(HttpClient::ENV_TLS_VERIFY . '=0');
+        $client = new HttpClient('https://hub.example.com');
+
+        $this->assertFalse($client->isTlsVerifyEnabled());
+
+        $ssl = $client->tlsContext()['ssl'];
+        $this->assertFalse($ssl['verify_peer']);
+        $this->assertFalse($ssl['verify_peer_name']);
+        $this->assertTrue($ssl['allow_self_signed']);
+    }
+
+    public function test_hub_tls_verify_typo_keeps_verification_on(): void
+    {
+        // A mistyped opt-out must not silently disable TLS verification.
+        putenv(HttpClient::ENV_TLS_VERIFY . '=flase');
+        $client = new HttpClient('https://hub.example.com');
+
+        $this->assertTrue($client->isTlsVerifyEnabled());
+    }
+
+    public function test_hub_tls_cafile_is_configurable_via_env(): void
+    {
+        $ca = tempnam(sys_get_temp_dir(), 'phlix-ca-');
+        $this->assertIsString($ca);
+
+        putenv(HttpClient::ENV_TLS_CAFILE . '=' . $ca);
+        $client = new HttpClient('https://hub.example.com');
+
+        $ssl = $client->tlsContext()['ssl'];
+        $this->assertSame($ca, $ssl['cafile']);
+
+        @unlink($ca);
+    }
+
+    public function test_constructor_overrides_beat_env(): void
+    {
+        putenv(HttpClient::ENV_TLS_VERIFY . '=1');
+        $client = new HttpClient('https://hub.example.com', null, 30, false);
+
+        $this->assertFalse($client->isTlsVerifyEnabled());
+
+        $ca = tempnam(sys_get_temp_dir(), 'phlix-ca-');
+        $this->assertIsString($ca);
+        $explicit = new HttpClient('https://hub.example.com', null, 30, true, $ca);
+        $this->assertSame($ca, $explicit->tlsContext()['ssl']['cafile']);
+        @unlink($ca);
+    }
     public function test_httpResponse_isSuccess_true_for_2xx(): void
     {
         $response = new HttpResponse(200, [], ['ok' => true]);

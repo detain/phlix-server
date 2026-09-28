@@ -27,6 +27,19 @@ use Workerman\Http\Client;
  */
 class HttpClient implements HttpClientInterface
 {
+    /**
+     * Env var opting OUT of hub TLS certificate verification (mirrors the
+     * `PHLIX_RELAY_TLS_VERIFY` idiom in {@see RelayConfig}). Verification is
+     * ON unless this is explicitly set to a falsy value.
+     */
+    public const ENV_TLS_VERIFY = 'PHLIX_HUB_TLS_VERIFY';
+
+    /** Env var pointing at the CA bundle used to verify the hub certificate. */
+    public const ENV_TLS_CAFILE = 'PHLIX_HUB_TLS_CAFILE';
+
+    /** System CA bundle default (same path the relay tunnel verifies against). */
+    public const DEFAULT_TLS_CAFILE = '/etc/ssl/certs/ca-certificates.crt';
+
     /** @var string Base URL for all requests (no trailing slash). */
     private string $baseUrl;
 
@@ -35,6 +48,12 @@ class HttpClient implements HttpClientInterface
 
     /** @var int Request timeout in seconds. */
     private int $timeout;
+
+    /** @var bool Whether to verify the hub's TLS certificate (default true). */
+    private bool $tlsVerify;
+
+    /** @var string CA bundle used when {@see $tlsVerify} is true. */
+    private string $tlsCafile;
 
     /** @var string Optional explicit Host header value for co-located hub routing. */
     private string $hostOverride = '';
@@ -45,16 +64,99 @@ class HttpClient implements HttpClientInterface
     /**
      * Creates a new HttpClient.
      *
+     * TLS verification is ON by default on every transport (async workerman
+     * client and the synchronous cURL fallback alike). This client carries the
+     * pairing claim POST, the heartbeat with the 7-day Bearer enrollment JWT,
+     * enrollment renewal, and the JWKS fetch — turning verification off lets a
+     * network-position attacker steal the enrollment JWT or serve a forged
+     * enrollment_jwt / forged JWKS. Opt out ONLY for a hub with a self-signed
+     * cert on a trusted network, via an explicit `$tlsVerify = false` or
+     * `PHLIX_HUB_TLS_VERIFY=0` in the environment.
+     *
      * @param string      $baseUrl      Base URL for all requests (e.g.
      *                                  `https://hub.example.com`).
      * @param string|null $bearerToken   Optional Bearer token for auth.
      * @param int         $timeout      Request timeout in seconds (default 30).
+     * @param bool|null   $tlsVerify    Explicit TLS verification choice; null
+     *                                  resolves from {@see ENV_TLS_VERIFY}
+     *                                  (default true).
+     * @param string|null $tlsCafile    Explicit CA bundle path; null resolves
+     *                                  from {@see ENV_TLS_CAFILE}, then
+     *                                  {@see DEFAULT_TLS_CAFILE}.
      */
-    public function __construct(string $baseUrl, ?string $bearerToken = null, int $timeout = 30)
-    {
+    public function __construct(
+        string $baseUrl,
+        ?string $bearerToken = null,
+        int $timeout = 30,
+        ?bool $tlsVerify = null,
+        ?string $tlsCafile = null,
+    ) {
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->bearerToken = $bearerToken;
         $this->timeout = $timeout;
+        $this->tlsVerify = $tlsVerify ?? self::envTlsVerifyDefault();
+        $cafile = $tlsCafile ?? (getenv(self::ENV_TLS_CAFILE) ?: '');
+        $this->tlsCafile = $cafile !== '' ? $cafile : self::DEFAULT_TLS_CAFILE;
+    }
+
+    /**
+     * Resolves the TLS-verify default from the environment.
+     *
+     * Mirrors RelayConfig::getEnvBool() (explicit truthy words enable, unset
+     * defaults true) with one deliberate hardening: a value that is neither a
+     * known truthy nor a known falsy word keeps verification ON — a typo in a
+     * security switch must never silently disable TLS verification.
+     */
+    private static function envTlsVerifyDefault(): bool
+    {
+        $value = getenv(self::ENV_TLS_VERIFY);
+        if ($value === false || trim($value) === '') {
+            return true;
+        }
+
+        $normalized = strtolower(trim($value));
+        if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Builds the stream context options for hub requests.
+     *
+     * @return array{ssl: array<string, mixed>} The 'ssl' context section: a
+     *         verified posture by default (verify_peer + verify_peer_name +
+     *         CA bundle), or the explicit opt-out (verify_peer=false +
+     *         allow_self_signed) when verification was disabled by config/env.
+     */
+    public function tlsContext(): array
+    {
+        if (!$this->tlsVerify) {
+            return ['ssl' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+            ]];
+        }
+
+        $ssl = [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ];
+        if (is_file($this->tlsCafile)) {
+            $ssl['cafile'] = $this->tlsCafile;
+        }
+
+        return ['ssl' => $ssl];
+    }
+
+    /**
+     * Whether this client verifies hub TLS certificates.
+     */
+    public function isTlsVerifyEnabled(): bool
+    {
+        return $this->tlsVerify;
     }
 
     /**
@@ -81,12 +183,7 @@ class HttpClient implements HttpClientInterface
         if ($this->asyncClient === null) {
             $this->asyncClient = new Client([
                 'timeout' => $this->timeout,
-                'context' => [
-                    'ssl' => [
-                        'verify_peer' => false,
-                        'verify_peer_name' => false,
-                    ],
-                ],
+                'context' => $this->tlsContext(),
             ]);
         }
         return $this->asyncClient;
@@ -203,6 +300,7 @@ class HttpClient implements HttpClientInterface
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
         curl_setopt($ch, CURLOPT_HEADER, true);
+        $this->applyCurlTlsOptions($ch);
         curl_setopt($ch, CURLOPT_HTTPHEADER, array_values(
             array_map(
                 fn(string $k, string $v): string => "$k: $v",
@@ -246,6 +344,31 @@ class HttpClient implements HttpClientInterface
         $bodyArray = json_decode($responseBody, true) ?? [];
 
         return new HttpResponse($statusCode, $responseHeaders, $bodyArray);
+    }
+
+    /**
+     * Apply the configured TLS posture to the synchronous cURL transport.
+     *
+     * cURL verifies by default; the options are set explicitly anyway so the
+     * async and sync transports can never silently diverge — and so the
+     * opt-out (and custom CA bundle) configured for the async client applies
+     * here too.
+     *
+     * @param \CurlHandle $ch Initialized cURL handle.
+     */
+    private function applyCurlTlsOptions(\CurlHandle $ch): void
+    {
+        if (!$this->tlsVerify) {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+            return;
+        }
+
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        if ($this->tlsCafile !== '' && is_file($this->tlsCafile)) {
+            curl_setopt($ch, CURLOPT_CAINFO, $this->tlsCafile);
+        }
     }
 
     /**

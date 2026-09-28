@@ -82,6 +82,59 @@ class JwksCacheTest extends TestCase
         $this->assertEquals($jwk2, $result['key-2']);
     }
 
+    public function testExpiredEntryIsRetainedForStaleReads(): void
+    {
+        $cache = new JwksCache(0);
+        $jwk = ['kty' => 'OKP', 'crv' => 'Ed25519', 'kid' => 'key-1', 'x' => 'dGhpcyBpcyBhIHRlc3QgcHVibGljIGtleQ=='];
+        $cache->set('key-1', $jwk);
+
+        // Fresh read hides it, stale read still serves it (M4 cooldown fallback).
+        $this->assertNull($cache->get('key-1'));
+        $this->assertEquals($jwk, $cache->getStale('key-1'));
+    }
+
+    public function testGetStaleReturnsNullForUnknownKid(): void
+    {
+        $cache = new JwksCache(900);
+
+        $this->assertNull($cache->getStale('nonexistent'));
+    }
+
+    public function testGetStaleReturnsFreshEntryToo(): void
+    {
+        $cache = new JwksCache(900);
+        $jwk = ['kty' => 'OKP', 'crv' => 'Ed25519', 'kid' => 'key-1', 'x' => 'dGhpcyBpcyBhIHRlc3QgcHVibGljIGtleQ=='];
+        $cache->set('key-1', $jwk);
+
+        $this->assertEquals($jwk, $cache->getStale('key-1'));
+    }
+
+    public function testInvalidateClearsStaleEntries(): void
+    {
+        $cache = new JwksCache(0);
+        $jwk = ['kty' => 'OKP', 'crv' => 'Ed25519', 'kid' => 'key-1', 'x' => 'dGhpcyBpcyBhIHRlc3QgcHVibGljIGtleQ=='];
+        $cache->set('key-1', $jwk);
+        $cache->invalidate();
+
+        $this->assertNull($cache->getStale('key-1'));
+    }
+
+    public function testFetchCooldownTracking(): void
+    {
+        $cache = new JwksCache(900);
+
+        // Never fetched → not cooling down.
+        $this->assertFalse($cache->isFetchCoolingDown(30));
+
+        $cache->noteFetchAttempt();
+
+        // Just attempted → cooling for any positive window.
+        $this->assertTrue($cache->isFetchCoolingDown(30));
+        // A zero/negative window disables rate-limiting by definition.
+        $this->assertFalse($cache->isFetchCoolingDown(0));
+        $this->assertFalse($cache->isFetchCoolingDown(-5));
+    }
+
     public function testSetOverwritesExistingEntry(): void
     {
         $cache = new JwksCache(900);

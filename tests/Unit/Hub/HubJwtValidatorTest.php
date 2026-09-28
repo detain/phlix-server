@@ -81,8 +81,12 @@ class HubJwtValidatorTest extends TestCase
         return new HttpResponse(200, [], ['keys' => $keys]);
     }
 
-    private function createValidator(HttpClientInterface $httpClient, string $serverId = 'test-server'): HubJwtValidator
-    {
+    private function createValidator(
+        HttpClientInterface $httpClient,
+        string $serverId = 'test-server',
+        ?JwksCache $cache = null,
+        int $fetchCooldown = 0,
+    ): HubJwtValidator {
         $factory = $this->createMock(HttpClientFactoryInterface::class);
         $factory->method('create')->willReturn($httpClient);
 
@@ -91,9 +95,18 @@ class HubJwtValidatorTest extends TestCase
             $factory,
             new NullLogger(),
             $serverId,
-            new JwksCache(900),
+            $cache ?? new JwksCache(900),
             900,
+            $fetchCooldown,
         );
+    }
+
+    /**
+     * @param array{iss: string, aud: string, sub: string, hub_user_id: string, server_id: string} $baseClaims
+     */
+    private function validClaims(array $baseClaims): array
+    {
+        return $baseClaims + ['exp' => time() + 3600];
     }
 
     public function testValidJwtReturnsClaims(): void
@@ -232,37 +245,90 @@ class HubJwtValidatorTest extends TestCase
         $this->assertNull($claims);
     }
 
-    public function testUnknownKidFetchesJwksAndRetries(): void
+    public function testUnknownKidFetchesJwksOnceAndValidates(): void
     {
         $callCount = 0;
         $httpClient = $this->createMock(HttpClientInterface::class);
         $httpClient->method('get')->willReturnCallback(function ($path) use (&$callCount) {
             $callCount++;
-            if ($callCount === 1) {
-                return new HttpResponse(200, [], ['keys' => []]);
-            }
-            return new HttpResponse(200, [], ['keys' => [[
-                'kty' => 'OKP',
-                'crv' => 'Ed25519',
-                'kid' => $this->kid,
-                'x' => $this->base64UrlEncode($this->publicKey),
-            ]]]);
+            return $this->createJwksResponse();
         });
 
-        $validator = $this->createValidator($httpClient);
-        $jwt = $this->createJwt([
+        // Cooldown 0 = rate-limiting off (this test pins the fetch itself).
+        $validator = $this->createValidator($httpClient, 'test-server', null, 0);
+        $jwt = $this->createJwt($this->validClaims([
             'iss' => 'phlix-hub',
             'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
-            'exp' => time() + 3600,
-        ]);
+        ]));
 
         $claims = $validator->validate($jwt);
 
         $this->assertInstanceOf(HubUserClaims::class, $claims);
-        $this->assertEquals(2, $callCount);
+        // M4: a single fetch returns the ENTIRE key set, so the old
+        // invalidate-and-refetch second round-trip per request is gone.
+        $this->assertEquals(1, $callCount);
+    }
+
+    public function testUnknownKidFloodIsRateLimitedByCooldown(): void
+    {
+        $callCount = 0;
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('get')->willReturnCallback(function ($path) use (&$callCount) {
+            $callCount++;
+            return new HttpResponse(200, [], ['keys' => []]);
+        });
+
+        $validator = $this->createValidator($httpClient, 'test-server', null, 3600);
+        // kid is signed by our key but the hub's (empty) key set never holds
+        // it: every request is an unknown-kid miss. Five forged-style requests
+        // must trigger exactly ONE refetch, not two per request.
+        $jwt = $this->createJwt($this->validClaims([
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
+            'sub' => 'hub-user-123',
+            'hub_user_id' => 'hub-user-123',
+            'server_id' => 'test-server',
+        ]));
+
+        for ($i = 0; $i < 5; $i++) {
+            $this->assertNull($validator->validate($jwt));
+        }
+
+        $this->assertEquals(1, $callCount);
+    }
+
+    public function testCooldownServesStaleKeyForKnownKid(): void
+    {
+        $callCount = 0;
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('get')->willReturnCallback(function ($path) use (&$callCount) {
+            $callCount++;
+            return $this->createJwksResponse();
+        });
+
+        // TTL 0: every fetched entry is immediately stale, so each validate()
+        // is an unknown-kid miss on the FRESH cache but has a stale fallback.
+        $cache = new JwksCache(0);
+        $validator = $this->createValidator($httpClient, 'test-server', $cache, 3600);
+        $jwt = $this->createJwt($this->validClaims([
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
+            'sub' => 'hub-user-123',
+            'hub_user_id' => 'hub-user-123',
+            'server_id' => 'test-server',
+        ]));
+
+        $first = $validator->validate($jwt);
+        $second = $validator->validate($jwt);
+
+        // Rotation-already-happened case: stale key still validates…
+        $this->assertInstanceOf(HubUserClaims::class, $first);
+        $this->assertInstanceOf(HubUserClaims::class, $second);
+        // …while the cooldown blocks the second request from refetching.
+        $this->assertEquals(1, $callCount);
     }
 
     public function testJwksFetchFailureReturnsNull(): void

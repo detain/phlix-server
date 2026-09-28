@@ -25,12 +25,43 @@ class Ed25519KeyManagerTest extends TestCase
     protected function tearDown(): void
     {
         if (is_dir($this->tmpDir)) {
-            $files = glob($this->tmpDir . '/*') ?: [];
-            foreach ($files as $file) {
-                @unlink($file);
-            }
-            @rmdir($this->tmpDir);
+            self::removeTree($this->tmpDir);
         }
+    }
+
+    private static function removeTree(string $path): void
+    {
+        if (is_dir($path)) {
+            foreach (glob($path . '/*') ?: [] as $child) {
+                self::removeTree($child);
+            }
+            @rmdir($path);
+            return;
+        }
+
+        @unlink($path);
+    }
+
+    /**
+     * L4: the key directory must be created 0700 and the private key file must
+     * be 0600 from birth (tempnam + rename), never world/group-readable at any
+     * point — assert no group/other permission bits on either.
+     */
+    public function test_creates_private_dir_0700_and_key_file_0600(): void
+    {
+        $dir = $this->tmpDir . '/hub-keys';
+        $manager = new Ed25519KeyManager($dir . '/signing.pem');
+
+        $manager->getOrCreateKeyPair();
+
+        $dirPerms = fileperms($dir) & 0777;
+        $filePerms = fileperms($dir . '/signing.pem') & 0777;
+
+        // Umask may only remove bits, so assert the security-relevant bound
+        // (no group/other access) plus the exact intent for the file.
+        $this->assertSame(0, $dirPerms & 0077, 'keys dir must not grant group/other access');
+        $this->assertSame(0, $filePerms & 0077, 'private key must not grant group/other access');
+        $this->assertSame(0600, $filePerms);
     }
 
     public function test_generates_keypair_when_not_exists(): void

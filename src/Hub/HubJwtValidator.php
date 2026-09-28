@@ -33,6 +33,15 @@ final class HubJwtValidator implements HubJwtValidatorInterface
 {
     private const EXPECTED_ISSUER = 'phlix-hub';
 
+    /**
+     * Minimum seconds between JWKS refetch attempts triggered by unknown-kid
+     * misses. Without it, a flood of JWTs carrying forged kids amplifies into
+     * two synchronous HTTP round-trips to the hub per request (DoS via the
+     * validator). During cooldown an unknown kid is resolved from the
+     * last-known (even TTL-expired) key set instead.
+     */
+    private const DEFAULT_JWKS_FETCH_COOLDOWN = 30;
+
     private JwksCache $jwksCache;
 
     /**
@@ -44,6 +53,8 @@ final class HubJwtValidator implements HubJwtValidatorInterface
      * @param string            $serverId         This server's unique ID (used for audience validation).
      * @param JwksCache|null    $jwksCache        Optional JWKS cache instance (creates default if null).
      * @param int               $cacheTtl         JWKS cache TTL in seconds (default 900).
+     * @param int               $jwksFetchCooldown Seconds between unknown-kid refetches
+     *                                            (default 30; 0 disables rate-limiting).
      */
     public function __construct(
         private readonly string $hubJwksUrl,
@@ -52,6 +63,7 @@ final class HubJwtValidator implements HubJwtValidatorInterface
         private readonly string $serverId,
         ?JwksCache $jwksCache = null,
         int $cacheTtl = 900,
+        private readonly int $jwksFetchCooldown = self::DEFAULT_JWKS_FETCH_COOLDOWN,
     ) {
         $this->jwksCache = $jwksCache ?? new JwksCache($cacheTtl);
     }
@@ -222,11 +234,16 @@ final class HubJwtValidator implements HubJwtValidatorInterface
     }
 
     /**
-     * Resolves a JWK by kid, fetching from hub if not in cache.
+     * Resolves a JWK by kid, fetching from the hub at most once per cooldown.
      *
-     * Attempts to find the key in cache first. If not found, fetches
-     * the full JWKS from the hub. If still not found after the fetch,
-     * returns null.
+     * Fresh cache hit first. On a miss the full key set is refetched — but
+     * only when the {@see DEFAULT_JWKS_FETCH_COOLDOWN|cooldown} since the last
+     * attempt has elapsed; the historical invalidate-and-refetch-again second
+     * round-trip is gone, because a fetch returns the ENTIRE key set, so if
+     * the kid is absent from a just-fetched set, re-fetching within the same
+     * request only amplifies attacker-controlled traffic. During cooldown —
+     * and after a failed refetch — the last-known entry for the kid (even
+     * TTL-expired) is served so legitimate rotation keeps validating.
      *
      * @param string $kid The key ID to resolve.
      *
@@ -239,24 +256,27 @@ final class HubJwtValidator implements HubJwtValidatorInterface
             return $jwk;
         }
 
-        $this->fetchHubJwks();
-        $jwk = $this->jwksCache->get($kid);
-        if ($jwk !== null) {
-            return $jwk;
+        if ($this->jwksCache->isFetchCoolingDown($this->jwksFetchCooldown)) {
+            return $this->jwksCache->getStale($kid);
         }
 
-        $this->jwksCache->invalidate();
         $this->fetchHubJwks();
-        return $this->jwksCache->get($kid);
+
+        return $this->jwksCache->get($kid) ?? $this->jwksCache->getStale($kid);
     }
 
     /**
      * Fetches JWKS from the hub and populates the cache.
      *
+     * Records the attempt in the cache first (success OR failure) so the
+     * unknown-kid cooldown also protects against floods while the hub is down.
+     *
      * @return void
      */
     private function fetchHubJwks(): void
     {
+        $this->jwksCache->noteFetchAttempt();
+
         try {
             $scheme = parse_url($this->hubJwksUrl, PHP_URL_SCHEME) ?: 'https';
             $host = parse_url($this->hubJwksUrl, PHP_URL_HOST) ?: '';

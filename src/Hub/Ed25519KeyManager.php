@@ -147,16 +147,52 @@ final class Ed25519KeyManager
         $pem = $this->buildPem($secretKey);
         $dir = dirname($this->keyPath);
         if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+            // 0700: the signing-key directory must never be world-readable
+            // (umask only removes bits, so 0700 stays private on any host).
+            @mkdir($dir, 0700, true);
         }
 
-        if (@file_put_contents($this->keyPath, $pem, LOCK_EX) === false) {
+        $this->writePrivateKeyAtomically($pem, $dir);
+
+        return $keyPair;
+    }
+
+    /**
+     * Writes the PEM through a 0600-from-birth temp file, then renames it
+     * into place.
+     *
+     * `tempnam()` creates the file with mode 0600 regardless of the process
+     * umask (PHP has no O_CREAT-mode stream context for regular files), so the
+     * secret is world-readable at no point between creation and rename —
+     * closing the write-then-chmod TOCTOU window a plain `file_put_contents()`
+     * + `chmod()` leaves open.
+     *
+     * @param string $pem PEM-encoded private key material.
+     * @param string $dir Directory of the final key path (temp must live on
+     *                    the same filesystem for rename() to be atomic).
+     *
+     * @throws RuntimeException If the temp file cannot be created, written, or moved.
+     */
+    private function writePrivateKeyAtomically(string $pem, string $dir): void
+    {
+        $tmp = @tempnam($dir, 'ed25519-');
+        if ($tmp === false) {
+            throw new RuntimeException('Failed to create temp Ed25519 key file in: ' . $dir);
+        }
+
+        if (@file_put_contents($tmp, $pem) === false) {
+            @unlink($tmp);
             throw new RuntimeException('Failed to write Ed25519 private key: ' . $this->keyPath);
         }
 
-        @chmod($this->keyPath, 0600);
+        // Belt-and-suspenders: tempnam is already 0600; chmod keeps the
+        // guarantee explicit if that ever changes.
+        @chmod($tmp, 0600);
 
-        return $keyPair;
+        if (!@rename($tmp, $this->keyPath)) {
+            @unlink($tmp);
+            throw new RuntimeException('Failed to move Ed25519 private key into place: ' . $this->keyPath);
+        }
     }
 
     /**

@@ -13,6 +13,7 @@ use Phlix\Hub\HubClient;
 use Phlix\Hub\HttpClient;
 use Phlix\Hub\HttpClientInterface;
 use Phlix\Hub\HttpResponse;
+use Phlix\Hub\HubClientException;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
 use Phlix\Common\Logger\StructuredLogger;
@@ -217,6 +218,86 @@ class HubClientTest extends TestCase
         $this->assertEquals('jwt-token', $data['enrollment_jwt']);
         $this->assertEquals('https://hub.example.com/.well-known/jwks.json', $data['hub_jwks_url']);
         $this->assertEquals('server-uuid', $data['server_id']);
+    }
+
+    /**
+     * L4: when the enrollment directory does not exist yet it is created 0700
+     * and the enrollment JWT file is 0600 from birth (tempnam + rename) —
+     * never group/other-readable.
+     */
+    public function test_storeEnrollment_creates_private_dir_and_0600_file(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $configDir = $this->tmpDir . '/hub-state';
+        $client = new HubClient($keyManager, $httpClient, $logger, $configDir);
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $dirPerms = fileperms($configDir) & 0777;
+        $filePerms = fileperms($configDir . '/hub-enrollment.json') & 0777;
+
+        $this->assertSame(0, $dirPerms & 0077, 'enrollment dir must not grant group/other access');
+        $this->assertSame(0, $filePerms & 0077, 'enrollment file must not grant group/other access');
+        $this->assertSame(0600, $filePerms);
+
+        @unlink($configDir . '/hub-enrollment.json');
+        @rmdir($configDir);
+    }
+
+    /**
+     * L5: a hub-provided claim ID is interpolated into the poll URL path, so
+     * anything beyond the opaque-token charset must be rejected before the
+     * request is built (no traversal, no path injection, no redirect tricks).
+     */
+    public function test_pollClaimStatus_rejects_malformed_claim_id(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->expects($this->never())->method('get');
+        $logger = new StructuredLogger('hub', []);
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+
+        $this->expectException(HubClientException::class);
+        $this->expectExceptionMessage('Invalid claim ID');
+        $client->pollClaimStatus('../../evil', 'https://hub.example.com');
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('provideUnsafeClaimIds')]
+    public function test_pollClaimStatus_rejects_every_unsafe_shape(string $claimId): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->expects($this->never())->method('get');
+        $logger = new StructuredLogger('hub', []);
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+
+        $this->expectException(HubClientException::class);
+        $client->pollClaimStatus($claimId, 'https://hub.example.com');
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function provideUnsafeClaimIds(): array
+    {
+        return [
+            'empty' => [''],
+            'path traversal' => ['../x'],
+            'query smuggle' => ['abc?x=1'],
+            'fragment smuggle' => ['abc#x'],
+            'space' => ['a b'],
+            'control byte' => ["a\nb"],
+            'percent' => ['a%2fb'],
+        ];
     }
 
     public function test_loadEnrollment_returns_null_when_not_enrolled(): void

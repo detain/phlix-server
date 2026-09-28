@@ -18,11 +18,20 @@ use Phlix\Plugins\Manifest;
  * a trusted-key allowlist AND against the on-disk content of the
  * staged plugin.
  *
- * **Scope for A.4 (per `PHLIX_EXPANSION_PLAN.md` §10 risk #4):**
- * the verifier is built but the trusted-key allowlist defaults to
- * empty. Plugins without a signature are accepted with a warning (the
- * loader logs on the `plugins` channel). Plugins WITH a signature
- * must:
+ * **Allowlist sourcing:** the container wiring builds this verifier
+ * with the operator's configured allowlist via
+ * {@see TrustedSignaturesConfig::fromEnv()} — the comma-separated
+ * `PHLIX_PLUGINS_TRUSTED_SIGNATURES` and/or the JSON-array file at
+ * `PHLIX_PLUGINS_TRUSTED_SIGNATURES_FILE`. When neither seam is
+ * configured the
+ * allowlist is empty, which preserves the legacy default: signed-but-
+ * unknown digests are optimistically accepted while
+ * `PHLIX_PLUGINS_REQUIRE_SIGNATURE` stays false. Operators who want
+ * trust-on-allowlist installs configure the list (and/or flip the
+ * require flag, which with an empty allowlist rejects everything —
+ * the explicit trusted-only opt-in below). Plugins without a
+ * signature are accepted with a warning (the loader logs on the
+ * `plugins` channel). Plugins WITH a signature must:
  *
  *  1. Pass a content-integrity check — the digest in `signature` is
  *     compared byte-for-byte against `hash_file('sha256', plugin.json)`.
@@ -127,9 +136,17 @@ class SignatureVerifier
             return $this->requireSignature ? self::RESULT_INVALID : self::RESULT_VALID;
         }
 
-        return in_array($signature, $this->trustedSignatures, true)
-            ? self::RESULT_VALID
-            : self::RESULT_INVALID;
+        // Digest matching is case-normalized on the hex half: an
+        // allowlist entry typed in a different case than the manifest
+        // emitted is still the same key. (`TrustedSignaturesConfig`
+        // validates the canonical form; this stays defensive.)
+        foreach ($this->trustedSignatures as $trusted) {
+            if (is_string($trusted) && self::stripPrefix($trusted) === $expectedHex) {
+                return self::RESULT_VALID;
+            }
+        }
+
+        return self::RESULT_INVALID;
     }
 
     /**

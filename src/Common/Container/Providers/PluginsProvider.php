@@ -29,6 +29,7 @@ use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
+use Phlix\Plugins\Signature\TrustedSignaturesConfig;
 use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
@@ -44,6 +45,11 @@ use function DI\factory;
  *  - {@see HttpInstaller}        — URL + local-dir source staging.
  *  - {@see ComposerRunner}       — per-plugin `composer install`.
  *  - {@see SignatureVerifier}    — trusted-key allowlist verification.
+ *    The allowlist comes from {@see TrustedSignaturesConfig::fromEnv()}
+ *    (`PHLIX_PLUGINS_TRUSTED_SIGNATURES` / `..._FILE`); unset seams mean
+ *    an empty allowlist, i.e. the documented optimistic-accept default
+ *    stays byte-for-byte intact. A malformed entry throws at boot —
+ *    a broken security config must never quietly un-trust keys.
  *  - {@see PluginLoader}         — public orchestrator that combines
  *    the above with the {@see ListenerRegistry} (from
  *    {@see EventServicesProvider}) and the host container itself.
@@ -88,6 +94,7 @@ final class PluginsProvider implements ServiceProviderInterface
             ComposerRunner::DEFAULT_TIMEOUT_SECONDS,
         );
         $requireSignature = self::envBool('PHLIX_PLUGINS_REQUIRE_SIGNATURE', false);
+        $trustedSignatures = TrustedSignaturesConfig::fromEnv();
         $loggerConfigPath = $appConfig['logger_config_path'] ?? null;
 
         $builder->addDefinitions([
@@ -125,8 +132,8 @@ final class PluginsProvider implements ServiceProviderInterface
             ),
 
             SignatureVerifier::class => factory(
-                static function () use ($requireSignature): SignatureVerifier {
-                    return new SignatureVerifier([], $requireSignature);
+                static function () use ($trustedSignatures, $requireSignature): SignatureVerifier {
+                    return new SignatureVerifier($trustedSignatures, $requireSignature);
                 }
             ),
 

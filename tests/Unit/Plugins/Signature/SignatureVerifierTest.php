@@ -149,6 +149,21 @@ final class SignatureVerifierTest extends TestCase
         $this->assertSame(SignatureVerifier::RESULT_INVALID, $result);
     }
 
+    public function test_allowlist_matching_ignores_hex_case(): void
+    {
+        $this->writeManifestBytes();
+        $signature = $this->expectedSignature();
+        $upperTrusted = 'sha256:' . strtoupper(substr($signature, strlen(SignatureVerifier::SIGNATURE_PREFIX)));
+
+        $verifier = new SignatureVerifier(trustedSignatures: [$upperTrusted]);
+        $result = $verifier->verify(
+            $this->buildManifest(signature: $signature),
+            $this->tmpDir,
+        );
+
+        $this->assertSame(SignatureVerifier::RESULT_VALID, $result);
+    }
+
     private function writeManifestBytes(): void
     {
         file_put_contents($this->tmpDir . '/plugin.json', self::MANIFEST_BYTES);

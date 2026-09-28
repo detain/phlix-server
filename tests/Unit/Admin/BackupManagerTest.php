@@ -79,10 +79,14 @@ class BackupManagerTest extends TestCase
      * every machine — CI included (the name sits in the CI skip set) — and reported
      * green forever while never executing a line of `createBackup()`. Both halves of
      * that justification were false on the suite's own venues: the filesystem it
-     * needs is a temp dir, and `createDatabaseDump()` cannot fail the way the message
-     * assumes — the shell's `>` redirect creates `database.sql` before mysqldump
-     * runs, and the throw needs BOTH a non-zero exit AND a missing file, so a missing
-     * or failing mysqldump still leaves a real archive.
+     * needs is a temp dir, and the dump step's old lenient contract — the shell `>`
+     * redirect created `database.sql` before mysqldump ran, and the throw needed a
+     * non-zero exit AND a MISSING file, so a failing mysqldump still "succeeded"
+     * with a truncated archive — is exactly the defect the L1 hardening closed. The
+     * dump step now demands exit 0 plus mysqldump's `-- Dump completed` trailer;
+     * this case pins the success path end to end and
+     * {@see self::testCreateDatabaseDumpThrowsOnNonZeroExitDespitePartialFile()}
+     * pins the failure path.
      *
      * ## Venue
      *
@@ -351,5 +355,85 @@ class BackupManagerTest extends TestCase
         $result = $this->backupManager->deleteBackup('s3-backup-id');
 
         $this->assertTrue($result);
+    }
+
+    /**
+     * L1 regression: a non-zero mysqldump exit must throw EVEN THOUGH the
+     * stdout redirect creates the destination file before the binary writes a
+     * single byte. The pre-fix condition threw only when the file was also
+     * MISSING — unreachable for a shell `>` redirect — so every failing dump
+     * silently shipped a truncated "backup".
+     *
+     * Venue: a closed port (127.0.0.1:1) makes mysqldump exit non-zero within
+     * milliseconds; no MySQL server involvement, no credentials.
+     *
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testCreateDatabaseDumpThrowsOnNonZeroExitDespitePartialFile(): void
+    {
+        self::assertFalse(defined('PHLIX_CONFIG_DIR'), 'the isolated process must start with the constant free');
+
+        $configDir = $this->scratchDir('cfgfail_');
+        file_put_contents($configDir . '/database.php', "<?php\nreturn " . var_export([
+            'connections' => [
+                'mysql' => [
+                    'host' => '127.0.0.1',
+                    'port' => 1,
+                    'username' => 'probe',
+                    'password' => 'probe',
+                    'database' => 'probe',
+                ],
+            ],
+        ], true) . ";\n");
+        define('PHLIX_CONFIG_DIR', $configDir);
+
+        $dumpPath = $configDir . '/database.sql';
+
+        $method = new \ReflectionMethod(BackupManager::class, 'createDatabaseDump');
+
+        try {
+            $method->invoke($this->backupManager, $dumpPath);
+            self::fail('createDatabaseDump() must throw when mysqldump exits non-zero, partial file or not.');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('mysqldump failed with code:', $e->getMessage());
+        }
+    }
+
+    /**
+     * L1 regression: the completion-marker gate is a byte check on the file's
+     * tail — a dump without mysqldump's `-- Dump completed` trailer is a
+     * truncated dump, full stop.
+     */
+    public function testDumpCarriesCompletionMarkerRequiresTheTrailer(): void
+    {
+        $dir = $this->scratchDir('marker_');
+
+        $truncated = $dir . '/truncated.sql';
+        file_put_contents(
+            $truncated,
+            "-- MySQL dump 8.0.46\nCREATE TABLE users (id int);\nINSERT INTO users VALUES (1);\n"
+        );
+
+        $completed = $dir . '/completed.sql';
+        file_put_contents(
+            $completed,
+            "-- MySQL dump 8.0.46\nSET character_set_client=NULL;\n-- Dump completed on 2026-09-28 12:00:00\n"
+        );
+
+        $method = new \ReflectionMethod(BackupManager::class, 'dumpCarriesCompletionMarker');
+
+        self::assertFalse(
+            (bool) $method->invoke($this->backupManager, $truncated),
+            'a dump without the completion trailer must not be trusted'
+        );
+        self::assertTrue(
+            (bool) $method->invoke($this->backupManager, $completed),
+            'a dump ending in the completion trailer must be accepted'
+        );
+        self::assertFalse(
+            (bool) $method->invoke($this->backupManager, $dir . '/missing.sql'),
+            'a missing file has no marker'
+        );
     }
 }

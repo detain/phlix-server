@@ -501,51 +501,168 @@ class BackupManager
 
     /**
      * Create database dump via mysqldump.
+     *
+     * Success requires BOTH a zero exit code AND the trailing
+     * `-- Dump completed` marker mysqldump writes as its last line. The shell
+     * redirect used to create the file the instant the command started, so the
+     * old "file exists" fallback treated a truncated, mid-dump failure as a
+     * valid backup — a silent, unrecoverable data-loss class.
+     *
+     * The password never touches the argument vector: a command line is
+     * world-readable via `/proc/<pid>/cmdline` for the process lifetime, so
+     * `--password=` leaked the DB credential to every local user. It is passed
+     * to the child through `MYSQL_PWD` in a shell-less `proc_open()` env, and
+     * `--no-defaults` (first) makes the run immune to ambient option files
+     * (`~/.my.cnf`) that could otherwise silently swap the credential.
      */
     private function createDatabaseDump(string $outputPath): void
     {
         $dbConfig = $this->getDbConfig();
 
-        $cmd = sprintf(
-            'mysqldump --single-transaction --quick --lock-tables=false'
-            . ' -h %s -P %s -u %s %s --password=%s > %s 2>/dev/null',
-            escapeshellarg($dbConfig->host),
-            escapeshellarg((string) $dbConfig->port),
-            escapeshellarg($dbConfig->username),
-            escapeshellarg($dbConfig->database),
-            escapeshellarg($dbConfig->password),
-            escapeshellarg($outputPath)
+        $dump = $this->runMysqlClientCommand(
+            [
+                'mysqldump',
+                '--no-defaults',
+                '--single-transaction',
+                '--quick',
+                '--lock-tables=false',
+                '-h', $dbConfig->host,
+                '-P', (string) $dbConfig->port,
+                '-u', $dbConfig->username,
+                $dbConfig->database,
+            ],
+            $dbConfig->password,
+            null,
+            $outputPath,
         );
 
-        exec($cmd, $output, $returnCode);
+        if ($dump['code'] !== 0) {
+            throw new \RuntimeException(
+                'mysqldump failed with code: ' . $dump['code']
+                . ($dump['stderr'] !== '' ? ' — ' . $dump['stderr'] : '')
+            );
+        }
 
-        if ($returnCode !== 0 && !file_exists($outputPath)) {
-            throw new \RuntimeException('mysqldump failed with code: ' . $returnCode);
+        if (!$this->dumpCarriesCompletionMarker($outputPath)) {
+            throw new \RuntimeException(
+                'mysqldump exited with code 0 but the dump at ' . $outputPath
+                . ' is missing its "-- Dump completed" trailer — treating it as truncated.'
+            );
         }
     }
 
     /**
      * Import database dump via mysql command.
+     *
+     * Same credential-hygiene contract as {@see self::createDatabaseDump()}:
+     * password via `MYSQL_PWD` in a shell-less `proc_open()`, `--no-defaults`
+     * first, exit code is authoritative.
      */
     private function importDatabaseDump(string $dumpPath): void
     {
         $dbConfig = $this->getDbConfig();
 
-        $cmd = sprintf(
-            'mysql -h %s -P %s -u %s --password=%s %s < %s 2>/dev/null',
-            escapeshellarg($dbConfig->host),
-            escapeshellarg((string) $dbConfig->port),
-            escapeshellarg($dbConfig->username),
-            escapeshellarg($dbConfig->password),
-            escapeshellarg($dbConfig->database),
-            escapeshellarg($dumpPath)
+        $import = $this->runMysqlClientCommand(
+            [
+                'mysql',
+                '--no-defaults',
+                '-h', $dbConfig->host,
+                '-P', (string) $dbConfig->port,
+                '-u', $dbConfig->username,
+                $dbConfig->database,
+            ],
+            $dbConfig->password,
+            $dumpPath,
+            null,
         );
 
-        exec($cmd, $output, $returnCode);
-
-        if ($returnCode !== 0) {
-            throw new \RuntimeException('mysql import failed with code: ' . $returnCode);
+        if ($import['code'] !== 0) {
+            throw new \RuntimeException('mysql import failed with code: ' . $import['code']
+                . ($import['stderr'] !== '' ? ' — ' . $import['stderr'] : ''));
         }
+    }
+
+    /**
+     * Run a mysql-family CLI binary without a shell.
+     *
+     * The child env carries only `MYSQL_PWD` plus the minimal `PATH`; the
+     * password never enters any argv. stderr is captured so a failure can name
+     * itself instead of being shovelled into `/dev/null`.
+     *
+     * @param list<string>  $argv       Binary first, then each argument as its
+     *                                  own element — no shell interpolation.
+     * @param string        $password   Supplied to the child via MYSQL_PWD.
+     * @param string|null   $stdinFile  File streamed into the client's stdin
+     *                                  (mysql import); null detaches stdin.
+     * @param string|null   $stdoutFile File receiving the client's stdout
+     *                                  (mysqldump target); null discards it.
+     *
+     * @return array{code: int, stderr: string} Exit code plus whatever the
+     *                                          child wrote to stderr.
+     */
+    private function runMysqlClientCommand(
+        array $argv,
+        string $password,
+        ?string $stdinFile = null,
+        ?string $stdoutFile = null
+    ): array {
+        $descriptors = [
+            0 => $stdinFile === null ? ['file', '/dev/null', 'r'] : ['file', $stdinFile, 'r'],
+            1 => $stdoutFile === null ? ['file', '/dev/null', 'w'] : ['file', $stdoutFile, 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = proc_open(
+            $argv,
+            $descriptors,
+            $pipes,
+            null,
+            ['MYSQL_PWD' => $password, 'PATH' => '/usr/bin:/bin']
+        );
+
+        if (!is_resource($process)) {
+            throw new \RuntimeException('Unable to start ' . $argv[0] . ' — proc_open failed.');
+        }
+
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $returnCode = proc_close($process);
+
+        return [
+            'code' => $returnCode,
+            'stderr' => is_string($stderr) ? trim($stderr) : '',
+        ];
+    }
+
+    /**
+     * True when the file's tail carries mysqldump's completion comment.
+     */
+    private function dumpCarriesCompletionMarker(string $outputPath): bool
+    {
+        if (!is_file($outputPath)) {
+            return false;
+        }
+
+        $handle = @fopen($outputPath, 'rb');
+        if ($handle === false) {
+            return false;
+        }
+
+        try {
+            $size = filesize($outputPath);
+            if ($size === false || $size === 0) {
+                return false;
+            }
+            $window = 128;
+            if ($size > $window) {
+                fseek($handle, -$window, SEEK_END);
+            }
+            $tail = fread($handle, $window);
+        } finally {
+            fclose($handle);
+        }
+
+        return is_string($tail) && str_contains($tail, '-- Dump completed');
     }
 
     /**

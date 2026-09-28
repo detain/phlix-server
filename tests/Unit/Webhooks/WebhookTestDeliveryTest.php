@@ -348,6 +348,73 @@ final class WebhookTestDeliveryTest extends TestCase
         );
     }
 
+    /**
+     * L2: every delivery ADDITIONALLY carries `X-Phlix-Signature-V2` with the
+     * Stripe-style timestamped signature (`t=<unix>,v1=<hmac over "t.body">`)
+     * over the same raw-body bytes, while the legacy header stays
+     * byte-identical. The reference receiver-side verifier accepts the fresh
+     * capture and rejects the same capture replayed outside the tolerance
+     * window — the replay class the timestamp binding exists to close.
+     */
+    public function test_test_delivery_carries_a_verifiable_timestamped_v2_header(): void
+    {
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
+        $calls = [];
+
+        $event = $this->testEvent();
+
+        $dispatcher = $this->dispatcherWith(
+            $this->fakeDb(),
+            $this->fakeHttpClient($this->httpOk(), $calls)
+        );
+
+        $dispatcher->dispatchToWebhook(self::WEBHOOK_ID, $event);
+
+        self::assertCount(1, $calls);
+
+        $body = $calls[0]['body'];
+        self::assertSame(
+            $event->serializedPayload(),
+            $body,
+            'The delivered body must be byte-exactly what the signing helpers cover.'
+        );
+
+        $v2 = $calls[0]['headers'][WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER] ?? null;
+        self::assertIsString($v2);
+        self::assertMatchesRegularExpression('/^t=\d+,v1=[0-9a-f]{64}$/', $v2);
+
+        self::assertSame(
+            $event->getSignature(self::WEBHOOK_SECRET),
+            $calls[0]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null,
+            'The legacy header must remain byte-identical for already-deployed receivers.'
+        );
+
+        preg_match('/^t=(\d+),/', $v2, $stamp);
+        $headerTime = (int) $stamp[1];
+
+        self::assertTrue(
+            WebhookEvent::verify(
+                self::WEBHOOK_SECRET,
+                $body,
+                $v2,
+                $calls[0]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null
+            ),
+            'A freshly delivered capture must pass reference verification.'
+        );
+
+        self::assertFalse(
+            WebhookEvent::verify(
+                self::WEBHOOK_SECRET,
+                $body,
+                $v2,
+                null,
+                WebhookEvent::DEFAULT_TOLERANCE_SECONDS,
+                $headerTime + WebhookEvent::DEFAULT_TOLERANCE_SECONDS + 1
+            ),
+            'The same capture replayed after the tolerance window must be rejected.'
+        );
+    }
+
     // -----------------------------------------------------------------
     // (b) Failing deliveries are reported as failures.
     // -----------------------------------------------------------------

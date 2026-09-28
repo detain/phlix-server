@@ -422,9 +422,15 @@ class WebhookDispatcher
             return ['success' => false, 'error' => $e->getMessage()];
         }
 
-        $payload = json_encode($event->toArray(), JSON_THROW_ON_ERROR);
+        // The canonical signed bytes come from the event itself, so the body
+        // sent here and the payloads covered by both signatures below are the
+        // same string by construction.
+        $payload = $event->serializedPayload();
         $secret = $this->stringFromMixed($webhook['secret'] ?? null);
         $signature = $event->getSignature($secret);
+        // Stamped per attempt (retries included) so a captured delivery ages
+        // out of the receiver's tolerance window.
+        $timestampedSignature = $event->getTimestampedSignature($secret, time());
 
         $config = $this->getConfig();
         $maxRetries = $this->intFromMixed($config['max_retries'] ?? null, 2);
@@ -433,13 +439,16 @@ class WebhookDispatcher
         // WebhookHttpClient (the same async/blocking-cURL dispatch pattern used
         // by the other HTTP clients) instead of a fresh, duplicated blocking
         // cURL call. postWithHeaders() preserves this subsystem's header-signed
-        // raw-body wire format (X-Phlix-Signature header + raw event JSON body)
-        // rather than post()'s {payload,signature} envelope, so registered
-        // webhook receivers see no wire-format change.
+        // raw-body wire format (signature headers + raw event JSON body)
+        // rather than post()'s {payload,signature} envelope. The legacy
+        // X-Phlix-Signature header stays byte-identical for already-deployed
+        // receivers; the additive X-Phlix-Signature-V2 timestamp header is
+        // ignored by them (see WebhookEvent's wire-format docblock).
         $client = $this->getHttpClient();
         $headers = [
             'Content-Type' => 'application/json',
-            'X-Phlix-Signature' => $signature,
+            WebhookEvent::SIGNATURE_HEADER => $signature,
+            WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER => $timestampedSignature,
         ];
 
         $retries = 0;

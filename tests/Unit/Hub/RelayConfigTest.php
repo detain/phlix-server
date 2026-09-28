@@ -30,6 +30,7 @@ final class RelayConfigTest extends TestCase
             'PHLIX_RELAY_ENABLED',
             'PHLIX_RELAY_HUB_URL',
             'PHLIX_RELAY_HUB_WS_URL',
+            'PHLIX_RELAY_ALLOW_PLAINTEXT',
             ] as $key
         ) {
             $this->savedEnv[$key] = getenv($key);
@@ -167,5 +168,39 @@ final class RelayConfigTest extends TestCase
         $this->assertFalse($config->relayTls, 'array override must win over env');
         $this->assertFalse($config->relayTlsVerify);
         $this->assertSame('/override/ca.pem', $config->relayTlsCafile);
+    }
+
+    // ---- M5: plaintext-tunnel acknowledgment flag ----
+
+    public function test_plaintext_opt_in_defaults_false(): void
+    {
+        $this->assertFalse(
+            (new RelayConfig())->allowPlaintextTunnel,
+            'the plaintext tunnel must stay LOUD by default (impersonation risk is opt-IN to silence)',
+        );
+    }
+
+    public function test_from_env_reads_plaintext_opt_in(): void
+    {
+        putenv('PHLIX_RELAY_ALLOW_PLAINTEXT=1');
+
+        $this->assertTrue(RelayConfig::fromEnv()->allowPlaintextTunnel);
+    }
+
+    public function test_from_env_plaintext_opt_in_override_wins(): void
+    {
+        putenv('PHLIX_RELAY_ALLOW_PLAINTEXT=1');
+
+        $config = RelayConfig::fromEnv(['allow_plaintext_tunnel' => false]);
+
+        $this->assertFalse($config->allowPlaintextTunnel, 'array override must win over env');
+    }
+
+    public function test_with_auto_enable_carries_plaintext_opt_in_forward(): void
+    {
+        $enabled = (new RelayConfig(allowPlaintextTunnel: true))->withAutoEnable('https://hub.example.com');
+
+        $this->assertTrue($enabled->allowPlaintextTunnel);
+        $this->assertSame('ws://hub.example.com:8802', $enabled->buildHubRelayWsUrl());
     }
 }

@@ -161,4 +161,59 @@ class RelayMessageFramerTest extends TestCase
         $this->assertSame(1, $frame->seq);
         $this->assertSame('first', $frame->payload);
     }
+
+    // ---- M1: unknownFrameLength — complete-but-unknown vs incomplete ----
+
+    public function test_unknown_frame_length_reports_wire_len_for_complete_unknown_frame(): void
+    {
+        // Type byte 0x77 is not in RelayFrameType; the frame is COMPLETE.
+        $bytes = pack('N', 9) . chr(0x77) . pack('n', 3) . 'abc';
+
+        $typeByte = null;
+        $len = $this->framer->unknownFrameLength($bytes, $typeByte);
+
+        $this->assertSame(10, $len, '7-byte header + 3-byte payload must be reported as the skip length');
+        $this->assertSame(0x77, $typeByte, 'the out-param surfaces the offending type byte for logging');
+    }
+
+    public function test_unknown_frame_length_handles_zero_payload_unknown_frame(): void
+    {
+        $bytes = pack('N', 1) . chr(0xFE) . pack('n', 0);
+
+        $this->assertSame(7, $this->framer->unknownFrameLength($bytes));
+    }
+
+    public function test_unknown_frame_length_null_for_short_header(): void
+    {
+        $typeByte = null;
+        $this->assertNull($this->framer->unknownFrameLength('abc', $typeByte));
+        $this->assertNull($typeByte, 'no type byte is surfaced for a sub-header buffer');
+    }
+
+    public function test_unknown_frame_length_null_for_valid_type(): void
+    {
+        // A frame decode() CAN parse is never a skip candidate.
+        $bytes = $this->framer->encode(RelayFrameType::DATA, 1, 'ok');
+
+        $typeByte = null;
+        $this->assertNull($this->framer->unknownFrameLength($bytes, $typeByte));
+        $this->assertNull($typeByte);
+    }
+
+    public function test_unknown_frame_length_null_while_payload_incomplete(): void
+    {
+        $bytes = pack('N', 9) . chr(0x77) . pack('n', 50) . 'short';
+
+        // Declared 50-byte payload not fully arrived yet → hold, do NOT skip.
+        $this->assertNull($this->framer->unknownFrameLength($bytes));
+    }
+
+    public function test_decode_still_returns_null_for_unknown_type(): void
+    {
+        // The frozen RelayWireCodecInterface contract: decode() keeps answering
+        // null for unknown types — the skip path is the concrete-class method.
+        $bytes = pack('N', 9) . chr(0x77) . pack('n', 3) . 'abc';
+
+        $this->assertNull($this->framer->decode($bytes));
+    }
 }

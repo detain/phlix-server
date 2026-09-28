@@ -106,9 +106,16 @@ final class RelayConsumer
     /**
      * Per-request deadline for HTTP dispatch over the relay tunnel.
      *
-     * Prevents one slow relayed request (e.g. a blocking metadata call) from
-     * stalling the single relay worker indefinitely. If the deadline expires
-     * a 504 Gateway Timeout is sent and the request is abandoned.
+     * Prevents one slow relayed request (e.g. a cooperative metadata call) from
+     * stalling the single relay worker indefinitely. Enforced for real by
+     * {@see dispatchWithDeadlineInner()} racing the dispatcher (child coroutine)
+     * against `Channel::pop($deadline)` (parent): if the deadline expires first,
+     * a 504 Gateway Timeout is sent and the still-running dispatch is orphaned.
+     *
+     * The race is COOPERATIVE: a dispatcher that never yields to the scheduler
+     * (a pure blocking C call) stalls the whole event loop and no in-process
+     * deadline could preempt it — such calls are bounded by the register in
+     * docs/dev/BLOCKING_IO_EXCEPTIONS.md, not by this deadline.
      */
     private const DISPATCH_DEADLINE_SECONDS = 30;
 
@@ -129,6 +136,32 @@ final class RelayConsumer
      * cannot open unbounded accumulators by sending many HEADs that never END.
      */
     private const MAX_CONCURRENT_REQUEST_ASSEMBLIES = 128;
+
+    /**
+     * Hard cap on bytes parked in the tunnel egress queue while the hub
+     * connection's send buffer is saturated ({@see sendTunnelFrame()}).
+     *
+     * The queue is what makes the local->hub direction byte-faithful under
+     * back-pressure (bytes are held and ordered instead of dropped), and the
+     * paused producers ({@see $pausedForTunnelDrain}) plus the paused tunnel
+     * recv keep it near-empty in normal operation. The cap exists only so a
+     * hub that stops reading entirely cannot grow a count=1 worker's memory
+     * without bound: exceeding it fails loud — the tunnel is closed (a clean
+     * reconnect is strictly better than silent corruption or an OOM) rather
+     * than dropping frames into a hole. Sized well above Workerman's default
+     * 1 MiB static send-buffer ceiling so flow control, never the cap, is the
+     * operating mechanism (16 MiB).
+     */
+    private const MAX_TUNNEL_QUEUE_BYTES = 16777216;
+
+    /**
+     * Hard cap on bytes queued for hub->local directions whose local
+     * connection is saturated ({@see onData()}). Tunnel recv pauses while any
+     * backlog exists, so this only bounds what a single already-read WS
+     * message can park; over-cap closes that channel (fail loud, no silent
+     * truncation) instead of growing the worker.
+     */
+    private const MAX_PENDING_LOCAL_BYTES = 4194304;
 
     /** @var RelayConfig */
     private RelayConfig $config;
@@ -204,6 +237,18 @@ final class RelayConsumer
      */
     private bool $tlsMismatchWarned = false;
 
+    /**
+     * @var bool Whether the plaintext-tunnel impersonation warning (M5) has been
+     *      logged this process, so a reconnect loop does not spam the log.
+     */
+    private bool $plaintextWarned = false;
+
+    /**
+     * Effective per-request dispatch deadline in seconds ({@see
+     * DISPATCH_DEADLINE_SECONDS}; constructor seam overrides it for tests).
+     */
+    private int $dispatchDeadlineSeconds;
+
     /** @var int Nanoseconds from hrtime(true) when the session started. */
     private int $sessionStartTime = 0;
 
@@ -236,15 +281,89 @@ final class RelayConsumer
      * channel, so it exposes only one `onBufferDrain` slot — a naive
      * per-channel callback registration would clobber earlier channels'
      * resume callbacks. Instead every paused channel id is recorded here and
-     * {@see armTunnelDrainResume()} arms (idempotently) ONE handler that
-     * resumes every pending channel when the tunnel drains. Entries are
-     * removed as soon as their channel closes (see {@see onLocalClose()},
+     * the ONE always-armed tunnel drain handler ({@see armTunnelFlowControl()})
+     * resumes every pending channel once the egress queue has flushed. Entries
+     * are removed as soon as their channel closes (see {@see onLocalClose()},
      * {@see closeLocalConnection()}, {@see closeAllLocalConnections()}) so
      * this cannot grow unbounded across the life of a resident worker.
      *
      * @var array<int, true>
      */
     private array $pausedForTunnelDrain = [];
+
+    /**
+     * Whether the hub tunnel's Workerman send buffer is currently saturated.
+     *
+     * M2: Workerman 5.x `send()` returns false when its send buffer is full —
+     * AND the packet is already DISCARDED by then — so its return value can
+     * never be the flow-control signal (a "pause after the drop" design opens
+     * a byte-hole in the middle of every stall). The house-correct idiom
+     * (src/Server/WebSocket/Connection.php, MessageHandler::isConnectionBufferFull)
+     * mirrors saturation through the connection's own `onBufferFull` /
+     * `onBufferDrain` callbacks and decides BEFORE sending. This flag is that
+     * mirror for the tunnel, armed at connect time; while true, every egress
+     * frame is parked in {@see $tunnelSendQueue} instead of hitting `send()`
+     * at all, so no byte is ever offered to a full buffer.
+     */
+    private bool $tunnelBufferFull = false;
+
+    /**
+     * FIFO of encoded frame bytes waiting out a tunnel send-buffer saturation
+     * ({@see sendTunnelFrame()}, {@see flushTunnelQueue()}).
+     *
+     * Ordering is preserved by construction: nothing enters this queue while
+     * the buffer is non-full, and the buffer's own bytes always precede the
+     * queue (Workerman only fires drain once the buffer is EMPTY, which is
+     * when flushing starts). Bounded by {@see MAX_TUNNEL_QUEUE_BYTES}.
+     *
+     * @var list<string>
+     */
+    private array $tunnelSendQueue = [];
+
+    /** @var int Sum of strlen() over {@see $tunnelSendQueue}. */
+    private int $tunnelSendQueueBytes = 0;
+
+    /**
+     * Channel ids whose LOCAL connection send buffer is saturated (hub->local
+     * direction mirror of {@see $tunnelBufferFull}), armed per-channel by
+     * {@see armLocalFlowControl()} at CLIENT_CONNECT time.
+     *
+     * @var array<int, true>
+     */
+    private array $localBufferFull = [];
+
+    /**
+     * Hub->local bytes queued per channel while that channel's local write side
+     * is saturated ({@see onData()}). Paired with {@see $localBufferFull};
+     * flushed on the channel's buffer-drain event. Any backlog at all pauses
+     * tunnel recv ({@see recomputeTunnelRecvGate()}) so the queue stays bounded
+     * by the last already-read WS message, and total bytes are capped by
+     * {@see MAX_PENDING_LOCAL_BYTES}.
+     *
+     * @var array<int, string>
+     */
+    private array $pendingLocalData = [];
+
+    /** @var int Sum of strlen() over {@see $pendingLocalData}. */
+    private int $pendingLocalBytes = 0;
+
+    /**
+     * Whether hub tunnel recv is paused by the local-backlog gate
+     * ({@see recomputeTunnelRecvGate()}).
+     */
+    private bool $tunnelRecvPaused = false;
+
+    /**
+     * File-backed HTTP responses parked mid-stream because the tunnel egress
+     * saturated, keyed by relay request id. The read handle stays open with
+     * the un-sent byte count so {@see continuePendingFileStreams()} resumes at
+     * the exact next chunk once the tunnel drains — a slow hub only slows a
+     * stream, it never truncates one (M2; replaces the old drop-and-break
+     * behavior that silently shortened file responses).
+     *
+     * @var array<int, array{handle: resource, remaining: int, response: ServerResponse}>
+     */
+    private array $pendingFileStreams = [];
 
     /**
      * In-flight chunked-request assemblies keyed by relay request id (HB-2.1).
@@ -334,6 +453,15 @@ final class RelayConsumer
      *        Cross-process state store; when set, the relay fork persists tunnel
      *        state to `relay-tunnel.state.json` for the HTTP worker to read. Null
      *        disables persistence (the container/HTTP-worker copy and unit tests).
+     * @param RelayIdentityResolver|null $identityResolver
+     *        Server-side hub-user → server-user resolver (S301); null keeps the
+     *        pre-S301 raw-principal behaviour.
+     * @param int|null $dispatchDeadlineSeconds
+     *        Per-request dispatch deadline override (null → {@see
+     *        DISPATCH_DEADLINE_SECONDS}). A seam for tests to exercise the
+     *        timeout arm without a 30 s wait; production wiring leaves it null.
+     *
+     * @throws \InvalidArgumentException If $dispatchDeadlineSeconds is not > 0.
      */
     public function __construct(
         RelayConfig $config,
@@ -345,7 +473,13 @@ final class RelayConsumer
         ?callable $httpDispatcher = null,
         ?RelayStateStore $stateStore = null,
         ?RelayIdentityResolver $identityResolver = null,
+        ?int $dispatchDeadlineSeconds = null,
     ) {
+        if ($dispatchDeadlineSeconds !== null && $dispatchDeadlineSeconds <= 0) {
+            throw new \InvalidArgumentException(
+                sprintf('dispatchDeadlineSeconds must be > 0, got %d', $dispatchDeadlineSeconds),
+            );
+        }
         $this->config = $config;
         $this->hubClient = $hubClient;
         $this->logger = $logger;
@@ -356,6 +490,7 @@ final class RelayConsumer
         $this->httpDispatcher = $httpDispatcher;
         $this->stateStore = $stateStore;
         $this->identityResolver = $identityResolver;
+        $this->dispatchDeadlineSeconds = $dispatchDeadlineSeconds ?? self::DISPATCH_DEADLINE_SECONDS;
     }
 
     /**
@@ -429,6 +564,9 @@ final class RelayConsumer
 
         $this->recvBuffer = '';
         $this->requestAccumulators = [];
+        // M2: same teardown as handleDisconnect — parked frames/handles must not
+        // survive a stop().
+        $this->resetTunnelFlowControl();
         $this->state = self::STATE_DISCONNECTED;
 
         $this->logger->info('RelayConsumer stopped');
@@ -650,7 +788,13 @@ final class RelayConsumer
             $stale->onMessage = null;
             $stale->onError = null;
             $stale->onClose = null;
+            $stale->onBufferFull = null;
+            $stale->onBufferDrain = null;
             $stale->close();
+            // M2: the stale tunnel's parked egress queue / local backlogs /
+            // parked file streams are unreachable now — release them before the
+            // fresh connection arms its own flow-control callbacks.
+            $this->resetTunnelFlowControl();
         }
 
         $wsUrl = $this->config->buildHubRelayWsUrl();
@@ -672,6 +816,7 @@ final class RelayConsumer
         // TLS hub relay port is healthy, so a preemptive state write would be a
         // false positive for the S40 health panel.
         $this->warnIfLikelyTlsMismatch($wsUrl);
+        $this->warnIfPlaintextTunnel($wsUrl);
 
         $enrollment = $this->hubClient->loadEnrollment();
         $this->logger->debug('RelayConsumer::connect() loaded enrollment', [
@@ -744,18 +889,29 @@ final class RelayConsumer
             $this->handleDisconnect();
         };
 
-        // Capture the connection id up front: connect() may synchronously
-        // invoke onClose (immediate DNS/socket error) which nulls
+        // M2: mirror the tunnel's send-buffer saturation through its own
+        // onBufferFull/onBufferDrain callbacks (the house idiom from
+        // Server/WebSocket) instead of inferring saturation from send()===false
+        // after Workerman has already discarded the packet.
+        $this->armTunnelFlowControl();
+
+        // Capture the connection up front: arming callbacks and connect() can
+        // synchronously invoke onClose (immediate DNS/socket error) which nulls
         // $this->connection via handleDisconnect(), so re-dereferencing it
         // after connect() would spl_object_id(null) and throw a spurious
         // TypeError that masks the real synchronous-close.
-        $connId = spl_object_id($this->connection);
+        $hubConnection = $this->connection;
+        if ($hubConnection === null) {
+            $this->logger->debug('RelayConsumer::connect() connection already gone after arming');
+            return;
+        }
+        $connId = spl_object_id($hubConnection);
         $this->logger->debug('RelayConsumer::connect() calling $connection->connect()', [
             'connection_id' => $connId,
-            'connection_status_before_connect' => $this->connection->getStatus(),
+            'connection_status_before_connect' => $hubConnection->getStatus(),
         ]);
         try {
-            $this->connection->connect();
+            $hubConnection->connect();
             $this->logger->debug('RelayConsumer::connect() $connection->connect() returned', [
                 'connection_id' => $connId,
                 'connection_status_after_connect' => $this->currentConnectionStatus(),
@@ -981,6 +1137,52 @@ final class RelayConsumer
     }
 
     /**
+     * Log a prominent WARNING (once per process) when the tunnel runs plaintext.
+     *
+     * M5 — the relay's app-layer trust model is "trust the tunnel": a relayed
+     * HTTP_REQUEST's `X-Phlix-Relay-User` header is read verbatim from the
+     * envelope and used as the request principal (see {@see buildRequest()}),
+     * because the hub is assumed to have authenticated the end user BEFORE the
+     * bytes entered this socket. Over `ws://` that assumption is only as strong
+     * as the network: anyone positioned on the path (LAN neighbor, hostile Wi-Fi,
+     * compromised switch) can inject an HTTP_REQUEST frame stamped with any hub
+     * user's UUID and be served as that user — full impersonation of every
+     * relayed request, including authenticated API calls.
+     *
+     * Connectivity is deliberately NOT changed (flipping the shipped plaintext
+     * default would break existing pairings); instead the risk is surfaced
+     * loudly at connect time and silenced ONLY by explicit operator opt-in
+     * (`PHLIX_RELAY_ALLOW_PLAINTEXT=1` / config `allow_plaintext_tunnel`), so
+     * running it becomes an acknowledged decision rather than an accident.
+     *
+     * @param string $wsUrl Resolved hub relay WS URL.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function warnIfPlaintextTunnel(string $wsUrl): void
+    {
+        if (parse_url($wsUrl, PHP_URL_SCHEME) !== 'ws' || $this->config->allowPlaintextTunnel) {
+            return;
+        }
+
+        if (!$this->plaintextWarned) {
+            $this->logger->warning(
+                'RelayConsumer: SECURITY — the hub relay tunnel is running PLAINTEXT ws://. '
+                . 'The relay trust model is "trust the tunnel": X-Phlix-Relay-User on every relayed '
+                . 'request is honored verbatim, so any attacker on the network path to the hub can '
+                . 'inject requests stamped with an arbitrary hub user id and gain FULL IMPERSONATION '
+                . 'of that account. Enable TLS (set PHLIX_RELAY_TLS=1 here AND HUB_RELAY_TLS=true on '
+                . 'the hub), or — only if the tunnel genuinely never leaves a trusted network you '
+                . 'control — acknowledge this risk by setting PHLIX_RELAY_ALLOW_PLAINTEXT=1.',
+                ['url' => $wsUrl],
+            );
+            $this->plaintextWarned = true;
+        }
+    }
+
+    /**
      * Send the JSON HELLO handshake as the first WS message.
      *
      * @param string $enrollmentJwt JWT from stored enrollment.
@@ -1076,6 +1278,18 @@ final class RelayConsumer
     /**
      * Drain all complete binary frames from the receive buffer.
      *
+     * Head-of-line protection (M1): {@see RelayMessageFramer::decode()} returns
+     * null for BOTH a partial frame and a complete frame whose type byte this
+     * build does not know (a newer hub). Treating every null as "wait" would
+     * strand the unknown frame at the buffer head forever — every later frame
+     * then fails to decode too, the buffer grows without bound, and the
+     * count=1 relay worker is dead until restart. So on a null the buffer head
+     * is offered to {@see RelayMessageFramer::unknownFrameLength()}: a complete
+     * unknown-type frame is consumed and skipped (logged — replying with an
+     * ERROR frame is useless against a peer speaking a newer protocol, whose
+     * own semantics here are unknowable), while a truly partial head breaks
+     * and waits for more bytes.
+     *
      * @return void
      *
      * @since 0.5.0
@@ -1085,7 +1299,18 @@ final class RelayConsumer
         while (true) {
             $frame = $this->codec->decode($this->recvBuffer);
             if ($frame === null) {
-                break;
+                $skippedTypeByte = null;
+                $unknownLen = $this->codec->unknownFrameLength($this->recvBuffer, $skippedTypeByte);
+                if ($unknownLen === null) {
+                    break; // Genuinely incomplete — wait for more bytes.
+                }
+
+                $this->recvBuffer = substr($this->recvBuffer, $unknownLen);
+                $this->logger->warning('RelayConsumer: skipping unknown frame type (newer protocol?)', [
+                    'type_byte' => is_int($skippedTypeByte) ? sprintf('0x%02X', $skippedTypeByte) : null,
+                    'frame_len' => $unknownLen,
+                ]);
+                continue;
             }
 
             // The shared decode() is stateless and does not consume bytes, so
@@ -1179,6 +1404,11 @@ final class RelayConsumer
             ]);
         };
 
+        // M2: mirror this channel's write-side saturation so onData() can
+        // queue-then-gate instead of offering bytes to a full (drop-on-full)
+        // buffer.
+        $this->armLocalFlowControl($local, $channelId);
+
         $this->localConnections[$channelId] = $local;
         // S40: activeSessions changed — persist it (coalesced) so the admin
         // panel and /api/v1/health/relay stop reporting 0 live sessions.
@@ -1245,28 +1475,60 @@ final class RelayConsumer
             return;
         }
 
-        if ($local->send($frame->payload, true) === false) {
-            // Local connection send buffer is full — apply back-pressure to the
-            // hub so it stops pipelining DATA frames for this channel until the
-            // local connection drains.  This mirrors the ConnectionResponseSink
-            // discipline used on the hub side.
-            if ($this->connection !== null && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
-                $this->connection->pauseRecv();
-                $local->onBufferDrain = function () use ($channelId): void {
-                    // Clean up the drain handler first to avoid double-resume.
-                    $conn = $this->localConnections[$channelId] ?? null;
-                    if ($conn !== null) {
-                        $conn->onBufferDrain = null;
-                    }
-                    if (
-                        $this->connection !== null
-                        && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED
-                    ) {
-                        $this->connection->resumeRecv();
-                    }
-                };
-            }
+        if ($frame->payload === '') {
+            return; // Empty pipe write — nothing to deliver or account for.
         }
+
+        // M2: saturation is read from the channel's armed onBufferFull mirror
+        // BEFORE offering bytes, never inferred from send()===false after
+        // Workerman dropped the packet. A flagged-full (or already-backlogged)
+        // channel queues its bytes and the tunnel recv gate stops the inflow;
+        // the channel's drain handler flushes the backlog and reopens the gate.
+        if (isset($this->localBufferFull[$channelId]) || isset($this->pendingLocalData[$channelId])) {
+            $this->queueLocalData($channelId, $frame->payload);
+            return;
+        }
+
+        if ($local->send($frame->payload, true) === false) {
+            // With the saturation check above having routed every full case to
+            // the queue, false here can only mean the local socket is dying —
+            // the channel's own close path cleans it up.
+            $this->logger->warning('RelayConsumer: local send failed (connection closing), dropping', [
+                'channel_id' => $channelId,
+                'payload_len' => strlen($frame->payload),
+            ]);
+        }
+    }
+
+    /**
+     * Park hub->local bytes for a saturated channel and close the recv gate.
+     *
+     * @param int    $channelId Owning channel id.
+     * @param string $payload   Raw client bytes (non-empty).
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function queueLocalData(int $channelId, string $payload): void
+    {
+        $this->pendingLocalData[$channelId] = ($this->pendingLocalData[$channelId] ?? '') . $payload;
+        $this->pendingLocalBytes += strlen($payload);
+
+        if ($this->pendingLocalBytes > self::MAX_PENDING_LOCAL_BYTES) {
+            $this->logger->error('RelayConsumer: local backlog cap exceeded — closing channel to bound memory', [
+                'channel_id' => $channelId,
+                'pending_bytes' => $this->pendingLocalBytes,
+                'cap_bytes' => self::MAX_PENDING_LOCAL_BYTES,
+            ]);
+            // closeLocalConnection() tears the backlog down with the channel
+            // (recv gate recomputed there) — losing one stalled client beats
+            // growing an unbounded resident worker.
+            $this->closeLocalConnection($channelId);
+            return;
+        }
+
+        $this->recomputeTunnelRecvGate();
     }
 
     /**
@@ -1535,10 +1797,12 @@ final class RelayConsumer
     /**
      * Dispatch a relayed HTTP request with a per-request deadline.
      *
-     * Wraps the dispatcher call in a Swoole coroutine with a deadline timer.
-     * If the deadline expires before the dispatch completes, a 504 error is
-     * sent and null is returned — preventing one slow request from stalling the
-     * relay worker.
+     * Enforced (inside a Swoole coroutine...) via
+     * {@see dispatchWithDeadlineInner()}: the dispatcher runs in a child
+     * coroutine raced against `Channel::pop($deadline)` in this one, so an
+     * expired deadline genuinely answers 504 and returns null instead of the
+     * pre-M3 sentinel that could never fire before the synchronous dispatcher
+     * returned.
      *
      * Falls back to synchronous dispatch when Swoole coroutines are unavailable
      * (e.g. in PHPUnit CLI without the swoole extension), though in that case
@@ -1578,56 +1842,92 @@ final class RelayConsumer
      */
     private function dispatchWithDeadlineInner(int $requestId, RelayHttpRequest $envelope): ?ServerResponse
     {
-        $deadline = self::DISPATCH_DEADLINE_SECONDS;
+        $deadline = $this->dispatchDeadlineSeconds;
         $request = $this->buildRequest($envelope);
 
-        // Fast path: when coroutines are available, enforce the deadline.
+        // M3 real-enforcement arm: when running inside a Swoole coroutine, RACE
+        // the dispatcher against the deadline instead of the previous
+        // same-coroutine Timer sentinel (structurally unreachable: the
+        // synchronous dispatcher call blocks this coroutine, so the timer's
+        // sentinel was either overwritten by the late result or never reached
+        // its 504 branch at all). The dispatcher runs in a CHILD coroutine whose
+        // outcome lands on a buffered-1 Channel; the parent pops with the
+        // deadline as timeout. pop() yields to the scheduler, so a cooperative
+        // dispatcher that overruns gets answered 504 WHILE the child keeps (or
+        // eventually finishes) its work.
+        //
+        // The race is COOPERATIVE by nature: a dispatcher that never yields to
+        // the scheduler (a pure blocking C call) stalls the whole worker and no
+        // in-process timer could preempt it either — those calls are governed by
+        // the register in docs/dev/BLOCKING_IO_EXCEPTIONS.md, not by this race.
+        //
+        // On timeout the child is ORPHANED by design: the Channel has capacity 1
+        // so its eventual push never blocks and the coroutine exits cleanly; the
+        // late result is simply discarded (the hub already got its 504).
         if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
-            /** @var ServerResponse|null $result */
-            $result = null;
-            $dispatched = false;
+            // $this->httpDispatcher is guaranteed non-null here because
+            // onHttpRequest returns early when it is null.
+            /** @var callable(ServerRequest): ServerResponse $dispatcher */
+            $dispatcher = $this->httpDispatcher;
+            $result = new \Swoole\Coroutine\Channel(1);
 
-            // Timer fires if dispatch takes longer than the deadline.
-            // The callback sets a sentinel 504 response if the timer fires before
-            // the dispatch completes (detected via $dispatched being still false).
-            $timer = Timer::add($deadline, static function () use (&$result, &$dispatched): void {
-                // @phpstan-ignore-next-line booleanNot.alwaysTrue
-                if (!$dispatched) {
-                    $result = (new ServerResponse())
-                        ->status(504)
-                        ->header('Content-Type', 'text/plain; charset=utf-8')
-                        ->text('relay request timed out');
+            $cid = \Swoole\Coroutine::create(static function () use ($dispatcher, $request, $result, $requestId): void {
+                try {
+                    // Publish the cancel group INSIDE the child: the dispatcher
+                    // — and any segment encode it launches — executes on THIS
+                    // coroutine's context, so the parent's bracketing in
+                    // dispatchWithDeadline() is not what TranscodeManager reads
+                    // here (and Swoole child-context inheritance is not relied
+                    // upon; this makes the publish explicit either way).
+                    RequestContext::setRelayCancelGroup((string) $requestId);
+                    $result->push(['dispatched', $dispatcher($request)]);
+                } catch (Throwable $e) {
+                    $result->push(['failed', $e]);
+                } finally {
+                    RequestContext::clearRelayCancelGroup();
                 }
-            }, [], false);
+            });
 
-            try {
-                // $this->httpDispatcher is guaranteed non-null here because
-                // onHttpRequest returns early when it is null.
-                /** @var callable(ServerRequest): ServerResponse $dispatcher */
-                $dispatcher = $this->httpDispatcher;
-                $result = $dispatcher($request);
-                $dispatched = true;
-            } catch (Throwable $e) {
-                $dispatched = true;
-                $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch failed', [
-                    'request_id' => $requestId,
-                    'path' => $envelope->path,
-                    'error' => $e->getMessage(),
-                ]);
-                $result = (new ServerResponse())
-                    ->status(500)
-                    ->header('Content-Type', 'text/plain; charset=utf-8')
-                    ->text('relay dispatch error');
-            } finally {
-                Timer::del($timer);
+            if ($cid !== false) {
+                /** @var array{0: string, 1: mixed}|false $outcome */
+                $outcome = $result->pop($deadline);
+
+                if ($outcome === false) {
+                    $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch exceeded deadline; answered 504', [
+                        'request_id' => $requestId,
+                        'path' => $envelope->path,
+                        'deadline_seconds' => $deadline,
+                    ]);
+                    $this->sendHttpError($requestId, 504, 'relay request timed out');
+                    return null;
+                }
+
+                [$kind, $value] = $outcome;
+
+                if ($kind === 'failed') {
+                    $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch failed', [
+                        'request_id' => $requestId,
+                        'path' => $envelope->path,
+                        'error' => $value instanceof Throwable ? $value->getMessage() : 'unknown',
+                    ]);
+                    return (new ServerResponse())
+                        ->status(500)
+                        ->header('Content-Type', 'text/plain; charset=utf-8')
+                        ->text('relay dispatch error');
+                }
+
+                // Genuine dispatcher verdict — including a REAL 504 — passes
+                // through untouched (the old code swallowed any 504 as the timer
+                // sentinel; that conflation is exactly what M3 removed).
+                return $value instanceof ServerResponse ? $value : null;
             }
 
-            if ($result !== null && $result->statusCode === 504) {
-                $this->sendHttpError($requestId, 504, 'relay request timed out');
-                return null;
-            }
-
-            return $result;
+            // Coroutine::create() failed to SCHEDULE (e.g. max_coroutine ceiling):
+            // fall through to the synchronous arm below, same degradation
+            // MediaScanner::probeManyConcurrently() applies.
+            $this->logger->debug('RelayConsumer: dispatch coroutine scheduling failed; synchronous fallback', [
+                'request_id' => $requestId,
+            ]);
         }
 
         // Synchronous fallback (no Swoole coroutines available).
@@ -1896,19 +2196,24 @@ final class RelayConsumer
         $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeHead($head));
 
         if ($response->filePath !== null && !$response->headOnly) {
+            // File body owns its END+cancel tail: inline when the whole body
+            // streams, deferred by pumpFileStream() until the last parked byte
+            // flushes if the tunnel saturates mid-file (M2 — an END queued
+            // ahead of parked BODY chunks would truncate the response).
             $this->streamFileChunks($requestId, $response);
-        } else {
-            foreach (RelayHttpResponseCodec::chunkBody($response->body) as $chunkPayload) {
-                $this->sendHttpResponseFrame($requestId, $chunkPayload);
-            }
+            return;
         }
 
-        $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeEnd());
+        foreach (RelayHttpResponseCodec::chunkBody($response->body) as $chunkPayload) {
+            $this->sendHttpResponseFrame($requestId, $chunkPayload);
+        }
 
         // P8: After the complete response (HEAD + BODY + END) is sent to the hub,
         // send an HTTP_CANCEL frame to notify the hub that the response is done and
-        // it can clean up its tracking state for this request.
-        $this->sendCancel($requestId);
+        // it can clean up its tracking state for this request. Buffered chunks all
+        // pass the same egress gate, so END+cancel keep FIFO order behind any
+        // bytes queued during a mid-response saturation.
+        $this->finishHttpResponseStream($requestId);
     }
 
     /**
@@ -1957,11 +2262,15 @@ final class RelayConsumer
     {
         $path = $response->filePath;
         if ($path === null) {
+            $this->finishHttpResponseStream($requestId);
             return;
         }
 
         $handle = @fopen($path, 'rb');
         if ($handle === false) {
+            // Unreadable file: the HEAD frame was already emitted (pre-existing
+            // behavior sent END regardless); close the chunk stream honestly.
+            $this->finishHttpResponseStream($requestId);
             return;
         }
 
@@ -1970,39 +2279,83 @@ final class RelayConsumer
         }
 
         $remaining = $response->fileLength > 0 ? $response->fileLength : PHP_INT_MAX;
+        $this->pumpFileStream($requestId, $handle, $remaining, $response);
+    }
+
+    /**
+     * Pump a file-backed body through the tunnel egress gate.
+     *
+     * Checks tunnel saturation BEFORE every chunk ({@see $tunnelBufferFull}):
+     * on saturation the read handle is PARKED with its remaining byte budget
+     * ({@see parkFileStream()}) instead of the old drop-and-break that silently
+     * truncated the response, and the END+cancel tail is deferred with it. The
+     * drain path resumes here at the exact next chunk; on natural completion
+     * (or a dead tunnel) the stream is cleared and, if complete, END+cancel are
+     * emitted. A parked stream cancelled by the hub is dropped by
+     * {@see onHttpCancel()} via {@see dropParkedFileStream()}.
+     *
+     * @param int            $requestId Hub-allocated request id (frame seq).
+     * @param resource       $handle    Open file handle positioned at the next byte.
+     * @param int            $remaining Unsent byte budget (PHP_INT_MAX = until EOF).
+     * @param ServerResponse $response  The response being streamed (for parked state).
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function pumpFileStream(int $requestId, $handle, int $remaining, ServerResponse $response): void
+    {
         $maxChunk = RelayHttpResponseCodec::MAX_BODY_CHUNK;
-        $local = $this->localConnections[$requestId] ?? null;
 
         while ($remaining > 0 && !feof($handle)) {
+            if ($this->tunnelBufferFull) {
+                $this->parkFileStream($requestId, $handle, $remaining, $response);
+                return;
+            }
+
             $readLen = (int) min($maxChunk, $remaining);
             $chunk = fread($handle, $readLen);
             if ($chunk === false || $chunk === '') {
                 break;
             }
 
-            if (
-                $this->sendHttpResponseFrame(
-                    $requestId,
-                    RelayHttpResponseCodec::encodeBody($chunk),
-                ) === false
-            ) {
-                // Hub connection send buffer is full — stop reading from the file
-                // and apply back-pressure to the local HTTP client until the hub
-                // drain event fires so a slow hub does not make us buffer the
-                // entire file in memory.
-                if ($local !== null) {
-                    $local->pauseRecv();
-                    $local->onBufferDrain = static function () use ($local): void {
-                        $local->onBufferDrain = null;
-                        $local->resumeRecv();
-                    };
-                }
-                break;
+            if (!$this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeBody($chunk))) {
+                // Tunnel gone (closing/closed) — a dead session's remainder is
+                // moot; the hub correlates the disconnect itself. No END.
+                fclose($handle);
+                unset($this->pendingFileStreams[$requestId]);
+                return;
             }
+
             $remaining -= strlen($chunk);
         }
 
         fclose($handle);
+        unset($this->pendingFileStreams[$requestId]);
+        $this->finishHttpResponseStream($requestId);
+    }
+
+    /**
+     * Close and forget a parked file stream for a request id (hub cancelled or
+     * tunnel replaced it). No-op when nothing is parked.
+     *
+     * @param int $requestId Hub-allocated request id.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function dropParkedFileStream(int $requestId): void
+    {
+        $stream = $this->pendingFileStreams[$requestId] ?? null;
+        if ($stream === null) {
+            return;
+        }
+
+        if (is_resource($stream['handle'])) {
+            fclose($stream['handle']);
+        }
+        unset($this->pendingFileStreams[$requestId]);
     }
 
     /**
@@ -2032,19 +2385,15 @@ final class RelayConsumer
      * @param int    $requestId Hub-allocated request id (carried in the seq field).
      * @param string $payload   Chunk payload (HEAD/BODY/END) from RelayHttpResponseCodec.
      *
-     * @return bool True if the frame was sent, false if the hub connection could
-     *              not accept it (e.g. send buffer full).
+     * @return bool True if the frame was sent or queued behind a saturated
+     *              buffer ({@see sendTunnelFrame()}); false only when there is
+     *              no active tunnel to accept it (dead/closing connection).
      *
      * @since 0.10.0
      */
     private function sendHttpResponseFrame(int $requestId, string $payload): bool
     {
-        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return false;
-        }
-
-        $encoded = $this->codec->encode(RelayFrameType::HTTP_RESPONSE, $requestId, $payload);
-        return $this->connection->send($encoded) !== false;
+        return $this->sendTunnelFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $payload);
     }
 
     /**
@@ -2062,12 +2411,9 @@ final class RelayConsumer
      */
     public function sendCancel(int $requestId): void
     {
-        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return;
-        }
-
-        $encoded = $this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, '');
-        $this->connection->send($encoded);
+        // M2: routed through the egress gate so a cancel can no longer bypass
+        // saturation and be dropped while queued frames still reference it.
+        $this->sendTunnelFrame(RelayFrameType::HTTP_CANCEL, $requestId, '');
     }
 
     /**
@@ -2111,6 +2457,11 @@ final class RelayConsumer
         // Drop any partial chunked-request assembly for this id so a cancelled
         // request in mid-upload cannot leave a dangling accumulator.
         $this->discardRequestAccumulator($channelId);
+
+        // M2: a parked file stream under this id would otherwise keep pumping
+        // BODY chunks for a response the hub no longer wants — drop it (and its
+        // open file handle) so the tunnel drains resume nothing for it.
+        $this->dropParkedFileStream($channelId);
 
         // SV-4.2 ([S-F23], X1 server half): kill any on-demand ffmpeg encode this
         // relayed request launched so an abandoned scrub-storm segment stops
@@ -2208,13 +2559,11 @@ final class RelayConsumer
         while ($offset < $length) {
             $chunk = substr($data, $offset, $maxChunk);
             if (!$this->sendDataFrame($channelId, $chunk)) {
-                // The hub tunnel's send buffer is full — sendDataFrame() has
-                // already paused this channel's local connection and armed
-                // the drain-resume handler. Stop feeding it more chunks from
-                // this already-read buffer rather than repeatedly dropping
-                // payloads into an over-full buffer (mirrors the
-                // check-return-then-break discipline streamFileChunks() uses
-                // for the HTTP_RESPONSE file-streaming path).
+                // The tunnel itself is gone (closing/closed) — only then does
+                // feeding stop. Under mere saturation sendDataFrame() QUEUES
+                // the chunk (and pauses the producer for subsequent reads), so
+                // every byte already read here stays byte-faithful instead of
+                // being discarded from the loop's mid-point (M2).
                 break;
             }
             $offset += $maxChunk;
@@ -2234,13 +2583,40 @@ final class RelayConsumer
     {
         if (isset($this->localConnections[$channelId])) {
             unset($this->localConnections[$channelId]);
-            unset($this->pausedForTunnelDrain[$channelId]);
+            $this->forgetChannelFlowState($channelId);
             // S40: activeSessions changed — persist it (coalesced).
             $this->markRelayStateDirty();
             $this->logger->info('RelayConsumer: local connection closed', [
                 'channel_id' => $channelId,
             ]);
         }
+    }
+
+    /**
+     * Forget every per-channel flow-control record on channel teardown (M2):
+     * the pause marker, the saturation mirror, and any hub->local backlog
+     * (whose bytes die with the connection they were destined for — recomputing
+     * the gate here is what prevents a closed channel from holding tunnel recv
+     * paused forever).
+     *
+     * @param int $channelId Owning channel id.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function forgetChannelFlowState(int $channelId): void
+    {
+        unset($this->pausedForTunnelDrain[$channelId]);
+        unset($this->localBufferFull[$channelId]);
+
+        $backlog = $this->pendingLocalData[$channelId] ?? null;
+        if ($backlog !== null) {
+            unset($this->pendingLocalData[$channelId]);
+            $this->pendingLocalBytes -= strlen($backlog);
+        }
+
+        $this->recomputeTunnelRecvGate();
     }
 
     /**
@@ -2278,7 +2654,7 @@ final class RelayConsumer
         }
 
         unset($this->localConnections[$channelId]);
-        unset($this->pausedForTunnelDrain[$channelId]);
+        $this->forgetChannelFlowState($channelId);
         // S40: activeSessions changed — persist it (coalesced).
         $this->markRelayStateDirty();
         $conn->close();
@@ -2305,11 +2681,332 @@ final class RelayConsumer
             }
             $this->localConnections = [];
             $this->pausedForTunnelDrain = [];
+            $this->localBufferFull = [];
+            $this->pendingLocalData = [];
+            $this->pendingLocalBytes = 0;
         } finally {
             $this->relayStateWritesSuspended = false;
         }
 
+        $this->recomputeTunnelRecvGate();
         $this->flushRelayStateIfDirty();
+    }
+
+    /**
+     * Arm the tunnel's send-buffer saturation callbacks (M2, house idiom from
+     * {@see \Phlix\Server\WebSocket\Connection}).
+     *
+     * Called once per connection in connect(): `onBufferFull` flips
+     * {@see $tunnelBufferFull} so {@see sendTunnelFrame()} parks further frames
+     * in {@see $tunnelSendQueue} BEFORE Workerman would silently discard them,
+     * and `onBufferDrain` (fired only when the send buffer is EMPTY) clears the
+     * flag, flushes the queue in order, and releases everything the saturation
+     * stalled — paused local producers and parked file streams.
+     *
+     * The handlers capture the connection object and self-check
+     * `$this->connection === $tunnel`, so a stale callback on an already
+     * replaced socket is inert.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function armTunnelFlowControl(): void
+    {
+        $tunnel = $this->connection;
+        if ($tunnel === null) {
+            return;
+        }
+
+        $tunnel->onBufferFull = function () use ($tunnel): void {
+            if ($this->connection === $tunnel) {
+                $this->tunnelBufferFull = true;
+            }
+        };
+
+        $tunnel->onBufferDrain = function () use ($tunnel): void {
+            if ($this->connection !== $tunnel) {
+                return; // Stale callback on a replaced socket — ignore.
+            }
+            $this->tunnelBufferFull = false;
+            $this->handleTunnelDrained();
+        };
+    }
+
+    /**
+     * Arm a local connection's write-side saturation callbacks (M2 mirror for
+     * the hub->local direction; called at CLIENT_CONNECT time).
+     *
+     * While the local's send buffer is full, {@see onData()} parks that
+     * channel's inbound bytes in {@see $pendingLocalData} instead of pushing
+     * them into a drop-on-full buffer, and the tunnel recv is paused so the
+     * hub stops pipelining. On drain the backlog is flushed (safe: the buffer
+     * is empty at that instant) and the recv gate recomputed.
+     *
+     * @param AsyncTcpConnection $local     The channel's local connection.
+     * @param int                $channelId Owning channel id.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function armLocalFlowControl(AsyncTcpConnection $local, int $channelId): void
+    {
+        $local->onBufferFull = function () use ($channelId): void {
+            if (isset($this->localConnections[$channelId])) {
+                $this->localBufferFull[$channelId] = true;
+            }
+        };
+
+        $local->onBufferDrain = function () use ($channelId, $local): void {
+            if (!isset($this->localConnections[$channelId])) {
+                return;
+            }
+            unset($this->localBufferFull[$channelId]);
+
+            $backlog = $this->pendingLocalData[$channelId] ?? '';
+            if ($backlog !== '') {
+                unset($this->pendingLocalData[$channelId]);
+                $this->pendingLocalBytes -= strlen($backlog);
+                // The buffer is EMPTY at drain time, so this append cannot hit
+                // the drop path; it may re-cross the high-water mark, which
+                // re-arms onBufferFull and parks subsequent frames again.
+                $local->send($backlog, true);
+            }
+
+            $this->recomputeTunnelRecvGate();
+        };
+    }
+
+    /**
+     * The single egress gate for every binary frame toward the hub (M2).
+     *
+     * Checks saturation BEFORE offering bytes: when the tunnel buffer is full
+     * the encoded frame is parked in the FIFO queue — Workerman is never asked
+     * to accept bytes into a full buffer, so nothing is silently discarded
+     * mid-stream. The queue is byte-bounded; over-cap fails loud (log + close,
+     * the reconnect path rebuilds cleanly) rather than corrupting streams.
+     *
+     * @param RelayFrameType $type    Frame type.
+     * @param int            $seq     Channel/request id carried in the seq field.
+     * @param string         $payload Raw payload bytes (<= 65535).
+     *
+     * @return bool True when the frame was accepted (sent or queued); false
+     *              when there is no active tunnel or the connection is dying —
+     *              callers may then stop feeding their source.
+     *
+     * @since 0.21.0
+     */
+    private function sendTunnelFrame(RelayFrameType $type, int $seq, string $payload): bool
+    {
+        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
+            return false;
+        }
+
+        $encoded = $this->codec->encode($type, $seq, $payload);
+
+        if (!$this->tunnelBufferFull) {
+            // Buffer not flagged full — Workerman appends without the drop
+            // path. A false here therefore means the connection is closing/
+            // closed (or the append itself failed), NOT backpressure.
+            return $this->connection->send($encoded) !== false;
+        }
+
+        if ($this->tunnelSendQueueBytes + strlen($encoded) > self::MAX_TUNNEL_QUEUE_BYTES) {
+            $this->logger->error('RelayConsumer: tunnel egress queue overflow — closing tunnel to avoid corruption', [
+                'queued_bytes' => $this->tunnelSendQueueBytes,
+                'incoming_bytes' => strlen($encoded),
+                'cap_bytes' => self::MAX_TUNNEL_QUEUE_BYTES,
+            ]);
+            $this->closeTunnel();
+            return false;
+        }
+
+        $this->tunnelSendQueue[] = $encoded;
+        $this->tunnelSendQueueBytes += strlen($encoded);
+        return true;
+    }
+
+    /**
+     * Push queued frames into a drained tunnel buffer, preserving FIFO order.
+     *
+     * Stops at the first sign of re-saturation (flag flipped by the append's
+     * own checkBufferWillFull, or a false send) leaving the remainder queued
+     * for the next drain.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function flushTunnelQueue(): void
+    {
+        while ($this->tunnelSendQueue !== [] && !$this->tunnelBufferFull) {
+            if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
+                return; // Tunnel gone — the queue dies with it (reset on disconnect).
+            }
+            $encoded = $this->tunnelSendQueue[0];
+            if ($this->connection->send($encoded) === false) {
+                return; // Dying connection; handleDisconnect resets state.
+            }
+            array_shift($this->tunnelSendQueue);
+            $this->tunnelSendQueueBytes -= strlen($encoded);
+        }
+    }
+
+    /**
+     * Tunnel send buffer emptied: flush parked frames, then release the
+     * producers the stall held back (paused local connections and parked file
+     * streams) — but only once the queue is fully drained and no longer
+     * saturated, so resumes cannot immediately re-queue behind stale backlog.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function handleTunnelDrained(): void
+    {
+        $this->flushTunnelQueue();
+
+        if ($this->tunnelBufferFull || $this->tunnelSendQueue !== []) {
+            return;
+        }
+
+        $pendingChannelIds = array_keys($this->pausedForTunnelDrain);
+        $this->pausedForTunnelDrain = [];
+
+        foreach ($pendingChannelIds as $channelId) {
+            $conn = $this->localConnections[$channelId] ?? null;
+            if ($conn !== null && $conn->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
+                $conn->resumeRecv();
+            }
+        }
+
+        $this->continuePendingFileStreams();
+    }
+
+    /**
+     * Park a file-backed response mid-stream (tunnel saturated) or discard it
+     * (tunnel dying) so it never truncates — resumes via
+     * {@see continuePendingFileStreams()} on the next full drain.
+     *
+     * @param int            $requestId Hub-allocated request id.
+     * @param resource       $handle    Open file handle at the next unread byte.
+     * @param int            $remaining Unsent byte budget (PHP_INT_MAX = to EOF).
+     * @param ServerResponse $response  Original response (for the END tail).
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function parkFileStream(int $requestId, $handle, int $remaining, ServerResponse $response): void
+    {
+        $this->pendingFileStreams[$requestId] = [
+            'handle' => $handle,
+            'remaining' => $remaining,
+            'response' => $response,
+        ];
+    }
+
+    /**
+     * Resume every parked file stream after the tunnel fully drained; each
+     * stream re-enters {@see pumpFileStream()} and either finishes (END frame
+     * emitted) or parks again on the next saturation.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function continuePendingFileStreams(): void
+    {
+        foreach ($this->pendingFileStreams as $requestId => $stream) {
+            $this->pumpFileStream(
+                (int) $requestId,
+                $stream['handle'],
+                $stream['remaining'],
+                $stream['response'],
+            );
+        }
+    }
+
+    /**
+     * Emit the END chunk + P8 cancel for a file-backed response — inline when
+     * the whole body streamed, deferred by {@see pumpFileStream()} when the
+     * body was parked (an END before the final BODY would tell the hub the
+     * response is complete while bytes are still queued behind it).
+     *
+     * @param int $requestId Hub-allocated request id.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function finishHttpResponseStream(int $requestId): void
+    {
+        $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeEnd());
+        $this->sendCancel($requestId);
+    }
+
+    /**
+     * Pause hub tunnel recv while any hub->local backlog exists (M2).
+     *
+     * The old code paused on the first saturation sighting per DATA frame and
+     * resumed from a one-shot handler on that one local; with per-channel
+     * backlogs the gate must consider ALL channels — resume only when the last
+     * backlog flushed. Idempotent: the Workerman recv pause counter is paired,
+     * so this tracks its own state to keep pause/resume calls balanced.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function recomputeTunnelRecvGate(): void
+    {
+        $blocked = $this->pendingLocalData !== [];
+
+        if ($blocked && !$this->tunnelRecvPaused) {
+            if ($this->connection !== null && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
+                $this->connection->pauseRecv();
+                $this->tunnelRecvPaused = true;
+            }
+            return;
+        }
+
+        if (!$blocked && $this->tunnelRecvPaused) {
+            if ($this->connection !== null && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
+                $this->connection->resumeRecv();
+            }
+            $this->tunnelRecvPaused = false;
+        }
+    }
+
+    /**
+     * Drop all tunnel egress/ingress flow-control state (M2).
+     *
+     * Called on every tunnel teardown: parked queue bytes belong to a dead
+     * session, parked file handles must be closed (resident worker — fd leak
+     * otherwise), and the recv-pause mirror must reset so the next connection
+     * starts unpaused.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function resetTunnelFlowControl(): void
+    {
+        foreach ($this->pendingFileStreams as $stream) {
+            if (is_resource($stream['handle'])) {
+                fclose($stream['handle']);
+            }
+        }
+
+        $this->tunnelBufferFull = false;
+        $this->tunnelSendQueue = [];
+        $this->tunnelSendQueueBytes = 0;
+        $this->pendingFileStreams = [];
+        $this->localBufferFull = [];
+        $this->pendingLocalData = [];
+        $this->pendingLocalBytes = 0;
+        $this->tunnelRecvPaused = false;
     }
 
     /**
@@ -2318,13 +3015,13 @@ final class RelayConsumer
      * Used for HEARTBEAT and other non-client-scoped frames. Client-scoped DATA
      * uses {@see sendDataFrame()} so the channel id is preserved.
      *
-     * Tunnel-scoped frames are not tied to any single channel, so unlike
-     * {@see sendDataFrame()} there is no single local connection to pause when
-     * the tunnel's send buffer is full — the shared tunnel being backed up is
-     * already surfaced (and backpressured) via whichever channel(s) are
-     * actively relaying DATA through {@see sendDataFrame()}. This method still
-     * checks the return value (SV-2.3, [S-F36]) so a dropped tunnel-scoped
-     * frame (e.g. a HEARTBEAT) is observable rather than silently ignored.
+     * Tunnel-scoped frames carry no channel of their own, so there is no local
+     * producer to pause — but they still ride the same byte-ordered egress
+     * gate as everything else: under saturation they queue behind the DATA
+     * frames already parked (M2; previously a HEARTBEAT hitting a full buffer
+     * was silently dropped, and Workerman's drop-on-full send made any such
+     * "drop" a corruption point rather than a delay). A frame this gate
+     * refuses means the tunnel itself is gone — observable via the warning.
      *
      * @param RelayFrameType $type    Frame type.
      * @param string         $payload Raw payload bytes (<= 65535).
@@ -2335,109 +3032,53 @@ final class RelayConsumer
      */
     private function sendFrame(RelayFrameType $type, string $payload): void
     {
-        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return;
-        }
-
         // Tunnel-scoped frames carry no channel — channel id 0.
-        $encoded = $this->codec->encode($type, 0, $payload);
-        if ($this->connection->send($encoded) === false) {
-            $this->logger->warning('RelayConsumer: tunnel-scoped frame dropped, send buffer full', [
+        if (!$this->sendTunnelFrame($type, 0, $payload)) {
+            $this->logger->warning('RelayConsumer: tunnel-scoped frame dropped, tunnel not accepting', [
                 'type' => $type->label(),
             ]);
         }
     }
 
     /**
-     * Encode and send a DATA frame tagged with the owning channel id.
+     * Relay one client->hub DATA chunk through the tunnel egress gate.
      *
      * The channel id travels in the frame's `seq` field so the hub routes the
      * response back to the correct client.
      *
-     * When the hub tunnel's send buffer is full (SV-2.3, [S-F36]), this
-     * applies back-pressure to the LOCAL connection that produced the bytes
-     * (the source, on the opposite side of the pipe from the destination
-     * that's full) by pausing its recv until the tunnel drains — mirroring
-     * the {@see onData()} discipline used for the opposite (hub->local)
-     * direction. Because the tunnel connection is shared by every
-     * multiplexed channel (unlike each channel's own dedicated local
-     * connection), the paused channel is tracked in
-     * {@see $pausedForTunnelDrain} and resumed via {@see armTunnelDrainResume()}
-     * rather than registering a callback directly on the tunnel per call,
-     * which would clobber any other channel's pending resume.
+     * Back-pressure (M2, replaces the SV-2.3 send()-===false design): when
+     * the tunnel's send buffer is saturated the chunk is PARKED in the FIFO
+     * egress queue by {@see sendTunnelFrame()} — never offered to the full
+     * buffer, so Workerman can never discard it — and the LOCAL connection
+     * that produced the bytes is paused up front, so the source stops
+     * generating more. All paused channels resume together from the ONE
+     * always-armed tunnel drain handler ({@see handleTunnelDrained()}) once
+     * the queue itself has flushed, which is why every paused channel id is
+     * tracked in {@see $pausedForTunnelDrain} instead of in a per-call
+     * callback (the tunnel has only one onBufferDrain slot).
      *
      * @param int    $channelId Owning channel id.
      * @param string $payload   Raw payload bytes (<= 65535).
      *
-     * @return bool True if the frame was sent; false if it was dropped
-     *              because there is no active tunnel, or its send buffer was
-     *              full (in which case the channel's local connection has
-     *              been paused and will resume once the tunnel drains).
+     * @return bool True if the chunk was sent or queued (byte-faithful either
+     *              way); false only when the tunnel itself is gone — the
+     *              caller may stop feeding and the reconnect path rebuilds.
      *
      * @since 0.5.0
      */
     private function sendDataFrame(int $channelId, string $payload): bool
     {
-        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return false;
-        }
+        $accepted = $this->sendTunnelFrame(RelayFrameType::DATA, $channelId, $payload);
 
-        $encoded = $this->codec->encode(RelayFrameType::DATA, $channelId, $payload);
-
-        if ($this->connection->send($encoded) === false) {
+        if ($accepted && $this->tunnelBufferFull) {
             $local = $this->localConnections[$channelId] ?? null;
             if ($local !== null) {
                 $local->pauseRecv();
                 $this->pausedForTunnelDrain[$channelId] = true;
-                $this->armTunnelDrainResume();
             }
-
-            return false;
         }
 
-        return true;
-    }
-
-    /**
-     * Idempotently arm a single hub-tunnel `onBufferDrain` handler that
-     * resumes every channel recorded in {@see $pausedForTunnelDrain} once the
-     * tunnel's send buffer empties (SV-2.3, [S-F36]).
-     *
-     * The tunnel connection exposes exactly one `onBufferDrain` slot, shared
-     * by every multiplexed channel, so this must NOT be re-armed (and
-     * overwrite an earlier channel's pending resume) while already armed —
-     * callers add to {@see $pausedForTunnelDrain} first and rely on this
-     * no-op-if-already-armed guard.
-     *
-     * @return void
-     *
-     * @since SV-2.3
-     */
-    private function armTunnelDrainResume(): void
-    {
-        $tunnel = $this->connection;
-        if ($tunnel === null || $tunnel->onBufferDrain !== null) {
-            return;
-        }
-
-        $tunnel->onBufferDrain = function () use ($tunnel): void {
-            // Clean up the drain handler first to avoid double-resume, but
-            // only if the tunnel hasn't already been replaced by a reconnect
-            // (in which case this is a stale callback on a dead object).
-            if ($this->connection === $tunnel) {
-                $tunnel->onBufferDrain = null;
-            }
-
-            $pendingChannelIds = array_keys($this->pausedForTunnelDrain);
-            $this->pausedForTunnelDrain = [];
-
-            foreach ($pendingChannelIds as $channelId) {
-                $conn = $this->localConnections[$channelId] ?? null;
-                if ($conn !== null && $conn->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
-                    $conn->resumeRecv();
-                }
-            }
-        };
+        return $accepted;
     }
 
     /**
@@ -2502,6 +3143,11 @@ final class RelayConsumer
         $this->recvBuffer = '';
         // Abandon any in-flight chunked-request assemblies — their tunnel is gone.
         $this->requestAccumulators = [];
+        // M2: the parked egress queue, local backlogs, parked file streams and
+        // the recv-pause mirror all belong to the DEAD tunnel — release them
+        // (fclose parked handles, drop unflushed frames, clear the pause flag so
+        // the next tunnel starts unpaused) instead of leaking across reconnects.
+        $this->resetTunnelFlowControl();
 
         if ($this->heartbeatTimer !== null) {
             Timer::del($this->heartbeatTimer);

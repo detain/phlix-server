@@ -107,14 +107,74 @@ final class RelayMessageFramer implements RelayWireCodecInterface
     }
 
     /**
+     * Measure a complete-but-UNKNOWN-TYPE frame at the head of the buffer.
+     *
+     * {@see decode()}'s frozen `?SharedRelayFrame` signature cannot distinguish
+     * "wait for more bytes" from "this frame's type byte is not in the enum" —
+     * both surface as null. A consumer that treats every null as "incomplete"
+     * stalls forever behind one frame from a newer protocol version (the frame
+     * never completes further; it is simply unparseable), so the buffer head
+     * must be skippable. This method is the skip oracle for that null case:
+     *
+     *  - returns the full wire length (7-byte header + payload) iff the header
+     *    is complete, its type byte is INVALID (unknown to this build), and the
+     *    whole frame's bytes are present — the caller can safely consume that
+     *    many bytes and keep draining;
+     *  - returns null for everything else (header incomplete, payload
+     *    incomplete, or the frame decodes normally — defer to {@see decode()}).
+     *
+     * Deliberately NOT part of {@see RelayWireCodecInterface} (frozen); it is a
+     * concrete-class seam used by the buffer-draining consumer.
+     *
+     * @param string   $bytes            Raw bytes from the WebSocket connection.
+     * @param int|null &$skippedTypeByte Out: the unknown type byte when a length
+     *                                   is returned (for logging); untouched otherwise.
+     *
+     * @return int|null Wire length to skip, or null when there is nothing to skip.
+     *
+     * @since 0.21.0
+     */
+    public function unknownFrameLength(string $bytes, ?int &$skippedTypeByte = null): ?int
+    {
+        if (strlen($bytes) < 7) {
+            return null;
+        }
+
+        $typeByte = ord($bytes[4]);
+        if (RelayFrameType::isValid($typeByte)) {
+            // Known type — decode() owns this frame (or waits for its payload).
+            return null;
+        }
+
+        $lenUnpacked = unpack('nlen', substr($bytes, 5, 2));
+        if ($lenUnpacked === false) {
+            return null;
+        }
+
+        $frameLen = 7 + $lenUnpacked['len'];
+        if (strlen($bytes) < $frameLen) {
+            // Unknown-type frame still in flight — keep buffering until its
+            // declared length arrives, then it becomes skippable.
+            return null;
+        }
+
+        $skippedTypeByte = $typeByte;
+        return $frameLen;
+    }
+
+    /**
      * Decode a binary frame from the wire.
      *
-     * Returns null if the data is incomplete (less than 7 bytes for the header).
-     * Caller is responsible for buffering partial data across multiple read calls.
+     * Returns null if the data is incomplete (less than 7 bytes for the header)
+     * OR if the frame's type byte is unknown to this build. These two cases are
+     * indistinguishable through this frozen signature — use
+     * {@see unknownFrameLength()} to tell a skippable unknown-type frame from a
+     * partial one before deciding to wait.
      *
      * @param string $bytes Raw bytes from the WebSocket connection.
      *
-     * @return SharedRelayFrame|null Parsed frame, or null if data is incomplete.
+     * @return SharedRelayFrame|null Parsed frame, or null if data is incomplete
+     *                               or the frame type is unknown.
      *
      * @since 0.5.0
      */

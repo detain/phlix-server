@@ -71,6 +71,16 @@ final class RelayConfig
      *                                      matching the hub's permissive relay listener.
      * @param string $relayTlsCafile       CA bundle used to verify the hub's relay TLS
      *                                      certificate (default = system bundle).
+     * @param bool   $allowPlaintextTunnel Explicit operator acknowledgement that the
+     *                                      relay tunnel may run plaintext ws://. The
+     *                                      tunnel trust model honors X-Phlix-Relay-User
+     *                                      verbatim, so ws:// exposes every relayed
+     *                                      request to path-positioned impersonation;
+     *                                      RelayConsumer warns loudly at connect unless
+     *                                      this is set (PHLIX_RELAY_ALLOW_PLAINTEXT=1).
+     *                                      Does NOT change connectivity defaults — the
+     *                                      derived scheme stays ws:// while relayTls is
+     *                                      off either way.
      */
     public function __construct(
         public readonly bool $enabled = false,
@@ -87,6 +97,7 @@ final class RelayConfig
         public readonly bool $relayTls = false,
         public readonly bool $relayTlsVerify = true,
         public readonly string $relayTlsCafile = self::DEFAULT_TLS_CAFILE,
+        public readonly bool $allowPlaintextTunnel = false,
     ) {
     }
 
@@ -119,6 +130,9 @@ final class RelayConfig
         $relayTls = self::getEnvBool('PHLIX_RELAY_TLS', false);
         $relayTlsVerify = self::getEnvBool('PHLIX_RELAY_TLS_VERIFY', true);
         $relayTlsCafile = getenv('PHLIX_RELAY_TLS_CAFILE') ?: self::DEFAULT_TLS_CAFILE;
+        // Opt-in ACK of the plaintext-tunnel impersonation risk (M5). Silence
+        // the connect-time warning ONLY when the operator explicitly sets it.
+        $allowPlaintextTunnel = self::getEnvBool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
 
         if ($overrides !== null) {
             $enabled = is_bool($overrides['enabled'] ?? null)
@@ -149,6 +163,8 @@ final class RelayConfig
                 ? $overrides['relay_tls_verify'] : $relayTlsVerify;
             $relayTlsCafile = is_string($overrides['relay_tls_cafile'] ?? null)
                 ? $overrides['relay_tls_cafile'] : $relayTlsCafile;
+            $allowPlaintextTunnel = is_bool($overrides['allow_plaintext_tunnel'] ?? null)
+                ? $overrides['allow_plaintext_tunnel'] : $allowPlaintextTunnel;
         }
 
         return new self(
@@ -166,6 +182,7 @@ final class RelayConfig
             relayTls: $relayTls,
             relayTlsVerify: $relayTlsVerify,
             relayTlsCafile: $relayTlsCafile,
+            allowPlaintextTunnel: $allowPlaintextTunnel,
         );
     }
 
@@ -224,6 +241,7 @@ final class RelayConfig
             relayTls: $this->relayTls,
             relayTlsVerify: $this->relayTlsVerify,
             relayTlsCafile: $this->relayTlsCafile,
+            allowPlaintextTunnel: $this->allowPlaintextTunnel,
         );
     }
 

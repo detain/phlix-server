@@ -37,9 +37,12 @@ class FakeRelayConnection extends AsyncTcpConnection
     public bool $closed = false;
 
     /**
-     * Controls what send() returns (SV-2.3 backpressure tests): defaults to
-     * true so every pre-existing test keeps its original always-succeeds
-     * behavior; set to false to simulate a full Workerman send buffer.
+     * Controls what send() returns: defaults to true so every pre-existing
+     * test keeps its original always-succeeds behavior; set to false to
+     * simulate a DEAD/closing connection. (M2: a FULL send buffer is NOT this
+     * flag — Workerman drops packets in that state, so the consumer gates on
+     * the onBufferFull/onBufferDrain callbacks instead. Simulate saturation
+     * with fireBufferFull()/fireBufferDrain(), leaving send() working.)
      */
     public bool $sendShouldSucceed = true;
 
@@ -55,8 +58,9 @@ class FakeRelayConnection extends AsyncTcpConnection
         // The real AsyncTcpConnection transitions to ESTABLISHED once the
         // underlying socket connects; this double never opens a real socket,
         // so set it synchronously here so getStatus() checks in the
-        // backpressure resume paths (RelayConsumer::armTunnelDrainResume()/
-        // onData()) see a live connection, exactly like production.
+        // backpressure resume paths (RelayConsumer::handleTunnelDrained()/
+        // recomputeTunnelRecvGate()) see a live connection, exactly like
+        // production.
         $this->status = self::STATUS_ESTABLISHED;
     }
 
@@ -100,6 +104,14 @@ class FakeRelayConnection extends AsyncTcpConnection
     {
         if ($this->onMessage !== null) {
             ($this->onMessage)($this, $data);
+        }
+    }
+
+    /** Simulate the outbound send buffer REACHING maxSendBufferSize. */
+    public function fireBufferFull(): void
+    {
+        if ($this->onBufferFull !== null) {
+            ($this->onBufferFull)($this);
         }
     }
 
@@ -624,12 +636,13 @@ class RelayConsumerTest extends TestCase
 
     public function test_local_to_hub_backpressure_pauses_and_resumes_on_drain(): void
     {
-        // SV-2.3 ([S-F36]): the local->hub direction was previously
-        // fire-and-forget (send()'s boolean return was ignored). Simulate a
-        // full hub-tunnel send buffer and confirm the LOCAL connection that
-        // produced the bytes gets paused, then resumes once the tunnel's
-        // buffer drains — mirroring the already-fixed hub->local (onData)
-        // discipline, applied to the opposite side of the pipe.
+        // SV-2.3 ([S-F36]) hardened by M2: saturation is signalled by Workerman's
+        // onBufferFull BEFORE any byte drops — it must NEVER be inferred from
+        // send()===false, because by the time send() returns false on a full
+        // buffer the packet is ALREADY discarded (a mid-stream byte-hole).
+        // A DATA frame produced while the tunnel is saturated must be QUEUED
+        // (byte-faithfully), pause the producing local connection, and deliver
+        // both the frame and the resume once the tunnel drains.
         $consumer = $this->createConsumer();
         $this->activate($consumer);
 
@@ -637,8 +650,9 @@ class RelayConsumerTest extends TestCase
         $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
         $local = $this->local(0);
 
-        // Simulate the hub tunnel's send buffer being full.
-        $this->hub->sendShouldSucceed = false;
+        // Signal tunnel send-buffer saturation (the real event loop fires
+        // onBufferFull when the send buffer reaches maxSendBufferSize).
+        $this->hub->fireBufferFull();
 
         $hubSentBefore = count($this->hub->sent);
         $local->fireMessage('a slow-reader response chunk');
@@ -646,25 +660,37 @@ class RelayConsumerTest extends TestCase
         $this->assertSame(
             $hubSentBefore,
             count($this->hub->sent),
-            'the dropped frame must not appear in sent (buffer was full)',
+            'while saturated the frame must be queued, not written-and-dropped',
         );
         $this->assertSame(1, $local->pauseRecvCalls, 'local connection must be paused while the tunnel is full');
         $this->assertSame(0, $local->resumeRecvCalls, 'must not resume before the tunnel actually drains');
 
-        // The tunnel drains — resume must fire for the paused channel.
-        $this->hub->sendShouldSucceed = true;
+        // The tunnel drains — queued bytes go out AND the paused channel resumes.
         $this->hub->fireBufferDrain();
 
         $this->assertSame(1, $local->resumeRecvCalls, 'local connection must resume once the tunnel drains');
+
+        $flushed = array_slice($this->hub->sent, $hubSentBefore);
+        $this->assertCount(1, $flushed, 'the queued DATA frame must be delivered on drain');
+        $frame = $this->codec->decode($flushed[0]);
+        $this->assertInstanceOf(RelayFrame::class, $frame);
+        $this->assertSame(
+            'a slow-reader response chunk',
+            $frame->payload,
+            'queued bytes must arrive intact (no byte-hole)',
+        );
+        $this->assertSame(1, $frame->channelId(), 'the queued frame keeps its owning channel id');
     }
 
     public function test_local_to_hub_backpressure_resumes_every_paused_channel_on_one_drain(): void
     {
-        // The hub tunnel is ONE shared connection multiplexing every
-        // channel, so it exposes a single onBufferDrain slot. Two channels
-        // hitting a full tunnel buffer back-to-back must BOTH still resume
-        // when it drains — a naive per-call callback registration would
-        // clobber the first channel's pending resume with the second's.
+        // The hub tunnel is ONE shared connection multiplexing every channel,
+        // so it exposes a single onBufferDrain slot. Two channels hitting a
+        // saturated tunnel back-to-back must BOTH still resume when it drains
+        // AND both their queued payloads must reach the wire intact — a naive
+        // per-call callback would clobber the first channel's pending resume,
+        // and the pre-M2 drop-on-full behaviour silently lost one direction's
+        // bytes.
         $consumer = $this->createConsumer();
         $this->activate($consumer);
 
@@ -681,18 +707,181 @@ class RelayConsumerTest extends TestCase
         $local1 = $this->local(0);
         $local2 = $this->local(1);
 
-        $this->hub->sendShouldSucceed = false;
+        $this->hub->fireBufferFull();
         $local1->fireMessage('resp-one');
         $local2->fireMessage('resp-two');
 
-        $this->assertSame(1, $local1->pauseRecvCalls);
-        $this->assertSame(1, $local2->pauseRecvCalls);
+        $hubSentBefore = count($this->hub->sent);
+        $this->assertSame($hubSentBefore, count($this->hub->sent));
 
-        $this->hub->sendShouldSucceed = true;
         $this->hub->fireBufferDrain();
 
         $this->assertSame(1, $local1->resumeRecvCalls, 'first channel must still resume, not be clobbered');
         $this->assertSame(1, $local2->resumeRecvCalls, 'second channel must resume too');
+
+        $flushed = array_slice($this->hub->sent, $hubSentBefore);
+        $this->assertCount(2, $flushed, 'both queued DATA frames must be delivered on drain');
+        $payloads = [];
+        foreach ($flushed as $bytes) {
+            $frame = $this->codec->decode($bytes);
+            $this->assertInstanceOf(RelayFrame::class, $frame);
+            $payloads[$frame->channelId()] = $frame->payload;
+        }
+        $this->assertSame('resp-one', $payloads[1] ?? null, 'channel 1 bytes intact');
+        $this->assertSame('resp-two', $payloads[2] ?? null, 'channel 2 bytes intact');
+    }
+
+    // ---- M1: unknown frame types must never stall the multiplexed stream ----
+
+    public function test_unknown_frame_type_is_skipped_and_never_stalls_the_stream(): void
+    {
+        // M1: a COMPLETE frame whose type byte is not in RelayFrameType used to
+        // decode() to null — indistinguishable from "incomplete" — so
+        // drainFrames() broke without consuming the buffer head. Every later
+        // frame then dead-ended in recvBuffer and the count=1 relay worker was
+        // dead until restart (100% relay outage). The framer now surfaces the
+        // skip length so the consumer consumes + logs the frame and keeps going.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $hubSentBefore = count($this->hub->sent);
+
+        // Unknown type 0x77 (10 bytes), then — in the SAME buffer — a valid
+        // HEARTBEAT (must be echoed) and a valid CLIENT_CONNECT (must open a
+        // local connection). Both sit behind the poison frame.
+        $unknown = pack('N', 9) . chr(0x77) . pack('n', 3) . 'abc';
+        $heartbeat = $this->codec->encode(RelayFrameType::HEARTBEAT, 0, '');
+        $connect = $this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            7,
+            json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR),
+        );
+        $this->hub->fireMessage($unknown . $heartbeat . $connect);
+
+        $newFrames = array_slice($this->hub->sent, $hubSentBefore);
+        $types = [];
+        foreach ($newFrames as $bytes) {
+            $frame = $this->codec->decode($bytes);
+            if ($frame !== null) {
+                $types[] = $frame->type->value;
+            }
+        }
+        $this->assertContains(
+            RelayFrameType::HEARTBEAT->value,
+            $types,
+            'frames AFTER an unknown-type frame must still be dispatched (no head-of-line stall)',
+        );
+        $this->assertCount(
+            1,
+            $this->locals,
+            'the CLIENT_CONNECT behind the unknown frame must have opened its local connection',
+        );
+
+        $recv = new \ReflectionProperty(RelayConsumer::class, 'recvBuffer');
+        $recv->setAccessible(true);
+        $this->assertSame('', $recv->getValue($consumer), 'the skipped frame must be CONSUMED from the buffer');
+    }
+
+    public function test_split_unknown_frame_waits_then_skips_on_completion(): void
+    {
+        // An unknown-type frame that is still INCOMPLETE must be held (it is not
+        // yet skippable — its declared payload may still be arriving), then
+        // consumed as a skip once the whole frame is present.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $unknown = pack('N', 9) . chr(0x77) . pack('n', 3) . 'abc';
+        $head = substr($unknown, 0, 6);
+
+        $hubSentBefore = count($this->hub->sent);
+        $this->hub->fireMessage($head);
+
+        $this->assertCount($hubSentBefore, $this->hub->sent, 'a partial frame must not trigger any processing');
+        $this->assertCount(0, $this->locals, 'no local connection may open behind a partial unknown frame');
+
+        $recv = new \ReflectionProperty(RelayConsumer::class, 'recvBuffer');
+        $recv->setAccessible(true);
+        $this->assertSame(
+            $head,
+            $recv->getValue($consumer),
+            'the partial bytes are held awaiting the rest of the frame',
+        );
+
+        $heartbeat = $this->codec->encode(RelayFrameType::HEARTBEAT, 0, '');
+        $this->hub->fireMessage(substr($unknown, 6) . $heartbeat);
+
+        $flushed = array_slice($this->hub->sent, $hubSentBefore);
+        $sawHeartbeat = false;
+        foreach ($flushed as $bytes) {
+            $frame = $this->codec->decode($bytes);
+            if ($frame !== null && $frame->type === RelayFrameType::HEARTBEAT) {
+                $sawHeartbeat = true;
+            }
+        }
+        $this->assertTrue(
+            $sawHeartbeat,
+            'once complete, the unknown frame is skipped and the HEARTBEAT behind it dispatched',
+        );
+        $this->assertSame('', $recv->getValue($consumer), 'buffer fully drained after the skip');
+    }
+
+    // ---- M5: plaintext tunnel startup warning ----
+
+    public function test_plaintext_tunnel_logs_impersonation_warning_once(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects($this->exactly(1))->method('warning');
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
+            $this->createMockHubClient(),
+            $logger,
+            'server-uuid-123',
+        );
+
+        $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
+        $warn->setAccessible(true);
+        $warn->invoke($consumer, 'ws://hub.example.com:8802');
+        $warn->invoke($consumer, 'ws://hub.example.com:8802');
+        // exactly(1) above pins the once-per-process behaviour across a reconnect loop.
+    }
+
+    public function test_wss_tunnel_emits_no_plaintext_warning(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects($this->never())->method('warning');
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(enabled: true, hubRelayWsUrl: 'wss://hub.example.com:8802', relayTls: true),
+            $this->createMockHubClient(),
+            $logger,
+            'server-uuid-123',
+        );
+
+        $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
+        $warn->setAccessible(true);
+        $warn->invoke($consumer, 'wss://hub.example.com:8802');
+    }
+
+    public function test_plaintext_opt_in_silences_the_warning(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects($this->never())->method('warning');
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                allowPlaintextTunnel: true,
+            ),
+            $this->createMockHubClient(),
+            $logger,
+            'server-uuid-123',
+        );
+
+        $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
+        $warn->setAccessible(true);
+        $warn->invoke($consumer, 'ws://hub.example.com:8802');
     }
 
     public function test_client_disconnect_closes_local_connection(): void

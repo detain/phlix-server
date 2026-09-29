@@ -15,6 +15,7 @@ use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpResponseChunk;
 use Workerman\Connection\AsyncTcpConnection;
 
 /**
@@ -52,6 +53,30 @@ class FakeRelayConnection extends AsyncTcpConnection
     /** @var int Number of times resumeRecv() was called. */
     public int $resumeRecvCalls = 0;
 
+    /**
+     * Peer-reset semantics: once this many sends have been recorded, send()
+     * returns false (like sendShouldSucceed) — lets a test let the first N
+     * frames through and then kill the socket mid-stream (M2/R-1 regression).
+     */
+    public int $failSendAfter = PHP_INT_MAX;
+
+    /**
+     * Workerman's real write-failure semantics: a failed send destroys the
+     * connection SYNCHRONOUSLY (destroy -> onClose fires inside send()).
+     * When true and a send fails, close() (and thus the consumer's onClose
+     * hook) runs before send() returns false. Default false keeps every
+     * pre-existing test's plain false-return.
+     */
+    public bool $syncDestroyOnSendFail = false;
+
+    /**
+     * Observes each successful send with the running recorded-send count —
+     * the seam to fire onBufferFull() SYNCHRONOUSLY inside a send (real
+     * Workerman checks buffer watermarks inside send()), or flip a
+     * failSendAfter-style death mid-stream.
+     */
+    public ?\Closure $afterSend = null;
+
     public function connect(): void
     {
         $this->connected = true;
@@ -66,10 +91,19 @@ class FakeRelayConnection extends AsyncTcpConnection
 
     public function send(mixed $sendBuffer, bool $raw = false): bool|null
     {
-        if (!$this->sendShouldSucceed) {
+        if (!$this->sendShouldSucceed || count($this->sent) >= $this->failSendAfter) {
+            if ($this->syncDestroyOnSendFail && !$this->closed) {
+                // Real Workerman: the write error destroys the connection
+                // synchronously — onClose (handleDisconnect) runs BEFORE
+                // send() yields false.
+                $this->close();
+            }
             return false;
         }
         $this->sent[] = is_string($sendBuffer) ? $sendBuffer : '';
+        if ($this->afterSend !== null) {
+            ($this->afterSend)(count($this->sent));
+        }
         return true;
     }
 
@@ -1160,12 +1194,12 @@ class RelayConsumerTest extends TestCase
             $requestId = $frame->channelId();
 
             $chunk = \Phlix\Shared\Relay\RelayHttpResponseCodec::decode($frame->payload);
-            if ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_HEAD && $chunk->head !== null) {
+            if ($chunk->kind === RelayHttpResponseChunk::KIND_HEAD && $chunk->head !== null) {
                 $status = $chunk->head->status;
                 $headers = $chunk->head->headers;
-            } elseif ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_BODY) {
+            } elseif ($chunk->kind === RelayHttpResponseChunk::KIND_BODY) {
                 $body .= $chunk->body;
-            } elseif ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_END) {
+            } elseif ($chunk->kind === RelayHttpResponseChunk::KIND_END) {
                 $ended = true;
                 break; // P8: stop after END — CANCEL frame follows but is not part of the response stream
             }
@@ -2500,5 +2534,653 @@ class RelayConsumerTest extends TestCase
                 'a state file just written by a live fork is not stale'
             );
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // M2 rework (R-1..R-3): parked-stream safety across synchronous teardown,
+    // local-flow-control object identity, and the previously untested M2
+    // mechanisms (hub->local backlog, recv gate, both cap fail-loud paths,
+    // park/resume END ordering, teardown flow-state reset, cross-channel FIFO).
+    // -----------------------------------------------------------------------
+
+    /** Read a private RelayConsumer property via reflection. */
+    private function consumerState(RelayConsumer $consumer, string $property): mixed
+    {
+        $prop = new \ReflectionProperty(RelayConsumer::class, $property);
+        $prop->setAccessible(true);
+
+        return $prop->getValue($consumer);
+    }
+
+    /** Write a deterministic temp file of exactly $size bytes; return its path. */
+    private function makeStreamFile(int $size): string
+    {
+        $path = sys_get_temp_dir() . '/phlix-relay-pump-' . bin2hex(random_bytes(6));
+        $tile = str_repeat('0123456789abcdef', 4096);
+        $fh = fopen($path, 'wb');
+        $this->assertNotFalse($fh);
+        $written = 0;
+        while ($written < $size) {
+            $slice = substr($tile, 0, min(strlen($tile), $size - $written));
+            fwrite($fh, $slice);
+            $written += strlen($slice);
+        }
+        fclose($fh);
+
+        return $path;
+    }
+
+    /** Dispatcher that always answers with the whole file (relayed media arm). */
+    private function fileDispatcher(string $path, int $size): callable
+    {
+        return static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => (new \Phlix\Server\Http\Response())->withFile($path, 0, $size);
+    }
+
+    /** Open a channel by id and return its local connection double. */
+    private function openChannel(int $channelId): FakeRelayConnection
+    {
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            $channelId,
+            json_encode(['client_id' => 'client-' . $channelId, 'session_id' => 's'], JSON_THROW_ON_ERROR),
+        ));
+        $local = $this->locals['local-' . ($channelId - 1)] ?? null;
+        $this->assertInstanceOf(FakeRelayConnection::class, $local);
+
+        return $local;
+    }
+
+    /** Send one hub->local DATA frame. */
+    private function sendDataToChannel(int $channelId, string $payload): void
+    {
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, $channelId, $payload));
+    }
+
+    /** Dispatch a relayed HTTP_REQUEST carrying the given request id. */
+    private function fireHttpRequest(int $requestId): void
+    {
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/media/stream', '', [], '');
+        $this->hub->fireMessage(
+            $this->codec->encode(RelayFrameType::HTTP_REQUEST, $requestId, $envelope->toJson()),
+        );
+    }
+
+    /** @return list<string> response-chunk kinds of HTTP_RESPONSE frames from $from on */
+    private function httpStreamKinds(int $from): array
+    {
+        $kinds = [];
+        foreach (array_slice($this->hub->sent, $from) as $raw) {
+            $frame = $this->codec->decode($raw);
+            $this->assertInstanceOf(RelayFrame::class, $frame);
+            if ($frame->type !== RelayFrameType::HTTP_RESPONSE) {
+                continue;
+            }
+            $kinds[] = \Phlix\Shared\Relay\RelayHttpResponseCodec::decode($frame->payload)->kind;
+        }
+
+        return $kinds;
+    }
+
+    public function test_resume_of_parked_streams_with_synchronous_teardown_inside_send_never_double_closes(): void
+    {
+        // R-1 regression. continuePendingFileStreams() iterates a SNAPSHOT copy
+        // of the park map. When the tunnel dies SYNCHRONOUSLY inside one
+        // stream's send (peer reset -> onClose -> handleDisconnect ->
+        // resetTunnelFlowControl fclose()s EVERY parked handle), the pump that
+        // triggered the death used to fclose() the already-closed handle again
+        // in its send-false branch, and the next snapshot iteration used to
+        // reach feof() on a dead resource. PHP >= 8.3 raises TypeError from
+        // both; escaping onBufferDrain that halts the count=1 relay worker
+        // (Worker::stopAll(250) — 100% relay outage). Both guards must keep the
+        // pumps inert and release each handle exactly once.
+        $file = $this->makeStreamFile(200000);
+        try {
+            $consumer = $this->createConsumer(null, $this->fileDispatcher($file, 200000));
+            $this->activate($consumer);
+
+            // Saturate, then dispatch two file-backed responses: each queues
+            // its HEAD frame and parks its handle at the pump's loop head.
+            $this->hub->fireBufferFull();
+            $this->fireHttpRequest(11);
+            $this->fireHttpRequest(12);
+
+            $streams = $this->consumerState($consumer, 'pendingFileStreams');
+            $this->assertCount(2, $streams, 'both streams must be parked');
+            $handleA = $streams[11]['handle'];
+            $this->assertIsResource($handleA);
+
+            // Kill the tunnel on the third wire write: HEAD(11) and HEAD(12)
+            // flush fine, the first BODY chunk's send fails and destroys the
+            // connection synchronously (real Workerman write-error semantics).
+            $base = count($this->hub->sent);
+            $this->hub->failSendAfter = $base + 2;
+            $this->hub->syncDestroyOnSendFail = true;
+
+            $this->hub->fireBufferDrain(); // must NOT throw a TypeError
+
+            $this->assertFalse(is_resource($handleA), 'teardown must close the parked handle exactly once');
+            $this->assertSame([], $this->consumerState($consumer, 'pendingFileStreams'));
+            $this->assertTrue($this->hub->closed, 'the synchronous destroy must have run');
+            $this->assertSame('disconnected', $this->consumerState($consumer, 'state'));
+
+            // Only the two queued HEADs reached the wire — no BODY, and no END
+            // for a dead session.
+            $flushed = array_slice($this->hub->sent, $base);
+            $this->assertCount(2, $flushed);
+            foreach ($flushed as $bytes) {
+                $frame = $this->codec->decode($bytes);
+                $this->assertInstanceOf(RelayFrame::class, $frame);
+                $chunk = \Phlix\Shared\Relay\RelayHttpResponseCodec::decode($frame->payload);
+                $this->assertSame(
+                    RelayHttpResponseChunk::KIND_HEAD,
+                    $chunk->kind,
+                    'a dead tunnel must never receive BODY/END frames from the resumed pumps',
+                );
+            }
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    public function test_stale_local_drain_and_full_callbacks_are_inert_after_channel_id_reuse(): void
+    {
+        // R-2 regression. A NEW client can be CONNECTed onto a channel id
+        // while the OLD socket is still flushing its graceful-close buffer and
+        // fires one last onBufferDrain/onBufferFull. An isset() guard alone
+        // lets the stale callback clear the NEW channel's saturation flag and
+        // flush the NEW backlog into the DYING socket — a silent byte-hole,
+        // the exact failure class M2 was built to kill. Object identity
+        // (as the tunnel handlers already document) makes both stale arms inert.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $old = $this->openChannel(1);
+        $old->fireBufferFull();
+        $this->sendDataToChannel(1, 'first-client-bytes');
+        $this->assertSame(1, $this->hub->pauseRecvCalls, 'backlog must close the tunnel recv gate');
+
+        // Graceful close of channel 1, then the hub REOPENS the same id. The
+        // replacement local is the SECOND double handed out by the factory
+        // (index 1), while the channel id is reused at 1.
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_DISCONNECT,
+            1,
+            json_encode(['client_id' => 'client-1'], JSON_THROW_ON_ERROR),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'client-2', 'session_id' => 's'], JSON_THROW_ON_ERROR),
+        ));
+        $new = $this->local(1);
+
+        $new->fireBufferFull();
+        $this->sendDataToChannel(1, 'live-backlog');
+
+        // The OLD socket emits its final drain callback.
+        $old->fireBufferDrain();
+
+        $this->assertSame(
+            'live-backlog',
+            $this->consumerState($consumer, 'pendingLocalData')[1] ?? null,
+            'a stale drain must not touch the reused channel backlog',
+        );
+        $this->assertSame(
+            [1],
+            array_keys($this->consumerState($consumer, 'localBufferFull')),
+            'a stale drain must not clear the reused channel saturation flag',
+        );
+        $this->assertSame([], $old->sent, 'a stale drain must not flush the backlog into the dying socket');
+        $this->assertSame([], $new->sent, 'the live backlog stays queued until ITS OWN drain fires');
+
+        // The live socket drains: backlog finally delivered.
+        $new->fireBufferDrain();
+        $this->assertSame(
+            ['live-backlog'],
+            $new->sent,
+            'the live socket flushes the backlog on its own drain',
+        );
+
+        // And a stale FULL after the channel went idle must not re-mark it.
+        $old->fireBufferFull();
+        $this->assertSame(
+            [],
+            $this->consumerState($consumer, 'localBufferFull'),
+            'a stale full callback must not (re)mark the reused channel saturated',
+        );
+    }
+
+    public function test_hub_to_local_backlog_queues_while_saturated_and_flushes_in_order_on_drain(): void
+    {
+        // R-3: the hub->local backlog arm of M2 (previously zero test refs).
+        // While a local's send buffer is flagged full, inbound DATA must be
+        // parked byte-faithfully (never offered to the drop-on-full buffer),
+        // the tunnel recv gate must close exactly once, and the whole backlog
+        // must leave IN ORDER on the channel's drain with the gate reopened.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $local = $this->openChannel(1);
+        $local->fireBufferFull();
+        $this->sendDataToChannel(1, 'part-one:');
+        $this->sendDataToChannel(1, 'part-two');
+
+        $this->assertSame([], $local->sent, 'a saturated local must receive nothing directly');
+        $this->assertSame(
+            'part-one:part-two',
+            $this->consumerState($consumer, 'pendingLocalData')[1] ?? null,
+            'backlog must accumulate in arrival order',
+        );
+        $this->assertSame(17, $this->consumerState($consumer, 'pendingLocalBytes'));
+        $this->assertSame(1, $this->hub->pauseRecvCalls, 'backlog must pause tunnel recv exactly once');
+
+        $local->fireBufferDrain();
+
+        $this->assertSame(
+            ['part-one:part-two'],
+            $local->sent,
+            'the drain must flush the WHOLE backlog as one ordered write',
+        );
+        $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+        $this->assertSame(0, $this->consumerState($consumer, 'pendingLocalBytes'));
+        $this->assertSame(1, $this->hub->resumeRecvCalls, 'an emptied backlog must re-open the recv gate exactly once');
+        $this->assertFalse($this->consumerState($consumer, 'tunnelRecvPaused'));
+    }
+
+    public function test_tunnel_recv_gate_resumes_only_when_the_last_backlogged_channel_drains(): void
+    {
+        // R-3: gate BALANCE. The single tunnel recv pause must survive N
+        // independent backlogs and reopen only for the LAST one to clear —
+        // resume-on-first-drain would let the hub pipeline into a still-stalled
+        // channel, and double-resume would desync the flag mirror.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $local1 = $this->openChannel(1);
+        $local2 = $this->openChannel(2);
+        $local1->fireBufferFull();
+        $local2->fireBufferFull();
+        $this->sendDataToChannel(1, 'hold-one');
+        $this->sendDataToChannel(2, 'hold-two');
+
+        $this->assertSame(1, $this->hub->pauseRecvCalls, 'two backlogs must still pause recv exactly once');
+
+        $local1->fireBufferDrain();
+        $this->assertSame(
+            0,
+            $this->hub->resumeRecvCalls,
+            'channel 1 draining while channel 2 is still backlogged must NOT reopen the gate',
+        );
+
+        $local2->fireBufferDrain();
+        $this->assertSame(1, $this->hub->resumeRecvCalls, 'the last backlog clearing must reopen exactly once');
+        $this->assertFalse($this->consumerState($consumer, 'tunnelRecvPaused'));
+        $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+    }
+
+    public function test_channel_teardown_with_pending_backlog_reopens_recv_gate(): void
+    {
+        // R-3: the third gate path — a backlogged channel DISCONNECTed (never
+        // drains) must release its bytes from the accounting and reopen the
+        // gate itself, else the tunnel would sit paused forever (the bug the
+        // forgetChannelFlowState recompute exists to prevent).
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $local = $this->openChannel(1);
+        $local->fireBufferFull();
+        $this->sendDataToChannel(1, 'stuck-bytes');
+        $this->assertSame(1, $this->hub->pauseRecvCalls);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_DISCONNECT,
+            1,
+            json_encode(['client_id' => 'client-1'], JSON_THROW_ON_ERROR),
+        ));
+
+        $this->assertTrue($local->closed, 'the channel local must be closed');
+        $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+        $this->assertSame(0, $this->consumerState($consumer, 'pendingLocalBytes'));
+        $this->assertSame(1, $this->hub->resumeRecvCalls, 'teardown must reopen the recv gate');
+        $this->assertFalse($this->consumerState($consumer, 'tunnelRecvPaused'));
+    }
+
+    public function test_local_backlog_cap_fails_loud_by_closing_the_offending_channel(): void
+    {
+        // R-3: MAX_PENDING_LOCAL_BYTES (4 MiB) cap arm of queueLocalData —
+        // over-cap must close ONLY the offending channel, release its backlog
+        // accounting, and reopen the gate (a bounded resident worker beats an
+        // unbounded stalled upload).
+        $cap = (new \ReflectionClass(RelayConsumer::class))->getConstant('MAX_PENDING_LOCAL_BYTES');
+        $this->assertIsInt($cap);
+        $chunk = str_repeat('u', 65535);
+
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $guilty = $this->openChannel(1);
+        $bystander = $this->openChannel(2);
+        $guilty->fireBufferFull();
+
+        // Fill to the largest whole-chunk total AT OR UNDER the cap: still
+        // queued (the arm is a STRICT > test, so exactly-cap stays open).
+        $fills = intdiv($cap, strlen($chunk));
+        for ($i = 0; $i < $fills; $i++) {
+            $this->sendDataToChannel(1, $chunk);
+        }
+        $this->assertFalse($guilty->closed, 'at-cap backlog must stay queued, not close the channel');
+        $this->assertLessThanOrEqual($cap, $this->consumerState($consumer, 'pendingLocalBytes'));
+
+        // One more crosses the cap → fail loud: channel closed, bytes released.
+        $this->sendDataToChannel(1, $chunk);
+
+        $this->assertTrue($guilty->closed, 'exceeding the backlog cap must close the offending channel');
+        $this->assertFalse($bystander->closed, 'the other channel must survive');
+        $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+        $this->assertSame(0, $this->consumerState($consumer, 'pendingLocalBytes'));
+        $this->assertSame(1, $this->hub->resumeRecvCalls, 'closing the only backlogged channel reopens the gate');
+
+        // Late frames for the dead channel are inert drops (unknown channel),
+        // never a resurrection of backlog accounting.
+        $this->sendDataToChannel(1, 'posthumous');
+        $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+    }
+
+    public function test_tunnel_egress_queue_cap_fails_loud_by_closing_the_tunnel(): void
+    {
+        // R-3: MAX_TUNNEL_QUEUE_BYTES (16 MiB) cap arm of sendTunnelFrame —
+        // a hub that never reads must not grow the queue forever; over-cap
+        // fails loud by closing the tunnel (the reconnect path rebuilds).
+        $cap = (new \ReflectionClass(RelayConsumer::class))->getConstant('MAX_TUNNEL_QUEUE_BYTES');
+        $this->assertIsInt($cap);
+        $chunk = str_repeat('v', 65535);
+        $frameBytes = 7 + strlen($chunk); // 4 seq + 1 type + 2 len + payload
+
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+        $local = $this->openChannel(1);
+
+        $this->hub->fireBufferFull();
+        $fills = intdiv($cap, $frameBytes);
+        for ($i = 0; $i < $fills; $i++) {
+            $local->fireMessage($chunk);
+        }
+        $this->assertFalse($this->hub->closed, 'at-cap queue must stay parked, not close the tunnel');
+        $this->assertSame($fills * $frameBytes, $this->consumerState($consumer, 'tunnelSendQueueBytes'));
+
+        $local->fireMessage($chunk); // crosses the cap
+
+        $this->assertTrue($this->hub->closed, 'over-cap egress must close the tunnel (fail loud)');
+        $this->assertSame('disconnected', $this->consumerState($consumer, 'state'));
+        $this->assertSame([], $this->consumerState($consumer, 'tunnelSendQueue'), 'teardown resets the parked queue');
+        $this->assertSame(0, $this->consumerState($consumer, 'tunnelSendQueueBytes'));
+        $this->assertTrue($local->closed, 'the disconnect path also closes local channels');
+    }
+
+    public function test_parked_file_stream_resumes_and_end_follows_the_final_byte(): void
+    {
+        // R-3: the park→re-park→resume arc of the file pump (previously zero
+        // test refs): END must be deferred until the LAST BODY byte leaves,
+        // saturation mid-pump re-parks (never truncates), and the reassembled
+        // body is byte-identical with P8 cancel trailing END.
+        $size = 200000; // 3 full MAX_BODY_CHUNKs + a 3398-byte tail
+        $file = $this->makeStreamFile($size);
+        try {
+            $consumer = $this->createConsumer(null, $this->fileDispatcher($file, $size));
+            $this->activate($consumer);
+
+            $this->hub->fireBufferFull();
+            $this->fireHttpRequest(0x8000000A);
+
+            $streams = $this->consumerState($consumer, 'pendingFileStreams');
+            $this->assertArrayHasKey(0x8000000A, $streams);
+            $this->assertSame($size, $streams[0x8000000A]['remaining'], 'parking must preserve the full budget');
+
+            // Drain #1: HEAD + first BODY leave; the afterSend hook saturates
+            // the tunnel synchronously behind that BODY (real Workerman flips
+            // the watermark inside send()) — the pump must RE-PARK mid-file.
+            $hub = $this->hub;
+            $hub->afterSend = static function (int $n) use ($hub): void {
+                if ($n === 3) { // after HELLO, HEAD, BODY1
+                    $hub->fireBufferFull();
+                }
+            };
+            $hub->fireBufferDrain();
+
+            $streams = $this->consumerState($consumer, 'pendingFileStreams');
+            $this->assertArrayHasKey(0x8000000A, $streams, 'mid-file saturation must park the remainder');
+            $this->assertSame($size - 65534, $streams[0x8000000A]['remaining']);
+            $this->assertSame(
+                [RelayHttpResponseChunk::KIND_HEAD, RelayHttpResponseChunk::KIND_BODY],
+                $this->httpStreamKinds(1),
+                'END must NOT precede the parked bytes',
+            );
+
+            // Drain #2: finish the file; END must trail the FINAL body byte.
+            $hub->afterSend = null;
+            $hub->fireBufferDrain();
+
+            $kinds = $this->httpStreamKinds(1);
+            $this->assertSame(
+                [
+                    RelayHttpResponseChunk::KIND_HEAD,
+                    RelayHttpResponseChunk::KIND_BODY,
+                    RelayHttpResponseChunk::KIND_BODY,
+                    RelayHttpResponseChunk::KIND_BODY,
+                    RelayHttpResponseChunk::KIND_BODY,
+                    RelayHttpResponseChunk::KIND_END,
+                ],
+                $kinds,
+                'exactly one END, after every BODY chunk',
+            );
+
+            $result = $this->collectHttpResponse();
+            $this->assertSame($size, strlen($result['body']));
+            // Hash-compare, not assertSame on the raw 200 KB strings: PHPUnit
+            // 10.5's IsIdentical failure exporter fatals ("Field width … too
+            // long") on hundred-KB string diffs.
+            $this->assertSame(
+                hash("sha256", (string) file_get_contents($file)),
+                hash("sha256", $result["body"]),
+                'body must be byte-faithful across park/resume/re-park',
+            );
+
+            $lastFrame = $this->codec->decode($this->hub->sent[count($this->hub->sent) - 1]);
+            $this->assertInstanceOf(RelayFrame::class, $lastFrame);
+            $this->assertSame(RelayFrameType::HTTP_CANCEL, $lastFrame->type, 'P8 cancel trails END');
+            $this->assertSame([], $this->consumerState($consumer, 'pendingFileStreams'));
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    public function test_tunnel_teardown_closes_parked_handles_and_resets_flow_state(): void
+    {
+        // R-3: handleDisconnect's resetTunnelFlowControl arm — every parked
+        // FD, parked queue byte, local backlog and pause mirror must die with
+        // the tunnel (a resident worker leaking handles/bytes per flap is an
+        // outage on the count=1 relay worker).
+        $file = $this->makeStreamFile(200000);
+        try {
+            $consumer = $this->createConsumer(null, $this->fileDispatcher($file, 200000));
+            $this->activate($consumer);
+
+            $local = $this->openChannel(1);
+
+            $this->hub->fireBufferFull();
+            $this->fireHttpRequest(5);
+            $local->fireBufferFull();
+            $this->sendDataToChannel(1, 'stuck');
+
+            $streams = $this->consumerState($consumer, 'pendingFileStreams');
+            $handle = $streams[5]['handle'];
+            $this->assertIsResource($handle);
+            $this->assertNotSame([], $this->consumerState($consumer, 'tunnelSendQueue'));
+
+            $this->hub->close(); // peer death → handleDisconnect
+
+            $this->assertFalse(is_resource($handle), 'the parked FD must be closed by teardown');
+            $this->assertSame([], $this->consumerState($consumer, 'pendingFileStreams'));
+            $this->assertSame([], $this->consumerState($consumer, 'tunnelSendQueue'));
+            $this->assertSame(0, $this->consumerState($consumer, 'tunnelSendQueueBytes'));
+            $this->assertSame([], $this->consumerState($consumer, 'pendingLocalData'));
+            $this->assertSame(0, $this->consumerState($consumer, 'pendingLocalBytes'));
+            $this->assertSame([], $this->consumerState($consumer, 'localBufferFull'));
+            $this->assertFalse($this->consumerState($consumer, 'tunnelBufferFull'));
+            $this->assertFalse($this->consumerState($consumer, 'tunnelRecvPaused'), 'next tunnel starts unpaused');
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    public function test_stop_releases_parked_handles_and_flow_state(): void
+    {
+        // R-3: the stop() twin of the teardown reset — a deliberate shutdown
+        // must not survive parked handles either.
+        $file = $this->makeStreamFile(200000);
+        try {
+            $consumer = $this->createConsumer(null, $this->fileDispatcher($file, 200000));
+            $this->activate($consumer);
+
+            $this->hub->fireBufferFull();
+            $this->fireHttpRequest(6);
+
+            $streams = $this->consumerState($consumer, 'pendingFileStreams');
+            $handle = $streams[6]['handle'];
+            $this->assertIsResource($handle);
+
+            $consumer->stop();
+
+            $this->assertFalse(is_resource($handle), 'stop() must close parked handles');
+            $this->assertSame([], $this->consumerState($consumer, 'pendingFileStreams'));
+            $this->assertSame([], $this->consumerState($consumer, 'tunnelSendQueue'));
+            $this->assertTrue($this->hub->closed);
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    public function test_stale_tunnel_drain_after_reconnect_is_inert(): void
+    {
+        // R-3: stale-reconnect arm. handleDisconnect does NOT detach the dead
+        // socket's callbacks; when the fresh tunnel is up and itself
+        // saturated, a late drain from the REPLACED socket must not touch the
+        // new connection's flow state (identity guard, mirroring the local-side
+        // R-2 check) — the new backlog still leaves only via the new socket.
+        /** @var list<FakeRelayConnection> $opened */
+        $opened = [];
+        /** @var list<FakeRelayConnection> $locals */
+        $locals = [];
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+            hubConnectionFactory: static function (string $url) use (&$opened): AsyncTcpConnection {
+                $conn = new FakeRelayConnection($url);
+                $opened[] = $conn;
+                return $conn;
+            },
+            localConnectionFactory: static function (string $url) use (&$locals): AsyncTcpConnection {
+                $conn = new FakeRelayConnection($url);
+                $locals[] = $conn;
+                return $conn;
+            },
+        );
+
+        $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
+        $connect->setAccessible(true);
+
+        $consumer->start(); // opens $opened[0]
+        $this->assertCount(1, $opened);
+        $opened[0]->fireConnect();
+        $opened[0]->fireMessage($this->codec->encodeHelloAck('session-1', 'tunnel-1'));
+        $this->assertSame('active', $this->consumerState($consumer, 'state'));
+
+        // The first tunnel dies (its flow-control callbacks stay armed on the
+        // dead socket, as production leaves them); a fresh tunnel replaces it.
+        $opened[0]->close();
+        $connect->invoke($consumer);
+        $this->assertCount(2, $opened);
+        $opened[1]->fireConnect();
+        $opened[1]->fireMessage($this->codec->encodeHelloAck('session-2', 'tunnel-2'));
+        $this->assertSame('active', $this->consumerState($consumer, 'state'));
+
+        // Open a channel on the NEW tunnel and saturate that tunnel.
+        $opened[1]->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'c1', 'session_id' => 's'], JSON_THROW_ON_ERROR),
+        ));
+        $this->assertCount(1, $locals, 'the new tunnel must have opened exactly one local channel');
+        $channelLocal = $locals[0];
+
+        $opened[1]->fireBufferFull();
+        $channelLocal->fireMessage('fresh-tunnel-frame');
+        $wireBefore = count($opened[1]->sent);
+
+        // The REPLACED socket fires its late graceful-close drain.
+        $opened[0]->fireBufferDrain();
+
+        $this->assertSame(
+            $wireBefore,
+            count($opened[1]->sent),
+            'a stale drain must not flush the new tunnel early',
+        );
+        $this->assertTrue(
+            (bool) $this->consumerState($consumer, 'tunnelBufferFull'),
+            'a stale drain must not clear the new tunnel saturation flag',
+        );
+
+        // The NEW socket's own drain does the job.
+        $opened[1]->fireBufferDrain();
+        $flushed = array_slice($opened[1]->sent, $wireBefore);
+        $this->assertCount(1, $flushed);
+        $frame = $this->codec->decode($flushed[0]);
+        $this->assertInstanceOf(RelayFrame::class, $frame);
+        $this->assertSame('fresh-tunnel-frame', $frame->payload);
+    }
+
+    public function test_tunnel_queue_preserves_cross_channel_fifo_order_with_multiple_frames_per_channel(): void
+    {
+        // R-3: the egress queue is ONE FIFO across ALL channels — the hub
+        // demuxes by the frame's own seq, so arrival order must survive the
+        // park/flush round trip even when channels interleave mid-saturation
+        // (the existing two-channel test carries only one frame per channel).
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $local1 = $this->openChannel(1);
+        $local2 = $this->openChannel(2);
+
+        $this->hub->fireBufferFull();
+        $local1->fireMessage('A1');
+        $local2->fireMessage('B1');
+        $local1->fireMessage('A2');
+        $local2->fireMessage('B2');
+        $local1->fireMessage('A3');
+
+        $base = count($this->hub->sent);
+        $this->assertSame($base, count($this->hub->sent), 'saturated tunnel writes nothing directly');
+
+        $this->hub->fireBufferDrain();
+
+        $wire = [];
+        foreach (array_slice($this->hub->sent, $base) as $bytes) {
+            $frame = $this->codec->decode($bytes);
+            $this->assertInstanceOf(RelayFrame::class, $frame);
+            $wire[] = [$frame->channelId(), $frame->payload];
+        }
+        $this->assertSame(
+            [[1, 'A1'], [2, 'B1'], [1, 'A2'], [2, 'B2'], [1, 'A3']],
+            $wire,
+            'cross-channel arrival order must be preserved on flush',
+        );
+        $this->assertSame(0, $this->consumerState($consumer, 'tunnelSendQueueBytes'), 'bookkeeping must zero out');
     }
 }

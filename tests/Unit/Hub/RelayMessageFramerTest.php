@@ -216,4 +216,21 @@ class RelayMessageFramerTest extends TestCase
 
         $this->assertNull($this->framer->decode($bytes));
     }
+
+    public function test_unknown_frame_length_skips_max_payload_frame(): void
+    {
+        // Worst-case skip: a MAX-length (65535-byte payload) unknown-type frame
+        // must be sized at its full 65542 wire bytes — and one byte short of
+        // complete it must still be HELD (never half-skipped), exactly like the
+        // small-frame arm.
+        $bytes = pack('N', 42) . chr(0x77) . pack('n', 65535) . str_repeat('z', 65535);
+
+        $typeByte = null;
+        $this->assertSame(7 + 65535, $this->framer->unknownFrameLength($bytes, $typeByte));
+        $this->assertSame(0x77, $typeByte);
+
+        $typeByte = null;
+        $this->assertNull($this->framer->unknownFrameLength(substr($bytes, 0, -1), $typeByte));
+        $this->assertNull($typeByte, 'the out-param stays untouched while the frame is incomplete');
+    }
 }

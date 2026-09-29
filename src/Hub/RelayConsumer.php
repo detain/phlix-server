@@ -2305,6 +2305,18 @@ final class RelayConsumer
      */
     private function pumpFileStream(int $requestId, $handle, int $remaining, ServerResponse $response): void
     {
+        // A synchronous tunnel teardown inside an earlier send (peer reset ->
+        // onClose -> handleDisconnect -> resetTunnelFlowControl) may already
+        // have closed this parked handle by the time
+        // continuePendingFileStreams() reaches it — that loop iterates a
+        // snapshot copy of the park map. An invalid handle exits quietly:
+        // PHP 8.3 throws TypeError from feof()/fclose() on a closed resource,
+        // and an exception escaping onBufferDrain halts the whole relay
+        // worker (stopAll).
+        if (!is_resource($handle)) {
+            return;
+        }
+
         $maxChunk = RelayHttpResponseCodec::MAX_BODY_CHUNK;
 
         while ($remaining > 0 && !feof($handle)) {
@@ -2321,18 +2333,46 @@ final class RelayConsumer
 
             if (!$this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeBody($chunk))) {
                 // Tunnel gone (closing/closed) — a dead session's remainder is
-                // moot; the hub correlates the disconnect itself. No END.
-                fclose($handle);
-                unset($this->pendingFileStreams[$requestId]);
+                // moot; the hub correlates the disconnect itself. No END. The
+                // failed send may have torn the tunnel down synchronously, in
+                // which case teardown already released this handle.
+                $this->releaseFileStream($requestId, $handle);
+                return;
+            }
+
+            if (!is_resource($handle)) {
+                // The send succeeded but rode over a synchronous teardown that
+                // closed the parked handle — nothing left to pump, and no END
+                // for a dead session.
                 return;
             }
 
             $remaining -= strlen($chunk);
         }
 
-        fclose($handle);
-        unset($this->pendingFileStreams[$requestId]);
+        $this->releaseFileStream($requestId, $handle);
         $this->finishHttpResponseStream($requestId);
+    }
+
+    /**
+     * Close a stream handle (when still open) and forget its park entry.
+     *
+     * Both halves are idempotent, which is what makes the pump loop safe to
+     * re-enter after a teardown has already released the same stream.
+     *
+     * @param int      $requestId Hub-allocated request id.
+     * @param resource|resource|null $handle Handle to close when it is still one.
+     *
+     * @return void
+     *
+     * @since 0.21.0
+     */
+    private function releaseFileStream(int $requestId, $handle): void
+    {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        unset($this->pendingFileStreams[$requestId]);
     }
 
     /**
@@ -2352,10 +2392,7 @@ final class RelayConsumer
             return;
         }
 
-        if (is_resource($stream['handle'])) {
-            fclose($stream['handle']);
-        }
-        unset($this->pendingFileStreams[$requestId]);
+        $this->releaseFileStream($requestId, $stream['handle']);
     }
 
     /**
@@ -2743,6 +2780,15 @@ final class RelayConsumer
      * hub stops pipelining. On drain the backlog is flushed (safe: the buffer
      * is empty at that instant) and the recv gate recomputed.
      *
+     * Like the tunnel handlers above, both callbacks capture the connection
+     * object and self-check {@see $localConnections} identity — a channel id
+     * can be REUSED by a later CLIENT_CONNECT while an old socket is still
+     * alive long enough to fire one last buffered drain during its graceful
+     * close. A mere isset() check would let that stale callback clear the NEW
+     * channel's saturation flag and flush the NEW backlog into the dying OLD
+     * socket (send false = silently discarded): exactly the byte-hole M2 was
+     * built to kill. With the identity check a stale callback is inert.
+     *
      * @param AsyncTcpConnection $local     The channel's local connection.
      * @param int                $channelId Owning channel id.
      *
@@ -2752,15 +2798,15 @@ final class RelayConsumer
      */
     private function armLocalFlowControl(AsyncTcpConnection $local, int $channelId): void
     {
-        $local->onBufferFull = function () use ($channelId): void {
-            if (isset($this->localConnections[$channelId])) {
+        $local->onBufferFull = function () use ($channelId, $local): void {
+            if (($this->localConnections[$channelId] ?? null) === $local) {
                 $this->localBufferFull[$channelId] = true;
             }
         };
 
         $local->onBufferDrain = function () use ($channelId, $local): void {
-            if (!isset($this->localConnections[$channelId])) {
-                return;
+            if (($this->localConnections[$channelId] ?? null) !== $local) {
+                return; // Stale callback on a replaced/closed socket — ignore.
             }
             unset($this->localBufferFull[$channelId]);
 
@@ -2952,8 +2998,10 @@ final class RelayConsumer
      * The old code paused on the first saturation sighting per DATA frame and
      * resumed from a one-shot handler on that one local; with per-channel
      * backlogs the gate must consider ALL channels — resume only when the last
-     * backlog flushed. Idempotent: the Workerman recv pause counter is paired,
-     * so this tracks its own state to keep pause/resume calls balanced.
+     * backlog flushed. Idempotent: the vendored Workerman pauseRecv/resumeRecv
+     * are a plain flag ({@see TcpConnection::$isPaused}), not a paired counter,
+     * so balancing is the caller's job — {@see $tunnelRecvPaused} mirrors the
+     * flag and each transition fires at most one call.
      *
      * @return void
      *

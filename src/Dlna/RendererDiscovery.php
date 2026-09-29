@@ -14,6 +14,7 @@ namespace Phlix\Dlna;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\LanEndpointGuard;
 use Phlix\Discovery\Ssdp\SsdpDiscovery;
 
 /**
@@ -138,7 +139,7 @@ class RendererDiscovery
             ]);
             return null;
         }
-        $xml = @simplexml_load_string($xmlContent);
+        $xml = @simplexml_load_string($xmlContent, 'SimpleXMLElement', LIBXML_NONET);
         if ($xml === false) {
             $this->logger->warning('Invalid XML in renderer description', [
                 'location' => $locationUrl,
@@ -155,11 +156,11 @@ class RendererDiscovery
         $modelDescription = (string)($deviceXml->modelDescription ?? '');
         $udn = (string)($deviceXml->UDN ?? '');
 
-        // Find AVTransport service control URL
-        $avTransportUrl = $this->extractServiceUrl($xml, 'urn:schemas-upnp-org:service:AVTransport:1');
+        // Find AVTransport service control URL — authority is pinned to the LOCATION host
+        $avTransportUrl = $this->extractServiceUrl($xml, 'urn:schemas-upnp-org:service:AVTransport:1', $locationUrl);
 
-        // Find icon URL
-        $iconUrl = $this->extractIconUrl($xml);
+        // Find icon URL — same-host constrained
+        $iconUrl = $this->extractIconUrl($xml, $locationUrl);
 
         return [
             'udn' => $udn,
@@ -177,12 +178,18 @@ class RendererDiscovery
     /**
      * Extract the control URL for a UPnP service from device description XML.
      *
+     * The controlURL is a client-controlled string read from a fetched document and is
+     * later POSTed SOAP/DIDL to. It MUST stay on the authority of the (already
+     * LAN-gated) LOCATION the description came from — an absolute cross-host or
+     * non-http(s) controlURL is dropped, not followed.
+     *
      * @param \SimpleXMLElement $xml Parsed device description XML
      * @param string $serviceType UPnP service type (e.g., 'urn:schemas-upnp-org:service:AVTransport:1')
+     * @param string $locationUrl Absolute LOCATION of the already-pinned description
      *
-     * @return string|null Control URL or null if not found
+     * @return string|null Control URL or null if not found / not same-host
      */
-    private function extractServiceUrl(\SimpleXMLElement $xml, string $serviceType): ?string
+    private function extractServiceUrl(\SimpleXMLElement $xml, string $serviceType, string $locationUrl): ?string
     {
         $deviceXml = $xml->device ?? $xml;
         $serviceList = $deviceXml->serviceList ?? null;
@@ -199,16 +206,7 @@ class RendererDiscovery
                     return null;
                 }
 
-                // Make absolute URL if relative
-                if (strpos($controlUrl, 'http://') !== 0 && strpos($controlUrl, 'https://') !== 0) {
-                    // Parse the location from parent to build absolute URL
-                    $baseUrl = $this->extractBaseUrl($xml);
-                    if ($baseUrl !== null) {
-                        return rtrim($baseUrl, '/') . '/' . ltrim($controlUrl, '/');
-                    }
-                }
-
-                return $controlUrl;
+                return $this->constrainToLocationHost($controlUrl, $locationUrl);
             }
         }
 
@@ -216,45 +214,52 @@ class RendererDiscovery
     }
 
     /**
-     * Extract base URL from device description XML.
-     *
-     * @param \SimpleXMLElement $xml Parsed device description XML
-     *
-     * @return string|null Base URL or null if cannot be determined
+     * Resolve a document-advertised path/URL to an absolute http(s) URL on the SAME
+     * authority as the pinned LOCATION. Relative values join the LOCATION origin;
+     * absolute values must already match it. Returns null when the candidate names any
+     * other host (or an unsafe scheme) — the caller then drops the endpoint.
      */
-    private function extractBaseUrl(\SimpleXMLElement $xml): ?string
+    private function constrainToLocationHost(string $candidate, string $locationUrl): ?string
     {
-        // Try to get URLBase first
-        $urlBase = (string)($xml->URLBase ?? '');
-        if ($urlBase !== '') {
-            return rtrim($urlBase, '/');
-        }
+        $normalized = LanEndpointGuard::normalizeHttpUrl($candidate);
 
-        // Fallback: extract from device URL (usually in presentationURL)
-        $deviceXml = $xml->device ?? $xml;
-        $presentationUrl = (string)($deviceXml->presentationURL ?? '');
+        if ($normalized !== null) {
+            // Absolute (or scheme-less) URL: only honored if it is the same host as
+            // the pinned LOCATION.
+            $sameHost = LanEndpointGuard::sameHostAbsolute($locationUrl, $normalized);
 
-        if ($presentationUrl !== '' && strpos($presentationUrl, 'http') === 0) {
-            $parsed = parse_url($presentationUrl);
-            if ($parsed !== false) {
-                $scheme = $parsed['scheme'] ?? 'http';
-                $host = $parsed['host'] ?? '';
-                $port = $parsed['port'] ?? 80;
-                return "{$scheme}://{$host}:{$port}";
+            if ($sameHost !== null) {
+                return $sameHost;
             }
+
+            $this->logger->warning('Dropped renderer endpoint on a foreign host', [
+                'candidate' => $candidate,
+                'location' => $locationUrl,
+            ]);
+
+            return null;
         }
 
-        return null;
+        // No parseable scheme/host — a bare relative path. Join it onto the LOCATION
+        // origin so the authority can never escape the pinned host.
+        $origin = LanEndpointGuard::originOf($locationUrl);
+
+        if ($origin === null) {
+            return null;
+        }
+
+        return $origin . '/' . ltrim($candidate, '/');
     }
 
     /**
      * Extract the best icon URL from device description XML.
      *
      * @param \SimpleXMLElement $xml Parsed device description XML
+     * @param string $locationUrl Absolute LOCATION of the already-pinned description
      *
-     * @return string|null Icon URL or null if no icons found
+     * @return string|null Icon URL or null if no icons found / not same-host
      */
-    private function extractIconUrl(\SimpleXMLElement $xml): ?string
+    private function extractIconUrl(\SimpleXMLElement $xml, string $locationUrl): ?string
     {
         $deviceXml = $xml->device ?? $xml;
         $iconList = $deviceXml->iconList ?? null;
@@ -281,14 +286,6 @@ class RendererDiscovery
             return null;
         }
 
-        // Make absolute URL if relative
-        if (strpos($bestIcon, 'http://') !== 0 && strpos($bestIcon, 'https://') !== 0) {
-            $baseUrl = $this->extractBaseUrl($xml);
-            if ($baseUrl !== null) {
-                return rtrim($baseUrl, '/') . '/' . ltrim($bestIcon, '/');
-            }
-        }
-
-        return $bestIcon;
+        return $this->constrainToLocationHost($bestIcon, $locationUrl);
     }
 }

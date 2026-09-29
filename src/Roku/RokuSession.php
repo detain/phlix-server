@@ -192,6 +192,34 @@ class RokuSession
     }
 
     /**
+     * Launch a channel by its ID.
+     *
+     * @param string $channelId Numeric Roku channel ID
+     *
+     * @return array<string, mixed> Response data
+     *
+     * @since 0.12.0
+     */
+    public function launchChannel(string $channelId): array
+    {
+        $this->logger->info('Launching channel on Roku', [
+            'session_id' => $this->sessionId,
+            'channel_id' => $channelId,
+        ]);
+
+        try {
+            return $this->client->launchChannel($channelId);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to launch channel on Roku', [
+                'session_id' => $this->sessionId,
+                'channel_id' => $channelId,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
      * Pause playback.
      *
      * @return array<string, mixed> Response data

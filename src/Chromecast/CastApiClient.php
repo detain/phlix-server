@@ -195,10 +195,15 @@ class CastApiClient
         $response = @file_get_contents($url, false, $context);
 
         if ($response === false) {
+            // L2: the thrown message reaches API clients via the controller's
+            // catch — never embed the internal LAN URL or PHP stream noise.
+            // Constant message out, full detail to the log.
             $error = error_get_last();
-            throw new \RuntimeException(
-                'Cast API request failed: ' . ($error['message'] ?? 'Unknown error') . ' for URL: ' . $url
-            );
+            $this->log('error', 'Cast API request failed', [
+                'url' => $url,
+                'reason' => $error['message'] ?? 'Unknown error',
+            ]);
+            throw new \RuntimeException('Cast API request failed');
         }
 
         // Parse response headers to check status
@@ -206,7 +211,13 @@ class CastApiClient
         $statusCode = $this->extractStatusCode($responseHeaders);
 
         if ($statusCode >= 400) {
-            throw new \RuntimeException("Cast API returned HTTP {$statusCode}: {$response}");
+            // L2: status code stays (no internal detail), device body + URL go to the log.
+            $this->log('error', 'Cast API returned error status', [
+                'url' => $url,
+                'status' => $statusCode,
+                'body' => substr($response, 0, 200),
+            ]);
+            throw new \RuntimeException('Cast API returned HTTP ' . $statusCode);
         }
 
         $decoded = json_decode($response, true);

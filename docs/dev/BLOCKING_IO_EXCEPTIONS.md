@@ -21,7 +21,8 @@ that worker is currently serving**, not just the caller's — one worker is ~1/1
 of HTTP capacity. The WS worker (`start.php:546`), the hub-heartbeat worker
 (`:711`), the background-timer worker (`:765`) and the relay-tunnel worker
 (`:813`) are all `count = 1`, so a stall there is a 100 % outage of that
-subsystem. No exception below runs in those workers — all three are HTTP-side.
+subsystem. No exception below runs in those workers — every listed exception is
+HTTP-side.
 
 ---
 
@@ -219,6 +220,40 @@ keeping the sync fetch; it is deliberately not unbounded like the pre-H1 code,
 which followed redirects inside the wrapper with no hop budget and no size cap.
 
 Regression guard: `tests/Unit/Discovery/Ssdp/SsdpDiscoverySsrfTest.php`.
+
+---
+
+## Exception 5 — IGD / NAT-PMP / STUN port-forward chain (H1(d)/H3/M4, raw sockets)
+
+| | |
+|---|---|
+| Site | `src/Network/UpnpIgdClient.php` — `discoverGateway()` (UDP M-SEARCH + `socket_select` loop), `asyncHttpGet()` (Swoole client or blocking `fsockopen`), `soapRequest()` (`stream_socket_client`, plain or TLS); plus the `NatPmpClient` / `StunClient` legs the same call chain drives |
+| Reached from | `POST /api/v1/admin/remote/portforward/{enable,disable}` and `GET …/status` (`AdminHubController::portForward*()`), synchronously via `PortForwardService::autoConfigure()` / `disable()` → `discoverGateway()` → `getExternalIp()` / `addPortMapping()` / `removePortMapping()`, on an HTTP worker |
+| Why it is sync | One-shot, admin-triggered control-plane operation against the LAN router; converting the whole `Phlix\Network` socket family to promises would touch every leg (SSDP, SOAP, NAT-PMP, STUN) to accelerate a call no viewer request ever makes. |
+| Bound | `discoverGateway()` is hard-bounded to `$timeout` (default 3000 ms) measured in **one** monotonic unit (`hrtime(true)` ms, H3 — the pre-fix code double-scaled elapsed-ms and fed `socket_select()` a negative timeout, busy-spinning one worker at 100 % CPU for the whole window) with `socket_select` slices ≤ 500 ms, matching `NatPmpClient`; `SO_RCVTIMEO`/`SO_SNDTIMEO` 3 s; every HTTP/SOAP socket 5 s connect. H1(d): the SSDP `LOCATION` must be an http(s) **literal IP equal to the datagram source** and every downstream fetch/SOAP target must be LAN-routable, enforced **before any socket** via `LanEndpointGuard`; `<controlURL>`s are same-host-pinned (`resolveUrl()` returns null for foreign absolutes); M4: the https SOAP branch verifies peer cert, name and SNI (self-signed IGD TLS is refused — the service falls back to NAT-PMP). L4: NAT-PMP/STUN replies from a source other than the configured gateway/STUN host are discarded. |
+| Cost | Zero against refused or spoofed targets (refused pre-socket); against a silent LAN router worst case ≈ the discovery budget (3 s) plus a bounded 5 s per follow-up — one of the 14 HTTP workers, only while an operator clicks port-forward. |
+
+Regression guards: `tests/Unit/Network/UpnpIgdClientTest.php` (LOCATION source-pin
+and cross-host `controlURL` refusals via reflection),
+`tests/Unit/Network/NatPmpClientTest.php`, `tests/Unit/Network/StunClientTest.php`,
+`tests/Unit/Common/Net/LanEndpointGuardTest.php`.
+
+---
+
+## Exception 6 — DLNA / HDHomeRun description fetch and renderer SOAP control (H1(a)-(c))
+
+| | |
+|---|---|
+| Site | `src/Dlna/DeviceRegistry.php::fetchBounded()` (UDP-discovered `LOCATION` → `fopen` GET), `src/Dlna/RendererControlClient.php::sendSoapRequest()` (SOAP POST to the pinned control URL), `src/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscovery.php::fetchBounded()` and `HdHomeRunApiClient::get()` (lineup fetch) |
+| Reached from | SSDP device registration (discovery loops), DLNA renderer listing/playback, and the LiveTv HDHomeRun tuner scan — admin/device-triggered paths on HTTP workers, not the media-serving hot path |
+| Why it is sync | LAN-peer description documents and SOAP frames are kilobyte-sized single request/response exchanges served by the same-segment device; same rationale the register already accepts for Exception 4. |
+| Bound | Every `LOCATION` is **source-pinned**: the host must be a literal IP equal to the datagram source (`literalIpEqualsSource`) and not a refused address (loopback / `0.0.0.0` / link-local incl. `169.254.169.254` / CGNAT / multicast), enforced **before any socket**. Device descriptions and lineup JSON are fetched with `follow_location = 0` (`max_redirects = 1`) — no automatic redirect walking — with a 3–5 s stream timeout and a hard 1 MiB read ceiling (`LanEndpointGuard::MAX_RESPONSE_BYTES`, read stops at cap+1). `presentationURL`/`<controlURL>`/`<URLBase>` values are same-host-constrained (`sameHostAbsolute`); foreign absolutes are dropped at parse. SOAP replies are capped the same way; renderer URLs failing the LAN gate are rejected in the `RendererControlClient` constructor (fail-loud). `LIBXML_NONET` closes XXE-external-fetch on every `simplexml_load_string` in the touched family. |
+| Cost | Zero against spoofed/off-segment targets (pre-socket refusal); worst case per accepted fetch is the per-site timeout (3–5 s, 10 s for the shipped SOAP control timeout) of one HTTP worker against a silent LAN device; a per-device loop, not a per-viewer-request path. |
+
+Regression guards: `tests/Unit/Dlna/DeviceRegistrySsrfTest.php`,
+`tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoverySsrfTest.php`,
+`tests/Unit/Dlna/RendererControlClientTest.php` (`@group network`),
+`tests/Unit/Common/Net/LanEndpointGuardTest.php`.
 
 ---
 

@@ -458,8 +458,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * is untouched (proved by the sibling rails passing on the clean
               * worktree of the landed commit). Measured `git ls-files
               * '*.php' | wc -l` = 1906 on the staged tree, not predicted.
+              * Re-pinned 1906→1910 by the device-integration audit lane: adds
+              * four first-party PHP files (src/Common/Net/LanEndpointGuard.php,
+              * tests/Unit/Common/Net/LanEndpointGuardTest.php,
+              * tests/Unit/Dlna/DeviceRegistrySsrfTest.php and
+              * tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoverySsrfTest.php);
+              * none names a Request property — the S433/S434 pattern again, only
+              * this denominator moves. Measured 1910 from the phpunit red, not
+              * predicted.
               */
-    private const EXPECTED_PHP_FILES = 1906;
+    private const EXPECTED_PHP_FILES = 1910;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -276,7 +276,7 @@ class RokuEcpClient
         // Parse XML response
         if (function_exists('simplexml_load_string')) {
             try {
-                $element = @simplexml_load_string($xml);
+                $element = @simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET);
                 if ($element !== false) {
                     $result['friendlyName'] = (string)($element->friendlyName ?? '');
                     $result['modelName'] = (string)($element->modelName ?? '');
@@ -315,7 +315,7 @@ class RokuEcpClient
         // Parse XML response
         if (function_exists('simplexml_load_string')) {
             try {
-                $element = @simplexml_load_string($xml);
+                $element = @simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET);
                 if ($element !== false) {
                     $result['state'] = (string)($element->state ?? 'Unknown');
                     $result['position'] = (int)($element->position ?? 0);
@@ -399,6 +399,11 @@ class RokuEcpClient
             $channel->push(true);
         };
         $options['error'] = function ($error) use ($channel): void {
+            $this->log('warning', 'ECP async request error: {error}', [
+                'error' => $error instanceof \Throwable
+                    ? $error::class . ': ' . $error->getMessage()
+                    : get_debug_type($error),
+            ]);
             $channel->push(true);
         };
 

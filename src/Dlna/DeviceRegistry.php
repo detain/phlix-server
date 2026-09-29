@@ -12,6 +12,7 @@ namespace Phlix\Dlna;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\LanEndpointGuard;
 
 /**
  * Device Registry for DLNA/UPnP Device Discovery and Management.
@@ -60,10 +61,25 @@ class DeviceRegistry
     /** @var array<int, string> Local IP addresses available on this host */
     private array $localAddresses = [];
 
-    public function __construct(int $cacheTtl = self::DEFAULT_CACHE_TTL, ?StructuredLogger $logger = null)
-    {
+    /**
+     * @var (callable(string): (array{status: int, body: string}|null))|null Test seam.
+     *      Null uses the bounded, redirect-free LAN fetcher. Injecting it opens zero sockets.
+     */
+    private $fetcher = null;
+
+    /**
+     * @param int                    $cacheTtl Seconds before cached devices go stale.
+     * @param StructuredLogger|null  $logger   Optional injected logger.
+     * @param (callable(string): (array{status: int, body: string}|null))|null $fetcher URL fetch seam (see $fetcher).
+     */
+    public function __construct(
+        int $cacheTtl = self::DEFAULT_CACHE_TTL,
+        ?StructuredLogger $logger = null,
+        ?callable $fetcher = null
+    ) {
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->cacheTtl = $cacheTtl;
+        $this->fetcher = $fetcher;
         $this->discoverLocalAddresses();
     }
 
@@ -345,50 +361,131 @@ class DeviceRegistry
         string $sourceAddress,
         string $server
     ): ?DlnaDevice {
-        // Parse URL
-        $urlParts = parse_url($location);
-        if (!$urlParts) {
+        // Boundary law: the LOCATION host MUST be a literal IP equal to the datagram
+        // source. A spoofed/unsolicited reply pointing elsewhere (metadata, another
+        // host, a resolvable name) is refused here, BEFORE any socket is opened.
+        $url = LanEndpointGuard::normalizeHttpUrl($location);
+
+        if ($url === null) {
+            $this->logger->warning('Rejected malformed SSDP LOCATION', ['location' => $location]);
             return null;
         }
 
-        $host = $urlParts['host'] ?? $sourceAddress;
-        $port = $urlParts['port'] ?? 80;
-        $path = $urlParts['path'] ?? '/device.xml';
+        $host = LanEndpointGuard::hostOf($url);
 
-        // Fetch device description
-        $xml = $this->httpGet("http://{$host}:{$port}{$path}");
-
-        if ($xml === null) {
-            // Try root device URL
-            $xml = $this->httpGet("http://{$host}:{$port}/");
-            if ($xml === null) {
-                $this->logger->warning('Could not fetch device description', [
-                    'location' => $location,
-                ]);
-                return null;
-            }
+        if (
+            $host === null
+            || !LanEndpointGuard::literalIpEqualsSource($host, $sourceAddress)
+            || LanEndpointGuard::isRefusedAddress($host)
+        ) {
+            $this->logger->warning('Rejected SSDP LOCATION not pinned to datagram source', [
+                'location' => $location,
+                'source' => $sourceAddress,
+            ]);
+            return null;
         }
 
-        return $this->parseDeviceDescription($xml, $usn, $host, $port);
+        $port = $this->locationPort($url);
+        $path = parse_url($url, PHP_URL_PATH) ?: '/device.xml';
+
+        // Fetch device description from the pinned origin only.
+        $xml = $this->fetchBounded($url);
+
+        if ($xml === null) {
+            // Fallback: the root of the SAME pinned host (never a different authority).
+            $xml = $this->fetchBounded($this->originUrl($host, $port) . '/');
+        }
+
+        if ($xml === null) {
+            $this->logger->warning('Could not fetch device description', [
+                'location' => $location,
+            ]);
+            return null;
+        }
+
+        return $this->parseDeviceDescription($xml, $usn, $host, $port, $url);
     }
 
     /**
-     * Perform HTTP GET request.
+     * Port advertised by a LOCATION URL, defaulting per scheme.
      */
-    private function httpGet(string $url, int $timeout = 3): ?string
+    private function locationPort(string $url): int
     {
+        $port = parse_url($url, PHP_URL_PORT);
+
+        if (is_int($port)) {
+            return $port;
+        }
+
+        return (parse_url($url, PHP_URL_SCHEME) === 'https') ? 443 : 80;
+    }
+
+    /**
+     * Origin (scheme://host[:port]) for a pinned LAN host, IPv6 bracketed.
+     */
+    private function originUrl(string $host, int $port): string
+    {
+        $authority = str_contains($host, ':') ? "[$host]" : $host;
+
+        return "http://{$authority}:{$port}";
+    }
+
+    /**
+     * Perform a bounded, redirect-free LAN GET. follow_location=0 means a 3xx is a
+     * failure (no redirect laundering to an ungated host); the body is capped at
+     * MAX_RESPONSE_BYTES. Route goes through the injected seam when present.
+     */
+    private function fetchBounded(string $url): ?string
+    {
+        if ($this->fetcher !== null) {
+            $result = ($this->fetcher)($url);
+
+            if (!is_array($result)) {
+                return null;
+            }
+
+            $status = (int)($result['status'] ?? 0);
+            $body = (string)($result['body'] ?? '');
+
+            if ($status < 200 || $status >= 300 || strlen($body) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+                return null;
+            }
+
+            return $body;
+        }
+
         $context = stream_context_create([
             'http' => [
-                'timeout' => $timeout,
                 'method' => 'GET',
-                'header' => "User-Agent: Phlix/1.0\r\n",
+                'timeout' => 3,
+                'follow_location' => 0,
+                'max_redirects' => 1,
                 'ignore_errors' => true,
+                'header' => "User-Agent: Phlix/1.0\r\nConnection: close\r\n",
             ],
         ]);
 
-        $content = @file_get_contents($url, false, $context);
+        $handle = @fopen($url, 'rb', false, $context);
 
-        return $content !== false ? $content : null;
+        if ($handle === false) {
+            return null;
+        }
+
+        $body = @stream_get_contents($handle, LanEndpointGuard::MAX_RESPONSE_BYTES + 1);
+        $statusLine = $http_response_header[0] ?? '';
+        @fclose($handle);
+
+        if (!is_string($body) || strlen($body) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+            return null;
+        }
+
+        if (preg_match('#^HTTP/\d(?:\.\d)?\s+(\d{3})#i', (string)$statusLine, $m) !== 1) {
+            return null;
+        }
+
+        $status = (int)$m[1];
+
+        return ($status >= 200 && $status < 300) ? $body : null;
     }
 
     /**
@@ -398,10 +495,11 @@ class DeviceRegistry
         string $xml,
         string $usn,
         string $host,
-        int $port
+        int $port,
+        string $baseUrl = ''
     ): ?DlnaDevice {
         libxml_use_internal_errors(true);
-        $doc = @simplexml_load_string($xml);
+        $doc = @simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET);
 
         if ($doc === false) {
             $this->logger->warning('Failed to parse device description XML');
@@ -440,8 +538,14 @@ class DeviceRegistry
         $device->setModelName($modelName);
         $device->setModelNumber($modelNumber);
 
-        if (!empty($presentationUrl)) {
-            $device->setPresentationUrl($presentationUrl);
+        if (!empty($presentationUrl) && $baseUrl !== '') {
+            // Secondary law: presentationURL must stay on the pinned host — a document
+            // that advertises an off-host presentation page is truncated to nothing.
+            $safePresentation = LanEndpointGuard::sameHostAbsolute($baseUrl, $presentationUrl);
+
+            if ($safePresentation !== null) {
+                $device->setPresentationUrl($safePresentation);
+            }
         }
 
         // Add icons if present

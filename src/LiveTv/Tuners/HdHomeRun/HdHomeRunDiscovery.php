@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\LanEndpointGuard;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -40,15 +41,24 @@ class HdHomeRunDiscovery
     private int $timeoutSecs;
 
     /**
+     * @var (callable(string): (array{status: int, body: string}|null))|null Test seam.
+     *      Null uses the bounded, redirect-free LAN fetcher.
+     */
+    private $fetcher = null;
+
+    /**
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger instance
      * @param int $timeoutSecs Socket timeout in seconds (default 5)
+     * @param (callable(string): (array{status: int, body: string}|null))|null $fetcher URL fetch seam (see $fetcher)
      */
     public function __construct(
         StructuredLogger|LoggerInterface|null $logger = null,
-        int $timeoutSecs = 5
+        int $timeoutSecs = 5,
+        ?callable $fetcher = null
     ) {
         $this->logger = $logger;
         $this->timeoutSecs = $timeoutSecs;
+        $this->fetcher = $fetcher;
     }
 
     /**
@@ -72,13 +82,16 @@ class HdHomeRunDiscovery
 
         $devices = [];
 
-        foreach ($responses as $response) {
+        foreach ($responses as $packet) {
+            $response = (string) ($packet['response'] ?? '');
+            $source = (string) ($packet['source'] ?? '');
+
             $locationUrl = $this->extractLocation($response);
             if ($locationUrl === null) {
                 continue;
             }
 
-            $deviceInfo = $this->fetchDeviceDescription($locationUrl);
+            $deviceInfo = $this->fetchDeviceDescription($locationUrl, $source);
             if ($deviceInfo === null) {
                 continue;
             }
@@ -116,7 +129,10 @@ class HdHomeRunDiscovery
     /**
      * Send SSDP M-SEARCH broadcast and collect responses.
      *
-     * @return string[] Array of response strings
+     * Each entry carries the reply body AND the datagram source address, so the caller
+     * can pin the advertised LOCATION to whoever actually sent it (SSRF defence).
+     *
+     * @return list<array{response: string, source: string}>
      */
     private function sendSearch(): array
     {
@@ -163,7 +179,7 @@ class HdHomeRunDiscovery
 
             $response = trim($buf);
             if (stripos($response, 'hdhomerun') !== false) {
-                $responses[] = $response;
+                $responses[] = ['response' => $response, 'source' => $from];
             }
         }
 
@@ -194,32 +210,47 @@ class HdHomeRunDiscovery
     /**
      * Fetch and parse a device's XML description.
      *
-     * @param string $locationUrl The device's location URL
+     * SSRF defence: the advertised LOCATION must be an http(s) URL whose host is a
+     * literal IP EQUAL to the datagram source (a spoofed reply pointing at metadata or
+     * another host is refused BEFORE any socket opens), inside RFC1918, and not a refused
+     * range. The description fetch is bounded (no redirects, capped body).
+     *
+     * @param string $locationUrl The device's advertised location URL
+     * @param string $source      Datagram source address of the SSDP reply
      * @return array<string, mixed>|null Parsed device info or null on failure
      */
-    private function fetchDeviceDescription(string $locationUrl): ?array
+    private function fetchDeviceDescription(string $locationUrl, string $source): ?array
     {
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => $this->timeoutSecs,
-                'method' => 'GET',
-                'user_agent' => 'Phlix/1.0',
-            ],
-        ]);
+        $url = LanEndpointGuard::normalizeHttpUrl($locationUrl);
+        $host = $url !== null ? LanEndpointGuard::hostOf($url) : null;
 
-        $xmlContent = @file_get_contents($locationUrl, false, $context);
-        if ($xmlContent === false) {
-            $this->logger?->warning('Failed to fetch device description', ['url' => $locationUrl]);
+        if (
+            $url === null
+            || $host === null
+            || !LanEndpointGuard::literalIpEqualsSource($host, $source)
+            || LanEndpointGuard::isRefusedAddress($host)
+            || !LanEndpointGuard::isLanAddress($host)
+        ) {
+            $this->logger?->warning('Rejected HDHomeRun LOCATION not pinned to source', [
+                'url' => $locationUrl,
+                'source' => $source,
+            ]);
+            return null;
+        }
+
+        $xmlContent = $this->fetchBounded($url);
+        if ($xmlContent === null) {
+            $this->logger?->warning('Failed to fetch device description', ['url' => $url]);
             return null;
         }
 
         $previousErrorHandling = libxml_use_internal_errors(true);
-        $xml = @simplexml_load_string($xmlContent);
+        $xml = @simplexml_load_string($xmlContent, 'SimpleXMLElement', LIBXML_NONET);
         libxml_clear_errors();
         libxml_use_internal_errors($previousErrorHandling);
 
         if ($xml === false) {
-            $this->logger?->warning('Failed to parse device XML', ['url' => $locationUrl]);
+            $this->logger?->warning('Failed to parse device XML', ['url' => $url]);
             return null;
         }
 
@@ -238,11 +269,8 @@ class HdHomeRunDiscovery
             $deviceInfo['device_id'] = $matches[1];
         }
 
-        // Try to get IP from URL
-        $host = parse_url($locationUrl, PHP_URL_HOST);
-        if ($host !== null) {
-            $deviceInfo['ip_address'] = $host;
-        }
+        // IP is the pinned source literal — never the (already-checked) URL authority alone.
+        $deviceInfo['ip_address'] = $host;
 
         // HDHomeRun device XML typically has a specific structure
         // Extract available tuner count if present
@@ -251,9 +279,68 @@ class HdHomeRunDiscovery
             $deviceInfo['tuner_count'] = $tunerCount;
         }
 
-        // Build lineup URL
-        $deviceInfo['lineup_url'] = 'http://' . $deviceInfo['ip_address'] . '/lineup.json';
+        // Build lineup URL on the pinned origin (scheme + host + advertised port).
+        $origin = LanEndpointGuard::originOf($url) ?? ('http://' . $host);
+        $deviceInfo['lineup_url'] = $origin . '/lineup.json';
 
         return $deviceInfo;
+    }
+
+    /**
+     * Bounded, redirect-free GET for the pinned device origin.
+     *
+     * @return string|null Response body (2xx, <= MAX_RESPONSE_BYTES) or null.
+     */
+    private function fetchBounded(string $url): ?string
+    {
+        if ($this->fetcher !== null) {
+            $result = ($this->fetcher)($url);
+
+            if (!is_array($result)) {
+                return null;
+            }
+
+            $status = (int) ($result['status'] ?? 0);
+            $body = (string) ($result['body'] ?? '');
+
+            if ($status < 200 || $status >= 300 || strlen($body) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+                return null;
+            }
+
+            return $body;
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => $this->timeoutSecs,
+                'follow_location' => 0,
+                'max_redirects' => 1,
+                'ignore_errors' => true,
+                'user_agent' => 'Phlix/1.0',
+                'header' => "Connection: close\r\n",
+            ],
+        ]);
+
+        $handle = @fopen($url, 'rb', false, $context);
+        if ($handle === false) {
+            return null;
+        }
+
+        $body = @stream_get_contents($handle, LanEndpointGuard::MAX_RESPONSE_BYTES + 1);
+        $statusLine = $http_response_header[0] ?? '';
+        @fclose($handle);
+
+        if (!is_string($body) || strlen($body) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+            return null;
+        }
+
+        if (preg_match('#^HTTP/\d(?:\.\d)?\s+(\d{3})#i', (string) $statusLine, $m) !== 1) {
+            return null;
+        }
+
+        $status = (int) $m[1];
+
+        return ($status >= 200 && $status < 300) ? $body : null;
     }
 }

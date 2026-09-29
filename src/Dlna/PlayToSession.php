@@ -50,6 +50,13 @@ class PlayToSession
     /** Polling interval in seconds */
     private const POLL_INTERVAL = 5;
 
+    /**
+     * Consecutive position-poll failures tolerated before the session is torn down.
+     * A renderer that stops answering position queries must not spin forever nor have
+     * its last known (or a bogus zero) progress repeatedly persisted.
+     */
+    private const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
     /** @var string Unique session identifier */
     private string $sessionId;
 
@@ -82,6 +89,9 @@ class PlayToSession
 
     /** @var int|null Polling timer ID */
     private ?int $pollTimer = null;
+
+    /** @var int Consecutive failed position polls since the last success */
+    private int $consecutivePollFailures = 0;
 
     /** @var callable|null State change callback */
     private $onStateChange = null;
@@ -156,9 +166,9 @@ class PlayToSession
 
         $result = $this->client->setAvTransportUri($uri, $metadata);
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
             $this->logger->error('Failed to set media URI', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
             ]);
             $this->setState(self::STATE_IDLE);
             return;
@@ -183,13 +193,14 @@ class PlayToSession
 
         $result = $this->client->play();
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
             $this->logger->error('Failed to start playback', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
             ]);
             return;
         }
 
+        $this->consecutivePollFailures = 0;
         $this->setState(self::STATE_PLAYING);
         $this->startPolling();
     }
@@ -210,9 +221,9 @@ class PlayToSession
 
         $result = $this->client->pause();
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
             $this->logger->error('Failed to pause playback', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
             ]);
             return;
         }
@@ -237,9 +248,9 @@ class PlayToSession
 
         $result = $this->client->stop();
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
             $this->logger->error('Failed to stop playback', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
             ]);
             return;
         }
@@ -274,9 +285,9 @@ class PlayToSession
 
         $result = $this->client->seek($target);
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
             $this->logger->error('Failed to seek', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
             ]);
             return;
         }
@@ -320,17 +331,38 @@ class PlayToSession
     {
         $result = $this->client->getPositionInfo();
 
-        if (isset($result['Error'])) {
+        if (RendererControlClient::failed($result)) {
+            $this->consecutivePollFailures++;
+
             $this->logger->warning('Failed to get position info', [
-                'error' => $result['Error'],
+                'error' => RendererControlClient::errorDescription($result),
+                'consecutive_failures' => $this->consecutivePollFailures,
             ]);
+
+            // Keep the last known position — never persist a fabricated zero, and stop
+            // polling a renderer that has gone unresponsive.
+            if ($this->consecutivePollFailures >= self::MAX_CONSECUTIVE_POLL_FAILURES) {
+                $this->logger->error('Renderer position polling failed repeatedly, ending session', [
+                    'session_id' => $this->sessionId,
+                    'renderer_id' => $this->rendererId,
+                ]);
+                $this->destroy();
+            }
+
             return;
         }
 
-        // Parse RelTime from response
+        $this->consecutivePollFailures = 0;
+
+        // Parse RelTime from response; a missing/blank RelTime is NOT a position of zero —
+        // leave the last known position untouched rather than corrupting watch history.
         $relTimeRaw = $result['RelTime'] ?? $result['relTime'] ?? null;
-        $relTime = is_string($relTimeRaw) ? $relTimeRaw : '00:00:00';
-        $newPosition = $this->timeStringToTicks($relTime);
+
+        if (!is_string($relTimeRaw) || $relTimeRaw === '' || $relTimeRaw === '00:00:00' && $this->position !== 0) {
+            return;
+        }
+
+        $newPosition = $this->timeStringToTicks($relTimeRaw);
 
         if ($newPosition !== $this->position) {
             $this->position = $newPosition;
@@ -397,6 +429,7 @@ class PlayToSession
      */
     public function destroy(): void
     {
+        $this->consecutivePollFailures = 0;
         $this->stopPolling();
         $this->stop();
         $this->setState(self::STATE_IDLE);

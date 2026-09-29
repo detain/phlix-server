@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Network;
 
+use Phlix\Common\Net\LanEndpointGuard;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Socket;
@@ -85,17 +86,24 @@ class UpnpIgdClient
         }
 
         $gatewayUrl = null;
-        $startTime = microtime(true);
+        // Monotonic clock in milliseconds (single unit end to end). The previous code
+        // mixed ms and µs so $remaining went negative, socket_select() was handed a
+        // negative timeout that returns immediately, and the loop busy-spun for the whole
+        // timeout window at 100% CPU inside a count=1-relevant worker. See finding H3.
+        $startMs = intdiv(hrtime(true), 1_000_000);
 
         while ($gatewayUrl === null) {
-            $elapsed = (microtime(true) - $startTime) * 1000;
-            if ($elapsed >= $this->timeout) {
+            $elapsedMs = intdiv(hrtime(true), 1_000_000) - $startMs;
+            if ($elapsedMs >= $this->timeout) {
                 break;
             }
 
-            $remaining = $this->timeout - (int)($elapsed * 1000);
-            $sec = (int) floor($remaining / 1000);
-            $usec = ($remaining % 1000) * 1000;
+            $remainingMs = $this->timeout - $elapsedMs;
+            // Wait in slices of at most 500 ms so a stray/ignored reply cannot wedge the
+            // loop past the deadline (mirrors NatPmpClient's bounded select slices).
+            $sliceMs = min(500, $remainingMs);
+            $sec = intdiv($sliceMs, 1000);
+            $usec = ($sliceMs % 1000) * 1000;
 
             $write = null;
             $except = null;
@@ -115,7 +123,8 @@ class UpnpIgdClient
                 continue;
             }
 
-            $gatewayUrl = $this->parseSsdpResponse($resp);
+            // Pin the advertised LOCATION to whoever actually sent the datagram.
+            $gatewayUrl = $this->parseSsdpResponse($resp, $fromAddr);
         }
 
         socket_close($socket);
@@ -285,31 +294,72 @@ class UpnpIgdClient
     }
 
     /**
-     * Parses an SSDP HTTP NOTIFY or HTTP/1.1 200 OK response to extract the LOCATION header.
+     * Parses an SSDP HTTP 200 or unsolicited NOTIFY response for its LOCATION header.
+     *
+     * SSRF defence: the LOCATION must be an http(s) URL whose host is a literal IP EQUAL
+     * to the datagram source and is not a refused (metadata/loopback/etc.) address. This
+     * runs for BOTH 200 replies and NOTIFY — an unsolicited NOTIFY is exactly how a
+     * spoofed gateway advertises an attacker host.
+     *
+     * @param string $response  Raw SSDP datagram.
+     * @param string $sourceAddr Source address reported by recvfrom.
      */
-    private function parseSsdpResponse(string $response): ?string
+    private function parseSsdpResponse(string $response, string $sourceAddr): ?string
     {
-        if (preg_match('/^HTTP\/1\.\d\s+200/is', $response)) {
-            if (preg_match('/^LOCATION:\s*(.+)$/mi', $response, $matches)) {
-                return trim($matches[1]);
-            }
+        $isReply = preg_match('/^HTTP\/1\.\d\s+200/is', $response) === 1;
+        $isNotify = preg_match('/^NOTIFY\s+/is', $response) === 1;
+
+        if (!$isReply && !$isNotify) {
+            return null;
         }
-        if (preg_match('/^NOTIFY\s+/is', $response)) {
-            if (preg_match('/^LOCATION:\s*(.+)$/mi', $response, $matches)) {
-                return trim($matches[1]);
-            }
+
+        if (preg_match('/^LOCATION:\s*(.+)$/mi', $response, $matches) !== 1) {
+            return null;
         }
-        return null;
+
+        $url = LanEndpointGuard::normalizeHttpUrl(trim($matches[1]));
+        $host = $url !== null ? LanEndpointGuard::hostOf($url) : null;
+
+        if (
+            $url === null
+            || $host === null
+            || !LanEndpointGuard::literalIpEqualsSource($host, $sourceAddr)
+            || LanEndpointGuard::isRefusedAddress($host)
+        ) {
+            $this->logger->warning('UPnP: rejected SSDP LOCATION not pinned to source', [
+                'source' => $sourceAddr,
+            ]);
+            return null;
+        }
+
+        return $url;
     }
 
     /**
      * Fetches the device description XML from the LOCATION URL.
      *
+     * The gateway URL is LAN-gated here (its host must be a private, non-refused literal)
+     * so a stored/misconfigured or spoofed control URL can never open a socket to a
+     * metadata/public host.
+     *
      * @return string|null URL to the device description XML.
      */
     private function fetchDeviceDescription(string $locationUrl): ?string
     {
-        $parsed = @parse_url($locationUrl);
+        $normalized = LanEndpointGuard::normalizeHttpUrl($locationUrl);
+        $host = $normalized !== null ? LanEndpointGuard::hostOf($normalized) : null;
+
+        if (
+            $normalized === null
+            || $host === null
+            || LanEndpointGuard::isRefusedAddress($host)
+            || !LanEndpointGuard::isLanAddress($host)
+        ) {
+            $this->logger->warning('UPnP: refused gateway description fetch for a non-LAN host');
+            return null;
+        }
+
+        $parsed = @parse_url($normalized);
         if (!is_array($parsed) || !isset($parsed['host']) || !is_string($parsed['host'])) {
             return null;
         }
@@ -324,7 +374,7 @@ class UpnpIgdClient
         }
 
         if (preg_match('/<deviceDescriptionURL>(.+?)<\/deviceDescriptionURL>/i', $body, $matches)) {
-            return $this->resolveUrl($locationUrl, $matches[1]);
+            return $this->resolveUrl($normalized, $matches[1]);
         }
 
         if (preg_match('/<URLBase>(.+?)<\/URLBase>/i', $body, $matches)) {
@@ -340,7 +390,7 @@ class UpnpIgdClient
                         if (preg_match($serviceListPattern, $wanDeviceMatch[0], $serviceListMatch)) {
                             $controlUrlPattern = '/<controlURL>(.+?)<\/controlURL>/is';
                             if (preg_match($controlUrlPattern, $serviceListMatch[0], $controlMatch)) {
-                                return $this->resolveUrl($locationUrl, trim($controlMatch[1]));
+                                return $this->resolveUrl($normalized, trim($controlMatch[1]));
                             }
                         }
                     }
@@ -348,7 +398,7 @@ class UpnpIgdClient
             }
         }
 
-        return $locationUrl;
+        return $normalized;
     }
 
     /**
@@ -415,26 +465,41 @@ class UpnpIgdClient
     }
 
     /**
-     * Resolves a relative URL against a base URL.
+     * Resolves a controlURL against the pinned base URL.
+     *
+     * Secondary SSRF law: an <controlURL> read from the (already LAN-gated) description
+     * must stay on the SAME host as that description. Relative values are joined onto the
+     * base authority; an absolute value naming a different host (or a non-http(s) scheme)
+     * is refused (null) rather than followed — a hostile gateway cannot aim the port-map
+     * SOAP POST at an arbitrary host.
      */
-    private function resolveUrl(string $base, string $relative): string
+    private function resolveUrl(string $base, string $relative): ?string
     {
-        if (str_starts_with($relative, 'http://') || str_starts_with($relative, 'https://')) {
-            return $relative;
+        $sameHost = LanEndpointGuard::sameHostAbsolute($base, $relative);
+
+        if ($sameHost !== null) {
+            return $sameHost;
+        }
+
+        // A cross-host or non-http(s) absolute URL is dropped; only a scheme-less relative
+        // path may be joined onto the base authority.
+        if (LanEndpointGuard::normalizeHttpUrl($relative) !== null) {
+            $this->logger->warning('UPnP: dropped controlURL on a foreign host');
+            return null;
         }
 
         $parsed = @parse_url($base);
-        if (!is_array($parsed)) {
-            return $relative;
+        if (!is_array($parsed) || !isset($parsed['host']) || !is_string($parsed['host'])) {
+            return null;
         }
 
         $scheme = $parsed['scheme'] ?? 'http';
-        $host = $parsed['host'] ?? '';
-        $port = $parsed['port'] ?? '';
+        $host = $parsed['host'];
+        $port = isset($parsed['port']) && is_int($parsed['port']) ? ':' . $parsed['port'] : '';
         $path = $parsed['path'] ?? '/';
 
         if (str_starts_with($relative, '/')) {
-            return $scheme . '://' . $host . ($port ? ':' . $port : '') . $relative;
+            return $scheme . '://' . $host . $port . $relative;
         }
 
         $dir = dirname($path);
@@ -442,7 +507,7 @@ class UpnpIgdClient
             $dir .= '/';
         }
 
-        return $scheme . '://' . $host . ($port ? ':' . $port : '') . $dir . $relative;
+        return $scheme . '://' . $host . $port . $dir . $relative;
     }
 
     /**
@@ -526,7 +591,21 @@ class UpnpIgdClient
      */
     private function soapRequest(string $url, string $action, string $body): ?string
     {
-        $parsed = @parse_url($url);
+        $normalized = LanEndpointGuard::normalizeHttpUrl($url);
+        $targetHost = $normalized !== null ? LanEndpointGuard::hostOf($normalized) : null;
+
+        // The port-mapping SOAP POST must aim at a private LAN gateway host only.
+        if (
+            $normalized === null
+            || $targetHost === null
+            || LanEndpointGuard::isRefusedAddress($targetHost)
+            || !LanEndpointGuard::isLanAddress($targetHost)
+        ) {
+            $this->logger->warning('UPnP: refused SOAP control request to a non-LAN host');
+            return null;
+        }
+
+        $parsed = @parse_url($normalized);
         if (!is_array($parsed) || !isset($parsed['host'], $parsed['scheme'])) {
             return null;
         }
@@ -550,10 +629,18 @@ class UpnpIgdClient
 
         $context = null;
         if ($parsed['scheme'] === 'https') {
+            // M4: TLS to the gateway is peer- and name-verified against the system CA.
+            // An IGD with a self-signed certificate will FAIL this and the mapping is
+            // refused (PortForwardService then falls back to NAT-PMP) rather than the
+            // port-forward POST being sent over an unauthenticated channel — the exact
+            // host-header forgery / MITM the old verify_peer=false allowed on a control
+            // path that mutates router config.
             $context = stream_context_create([
                 'ssl' => [
-                    'verify_peer' => false,
-                    'verify_peer_name' => false,
+                    'verify_peer' => true,
+                    'verify_peer_name' => true,
+                    'peer_name' => $parsed['host'],
+                    'SNI_enabled' => true,
                 ],
             ]);
         }

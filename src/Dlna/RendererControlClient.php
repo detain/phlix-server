@@ -14,6 +14,7 @@ namespace Phlix\Dlna;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\LanEndpointGuard;
 
 /**
  * HTTP SOAP client for AVTransport control of a remote DLNA renderer.
@@ -39,14 +40,57 @@ class RendererControlClient
      * @param string $rendererUrl Renderer control URL (e.g., http://192.168.1.50:8200)
      * @param StructuredLogger|null $logger Optional logger instance
      *
+     * @throws \InvalidArgumentException when the control URL is not a safe LAN endpoint.
+     *
      * @since 0.12.0
      */
     public function __construct(
         string $rendererUrl,
         ?StructuredLogger $logger = null
     ) {
-        $this->rendererUrl = rtrim($rendererUrl, '/');
+        // Control-plane sink guard: this URL is POSTed SOAP + DIDL-Lite payloads. It must
+        // be an http(s) endpoint on a LAN host — never metadata/loopback/other, never a
+        // non-http scheme. Fail fast at construction so no request is ever attempted.
+        $normalized = LanEndpointGuard::normalizeHttpUrl($rendererUrl);
+
+        if ($normalized === null) {
+            throw new \InvalidArgumentException('Renderer control URL is not a valid http(s) endpoint');
+        }
+
+        $host = LanEndpointGuard::hostOf($normalized);
+
+        if ($host === null || !LanEndpointGuard::isLanAddress($host) || LanEndpointGuard::isRefusedAddress($host)) {
+            throw new \InvalidArgumentException('Renderer control URL must address a private LAN host');
+        }
+
+        $this->rendererUrl = rtrim($normalized, '/');
         $this->logger = $logger ?? $this->createDefaultLogger();
+    }
+
+    /**
+     * Shared failure predicate for every control-plane result array.
+     *
+     * The transport returns errors under the LOWERCASE 'error' key (connection/XML/fault
+     * codes 1-4). Callers historically probed 'Error' (capital) — which never matched, so
+     * failed Play/Pause/Stop/poll were treated as success. Centralize the real shape here
+     * so the check can never drift again.
+     *
+     * @param array<string, mixed> $result A result returned by this client.
+     */
+    public static function failed(array $result): bool
+    {
+        return isset($result['error']);
+    }
+
+    /**
+     * Human-readable reason for a failed control result (empty when it succeeded).
+     *
+     * @param array<string, mixed> $result
+     */
+    public static function errorDescription(array $result): string
+    {
+        $description = $result['description'] ?? null;
+        return is_string($description) ? $description : 'Renderer control request failed';
     }
 
     /**
@@ -232,21 +276,37 @@ class RendererControlClient
             'http' => [
                 'timeout' => 10,
                 'method' => 'POST',
+                'follow_location' => 0,
+                'max_redirects' => 1,
                 'header' => implode("\r\n", [
                     'Content-Type: text/xml; charset="utf-8"',
                     'SOAPACTION: "' . $soapAction . '"',
                     'User-Agent: Phlix/1.0 DLNA Renderer Client',
                     'Accept: text/xml',
+                    'Connection: close',
                 ]),
                 'content' => $soapBody,
                 'ignore_errors' => true,
             ],
         ]);
 
-        $response = @file_get_contents($this->rendererUrl, false, $context);
+        // Bounded, redirect-free read: a control response is never followed to another
+        // host and is capped so a hostile/compromised renderer cannot balloon worker memory.
+        $handle = @fopen($this->rendererUrl, 'rb', false, $context);
 
-        if ($response === false) {
+        if ($handle === false) {
             $this->logger->error('SOAP request failed', [
+                'action' => $action,
+                'renderer' => $this->rendererUrl,
+            ]);
+            return ['error' => 1, 'description' => 'Connection failed'];
+        }
+
+        $response = @stream_get_contents($handle, LanEndpointGuard::MAX_RESPONSE_BYTES + 1);
+        @fclose($handle);
+
+        if (!is_string($response) || strlen($response) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+            $this->logger->error('SOAP response unreadable or oversized', [
                 'action' => $action,
                 'renderer' => $this->rendererUrl,
             ]);
@@ -299,7 +359,7 @@ class RendererControlClient
     private function parseSoapResponse(string $response, string $action): array
     {
         libxml_use_internal_errors(true);
-        $xml = @simplexml_load_string($response);
+        $xml = @simplexml_load_string($response, 'SimpleXMLElement', LIBXML_NONET);
 
         if ($xml === false) {
             $this->logger->warning('Failed to parse SOAP response', [

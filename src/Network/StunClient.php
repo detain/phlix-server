@@ -75,8 +75,21 @@ class StunClient
             return null;
         }
 
+        // L4: pin the reply source. socket_sendto() would resolve the hostname
+        // internally and discard which address it actually used, so resolve the
+        // configured STUN server to a literal ONCE, send to that literal, and
+        // accept a binding response only from the exact address we asked.
+        $stunIp = gethostbyname($this->stunServer);
+        if ($stunIp === $this->stunServer || filter_var($stunIp, FILTER_VALIDATE_IP) === false) {
+            $this->logger->warning('STUN: could not resolve STUN server, refusing to probe', [
+                'server' => $this->stunServer,
+            ]);
+            socket_close($socket);
+            return null;
+        }
+
         $request = $this->buildBindingRequest();
-        $sent = @socket_sendto($socket, $request, strlen($request), 0, $this->stunServer, $this->stunPort);
+        $sent = @socket_sendto($socket, $request, strlen($request), 0, $stunIp, $this->stunPort);
         if ($sent === false) {
             socket_close($socket);
             return null;
@@ -97,6 +110,14 @@ class StunClient
 
         $recvLen = @socket_recvfrom($socket, $response, 65536, 0, $fromAddr, $fromPort);
         socket_close($socket);
+
+        if ($fromAddr !== $stunIp) {
+            $this->logger->warning('STUN: discarding reply from unexpected source', [
+                'expected' => $stunIp,
+                'received' => $fromAddr,
+            ]);
+            return null;
+        }
 
         if ($recvLen === false || $recvLen < self::STUN_HEADER_SIZE) {
             return null;

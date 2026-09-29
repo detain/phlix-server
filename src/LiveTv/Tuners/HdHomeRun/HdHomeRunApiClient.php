@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\LanEndpointGuard;
+use Phlix\Common\Net\SsrfGuard;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -144,20 +146,43 @@ class HdHomeRunApiClient
     {
         $url = $this->baseUrl . $path;
 
-        $this->logger?->debug('HDHomeRun API request', ['url' => $url]);
+        // Boundary gate: a tuner host is either a LAN address or this machine (localhost
+        // self-hosted setups). Scheme must be http(s). Cloud-metadata / other ranges and
+        // any other scheme are refused BEFORE the socket — closing the SSRF vector where a
+        // spoofed discovery reply seeded a hostile lineup/stream host.
+        $normalized = LanEndpointGuard::normalizeHttpUrl($url);
+        $host = $normalized !== null ? LanEndpointGuard::hostOf($normalized) : null;
+
+        if ($normalized === null || $host === null || !self::isAllowedTunerHost($host)) {
+            $this->logger?->warning('Refused HDHomeRun API request to a disallowed host', ['url' => $url]);
+            return false;
+        }
+
+        $this->logger?->debug('HDHomeRun API request', ['url' => $normalized]);
 
         $context = stream_context_create([
             'http' => [
                 'timeout' => self::DEFAULT_TIMEOUT,
                 'method' => 'GET',
+                'follow_location' => 0,
+                'max_redirects' => 1,
                 'user_agent' => 'Phlix/1.0',
                 'ignore_errors' => true,
+                'header' => "Connection: close\r\n",
             ],
         ]);
 
-        $response = @file_get_contents($url, false, $context);
-        if ($response === false) {
-            $this->logger?->warning('HDHomeRun API request failed', ['url' => $url]);
+        $handle = @fopen($normalized, 'rb', false, $context);
+        if ($handle === false) {
+            $this->logger?->warning('HDHomeRun API request failed', ['url' => $normalized]);
+            return false;
+        }
+
+        $response = @stream_get_contents($handle, LanEndpointGuard::MAX_RESPONSE_BYTES + 1);
+        @fclose($handle);
+
+        if (!is_string($response) || strlen($response) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+            $this->logger?->warning('HDHomeRun API response unreadable or oversized', ['url' => $normalized]);
             return false;
         }
 
@@ -170,5 +195,26 @@ class HdHomeRunApiClient
 
         // Return raw response if not JSON
         return '';
+    }
+
+    /**
+     * Is a tuner host allowed for API traffic? RFC1918 LAN space or loopback (a tuner
+     * on this host). Everything else — link-local/metadata (169.254.169.254), CGNAT,
+     * multicast, reserved, and public addresses — is refused.
+     */
+    private static function isAllowedTunerHost(string $host): bool
+    {
+        if (!LanEndpointGuard::isIpLiteral($host)) {
+            // Hostname tuner URLs are not supported by this LAN path; only literals pin.
+            return false;
+        }
+
+        if (LanEndpointGuard::isLanAddress($host)) {
+            return true;
+        }
+
+        $effective = SsrfGuard::embeddedIpv4($host) ?? $host;
+
+        return SsrfGuard::ipMatchesAnyCidr($effective, ['127.0.0.0/8', '::1/128']);
     }
 }

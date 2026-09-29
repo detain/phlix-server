@@ -98,6 +98,17 @@ class NatPmpClient
                 continue;
             }
 
+            // L4: the reply must come from the gateway the request was sent to.
+            // Any other host on the segment gets the same UDP response shape and
+            // must never be parsed as the router's answer.
+            if ($fromAddr !== $gatewayIp) {
+                $this->logger->warning('NAT-PMP: discarding reply from unexpected source', [
+                    'expected' => $gatewayIp,
+                    'received' => $fromAddr,
+                ]);
+                continue;
+            }
+
             socket_close($socket);
             return $this->parseExternalIp($response);
         }
@@ -168,6 +179,13 @@ class NatPmpClient
             }
 
             $recvLen = @socket_recvfrom($socket, $response, 1024, 0, $fromAddr, $fromPort);
+
+            // L4: see discoverGateway() — only the configured gateway's reply is
+            // trusted as the unmap acknowledgement.
+            if ($fromAddr !== $gatewayIp) {
+                continue;
+            }
+
             socket_close($socket);
 
             if ($recvLen !== false && $recvLen >= 12 && strlen($response) >= 2) {
@@ -221,6 +239,13 @@ class NatPmpClient
             }
 
             $recvLen = @socket_recvfrom($socket, $response, 1024, 0, $fromAddr, $fromPort);
+
+            // L4: see discoverGateway() — only the configured gateway's reply is
+            // trusted; anything else keeps the loop until the overall timeout.
+            if ($fromAddr !== $gatewayIp) {
+                continue;
+            }
+
             socket_close($socket);
 
             if ($recvLen !== false && $recvLen >= 16 && strlen($response) >= 12) {

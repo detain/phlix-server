@@ -15,6 +15,7 @@ class PlayToSessionTest extends TestCase
 {
     /** @var RendererControlClient&MockObject */
     private RendererControlClient $clientMock;
+    /** @var PlaybackController&MockObject */
     private PlaybackController $playbackControllerMock;
     private StructuredLogger $logger;
 
@@ -95,7 +96,7 @@ class PlayToSessionTest extends TestCase
         $this->clientMock
             ->expects($this->once())
             ->method('play')
-            ->willReturn(['Error' => ['code' => 702, 'description' => 'Transport not set up']]);
+            ->willReturn(['error' => 3, 'description' => 'Transport not set up']);
 
         $session->play();
 
@@ -283,5 +284,123 @@ class PlayToSessionTest extends TestCase
         $session->setMediaItem('item-1', 'http://example.com/media.m3u8', '');
 
         $this->assertContains(PlayToSession::STATE_BUFFERING, $stateChanges);
+    }
+
+    public function testFailedPollKeepsLastPositionAndNeverWritesZero(): void
+    {
+        $session = new PlayToSession(
+            'session-123',
+            'renderer-1',
+            'Living Room TV',
+            $this->clientMock,
+            $this->playbackControllerMock,
+            $this->logger
+        );
+
+        $this->clientMock->method('setAvTransportUri')->willReturn(['CurrentState' => 'STOPPED']);
+        $this->clientMock->method('play')->willReturn(['CurrentState' => 'PLAYING']);
+        $this->clientMock->method('getPositionInfo')->willReturnOnConsecutiveCalls(
+            ['RelTime' => '00:10:30'],
+            ['error' => 1, 'description' => 'Connection failed'],
+            ['error' => 1, 'description' => 'Connection failed']
+        );
+
+        // One report for the successful sync that moved the position.
+        $this->playbackControllerMock->expects($this->once())->method('reportProgress');
+
+        $session->setMediaItem('item-1', 'http://example.com/media.m3u8', '');
+        $session->play();
+
+        $session->syncFromRenderer();
+        $this->assertEquals(6300000000, $session->getPosition());
+
+        // Failed polls: position kept, session alive (below the failure cap).
+        $session->syncFromRenderer();
+        $session->syncFromRenderer();
+
+        $this->assertEquals(6300000000, $session->getPosition());
+        $this->assertEquals(PlayToSession::STATE_PLAYING, $session->getState());
+    }
+
+    public function testMissingRelTimeDoesNotFabricateZeroPosition(): void
+    {
+        $session = new PlayToSession(
+            'session-123',
+            'renderer-1',
+            'Living Room TV',
+            $this->clientMock,
+            $this->playbackControllerMock,
+            $this->logger
+        );
+
+        $this->clientMock->method('setAvTransportUri')->willReturn(['CurrentState' => 'STOPPED']);
+        $this->clientMock->method('play')->willReturn(['CurrentState' => 'PLAYING']);
+        $this->clientMock->method('getPositionInfo')->willReturnOnConsecutiveCalls(
+            ['RelTime' => '00:10:30'],
+            [] // success envelope without RelTime
+        );
+
+        $this->playbackControllerMock->expects($this->once())->method('reportProgress');
+
+        $session->setMediaItem('item-1', 'http://example.com/media.m3u8', '');
+        $session->play();
+        $session->syncFromRenderer();
+        $session->syncFromRenderer();
+
+        $this->assertEquals(6300000000, $session->getPosition());
+    }
+
+    public function testConsecutivePollFailuresTearDownSession(): void
+    {
+        $session = new PlayToSession(
+            'session-123',
+            'renderer-1',
+            'Living Room TV',
+            $this->clientMock,
+            $this->playbackControllerMock,
+            $this->logger
+        );
+
+        $this->clientMock->method('setAvTransportUri')->willReturn(['CurrentState' => 'STOPPED']);
+        $this->clientMock->method('play')->willReturn(['CurrentState' => 'PLAYING']);
+        $this->clientMock->method('stop')->willReturn(['CurrentState' => 'STOPPED']);
+        $this->clientMock->method('getPositionInfo')->willReturnOnConsecutiveCalls(
+            ['RelTime' => '00:10:30'],
+            ['error' => 1, 'description' => 'Connection failed'],
+            ['error' => 1, 'description' => 'Connection failed'],
+            ['error' => 1, 'description' => 'Connection failed']
+        );
+
+        $session->setMediaItem('item-1', 'http://example.com/media.m3u8', '');
+        $session->play();
+
+        $session->syncFromRenderer(); // success
+        $this->assertEquals(PlayToSession::STATE_PLAYING, $session->getState());
+
+        $session->syncFromRenderer(); // failure 1
+        $session->syncFromRenderer(); // failure 2
+        $this->assertEquals(PlayToSession::STATE_PLAYING, $session->getState());
+
+        $session->syncFromRenderer(); // failure 3 → tear down
+        $this->assertEquals(PlayToSession::STATE_IDLE, $session->getState());
+    }
+
+    public function testSetMediaItemFailureKeepsSessionIdle(): void
+    {
+        $session = new PlayToSession(
+            'session-123',
+            'renderer-1',
+            'Living Room TV',
+            $this->clientMock,
+            $this->playbackControllerMock,
+            $this->logger
+        );
+
+        $this->clientMock->method('setAvTransportUri')
+            ->willReturn(['error' => 3, 'description' => 'SOAP fault']);
+
+        $session->setMediaItem('item-1', 'http://example.com/media.m3u8', '');
+
+        $this->assertEquals(PlayToSession::STATE_IDLE, $session->getState());
     }
 }

@@ -235,7 +235,9 @@ class CdsControlHandler
     private function parseSoapEnvelope(string $body): ?array
     {
         libxml_use_internal_errors(true);
-        $doc = simplexml_load_string($body);
+        // L1: LIBXML_NONET — untrusted SOAP bodies must never resolve external
+        // entities over the network (parity with SoapArgumentExtractor).
+        $doc = simplexml_load_string($body, 'SimpleXMLElement', LIBXML_NONET);
 
         if ($doc === false) {
             return null;
@@ -246,7 +248,7 @@ class CdsControlHandler
         if ($xmlString === false) {
             return null;
         }
-        $xpath = new \SimpleXMLElement($xmlString);
+        $xpath = new \SimpleXMLElement($xmlString, LIBXML_NONET);
         $xpath->registerXPathNamespace('s', 'http://schemas.xmlsoap.org/soap/envelope/');
 
         // Find any element inside Body that is the action

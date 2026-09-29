@@ -17,36 +17,37 @@ class CastApiClientTest extends TestCase
         $this->loggerMock = $this->createMock(StructuredLogger::class);
     }
 
-    public function testConnectFetchesEurekaInfo(): void
+    /**
+     * L2: nothing listening on the probe port — the thrown RuntimeException is
+     * what ChromecastController renders into its API response, so it MUST be a
+     * constant with no internal LAN URL. The URL belongs in the log context.
+     */
+    public function testConnectFailureThrowsConstantMessageWithoutLanUrl(): void
     {
-        // Use localhost with a non-existent port to avoid actual network calls
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
-        // The connect() method will fail to reach the server since nothing is listening
-        // but we can verify it attempts the correct URL structure
         try {
             $client->connect();
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
-            $this->assertStringContainsString('/setup/eureka_info', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
+            $this->assertStringNotContainsString('127.0.0.1', $e->getMessage());
         }
     }
 
-    public function testLaunchAppSendsPostToAppsEndpoint(): void
+    public function testLaunchAppFailureThrowsConstantMessageWithoutLanUrl(): void
     {
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
             $client->launchApp(CastApiClient::APP_ID_DEFAULT);
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
-            $this->assertStringContainsString('/apps/CC1AD845', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
         }
     }
 
-    public function testLoadMediaSendsCorrectPayload(): void
+    public function testLoadMediaFailureThrowsConstantMessageWithoutLanUrl(): void
     {
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
@@ -56,46 +57,45 @@ class CastApiClientTest extends TestCase
                 'application/x-mpegurl',
                 ['title' => 'Test Stream']
             );
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
-            $this->assertStringContainsString('/media', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
         }
     }
 
-    public function testGetMediaStatusParsesResponse(): void
+    public function testGetMediaStatusFailureThrowsConstantMessage(): void
     {
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
             $client->getMediaStatus();
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
         }
     }
 
-    public function testSendMediaCommandSendsCorrectCommand(): void
+    public function testSendMediaCommandFailureThrowsConstantMessage(): void
     {
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
             $client->sendMediaCommand('PLAY', ['currentTime' => 60]);
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
         }
     }
 
-    public function testGetAppSessionsReturnsArray(): void
+    public function testGetAppSessionsFailureThrowsConstantMessage(): void
     {
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
             $client->getAppSessions();
-        } catch (\Throwable $e) {
-            // Expected - no server running
-            $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
+            $this->fail('Expected RuntimeException for an unreachable device.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Cast API request failed', $e->getMessage());
         }
     }
 

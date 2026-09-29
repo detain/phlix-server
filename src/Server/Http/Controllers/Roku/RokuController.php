@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Roku;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Roku\RokuManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -25,17 +28,35 @@ use Phlix\Server\Http\Response;
  */
 class RokuController
 {
+    /**
+     * The ECP key names a client may drive via {@see self::sendKey()}.
+     *
+     * Parse-don't-validate at the HTTP boundary: anything outside this set is
+     * rejected with 400 before it can reach the raw `key=…` form append in
+     * RokuEcpClient::sendKeypress(), which would otherwise let a caller forge
+     * the POST body or smuggle extra form fields.
+     */
+    private const ALLOWED_KEYS = [
+        'SendHome', 'Select', 'Up', 'Down', 'Left', 'Right',
+        'Back', 'Play', 'Pause', 'Rev', 'Fwd', 'Info', 'Backspace', 'Enter',
+    ];
+
     /** @var RokuManager Roku session manager */
     private RokuManager $rokuManager;
 
+    /** @var StructuredLogger Diagnostic sink for device-side failures. */
+    private StructuredLogger $logger;
+
     /**
      * @param RokuManager $rokuManager Roku session manager
+     * @param StructuredLogger|null $logger Optional logger (defaults to the MEDIA channel)
      *
      * @since 0.12.0
      */
-    public function __construct(RokuManager $rokuManager)
+    public function __construct(RokuManager $rokuManager, ?StructuredLogger $logger = null)
     {
         $this->rokuManager = $rokuManager;
+        $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**
@@ -145,19 +166,34 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'Channel ID is required']);
         }
 
+        // M6: the channel id is interpolated into the ECP /launch/{id} path, so
+        // it must be a plain numeric channel number before it reaches the client.
+        if (!is_string($channelId) || !ctype_digit($channelId)) {
+            return (new Response())->status(400)->json(['error' => 'Channel ID must be numeric']);
+        }
+
         $session = $this->rokuManager->getSession($deviceId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
         }
 
         try {
-            $result = $session->sendKey($channelId);
+            // M3: this route launches a channel (POST /launch/{id}); it must not
+            // be routed to sendKey(), which posts the value as an ECP keypress.
+            $result = $session->launchChannel($channelId);
             return (new Response())->json([
                 'success' => true,
                 'result' => $result,
             ]);
         } catch (\Throwable $e) {
-            return (new Response())->status(500)->json(['error' => $e->getMessage()]);
+            $this->logger->error('Roku channel launch failed', [
+                'device_id' => $deviceId,
+                'channel_id' => $channelId,
+                'error' => $e->getMessage(),
+            ]);
+            // L2: constant client-facing message; the internal LAN URL stays in
+            // the log only.
+            return (new Response())->status(500)->json(['error' => 'Roku device request failed']);
         }
     }
 
@@ -186,6 +222,12 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'Key name is required']);
         }
 
+        // M6: allowlist the key at the boundary so the raw `key=` form append in
+        // the ECP client can never be steered by caller-controlled bytes.
+        if (!is_string($keyName) || !in_array($keyName, self::ALLOWED_KEYS, true)) {
+            return (new Response())->status(400)->json(['error' => 'Unsupported key name']);
+        }
+
         $session = $this->rokuManager->getSession($deviceId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
@@ -198,7 +240,14 @@ class RokuController
                 'result' => $result,
             ]);
         } catch (\Throwable $e) {
-            return (new Response())->status(500)->json(['error' => $e->getMessage()]);
+            $this->logger->error('Roku keypress failed', [
+                'device_id' => $deviceId,
+                'key' => $keyName,
+                'error' => $e->getMessage(),
+            ]);
+            // L2: constant client-facing message; the internal LAN URL stays in
+            // the log only.
+            return (new Response())->status(500)->json(['error' => 'Roku device request failed']);
         }
     }
 

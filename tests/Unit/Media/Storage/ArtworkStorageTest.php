@@ -370,6 +370,111 @@ final class ArtworkStorageTest extends TestCase
         self::assertNull($storage->variantPath('item-none', ArtworkStorage::LOGO_SIZE));
     }
 
+    // ---- M3: stale-artwork-after-rematch guard ------------------------------
+
+    private function markerFile(string $itemId): string
+    {
+        return rtrim($this->tmpDir, '/') . '/' . $itemId . '/source.json';
+    }
+
+    public function testDownloadAndStoreWritesSourceMarkerAfterSuccess(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = true;
+        $storage->blockingResponseBody = $this->makeJpegBytes(800, 1200);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+
+        $variants = $storage->downloadAndStore('item-m3', '/poster-a.jpg');
+
+        self::assertCount(count(ArtworkStorage::WIDTHS) + 1, $variants);
+        $raw = file_get_contents($this->markerFile('item-m3'));
+        self::assertIsString($raw);
+        $decoded = json_decode($raw, true);
+        self::assertIsArray($decoded);
+        self::assertSame('/poster-a.jpg', $decoded['poster_path'] ?? null);
+    }
+
+    public function testDownloadAndStoreSkipsWhenPosterPathUnchanged(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = true;
+        $storage->blockingResponseBody = $this->makeJpegBytes(800, 1200);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-same', '/poster-a.jpg');
+
+        // No scripted responses left: ANY attempted fetch throws LogicException,
+        // so a silent pass here IS the "skipped" proof.
+        $storage->scriptedBlockingResponses = [];
+        $again = $storage->downloadAndStore('item-m3-same', '/poster-a.jpg');
+
+        self::assertCount(1, $storage->blockingFetchUrls);
+        self::assertCount(count(ArtworkStorage::WIDTHS) + 1, $again);
+    }
+
+    public function testDownloadAndStoreRefetchesWhenPosterPathChanged(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = true;
+
+        $storage->blockingResponseBody = $this->makeJpegBytes(800, 1200);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-change', '/poster-a.jpg');
+        $firstW500 = file_get_contents(rtrim($this->tmpDir, '/') . '/item-m3-change/w500.jpg');
+        self::assertIsString($firstW500);
+
+        // Corrected match: DIFFERENT source poster with genuinely different
+        // bytes (different aspect → different w500 render).
+        $storage->blockingResponseBody = $this->makeJpegBytes(1200, 800);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-change', '/poster-b.jpg');
+
+        self::assertCount(2, $storage->blockingFetchUrls, 'the changed source must be refetched');
+        self::assertStringEndsWith('/original/poster-b.jpg', $storage->blockingFetchUrls[1]);
+
+        $secondW500 = file_get_contents(rtrim($this->tmpDir, '/') . '/item-m3-change/w500.jpg');
+        self::assertIsString($secondW500);
+        self::assertNotSame($firstW500, $secondW500, 'variant bytes must be replaced');
+
+        $raw = file_get_contents($this->markerFile('item-m3-change'));
+        self::assertIsString($raw);
+        $decoded = json_decode($raw, true);
+        self::assertIsArray($decoded);
+        self::assertSame('/poster-b.jpg', $decoded['poster_path'] ?? null, 'marker must roll forward');
+    }
+
+    public function testPreM3CacheWithoutMarkerIsRefetchedOnce(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = true;
+        $storage->blockingResponseBody = $this->makeJpegBytes(800, 1200);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-legacy', '/poster-a.jpg');
+
+        // Simulate the pre-M3 cache state: variants exist, marker never written.
+        self::assertTrue(unlink($this->markerFile('item-m3-legacy')));
+
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-legacy', '/poster-a.jpg');
+
+        self::assertCount(2, $storage->blockingFetchUrls, 'unknown provenance must trigger exactly one heal');
+        self::assertFileExists($this->markerFile('item-m3-legacy'), 'the marker must be recreated');
+    }
+
+    public function testSourceMarkerIsInvisibleToVariantScan(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+        $storage->forceBlocking = true;
+        $storage->blockingResponseBody = $this->makeJpegBytes(800, 1200);
+        $storage->scriptedBlockingResponses = [['code' => 200]];
+        $storage->downloadAndStore('item-m3-scan', '/poster-a.jpg');
+
+        // source.json exists on disk but must not join the variant list.
+        self::assertFileExists($this->markerFile('item-m3-scan'));
+        foreach ($storage->getStoredVariants('item-m3-scan') as $size) {
+            self::assertMatchesRegularExpression('/^(w\d+|original)$/', $size);
+        }
+    }
+
     /**
      * Build a fake Workerman HTTP client whose request() resolves the given
      * handler synchronously (no network, no event loop).

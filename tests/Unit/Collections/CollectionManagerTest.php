@@ -283,6 +283,68 @@ class CollectionManagerTest extends TestCase
         $manager->refreshSmartCollection('col-1');
     }
 
+    /**
+     * L5: a smart refresh must hand the repository ONE diff to apply as a
+     * single transaction — adds in evaluation order offset from max+1, and
+     * removals of everything that stopped matching — and must NOT loop
+     * insert()/delete() itself.
+     */
+    public function testRefreshSmartCollectionAppliesDiffAsOneTransaction(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'sp-1',
+            'name' => 'Recently added',
+            'library_id' => 'lib-1',
+            'rules_json' => '{}',
+            'limit' => 0,
+            'sort_by' => 'addedAt',
+            'sort_desc' => true,
+        ]]);
+
+        $collectionRepo = $this->createMock(CollectionRepository::class);
+        $collectionRepo->method('findById')->with('col-1')->willReturn(new Collection(
+            id: 'col-1',
+            name: 'Smart Collection',
+            libraryId: 'lib-1',
+            smartPlaylistId: 'sp-1',
+            parentId: null,
+        ));
+
+        $engine = $this->createMock(SmartPlaylistEngine::class);
+        $engine->method('evaluateOnScan')->willReturn([
+            ['id' => 'media-2'],
+            ['id' => 'media-1'],
+        ]);
+
+        $playlistRepo = new SmartPlaylistRepository($db);
+        $mediaItemRepo = $this->createMock(ItemRepository::class);
+
+        $itemRepo = $this->createMock(CollectionItemRepository::class);
+        $itemRepo->method('findMediaItemIdsForCollection')
+            ->with('col-1')
+            ->willReturn(['media-1', 'media-old']);
+        $itemRepo->method('getMaxSortOrder')->with('col-1')->willReturn(5);
+
+        // media-2 is new, media-old stopped matching, media-1 is untouched.
+        $itemRepo->expects($this->once())
+            ->method('applyMemberDiff')
+            ->with('col-1', ['media-2'], ['media-old'], 6);
+        // The untransacted per-row path must be gone from the manager.
+        $itemRepo->expects($this->never())->method('insert');
+        $itemRepo->expects($this->never())->method('delete');
+
+        $manager = new CollectionManager(
+            $collectionRepo,
+            $itemRepo,
+            $engine,
+            $playlistRepo,
+            $mediaItemRepo
+        );
+
+        $manager->refreshSmartCollection('col-1');
+    }
+
     public function testFindAllReturnsCollections(): void
     {
         $db = $this->createMock(Connection::class);
@@ -294,8 +356,20 @@ class CollectionManagerTest extends TestCase
         $mediaItemRepo = $this->createMock(ItemRepository::class);
 
         $collections = [
-            new Collection(id: 'col-1', name: 'Collection 1', libraryId: 'lib-1', smartPlaylistId: null, parentId: null),
-            new Collection(id: 'col-2', name: 'Collection 2', libraryId: 'lib-1', smartPlaylistId: null, parentId: null),
+            new Collection(
+                id: 'col-1',
+                name: 'Collection 1',
+                libraryId: 'lib-1',
+                smartPlaylistId: null,
+                parentId: null,
+            ),
+            new Collection(
+                id: 'col-2',
+                name: 'Collection 2',
+                libraryId: 'lib-1',
+                smartPlaylistId: null,
+                parentId: null,
+            ),
         ];
 
         $collectionRepo->method('findAll')
@@ -326,7 +400,13 @@ class CollectionManagerTest extends TestCase
         $mediaItemRepo = $this->createMock(ItemRepository::class);
 
         $collections = [
-            new Collection(id: 'col-1', name: 'Collection 1', libraryId: 'lib-1', smartPlaylistId: null, parentId: null),
+            new Collection(
+                id: 'col-1',
+                name: 'Collection 1',
+                libraryId: 'lib-1',
+                smartPlaylistId: null,
+                parentId: null,
+            ),
         ];
 
         $collectionRepo->method('findByLibraryId')

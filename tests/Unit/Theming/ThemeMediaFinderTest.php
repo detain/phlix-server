@@ -159,8 +159,12 @@ class ThemeMediaFinderTest extends TestCase
 
         $this->assertNotNull($result);
         $this->assertNotNull($result->audio);
-        $this->assertStringContainsString('/stream/theme-media/audio', $result->audio->url);
-        $this->assertStringContainsString(urlencode($themeMp3), $result->audio->url);
+        // L2: the persisted URL must match the REGISTERED route shape
+        // GET /stream/theme-media/{libraryId}/audio — the old
+        // '?path={abs}' query form was served by no route, and the absolute
+        // filesystem path must not appear in the public URL at all.
+        $this->assertSame('/stream/theme-media/lib-123/audio', $result->audio->url);
+        $this->assertStringNotContainsString($themeMp3, $result->audio->url);
     }
 
     public function testVideoUrlIsCorrectlyFormatted(): void
@@ -173,8 +177,9 @@ class ThemeMediaFinderTest extends TestCase
 
         $this->assertNotNull($result);
         $this->assertNotNull($result->video);
-        $this->assertStringContainsString('/stream/theme-media/video', $result->video->url);
-        $this->assertStringContainsString(urlencode($backdropMp4), $result->video->url);
+        // L2: real route shape, no absolute path leak (see audio twin above).
+        $this->assertSame('/stream/theme-media/lib-123/video', $result->video->url);
+        $this->assertStringNotContainsString($backdropMp4, $result->video->url);
     }
 
     public function testScannedAtIsSetCorrectly(): void

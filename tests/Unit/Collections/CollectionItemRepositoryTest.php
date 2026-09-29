@@ -162,4 +162,68 @@ class CollectionItemRepositoryTest extends TestCase
 
         $this->assertEquals(10, $result);
     }
+
+    // ---- L5: applyMemberDiff transactional semantics ------------------------
+
+    public function testApplyMemberDiffWrapsAddsAndRemovesInOneTransaction(): void
+    {
+        $log = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @param list<mixed> $params */
+            function (string $sql, array $params) use (&$log): array {
+                $log[] = [str_starts_with(trim($sql), 'INSERT') ? 'INSERT' : 'DELETE', $params];
+                return [];
+            }
+        );
+        $db->expects($this->once())->method('beginTrans');
+        $db->expects($this->once())->method('commitTrans');
+        $db->expects($this->never())->method('rollBackTrans');
+
+        $repo = new CollectionItemRepository($db);
+        $repo->applyMemberDiff('col-1', ['media-2', 'media-3'], ['media-1'], 5);
+
+        $this->assertCount(3, $log);
+        $this->assertSame('INSERT', $log[0][0]);
+        $this->assertSame('INSERT', $log[1][0]);
+        $this->assertSame('DELETE', $log[2][0]);
+        // sort_order offsets from startSortOrder in add order
+        $this->assertSame(5, $log[0][1][2]);
+        $this->assertSame(6, $log[1][1][2]);
+        $this->assertSame('media-1', $log[2][1][1]);
+    }
+
+    public function testApplyMemberDiffRollsBackAndRethrowsOnStatementFailure(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params): array {
+                // The item id lives in the bound params, not the SQL text.
+                if (($params[1] ?? null) === 'media-bad') {
+                    throw new \RuntimeException('simulated statement failure');
+                }
+                return [];
+            }
+        );
+        $db->expects($this->once())->method('beginTrans');
+        $db->expects($this->never())->method('commitTrans');
+        $db->expects($this->once())->method('rollBackTrans');
+
+        $repo = new CollectionItemRepository($db);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('simulated statement failure');
+
+        $repo->applyMemberDiff('col-1', ['media-bad'], ['media-1'], 1);
+    }
+
+    public function testApplyMemberDiffNoOpOnEmptyDiffOpensNoTransaction(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+        $db->expects($this->never())->method('beginTrans');
+
+        $repo = new CollectionItemRepository($db);
+        $repo->applyMemberDiff('col-1', [], [], 1);
+    }
 }

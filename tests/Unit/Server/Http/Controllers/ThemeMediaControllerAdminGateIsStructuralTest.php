@@ -454,16 +454,21 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
     }
 
     /**
-     * The READ stays ungated, and stays ungated for a REASON that is asserted.
+     * The READ stays ADMIN-ungated — and M5 added the precise shape of what
+     * "ungated" means: login-gated, never admin-gated.
      *
-     * `getThemeMedia()` is deliberately not behind the gate. Pinning that here
-     * means a future "make everything admin-only" sweep has to be a deliberate
-     * edit to this file rather than a silent behaviour change, and it is the
-     * negative control for the three arms above: an anonymous caller reaching a
-     * 200 on the READ proves the 401s above come from the gate on the mutations
-     * and not from something global.
+     * Originally this pinned "deliberately open to anonymous callers". Audit
+     * finding M5 reversed the anonymous half (the payload embeds absolute
+     * filesystem paths from the scan) while keeping the admin half: a merely
+     * authenticated NON-admin must still read, because the sibling
+     * LibraryController read convention is login-only. Both arms are asserted
+     * here so a future sweep has to edit this file deliberately:
+     *   - anonymous  -> 401 auth.required  (login gate, M5)
+     *   - non-admin  -> reaches the body   (still not admin-gated, S323)
+     * and it remains the negative control for the admin arms above: the 401
+     * below carries `auth.required`, never `auth.not_admin`.
      */
-    public function testTheReadHandlerIsNotGated(): void
+    public function testTheReadHandlerIsLoginGatedButNotAdminGated(): void
     {
         $users = $this->createMock(UserRepository::class);
         $users->method('findAdminById')->willReturn(null); // nobody is an admin
@@ -481,13 +486,27 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
             new AdminMiddleware($users, $this->createMock(AuditLogger::class))
         );
 
-        $response = $controller->getThemeMedia(new Request(), ['id' => 'lib-1']);
+        // Arm 1 (M5): anonymous is refused at the login gate…
+        $anonymous = $controller->getThemeMedia(new Request(), ['id' => 'lib-1']);
+        self::assertSame(401, $anonymous->statusCode);
+        self::assertSame(
+            'auth.required',
+            $this->decode($anonymous)['code'] ?? null,
+            'the read must refuse on the LOGIN branch (auth.required), never the admin branch'
+        );
+
+        // Arm 2 (S323): a non-admin still reaches the handler body (404-free:
+        // the fixture library exists, empty theme renders 200).
+        $viewer = new Request();
+        $viewer->userId = 'viewer-1';
+        $response = $controller->getThemeMedia($viewer, ['id' => 'lib-1']);
 
         self::assertSame(
             200,
             $response->statusCode,
-            'getThemeMedia() must stay readable by an anonymous caller — if this ever becomes a '
-            . '401 the change was intentional and belongs in this test, not in a passing suite'
+            'getThemeMedia() must stay readable by any AUTHENTICATED caller — if this ever '
+            . 'becomes admin-only the change was intentional and belongs in this test, not in '
+            . 'a passing suite'
         );
     }
 

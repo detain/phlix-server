@@ -437,4 +437,240 @@ class SmartPlaylistEngineTest extends TestCase
             $this->assertLessThanOrEqual(10500, $item['id']);
         }
     }
+
+    // ---- M2: rules against REAL hydrated list<string> metadata -------------
+
+    /**
+     * The real hydrated shape from FieldMappers: the key is the PLURAL
+     * `genres` and the value is a `list<string>`, e.g. ['Drama','Crime'].
+     *
+     * @param list<string> $genres
+     * @return array<string, mixed>
+     */
+    private function itemWithGenres(string $id, array $genres): array
+    {
+        return ['id' => $id, 'metadata' => ['genres' => $genres, 'title' => 'T-' . $id]];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $items
+     * @param array<string, mixed> $rule
+     * @return list<string> ids of the matching items, in input order
+     */
+    private function idsMatching(array $items, array $rule): array
+    {
+        $result = $this->engine->evaluate(
+            ['logic' => 'and', 'rules' => [$rule]],
+            $items,
+            0,
+            'title',
+            false
+        );
+
+        return array_values(array_map(static fn(array $item): string => (string)$item['id'], $result));
+    }
+
+    public function testContainsAgainstGenresListMatchesAnyElement(): void
+    {
+        $items = [
+            $this->itemWithGenres('1', ['Drama', 'Crime']),
+            $this->itemWithGenres('2', ['Comedy']),
+        ];
+
+        $this->assertSame(
+            ['1'],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'contains', 'value' => 'Drama']),
+        );
+    }
+
+    public function testContainsAgainstGenresListIsSubstringPerElement(): void
+    {
+        $items = [
+            $this->itemWithGenres('1', ['Drama', 'Crime']),
+            $this->itemWithGenres('2', ['Comedy']),
+        ];
+
+        $this->assertSame(
+            ['1'],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'contains', 'value' => 'rim']),
+        );
+    }
+
+    public function testNotContainsAgainstGenresListNoLongerMatchesEverything(): void
+    {
+        $items = [
+            $this->itemWithGenres('1', ['Drama', 'Crime']),
+            $this->itemWithGenres('2', ['Comedy']),
+        ];
+
+        // Pre-M2: the array cast to '' so notContains matched EVERY item.
+        $this->assertSame(
+            ['2'],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'notContains', 'value' => 'Drama']),
+        );
+    }
+
+    public function testEqualsAgainstGenresListUsesAnyOf(): void
+    {
+        $items = [
+            $this->itemWithGenres('1', ['Drama', 'Crime']),
+            $this->itemWithGenres('2', ['Comedy']),
+        ];
+
+        $this->assertSame(
+            ['1'],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'equals', 'value' => 'Crime']),
+        );
+        $this->assertSame(
+            [],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'equals', 'value' => 'Dram']),
+        );
+    }
+
+    public function testNotEqualsAgainstGenresListUsesNoneOf(): void
+    {
+        $items = [
+            $this->itemWithGenres('1', ['Drama', 'Crime']),
+            $this->itemWithGenres('2', ['Comedy']),
+        ];
+
+        $this->assertSame(
+            ['2'],
+            $this->idsMatching($items, ['field' => 'genres', 'op' => 'notEquals', 'value' => 'Drama']),
+        );
+    }
+
+    public function testScalarFieldSemanticsUnchangedByListSupport(): void
+    {
+        $items = [
+            ['id' => '1', 'metadata' => ['title' => 'Dune']],
+            ['id' => '2', 'metadata' => ['title' => 'Dunkirk']],
+        ];
+
+        $this->assertSame(
+            ['1', '2'],
+            $this->idsMatching($items, ['field' => 'title', 'op' => 'contains', 'value' => 'Du']),
+        );
+    }
+
+    public function testObjectListElementsNeverMatchViaEmptyCast(): void
+    {
+        // 'cast' holds list<array{...}> — non-scalar elements must be skipped,
+        // not stringified to '' (which would match an empty needle only, but
+        // proves no accidental containment via casts).
+        $items = [
+            ['id' => '1', 'metadata' => ['cast' => [['name' => 'Timothée']]]],
+        ];
+
+        $this->assertSame(
+            [],
+            $this->idsMatching($items, ['field' => 'cast', 'op' => 'contains', 'value' => 'Timothée']),
+        );
+    }
+
+    public function testGteBoundaryHasNoEpsilonFalsePositive(): void
+    {
+        $items = [
+            ['id' => '1', 'metadata' => ['sortField' => 2010.9995]],
+            ['id' => '2', 'metadata' => ['sortField' => 2011]],
+        ];
+
+        // Pre-L4, the -0.001 epsilon let 2010.9995 satisfy `gte 2011`.
+        $this->assertSame(
+            ['2'],
+            $this->idsMatching($items, ['field' => 'sortField', 'op' => 'gte', 'value' => 2011]),
+        );
+        // Exact-boundary equality still matches.
+        $this->assertSame(
+            ['1', '2'],
+            $this->idsMatching($items, ['field' => 'sortField', 'op' => 'gte', 'value' => 2010.9995]),
+        );
+    }
+
+    // ---- M4: bounded top-K must equal the naive full-sort + slice -----------
+
+    public function testTopKBoundedSelectionMatchesNaiveFullSortOrdering(): void
+    {
+        // Deterministic pseudo-random fixture of 137 items (> K = 10) mixing
+        // numeric values, ties, and nulls (nulls sort last per comparator).
+        $values = [];
+        mt_srand(20260929);
+        for ($i = 1; $i <= 137; $i++) {
+            $roll = $i % 7;
+            $values[] = match (true) {
+                $roll === 0 => null,
+                $roll < 3 => (int)($i / 10),   // lots of ties
+                default => mt_rand(1, 200),
+            };
+        }
+
+        $items = [];
+        foreach ($values as $index => $value) {
+            $items[] = ['id' => 'item-' . $index, 'metadata' => ['sortField' => $value]];
+        }
+
+        // Naive reference: full evaluation, full sort, then slice — computed
+        // in-test from the fixture with the same semantics the class promises
+        // (numeric desc, nulls last, stable for ties).
+        $reference = $items;
+        usort($reference, static function (array $a, array $b): int {
+            $va = $a['metadata']['sortField'];
+            $vb = $b['metadata']['sortField'];
+            if ($va === null && $vb === null) {
+                return 0;
+            }
+            if ($va === null) {
+                return 1;
+            }
+            if ($vb === null) {
+                return -1;
+            }
+            return -((int)$va <=> (int)$vb);
+        });
+        $expectedIds = array_map(
+            static fn(array $item): string => (string)$item['id'],
+            array_slice($reference, 0, 10)
+        );
+
+        // Re-run stream fixture in the SAME order for a fair comparison.
+        $this->assertSame($expectedIds, $this->runTopKWithFixture($items, 10, true));
+    }
+
+    public function testTopKBoundedSelectionMatchesNaiveFullSortAscending(): void
+    {
+        $items = [];
+        for ($i = 1; $i <= 53; $i++) {
+            $items[] = ['id' => 'x' . $i, 'metadata' => ['sortField' => ($i * 37) % 53]];
+        }
+
+        $reference = $items;
+        usort($reference, fn(array $a, array $b): int => $a['metadata']['sortField'] <=> $b['metadata']['sortField']);
+        $expectedIds = array_map(
+            static fn(array $item): string => (string)$item['id'],
+            array_slice($reference, 0, 7)
+        );
+
+        $this->assertSame($expectedIds, $this->runTopKWithFixture($items, 7, false));
+    }
+
+    /**
+     * @param list<array<string, mixed>> $items
+     * @return list<string>
+     */
+    private function runTopKWithFixture(array $items, int $limit, bool $desc): array
+    {
+        $repository = $this->createMock(ItemRepository::class);
+        $repository
+            ->method('getByLibrary')
+            ->willReturnCallback(
+                function (string $libId, int $batch, int $offset) use ($items) {
+                    return array_slice($items, $offset, $batch);
+                }
+            );
+
+        $engine = new SmartPlaylistEngine($repository);
+        $result = $engine->evaluateOnScan([], self::LIBRARY_ID, $limit, 'sortField', $desc);
+
+        return array_map(static fn(array $item): string => (string)$item['id'], $result);
+    }
 }

@@ -37,6 +37,13 @@ final class TestableArtworkStorage extends ArtworkStorage
     public array $scriptedBlockingResponses = [];
 
     /**
+     * Body the scripted 200 responses write into the temp file. M3 tests set
+     * this to REAL JPEG bytes so the full resize pipeline runs; the S73 SSRF
+     * hop tests never reach a 200 write and keep the default marker string.
+     */
+    public string $blockingResponseBody = 'SSRF-TEST-JPEG-BYTES';
+
+    /**
      * S73: recording/scripted blocking-fetch seam REPLACING cURL entirely —
      * the SSRF hop tests need deterministic redirect chains with no network.
      */
@@ -50,7 +57,7 @@ final class TestableArtworkStorage extends ArtworkStorage
         }
 
         if ($next['code'] === 200) {
-            file_put_contents($tmpFile, 'SSRF-TEST-JPEG-BYTES');
+            file_put_contents($tmpFile, $this->blockingResponseBody);
         }
 
         return ['code' => $next['code'], 'location' => $next['location'] ?? ''];

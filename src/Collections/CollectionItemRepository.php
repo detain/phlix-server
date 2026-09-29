@@ -260,4 +260,51 @@ class CollectionItemRepository
         $maxOrder = $firstRow['max_order'] ?? 0;
         return is_numeric($maxOrder) ? (int)$maxOrder : 0;
     }
+
+    /**
+     * Apply a membership diff atomically (L5): every add and every remove of
+     * one smart-collection refresh commits or rolls back as a unit, so a
+     * mid-loop DB failure can never leave the collection half-rebuilt —
+     * previously the insert loop and the delete loop ran untransacted, and a
+     * throw between them persisted an inconsistent membership set.
+     *
+     * Transaction idiom mirrors the house pattern in
+     * {@see \Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore::fetchAndDelete()}
+     * (begin → work → commit, rollback on every early exit or Throwable). The
+     * failure path RETHROWS: a refresh caller must hear about a rolled-back
+     * diff rather than receive a silent no-op.
+     *
+     * @param string $collectionId   Collection UUID
+     * @param list<string> $toAdd     Media item UUIDs to append, in order
+     * @param list<string> $toRemove  Media item UUIDs to delete
+     * @param int $startSortOrder     sort_order for the first $toAdd entry
+     *
+     * @throws \Throwable any statement failure, after rollback
+     *
+     * @since 0.14.0
+     */
+    public function applyMemberDiff(string $collectionId, array $toAdd, array $toRemove, int $startSortOrder): void
+    {
+        if ($toAdd === [] && $toRemove === []) {
+            return;
+        }
+
+        $this->db->beginTrans();
+        try {
+            $sortOrder = $startSortOrder;
+            foreach ($toAdd as $mediaItemId) {
+                $this->insert($collectionId, $mediaItemId, $sortOrder);
+                $sortOrder++;
+            }
+
+            foreach ($toRemove as $mediaItemId) {
+                $this->delete($collectionId, $mediaItemId);
+            }
+
+            $this->db->commitTrans();
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
+    }
 }

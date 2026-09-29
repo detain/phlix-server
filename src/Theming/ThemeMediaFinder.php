@@ -58,8 +58,8 @@ class ThemeMediaFinder
      */
     public function findForLibrary(string $libraryId, string $libraryPath): ?ThemeMedia
     {
-        $audio = $this->findAudio($libraryPath);
-        $video = $this->findVideo($libraryPath);
+        $audio = $this->findAudio($libraryPath, $libraryId);
+        $video = $this->findVideo($libraryPath, $libraryId);
 
         if ($audio === null && $video === null) {
             return null;
@@ -104,12 +104,12 @@ class ThemeMediaFinder
      *
      * @since 0.14.0
      */
-    private function findAudio(string $directory): ?ThemeAudio
+    private function findAudio(string $directory, string $libraryId): ?ThemeAudio
     {
         foreach (self::SUPPORTED_AUDIO_EXTENSIONS as $extension) {
             $filePath = $directory . '/theme.' . $extension;
             if (file_exists($filePath)) {
-                return $this->createAudioData($filePath, $extension);
+                return $this->createAudioData($filePath, $extension, $libraryId);
             }
         }
 
@@ -127,12 +127,12 @@ class ThemeMediaFinder
      *
      * @since 0.14.0
      */
-    private function findVideo(string $directory): ?ThemeVideo
+    private function findVideo(string $directory, string $libraryId): ?ThemeVideo
     {
         foreach (self::SUPPORTED_VIDEO_EXTENSIONS as $extension) {
             $filePath = $directory . '/backdrop.' . $extension;
             if (file_exists($filePath)) {
-                return $this->createVideoData($filePath, $extension);
+                return $this->createVideoData($filePath, $extension, $libraryId);
             }
         }
 
@@ -149,10 +149,10 @@ class ThemeMediaFinder
      *
      * @since 0.14.0
      */
-    private function createAudioData(string $path, string $format): ThemeAudio
+    private function createAudioData(string $path, string $format, string $libraryId): ThemeAudio
     {
         $duration = 0;
-        $url = $this->buildStreamUrl($path, 'audio');
+        $url = $this->buildStreamUrl($libraryId, 'audio');
 
         if ($this->ffmpegRunner !== null) {
             $probe = $this->ffmpegRunner->probe($path);
@@ -179,12 +179,12 @@ class ThemeMediaFinder
      *
      * @since 0.14.0
      */
-    private function createVideoData(string $path, string $format): ThemeVideo
+    private function createVideoData(string $path, string $format, string $libraryId): ThemeVideo
     {
         $duration = 0;
         $width = 0;
         $height = 0;
-        $url = $this->buildStreamUrl($path, 'video');
+        $url = $this->buildStreamUrl($libraryId, 'video');
 
         if ($this->ffmpegRunner !== null) {
             $probe = $this->ffmpegRunner->probe($path);
@@ -207,20 +207,28 @@ class ThemeMediaFinder
     }
 
     /**
-     * Build streaming URL for a theme media file.
+     * Build the streaming URL for a theme media file.
      *
-     * @param string $path Absolute filesystem path
-     * @param string $type Media type (audio|video)
+     * L2: this used to emit `/stream/theme-media/{type}?path={abs-path}` —
+     * a URL matching NO registered route (the query-string form was never
+     * implemented server-side) persisted into `audio_url`/`video_url`, so
+     * every client that trusted it got a 404. The real routes, registered in
+     * Application (see Router::registerThemeMediaRoutes), resolve the file
+     * from the database by library:
      *
-     * @return string Internal streaming URL
+     *   GET /stream/theme-media/{libraryId}/audio
+     *   GET /stream/theme-media/{libraryId}/video
+     *
+     * @param string $libraryId Library identifier (route segment; UUID in practice)
+     * @param string $type      Media type (audio|video)
+     *
+     * @return string Internal streaming URL matching the registered route
      *
      * @since 0.14.0
      */
-    private function buildStreamUrl(string $path, string $type): string
+    private function buildStreamUrl(string $libraryId, string $type): string
     {
-        // URL encoding the path to handle spaces and special characters
-        $encodedPath = urlencode($path);
-        return "/stream/theme-media/{$type}?path={$encodedPath}";
+        return "/stream/theme-media/{$libraryId}/{$type}";
     }
 
     /**

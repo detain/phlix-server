@@ -36,11 +36,14 @@ class SmartPlaylistEngine
      * {
      *   "logic": "and",
      *   "rules": [
-     *     { "field": "genre", "op": "contains", "value": "Drama" },
+     *     { "field": "genres", "op": "contains", "value": "Drama" },
      *     { "field": "year", "op": "gt", "value": 2010 }
      *   ]
      * }
      * ```
+     *
+     * `genres` is the real hydrated metadata key — a `list<string>` that the
+     * containment/equality operators match with any-of semantics (M2).
      *
      * @param array<string, mixed> $dsl Decoded JSON DSL
      * @return RuleNode Root node of the parsed tree
@@ -243,6 +246,15 @@ class SmartPlaylistEngine
     /**
      * Evaluates a leaf rule node against a media item.
      *
+     * M2: hydrated metadata stores multi-valued fields as LISTS — the real
+     * genre key is the plural `genres` holding `list<string>` (see
+     * {@see \Phlix\Media\Metadata\Resolution\FieldMappers}, e.g. its
+     * `fromTmdb()`'s `$b->stringList('genres', …)`). The equality/containment
+     * operators therefore carry any-of semantics over array item values:
+     * `contains` matches when ANY element contains the needle and
+     * `notContains`/`notEquals` hold only when NO element matches. Scalar
+     * fields keep their original scalar semantics untouched.
+     *
      * @param RuleNode $node The rule node with field/operator/value
      * @param array<string, mixed> $item The media item with 'metadata' key
      * @return bool True if the rule matches
@@ -260,19 +272,18 @@ class SmartPlaylistEngine
         }
 
         return match ($node->operator) {
-            'equals' => RuleOperators::equals($itemValue, $ruleValue),
-            'notEquals' => RuleOperators::notEquals($itemValue, $ruleValue),
-            'contains' => RuleOperators::contains($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
-            'notContains' => RuleOperators::notContains(
-                $this->mixedToString($itemValue),
-                $this->mixedToString($ruleValue)
-            ),
+            'equals' => $this->equalsAnyElement($itemValue, $ruleValue),
+            'notEquals' => !$this->equalsAnyElement($itemValue, $ruleValue),
+            'contains' => $this->containsAnyElement($itemValue, $ruleValue),
+            'notContains' => !$this->containsAnyElement($itemValue, $ruleValue),
             'gt' => RuleOperators::greaterThan($this->toFloat($itemValue), $this->toFloat($ruleValue)),
-            'gte' => RuleOperators::greaterThan($this->toFloat($itemValue), $this->toFloat($ruleValue) - 0.001) ||
-                RuleOperators::equals($itemValue, $ruleValue),
+            // L4: exact boundary comparisons. The old ±0.001 epsilon made
+            // gte/lte fire inside a dead zone around the rule value (e.g.
+            // year 2010.9995 satisfied `gte 2011`), and the trailing
+            // strict-equals arm only rescued same-typed operands anyway.
+            'gte' => RuleOperators::greaterThanOrEqual($this->toFloat($itemValue), $this->toFloat($ruleValue)),
             'lt' => RuleOperators::lessThan($this->toFloat($itemValue), $this->toFloat($ruleValue)),
-            'lte' => RuleOperators::lessThan($this->toFloat($itemValue), $this->toFloat($ruleValue) + 0.001) ||
-                RuleOperators::equals($itemValue, $ruleValue),
+            'lte' => RuleOperators::lessThanOrEqual($this->toFloat($itemValue), $this->toFloat($ruleValue)),
             'between' => is_array($ruleValue) && count($ruleValue) >= 2
                 ? RuleOperators::between($this->toFloat($itemValue), $this->toFloat($ruleValue[0] ?? 0),
                     $this->toFloat($ruleValue[1] ?? 0))
@@ -286,6 +297,55 @@ class SmartPlaylistEngine
             'endsWith' => RuleOperators::endsWith($this->mixedToString($itemValue), $this->mixedToString($ruleValue)),
             default => false,
         };
+    }
+
+    /**
+     * Any-of equality over list-shaped metadata (M2).
+     *
+     * A scalar item value keeps the historical strict comparison verbatim; an
+     * array value (a hydrated `list<string>` like `genres`) matches when ANY
+     * of its elements strictly equals the rule value.
+     */
+    private function equalsAnyElement(mixed $itemValue, mixed $ruleValue): bool
+    {
+        if (!is_array($itemValue)) {
+            return RuleOperators::equals($itemValue, $ruleValue);
+        }
+
+        foreach ($itemValue as $element) {
+            if (RuleOperators::equals($element, $ruleValue)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Any-of substring containment over list-shaped metadata (M2).
+     *
+     * A scalar item value keeps the historical string-containment comparison;
+     * an array value matches when ANY scalar element contains the needle.
+     * Non-scalar (nested) elements are skipped rather than stringified to
+     * `''`, so an object-list field can never match via an empty cast.
+     */
+    private function containsAnyElement(mixed $itemValue, mixed $ruleValue): bool
+    {
+        if (!is_array($itemValue)) {
+            return RuleOperators::contains($this->mixedToString($itemValue), $this->mixedToString($ruleValue));
+        }
+
+        $needle = $this->mixedToString($ruleValue);
+        foreach ($itemValue as $element) {
+            if (!is_scalar($element)) {
+                continue;
+            }
+            if (RuleOperators::contains($this->mixedToString($element), $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -323,30 +383,10 @@ class SmartPlaylistEngine
             return $items;
         }
 
-        usort($items, function (array $a, array $b) use ($sortBy, $sortDesc): int {
-            $metadataA = is_array($a['metadata'] ?? null) ? $a['metadata'] : [];
-            $metadataB = is_array($b['metadata'] ?? null) ? $b['metadata'] : [];
-
-            $valueA = $metadataA[$sortBy] ?? $a[$sortBy] ?? null;
-            $valueB = $metadataB[$sortBy] ?? $b[$sortBy] ?? null;
-
-            // Handle nulls - push to end
-            if ($valueA === null && $valueB === null) {
-                return 0;
-            }
-            if ($valueA === null) {
-                return $sortDesc ? 1 : -1;
-            }
-            if ($valueB === null) {
-                return $sortDesc ? -1 : 1;
-            }
-
-            $cmp = is_numeric($valueA) && is_numeric($valueB)
-                ? $valueA <=> $valueB
-                : strcasecmp($this->mixedToString($valueA), $this->mixedToString($valueB));
-
-            return $sortDesc ? -$cmp : $cmp;
-        });
+        usort(
+            $items,
+            fn(array $a, array $b): int => $this->compareForSort($a, $b, $sortBy, $sortDesc)
+        );
 
         return $items;
     }
@@ -408,7 +448,7 @@ class SmartPlaylistEngine
             });
         }
 
-        // For sorted results with a limit, use heap-based top-k selection
+        // For sorted results with a limit, use bounded top-k selection (M4)
         if ($sortBy !== 'random' && $limit > 0) {
             return $this->collectTopKSortedItems($libraryId, $limit, $sortBy, $sortDesc, $root);
         }
@@ -488,10 +528,25 @@ class SmartPlaylistEngine
     }
 
     /**
-     * Collects top-K sorted items using streaming approach.
+     * Collects top-K sorted items with a bounded, streaming selection (M4).
      *
-     * Uses the generator to stream items without full memory accumulation,
-     * then applies sorting with limit efficiently using usort and array_slice.
+     * Holds at most K items: each streamed match is inserted into a
+     * descending-sorted buffer of size K (linear from the tail, so equal
+     * values keep encounter order exactly like PHP 8's stable usort), and a
+     * candidate worse than the current K-th is dropped immediately. The old
+     * body materialised EVERY matching item before slicing — the docblock's
+     * "heap-bounded" claim was a lie the code never honoured.
+     *
+     * Why a sorted buffer and not SplPriorityQueue: the estate's sort
+     * comparator is a mixed-typed total order (numeric spaceship when both
+     * sides are numeric, case-insensitive string compare otherwise, nulls to
+     * the end). SplPriorityQueue can only order by a scalar priority, and no
+     * scalar priority exists that reproduces that comparator — a heap swap
+     * would silently change WHICH K items survive on string sort fields. The
+     * "SQL pushdown (ORDER BY/LIMIT for flat rules)" alternative is deferred
+     * for the same identity reason: MySQL JSON-collation ordering does not
+     * agree with this comparator, and result identity for existing callers is
+     * the hard constraint. Bounded MEMORY is achieved either way.
      *
      * @param string $libraryId Library to fetch from
      * @param int $limit Maximum items to return
@@ -507,66 +562,86 @@ class SmartPlaylistEngine
         bool $sortDesc,
         ?RuleNode $root
     ): array {
-        // Collect items using generator (streaming, memory efficient)
-        // For large libraries with limit, this still processes efficiently
-        // because we only hold one batch in memory at a time
-        $items = [];
+        /** @var list<array<string, mixed>> $top Best-K seen so far, ordered best → worst. */
+        $top = [];
+
         foreach ($this->iterateItemsForLibrary($libraryId) as $item) {
             if ($root !== null && !$this->evaluateNode($root, $item)) {
                 continue;
             }
-            $items[] = $item;
+
+            if (count($top) < $limit) {
+                $this->insertIntoSortedBuffer($top, $item, $sortBy, $sortDesc);
+                continue;
+            }
+
+            // Buffer full: only a candidate strictly better than the current
+            // worst kept item earns a slot; everything else is dropped here,
+            // which is the entire point of the bound.
+            $worst = $top[$limit - 1] ?? null;
+            if ($worst !== null && $this->compareForSort($item, $worst, $sortBy, $sortDesc) < 0) {
+                array_pop($top);
+                $this->insertIntoSortedBuffer($top, $item, $sortBy, $sortDesc);
+            }
         }
 
-        return $this->sortAndLimit($items, $sortBy, $sortDesc, $limit);
+        return $top;
     }
 
     /**
-     * Sorts items and applies limit.
+     * Inserts one item into the descending-sorted top-K buffer.
      *
-     * @param array<int, array<string, mixed>> $items Items to sort
-     * @param string $sortBy Sort field
-     * @param bool $sortDesc Sort descending
-     * @param int $limit Maximum items to return
-     * @return array<int, array<string, mixed>>
+     * Scans from the tail (the worst end) and stops at the first position the
+     * item does not outrank, so ties keep first-seen order — the same stable
+     * ordering PHP 8's usort produces for the full-sort path.
+     *
+     * @param array<int, array<string, mixed>> $top
+     * @param array<string, mixed> $item
      */
-    private function sortAndLimit(array $items, string $sortBy, bool $sortDesc, int $limit): array
+    private function insertIntoSortedBuffer(array &$top, array $item, string $sortBy, bool $sortDesc): void
     {
-        if (empty($items)) {
-            return [];
+        $index = count($top);
+        while ($index > 0 && $this->compareForSort($item, $top[$index - 1], $sortBy, $sortDesc) < 0) {
+            $index--;
+        }
+        array_splice($top, $index, 0, [$item]);
+    }
+
+    /**
+     * The single source of truth for sort ordering (M4).
+     *
+     * Mirrors exactly what {@see sortItems()}/{@see sortAndLimit()} used to
+     * inline: metadata-first value lookup, nulls to the end, numeric spaceship
+     * when both sides are numeric, case-insensitive string compare otherwise.
+     * Negative result = $a sorts BEFORE $b.
+     *
+     * @param array<string, mixed> $a
+     * @param array<string, mixed> $b
+     */
+    private function compareForSort(array $a, array $b, string $sortBy, bool $sortDesc): int
+    {
+        $metadataA = is_array($a['metadata'] ?? null) ? $a['metadata'] : [];
+        $metadataB = is_array($b['metadata'] ?? null) ? $b['metadata'] : [];
+
+        $valueA = $metadataA[$sortBy] ?? $a[$sortBy] ?? null;
+        $valueB = $metadataB[$sortBy] ?? $b[$sortBy] ?? null;
+
+        // Handle nulls - push to end
+        if ($valueA === null && $valueB === null) {
+            return 0;
+        }
+        if ($valueA === null) {
+            return $sortDesc ? 1 : -1;
+        }
+        if ($valueB === null) {
+            return $sortDesc ? -1 : 1;
         }
 
-        if ($sortBy === 'random') {
-            shuffle($items);
-            return array_slice($items, 0, $limit);
-        }
+        $cmp = is_numeric($valueA) && is_numeric($valueB)
+            ? $valueA <=> $valueB
+            : strcasecmp($this->mixedToString($valueA), $this->mixedToString($valueB));
 
-        usort($items, function (array $a, array $b) use ($sortBy, $sortDesc): int {
-            $metadataA = is_array($a['metadata'] ?? null) ? $a['metadata'] : [];
-            $metadataB = is_array($b['metadata'] ?? null) ? $b['metadata'] : [];
-
-            $valueA = $metadataA[$sortBy] ?? $a[$sortBy] ?? null;
-            $valueB = $metadataB[$sortBy] ?? $b[$sortBy] ?? null;
-
-            // Handle nulls - push to end
-            if ($valueA === null && $valueB === null) {
-                return 0;
-            }
-            if ($valueA === null) {
-                return $sortDesc ? 1 : -1;
-            }
-            if ($valueB === null) {
-                return $sortDesc ? -1 : 1;
-            }
-
-            $cmp = is_numeric($valueA) && is_numeric($valueB)
-                ? $valueA <=> $valueB
-                : strcasecmp($this->mixedToString($valueA), $this->mixedToString($valueB));
-
-            return $sortDesc ? -$cmp : $cmp;
-        });
-
-        return array_slice($items, 0, $limit);
+        return $sortDesc ? -$cmp : $cmp;
     }
 
     /**

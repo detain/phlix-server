@@ -245,18 +245,16 @@ class CollectionManager
         // Compute diff: items to remove (in current but not in new)
         $toRemove = array_diff($currentIdsStrings, $newIdsStrings);
 
-        // Add new items with sort order at the end
+        // Apply the whole diff as ONE atomic unit (L5): a failure part-way
+        // through used to persist a half-rebuilt membership set. Sort order is
+        // computed once up front and offset inside the repository loop.
         $maxSortOrder = $this->itemRepo->getMaxSortOrder($id);
-        $sortOrder = $maxSortOrder + 1;
-        foreach ($toAdd as $mediaItemId) {
-            $this->itemRepo->insert($id, (string)$mediaItemId, $sortOrder);
-            $sortOrder++;
-        }
-
-        // Remove items that no longer match
-        foreach ($toRemove as $mediaItemId) {
-            $this->itemRepo->delete($id, $mediaItemId);
-        }
+        $this->itemRepo->applyMemberDiff(
+            $id,
+            array_values(array_map('strval', $toAdd)),
+            array_values(array_map('strval', $toRemove)),
+            $maxSortOrder + 1
+        );
     }
 
     /**

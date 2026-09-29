@@ -82,6 +82,31 @@ final class RuleOperators
     }
 
     /**
+     * Greater-than-or-equal numeric comparison (L4).
+     *
+     * Exact boundary: `gte` matches when the item value equals or exceeds the
+     * rule value — no epsilon dead zone (the engine previously faked gte with
+     * `gt(x, rule - 0.001) || strictEquals`, which matched values strictly
+     * BELOW the rule inside a ±0.001 band).
+     *
+     * @since 0.14.0
+     */
+    public static function greaterThanOrEqual(int|float $itemValue, int|float $ruleValue): bool
+    {
+        return $itemValue >= $ruleValue;
+    }
+
+    /**
+     * Less-than-or-equal numeric comparison (L4). Exact boundary, no epsilon.
+     *
+     * @since 0.14.0
+     */
+    public static function lessThanOrEqual(int|float $itemValue, int|float $ruleValue): bool
+    {
+        return $itemValue <= $ruleValue;
+    }
+
+    /**
      * Range inclusion check - value must be between lo and hi (inclusive).
      *
      * @since 0.14.0
@@ -94,6 +119,13 @@ final class RuleOperators
     /**
      * Set membership - item value must be in the allowed values array.
      *
+     * L4: replaces the old loose `in_array(..., false)`, whose type juggling
+     * produced magic hits (`0` matching `'abc'`, `''` matching `0`, `true`
+     * matching `1`). Membership is now strict identity, widened ONLY for the
+     * two JSON-decode reality the DSL actually carries: a numeric string and
+     * its numeric equivalent ('2010' vs 2010) match as numbers, booleans never
+     * mix with numbers, and strings only match strings.
+     *
      * @param mixed $itemValue The value to check
      * @param array<mixed> $ruleValues Array of allowed values
      * @return bool True if item value is in the array
@@ -102,11 +134,19 @@ final class RuleOperators
      */
     public static function in(mixed $itemValue, array $ruleValues): bool
     {
-        return in_array($itemValue, $ruleValues, false);
+        foreach ($ruleValues as $ruleValue) {
+            if (self::matches($itemValue, $ruleValue)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
      * Set exclusion - item value must NOT be in the excluded values array.
+     *
+     * L4: complement of {@see self::in()} under the same type-aware equality.
      *
      * @param mixed $itemValue The value to check
      * @param array<mixed> $ruleValues Array of excluded values
@@ -116,7 +156,39 @@ final class RuleOperators
      */
     public static function notIn(mixed $itemValue, array $ruleValues): bool
     {
-        return !in_array($itemValue, $ruleValues, false);
+        return !self::in($itemValue, $ruleValues);
+    }
+
+    /**
+     * The type-aware membership comparison used by in/notIn (L4).
+     */
+    private static function matches(mixed $itemValue, mixed $ruleValue): bool
+    {
+        if ($itemValue === $ruleValue) {
+            return true;
+        }
+
+        $left = self::numericValue($itemValue);
+        $right = self::numericValue($ruleValue);
+
+        return $left !== null && $right !== null && $left === $right;
+    }
+
+    /**
+     * The float value of an int/float/numeric-string, or null for anything
+     * else — notably booleans and non-numeric strings never quantify.
+     */
+    private static function numericValue(mixed $value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float)$value;
+        }
+
+        if (is_string($value) && is_numeric($value)) {
+            return (float)$value;
+        }
+
+        return null;
     }
 
     /**

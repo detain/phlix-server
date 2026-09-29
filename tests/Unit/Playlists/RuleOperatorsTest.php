@@ -142,4 +142,56 @@ class RuleOperatorsTest extends TestCase
         $this->assertFalse(RuleOperators::endsWith('The Dark Knight', 'Dark'));
         $this->assertFalse(RuleOperators::endsWith('movie.mp4', '.MP4')); // case-sensitive
     }
+
+    // ---- L4: exact boundary comparisons + type-aware membership ------------
+
+    public function test_greaterThanOrEqual_matches_exact_boundary(): void
+    {
+        $this->assertTrue(RuleOperators::greaterThanOrEqual(2010, 2010));
+        $this->assertTrue(RuleOperators::greaterThanOrEqual(2011, 2010));
+        $this->assertFalse(RuleOperators::greaterThanOrEqual(2009, 2010));
+    }
+
+    public function test_lessThanOrEqual_matches_exact_boundary(): void
+    {
+        $this->assertTrue(RuleOperators::lessThanOrEqual(2010, 2010));
+        $this->assertTrue(RuleOperators::lessThanOrEqual(2009, 2010));
+        $this->assertFalse(RuleOperators::lessThanOrEqual(2011, 2010));
+    }
+
+    public function test_greaterThanOrEqual_has_no_epsilon_dead_zone(): void
+    {
+        // The pre-L4 engine faked gte with `gt(x, rule - 0.001)`, so this value
+        // strictly BELOW the rule matched. It must not anymore.
+        $this->assertFalse(RuleOperators::greaterThanOrEqual(2010.9995, 2011));
+        $this->assertFalse(RuleOperators::lessThanOrEqual(2011.0005, 2011));
+    }
+
+    public function test_in_keeps_numeric_string_equivalence(): void
+    {
+        $this->assertTrue(RuleOperators::in('2010', [2010]));
+        $this->assertTrue(RuleOperators::in(2010, ['2010']));
+        $this->assertTrue(RuleOperators::in(2010.0, ['2010']));
+    }
+
+    public function test_in_rejects_boolean_number_juggling(): void
+    {
+        // Loose in_array matched true == 1 and true == '1'.
+        $this->assertFalse(RuleOperators::in(true, [1]));
+        $this->assertFalse(RuleOperators::in(1, [true]));
+        $this->assertFalse(RuleOperators::in(true, ['1']));
+    }
+
+    public function test_in_rejects_non_numeric_string_number_mix(): void
+    {
+        $this->assertFalse(RuleOperators::in('abc', [0]));
+        $this->assertFalse(RuleOperators::in('', [0]));
+        $this->assertFalse(RuleOperators::in(0, ['abc']));
+    }
+
+    public function test_notIn_is_the_complement_of_in(): void
+    {
+        $this->assertTrue(RuleOperators::notIn(true, [1]));
+        $this->assertFalse(RuleOperators::notIn('2010', [2010]));
+    }
 }

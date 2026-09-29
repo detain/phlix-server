@@ -74,6 +74,13 @@ class ThemeMediaController
      *
      * GET /api/v1/libraries/{id}/theme-media
      *
+     * M5: authenticated. The payload embeds `audio->toArray()` /
+     * `video->toArray()`, which carry ABSOLUTE filesystem paths from the
+     * theme-media scan — an anonymous read was an absolute-path disclosure.
+     * Gate matches the sibling read convention
+     * ({@see LibraryController::requireAuth()}: any logged-in user, 401 with
+     * `code: auth.required` otherwise). Mutation endpoints stay admin-gated.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters including 'id' (library ID)
      *
@@ -83,6 +90,11 @@ class ThemeMediaController
      */
     public function getThemeMedia(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAuth($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $libraryId = $params['id'] ?? '';
 
         if (empty($libraryId)) {
@@ -253,5 +265,22 @@ class ThemeMediaController
             'library_id' => $libraryId,
             'deleted' => true,
         ]);
+    }
+
+    /**
+     * M5: authentication gate mirroring the sibling read convention
+     * ({@see LibraryController::requireAuth()}) — any authenticated user may
+     * read theme metadata; anonymous callers get 401 `auth.required`.
+     */
+    private function requireAuth(Request $request): ?Response
+    {
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+        return null;
     }
 }

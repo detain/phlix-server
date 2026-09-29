@@ -60,6 +60,14 @@ class ArtworkStorage
     /** On-disk filename of the cached, transparency-preserving title logo. */
     public const LOGO_FILENAME = 'logo.png';
 
+    /**
+     * M3: name of the per-item provenance marker recording the TMDB
+     * `poster_path` the cached variants were fetched from. Deliberately NOT
+     * matching the `(w###|original).jpg` variant scan, so it can never be
+     * mistaken for an artwork variant.
+     */
+    public const SOURCE_MARKER_FILENAME = 'source.json';
+
     /** JPEG quality for re-encoded variants (source of truth: the generic service). */
     public const JPEG_QUALITY = ImageResizer::JPEG_QUALITY;
 
@@ -120,6 +128,17 @@ class ArtworkStorage
     /**
      * Download a poster from TMDB and store all size variants locally.
      *
+     * M3 freshness: the early-return for an already-cached item is honored
+     * only while the cached variants still belong to THE SAME source
+     * `poster_path`. A corrected TMDB match persists new metadata but used to
+     * keep serving the OLD bytes forever, because the only eviction was
+     * `deleteItemArtwork()` on item deletion. The item directory now carries
+     * a `source.json` marker (invisible to {@see getStoredVariants()}, whose
+     * scan matches only `(w###|original).jpg`) recording the poster path the
+     * bytes came from; a different — or missing, pre-M3 — marker means the
+     * cache is stale or of unknown provenance and the variants are refetched
+     * and overwritten.
+     *
      * @param string $itemId      Media item UUID
      * @param string $posterPath  TMDB poster path (e.g., '/abc123.jpg')
      * @return string[]           Array of size names that were stored
@@ -132,9 +151,14 @@ class ArtworkStorage
             throw new \InvalidArgumentException('Poster path cannot be empty');
         }
 
-        // Check if already cached - return early if all variants exist
+        // Check if already cached - return early only when the cache covers
+        // every variant AND still belongs to this exact source poster (M3).
         $existingVariants = $this->getStoredVariants($itemId);
-        if ($existingVariants !== [] && count($existingVariants) >= count(self::WIDTHS) + 1) {
+        if (
+            $existingVariants !== []
+            && count($existingVariants) >= count(self::WIDTHS) + 1
+            && $this->readSourceMarker($itemId) === $posterPath
+        ) {
             return $existingVariants;
         }
 
@@ -146,7 +170,13 @@ class ArtworkStorage
             // Validate, generate each sized variant, and store the original —
             // all through the generic keyed service (S71). Same order of
             // operations and same return shape as the pre-extraction pipeline.
-            return $this->resizer->resizeToWidths($itemId, $tmpPath, self::WIDTHS);
+            $variants = $this->resizer->resizeToWidths($itemId, $tmpPath, self::WIDTHS);
+            // M3: record WHICH source these bytes came from, only after the
+            // whole pipeline succeeded — a failed refetch never clobbers the
+            // last good marker.
+            $this->writeSourceMarker($itemId, $posterPath);
+
+            return $variants;
         } finally {
             // Clean up temp file
             if (is_file($tmpPath)) {
@@ -336,6 +366,68 @@ class ArtworkStorage
             // metadata rescan's downloadAndStore() re-validates and self-heals.
             return null;
         }
+    }
+
+    /**
+     * Read the M3 provenance marker for an item.
+     *
+     * @return string|null The poster path the cached bytes came from, or null
+     *                     when no (usable) marker exists — absent, unreadable,
+     *                     corrupt, or pre-M3 cache.
+     */
+    private function readSourceMarker(string $itemId): ?string
+    {
+        $file = $this->sourceMarkerPath($itemId);
+        if (!is_file($file)) {
+            return null;
+        }
+
+        $raw = @file_get_contents($file);
+        if (!is_string($raw)) {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $posterPath = $decoded['poster_path'] ?? null;
+
+        return is_string($posterPath) ? $posterPath : null;
+    }
+
+    /**
+     * Write the M3 provenance marker atomically (temp-then-rename, mirroring
+     * {@see atomicWriteVariant()}'s same-directory guarantee).
+     *
+     * @throws \RuntimeException when the marker cannot be persisted.
+     */
+    private function writeSourceMarker(string $itemId, string $posterPath): void
+    {
+        $file = $this->sourceMarkerPath($itemId);
+        $temp = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
+
+        $payload = json_encode(['poster_path' => $posterPath]);
+        if ($payload === false || @file_put_contents($temp, $payload) === false) {
+            if (is_file($temp)) {
+                @unlink($temp);
+            }
+            throw new \RuntimeException('Failed to persist artwork source marker for item ' . $itemId);
+        }
+
+        if (!@rename($temp, $file)) {
+            @unlink($temp);
+            throw new \RuntimeException('Failed to persist artwork source marker for item ' . $itemId);
+        }
+    }
+
+    /**
+     * Absolute path of an item's provenance marker (id validated via itemDir()).
+     */
+    private function sourceMarkerPath(string $itemId): string
+    {
+        return $this->itemDir($itemId) . self::SOURCE_MARKER_FILENAME;
     }
 
     /**

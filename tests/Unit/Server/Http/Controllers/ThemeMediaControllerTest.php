@@ -77,6 +77,7 @@ class ThemeMediaControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->userId = 'user-1'; // M5: reads are authenticated.
 
         $response = $controller->getThemeMedia($request, ['id' => 'lib-1']);
 
@@ -118,6 +119,7 @@ class ThemeMediaControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->userId = 'user-1'; // M5: reads are authenticated.
 
         $response = $controller->getThemeMedia($request, ['id' => 'lib-1']);
 
@@ -152,6 +154,7 @@ class ThemeMediaControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->userId = 'user-1'; // M5: auth is checked before param validation.
 
         $response = $controller->getThemeMedia($request, ['id' => '']);
 
@@ -185,6 +188,7 @@ class ThemeMediaControllerTest extends TestCase
         );
 
         $request = new Request();
+        $request->userId = 'user-1'; // M5: reads are authenticated.
 
         $response = $controller->getThemeMedia($request, ['id' => 'nonexistent']);
 
@@ -192,6 +196,42 @@ class ThemeMediaControllerTest extends TestCase
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library not found', $body['error']);
+    }
+
+    /**
+     * M5: getThemeMedia() returns 401 (auth.required) for an ANONYMOUS
+     * request, touching neither the library manager nor the repository —
+     * the response embedded absolute filesystem paths, so the gate must
+     * run before any data access.
+     */
+    public function testGetThemeMediaRejectsAnonymousRequest(): void
+    {
+        $themeMediaRepository = $this->createMock(ThemeMediaRepository::class);
+        $themeMediaRepository->expects($this->never())->method('findByLibraryId');
+
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $themeMediaFinder = $this->createMock(ThemeMediaFinder::class);
+
+        $controller = new ThemeMediaController(
+            $themeMediaRepository,
+            $themeMediaFinder,
+            $libraryManager,
+            $this->makeAdminMiddleware(['id' => 'admin-1', 'is_admin' => 1])
+        );
+
+        $request = new Request();
+        $request->userId = null;
+
+        $response = $controller->getThemeMedia($request, ['id' => 'lib-1']);
+
+        $this->assertSame(401, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('Unauthorized', $body['error']);
+        $this->assertSame('auth.required', $body['code']);
     }
 
     /**
@@ -755,8 +795,12 @@ class ThemeMediaControllerTest extends TestCase
     }
 
     /**
-     * Gate: getThemeMedia() (the READ) is NOT gated even when admin middleware
-     * is set — matches LibraryController, which gates mutations only.
+     * Gate: getThemeMedia() (the READ) is NOT ADMIN-gated even when the admin
+     * middleware would deny — matches LibraryController, which admin-gates
+     * mutations only. M5 amended this: the read IS login-gated
+     * ({@see testGetThemeMediaRejectsAnonymousRequest()}); what stays true is
+     * that a merely-authenticated non-admin passes while the admin gate would
+     * refuse the same request on the mutation endpoints.
      */
     public function testGetThemeMediaIsNotGatedByAdminMiddleware(): void
     {
@@ -774,7 +818,8 @@ class ThemeMediaControllerTest extends TestCase
             ->with('lib-1')
             ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
 
-        // Even with an admin gate that would deny (no userId), the READ proceeds.
+        // An admin gate that would DENY, plus a non-admin viewer: the READ
+        // proceeds (login-gated per M5, never admin-gated).
         $controller = new ThemeMediaController(
             $repository,
             $finder,
@@ -783,7 +828,8 @@ class ThemeMediaControllerTest extends TestCase
         );
 
         $request = new Request();
-        // userId intentionally null: a gated endpoint would 401, the read must not.
+        // M5: any authenticated id clears the read gate; admin rights stay irrelevant.
+        $request->userId = 'viewer-1';
 
         $response = $controller->getThemeMedia($request, ['id' => 'lib-1']);
 

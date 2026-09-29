@@ -202,6 +202,26 @@ Regression guards: `tests/Unit/Session/SyncPlay/SyncPlayBridgeTest.php`
 
 ---
 
+## Exception 4 — SSDP device-description fetch (H1, `stream_context` + `fopen`)
+
+| | |
+|---|---|
+| Site | `src/Discovery/Ssdp/SsdpDiscovery.php::fetchOnceBounded()` — one `fopen()` + one capped `stream_get_contents()` per hop |
+| Reached from | `GET /api/v1/dlna/renderers` (`RendererListController::listRenderers()` → `PlayToManager::discoverRenderers()` → `RendererDiscovery::getRendererDescription()`), synchronously per discovered device, on an HTTP worker |
+| Why it is sync | Renderer discovery is an operator-triggered, authenticated, low-frequency listing of LAN devices; the fetch target is a LAN peer whose description is a few KB. Making it async would require threading a promise through the whole DLNA discovery family for a call that real devices answer in milliseconds. |
+| Bound | stream `timeout = 5 s` (`FETCH_TIMEOUT_SECONDS`), `follow_location = 0` + a manual hop budget of 3 (`MAX_REDIRECT_HOPS`), and a hard read ceiling of 1 MiB (`MAX_RESPONSE_BYTES` — the read stops at cap + 1 so oversize is refused, not buffered). Additionally the target is gated BEFORE the socket to RFC1918-only addresses, so the peer is on the LAN segment, not an internet host under attacker pace. |
+| Cost | Worst case 4 × 5 s of one HTTP worker against a hostile/throttling LAN peer that trickles under the byte cap; sub-second against real devices; zero against refused URLs (the gate refuses before any syscall). |
+
+The `timeout` stream option bounds the connect **and** the gap between reads, not
+the whole transfer — a drip attacker that sends one byte every 4 s within the
+1 MiB ceiling is the pathological bound above. That is the accepted cost of
+keeping the sync fetch; it is deliberately not unbounded like the pre-H1 code,
+which followed redirects inside the wrapper with no hop budget and no size cap.
+
+Regression guard: `tests/Unit/Discovery/Ssdp/SsdpDiscoverySsrfTest.php`.
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

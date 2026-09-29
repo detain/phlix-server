@@ -25,8 +25,12 @@ namespace Phlix\Session\SyncPlay;
  * S417-pinned outbound frame shape. So the bridge rides its OWN newline-
  * delimited JSON envelope on a private unix socket (default
  * `var/syncplay-bridge.sock`), authenticated by unix file permissions (0600,
- * same-user supervisor topology — the master forks all workers) plus a shared
- * secret token echoed in every frame and constant-time checked on receipt.
+ * same-user supervisor topology — the master forks all workers) plus a
+ * per-boot shared secret token echoed in every frame and constant-time
+ * checked on receipt (MED-1(1): resolved once at boot — config token →
+ * `PHLIX_SYNCPLAY_BRIDGE_TOKEN` env → fresh random bytes — and pinned
+ * pre-fork by start.php so every forked worker inherits the same secret;
+ * {@see self::initToken()}).
  *
  * Full model, ordering and loss posture: `docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md`.
  *
@@ -41,12 +45,89 @@ namespace Phlix\Session\SyncPlay;
 final class SyncPlayBridge
 {
     /**
-     * Shared secret every bridge frame must carry. The unix socket's 0600
-     * permissions are the primary gate; this token is the defense-in-depth
-     * tripwire against misconfiguration (world-writable var/, wrong-socket
-     * wiring) — a frame that arrives without it is dropped with a warning.
+     * Per-boot shared secret every bridge frame must carry (MED-1(1)).
+     *
+     * This REPLACES the old compile-time constant — a secret published in the
+     * source of every repo reader made the hash_equals check theater rather
+     * than defense. Resolution order ({@see self::initToken()}, called
+     * pre-fork from start.php so all forked workers inherit one value):
+     *   1. explicit config value  — $appConfig['syncplay_bridge']['token']
+     *   2. env PHLIX_SYNCPLAY_BRIDGE_TOKEN
+     *   3. fresh random 32-hex-char secret (per-process)
+     *
+     * The unix socket's 0600 permissions remain the PRIMARY gate; this token
+     * is the defense-in-depth tripwire against misconfiguration
+     * (world-writable var/, wrong-socket wiring, a second checkout aimed at
+     * the same path) — and post-MED-1 it is a tripwire a source-reading
+     * attacker cannot pass. A token mismatch FAILS CLOSED: parse() drops the
+     * frame and the listener logs a warning.
      */
-    public const TOKEN = 'S445XWORKPUBX9Q3';
+    private static ?string $token = null;
+
+    /** @var bool One-shot guard for the loud lazy-boot warning in token(). */
+    private static bool $lazyWarned = false;
+
+    /**
+     * Resolve and pin this process's bridge token. IDEMPOTENT: once pinned,
+     * later calls never overwrite it — that is what makes the master→worker
+     * fork inheritance and any defensive per-worker re-call order-insensitive.
+     *
+     * @param string|null $configured Explicit token (config value); null falls
+     *                                back to the env var, then to fresh randoms.
+     * @return string The pinned token
+     */
+    public static function initToken(?string $configured = null): string
+    {
+        if (self::$token !== null) {
+            return self::$token;
+        }
+
+        $env = getenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN');
+        $fromEnv = is_string($env) && $env !== '' ? $env : null;
+
+        self::$token = $configured ?? $fromEnv ?? bin2hex(random_bytes(16));
+
+        return self::$token;
+    }
+
+    /**
+     * The pinned token. Lazily self-boots (random + ONE-TIME loud stderr
+     * warning) when the entry point forgot initToken(): a lazily generated
+     * secret is process-local, so cross-process bridge traffic then fails
+     * CLOSED on the token mismatch — degraded (frames dropped, warnings
+     * logged, REST rail still durable-persists) but never insecure. Operators
+     * of split topologies must set syncplay_bridge.token or
+     * PHLIX_SYNCPLAY_BRIDGE_TOKEN so publisher and listener converge.
+     */
+    public static function token(): string
+    {
+        if (self::$token === null) {
+            $token = self::initToken();
+            if (!self::$lazyWarned) {
+                self::$lazyWarned = true;
+                error_log(
+                    '[phlix] SyncPlayBridge: initToken() was never called at boot; generated a process-local'
+                    . ' random bridge token. Cross-process bridge traffic will fail closed until fixed — boot'
+                    . ' via start.php or set syncplay_bridge.token / PHLIX_SYNCPLAY_BRIDGE_TOKEN.'
+                );
+            }
+
+            return $token;
+        }
+
+        return self::$token;
+    }
+
+    /**
+     * Forget the pinned token so a test can re-run boot resolution.
+     *
+     * @internal Test seam only — production code must never call this.
+     */
+    public static function resetTokenForTesting(): void
+    {
+        self::$token = null;
+        self::$lazyWarned = false;
+    }
 
     /** Envelope format version (this file's shape, independent of the client protocol version). */
     public const VERSION = 1;
@@ -121,7 +202,7 @@ final class SyncPlayBridge
         $frame = $payload;
         $frame['op'] = $op;
         $frame['bridge_version'] = self::VERSION;
-        $frame['token'] = self::TOKEN;
+        $frame['token'] = self::token();
         $frame['issued_at_ms'] = $issuedAtMs ?? (int) round(microtime(true) * 1000);
 
         return $frame;
@@ -174,7 +255,7 @@ final class SyncPlayBridge
         }
 
         $token = $decoded['token'] ?? null;
-        if (!is_string($token) || !hash_equals(self::TOKEN, $token)) {
+        if (!is_string($token) || !hash_equals(self::token(), $token)) {
             return null;
         }
 

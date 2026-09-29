@@ -494,4 +494,145 @@ class GroupStateTest extends TestCase
         $this->assertEquals(GroupState::POSITION_TOLERANCE, $group1->getPositionTolerance());
         $this->assertEquals(5000, $group2->getPositionTolerance());
     }
+
+    // =================================================================
+    // LOW-2 — capped playback queue.
+    // =================================================================
+
+    public function testAddToQueueIsCappedAtMaxQueueSize(): void
+    {
+        $group = new GroupState('group_123', 'Queue Cap');
+
+        for ($i = 1; $i <= GroupState::MAX_QUEUE_SIZE; $i++) {
+            $this->assertTrue($group->addToQueue('m' . $i, []), "item {$i} must be accepted");
+        }
+
+        $this->assertFalse($group->addToQueue('overflow', []), 'the cap must refuse, not grow');
+        $this->assertCount(GroupState::MAX_QUEUE_SIZE, $group->getPlaybackQueue());
+        $this->assertSame('m1', $group->getPlaybackQueue()[0]['media_id'], 'refusal must not evict older items');
+    }
+
+    // =================================================================
+    // HIGH-1 — canonical digest gate helpers.
+    // =================================================================
+
+    public function testIsCanonicalPasswordHashShapeLaw(): void
+    {
+        $this->assertTrue(GroupState::isCanonicalPasswordHash(hash('sha256', 'x')));
+        $this->assertFalse(GroupState::isCanonicalPasswordHash(strtoupper(hash('sha256', 'x'))));
+        $this->assertFalse(GroupState::isCanonicalPasswordHash('nope'));
+        $this->assertFalse(GroupState::isCanonicalPasswordHash(substr(hash('sha256', 'x'), 0, 63)));
+        $this->assertFalse(GroupState::isCanonicalPasswordHash(hash('sha256', 'x') . '0'));
+        $this->assertFalse(GroupState::isCanonicalPasswordHash(str_repeat('g', 64)));
+    }
+
+    public function testVerifyPasswordHashComparesVerbatimAndFailsClosed(): void
+    {
+        $hash = hash('sha256', 'gate');
+        $protected = new GroupState('g1', 'Protected', $hash);
+        $open = new GroupState('g2', 'Open');
+
+        $this->assertTrue($protected->verifyPasswordHash($hash));
+        $this->assertFalse($protected->verifyPasswordHash(hash('sha256', 'other')));
+        $this->assertFalse($protected->verifyPasswordHash($hash . $hash), 'non-canonical never matches');
+        $this->assertTrue($open->verifyPasswordHash($hash), 'open groups accept any digest');
+
+        // The two gate shapes agree: plaintext verify sees the same room.
+        $this->assertTrue($protected->verifyPassword('gate'));
+    }
+
+    // =================================================================
+    // MED-1(3) — deserialize invariants on externally-sourced blobs.
+    // =================================================================
+
+    public function testDeserializeRefusesMalformedPasswordHashShapes(): void
+    {
+        $base = [
+            'id' => 'g1',
+            'name' => 'Blob',
+            'members' => ['u1' => ['name' => 'One', 'connection_id' => null, 'joined_at' => 1, 'is_active' => true]],
+            'host_id' => 'u1',
+        ];
+
+        foreach (['garbage', strtoupper(hash('sha256', 'x')), 12345, ['h']] as $malformed) {
+            try {
+                GroupState::deserialize(array_merge($base, ['password_hash' => $malformed]));
+                $this->fail('a malformed password_hash blob must be refused, never silently nulled');
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function testDeserializeAcceptsNullAndCanonicalPasswordHash(): void
+    {
+        $hash = hash('sha256', 'ok');
+        $open = GroupState::deserialize(['id' => 'g1', 'name' => 'Blob', 'password_hash' => null]);
+        $this->assertFalse($open->hasPassword());
+
+        $protected = GroupState::deserialize(['id' => 'g2', 'name' => 'Blob', 'password_hash' => $hash]);
+        $this->assertTrue($protected->hasPassword());
+        $this->assertSame($hash, $protected->serialize()['password_hash']);
+    }
+
+    public function testDeserializeElectsOldestMemberWhenHostIsNotAMember(): void
+    {
+        $group = GroupState::deserialize([
+            'id' => 'g1',
+            'name' => 'Ghost Host',
+            'members' => [
+                'u2' => [
+                    'name' => 'Two', 'connection_id' => null, 'joined_at' => 5,
+                    'is_active' => true, 'is_host' => false,
+                ],
+                'u1' => [
+                    'name' => 'One', 'connection_id' => null, 'joined_at' => 2,
+                    'is_active' => true, 'is_host' => false,
+                ],
+            ],
+            'host_id' => 'attacker-not-a-member',
+        ]);
+
+        $this->assertSame('u1', $group->getHostId(), 'a ghost host claim must collapse to the oldest-member election');
+        $members = $group->getMembers();
+        $this->assertTrue($members['u1']['is_host']);
+        $this->assertFalse($members['u2']['is_host']);
+    }
+
+    public function testDeserializeNormalizesForgedIsHostFlagsAgainstResolvedHost(): void
+    {
+        $group = GroupState::deserialize([
+            'id' => 'g1',
+            'name' => 'Flag Forge',
+            'members' => [
+                'u1' => [
+                    'name' => 'One', 'connection_id' => null, 'joined_at' => 1,
+                    'is_active' => true, 'is_host' => false,
+                ],
+                'u2' => [
+                    'name' => 'Two', 'connection_id' => null, 'joined_at' => 2,
+                    'is_active' => true, 'is_host' => true,
+                ],
+            ],
+            'host_id' => 'u1',
+        ]);
+
+        $members = $group->getMembers();
+        $this->assertTrue($members['u1']['is_host'], 'the real host must carry the flag');
+        $this->assertFalse($members['u2']['is_host'], 'a forged member-level is_host must be normalized away');
+    }
+
+    public function testDeserializeRepairsMissingHostForNonEmptyMembership(): void
+    {
+        $group = GroupState::deserialize([
+            'id' => 'g1',
+            'name' => 'Hostless',
+            'members' => [
+                'u1' => ['name' => 'One', 'connection_id' => null, 'joined_at' => 1, 'is_active' => true],
+            ],
+            'host_id' => null,
+        ]);
+
+        $this->assertSame('u1', $group->getHostId(), 'members without a host elect the oldest on install');
+    }
 }

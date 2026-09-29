@@ -432,8 +432,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * +2 reads / +1 write deltas are pinned with their provenance under
               * census numbers 2 and 5 below. Measured 1898/397/991 from the phpunit
               * red on the final tree, not predicted.
+              * Re-pinned 1898→1897 by the SyncPlay security lane (2026-09-29):
+              * deletes the dormant second-membership-truth file src/Server/
+              * WebSocket/SyncPlay/SyncPlayRoom.php (LOW-4 — zero src instantiation;
+              * grep-verified it names no Request property, so reads/writes are
+              * untouched) and adds zero first-party PHP files — every new test
+              * case was appended into an existing test file. Measured from
+              * `git ls-files '*.php'` plus the phpunit red on the clean worktree
+              * of the landed commit, not predicted.
               */
-    private const EXPECTED_PHP_FILES = 1898;
+    private const EXPECTED_PHP_FILES = 1897;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

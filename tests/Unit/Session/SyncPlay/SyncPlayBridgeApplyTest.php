@@ -15,6 +15,8 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Session\SyncPlay\SyncPlayBridge;
 use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Server\WebSocket\ConnectionPool;
+use Phlix\Tests\Unit\Server\WebSocket\TestConnection;
 
 /**
  * S445 — the WS-side APPLY semantics of the write-through bridge, on two real
@@ -235,5 +237,91 @@ final class SyncPlayBridgeApplyTest extends TestCase
 
         // Hydration is not bridge traffic: a later frame stamped anything still applies.
         $this->assertTrue($rest->applyBridgeFrame($this->upsertFrame($this->serializedGroup('sp_hydrate', 'Mirror'), 1)));
+    }
+
+    // =================================================================
+    // MED-1(2) — a merge may NOT silently evict a member this worker still
+    // holds a LIVE socket for; MED-1(3) — a blob cannot install a ghost host.
+    // =================================================================
+
+    protected function tearDown(): void
+    {
+        ConnectionPool::getInstance()->clear();
+    }
+
+    public function testMergeOmittingALiveConnectedMemberKeepsThemAndLogs(): void
+    {
+        $pool = ConnectionPool::getInstance();
+        $live = new TestConnection('sock-live');
+        $pool->add($live);
+
+        $ws = new SyncPlayManager();
+        $created = $ws->createGroup('Live Room', null, 'u1', 'One', 'sock-live');
+        $groupId = $created['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        // Forged-style blob: membership rewritten to a stranger, u1 omitted.
+        $blob = GroupState::deserialize([
+            'id' => $groupId,
+            'name' => 'Hijacked',
+            'members' => ['u9' => ['name' => 'Nine', 'connection_id' => null, 'joined_at' => 1, 'is_active' => true]],
+            'host_id' => 'u9',
+        ])->serialize();
+
+        $this->assertTrue($ws->applyBridgeFrame($this->upsertFrame($blob, 900)));
+
+        $state = $ws->getGroupState($groupId);
+        $this->assertNotNull($state);
+        $this->assertArrayHasKey('u1', $state['members'], 'a live-socketed member must never be silently evicted');
+        $this->assertArrayHasKey('u9', $state['members'], 'the REST-owned additions still merge');
+        $this->assertSame('u9', $state['host_id'], 'host facet stays REST-owned (u9 is a member, so it is legal)');
+    }
+
+    public function testMergeStillEvictsMembersWithoutALiveSocketOnThisWorker(): void
+    {
+        $ws = new SyncPlayManager();
+        $created = $ws->createGroup('Phantom Room', null, 'u1', 'One', 'sock-ghost');
+        $groupId = $created['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        // 'sock-ghost' is deliberately NOT registered in the ConnectionPool —
+        // parity with today's behavior for phantom/idle entries: REST owns them.
+        $blob = GroupState::deserialize([
+            'id' => $groupId,
+            'name' => 'Cleared',
+            'members' => [],
+            'host_id' => null,
+        ])->serialize();
+
+        $this->assertTrue($ws->applyBridgeFrame($this->upsertFrame($blob, 900)));
+
+        $state = $ws->getGroupState($groupId);
+        $this->assertNotNull($state);
+        $this->assertSame([], $state['members'], 'non-live members remain fully REST-evictable');
+        $this->assertNull($ws->getMemberGroup('u1'));
+    }
+
+    public function testAdoptedBlobClaimingAGhostHostIsCorrectedByElection(): void
+    {
+        $ws = new SyncPlayManager();
+
+        // Raw (not helper-built) blob: helpers round-trip through deserialize(),
+        // which now repairs host∈members itself — so forge the shape directly.
+        $forged = [
+            'id' => 'sp_ghost_host',
+            'name' => 'Claimed',
+            'password_hash' => null,
+            'members' => [
+                'u2' => ['name' => 'Two', 'connection_id' => null, 'joined_at' => 5, 'is_active' => true],
+                'u1' => ['name' => 'One', 'connection_id' => null, 'joined_at' => 2, 'is_active' => true],
+            ],
+            'host_id' => 'attacker-never-a-member',
+        ];
+
+        $this->assertTrue($ws->applyBridgeFrame($this->upsertFrame($forged, 100)));
+
+        $state = $ws->getGroupState('sp_ghost_host');
+        $this->assertNotNull($state);
+        $this->assertSame('u1', $state['host_id'], 'a ghost host claim collapses to the oldest-member election');
     }
 }

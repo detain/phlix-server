@@ -43,8 +43,7 @@ use Phlix\Common\Logger\LogChannels;
  * @copyright 2024 Phlix Media Server
  * @license Proprietary
  *
- * @see SyncPlayManager For group state management
- * @see SyncPlayRoom For room broadcasting
+ * @see SyncPlayManager For group state management and room broadcasting
  * @see Protocol For binary frame encoding/decoding
  */
 class SyncPlayWorker
@@ -269,6 +268,11 @@ class SyncPlayWorker
         // logged warning — never block :8097/8098 serving.
         $bridgeConfigRaw = $this->config['syncplay_bridge'] ?? [];
         $bridgeConfig = is_array($bridgeConfigRaw) ? $bridgeConfigRaw : [];
+        // MED-1(1) parity with the served start.php pin (idempotent): a boot
+        // that reaches this alternate bootstrap without a pre-fork init still
+        // converges when the token is config/env-provided.
+        $bridgeTokenRaw = $bridgeConfig['token'] ?? null;
+        SyncPlayBridge::initToken(is_string($bridgeTokenRaw) && $bridgeTokenRaw !== '' ? $bridgeTokenRaw : null);
         if (SyncPlayBridge::isEnabled($bridgeConfig)) {
             try {
                 $listener = new SyncPlayBridgeListener(

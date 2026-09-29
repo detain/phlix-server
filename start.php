@@ -77,6 +77,20 @@ $config['web_portal']         = array_merge(
 
 LoggerFactory::init($config['logger_config_path']);
 
+// S445/MED-1(1): pin the SyncPlay write-through bridge's shared secret HERE,
+// pre-fork, so every forked worker (14 HTTP publishers + the WS listener + the
+// timer workers) inherits ONE value through memory — no on-disk secret needed
+// in the served topology. Resolution: syncplay_bridge.token (config) →
+// PHLIX_SYNCPLAY_BRIDGE_TOKEN (env) → fresh random bytes; a process that
+// reaches the bridge without a boot pin self-boots a process-local secret and
+// warns once (cross-process frames then fail CLOSED). Split topologies must
+// set the config/env token. See docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
+$syncPlayBridgeConfig = is_array($config['syncplay_bridge'] ?? null) ? $config['syncplay_bridge'] : [];
+$syncPlayBridgeToken = $syncPlayBridgeConfig['token'] ?? null;
+\Phlix\Session\SyncPlay\SyncPlayBridge::initToken(
+    is_string($syncPlayBridgeToken) && $syncPlayBridgeToken !== '' ? $syncPlayBridgeToken : null
+);
+
 // Point Workerman's master PID file at config/server.php's `worker.pid_file`.
 // MUST run in the master, before Worker::runAll(). Without this, Workerman uses
 // its own default (dirname(start.php)/workerman.start.php.pid) while

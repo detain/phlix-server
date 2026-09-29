@@ -34,12 +34,67 @@ final class SyncPlayBridgeTest extends TestCase
     private ?SyncPlayBridgeListener $listener = null;
 
     /**
-     * The lane token is CODE-RESIDENT by contract: the const in SyncPlayBridge
-     * plus this guard. Markdown never carries it.
+     * MED-1(1) — the lane secret is NO LONGER code-resident. Unpinned, it boots
+     * to fresh random hex, and two boots differ: the retired const let anyone
+     * who could read the repo forge bridge frames, so the hash_equals gate was
+     * theater; a per-boot secret makes the tripwire real.
      */
-    public function testTheBridgeTokenIsTheS445LaneToken(): void
+    public function testTokenDefaultsToFreshRandomPerBoot(): void
     {
-        $this->assertSame('S445XWORKPUBX9Q3', SyncPlayBridge::TOKEN);
+        putenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN');
+        SyncPlayBridge::resetTokenForTesting();
+        try {
+            $first = SyncPlayBridge::initToken();
+            $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $first);
+
+            SyncPlayBridge::resetTokenForTesting();
+            $second = SyncPlayBridge::token();
+            $this->assertNotSame($first, $second, 'each boot must mint its own secret');
+        } finally {
+            putenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN');
+            SyncPlayBridge::resetTokenForTesting();
+        }
+    }
+
+    /**
+     * MED-1(1) — resolution precedence config value → env → random, and once
+     * pinned the token NEVER moves (that is what makes start.php's pre-fork pin
+     * survive every defensive post-fork re-call in all 17 workers).
+     */
+    public function testTokenResolvesEnvThenExplicitAndPinsIdempotently(): void
+    {
+        try {
+            putenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN=env-lane-secret');
+            SyncPlayBridge::resetTokenForTesting();
+            $this->assertSame('env-lane-secret', SyncPlayBridge::initToken());
+
+            SyncPlayBridge::resetTokenForTesting();
+            $this->assertSame('config-lane-secret', SyncPlayBridge::initToken('config-lane-secret'));
+
+            $this->assertSame('config-lane-secret', SyncPlayBridge::initToken('late-rival'));
+            $this->assertSame('config-lane-secret', SyncPlayBridge::token());
+        } finally {
+            putenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN');
+            SyncPlayBridge::resetTokenForTesting();
+        }
+    }
+
+    /**
+     * A frame minted by frame() always parses back through parse() in the same
+     * process (one shared pin) — and a frame carrying any other value is
+     * dropped: the pin only ever round-trips with itself.
+     */
+    public function testFrameTokenRoundTripsOnlyWithThePinnedToken(): void
+    {
+        $line = SyncPlayBridge::encode(
+            SyncPlayBridge::frame(SyncPlayBridge::OP_GROUP_DELETE, ['group_id' => 'sp_a'], 7)
+        );
+        $this->assertIsArray(SyncPlayBridge::parse($line));
+
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $decoded['token'] = strrev((string) SyncPlayBridge::token());
+        $this->assertNull(SyncPlayBridge::parse((string) json_encode($decoded)));
     }
 
     public function testFrameCarriesTheEnvelopeAndPayload(): void
@@ -48,7 +103,7 @@ final class SyncPlayBridgeTest extends TestCase
 
         $this->assertSame(SyncPlayBridge::OP_GROUP_DELETE, $frame['op']);
         $this->assertSame(SyncPlayBridge::VERSION, $frame['bridge_version']);
-        $this->assertSame(SyncPlayBridge::TOKEN, $frame['token']);
+        $this->assertSame(SyncPlayBridge::token(), $frame['token']);
         $this->assertSame(123456789, $frame['issued_at_ms']);
         $this->assertSame('sp_x', $frame['group_id']);
     }
@@ -64,7 +119,7 @@ final class SyncPlayBridgeTest extends TestCase
         ], 42);
 
         $this->assertSame(SyncPlayBridge::OP_GROUP_DELETE, $frame['op']);
-        $this->assertSame(SyncPlayBridge::TOKEN, $frame['token']);
+        $this->assertSame(SyncPlayBridge::token(), $frame['token']);
         $this->assertSame(SyncPlayBridge::VERSION, $frame['bridge_version']);
         $this->assertSame(42, $frame['issued_at_ms']);
     }
@@ -99,14 +154,14 @@ final class SyncPlayBridgeTest extends TestCase
         $cases = [
             'not json' => 'definitely not json',
             'json scalar' => '"just a string"',
-            'unknown op' => (string) json_encode(['op' => 'rm_rf', 'bridge_version' => 1, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
+            'unknown op' => (string) json_encode(['op' => 'rm_rf', 'bridge_version' => 1, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
             'wrong token' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'token' => 'nope', 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
             'missing token' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
-            'wrong version' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 2, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
-            'negative stamp' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => -1, 'group_id' => 'sp_a']),
-            'delete without id' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => 5]),
-            'upsert without group' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_UPSERT, 'bridge_version' => 1, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => 5]),
-            'upsert group without id' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_UPSERT, 'bridge_version' => 1, 'token' => SyncPlayBridge::TOKEN, 'issued_at_ms' => 5, 'group' => ['name' => 'x']]),
+            'wrong version' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 2, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => 5, 'group_id' => 'sp_a']),
+            'negative stamp' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => -1, 'group_id' => 'sp_a']),
+            'delete without id' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_DELETE, 'bridge_version' => 1, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => 5]),
+            'upsert without group' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_UPSERT, 'bridge_version' => 1, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => 5]),
+            'upsert group without id' => (string) json_encode(['op' => SyncPlayBridge::OP_GROUP_UPSERT, 'bridge_version' => 1, 'token' => SyncPlayBridge::token(), 'issued_at_ms' => 5, 'group' => ['name' => 'x']]),
             'oversized line' => str_repeat('x', SyncPlayBridge::MAX_LINE_BYTES + 1),
             'blank' => "   \n",
         ];

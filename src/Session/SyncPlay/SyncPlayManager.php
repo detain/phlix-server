@@ -384,9 +384,28 @@ class SyncPlayManager
         foreach ($existing->getMembers() as $memberId => $member) {
             $memberId = (string) $memberId;
             if (!$incoming->hasMember($memberId)) {
+                $connectionId = $member['connection_id'] ?? null;
+                if ($this->isLiveConnectedMember($connectionId, $memberId)) {
+                    // MED-1(2) — REFUSE THE SILENT EVICTION OF A LIVE SOCKET.
+                    // REST owns the durable membership set, but a blob that omits
+                    // a member this worker still holds an open connection for is
+                    // precisely the "kick the room" shape the bridge tripwire
+                    // exists to contain. The membership is KEPT and the omission
+                    // logged loud. This stays convergent: a legitimate REST leave
+                    // has already dropped the member from the durable snapshot,
+                    // and the live copy sheds them when the socket ends — the
+                    // member's own WS leave or onConnectionClose → leaveGroup →
+                    // publish. Rejecting the whole frame instead was considered
+                    // and dropped: it would block legitimate leaves just as hard
+                    // as forged ones.
+                    $this->log('warning', 'Bridge merge omitted a live-connected member; membership kept', [
+                        'group_id' => $groupId,
+                        'member_id' => $memberId,
+                    ]);
+                    continue;
+                }
                 $existing->removeMember($memberId);
                 unset($this->memberToGroup[$memberId]);
-                $connectionId = $member['connection_id'] ?? null;
                 if (is_string($connectionId) && ($this->connectionToMember[$connectionId] ?? null) === $memberId) {
                     unset($this->connectionToMember[$connectionId]);
                 }
@@ -460,6 +479,25 @@ class SyncPlayManager
                 unset($this->connectionToMember[$connectionId]);
             }
         }
+    }
+
+    /**
+     * Is this connection id an OPEN socket on this worker mapped to exactly this
+     * member? That is the MED-1(2) eviction-guard condition: only members with a
+     * real viewer behind a live socket are protected from a bridge merge that
+     * omits them; phantom/idle entries stay fully REST-owned.
+     */
+    private function isLiveConnectedMember(mixed $connectionId, string $memberId): bool
+    {
+        if (!is_string($connectionId) || $connectionId === '') {
+            return false;
+        }
+
+        if (($this->connectionToMember[$connectionId] ?? null) !== $memberId) {
+            return false;
+        }
+
+        return ConnectionPool::getInstance()->get($connectionId) !== null;
     }
 
     /**
@@ -592,15 +630,20 @@ class SyncPlayManager
      * as the first member and designated as the host.
      *
      * @param string $name The display name for the group (max 255 chars recommended)
-     * @param string|null $password Optional password to protect the group (null for open groups)
+     * @param string|null $password Optional PLAINTEXT password to protect the group
+     *     (hashed server-side; null for open groups)
      * @param string|null $memberId The member ID of the group creator (null if not joining)
      * @param string|null $memberName The display name of the creator (defaults to 'Host')
-      * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string,
-      *     error_code?: string} Result with group state or error
-      *
-      * @example
-      * ```php
-      * // Create a group without password
+     * @param string|null $connectionId Socket id to bind the host's broadcasts to
+     * @param string|null $passwordHash HIGH-1 (SPEC §4): canonical SHA-256 hex
+     *     gate stored VERBATIM; wins over the plaintext $password when both are
+     *     set. Non-canonical values throw (fail-fast API law).
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string,
+     *     error_code?: string} Result with group state or error
+     *
+     * @example
+     * ```php
+     * // Create a group without password
      * $result = $manager->createGroup('Movie Night');
      *
      * // Create a protected group with the creator as host
@@ -612,8 +655,20 @@ class SyncPlayManager
         ?string $password = null,
         ?string $memberId = null,
         ?string $memberName = null,
-        ?string $connectionId = null
+        ?string $connectionId = null,
+        ?string $passwordHash = null
     ): array {
+        // HIGH-1 (SPEC §4): the spec gate `password_hash` is a canonical digest
+        // stored VERBATIM; the legacy `password` plaintext is hashed
+        // server-side. The boundary parser normalizes before calling; this
+        // guard is the fail-fast API law — no non-canonical value can ever
+        // become a stored gate through any rail.
+        if ($passwordHash !== null && !GroupState::isCanonicalPasswordHash($passwordHash)) {
+            throw new \InvalidArgumentException(
+                'createGroup(): passwordHash must be a canonical 64-char lowercase hex digest'
+            );
+        }
+
         if (count($this->groups) >= self::MAX_GROUPS) {
             return [
                 'success' => false,
@@ -623,7 +678,7 @@ class SyncPlayManager
         }
 
         $groupId = $this->generateGroupId();
-        $passwordHash = $password !== null ? GroupState::hashPassword($password) : null;
+        $passwordHash = $passwordHash ?? ($password !== null ? GroupState::hashPassword($password) : null);
 
         $group = new GroupState(
             $groupId,
@@ -677,7 +732,11 @@ class SyncPlayManager
      * @param string $groupId The group ID to join (format: sp_*)
      * @param string $memberId Unique identifier for the member joining
      * @param string $memberName Display name for the member
-     * @param string|null $password Optional password if group is protected
+     * @param string|null $password Optional PLAINTEXT password if group is protected
+     * @param string|null $connectionId Socket id to bind the member's broadcasts to
+     * @param string|null $passwordHash HIGH-1 (SPEC §4): the joiner's canonical
+     *     SHA-256 hex gate, compared VERBATIM; wins over $password when both
+     *     are set. Must be canonical or the call throws (fail-fast API law).
      * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string,
      *     error_code?: string} Result with group state or error
      *
@@ -694,8 +753,15 @@ class SyncPlayManager
         string $memberId,
         string $memberName,
         ?string $password = null,
-        ?string $connectionId = null
+        ?string $connectionId = null,
+        ?string $passwordHash = null
     ): array {
+        if ($passwordHash !== null && !GroupState::isCanonicalPasswordHash($passwordHash)) {
+            throw new \InvalidArgumentException(
+                'joinGroup(): passwordHash must be a canonical 64-char lowercase hex digest'
+            );
+        }
+
         $group = $this->groups[$groupId] ?? null;
 
         if ($group === null) {
@@ -737,12 +803,34 @@ class SyncPlayManager
         }
 
         // New member: verify entry conditions before admitting.
-        if ($group->hasPassword() && !$group->verifyPassword($password ?? '')) {
-            return ['success' => false, 'error' => 'Invalid password', 'error_code' => 'syncplay.invalid_password'];
+        // HIGH-1 (SPEC §4): a canonical wire digest presented by the client is
+        // compared VERBATIM; the legacy plaintext field keeps its server-side
+        // hash comparison. Either shape now gates the join — pre-fix, the WS
+        // handlers read only `password`, so a spec client's gate arrived as
+        // null and protected rooms joined over WS were effectively PUBLIC.
+        if ($group->hasPassword()) {
+            $gatePasses = $passwordHash !== null
+                ? $group->verifyPasswordHash($passwordHash)
+                : $group->verifyPassword($password ?? '');
+            if (!$gatePasses) {
+                return ['success' => false, 'error' => 'Invalid password', 'error_code' => 'syncplay.invalid_password'];
+            }
         }
 
         if ($group->getMemberCount() >= GroupState::MAX_MEMBERS) {
             return ['success' => false, 'error' => 'Group is full', 'error_code' => 'syncplay.group_full'];
+        }
+
+        // MED-3 — JOIN IMPLIES LEAVE. An identity re-homing to a second room must
+        // first fully detach from its previous one (host election, empty-group
+        // teardown, snapshot publish — all via the existing leaveGroup
+        // mechanics). Without this, memberToGroup[$memberId] is simply
+        // overwritten below and the old group keeps an unreachable ghost member:
+        // permanently subscribed to the old room's broadcasts, polluting its
+        // roster and capacity.
+        $previousGroupId = $this->memberToGroup[$memberId] ?? null;
+        if ($previousGroupId !== null && $previousGroupId !== $groupId) {
+            $this->leaveGroup($memberId);
         }
 
         $memberData = [
@@ -1108,8 +1196,12 @@ class SyncPlayManager
 
         $queueRaw = $payload['queue'] ?? [];
 
-        // Update queue
-        $group->clearQueue();
+        // LOW-2 — parse the FULL replacement queue before touching live state:
+        // the update is all-or-nothing, and an over-cap submission is refused
+        // fail-loud with the current queue left UNTOUCHED (pre-fix the handler
+        // cleared first, then grew the queue without bound).
+        /** @var list<array{media_id: string, media_info: array<string, mixed>}> $parsedQueue */
+        $parsedQueue = [];
         if (is_array($queueRaw)) {
             foreach ($queueRaw as $item) {
                 if (!is_array($item)) {
@@ -1128,13 +1220,36 @@ class SyncPlayManager
                         }
                     }
                 }
-                $group->addToQueue($mediaId, $mediaInfo);
+                $parsedQueue[] = ['media_id' => $mediaId, 'media_info' => $mediaInfo];
             }
+        }
+
+        if (count($parsedQueue) > GroupState::MAX_QUEUE_SIZE) {
+            $this->sendError(
+                $connection,
+                'syncplay.group_limit_reached',
+                sprintf(
+                    'Playback queue exceeds the %d-item cap; queue unchanged',
+                    GroupState::MAX_QUEUE_SIZE
+                )
+            );
+            return;
+        }
+
+        // Update queue
+        $group->clearQueue();
+        foreach ($parsedQueue as $entry) {
+            $group->addToQueue($entry['media_id'], $entry['media_info']);
         }
 
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_QUEUE, [
             'queue' => $group->getPlaybackQueue(),
         ]);
+
+        // SP5/LOW-2 — Publish snapshot so HTTP workers can see the queue change.
+        // Every other mutation site publishes; this one used to skip it, leaving
+        // REST reads and rehydration staring at a stale queue.
+        $this->publishSnapshot($groupId);
     }
 
     /**
@@ -1571,9 +1686,26 @@ class SyncPlayManager
 
         $memberName = self::stringFromMixed($payload['member_name'] ?? 'Host');
         $groupName = self::stringFromMixed($payload['group_name'] ?? 'New Group');
-        $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
-        $result = $this->createGroup($groupName, $password, $memberId, $memberName, $connection->getId());
+        // HIGH-1 — parse the wire gate at the boundary: SPEC §4's `password_hash`
+        // (canonical digest, stored verbatim) or the legacy `password`
+        // (plaintext, hashed server-side). A present-but-malformed digest is
+        // REFUSED loudly; ignoring a gate you do not understand is exactly the
+        // fail-open class this fix exists to kill.
+        $gate = self::groupPasswordGate($payload);
+        if ($gate['refusal'] !== null) {
+            $this->sendError($connection, 'syncplay.create_failed', $gate['refusal']);
+            return;
+        }
+
+        $result = $this->createGroup(
+            $groupName,
+            $gate['plaintext'],
+            $memberId,
+            $memberName,
+            $connection->getId(),
+            $gate['hash']
+        );
 
         if ($result['success'] === true) {
             $connection->send(Messages::frame(Messages::TYPE_GROUP_STATE, [
@@ -1610,9 +1742,23 @@ class SyncPlayManager
 
         $groupId = self::stringFromMixed($payload['group_id'] ?? '');
         $memberName = self::stringFromMixed($payload['member_name'] ?? 'User');
-        $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
-        $result = $this->joinGroup($groupId, $memberId, $memberName, $password, $connection->getId());
+        // HIGH-1 — same boundary gate parse as handleGroupCreate(): spec
+        // `password_hash` verbatim, legacy `password` hashed, malformed refused.
+        $gate = self::groupPasswordGate($payload);
+        if ($gate['refusal'] !== null) {
+            $this->sendError($connection, 'syncplay.join_failed', $gate['refusal']);
+            return;
+        }
+
+        $result = $this->joinGroup(
+            $groupId,
+            $memberId,
+            $memberName,
+            $gate['plaintext'],
+            $connection->getId(),
+            $gate['hash']
+        );
 
         if ($result['success'] === true) {
             $connection->send(Messages::frame(Messages::TYPE_GROUP_STATE, [
@@ -1881,6 +2027,47 @@ class SyncPlayManager
             return (string) $value;
         }
         return null;
+    }
+
+    /**
+     * HIGH-1 (SPEC §4 + §8.2) — parse a group create/join wire payload into its
+     * entry gate, boundary-style: everything downstream is already trusted.
+     *
+     * The spec field is `password_hash`: the client's own SHA-256 hex digest,
+     * consumed VERBATIM (case-normalized to the canonical lowercase form the
+     * store keeps). The pre-spec `password` field stays accepted for legacy
+     * callers and is hashed server-side exactly as before; the spec field wins
+     * when both are present. A present-but-malformed `password_hash` yields a
+     * refusal, never a coercion — silently dropping a gate the server cannot
+     * parse is how protected rooms became public.
+     *
+     * @param array<string, mixed> $payload
+     * @return array{hash: string|null, plaintext: string|null, refusal: string|null}
+     *     hash     — canonical lowercase hex digest to store/compare, null when absent
+     *     plaintext— legacy password value for server-side hashing, null when absent
+     *     refusal  — client-facing error prose, null when the gate parsed cleanly
+     */
+    private static function groupPasswordGate(array $payload): array
+    {
+        $rawHash = $payload['password_hash'] ?? null;
+        if ($rawHash !== null) {
+            $normalized = is_string($rawHash) ? strtolower($rawHash) : '';
+            if (!GroupState::isCanonicalPasswordHash($normalized)) {
+                return [
+                    'hash' => null,
+                    'plaintext' => null,
+                    'refusal' => 'password_hash must be a 64-character hex SHA-256 digest',
+                ];
+            }
+
+            return ['hash' => $normalized, 'plaintext' => null, 'refusal' => null];
+        }
+
+        return [
+            'hash' => null,
+            'plaintext' => self::stringOrNullFromMixed($payload['password'] ?? null),
+            'refusal' => null,
+        ];
     }
 
     /**

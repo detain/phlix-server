@@ -10,6 +10,10 @@ use Phlix\Session\SyncPlay\Messages;
 use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\ConnectionInterface;
+use Phlix\Server\WebSocket\MessageHandler;
+use Phlix\Tests\Unit\Server\WebSocket\TestableSyncPlayManager;
+use Phlix\Tests\Unit\Server\WebSocket\TestConnection;
+use Phlix\Tests\Support\SyncPlay\InMemorySyncPlaySnapshotService;
 
 class SyncPlayManagerTest extends TestCase
 {
@@ -583,5 +587,345 @@ class SyncPlayManagerTest extends TestCase
         $this->assertArrayHasKey('conn-host', $sentTo);
         $this->assertArrayHasKey('conn-member-3', $sentTo);
         $this->assertArrayNotHasKey('conn-member-2', $sentTo);
+    }
+
+    // =================================================================
+    // HIGH-1 — spec `password_hash` gate over WS (field-name split-brain fix).
+    // SPEC §4/§8.2: create/join frames carry `password_hash` (SHA-256 hex);
+    // the pre-fix parser read only legacy `password`, so a spec client's
+    // protected room was created PUBLIC (fail-open). These drive the REAL
+    // production handlers via TestableSyncPlayManager::publicHandleMessage.
+    // =================================================================
+
+    private function wireManager(): TestableSyncPlayManager
+    {
+        return new TestableSyncPlayManager(new MessageHandler(ConnectionPool::getInstance()));
+    }
+
+    private function authedConnection(string $id, string $userId): TestConnection
+    {
+        $connection = new TestConnection($id);
+        $connection->setAuthenticated(true, $userId);
+
+        return $connection;
+    }
+
+    /**
+     * @param array<array-key, mixed> $frame
+     */
+    private function assertErrorCode(array $frame, string $code): void
+    {
+        $this->assertSame(Messages::TYPE_ERROR, $frame['type'] ?? null);
+        $this->assertSame($code, $frame['error_code'] ?? null);
+    }
+
+    public function testSpecPasswordHashCreateThenJoinRoundTripsThroughRealWireHandlers(): void
+    {
+        $wire = $this->wireManager();
+        $hash = hash('sha256', 'hunter2');
+
+        $host = $this->authedConnection('h-1', 'user-host');
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'group_name' => 'Locked Room',
+            'password_hash' => $hash,
+        ]);
+
+        $stateFrames = $host->framesOfType(Messages::TYPE_GROUP_STATE);
+        $this->assertCount(1, $stateFrames, 'spec-shape create with a valid digest must succeed');
+        $groupId = $stateFrames[0]['group']['group_id'];
+        $this->assertIsString($groupId);
+        $group = $wire->getGroup($groupId);
+        $this->assertNotNull($group);
+        $this->assertTrue($group->hasPassword(), 'the wire digest must gate the room, not vanish');
+        $this->assertSame($hash, $group->serialize()['password_hash'], 'stored VERBATIM (no server re-hash)');
+
+        // Correct digest joins.
+        $guest = $this->authedConnection('g-1', 'user-guest');
+        $wire->publicHandleMessage($guest, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'password_hash' => $hash,
+        ]);
+        $this->assertCount(1, $guest->framesOfType(Messages::TYPE_GROUP_STATE), 'correct digest must be admitted');
+
+        // Wrong digest refused.
+        $wrong = $this->authedConnection('g-2', 'user-wrong');
+        $wire->publicHandleMessage($wrong, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'password_hash' => hash('sha256', 'not-it'),
+        ]);
+        $wrongFrames = $wrong->getSentMessages();
+        $this->assertNotEmpty($wrongFrames);
+        $this->assertErrorCode($wrongFrames[count($wrongFrames) - 1], 'syncplay.invalid_password');
+
+        // Absent digest on a protected room refused.
+        $absent = $this->authedConnection('g-3', 'user-absent');
+        $wire->publicHandleMessage($absent, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+        ]);
+        $absentFrames = $absent->getSentMessages();
+        $this->assertErrorCode($absentFrames[count($absentFrames) - 1], 'syncplay.invalid_password');
+    }
+
+    public function testMalformedPasswordHashIsRefusedLoudlyAndCreatesNothing(): void
+    {
+        $wire = $this->wireManager();
+        foreach (['nope', str_repeat('g', 64), substr(hash('sha256', 'x'), 0, 63), 12345] as $malformed) {
+            $host = $this->authedConnection('h-mal', 'user-mal');
+            $wire->publicHandleMessage($host, [
+                'type' => Messages::TYPE_GROUP_CREATE,
+                'group_name' => 'Should Not Exist',
+                'password_hash' => $malformed,
+            ]);
+            $this->assertSame(
+                [],
+                $host->framesOfType(Messages::TYPE_GROUP_STATE),
+                'a malformed digest must never mint a room'
+            );
+            $this->assertNotEmpty($host->getSentMessages(), 'the refusal must be visible to the client');
+        }
+
+        $this->assertSame(0, $wire->getStats()['total_groups'], 'no group may exist behind a refused create');
+    }
+
+    public function testLegacyPlaintextFieldStillProtectsAcrossBothWireShapes(): void
+    {
+        $wire = $this->wireManager();
+        $hash = hash('sha256', 'legacy-secret');
+
+        $host = $this->authedConnection('l-h', 'legacy-host');
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'group_name' => 'Legacy Room',
+            'password' => 'legacy-secret',
+        ]);
+        $stateFrames = $host->framesOfType(Messages::TYPE_GROUP_STATE);
+        $this->assertCount(1, $stateFrames);
+        $groupId = $stateFrames[0]['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        // The mirror direction the scan flagged: a legacy-created (server-hashed)
+        // room must accept a SPEC joiner's digest — same stored value.
+        $specGuest = $this->authedConnection('l-spec', 'legacy-guest');
+        $wire->publicHandleMessage($specGuest, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'password_hash' => $hash,
+        ]);
+        $this->assertCount(1, $specGuest->framesOfType(Messages::TYPE_GROUP_STATE));
+
+        // …and the legacy plaintext joiner keeps working unchanged.
+        $legacyGuest = $this->authedConnection('l-leg', 'legacy-guest-2');
+        $wire->publicHandleMessage($legacyGuest, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'password' => 'legacy-secret',
+        ]);
+        $this->assertCount(1, $legacyGuest->framesOfType(Messages::TYPE_GROUP_STATE));
+
+        $wrongLegacy = $this->authedConnection('l-wrong', 'legacy-guest-3');
+        $wire->publicHandleMessage($wrongLegacy, [
+            'type' => Messages::TYPE_GROUP_JOIN,
+            'group_id' => $groupId,
+            'password' => 'nope',
+        ]);
+        $frames = $wrongLegacy->getSentMessages();
+        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.invalid_password');
+    }
+
+    public function testManagerLevelHashGateStoresVerbatimAndRejectsNonCanonical(): void
+    {
+        $hash = hash('sha256', 'direct-api');
+
+        $result = $this->manager->createGroup('Direct', null, 'd-host', 'Host', null, $hash);
+        $this->assertTrue($result['success']);
+        $groupId = $result['group']['group_id'];
+        $directGroup = $this->manager->getGroup($groupId);
+        $this->assertNotNull($directGroup);
+        $this->assertSame($hash, $directGroup->serialize()['password_hash']);
+
+        $joinOk = $this->manager->joinGroup($groupId, 'd-guest', 'Guest', null, null, $hash);
+        $this->assertTrue($joinOk['success']);
+
+        $joinWrong = $this->manager->joinGroup($groupId, 'd-guest-2', 'G2', null, null, hash('sha256', 'other'));
+        $this->assertFalse($joinWrong['success']);
+        $this->assertSame('syncplay.invalid_password', $joinWrong['error_code'] ?? null);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->manager->createGroup('X', null, null, null, null, 'not-a-digest');
+    }
+
+    // =================================================================
+    // MED-3 — joinGroup must imply leave-of-prior-group.
+    // =================================================================
+
+    public function testJoiningSecondGroupDetachesFromFirstWithHostReelection(): void
+    {
+        $pool = ConnectionPool::getInstance();
+
+        $connU1 = $this->authedConnection('conn-u1', 'u1');
+        $connU2 = $this->authedConnection('conn-u2', 'u2');
+        $pool->add($connU1);
+        $pool->add($connU2);
+
+        $a = $this->manager->createGroup('Room A', null, 'u1', 'One', 'conn-u1');
+        $groupA = $a['group']['group_id'];
+        $this->assertIsString($groupA);
+        $this->manager->joinGroup($groupA, 'u2', 'Two', null, 'conn-u2');
+
+        $b = $this->manager->createGroup('Room B', null, 'u9', 'Nine', 'conn-u9');
+        $groupB = $b['group']['group_id'];
+        $this->assertIsString($groupB);
+
+        // u1 — A's HOST — moves to B.
+        $moved = $this->manager->joinGroup($groupB, 'u1', 'One', null, 'conn-u1');
+        $this->assertTrue($moved['success']);
+
+        $stateA = $this->manager->getGroupState($groupA);
+        $this->assertNotNull($stateA, 'A survives with its remaining member');
+        $this->assertArrayNotHasKey('u1', $stateA['members'], 'the ghost must be gone from A roster');
+        $this->assertSame(1, $stateA['member_count']);
+
+        $this->assertSame($groupB, $this->manager->getMemberGroup('u1'));
+        $groupAObject = $this->manager->getGroup($groupA);
+        $this->assertNotNull($groupAObject);
+        $this->assertSame('u2', $groupAObject->getHostId(), 'A re-elected its oldest member');
+        $this->assertCount(1, $connU2->framesOfType(Messages::TYPE_HOST_ELECT), 'A broadcast the election');
+
+        // A's future broadcasts must never reach u1's connection again.
+        $seenBefore = count($connU1->getSentMessages());
+        $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
+        $reflection->setAccessible(true);
+        $reflection->invoke($this->manager, $groupA, Messages::TYPE_INFO, ['message' => 'A only'], []);
+        $this->assertSame(
+            $seenBefore,
+            count($connU1->getSentMessages()),
+            'moved member must never receive the OLD room broadcasts again'
+        );
+        $this->assertCount(1, $connU2->framesOfType(Messages::TYPE_INFO));
+    }
+
+    public function testJoiningSecondGroupTearsDownFirstRoomWhenLeftEmpty(): void
+    {
+        $snapshots = new InMemorySyncPlaySnapshotService();
+        $this->manager->setSnapshotService($snapshots);
+
+        $a = $this->manager->createGroup('Solo A', null, 'solo', 'Solo', 'conn-solo');
+        $groupA = $a['group']['group_id'];
+        $this->assertIsString($groupA);
+        $this->assertArrayHasKey($groupA, $snapshots->rows(), 'create published its snapshot');
+
+        $b = $this->manager->createGroup('Room B', null, 'u9', 'Nine', 'conn-b9');
+        $groupB = $b['group']['group_id'];
+        $this->assertIsString($groupB);
+
+        $this->manager->joinGroup($groupB, 'solo', 'Solo', null, 'conn-solo');
+
+        $this->assertNull($this->manager->getGroupState($groupA), 'A emptied by the move must be gone');
+        $this->assertArrayNotHasKey($groupA, $snapshots->rows(), 'A snapshot torn down by the move');
+        $this->assertNotContains($groupA, array_column($this->manager->listGroups(), 'id'));
+    }
+
+    // =================================================================
+    // LOW-2 — queue mutation publishes snapshots and is capped.
+    // =================================================================
+
+    public function testQueueReplacementPublishesSnapshot(): void
+    {
+        $snapshots = new InMemorySyncPlaySnapshotService();
+        $wire = $this->wireManager();
+        $wire->setSnapshotService($snapshots);
+
+        $host = $this->authedConnection('q-host', 'q-user');
+        ConnectionPool::getInstance()->add($host);
+
+        $created = $wire->createGroup('Queue Room', null, 'q-user', 'QHost', 'q-host');
+        $groupId = $created['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => [
+                ['media_id' => 'm1', 'media_info' => ['title' => 'One']],
+                ['media_id' => 'm2'],
+            ],
+        ]);
+
+        $this->assertCount(1, $host->framesOfType(Messages::TYPE_PLAYBACK_QUEUE));
+        $row = $snapshots->loadSerialized($groupId);
+        $this->assertNotNull($row);
+        $this->assertSame(
+            ['m1', 'm2'],
+            array_column($row['playback_queue'], 'media_id'),
+            'the queue mutation must reach the snapshot store'
+        );
+    }
+
+    public function testOversizedQueueIsRefusedLoudlyAndCurrentQueueUntouched(): void
+    {
+        $snapshots = new InMemorySyncPlaySnapshotService();
+        $wire = $this->wireManager();
+        $wire->setSnapshotService($snapshots);
+
+        $host = $this->authedConnection('c-host', 'c-user');
+        ConnectionPool::getInstance()->add($host);
+
+        $created = $wire->createGroup('Cap Room', null, 'c-user', 'CHost', 'c-host');
+        $groupId = $created['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => [['media_id' => 'keep-1'], ['media_id' => 'keep-2']],
+        ]);
+
+        $overflow = array_map(
+            static fn (int $i): array => ['media_id' => 'x' . $i],
+            range(1, GroupState::MAX_QUEUE_SIZE + 1)
+        );
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => $overflow,
+        ]);
+
+        $frames = $host->getSentMessages();
+        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.group_limit_reached');
+
+        $state = $wire->getGroupState($groupId);
+        $this->assertSame(
+            ['keep-1', 'keep-2'],
+            array_column($state['queue'], 'media_id'),
+            'the refused frame must leave the live queue byte-identical (no clear-then-grow)'
+        );
+    }
+
+    public function testQueueAtExactlyTheCapIsAccepted(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('e-host', 'e-user');
+        ConnectionPool::getInstance()->add($host);
+
+        $created = $wire->createGroup('Edge Room', null, 'e-user', 'EHost', 'e-host');
+        $groupId = $created['group']['group_id'];
+        $this->assertIsString($groupId);
+
+        $atCap = array_map(
+            static fn (int $i): array => ['media_id' => 'm' . $i],
+            range(1, GroupState::MAX_QUEUE_SIZE)
+        );
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => $atCap,
+        ]);
+
+        $this->assertCount(GroupState::MAX_QUEUE_SIZE, $wire->getGroupState($groupId)['queue']);
+        $this->assertSame([], $host->framesOfType(Messages::TYPE_ERROR), 'exactly-at-cap is legal, not an overflow');
     }
 }

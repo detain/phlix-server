@@ -58,7 +58,8 @@ use Phlix\Session\SyncPlay\Messages;
  * @license Proprietary
  *
  * @see Messages For JSON message type definitions
- * @see SyncPlayRoom For room broadcasting
+ * @see \Phlix\Session\SyncPlay\SyncPlayManager For room broadcasting (the live
+ *      membership truth — the dormant SyncPlayRoom duplicate was removed LOW-4)
  */
 final class Protocol
 {

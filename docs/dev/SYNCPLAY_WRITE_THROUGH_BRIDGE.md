@@ -52,11 +52,18 @@ the WS worker, fed by published deltas.
 - **NDJSON, one frame per short-lived connection**: connect → single
   `fwrite($frame."\n")` → close. No interleaving is possible across 14
   concurrent publishers, and there is no persistent-connection state machine.
-- **Second factor**: every frame carries `SyncPlayBridge::TOKEN` (a shared
-  secret constant); `SyncPlayBridge::parse()` drops a mismatched token with a
-  warning. This is defense-in-depth / misconfiguration tripwire (e.g. a
-  second checkout on the same host pointed at the same socket path by env
-  override), not the primary boundary.
+- **Second factor**: every frame carries a **per-boot shared secret**
+  (`SyncPlayBridge::token()`, MED-1(1) — it replaced a source-code constant
+  that made the check theater). start.php pins it **pre-fork** so all forked
+  workers inherit one value through memory; resolution order is config
+  `syncplay_bridge.token` → env `PHLIX_SYNCPLAY_BRIDGE_TOKEN` → fresh random
+  bytes. A process that reaches the bridge without a boot pin self-boots a
+  process-local secret and warns once on stderr; cross-process frames from
+  mismatched secrets **fail CLOSED** (`parse()` drops them with a warning, and
+  the REST rail's durable persist still stands — the design self-heals on the
+  group's next mutation). Split topologies (separate masters aimed at one
+  socket) MUST set the config/env token. This remains defense-in-depth / a
+  misconfiguration tripwire, not the primary boundary.
 - The frame is a **clearly-separate internal channel**, deliberately *not* a
   `Messages::frame()` type: `Messages::VALID_TYPES` gates the *client-facing*
   inbound protocol on `:8097`, and registering a bridge op there would make
@@ -184,6 +191,9 @@ never converged). Closing this properly is a compare-and-swap on
     'enabled'            => getenv('SYNCPLAY_BRIDGE') !== '0',        // opt-out
     'socket_path'        => getenv('SYNCPLAY_BRIDGE_SOCKET')
         ?: dirname(__DIR__) . '/var/syncplay-bridge.sock',
+    // MED-1(1): optional explicit bridge secret; env PHLIX_SYNCPLAY_BRIDGE_TOKEN
+    // is the fallback, start.php pins the resolved value pre-fork anyway.
+    'token'              => getenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN') ?: null,
     'publish_timeout_ms' => (int) (getenv('SYNCPLAY_BRIDGE_TIMEOUT_MS') ?: 250),
 ],
 ```

@@ -106,6 +106,16 @@ class GroupState
     public const MAX_MEMBERS = 50;
 
     /**
+     * Maximum number of items allowed in a group's playback queue.
+     *
+     * LOW-2 — mirrors the MAX_QUEUE_SIZE = 1000 ceiling the repo's job stores
+     * (MetadataWriteJobStore, SimilarityJobStore, CollectionJobStore) already
+     * enforce. Queue mutations REFUSE at the cap; they never silently evict
+     * or grow without bound.
+     */
+    public const MAX_QUEUE_SIZE = 1000;
+
+    /**
      * Default playback position tolerance in milliseconds.
      *
      * Members whose position differs from host by more than this
@@ -278,6 +288,47 @@ class GroupState
         }
 
         return hash_equals($this->passwordHash, hash('sha256', $password));
+    }
+
+    /**
+     * Canonical group-gate digest shape: exactly 64 lowercase hex characters
+     * (a SHA-256 digest as SPEC §4/§8.2 defines `password_hash`). Every stored
+     * hash — server-hashed plaintext or wire-supplied digest normalized by the
+     * boundary parser — satisfies this, so it doubles as the storage invariant
+     * enforced by GroupState::deserialize() and the manager's fail-fast guards.
+     */
+    public static function isCanonicalPasswordHash(string $hash): bool
+    {
+        return preg_match('/^[0-9a-f]{64}$/', $hash) === 1;
+    }
+
+    /**
+     * Verify a wire-supplied SHA-256 hex gate against the stored hash VERBATIM.
+     *
+     * HIGH-1 (SPEC §4): the `password_hash` field carries the CLIENT's own
+     * SHA-256 hex digest, so the server must compare it as-is — re-hashing a
+     * hash would reject every spec-compliant client (and the pre-fix parser
+     * that ignored the field entirely is what made pw-rooms silently public).
+     *
+     * A non-canonical digest can never match: the stored gate is canonical by
+     * construction (createGroup hashes via hash('sha256'), the wire parser
+     * validates-then-normalizes, deserialize refuses malformed blobs), so
+     * returning false here is a belt-and-braces fail-CLOSED for direct callers.
+     *
+     * @param string $passwordHash Supplied digest (canonical lowercase 64-hex)
+     * @return bool True when the group is open or the digest matches
+     */
+    public function verifyPasswordHash(string $passwordHash): bool
+    {
+        if ($this->passwordHash === null) {
+            return true;
+        }
+
+        if (!self::isCanonicalPasswordHash($passwordHash)) {
+            return false;
+        }
+
+        return hash_equals($this->passwordHash, $passwordHash);
     }
 
     /**
@@ -743,12 +794,19 @@ class GroupState
     /**
      * Add an item to the playback queue.
      *
+     * LOW-2 — the queue is capped at {@see MAX_QUEUE_SIZE}; an add at the cap
+     * is REFUSED (false), never silently accepted or evicting older items.
+     *
      * @param string $mediaId The media item ID to add
      * @param array<string, mixed> $mediaInfo Additional media information (title, thumbnail, etc.)
-     * @return void
+     * @return bool True when the item was appended, false when the queue is full
      */
-    public function addToQueue(string $mediaId, array $mediaInfo): void
+    public function addToQueue(string $mediaId, array $mediaInfo): bool
     {
+        if (count($this->playbackQueue) >= self::MAX_QUEUE_SIZE) {
+            return false;
+        }
+
         $this->playbackQueue[] = [
             'media_id' => $mediaId,
             'media_info' => $mediaInfo,
@@ -756,6 +814,8 @@ class GroupState
             'added_by' => $this->hostId,
         ];
         $this->lastActivityAt = time();
+
+        return true;
     }
 
     /**
@@ -963,7 +1023,19 @@ class GroupState
         }
 
         $passwordHashRaw = $data['password_hash'] ?? null;
-        $passwordHash = is_string($passwordHashRaw) ? $passwordHashRaw : null;
+        // HIGH-1/MED-1 — the stored gate is canonical hex or absent. A blob that
+        // smuggles in anything else is REFUSED outright, never coerced to null:
+        // nulling a malformed hash would silently make a protected room public,
+        // the exact fail-open this deserializer exists to gate.
+        if ($passwordHashRaw === null) {
+            $passwordHash = null;
+        } elseif (is_string($passwordHashRaw) && self::isCanonicalPasswordHash($passwordHashRaw)) {
+            $passwordHash = $passwordHashRaw;
+        } else {
+            throw new \InvalidArgumentException(
+                'GroupState::deserialize requires password_hash to be a canonical 64-char hex digest or null'
+            );
+        }
 
         $positionToleranceRaw = $data['position_tolerance'] ?? self::POSITION_TOLERANCE;
         $positionTolerance = is_int($positionToleranceRaw) ? $positionToleranceRaw : self::POSITION_TOLERANCE;
@@ -974,6 +1046,25 @@ class GroupState
 
         $hostIdRaw = $data['host_id'] ?? null;
         $group->hostId = is_string($hostIdRaw) ? $hostIdRaw : null;
+
+        // MED-1(3) — host ∈ members is a class invariant that must survive
+        // deserialization of EXTERNALLY-SOURCED blobs (the S445 bridge socket,
+        // a REST snapshot row). A claimed host absent from the membership set is
+        // dropped and the oldest member elected through the same election the
+        // live leave-path uses; per-member is_host flags are then normalized
+        // against the resolved host so a forged blob can neither self-elect a
+        // ghost host nor mark non-host members as host.
+        if ($group->hostId !== null && !isset($group->members[$group->hostId])) {
+            $group->hostId = null;
+        }
+        if ($group->hostId === null && $group->members !== []) {
+            $group->electNewHost();
+        }
+        foreach ($group->members as $memberIdKey => $memberShape) {
+            if (array_key_exists('is_host', $memberShape)) {
+                $group->members[$memberIdKey]['is_host'] = ((string) $memberIdKey) === $group->hostId;
+            }
+        }
 
         $currentMediaIdRaw = $data['current_media_id'] ?? null;
         $group->currentMediaId = is_string($currentMediaIdRaw) ? $currentMediaIdRaw : null;

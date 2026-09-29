@@ -9,7 +9,6 @@ use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
-use Phlix\Server\WebSocket\SyncPlay\SyncPlayRoom;
 use Phlix\Session\SyncPlay\Messages;
 use Phlix\Tests\Unit\Server\WebSocket\TestableSyncPlayManager;
 use Phlix\Tests\Unit\Server\WebSocket\TestConnection;
@@ -313,37 +312,10 @@ final class OutboundFrameShapeGuardTest extends TestCase
         $this->assertSame('PROTOCOL_VERSION_MISMATCH', $frame['error_code'] ?? null);
     }
 
-    // ── SyncPlayRoom (dormant JSON senders, conformed anyway) ─────────────
-
-    public function testSite20SyncPlayRoomBroadcastFrameConforms(): void
-    {
-        $room = new SyncPlayRoom('sp_room_guard', 'Guard Room');
-        $m1 = new TestConnection('room-conn-1');
-        $m2 = new TestConnection('room-conn-2');
-        $room->addMember('member-1', $m1);
-        $room->addMember('member-2', $m2);
-
-        $sent = $room->broadcast(Messages::TYPE_PLAYBACK_SYNC, ['position' => 42], 'member-1');
-        $this->assertSame(1, $sent);
-
-        $frame = $this->pickFrame($m2->getSentMessages(), Messages::TYPE_PLAYBACK_SYNC, 'site20-room-broadcast');
-        $this->assertFrameConforms($frame, 'site20 (SyncPlayRoom::broadcast)');
-        $this->assertSame(0, count($m1->framesOfType(Messages::TYPE_PLAYBACK_SYNC)));
-    }
-
-    public function testSite21SyncPlayRoomSendToMemberFrameConforms(): void
-    {
-        $room = new SyncPlayRoom('sp_room_guard2', 'Guard Room 2');
-        $m1 = new TestConnection('room-conn-a');
-        $room->addMember('member-1', $m1);
-
-        $this->assertTrue($room->sendToMember('member-1', Messages::TYPE_INFO, ['message' => 'ping']));
-
-        $frame = $this->pickFrame($m1->getSentMessages(), Messages::TYPE_INFO, 'site21-room-send-to-member');
-        $this->assertFrameConforms($frame, 'site21 (SyncPlayRoom::sendToMember)');
-    }
-
     // ── The already-conforming exemplar stays conforming ──────────────────
+    // (LOW-4: the dormant SyncPlayRoom senders this section pinned — sites 20/21 —
+    // were deleted with the class: a second membership truth with zero src
+    // instantiation was drift risk, not coverage.)
 
     public function testExemplarTimePongFrameConforms(): void
     {
@@ -402,10 +374,6 @@ final class OutboundFrameShapeGuardTest extends TestCase
         return [
             'SyncPlayManager' => [
                 $root . '/src/Session/SyncPlay/SyncPlayManager.php',
-                ["'timestamp' => time()", 'sendFlat(', "['type' => \$type]"],
-            ],
-            'SyncPlayRoom' => [
-                $root . '/src/Server/WebSocket/SyncPlay/SyncPlayRoom.php',
                 ["'timestamp' => time()", 'sendFlat(', "['type' => \$type]"],
             ],
             'MessageHandler' => [

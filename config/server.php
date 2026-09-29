@@ -177,6 +177,12 @@ return [
         'enabled' => getenv('SYNCPLAY_BRIDGE') !== '0',
         // SYNCPLAY_BRIDGE_SOCKET overrides the bind path (multi-instance boxes).
         'socket_path' => getenv('SYNCPLAY_BRIDGE_SOCKET') ?: dirname(__DIR__) . '/var/syncplay-bridge.sock',
+        // MED-1(1): the bridge's per-boot shared secret. Optional. start.php
+        // pins it pre-fork (config value -> env -> random) so all forked
+        // workers inherit one secret without it ever hitting disk; an explicit
+        // value is REQUIRED only for split topologies (separate masters
+        // reaching one socket). Mismatched tokens fail CLOSED (frames dropped).
+        'token' => getenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN') ?: null,
         // Hard budget for one frame's connect+full-write in an HTTP worker.
         'publish_timeout_ms' => (int) (getenv('SYNCPLAY_BRIDGE_TIMEOUT_MS') ?: 250),
     ],

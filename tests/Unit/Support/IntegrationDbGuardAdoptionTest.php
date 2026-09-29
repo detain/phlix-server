@@ -428,8 +428,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * nil-marker healing and replay-safety are live DML semantics no stub can
      * model, so the proof drives the REAL MigrationRunner and AuthManager::register()
      * against throwaway scratch databases.
+     *
+     * 63 since the mysqldump exit-code strictness fix's (commit ce295f9d)
+     * `tests/Unit/Server/Http/Controllers/Admin/BackupControllerBodyPersistenceTest.php`:
+     * the label-persistence drive rides the REAL `BackupManager::createBackup()`,
+     * whose `mysqldump` step now fails loudly when the server named by the
+     * scratch `database.php` refuses the connection — on the MySQL-less
+     * `test-server` job that is an absent capability, not a defect, so the
+     * drive gates on the shared guard and runs fully wherever MySQL lives.
      */
-    private const EXPECTED_ADOPTERS = 62;
+    private const EXPECTED_ADOPTERS = 63;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

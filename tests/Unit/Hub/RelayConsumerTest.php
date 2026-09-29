@@ -2645,6 +2645,12 @@ class RelayConsumerTest extends TestCase
             $this->fireHttpRequest(11);
             $this->fireHttpRequest(12);
 
+            // @var boundary-parse: consumerState() reads a PRIVATE property
+            // through reflection and can only answer `mixed`; the parked-stream
+            // shape (id-keyed rows with a stream `handle`) is the relay pump's
+            // own documented structure, so declare it at the seam instead of
+            // letting `mixed` collapse to Countable under assertCount.
+            /** @var array<int|string, array<string, mixed>> $streams */
             $streams = $this->consumerState($consumer, 'pendingFileStreams');
             $this->assertCount(2, $streams, 'both streams must be parked');
             $handleA = $streams[11]['handle'];
@@ -2986,6 +2992,12 @@ class RelayConsumerTest extends TestCase
                 'body must be byte-faithful across park/resume/re-park',
             );
 
+            // Boundary non-emptiness claim: the tail index is only meaningful
+            // on a non-empty wire log, and assertNotEmpty's @psalm-assert
+            // narrows `list` to `non-empty-list` so `count()-1` is a legal
+            // offset (the same claim the drive's earlier flush checks make
+            // informally — made explicit here instead of trusted silently).
+            $this->assertNotEmpty($this->hub->sent, 'the park/resume drive must have put frames on the wire');
             $lastFrame = $this->codec->decode($this->hub->sent[count($this->hub->sent) - 1]);
             $this->assertInstanceOf(RelayFrame::class, $lastFrame);
             $this->assertSame(RelayFrameType::HTTP_CANCEL, $lastFrame->type, 'P8 cancel trails END');

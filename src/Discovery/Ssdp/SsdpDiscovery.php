@@ -109,7 +109,7 @@ class SsdpDiscovery
      * H1 fetch seam: one guarded GET → {status, headers, body} or null on
      * transport failure. Null uses the bounded stream-context fopen path.
      *
-     * @var (callable(string): array{status: int, headers: list<string>, body: string}|null)|null
+     * @var (callable(string): (array{status: int, headers: list<string>, body: string}|null))|null
      */
     private $fetcher;
 
@@ -131,7 +131,7 @@ class SsdpDiscovery
      * @param SsdpSocket $socket SSDP socket instance
      * @param LoggerInterface|null $logger Optional logger
      * @param (callable(string): list<string>)|null $hostResolver H1 test/boot DNS seam
-     * @param (callable(string): array{status: int, headers: list<string>, body: string}|null)|null $fetcher
+     * @param (callable(string): (array{status: int, headers: list<string>, body: string}|null))|null $fetcher
      * @param (callable(string, string): void)|null $dialRecorder H1 dial-URL/header sink for the default path
      */
     public function __construct(

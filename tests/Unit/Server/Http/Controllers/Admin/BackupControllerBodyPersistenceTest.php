@@ -44,10 +44,13 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\BackupManager;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Request;
+use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use Workerman\MySQL\Connection;
 
 final class BackupControllerBodyPersistenceTest extends TestCase
 {
+    use RequiresRealDatabase;
+
     /** @var list<string> Directories to remove in tearDown. */
     private array $temp = [];
 
@@ -181,11 +184,29 @@ final class BackupControllerBodyPersistenceTest extends TestCase
      * real `listBackups()` reader, and independently against the archive file
      * name the manager derived from the same label on disk.
      *
+     * Env-gated on a reachable MySQL: since the exit-code strictness fix
+     * (ce295f9d), the REAL `BackupManager::createBackup()` this drive rides
+     * refuses a failing `mysqldump` instead of shrugging it off, so the
+     * scratch `database.php` must point at a server the client can actually
+     * connect to. The `test-server` CI job runs `tests/Unit/Server/` with no
+     * MySQL service at all — the shared guard skips there (the house idiom,
+     * see {@see RequiresRealDatabase}) and the full drive runs in the main
+     * `test` job and the S180 probe job, both of which ship a live MySQL.
+     * The other two tests in this file mock the DB with `never()` arms and
+     * need no gate.
+     *
      * @runInSeparateProcess
      * @preserveGlobalState disabled
      */
     public function test_supplied_label_reaches_the_persisted_backup_row(): void
     {
+        // Guard FIRST: the skip must happen before any define/scratch work,
+        // and a reachable-but-unusable DB must redden, never be caught here.
+        $this->requireHealthyDatabase(
+            'skipping the real mysqldump write path — createBackup() now fails loudly on an '
+            . 'unreachable DB (ce295f9d). Runs in CI.'
+        );
+
         $backupDir = $this->tmpdir('phlix_s271_backups_');
         // Retention far above anything this test creates: cleanup must never
         // delete a row mid-assertion.

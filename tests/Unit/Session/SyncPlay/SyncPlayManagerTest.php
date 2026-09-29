@@ -667,6 +667,7 @@ class SyncPlayManagerTest extends TestCase
             'group_id' => $groupId,
         ]);
         $absentFrames = $absent->getSentMessages();
+        $this->assertNotEmpty($absentFrames, 'the join refusal must answer with at least one frame');
         $this->assertErrorCode($absentFrames[count($absentFrames) - 1], 'syncplay.invalid_password');
     }
 
@@ -733,6 +734,7 @@ class SyncPlayManagerTest extends TestCase
             'password' => 'nope',
         ]);
         $frames = $wrongLegacy->getSentMessages();
+        $this->assertNotEmpty($frames, 'the legacy join refusal must answer with at least one frame');
         $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.invalid_password');
     }
 
@@ -895,6 +897,7 @@ class SyncPlayManagerTest extends TestCase
         ]);
 
         $frames = $host->getSentMessages();
+        $this->assertNotEmpty($frames, 'the overflow refusal must answer with at least one frame');
         $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.group_limit_reached');
 
         $state = $wire->getGroupState($groupId);

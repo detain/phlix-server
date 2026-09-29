@@ -37,6 +37,12 @@
             "method": "testMultipleInstancesShareCache",
             "recorded": "2026-08-03",
             "reason": "S120 census site 14. The closure is NEVER INVOKED — that is the assertion: `$db2->method('query')->willReturnCallback(fn => $this->fail('Second instance should use cached data, not query DB'))` proves the second LibraryManager reads the shared cache instead of querying. S120 confirmed by planting a tripwire at the closure's opening brace: still not reached. A probe cannot decide a closure that must not run; the test's proof IS its non-execution. Mocked connection, no database, deterministic on every box."
+        },
+        {
+            "file": "tests/Unit/Auth/WebAuthn/WebAuthnCeremonyTest.php",
+            "method": "derToRawEcSignature",
+            "recorded": "2026-09-29",
+            "reason": "The site is `self::fail('not a DER integer')` — the malformed-DER guard arm inside the `$readInt` static closure of the DER→raw signature helper. The closure IS invoked twice per call, but only its happy path runs: the sole caller is `test_es256_full_ceremony`, which signs with openssl_sign and feeds VALID DER, so the `ord($der[$offset]) !== 0x02` arm is unreachable on the passing path BY DESIGN — making the probed line run would mean handing the converter a corrupt signature, i.e. breaking the behaviour under test (and a `fail()` arm that ever executes reddens the test itself, so no green run can reach it). A run-tripwire placed before the fail line cannot execute in any green run of this site. Mocked Connection, no database — deterministic on every box."
         }
     ]
 }

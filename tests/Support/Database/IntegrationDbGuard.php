@@ -231,6 +231,17 @@ final class IntegrationDbGuard
         // catch safe as written.
         self::skipUnlessListening($host, $port, $skipReason);
 
+        // The probe mints a real connection, and `ConnectionPool::getConnection()`
+        // logs minting and pooling decisions through `error_log()` (the `[DEBUG]`
+        // lines in `src/Common/Database/ConnectionPool.php:71-96`). In a
+        // `@runInSeparateProcess` test that error log rides the child's captured
+        // output stream and corrupts PHPUnit's serialized result framing — the run
+        // dies as `PHPUnit\Framework\Exception: [DEBUG] ...`, an artifact of the
+        // harness, not of the database. Route those lines to `/dev/null` for the
+        // probe window only, then restore whatever the caller had.
+        $previousErrorLog = ini_get('error_log');
+        ini_set('error_log', '/dev/null');
+
         try {
             ConnectionPool::init(self::configPath());
             $db = ConnectionPool::getConnection('mysql');
@@ -241,6 +252,8 @@ final class IntegrationDbGuard
             return $db;
         } catch (Throwable $e) {
             throw self::unusable($host, $port, $e);
+        } finally {
+            ini_set('error_log', is_string($previousErrorLog) ? $previousErrorLog : '');
         }
     }
 

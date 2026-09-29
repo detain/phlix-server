@@ -602,6 +602,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Three long-red CI jobs greened (`test-server` PHPUnit, `Psalm-on-tests`, S180 probe), none of
+  them by weakening what they test.**
+  (1) `BackupControllerBodyPersistenceTest::test_supplied_label_reaches_the_persisted_backup_row`
+  turned the MySQL-less `test-server` job red after the mysqldump exit-code strictness fix
+  (`ce295f9d`) made `BackupManager::createDatabaseDump()` fail loudly on an unreachable DB — the
+  old lenient contract had been silently tolerating exactly that. The test now rides the house
+  `RequiresRealDatabase` gate (skip when absent, redden when unusable), and `IntegrationDbGuard`
+  routes `error_log` to `/dev/null` for the probe window only: `ConnectionPool`'s `[DEBUG]`
+  connection-minting lines corrupted a `@runInSeparateProcess` child's captured result stream
+  (`PHPUnit\Framework\Exception: [DEBUG] ...`), a harness artifact, not a database verdict.
+  Adopter census 62→63.
+  (2) `psalm -c psalm-tests.xml` 6→0 errors: non-emptiness narrowing (`assertNotEmpty`) before the
+  three `[count(…) - 1]` tail reads in `RelayConsumerTest`/`SyncPlayManagerTest`, a
+  `/** @var array<int|string, …> */` boundary parse over `consumerState()`'s stream map, and a
+  production docblock spelling in `SsdpDiscovery` — `callable(string): (array{…}|null)` now
+  parenthesizes the inner union, which psalm needs to see the fetcher seam's documented
+  transport-failure `null` instead of reading it as a callable-level union and refusing the very
+  closure the SSRF suite's contract demands (the test was right; the annotation was mis-parsed).
+  (3) The S180 probe's `WebAuthnCeremonyTest::derToRawEcSignature` NOT-REACHED is recorded in
+  `probe-baseline.json`: the probed line is the `self::fail('not a DER integer')` arm of the
+  `$readInt` closure and cannot execute in any green run — its only caller feeds VALID DER, so
+  making the line run would break the behaviour under test.
+
 - **A freshly booted worker now reconciles theme state on its first request instead of
   recording a foreign stamp as its baseline (`S499`).** S498's cross-worker fleet sync adopts
   the current `plugins`-table stamp on a worker's very first theme request and rebuilds only

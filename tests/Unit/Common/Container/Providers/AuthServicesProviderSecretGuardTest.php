@@ -107,6 +107,49 @@ final class AuthServicesProviderSecretGuardTest extends TestCase
     }
 
     /**
+     * L-4 (security audit 2026-09-29): the length floor is enforced end to end —
+     * a short-but-real secret aborts the boot in a forced non-test child.
+     */
+    public function testThrowsOnShortSecretInNonTestEnvironment(): void
+    {
+        $this->assertGuardThrows(str_repeat('a', AuthServicesProvider::MIN_SECRET_BYTES - 1), 'bytes');
+    }
+
+    /**
+     * L-4: the pure policy seam. assertSecretConfigured cannot run under
+     * PHPUnit (the test-env early-return is the very thing that keeps the suite
+     * bootable), so the tier logic is unit-tested directly on secretViolation:
+     * empty/sentinel are fatal EVERYWHERE (dev included); only the length floor
+     * gets the dev relaxation.
+     */
+    public function testSecretViolationTiers(): void
+    {
+        // Tier 1+2: fatal in both modes.
+        self::assertStringContainsString('not set', (string) AuthServicesProvider::secretViolation(''));
+        self::assertStringContainsString('not set', (string) AuthServicesProvider::secretViolation('', true));
+        self::assertStringContainsString(
+            'shipped default',
+            (string) AuthServicesProvider::secretViolation(AuthServicesProvider::DEFAULT_JWT_SECRET)
+        );
+        self::assertStringContainsString(
+            'shipped default',
+            (string) AuthServicesProvider::secretViolation(AuthServicesProvider::DEFAULT_JWT_SECRET, true)
+        );
+
+        // Tier 3: length floor outside dev only.
+        $short = str_repeat('k', AuthServicesProvider::MIN_SECRET_BYTES - 1);
+        self::assertStringContainsString('bytes', (string) AuthServicesProvider::secretViolation($short));
+        self::assertNull(AuthServicesProvider::secretViolation($short, true));
+
+        // Floor boundary: exactly MIN_SECRET_BYTES passes.
+        self::assertNull(
+            AuthServicesProvider::secretViolation(str_repeat('k', AuthServicesProvider::MIN_SECRET_BYTES))
+        );
+        // A realistic 64-hex (openssl rand -hex 32) key passes.
+        self::assertNull(AuthServicesProvider::secretViolation(str_repeat('0123456789abcdef', 4)));
+    }
+
+    /**
      * Runs assertSecretConfigured() in a forced non-test child PHP process so the
      * PHPUnit-constant short-circuit does not apply, and asserts it aborts with a
      * non-zero exit and a CRITICAL message mentioning JWT_SECRET.

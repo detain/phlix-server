@@ -21,6 +21,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Stats\StatsCollector;
+use Phlix\Session\SessionManager;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -95,6 +96,21 @@ class AuthManager
     private ?UserProfileManager $profileManager;
 
     /**
+     * Optional device-session manager (M-1, security audit 2026-09-29).
+     *
+     * When wired, logout() ends the user's `sessions` rows server-side in
+     * addition to revoking JWTs, so a device presenting a session-cookie login
+     * cannot keep authenticating from the session table after an explicit
+     * logout. When null (legacy hand-built managers, unit-test callers that
+     * never touch sessions) JWT revocation alone still holds — the token
+     * denylist is the primary control; the device-session teardown is
+     * belt-and-braces so the two stores do not diverge.
+     *
+     * @var SessionManager|null
+     */
+    private ?SessionManager $sessionManager;
+
+    /**
      * In-memory fallback rate limit store used when no DbLoginRateLimitStore
      * is injected (tests / legacy callers).
      *
@@ -158,15 +174,25 @@ class AuthManager
     private PasswordPolicy $passwordPolicy;
 
     /**
-     * In-worker TTL cache for user status lookups.
+     * In-worker TTL cache for the per-request auth-state lookup (status +
+     * token-revocation watermark).
      *
-     * Avoids a PK lookup on user_repository.getStatus() for every authenticated
-     * request when the same user makes multiple concurrent requests. The short
-     * TTL (5 seconds) means status revocation takes effect within a few seconds
-     * rather than immediately (see {@see self::invalidateUserStatusCache()} for
-     * the in-process path that makes a status change take effect immediately,
-     * without waiting for the TTL), which is acceptable for the "disable
-     * account" use-case while significantly reducing DB load.
+     * Avoids a PK lookup on UserRepository::getAuthState() for every
+     * authenticated request when the same user makes multiple concurrent
+     * requests. The short TTL (5 seconds) means status revocation AND token
+     * revocation (logout / password change / admin bump) take effect within a
+     * few seconds rather than immediately (see
+     * {@see self::invalidateUserStatusCache()} for the in-process path that
+     * makes a same-worker change take effect immediately, without waiting for
+     * the TTL), which is acceptable for the "disable account" use-case while
+     * significantly reducing DB load.
+     *
+     * SINGLE-LAYER CACHE DOCTRINE (M-6, security audit 2026-09-29): this is the
+     * ONLY cache tier on the revocation hot path. The repository previously
+     * layered a 60-second status cache under this one, silently making the real
+     * revocation ceiling 60s while every docblock here claimed 5s. The inner
+     * layer is deleted; `AuthManagerRevocationCeilingTest` pins the bound so a
+     * future re-caching at the repository fails loudly instead of re-lying.
      *
      * Bounded by {@see self::USER_STATUS_CACHE_MAX}: insertion order doubles as
      * an LRU (a cache hit re-inserts the entry at the end via unset()+reassign,
@@ -176,7 +202,7 @@ class AuthManager
      * eviction correctness (a plain value overwrite of an existing key leaves
      * it in its original position, not the end).
      *
-     * @var array<string, array{status: string, cachedAt: int}> keyed by userId
+     * @var array<string, array{status: string|null, tokensNotValidAfter: int, cachedAt: int}> keyed by userId
      */
     private array $userStatusCache = [];
 
@@ -221,6 +247,10 @@ class AuthManager
      *                                       multiplied by worker count) and bounded by
      *                                       TTL cleanup. When null (tests / legacy),
      *                                       falls back to an in-memory per-worker store.
+     * @param SessionManager|null $sessionManager Optional device-session manager;
+     *                                       when supplied, logout() also ends the
+     *                                       user's device sessions server-side (M-1)
+     *                                       instead of only revoking JWTs.
      *
      * @example
      * ```php
@@ -242,7 +272,8 @@ class AuthManager
         ?StatsCollector $statsCollector = null,
         ?SettingsRepository $settingsRepository = null,
         ?DbLoginRateLimitStore $loginRateLimitStore = null,
-        ?UserProfileManager $profileManager = null
+        ?UserProfileManager $profileManager = null,
+        ?SessionManager $sessionManager = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -255,6 +286,7 @@ class AuthManager
         $this->settingsRepository = $settingsRepository;
         $this->loginRateLimitStore = $loginRateLimitStore;
         $this->profileManager = $profileManager;
+        $this->sessionManager = $sessionManager;
         // Built from the already-explicitly-wired settings store rather than
         // taken as its own optional ctor param: PHP-DI skips optional params
         // during autowiring, so an unnamed PasswordPolicy param would silently
@@ -280,15 +312,36 @@ class AuthManager
     }
 
     /**
-     * Gets the cached user status or fetches from repository if cache miss/expired.
+     * Gets the cached auth state (status + token-revocation watermark) for a
+     * user, fetching from the repository on cache miss/expiry.
      *
      * Uses a short TTL (5 seconds) to reduce DB lookups for every authenticated
-     * request while still allowing near-instant account revocation to take effect.
+     * request while still allowing near-instant account revocation to take
+     * effect. 5 seconds is the AUTHORITY, not an aspiration — see the
+     * single-layer cache doctrine on {@see self::$userStatusCache} (M-6).
+     *
+     * H-1 (security audit 2026-09-29, fail-OPEN fix): a missing user row used
+     * to be defaulted to 'active' here. The `status` column is a NOT NULL ENUM
+     * — a null from the repository can ONLY mean "row does not exist" (a
+     * DELETED user), so `?? 'active'` let deleted accounts pass access-token
+     * validation and — worse — re-mint 7-day refresh pairs forever, with
+     * {@see self::invalidateUserStatusCache()} re-caching 'active' on every
+     * admin delete. Null now flows through as null and every enforcement site
+     * compares `!== 'active'`, so "unknown" fails CLOSED on both paths.
+     *
+     * NOTE the deliberate asymmetry with the login-time fallbacks in
+     * {@see self::login()} / {@see self::verifyCredentials()} (`?? 'active'`
+     * on an ALREADY-FETCHED row): there, a missing status key means a legacy
+     * row shape from a hydrated user object, not a missing row — the row's
+     * existence is already proven. That fallback is safe and stays.
      *
      * @param string $userId The user ID to look up
-     * @return string The user status ('active', 'disabled', 'pending', etc.)
+     *
+     * @return array{status: string|null, tokensNotValidAfter: int} The stored
+     *         status (null = the user row no longer exists) and the epoch-second
+     *         token-revocation watermark (0 = never revoked).
      */
-    private function getCachedUserStatus(string $userId): string
+    private function getCachedAuthState(string $userId): array
     {
         $now = hrtime(true);
 
@@ -303,19 +356,22 @@ class AuthManager
                 // genuine LRU rather than pure insertion order.
                 unset($this->userStatusCache[$userId]);
                 $this->userStatusCache[$userId] = $entry;
-                return $entry['status'];
+                return ['status' => $entry['status'], 'tokensNotValidAfter' => $entry['tokensNotValidAfter']];
             }
         }
 
-        // Cache miss or expired - fetch from DB
-        $status = $this->userRepository->getStatus($userId) ?? 'active';
+        // Cache miss or expired - fetch from DB. A missing row yields
+        // ['status' => null, ...] — NEVER defaulted to 'active' (H-1).
+        $state = $this->userRepository->getAuthState($userId)
+            ?? ['status' => null, 'tokensNotValidAfter' => 0];
 
         // Store in cache. unset() first (see the LRU-touch comment above) so a
         // stale-entry recompute is reinserted at the MRU end rather than left
         // in its original array position.
         unset($this->userStatusCache[$userId]);
         $this->userStatusCache[$userId] = [
-            'status' => $status,
+            'status' => $state['status'],
+            'tokensNotValidAfter' => $state['tokensNotValidAfter'],
             'cachedAt' => (int) $now,
         ];
 
@@ -329,22 +385,60 @@ class AuthManager
             }
         }
 
-        return $status;
+        return $state;
     }
 
     /**
-     * Clears the cached user status for a user (call when status changes).
+     * Is the account active right now, per the cached auth state? (H-1/M-6:
+     * the single enforcement predicate for "this user may still authenticate",
+     * null status — a deleted row — fails closed.)
+     */
+    private function isUserActive(?string $status): bool
+    {
+        return $status === 'active';
+    }
+
+    /**
+     * Was this token minted BEFORE the user's revocation watermark? (M-1.)
+     *
+     * The watermark says "everything issued up to instant W is dead". Tokens
+     * carry `iat` (seconds); a token minted at or before the watermark was
+     * minted before the logout/password-change/admin bump that set it, so it
+     * must not authenticate or re-mint. A token with NO iat claim cannot be
+     * placed after the watermark — fail closed and reject it once any
+     * watermark exists (our own JwtHandler always stamps iat).
+     *
+     * @param int $tokensNotValidAfter Watermark epoch seconds (0 = never revoked).
+     * @param array<string, mixed> $payload Validated JWT payload.
+     */
+    private function isTokenRevoked(int $tokensNotValidAfter, array $payload): bool
+    {
+        if ($tokensNotValidAfter <= 0) {
+            return false;
+        }
+
+        $issuedAt = $payload['iat'] ?? null;
+        if (!is_int($issuedAt) && !is_numeric($issuedAt)) {
+            return true; // un-placeable issue time + live watermark ⇒ reject
+        }
+
+        return (int) $issuedAt <= $tokensNotValidAfter;
+    }
+
+    /**
+     * Clears the cached auth state for a user (call when status or the token
+     * watermark changes).
      *
      * Called by {@see \Phlix\Server\Http\Controllers\Admin\AdminUserController}
      * after any admin action that changes a user's `status` column (approve,
-     * disable, reject/delete) so an in-process status change is reflected on
-     * THIS worker's very next request for that user, instead of waiting out
-     * the {@see self::USER_STATUS_CACHE_TTL_NS} TTL. Other resident workers in
-     * the same process pool do not share this cache (it is in-worker only,
-     * exactly like {@see UserRepository::$statusCacheById}) and converge only
-     * via the TTL — the 5-second window is the ceiling on cross-worker
-     * revocation latency, immediate invalidation is only possible for
-     * same-worker requests.
+     * disable, reject/delete) or revocation watermark so an in-process change
+     * is reflected on THIS worker's very next request for that user, instead of
+     * waiting out the {@see self::USER_STATUS_CACHE_TTL_NS} TTL. Other resident
+     * workers in the same process pool do not share this cache (it is
+     * in-worker only) and converge only via the TTL — with the inner repository
+     * cache deleted (M-6), the 5-second window is now the GENUINE ceiling on
+     * cross-worker revocation latency; immediate invalidation is only possible
+     * for same-worker requests.
      *
      * @param string $userId The user ID to invalidate
      * @return void
@@ -383,6 +477,45 @@ class AuthManager
         }
 
         return 'approval';
+    }
+
+    /**
+     * Claim (or lose) the first-admin election, INSIDE the caller's open
+     * transaction (L-3, security audit 2026-09-29).
+     *
+     * Protocol on the single-row `first_admin_election` sentinel:
+     *   1. `INSERT IGNORE (1, NULL)` — when no row exists this claims the
+     *      election for the current transaction; when an UNCOMMITTED claim by
+     *      another registration exists, InnoDB blocks this statement until that
+     *      transaction resolves (this blocking is the serialisation; it is why
+     *      the claim must run inside the transaction, never before it).
+     *   2. `SELECT ... FOR UPDATE` (a current read — a plain SELECT could serve
+     *      a pre-block snapshot under REPEATABLE READ) returns the row's
+     *      winner. `user_id IS NULL` can only be MY uncommitted claim: every
+     *      winner stamps its id before committing, and a crash/rollback between
+     *      claim and stamp releases the row with the transaction, so a failed
+     *      first registration never bricks the election.
+     *
+     * @param Connection $db The connection with the registration transaction
+     *                       already open.
+     *
+     * @return bool True when THIS caller won the election (no prior admin).
+     */
+    private function claimFirstAdminElection(Connection $db): bool
+    {
+        $db->query('INSERT IGNORE INTO first_admin_election (id, user_id) VALUES (1, NULL)');
+        $rows = $db->query('SELECT user_id FROM first_admin_election WHERE id = 1 FOR UPDATE');
+        if (!is_array($rows) || $rows === []) {
+            // INSERT IGNORE guarantees the row exists on this connection; an
+            // empty read would mean the sentinel table is missing (migrations
+            // not run). Fail loud rather than silently electing everyone.
+            throw new \RuntimeException(
+                'first_admin_election sentinel unreadable — run migrations (108_first_admin_election.sql)'
+            );
+        }
+        $row = $rows[0];
+
+        return is_array($row) && ($row['user_id'] ?? null) === null;
     }
 
     /**
@@ -657,25 +790,15 @@ class AuthManager
             throw new \InvalidArgumentException('Email already registered');
         }
 
-        // Detect first-user case BEFORE create() so we don't race
-        // ourselves: the row we are about to insert must not count as
-        // a "prior" user. See Step A.5 for the admin-bootstrap policy.
-        $isFirstUser = $this->userRepository->countUsers() === 0;
-
-        // Resolve the signup gate (S1). The first user ALWAYS bootstraps as an
-        // active admin regardless of mode, so the gate only applies to Nth users.
-        $signupMode = $this->resolveSignupMode();
-        if (!$isFirstUser && $signupMode === 'disabled') {
-            $this->auditLogger->logFailedAuth('signups_disabled', [
-                'username' => $username,
-            ]);
-            throw new SignupDisabledException();
-        }
-
-        // Status the new account is created with: active for the first user and
-        // for 'open' mode; pending for 'approval' mode (no tokens issued).
-        $status = ($isFirstUser || $signupMode !== 'approval') ? 'active' : 'pending';
-
+        // L-3 (security audit 2026-09-29): the first-user election used to be
+        // `countUsers() === 0` evaluated OUTSIDE the transaction — two
+        // concurrent first registrations both saw zero rows and BOTH became
+        // admin (and both bypassed a 'disabled' gate). The election is now a
+        // sentinel-row claim INSIDE the transaction, so InnoDB's duplicate-key
+        // serialisation decides exactly one winner. Without a Connection the
+        // legacy count check remains (unit-test / pre-transaction callers get
+        // no protection to begin with).
+        //
         // Wrap create() + setAdmin() in a transaction for the first-user
         // path so a failure between the two does not leave the database
         // with an unauthorized half-promoted account. For the common
@@ -689,6 +812,26 @@ class AuthManager
         }
 
         try {
+            $isFirstUser = $db !== null
+                ? $this->claimFirstAdminElection($db)
+                : $this->userRepository->countUsers() === 0;
+
+            // Resolve the signup gate (S1). The first user ALWAYS bootstraps as
+            // an active admin regardless of mode, so the gate only applies to
+            // Nth users.
+            $signupMode = $this->resolveSignupMode();
+            if (!$isFirstUser && $signupMode === 'disabled') {
+                $this->auditLogger->logFailedAuth('signups_disabled', [
+                    'username' => $username,
+                ]);
+                throw new SignupDisabledException();
+            }
+
+            // Status the new account is created with: active for the first user
+            // and for 'open' mode; pending for 'approval' mode (no tokens
+            // issued).
+            $status = ($isFirstUser || $signupMode !== 'approval') ? 'active' : 'pending';
+
             // Create user
             $userId = $this->userRepository->create([
                 'username' => $username,
@@ -703,6 +846,14 @@ class AuthManager
                 // registered first owns the box. Phase D will replace
                 // this with a real RBAC + invite flow.
                 $this->userRepository->setAdmin($userId, true);
+                if ($db !== null) {
+                    // Record the winner in the sentinel, same transaction: a
+                    // crash before commit releases the claim (see helper).
+                    $db->query(
+                        'UPDATE first_admin_election SET user_id = ? WHERE id = 1',
+                        [$userId]
+                    );
+                }
                 $this->logger->info('Promoted first user to admin', [
                     'user_id' => $userId,
                     'username' => $username,
@@ -735,6 +886,13 @@ class AuthManager
                         'rollback_error' => $rollbackError->getMessage(),
                     ]);
                 }
+            }
+            // A gate rejection is a policy answer, not a fault: the rollback
+            // above already ran (releasing any in-progress first-admin claim —
+            // that is precisely why the election must die with the failed
+            // transaction), and the audit log already carries the event.
+            if ($e instanceof SignupDisabledException) {
+                throw $e;
             }
             $this->logger->error('User registration failed', [
                 'username' => $username,
@@ -800,7 +958,18 @@ class AuthManager
         }
         $userId = UserRow::string($user, 'id');
 
-        if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {
+        // L-1 (timing oracle): a miss must spend the same Argon2id time a hit
+        // spends, or response timing enumerates usernames.
+        if ($user === null || $userId === null) {
+            $this->userRepository->burnPasswordVerifyTime($password);
+            $this->recordFailedAttempt($clientIp);
+            $this->auditLogger->logFailedAuth('invalid_credentials', [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+            throw new \InvalidArgumentException('Invalid username or password');
+        }
+        if (!$this->userRepository->verifyPassword($userId, $password)) {
             $this->recordFailedAttempt($clientIp);
             $this->auditLogger->logFailedAuth('invalid_credentials', [
                 'username' => $username,
@@ -812,7 +981,14 @@ class AuthManager
         // Signup approval gate (S1): credentials are correct, but the account
         // must be 'active' to log in. Pending (awaiting approval) and disabled
         // (suspended) accounts are rejected with a distinct error code and no
-        // tokens. A missing status column defaults to 'active' for safety.
+        // tokens.
+        //
+        // Why `?? 'active'` is SAFE here but NOT in getCachedAuthState() (H-1):
+        // this operates on an ALREADY-FETCHED row — $user !== null is proven
+        // above, so a missing 'status' key can only be a legacy hydrated-row
+        // shape, never a deleted account. The hot-path lookup's null means
+        // "row gone" and must fail closed; this one means "old row, pre-S1"
+        // and defaults to the historical behaviour.
         $status = UserRow::string($user, 'status') ?? 'active';
         if ($status !== 'active') {
             $this->auditLogger->logFailedAuth('account_' . $status, [
@@ -876,12 +1052,19 @@ class AuthManager
         }
 
         $userId = UserRow::string($user, 'id');
-        if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {
+        if ($user === null || $userId === null) {
+            // L-1 (timing oracle): burn the same Argon2id time as a real hit.
+            $this->userRepository->burnPasswordVerifyTime($password);
+            return null;
+        }
+        if (!$this->userRepository->verifyPassword($userId, $password)) {
             return null;
         }
 
-        // Mirror login(): only fully 'active' accounts may stream. A missing
-        // status column defaults to active for backwards compatibility.
+        // Mirror login(): only fully 'active' accounts may stream. The `?? 'active'`
+        // fallback is safe HERE (row existence already proven above — a missing key
+        // is a legacy row shape, not a deleted account) and unsafe on the hot-path
+        // lookup, where null means "row gone" — see getCachedAuthState() (H-1).
         $status = UserRow::string($user, 'status') ?? 'active';
         if ($status !== 'active') {
             return null;
@@ -1042,13 +1225,26 @@ class AuthManager
         // active. Mirror this method's existing invalid/expired-token failure
         // contract exactly (throw \InvalidArgumentException, which the caller
         // already maps to a 401) so callers need no change.
-        $status = $this->getCachedUserStatus($userId);
-        if ($status !== 'active') {
-            $this->auditLogger->logFailedAuth('account_' . $status, [
+        //
+        // H-1 (fail-open fix): a null status here means the user ROW IS GONE
+        // (the column is a NOT NULL ENUM) — deleted accounts must not re-mint.
+        // M-1: the same cached lookup also carries the token-revocation
+        // watermark, so a refresh token from before the user's last
+        // logout/password-change can no longer mint a fresh 7-day pair.
+        $state = $this->getCachedAuthState($userId);
+        if (!$this->isUserActive($state['status'])) {
+            $this->auditLogger->logFailedAuth('account_' . ($state['status'] ?? 'deleted'), [
                 'user_id' => $userId,
                 'context' => 'refresh',
             ]);
             throw new \InvalidArgumentException('Account is not active');
+        }
+        if ($this->isTokenRevoked($state['tokensNotValidAfter'], $payload)) {
+            $this->auditLogger->logFailedAuth('token_revoked', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
         }
 
         // S7+F1: if the account has must_change_password set, block token
@@ -1102,12 +1298,21 @@ class AuthManager
         // single lightweight PK lookup. Mirror the invalid-token failure
         // contract exactly (return null) so HttpHandler simply leaves the
         // request unauthenticated — no signature or caller change.
+        //
+        // H-1 (fail-open fix): null status = the user row no longer exists —
+        // deleted accounts authenticate as NO ONE from here on.
+        // M-1: tokens minted at/before the user's revocation watermark (last
+        // logout / password change / admin bump) are likewise rejected, within
+        // the 5s cached-state window documented on $userStatusCache.
         $userId = self::asString($payload['sub'] ?? null);
         if ($userId === '') {
             return null;
         }
-        $status = $this->getCachedUserStatus($userId);
-        if ($status !== 'active') {
+        $state = $this->getCachedAuthState($userId);
+        if (!$this->isUserActive($state['status'])) {
+            return null;
+        }
+        if ($this->isTokenRevoked($state['tokensNotValidAfter'], $payload)) {
             return null;
         }
 
@@ -1327,13 +1532,22 @@ class AuthManager
     }
 
     /**
-     * Record that a user has logged out and publish {@see UserLoggedOut}.
+     * Log a user out SERVER-SIDE and publish {@see UserLoggedOut}.
      *
-     * This is the lightweight A.2 hook: AuthManager does not yet own
-     * session-row deletion (that lives in `SessionManager` and is
-     * driven by the controllers), so this method simply emits the
-     * event so plugins / hub mirrors can react. Token revocation will
-     * be implemented in a later phase.
+     * M-1 (security audit 2026-09-29): this used to be an event emission with
+     * an explicit "token revocation will be implemented in a later phase"
+     * note — the phase is now. Logout bumps the per-user token-revocation
+     * watermark (`users.tokens_not_valid_after = NOW()`), which kills every
+     * JWT pair issued up to this instant on BOTH enforcement paths
+     * (validateAccessToken per request, refreshToken on re-mint), and — when a
+     * SessionManager is wired — ends the user's device-session rows so the
+     * cookie-backed session store cannot outlive the revoked tokens.
+     *
+     * Granularity is deliberately PER-USER ("log out everywhere"), matching the
+     * documented meaning of the watermark and the blast radius of the other
+     * bump triggers (password change, admin disable). The presented token's
+     * lineage is always dead: the request that logs out can still complete
+     * (auth already resolved upstream), no later request can.
      *
      * @param string $userId    UUID of the user logging out.
      * @param string $sessionId Opaque session identifier (device ID /
@@ -1352,6 +1566,16 @@ class AuthManager
         string $sessionId,
         string $reason = UserLoggedOut::REASON_EXPLICIT
     ): void {
+        // The watermark + device-session teardown belong to the explicit-user
+        // intent paths. REASON_EXPIRED/REASON_REVOKED are bookkeeping emissions
+        // (a timer noticing an old session) and must NOT nuke the account's
+        // live tokens, so the bump runs only for REASON_EXPLICIT and
+        // REASON_REVOKED (an admin-forced logout IS a revocation).
+        if ($reason !== UserLoggedOut::REASON_EXPIRED) {
+            $this->revokeUserTokens($userId, 'logout:' . $reason);
+            $this->sessionManager?->endAllUserSessions($userId);
+        }
+
         $this->logger->info('User logged out', [
             'user_id' => $userId,
             'session_id' => $sessionId,
@@ -1359,6 +1583,76 @@ class AuthManager
         ]);
         $this->recordActivity($userId, 'logout', $this->getClientIp());
         $this->dispatchUserLoggedOut($userId, $sessionId, $reason);
+    }
+
+    /**
+     * Kill every JWT minted up to NOW() for one user (M-1 denylist bump).
+     *
+     * Single choke point for all bump triggers: explicit logout, password
+     * change/reset, admin disable/delete. Writes the watermark, then clears
+     * THIS worker's cached auth state so the new bound applies on the very
+     * next request here; other workers converge via the 5s TTL (the honest,
+     * now-pinned ceiling — see the single-layer cache doctrine on
+     * {@see self::$userStatusCache}).
+     *
+     * @param string $userId User whose outstanding token pairs should die.
+     * @param string $reason Audit context (e.g. 'password_changed').
+     *
+     * @return void
+     */
+    public function revokeUserTokens(string $userId, string $reason): void
+    {
+        $this->userRepository->revokeTokensBeforeNow($userId);
+        $this->invalidateUserStatusCache($userId);
+        $this->logger->info('User tokens revoked', [
+            'user_id' => $userId,
+            'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * {@see self::verifyCredentials()} with the LOGIN rate-limit budget applied (M-5).
+     *
+     * verifyCredentials() is deliberately unthrottled — internal callers
+     * (provider flows) must keep it pure. The OPDS Basic-auth gate is the one
+     * externally-reachable caller, and Basic auth re-presents credentials on
+     * every request, so without this wrapper an attacker gets unlimited
+     * Argon2id-cost guesses from one socket: a free password-crashing rig on
+     * the same budget login() guards.
+     *
+     * Failures are charged PER-IP against the same DbLoginRateLimitStore
+     * budget as login() (one shared ceiling per IP — a client brute-forcing
+     * OPDS is brute-forcing the account, no separate quota to earn); success
+     * clears the window so a legitimate e-reader that finally lands a correct
+     * password is not punished for earlier typos. Per-segment re-auth UX is
+     * unaffected: only WRONG passwords count.
+     *
+     * @param string $usernameOrEmail Identifier from the Basic header.
+     * @param string $password        Password from the Basic header.
+     * @param string $clientIp        Caller-supplied, already-trusted client IP
+     *                                (taken from Request::getTrustedClientIp()
+     *                                by the middleware — NOT $_SERVER, which is
+     *                                stale under resident Workerman workers).
+     *
+     * @return string|null User id on success, null on bad credentials.
+     *
+     * @throws RateLimitException When the IP has exhausted the login budget;
+     *                            the central dispatch maps it to a 429 +
+     *                            Retry-After envelope (same contract as
+     *                            login()).
+     */
+    public function verifyCredentialsThrottled(string $usernameOrEmail, string $password, string $clientIp): ?string
+    {
+        $this->checkRateLimit($clientIp);
+
+        $userId = $this->verifyCredentials($usernameOrEmail, $password);
+        if ($userId === null) {
+            $this->recordFailedAttempt($clientIp);
+            return null;
+        }
+
+        $this->clearRateLimit($clientIp);
+        return $userId;
     }
 
     /**

@@ -236,7 +236,19 @@ final class AccessScheduleService
             $values,
         );
 
-        return $result !== false;
+        // L-7 (security audit 2026-09-29): `return $result !== false` was dead
+        // code — Workerman's query() never returns false (failures THROW), so
+        // the expression was always true and the docblock's "True if the
+        // schedule was updated" was a lie. Same S131 family as
+        // {@see \Phlix\Access\StreamSessionService::updateStreamLimit()}, but
+        // here the statement is a plain `UPDATE … WHERE id = ?`, NOT an upsert:
+        // affected-rows 0 means the id matched nothing, which is genuinely
+        // "did not update" (no already-current-row success shape to protect,
+        // unlike the upsert's null case). So the honest contract for an id-keyed
+        // UPDATE is: the write RAN (int rowcount returned) — MySQL reports 0 on
+        // identical-values no-op too, and that IS success for the caller's
+        // intent — while `is_int()` guards the shape.
+        return is_int($result);
     }
 
     /**
@@ -244,7 +256,8 @@ final class AccessScheduleService
      *
      * @param int $scheduleId The schedule ID to delete.
      *
-     * @return bool True if the schedule was deleted.
+     * @return bool True when a row was actually removed; false when the id
+     *              matched nothing (L-7: the old `!== false` always said true).
      */
     public function deleteSchedule(int $scheduleId): bool
     {
@@ -253,6 +266,9 @@ final class AccessScheduleService
             [$scheduleId],
         );
 
-        return $result !== false;
+        // Mirrors StreamSessionService::deleteStreamLimit's S131 narrowing
+        // (`is_int($result) ? $result : 0`): DELETE's rowcount IS the answer,
+        // and 0 rows deleted is a miss, not a silent success.
+        return is_int($result) ? $result > 0 : false;
     }
 }

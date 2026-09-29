@@ -184,6 +184,9 @@ final class UserRepositoryStatusTest extends TestCase
 
     // ─────────────────────────────────────────────────────────────────
     // getStatus() — lightweight PK lookup for the token hot path (S1 fix)
+    // (M-6: getStatus now rides getAuthState — the hot path's single
+    // projection of status + token-revocation watermark, and the reason the
+    // tested SQL selects TWO columns.)
     // ─────────────────────────────────────────────────────────────────
 
     public function test_get_status_selects_only_status_by_id(): void
@@ -193,12 +196,12 @@ final class UserRepositoryStatusTest extends TestCase
             ->method('query')
             ->with(
                 $this->logicalAnd(
-                    $this->stringContains('SELECT status FROM users'),
-                    $this->stringContains('WHERE id = ?'),
+                    $this->stringContains('SELECT status,'),
+                    $this->stringContains('FROM users WHERE id = ?'),
                 ),
                 ['user-1'],
             )
-            ->willReturn([['status' => 'active']]);
+            ->willReturn([['status' => 'active', 'tokens_not_valid_after' => null]]);
 
         $repo = new UserRepository($db);
         $this->assertSame('active', $repo->getStatus('user-1'));

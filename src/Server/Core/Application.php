@@ -2375,8 +2375,9 @@ class Application
      * Builds the HTTP Basic credential validator used by the OPDS feed group.
      *
      * Returns a closure that resolves a username/email + password to a user id
-     * via {@see \Phlix\Auth\AuthManager::verifyCredentials()} (no session is
-     * created). When the container is unavailable (e.g. a bare test harness),
+     * via {@see \Phlix\Auth\AuthManager::verifyCredentialsThrottled()} (no
+     * session is created; failures consume the shared per-IP login budget,
+     * M-5). When the container is unavailable (e.g. a bare test harness),
      * Basic auth is effectively disabled — the closure always rejects — leaving
      * the session/signed-URL paths intact.
      */
@@ -2387,11 +2388,20 @@ class Application
             return static fn (string $username, string $password): ?string => null;
         }
 
-        return static function (string $username, string $password) use ($container): ?string {
+        return static function (string $username, string $password, string $ip = '') use ($container): ?string {
             /** @var \Phlix\Auth\AuthManager $authManager */
             $authManager = $container->get(\Phlix\Auth\AuthManager::class);
 
-            return $authManager->verifyCredentials($username, $password);
+            // M-5 (security audit 2026-09-29): the plain verifyCredentials()
+            // is deliberately un-throttled for internal callers, which made
+            // this externally-reachable Basic-auth door an unlimited
+            // Argon2-cost password oracle. Throttled variant charges
+            // failures to the SAME per-IP budget as /auth/login (success
+            // clears the window); exceeding it throws RateLimitException,
+            // which the central dispatch mapper turns into a 429 — the
+            // per-segment re-auth UX is untouched because only FAILURES
+            // count against the budget.
+            return $authManager->verifyCredentialsThrottled($username, $password, $ip);
         };
     }
 

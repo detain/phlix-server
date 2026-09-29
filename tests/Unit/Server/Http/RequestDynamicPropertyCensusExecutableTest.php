@@ -417,8 +417,23 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * proves it. Measured 1892 from the phpunit red (and `git ls-files
               * '*.php' | wc -l` = 1892), not predicted. The next lane that moves a
               * first-party PHP file re-pins again the same way.
+              * Re-pinned 1892→1898 by the auth-security lane (H-1/M-1..M-6, 2026-09-29):
+              * the lane adds five first-party PHP files — src/Auth/WebAuthn/
+              * WebAuthnChallengeStore.php plus four test files (Unit/Auth/WebAuthn/
+              * WebAuthnCeremonyTest, Unit/Auth/{AuthManagerLogoutRevocationTest,
+              * AuthManagerOpdsThrottleTest}, Unit/Access/AccessScheduleServiceWriteResultTest).
+              * The HEAD it landed on (58bdd652) already measured 1893/990 against this
+              * pin's 1892/983 — one file and seven site-verified write sites drifted
+              * in WITHOUT a re-pin (the media/discovery lane's filter gates do not
+              * name this test, and 13cdaf60 — which set the current pins — measured
+              * green, so the drift is 58bdd652's alone); this commit absorbs the
+              * whole measured gap so master goes green whole, not green-per-filter.
+              * None of the five new files reads or writes a Request property; the
+              * +2 reads / +1 write deltas are pinned with their provenance under
+              * census numbers 2 and 5 below. Measured 1898/397/991 from the phpunit
+              * red on the final tree, not predicted.
               */
-    private const EXPECTED_PHP_FILES = 1892;
+    private const EXPECTED_PHP_FILES = 1898;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -441,8 +456,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * approve/token/heartbeat and `$request->userId` in approve's auth gate
      * (headers reach only through the `getHeader()` method, and the rate keys
      * only through `getTrustedClientIp()` — neither is a property read).
+     * Re-pinned 395→397 by the auth-security lane (M-1/M-4, 2026-09-29):
+     * `AuthController::logout` snapshots `$request->userId` for its server-side
+     * revocation branch, and `SessionController::endSession` now reads
+     * `$request->userId` a second time to pass the owner into the ownership-
+     * scoped `SessionManager::endSession` (the comparison already read it
+     * inline). The signed-URL/OPDS middleware changes call only methods
+     * (`getTrustedClientIp()`), never properties; the five new files touch no
+     * Request at all. Measured from the phpunit red on the final tree.
      */
-    private const EXPECTED_DECLARED_READS = 395;
+    private const EXPECTED_DECLARED_READS = 397;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -502,8 +525,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * a query-override and a body-override site; QuickConnectControllerRateLimitTest:
      * the same quartet in xffRequest()) — the S435/S438/S289 entry-point shape,
      * S427 license intact. The src/ controller adds no write site.
+     * Re-pinned 983→991 by the auth-security lane (2026-09-29), absorbing two
+     * batches measured from the phpunit red on the final tree (HEAD probe: the
+     * census at 13cdaf60 measured green at its own 1892/395/983; the media/
+     * discovery lane 58bdd652 landed +1 file/+7 writes WITHOUT a re-pin — seven
+     * site-verified test-builder assignments on $request->userId: six
+     * `'user-1'/'viewer-1'` stamps and one `= null` — its one new src read
+     * nets to zero against a replaced read; the census is not in that lane's
+     * filter-gate vocabulary, which is how it slipped) plus this lane's own
+     * +1 write (AuthControllerTest's logout identity-stamp, the same S435
+     * entry-point shape) and +2 reads (documented under census number 2).
+     * Every assignment lands on a DECLARED property; S427 license intact.
      */
-    private const EXPECTED_DECLARED_WRITES = 983;
+    private const EXPECTED_DECLARED_WRITES = 991;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

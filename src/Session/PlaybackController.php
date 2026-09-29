@@ -176,8 +176,16 @@ class PlaybackController
             ]
         );
 
-        // Update session activity
-        $this->sessionManager->updateActivity($sessionId);
+        // Update session activity. M-4: updateActivity is owner-scoped; this
+        // bookkeeping tick has no asserting user (it is reached from device
+        // session objects — Chromecast/DLNA/Roku — whose ownership was checked
+        // when the session row was minted), so the owner is derived from the
+        // session row itself. A missing row means nothing to refresh.
+        $session = $this->sessionManager->getSession($sessionId);
+        if ($session !== null) {
+            $owner = is_string($session['user_id'] ?? null) ? $session['user_id'] : '';
+            $this->sessionManager->updateActivity($sessionId, $owner);
+        }
 
         // Dispatch lifecycle events for state transitions. The session
         // lookup is best-effort: when the session row is missing we

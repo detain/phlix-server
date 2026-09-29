@@ -59,9 +59,6 @@ class UserRepository
     /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by email */
     private array $cacheByEmail = [];
 
-    /** @var array<string, array{status: string|null, expires_at: int}> Status cache keyed by user id */
-    private array $statusCacheById = [];
-
     /** @var int Cache TTL in seconds (60 seconds) */
     private const CACHE_TTL = 60;
 
@@ -205,38 +202,90 @@ class UserRepository
      * revoked rather than continuing to work until its token expires. Kept to a
      * single lightweight lookup on the primary key, selecting only `status`.
      *
+     * NOT CACHED HERE on purpose (M-6, security audit 2026-09-29): this used to
+     * carry a 60-second in-repository cache while {@see AuthManager}'s hot path
+     * claimed a 5-second revocation ceiling — the inner layer silently made the
+     * real ceiling 60s and made the documented bound a lie. The revocation
+     * ceiling is now pinned to exactly ONE layer (AuthManager's 5s status
+     * cache, bounded by `AuthManagerRevocationCeilingTest`); a per-repository
+     * second TTL below it would only re-introduce the same documentation trap.
+     * A PK lookup amortised to once per user per 5 seconds per worker is the
+     * intended cost of an honest ceiling.
+     *
      * @param string $id User UUID to look up.
      *
      * @return string|null The stored status string, or null when the user does
-     *         not exist (caller treats null as "not active").
+     *         not exist (caller MUST treat null as "not active" — see H-1 in
+     *         {@see \Phlix\Auth\AuthManager::getCachedUserStatus()} for why a
+     *         null here must never be defaulted to 'active').
      *
      * @since S1 (signup approval gate — security follow-up)
      */
     public function getStatus(string $id): ?string
     {
-        $now = time();
+        return $this->getAuthState($id)['status'] ?? null;
+    }
 
-        // Check cache first
-        if (isset($this->statusCacheById[$id])) {
-            $entry = $this->statusCacheById[$id];
-            if ($entry['expires_at'] > $now) {
-                return $entry['status'];
-            }
-            unset($this->statusCacheById[$id]);
-        }
-
+    /**
+     * The auth-hot-path projection of a user row: status + token-revocation
+     * watermark, in ONE primary-key lookup.
+     *
+     * M-1 (security audit 2026-09-29): the per-request revocation check must
+     * test both "is the account still active" and "was this token minted before
+     * the user last logged out / changed their password". Both ride the same
+     * PK lookup so the hot path never pays for two queries.
+     *
+     * Like {@see getStatus()} this is deliberately UNcached at the repository
+     * layer (single-layer cache doctrine, see M-6 note there); AuthManager's
+     * 5-second in-worker cache is the only caching tier on this path.
+     *
+     * @param string $id User UUID to look up.
+     *
+     * @return array{status: string|null, tokensNotValidAfter: int}|null
+     *         `status` is the stored ENUM value; `tokensNotValidAfter` is the
+     *         epoch-second revocation watermark (UNIX_TIMESTAMP of the column)
+     *         or 0 when no revocation has ever been recorded. Null is returned
+     *         only when the user row does not exist — callers must treat a
+     *         null row as "not active" (never default it to active).
+     */
+    public function getAuthState(string $id): ?array
+    {
         $result = $this->db->query(
-            "SELECT status FROM users WHERE id = ?",
+            'SELECT status, UNIX_TIMESTAMP(tokens_not_valid_after) AS tokens_not_valid_after FROM users WHERE id = ?',
             [$id]
         );
-        $status = UserRow::string(UserRow::firstFromMixed($result), 'status');
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
+            return null;
+        }
 
-        $this->statusCacheById[$id] = [
-            'status' => $status,
-            'expires_at' => $now + self::CACHE_TTL,
+        $watermark = $row['tokens_not_valid_after'] ?? null;
+
+        return [
+            'status' => UserRow::string($row, 'status'),
+            'tokensNotValidAfter' => is_numeric($watermark) ? (int) $watermark : 0,
         ];
+    }
 
-        return $status;
+    /**
+     * Record "every token minted up to NOW() is dead" for one user (M-1).
+     *
+     * The DATETIME is written by the database clock (`NOW()`) rather than a
+     * PHP-side timestamp so the comparison basis stays identical to the
+     * `iat`-derived epoch embedded in tokens (both are Unix seconds, both come
+     * from the same server fleet's clock — same trust the JWT `exp` check
+     * already relies on).
+     *
+     * @param string $id User UUID whose outstanding token pairs should die.
+     *
+     * @return void
+     */
+    public function revokeTokensBeforeNow(string $id): void
+    {
+        $this->db->query(
+            'UPDATE users SET tokens_not_valid_after = NOW() WHERE id = ?',
+            [$id]
+        );
     }
 
     /**
@@ -341,7 +390,6 @@ class UserRepository
 
         // Invalidate caches for this user
         unset($this->cacheById[$id]);
-        unset($this->statusCacheById[$id]);
     }
 
     /**
@@ -391,7 +439,6 @@ class UserRepository
 
         // Invalidate caches for this user - status affects session validity
         unset($this->cacheById[$id]);
-        unset($this->statusCacheById[$id]);
     }
 
     /**
@@ -574,6 +621,14 @@ class UserRepository
             }
             $sets[] = 'password_hash = ?';
             $values[] = password_hash($passwordRaw, PASSWORD_ARGON2ID);
+            // M-1 (security audit 2026-09-29): a password write IS a
+            // revocation event — every JWT minted before it must die with the
+            // old secret. Stamped HERE, inside the same UPDATE, because this
+            // is the only choke point through which every password write in
+            // the codebase passes (admin update, console reset, account-link
+            // updates); a caller-side bump could be forgotten by the next
+            // caller.
+            $sets[] = 'tokens_not_valid_after = NOW()';
         }
 
         if (empty($sets)) {
@@ -850,6 +905,33 @@ class UserRepository
 
         return password_verify($password, $hash);
     }
+
+    /**
+     * Spend one Argon2id verification's worth of CPU on a password that will
+     * never match (L-1, security audit 2026-09-29 — login timing oracle).
+     *
+     * Before this, an unknown username returned immediately while a known
+     * username burned a full argon2id verify (~100ms), so the response time
+     * itself enumerated accounts. Callers on the "no such user" path invoke
+     * this BEFORE throwing the same generic error, making the two failure
+     * timings indistinguishable. The dummy hash below is a real argon2id hash
+     * generated with the same default cost parameters {@see self::create()}
+     * uses (m=65536,t=4,p=1); its plaintext is unknown by construction and
+     * the stored value is irrelevant — only its cost shape matters.
+     *
+     * @param string $password The candidate password to burn-verify.
+     *
+     * @return void
+     */
+    public function burnPasswordVerifyTime(string $password): void
+    {
+        password_verify($password, self::TIMING_BURN_DUMMY_HASH);
+    }
+
+    /** Argon2id (default costs) dummy hash for {@see burnPasswordVerifyTime()}. */
+    private const TIMING_BURN_DUMMY_HASH =
+        '$argon2id$v=19$m=65536,t=4,p=1$ajhMV1lZWk0wNUZYMUJJeA'
+        . '$GnAZV0jZAc3B24RwsTj5qLoSiy6ITh4BFMMHxFIDdSQ';
 
     /**
      * Whether the user has a usable LOCAL password sign-in method.
@@ -1328,7 +1410,6 @@ class UserRepository
         $this->cacheById = [];
         $this->cacheByUsername = [];
         $this->cacheByEmail = [];
-        $this->statusCacheById = [];
     }
 
     /**

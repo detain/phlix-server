@@ -70,7 +70,7 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
      * namespaces per window — paired with the initiate limiter that is
      * unguessable by budget long before it is unguessable by entropy).
      */
-    public const string ALPHABET = 'ACDEFGHJKMNPQRTVWXY'; // 20 chars, pinned by unit test
+    public const string ALPHABET = 'ACDEFGHJKMNPQRTVWXY'; // 19 chars, pinned by unit test
 
     /** Number of expired rows deleted per opportunistic sweep. */
     private const int CLEANUP_BATCH_SIZE = 100;

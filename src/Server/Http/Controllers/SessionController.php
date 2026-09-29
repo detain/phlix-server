@@ -146,7 +146,7 @@ class SessionController
             return (new Response())->status(403)->json(['error' => 'Forbidden']);
         }
 
-        $this->sessionManager->endSession($sessionId);
+        $this->sessionManager->endSession($sessionId, (string) ($request->userId ?? ''));
 
         return (new Response())->json(['message' => 'Session ended']);
     }

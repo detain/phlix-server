@@ -614,4 +614,107 @@ class UserProfileManagerTest extends TestCase
         $this->assertContains('TV-PG', $filter['allowedRatings']);
         $this->assertNotContains('PG-13', $filter['allowedRatings']);
     }
+
+    /**
+     * L-7 (security audit 2026-09-29): owner-predicate defense-in-depth.
+     * A supplied $ownerUserId that does not own the row raises the SAME
+     * 'Profile not found' error as a missing row (no existence oracle) and
+     * must not issue the mutation at all.
+     */
+    public function testUpdateWithMismatchedOwnerThrowsAndIssuesNoUpdate(): void
+    {
+        $capturedSql = [];
+        $this->wireProfileRowDb('profile-1', 'user-1', $capturedSql);
+
+        try {
+            $this->manager->update('profile-1', ['name' => 'Renamed'], 'intruder-9');
+            $this->fail('Expected InvalidArgumentException for cross-account update');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertSame('Profile not found', $e->getMessage());
+        }
+
+        $this->assertSame(1, count($capturedSql), 'only the existence SELECT may run');
+        $this->assertStringNotContainsString('UPDATE', $capturedSql[0]);
+    }
+
+    public function testUpdateWithMatchingOwnerScopesSqlWithPredicate(): void
+    {
+        $capturedSql = [];
+        $this->wireProfileRowDb('profile-1', 'user-1', $capturedSql);
+
+        $this->manager->update('profile-1', ['name' => 'Renamed'], 'user-1');
+
+        $mutationSql = array_values(array_filter($capturedSql, fn($s) => str_contains($s, 'UPDATE')));
+        $this->assertCount(1, $mutationSql);
+        $this->assertStringContainsString('AND user_id = ?', $mutationSql[0]);
+    }
+
+    public function testUpdateWithoutOwnerKeepsLegacyUnscopedSql(): void
+    {
+        // The admin-scoped callers (ProfilesController via canManageProfile)
+        // intentionally pass null — that path must stay byte-identical.
+        $capturedSql = [];
+        $this->wireProfileRowDb('profile-1', 'user-1', $capturedSql);
+
+        $this->manager->update('profile-1', ['name' => 'Renamed']);
+
+        $mutationSql = array_values(array_filter($capturedSql, fn($s) => str_contains($s, 'UPDATE')));
+        $this->assertCount(1, $mutationSql);
+        $this->assertStringNotContainsString('AND user_id', $mutationSql[0]);
+    }
+
+    public function testDeleteWithMismatchedOwnerThrowsAndIssuesNoDelete(): void
+    {
+        $capturedSql = [];
+        $this->wireProfileRowDb('profile-1', 'user-1', $capturedSql);
+
+        try {
+            $this->manager->delete('profile-1', 'intruder-9');
+            $this->fail('Expected InvalidArgumentException for cross-account delete');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertSame('Profile not found', $e->getMessage());
+        }
+
+        $this->assertSame(1, count($capturedSql));
+        $this->assertStringNotContainsString('DELETE', $capturedSql[0]);
+    }
+
+    public function testDeleteWithMatchingOwnerScopesSqlWithPredicate(): void
+    {
+        $capturedSql = [];
+        $this->wireProfileRowDb('profile-1', 'user-1', $capturedSql);
+
+        $this->manager->delete('profile-1', 'user-1');
+
+        $mutationSql = array_values(array_filter($capturedSql, fn($s) => str_contains($s, 'DELETE')));
+        $this->assertCount(1, $mutationSql);
+        $this->assertStringContainsString('AND user_id = ?', $mutationSql[0]);
+    }
+
+    /**
+     * Mock the db so any SELECT by id returns one owned profile row, and
+     * capture every issued SQL statement in order into &$capturedSql
+     * (by-reference: the callback keeps appending after this returns — an
+     * array return would hand back a snapshot copy and see nothing).
+     */
+    private function wireProfileRowDb(string $profileId, string $ownerUserId, array &$capturedSql): void
+    {
+        $this->db->method('query')
+            ->willReturnCallback(function ($sql) use (&$capturedSql, $profileId, $ownerUserId) {
+                $capturedSql[] = $sql;
+                if (str_contains($sql, 'SELECT')) {
+                    return [[
+                        'id' => $profileId,
+                        'user_id' => $ownerUserId,
+                        'name' => 'Old Name',
+                        'avatar_url' => null,
+                        'is_active' => false,
+                        'is_admin' => false,
+                        'created_at' => '2024-01-01 00:00:00',
+                        'updated_at' => '2024-01-01 00:00:00',
+                    ]];
+                }
+                return [];
+            });
+    }
 }

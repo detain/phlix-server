@@ -170,19 +170,36 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * (the `INSERT … ON DUPLICATE KEY UPDATE` into `client_heartbeats`, consumed
      * to surface a false `recorded` bit rather than a phantom write — the row's
      * own freshness is the durable signal). Measured 97 from the phpunit red.
+     * Re-pinned 97→99 by the auth-security lane (M-1/L-3/M-2, 2026-09-29): two
+     * literal-first-argument INSERT sites join `src/` —
+     * `AuthManager::claimFirstAdminElection()` (the `INSERT IGNORE` into the
+     * `first_admin_election` sentinel; result deliberately DISCARDED — under
+     * INSERT IGNORE the client returns lastInsertId, which cannot distinguish
+     * inserted-from-ignored here, so the election reads the verdict back via
+     * `SELECT … FOR UPDATE` instead), and `WebAuthnChallengeStore::issue()`
+     * (the challenge INSERT into `oauth_state_store`, consumed through
+     * `WriteResult::wroteNothing()` so a zero-row insert can never hand a
+     * caller a phantom-stored challenge — same contract as S518's pairing
+     * site). Measured 99 from the phpunit red.
      */
-    private const EXPECTED_TOTAL_INSERT_CALLS = 97;
+    private const EXPECTED_TOTAL_INSERT_CALLS = 99;
 
     /**
-     * The denominator, part 2: how many of those 95 consume their result.
-     * 15 tokens = 13 logical sites (the two ScanJobRepository sites each
+     * The denominator, part 2: how many of those 99 consume their result.
+     * 18 tokens = 16 logical sites (the two ScanJobRepository sites each
      * contribute a try arm and a retry arm; both arms feed one consumption).
-     * All 15 must be consumed through `WriteResult::wroteNothing()` /
+     * All 18 must be consumed through `WriteResult::wroteNothing()` /
      * `statementWroteNothing()`.
      * Re-pinned 15→17 by S518: both new sites above consume their result through
      * `WriteResult::wroteNothing()` — measured 17 from the phpunit red.
+     * Re-pinned 17→18 by the auth-security lane: `WebAuthnChallengeStore::issue()`
+     * is the one new CONSUMER of the pair above (the sentinel `INSERT IGNORE`
+     * discards, per its documented reason). This pin never reddened on its own
+     * because the total assertion above fails first inside the same test — the
+     * 18 was read from the scan output after the total re-pin, then confirmed
+     * by this test's green run.
      */
-    private const EXPECTED_CONSUMED_INSERT_RESULTS = 17;
+    private const EXPECTED_CONSUMED_INSERT_RESULTS = 18;
 
     /**
      * Helper call names whose first argument is the consumed result, plus the
@@ -252,7 +269,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /**
      * The denominator is pinned so a scan that examined nothing cannot pass
-     * silently: 95 `INSERT`/`REPLACE` `->query()` call tokens, 15 of which
+     * silently: 99 `INSERT`/`REPLACE` `->query()` call tokens, 18 of which
      * consume the result.
      */
     public function testTheInsertConsumerInventoryDenominatorIsPinned(): void

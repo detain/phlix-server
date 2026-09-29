@@ -656,6 +656,14 @@ class UserProfileManager
      *     blocked_genres?: array<string>|null,
      *     allow_unrated?: bool
      * } $data Fields to update. See create() for field descriptions.
+     * @param string|null $ownerUserId L-7 (security audit 2026-09-29): optional
+     *        defense-in-depth owner predicate. Callers already gate ownership at
+     *        the controller layer; passing the account here makes the manager
+     *        itself enforce it — the row is re-checked AND the UPDATE carries
+     *        `AND user_id = ?`, so a caller that forgets its gate cannot write
+     *        across accounts. Admin-by-design callers omit it (null). A supplied
+     *        non-owner fails with the SAME 'Profile not found' error as a
+     *        missing profile, so this is never an existence oracle.
      *
      * @return void
      *
@@ -664,12 +672,13 @@ class UserProfileManager
      * @see create() For field descriptions and validation rules
      * @see delete() To remove a profile entirely
      */
-    public function update(string $profileId, array $data): void
+    public function update(string $profileId, array $data, ?string $ownerUserId = null): void
     {
         $profile = $this->findById($profileId);
         if (!$profile) {
             throw new \InvalidArgumentException('Profile not found');
         }
+        $this->assertOwner($profile, $ownerUserId);
 
         $sets = [];
         $values = [];
@@ -697,10 +706,14 @@ class UserProfileManager
 
         if (!empty($sets)) {
             $values[] = $profileId;
-            $this->db->query(
-                "UPDATE user_profiles SET " . implode(', ', $sets) . " WHERE id = ?",
-                $values
-            );
+            $sql = "UPDATE user_profiles SET " . implode(', ', $sets) . " WHERE id = ?";
+            if ($ownerUserId !== null) {
+                // L-7: the row check above is the loud path; this predicate is
+                // the atomic guard against a delete/re-create race between them.
+                $sql .= " AND user_id = ?";
+                $values[] = $ownerUserId;
+            }
+            $this->db->query($sql, $values);
         }
 
         // Update settings if provided
@@ -768,6 +781,8 @@ class UserProfileManager
      * deactivate rather than delete if the profile should remain accessible.
      *
      * @param string $profileId The unique profile identifier (UUID format)
+     * @param string|null $ownerUserId L-7 defense-in-depth owner predicate —
+     *        see {@see update()}. Admin-by-design callers pass null.
      *
      * @return void
      *
@@ -775,14 +790,42 @@ class UserProfileManager
      *
      * @see update() To modify profile settings without deletion
      */
-    public function delete(string $profileId): void
+    public function delete(string $profileId, ?string $ownerUserId = null): void
     {
         $profile = $this->findById($profileId);
         if (!$profile) {
             throw new \InvalidArgumentException('Profile not found');
         }
+        $this->assertOwner($profile, $ownerUserId);
 
-        $this->db->query("DELETE FROM user_profiles WHERE id = ?", [$profileId]);
+        $sql = "DELETE FROM user_profiles WHERE id = ?";
+        $values = [$profileId];
+        if ($ownerUserId !== null) {
+            $sql .= " AND user_id = ?";
+            $values[] = $ownerUserId;
+        }
+        $this->db->query($sql, $values);
+    }
+
+    /**
+     * L-7 (security audit 2026-09-29): non-strict owner assertion shared by
+     * update()/delete(). A supplied $ownerUserId that does not match the row's
+     * `user_id` raises the SAME error as a missing profile — a cross-account
+     * probe must not learn the profile exists.
+     *
+     * @param array<string, mixed> $profile     Hydrated user_profiles row.
+     * @param string|null          $ownerUserId The asserting account, or null
+     *                                          (caller has admin-by-design scope).
+     */
+    private function assertOwner(array $profile, ?string $ownerUserId): void
+    {
+        if ($ownerUserId === null) {
+            return;
+        }
+        $rowOwner = $profile['user_id'] ?? null;
+        if (!is_string($rowOwner) || !hash_equals($rowOwner, $ownerUserId)) {
+            throw new \InvalidArgumentException('Profile not found');
+        }
     }
 
     /**

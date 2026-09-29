@@ -404,7 +404,8 @@ final class AuthManagerSignupGateTest extends TestCase
         $refreshToken = $jwt->createRefreshToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->expects($this->once())->method('getStatus')->with('user-9')->willReturn('active');
+        $repo->expects($this->once())->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
         $repo->method('findById')->willReturn($this->userRow(['status' => 'active']));
 
         /** @var array{user: array<string, mixed>, access_token?: mixed, refresh_token?: mixed} $result */
@@ -421,7 +422,8 @@ final class AuthManagerSignupGateTest extends TestCase
         $refreshToken = $jwt->createRefreshToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->with('user-9')->willReturn('disabled');
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'disabled', 'tokensNotValidAfter' => 0]);
         // A disabled account must not be issued fresh tokens.
         $repo->expects($this->never())->method('findById');
 
@@ -435,24 +437,35 @@ final class AuthManagerSignupGateTest extends TestCase
         $refreshToken = $jwt->createRefreshToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->with('user-9')->willReturn('pending');
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'pending', 'tokensNotValidAfter' => 0]);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->manager($repo, 'open', $jwt)->refreshToken($refreshToken);
     }
 
-    public function test_refresh_token_treats_missing_status_as_active(): void
+    /**
+     * H-1 (security audit 2026-09-29, fail-OPEN fix). This test USED to pin the
+     * bug: a null status — which for a NOT NULL ENUM column can only mean the
+     * user ROW IS GONE (deleted account) — was defaulted to 'active', letting
+     * deleted users re-mint 7-day refresh pairs forever. The defaulted branch
+     * is deleted; the deleted row now must be rejected with the exact same
+     * invalid-token failure contract (InvalidArgumentException → 401).
+     */
+    public function test_refresh_token_rejects_deleted_user_missing_row(): void
     {
         $jwt = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
         $refreshToken = $jwt->createRefreshToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        // getStatus returns null when the column/row is absent — treated as active.
-        $repo->method('getStatus')->with('user-9')->willReturn(null);
-        $repo->method('findById')->willReturn($this->userRow());
+        // getAuthState returns null when the row does not exist.
+        $repo->method('getAuthState')->with('user-9')->willReturn(null);
+        // Rejection must happen BEFORE any token re-mint reads the user row.
+        $repo->expects($this->never())->method('findById');
 
-        $result = $this->manager($repo, 'open', $jwt)->refreshToken($refreshToken);
-        $this->assertArrayHasKey('access_token', $result);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Account is not active');
+        $this->manager($repo, 'open', $jwt)->refreshToken($refreshToken);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -465,7 +478,8 @@ final class AuthManagerSignupGateTest extends TestCase
         $accessToken = $jwt->createAccessToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->expects($this->once())->method('getStatus')->with('user-9')->willReturn('active');
+        $repo->expects($this->once())->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
 
         $info = $this->manager($repo, 'open', $jwt)->validateAccessToken($accessToken);
 
@@ -480,7 +494,8 @@ final class AuthManagerSignupGateTest extends TestCase
         $accessToken = $jwt->createAccessToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->with('user-9')->willReturn('disabled');
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'disabled', 'tokensNotValidAfter' => 0]);
 
         // A live token for a now-disabled account is revoked → null (mirrors the
         // invalid-token contract so HttpHandler leaves the request unauthenticated).
@@ -493,18 +508,71 @@ final class AuthManagerSignupGateTest extends TestCase
         $accessToken = $jwt->createAccessToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->with('user-9')->willReturn('pending');
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'pending', 'tokensNotValidAfter' => 0]);
 
         $this->assertNull($this->manager($repo, 'open', $jwt)->validateAccessToken($accessToken));
     }
 
-    public function test_validate_access_token_treats_missing_status_as_active(): void
+    /**
+     * H-1 companion on the access path: deleted row ⇒ null ⇒ request
+     * unauthenticated (never the old defaulted-'active' pass).
+     */
+    public function test_validate_access_token_rejects_deleted_user_missing_row(): void
     {
         $jwt = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
         $accessToken = $jwt->createAccessToken('user-9');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->with('user-9')->willReturn(null);
+        $repo->method('getAuthState')->with('user-9')->willReturn(null);
+
+        $this->assertNull($this->manager($repo, 'open', $jwt)->validateAccessToken($accessToken));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // M-1 token-revocation watermark — logout/password-change kills lineage
+    // ─────────────────────────────────────────────────────────────────
+
+    public function test_validate_access_token_rejects_token_issued_before_watermark(): void
+    {
+        $jwt = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
+        $accessToken = $jwt->createAccessToken('user-9'); // iat = now
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->with('user-9')
+            // Watermark stamped at (or after) the token's iat: the pair predates
+            // the logout/password-change and must not authenticate.
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => time() + 5]);
+
+        $this->assertNull($this->manager($repo, 'open', $jwt)->validateAccessToken($accessToken));
+    }
+
+    public function test_refresh_token_rejects_pair_issued_before_watermark(): void
+    {
+        $jwt = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
+        $refreshToken = $jwt->createRefreshToken('user-9');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => time() + 5]);
+        $repo->expects($this->never())->method('findById');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Token has been revoked');
+        $this->manager($repo, 'open', $jwt)->refreshToken($refreshToken);
+    }
+
+    public function test_tokens_minted_after_watermark_still_work(): void
+    {
+        // The denylist is a LINEAGE cut, not a kill-switch: an account whose
+        // watermark sits in the past (revoked then re-logged-in) must pass —
+        // iat strictly AFTER the watermark is alive.
+        $jwt = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
+        $accessToken = $jwt->createAccessToken('user-9');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->with('user-9')
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => time() - 60]);
 
         $info = $this->manager($repo, 'open', $jwt)->validateAccessToken($accessToken);
         $this->assertIsArray($info);

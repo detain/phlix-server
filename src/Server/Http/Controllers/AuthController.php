@@ -18,6 +18,7 @@ use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\AccountInactiveException;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use InvalidArgumentException;
 
@@ -457,6 +458,19 @@ class AuthController
      */
     public function logout(Request $request, array $params): Response
     {
+        // M-1 (security audit 2026-09-29): logout used to be cookie-clearing
+        // theatre — the minted JWTs stayed fully valid server-side. The route
+        // sits outside AuthMiddleware, but the front controller still
+        // populates $request->userId from a valid bearer/session cookie, so
+        // whenever an identity is attached we run the real server-side
+        // teardown: per-user JWT revocation watermark + endAllUserSessions
+        // (via AuthManager::logout). An anonymous hit (already logged out,
+        // or a stray cookie) keeps the old pure-clear behaviour.
+        $userId = $request->userId;
+        if (is_string($userId) && $userId !== '') {
+            $this->authManager->logout($userId, '', UserLoggedOut::REASON_EXPLICIT);
+        }
+
         return (new Response())
             ->clearCookie(self::SESSION_COOKIE)
             ->clearCookie(self::REFRESH_COOKIE)

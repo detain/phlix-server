@@ -105,23 +105,83 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
         $value = (string) ($secret ?? getenv('JWT_SECRET') ?: '');
 
+        // The policy itself lives in the pure seam below (unit-testable —
+        // assertSecretConfigured can never run under PHPUnit because the
+        // test-env early-return exists precisely so the suite boots without a
+        // real secret).
+        $violation = self::secretViolation($value, self::isDevEnvironment());
+        if ($violation !== null) {
+            throw new \RuntimeException($violation);
+        }
+    }
+
+    /**
+     * Pure JWT_SECRET policy (L-4, security audit 2026-09-29): returns the
+     * fatal boot message for a weak secret, or null when it is acceptable.
+     *
+     * Three tiers, in order:
+     *   1. empty                    → fatal everywhere (unsigned/forgeable JWTs
+     *                                 AND forgeable media signed URLs, since
+     *                                 SignedUrl::fromEnv() HMAC-derives from
+     *                                 JWT_SECRET when PHLIX_SIGNED_URL_SECRET
+     *                                 is unset);
+     *   2. the shipped sentinel     → fatal everywhere (publicly guessable);
+     *   3. shorter than
+     *      {@see self::MIN_SECRET_BYTES} → fatal outside development. Dev mode
+     *      keeps a friction-free path for local quick-starts with a throwaway
+     *      key — the relaxation covers ONLY the length floor; tiers 1 and 2
+     *      still refuse to boot a dev box with no key at all.
+     *
+     * @param string $value   The configured secret value.
+     * @param bool   $devMode Whether the caller resolves to dev environment.
+     *
+     * @return string|null The RuntimeException message, or null when OK.
+     */
+    public static function secretViolation(string $value, bool $devMode = false): ?string
+    {
         if ($value === '') {
-            throw new \RuntimeException(
-                'CRITICAL: JWT_SECRET is not set. Refusing to start with an empty signing key — '
+            return 'CRITICAL: JWT_SECRET is not set. Refusing to start with an empty signing key — '
                 . 'JWTs and media signed URLs would be unsigned/forgeable. '
                 . 'Set a high-entropy JWT_SECRET environment variable (e.g. `openssl rand -hex 32`) '
-                . 'before starting the server.'
-            );
+                . 'before starting the server.';
         }
 
         if ($value === self::DEFAULT_JWT_SECRET) {
-            throw new \RuntimeException(
-                'CRITICAL: JWT_SECRET is still the shipped default ("' . self::DEFAULT_JWT_SECRET . '"). '
+            return 'CRITICAL: JWT_SECRET is still the shipped default ("' . self::DEFAULT_JWT_SECRET . '"). '
                 . 'Refusing to start with a guessable signing key — JWTs and media signed URLs would be forgeable. '
                 . 'Set a unique high-entropy JWT_SECRET environment variable (e.g. `openssl rand -hex 32`) '
-                . 'before starting the server.'
-            );
+                . 'before starting the server.';
         }
+
+        // L-4 (security audit 2026-09-29): length/entropy floor. Empty and the
+        // shipped sentinel were refused, but so was everything else — a
+        // 6-character "secret" passes those two checks and is offline-bruteforce
+        // fodder for forging admin JWTs and every media signed URL. 32 bytes is
+        // the HS256 key size the class docblocks already recommend ("min 32
+        // bytes"), so enforce the recommendation rather than document it.
+        if (!$devMode && strlen($value) < self::MIN_SECRET_BYTES) {
+            return 'CRITICAL: JWT_SECRET is only ' . strlen($value) . ' bytes; at least '
+                . self::MIN_SECRET_BYTES . ' are required outside development. '
+                . 'A short HMAC key is offline-bruteforceable, forging admin JWTs and media signed URLs. '
+                . 'Generate one with `openssl rand -hex 32` (64 chars) and re-export JWT_SECRET.';
+        }
+
+        return null;
+    }
+
+    /** Minimum accepted JWT_SECRET length in bytes (L-4 boot guard). */
+    public const MIN_SECRET_BYTES = 32;
+
+    /**
+     * Whether the process runs in an explicit development mode, where the
+     * JWT_SECRET entropy floor is relaxed (empty/sentinel are STILL refused —
+     * only short-but-real keys get the pass).
+     *
+     * @return bool
+     */
+    private static function isDevEnvironment(): bool
+    {
+        return in_array(getenv('PHLIX_ENV'), ['dev', 'development'], true);
     }
 
     /**

@@ -106,12 +106,18 @@ class SessionManager
      */
     public function createSession(string $userId, string $deviceId, string $deviceName, string $deviceType): string
     {
-        // Check if session already exists for this device
-        $existing = $this->findByDeviceId($deviceId);
+        // M-4 (security audit 2026-09-29): the device reuse lookup used to be
+        // keyed by device_id ALONE, so user B calling createSession with a
+        // device id user A had already registered returned A's session id — a
+        // cross-user session handle (guessability of the 36-char UUID and
+        // downstream 403s were the only thing between that and full session
+        // hijack). Reuse is now scoped to the (user, device) pair: a device
+        // switching accounts mints a FRESH row instead of inheriting.
+        $existing = $this->findSessionForUserDevice($userId, $deviceId);
         if ($existing !== null) {
             $existingId = $existing['id'] ?? null;
             if (is_string($existingId) && $existingId !== '') {
-                $this->updateActivity($existingId);
+                $this->updateActivity($existingId, $userId);
                 return $existingId;
             }
         }
@@ -194,6 +200,30 @@ class SessionManager
     }
 
     /**
+     * Find the session a specific USER holds on a specific DEVICE (M-4).
+     *
+     * The owner-scoped sibling of {@see findByDeviceId()} and the only shape
+     * the create-session reuse path may use: device ids are client-asserted,
+     * so a device_id-keyed lookup lets one user's `createSession` claim
+     * another user's session row.
+     *
+     * @param string $userId   Session owner UUID.
+     * @param string $deviceId Device UUID.
+     *
+     * @return array<string, mixed>|null Most recent owned session or null.
+     */
+    public function findSessionForUserDevice(string $userId, string $deviceId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM sessions WHERE user_id = ? AND device_id = ? ORDER BY last_activity DESC LIMIT 1",
+            [$userId, $deviceId]
+        );
+
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
+    }
+
+    /**
      * Get all sessions for a user.
      *
      * @param string $userId User UUID to get sessions for
@@ -221,48 +251,79 @@ class SessionManager
     /**
      * Update session's last activity timestamp.
      *
+     * M-4 (security audit 2026-09-29): takes the asserting owner and scopes the
+     * UPDATE with it — the row simply cannot be touched under the wrong
+     * account, ownership-blind even if the caller forgets its own check. The
+     * in-memory mirror only refreshes when it agrees on the owner (a cached
+     * row belonging to someone else is left alone, never resurrected).
+     *
      * @param string $sessionId Session UUID to update
+     * @param string $userId    Owner whose session may be touched; a mismatch
+     *                          (or missing row) makes this a silent no-op in
+     *                          SQL — callers that must distinguish use
+     *                          {@see getSession()} first.
      *
      * @return void
      *
      * @example
      * ```php
-     * $sessionManager->updateActivity('session-uuid-123');
+     * $sessionManager->updateActivity('session-uuid-123', 'user-uuid-123');
      * ```
      */
-    public function updateActivity(string $sessionId): void
+    public function updateActivity(string $sessionId, string $userId): void
     {
         $this->db->query(
-            "UPDATE sessions SET last_activity = NOW() WHERE id = ?",
-            [$sessionId]
+            "UPDATE sessions SET last_activity = NOW() WHERE id = ? AND user_id = ?",
+            [$sessionId, $userId]
         );
 
         if (isset($this->activeSessions[$sessionId])) {
-            $this->activeSessions[$sessionId]['last_activity'] = time();
+            $cachedOwner = $this->activeSessions[$sessionId]['user_id'] ?? null;
+            if ($cachedOwner === $userId) {
+                $this->activeSessions[$sessionId]['last_activity'] = time();
+            }
         }
     }
 
     /**
-     * End and delete a session.
+     * End and delete a session, scoped to its owner (M-4).
+     *
+     * The DELETE carries the `user_id` predicate, so even a caller that skips
+     * the controller-level ownership check cannot end another user's session
+     * (defense in depth, mirroring {@see \Phlix\Auth\WebAuthn\WebAuthnCredentialRepository::delete()}'s
+     * `WHERE credential_id = ? AND user_id = ?` shape).
      *
      * @param string $sessionId Session UUID to end
+     * @param string $userId    Owner whose session may be ended.
      *
      * @return void
      *
      * @example
      * ```php
-     * $sessionManager->endSession('session-uuid-123');
+     * $sessionManager->endSession('session-uuid-123', 'user-uuid-123');
      * ```
      */
-    public function endSession(string $sessionId): void
+    public function endSession(string $sessionId, string $userId): void
     {
         $session = $this->getSession($sessionId);
-        if ($session) {
-            $this->db->query("DELETE FROM sessions WHERE id = ?", [$sessionId]);
-            unset($this->activeSessions[$sessionId]);
-
-            $this->logger->info('Session ended', ['session_id' => $sessionId]);
+        if ($session === null) {
+            return;
         }
+        $owner = $session['user_id'] ?? null;
+        if (!is_string($owner) || $owner !== $userId) {
+            // Ownership-blind end was the M-4 hole; refuse loudly rather than
+            // silently deleting someone else's row.
+            $this->logger->warning('Rejected cross-user session end attempt', [
+                'session_id' => $sessionId,
+                'requesting_user_id' => $userId,
+            ]);
+            return;
+        }
+
+        $this->db->query("DELETE FROM sessions WHERE id = ? AND user_id = ?", [$sessionId, $userId]);
+        unset($this->activeSessions[$sessionId]);
+
+        $this->logger->info('Session ended', ['session_id' => $sessionId]);
     }
 
     /**

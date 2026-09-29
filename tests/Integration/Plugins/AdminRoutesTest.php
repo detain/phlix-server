@@ -1283,11 +1283,11 @@ final class FakeUserProfileManager extends UserProfileManager
         return 'fake-profile-id';
     }
 
-    public function update(string $profileId, array $data): void
+    public function update(string $profileId, array $data, ?string $ownerUserId = null): void
     {
     }
 
-    public function delete(string $profileId): void
+    public function delete(string $profileId, ?string $ownerUserId = null): void
     {
     }
 

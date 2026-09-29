@@ -179,26 +179,59 @@ final class UserRepositoryCacheTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // getStatus cache tests
+    // status lookups are NOT cached here (M-6, security audit 2026-09-29)
     // ─────────────────────────────────────────────────────────────────
 
-    public function testGetStatusHitsCacheOnSecondCall(): void
+    /**
+     * This test used to PIN the inner 60s status cache. That cache was the
+     * second layer M-6 removed (it silently extended the documented 5s
+     * revocation ceiling to 60s), so the honest contract is now the
+     * opposite: EVERY getStatus()/getAuthState() call hits the DB, and the
+     * only caching tier on the revocation path lives in AuthManager
+     * (pinned by AuthManagerStatusCacheTest::
+     * test_revocation_ceiling_is_the_single_five_second_layer).
+     */
+    public function testGetStatusHitsDbEveryCallNoInnerCache(): void
     {
-        $this->db->expects($this->once())
+        $this->db->expects($this->exactly(2))
             ->method('query')
             ->with(
-                $this->stringContains('SELECT status FROM users WHERE id = ?'),
+                $this->stringContains('FROM users WHERE id = ?'),
                 ['user-1']
             )
-            ->willReturn([['status' => 'active']]);
+            ->willReturn([['status' => 'active', 'tokens_not_valid_after' => null]]);
 
-        // First call - should hit DB
-        $result1 = $this->repo->getStatus('user-1');
-        $this->assertSame('active', $result1);
+        $this->assertSame('active', $this->repo->getStatus('user-1'));
+        $this->assertSame('active', $this->repo->getStatus('user-1'));
+    }
 
-        // Second call - should hit cache
-        $result2 = $this->repo->getStatus('user-1');
-        $this->assertSame('active', $result2);
+    public function testGetAuthStateReturnsWatermarkAndNullRowForMissingUser(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $calls = 0;
+        $db->method('query')->willReturnCallback(function () use (&$calls): array {
+            $calls++;
+            return $calls === 1
+                ? [['status' => 'active', 'tokens_not_valid_after' => '1750000000']]
+                : [];
+        });
+
+        $repo = new UserRepository($db);
+
+        $state = $repo->getAuthState('user-1');
+        $this->assertIsArray($state);
+        $this->assertSame('active', $state['status']);
+        $this->assertSame(1750000000, $state['tokensNotValidAfter']);
+
+        // Missing row ⇒ null — the caller must treat it as not-active (H-1),
+        // and a NULL watermark column reads as 0 ("never revoked").
+        $this->assertNull($repo->getAuthState('ghost'));
+
+        $db2 = $this->createMock(Connection::class);
+        $db2->method('query')->willReturn([['status' => 'active', 'tokens_not_valid_after' => null]]);
+        $state2 = (new UserRepository($db2))->getAuthState('user-1');
+        $this->assertIsArray($state2);
+        $this->assertSame(0, $state2['tokensNotValidAfter']);
     }
 
     // ─────────────────────────────────────────────────────────────────

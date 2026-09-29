@@ -10,6 +10,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 use ReflectionClassConstant;
 use ReflectionMethod;
 use ReflectionProperty;
@@ -18,7 +19,7 @@ use ReflectionProperty;
  * Verifies the SV-2.7 per-request auth-status cache in {@see AuthManager}:
  *
  *  - a repeat lookup for the same user within the TTL is served from the
- *    in-worker cache (no repeat `UserRepository::getStatus()` call);
+ *    in-worker cache (no repeat `UserRepository::getAuthState()` call);
  *  - a stale (TTL-expired) entry recomputes from the DB;
  *  - {@see AuthManager::invalidateUserStatusCache()} forces an immediate
  *    recompute even while the entry is still within its TTL — the real
@@ -73,9 +74,9 @@ final class AuthManagerStatusCacheTest extends TestCase
 
         $repo = $this->createMock(UserRepository::class);
         $repo->expects($this->once())
-            ->method('getStatus')
+            ->method('getAuthState')
             ->with('user-1')
-            ->willReturn('active');
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
 
         $manager = $this->manager($repo, $jwt);
 
@@ -99,9 +100,9 @@ final class AuthManagerStatusCacheTest extends TestCase
 
         $repo = $this->createMock(UserRepository::class);
         $repo->expects($this->once())
-            ->method('getStatus')
+            ->method('getAuthState')
             ->with('user-1')
-            ->willReturn('active');
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
         $repo->method('findById')->willReturn([
             'id' => 'user-1',
             'username' => 'nina',
@@ -127,9 +128,9 @@ final class AuthManagerStatusCacheTest extends TestCase
 
         $repo = $this->createMock(UserRepository::class);
         $repo->expects($this->exactly(2))
-            ->method('getStatus')
+            ->method('getAuthState')
             ->with('user-1')
-            ->willReturn('active');
+            ->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
 
         $manager = $this->manager($repo, $jwt);
 
@@ -162,13 +163,15 @@ final class AuthManagerStatusCacheTest extends TestCase
         $callCount = 0;
         $repo = $this->createMock(UserRepository::class);
         $repo->expects($this->exactly(2))
-            ->method('getStatus')
+            ->method('getAuthState')
             ->with('user-1')
-            ->willReturnCallback(function () use (&$callCount): string {
+            ->willReturnCallback(function () use (&$callCount): array {
                 $callCount++;
                 // First read (still active): the account is disabled by an
                 // admin action *between* the two validateAccessToken() calls.
-                return $callCount === 1 ? 'active' : 'disabled';
+                return $callCount === 1
+                    ? ['status' => 'active', 'tokensNotValidAfter' => 0]
+                    : ['status' => 'disabled', 'tokensNotValidAfter' => 0];
             });
 
         $manager = $this->manager($repo, $jwt);
@@ -212,7 +215,7 @@ final class AuthManagerStatusCacheTest extends TestCase
     public function test_user_status_cache_evicts_oldest_user_beyond_bound(): void
     {
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->willReturn('active');
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
 
         $manager = $this->manager($repo, $this->jwt());
 
@@ -220,12 +223,12 @@ final class AuthManagerStatusCacheTest extends TestCase
         $max = is_int($maxConst) ? $maxConst : 0;
         $this->assertGreaterThan(0, $max);
 
-        $getCachedUserStatus = new ReflectionMethod(AuthManager::class, 'getCachedUserStatus');
-        $getCachedUserStatus->setAccessible(true);
+        $getCachedAuthState = new ReflectionMethod(AuthManager::class, 'getCachedAuthState');
+        $getCachedAuthState->setAccessible(true);
 
         // Fill exactly to the bound (user-0 .. user-(max-1)) — no eviction yet.
         for ($i = 0; $i < $max; $i++) {
-            $getCachedUserStatus->invoke($manager, 'user-' . $i);
+            $getCachedAuthState->invoke($manager, 'user-' . $i);
         }
 
         $cacheProp = new ReflectionProperty(AuthManager::class, 'userStatusCache');
@@ -234,11 +237,11 @@ final class AuthManagerStatusCacheTest extends TestCase
         $this->assertCount($max, is_array($cacheAtBound) ? $cacheAtBound : [], 'at the bound, nothing evicted yet');
 
         // Touch the oldest user so it becomes MRU (hot), making user-1 the new oldest.
-        $getCachedUserStatus->invoke($manager, 'user-0');
+        $getCachedAuthState->invoke($manager, 'user-0');
 
         // One more distinct user overflows the bound → the coldest (untouched)
         // user is evicted, not the just-touched user-0.
-        $getCachedUserStatus->invoke($manager, 'user-' . $max);
+        $getCachedAuthState->invoke($manager, 'user-' . $max);
 
         $cacheAfter = $cacheProp->getValue($manager);
         $keys = array_keys(is_array($cacheAfter) ? $cacheAfter : []);
@@ -246,6 +249,62 @@ final class AuthManagerStatusCacheTest extends TestCase
         $this->assertNotContains('user-1', $keys, 'the coldest (untouched) user was evicted first (LRU)');
         $this->assertContains('user-0', $keys, 'a recently-touched hot user survives eviction');
         $this->assertContains('user-' . $max, $keys, 'the newest user is retained');
+    }
+
+    /**
+     * M-6 (security audit 2026-09-29): the 5-second window here is the ONE
+     * authoritative revocation ceiling. Before the fix, `UserRepository` kept
+     * a SECOND, 60-second `statusCacheById` under this cache, so the docs'
+     * "5 seconds" was a lie — a watermark bump (logout/password change) could
+     * take up to a minute to surface. This test pins the contract in both
+     * directions: (1) the repository exposes no status-cache property anymore
+     * (grep-level guard against re-introducing a second layer), and (2) the
+     * revocation watermark converges through exactly this 5s layer — an
+     * already-cached 'active + no watermark' keeps a fresh token alive only
+     * until the entry expires (or is invalidated), after which the bumped
+     * watermark rejects it.
+     */
+    public function test_revocation_ceiling_is_the_single_five_second_layer(): void
+    {
+        $ttlConst = (new ReflectionClassConstant(AuthManager::class, 'USER_STATUS_CACHE_TTL_NS'))->getValue();
+        $this->assertSame(5_000_000_000, $ttlConst, '5s ceiling is a SECURITY constant, not a tuning knob');
+
+        $this->assertFalse(
+            (new ReflectionClass(UserRepository::class))->hasProperty('statusCacheById'),
+            'UserRepository must not re-introduce an inner status/watermark cache (M-6 single-layer doctrine)'
+        );
+
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken('user-1');
+
+        // Flag carrier object (not a bool): the flip below happens AFTER the
+        // closure is defined, which scalar-level static analysis cannot see
+        // through by-reference captures; a dynamic property is honestly
+        // "mixed" to the analyser and stays honest at runtime too.
+        $revoked = new \stdClass();
+        $revoked->flag = false;
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')
+            ->willReturnCallback(function () use ($revoked): array {
+                return $revoked->flag
+                    ? ['status' => 'active', 'tokensNotValidAfter' => time() + 10]
+                    : ['status' => 'active', 'tokensNotValidAfter' => 0];
+            });
+
+        $manager = $this->manager($repo, $jwt);
+
+        // Warm the cache while nothing is revoked.
+        $this->assertIsArray($manager->validateAccessToken($token));
+
+        // Admin bumps the watermark now — within the cached window the live
+        // session still passes (the documented 5s convergence), …
+        $revoked->flag = true;
+        $this->assertIsArray($manager->validateAccessToken($token));
+
+        // …and the moment the entry ages past the ceiling, the watermark takes
+        // effect: no second cache can hold the stale 'no revocation' answer.
+        $this->expireCachedEntry($manager, 'user-1');
+        $this->assertNull($manager->validateAccessToken($token));
     }
 
     /**

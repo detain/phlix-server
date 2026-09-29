@@ -153,6 +153,13 @@ final class AdminUserController
         }
 
         $this->userRepository->setStatus($id, 'disabled');
+        // M-1 (security audit 2026-09-29): disabling must also kill every
+        // outstanding JWT now — the status check alone would let already-
+        // minted access tokens ride out their hour (and refresh would be
+        // blocked, but the pair on the wire is not). Bump the per-user
+        // revocation watermark; the cache invalidation makes it immediate on
+        // this worker, ≤5s cross-worker (documented AuthManager ceiling).
+        $this->authManager?->revokeUserTokens($id, 'admin_disable');
         $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User disabled successfully']);
     }
@@ -183,6 +190,11 @@ final class AdminUserController
             ]);
         }
 
+        // M-1: bump the watermark BEFORE the row goes away (a UPDATE against
+        // a deleted id is a no-op). Post-delete the row's absence fails the
+        // status check closed anyway (H-1); this is defense-in-depth for the
+        // cache window.
+        $this->authManager?->revokeUserTokens($id, 'user_rejected');
         $this->userRepository->delete($id);
         $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User rejected successfully']);
@@ -205,6 +217,11 @@ final class AdminUserController
         }
 
         $this->userRepository->setStatus($id, $status);
+        // M-1: only a transition INTO a non-active status revokes — enabling
+        // an account must not bump the watermark (approve is not revocation).
+        if ($status !== 'active') {
+            $this->authManager?->revokeUserTokens($id, 'admin_status_' . $status);
+        }
         $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => $successMessage]);
     }
@@ -413,6 +430,8 @@ final class AdminUserController
             }
         }
 
+        // M-1: watermark bump BEFORE the row goes away — see reject().
+        $this->authManager?->revokeUserTokens($id, 'admin_delete');
         $this->userRepository->delete($id);
         $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User deleted successfully']);
@@ -487,6 +506,13 @@ final class AdminUserController
         // Store the hashed token, its expiry, and force a password change.
         $this->userRepository->setPasswordResetToken($id, $hashedToken, $expiresAt);
         $this->userRepository->setMustChangePassword($id, true);
+
+        // M-1 (security audit 2026-09-29): a reset token being issued means the
+        // account's password is considered compromised-or-about-to-be. Kill
+        // every outstanding JWT pair NOW, not only when the new password
+        // lands — must_change_password blocks re-mints but access tokens
+        // would otherwise ride out their hour.
+        $this->authManager?->revokeUserTokens($id, 'password_reset_issued');
 
         // NOTE: In a full implementation, the plaintext $token would be sent
         // to the user via email here. The out-of-band delivery is handled by

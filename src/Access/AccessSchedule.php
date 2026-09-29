@@ -16,11 +16,17 @@ use DateTimeInterface;
 /**
  * Represents a time-based access control schedule for a profile.
  *
- * A schedule defines a recurring time window during which access is allowed.
- * It can be restricted to specific days of the week and time ranges.
+ * ⚠ L-7 (security audit 2026-09-29): PROSE FIX — this class docblock used to
+ * say the window was when access is ALLOWED. The consumer semantics are the
+ * INVERSE, and they are the shipped, middleware-enforced truth (see
+ * {@see \Phlix\Access\AccessScheduleService::isAccessAllowed()} and
+ * `AccessScheduleMiddleware`): a schedule defines a recurring **BLOCKED**
+ * ("curfew") window. A profile with NO schedules — or whose schedules do not
+ * match the current day/time — is ALLOWED; the moment a matching active
+ * schedule exists, access is DENIED.
  *
- * Example: A schedule named "Weekend Only" could allow access only on
- * Saturday and Sunday from 10:00 to 22:00.
+ * Example: a schedule "School Night Curfew" blocking Monday–Friday 08:00 to
+ * 15:00 lets the profile play outside those hours and locks it inside them.
  *
  * @package Phlix\Access
  */
@@ -87,16 +93,20 @@ final class AccessSchedule
     }
 
     /**
-     * Check if this schedule is currently active at the given time.
+     * Whether THIS schedule's window APPLIES at the given time.
      *
      * Returns true only if ALL of the following conditions are met:
      * - The schedule is marked as active
      * - The current day of week is in the schedule's days_of_week
      * - The current time is within the start_time and end_time range
      *
-     * @param DateTimeInterface $now The time to check against. Defaults to current time.
+     * ⚠ true here means the schedule MATCHES — and per the class docblock
+     * (L-7 correction) a matching schedule BLOCKS access; it does not grant
+     * it. The method is named for schedule applicability, not permission.
      *
-     * @return bool True if access should be allowed at the given time.
+     * @param DateTimeInterface $now The time to check against.
+     *
+     * @return bool True if the (blocking) window applies at the given time.
      */
     public function isActiveAt(DateTimeInterface $now): bool
     {

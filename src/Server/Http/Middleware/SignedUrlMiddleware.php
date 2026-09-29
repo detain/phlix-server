@@ -79,7 +79,10 @@ final class SignedUrlMiddleware
      * Convenience factory for the OPDS feeds: enables HTTP Basic with the
      * supplied credential validator and an OPDS realm.
      *
-     * @param \Closure $basicValidator `fn(string $user, string $pass): ?string`.
+     * @param \Closure $basicValidator `fn(string $user, string $pass, string $ip = ''): ?string`.
+     *                                 The third parameter (trusted client IP,
+     *                                 M-5) is passed to every validator;
+     *                                 closures that ignore it are unaffected.
      */
     public static function forOpds(\Closure $basicValidator, ?SignedUrl $signer = null): self
     {
@@ -110,7 +113,12 @@ final class SignedUrlMiddleware
         if ($this->allowBasic && $this->basicValidator !== null) {
             $credentials = self::parseBasicCredentials($request->getHeader('Authorization'));
             if ($credentials !== null) {
-                $resolved = ($this->basicValidator)($credentials[0], $credentials[1]);
+                // M-5 (security audit 2026-09-29): the trusted client IP is
+                // threaded through so validators can charge failures to the
+                // shared login throttle. Userland calls ignore surplus
+                // positional args, so pre-existing two-parameter validators
+                // keep working untouched.
+                $resolved = ($this->basicValidator)($credentials[0], $credentials[1], $request->getTrustedClientIp());
                 if (is_string($resolved) && $resolved !== '') {
                     $request->userId = $resolved;
                     RequestContext::setUserId($resolved);

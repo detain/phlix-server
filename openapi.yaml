@@ -5182,12 +5182,26 @@ paths:
       operationId: "post_api_v1_auth_register"
       tags: ["Authentication"]
       summary: "Register"
-      description: "Register (post /api/v1/auth/register)."
+      description: >-
+        Register (post /api/v1/auth/register). JSON client: 201 with the token
+        pair when the account is created active (open mode or the first-user
+        admin bootstrap); 202 with {status:pending} and NO tokens when the
+        signup gate is 'approval'; 400 on validation failure (duplicate
+        username/email, policy); 403 code=signup_disabled when the gate is
+        'disabled' (first user still bootstraps regardless of mode). Browser
+        form posts get 302 redirects instead (see /auth/register).
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Account created active; token pair returned."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "202":
+          description: "Account created pending administrator approval; no tokens."
           content:
             application/json:
               schema:
@@ -5195,6 +5209,8 @@ paths:
                 additionalProperties: true
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/webauthn/login/options":
@@ -5222,7 +5238,16 @@ paths:
       operationId: "post_api_v1_auth_webauthn_login_verify"
       tags: ["Authentication"]
       summary: "Finish authentication"
-      description: "Finish authentication (post /api/v1/auth/webauthn/login/verify)."
+      description: >-
+        Finish authentication (post /api/v1/auth/webauthn/login/verify).
+        Verifies the assertion cryptographically (challenge/origin/rpId/UV
+        flags plus the COSE signature and a monotonic counter) against the
+        DB-stored single-use challenge and the stored credential; the identity
+        in the returned token pair is the OWNER OF THE STORED CREDENTIAL, not
+        anything the client asserts. Success mints the full JWT pair; any
+        verification failure (bad signature, expired/consumed challenge,
+        origin/rpId mismatch, counter rollback, credential/user mismatch)
+        answers 401.
       x-phlix-middleware: []
       security: []
       responses:
@@ -5235,6 +5260,8 @@ paths:
                 additionalProperties: true
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/webauthn/register/options":
@@ -10757,19 +10784,24 @@ paths:
       operationId: "post_auth_login"
       tags: ["Authentication"]
       summary: "Login"
-      description: "Login (post /auth/login)."
+      description: >-
+        Login (post /auth/login). Browser form alias of
+        /api/v1/auth/login: any request on this path (or a form Content-Type
+        on the API path) gets the REDIRECT contract instead of JSON — 302 to
+        `/` with HttpOnly `phlix_session`/`phlix_refresh` cookies on success,
+        302 to `/login?error=…` on bad credentials, inactive account, or the
+        signup-disabled / validation failures. The JSON contract (200 with the
+        token pair, 400/403 errors) lives on /api/v1/auth/login.
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Redirect to / (success, cookies set) or /login?error=… (failure)."
+          headers:
+            Set-Cookie:
+              description: "HttpOnly auth cookies on success only."
               schema:
-                type: object
-                additionalProperties: true
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/logout":
@@ -10777,36 +10809,48 @@ paths:
       operationId: "get_auth_logout"
       tags: ["Authentication"]
       summary: "Logout"
-      description: "Logout (get /auth/logout)."
+      description: >-
+        Logout (get /auth/logout). Browser alias; POST /auth/logout is the same
+        handler. When the request carries a resolvable identity (bearer access
+        token or session cookie), this is a REAL server-side logout: the
+        per-user token revocation watermark is bumped (every JWT minted up to
+        now dies on both the access and refresh paths within the documented
+        5s cache ceiling) and all device session rows are ended (M-1). Always
+        answers 302 to /login after clearing the auth cookies — including for
+        already-anonymous requests (idempotent; no JSON body).
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Redirect to /login; auth cookies cleared."
+          headers:
+            Set-Cookie:
+              description: "phlix_session and phlix_refresh cookies cleared."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
     post:
       operationId: "post_auth_logout"
       tags: ["Authentication"]
       summary: "Logout"
-      description: "Logout (post /auth/logout)."
+      description: >-
+        Logout (post /auth/logout). See the GET alias: same handler, same
+        server-side JWT + device-session revocation (M-1), always 302 to
+        /login. API clients authenticating with a bearer token should call
+        THIS route (POST is the semantically correct verb for a state change)
+        to kill their token lineage server-side instead of only discarding it
+        client-side.
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Redirect to /login; auth cookies cleared."
+          headers:
+            Set-Cookie:
+              description: "phlix_session and phlix_refresh cookies cleared."
               schema:
-                type: object
-                additionalProperties: true
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/oidc/authorize":
@@ -10870,19 +10914,22 @@ paths:
       operationId: "post_auth_register"
       tags: ["Authentication"]
       summary: "Register"
-      description: "Register (post /auth/register)."
+      description: >-
+        Register (post /auth/register). Browser form alias of
+        /api/v1/auth/register (which owns the 201/202/400/403 JSON contract):
+        this path always answers 302 — success → `/` with auth cookies (open
+        mode / first user) or `/login?notice=…` (pending approval); validation
+        or signup-disabled failures → `/auth/register?error=…`.
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Redirect: / on active signup, /login?notice= when pending, /auth/register?error= on failure."
+          headers:
+            Set-Cookie:
+              description: "HttpOnly auth cookies on active signup only."
               schema:
-                type: object
-                additionalProperties: true
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/dash/{job_id}/manifest":

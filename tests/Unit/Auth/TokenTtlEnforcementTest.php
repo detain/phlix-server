@@ -95,7 +95,7 @@ final class TokenTtlEnforcementTest extends TestCase
     private function userRepository(): UserRepository
     {
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('getStatus')->willReturn('active');
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
         $repo->method('mustChangePassword')->willReturn(false);
         $repo->method('findById')->willReturn(['id' => self::USER_ID, 'username' => 'ttl']);
 

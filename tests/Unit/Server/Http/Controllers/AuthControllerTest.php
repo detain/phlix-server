@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Phlix\Auth\AuthManager;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Request;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -492,5 +493,45 @@ class AuthControllerTest extends TestCase
         }
 
         $this->fail("Set-Cookie line for '{$name}' not found");
+    }
+
+    /**
+     * M-1 (security audit 2026-09-29): logout must run SERVER-SIDE revocation
+     * when the request carries a resolvable identity — not merely wipe cookies.
+     */
+    public function testLogoutRevokesServerSideWhenIdentityPresent(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('logout')
+            ->with('u-1', '', UserLoggedOut::REASON_EXPLICIT);
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->userId = 'u-1';
+
+        $response = $controller->logout($request, []);
+
+        // Browser contract unchanged: cookies cleared + redirect to /login.
+        $this->assertSame(302, $response->statusCode);
+    }
+
+    /**
+     * M-1: an anonymous logout hit (stray cookie, already revoked) must keep
+     * the pure cookie-wipe behaviour and never touch AuthManager.
+     */
+    public function testLogoutWithoutIdentitySkipsRevocation(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->never())->method('logout');
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+
+        $response = $controller->logout($request, []);
+
+        $this->assertSame(302, $response->statusCode);
     }
 }

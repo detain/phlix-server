@@ -99,7 +99,13 @@ class JwtHandler
      * @param int $ttl Access token time-to-live in seconds (default: 3600)
      * @param int $refreshTtl Refresh token time-to-live in seconds (default: 604800)
      *
-     * @throws \InvalidArgumentException If secret key is too short
+     * NOTE (L-4, security audit 2026-09-29): this constructor does NOT validate
+     * secret strength and never did — the `@throws If secret key is too short`
+     * this docblock used to claim was fiction. The real enforcement is the boot
+     * guard {@see \Phlix\Common\Container\Providers\AuthServicesProvider::assertSecretConfigured()},
+     * which refuses empty, placeholder, and sub-32-byte secrets outside dev.
+     * Length policy belongs at the composition root so existing (test) handlers
+     * with short secrets keep constructing.
      *
      * @example
      * ```php
@@ -285,8 +291,19 @@ class JwtHandler
         try {
             $payload = $this->decode($token);
 
-            // Verify expiration
-            if (isset($payload['exp']) && $payload['exp'] < time()) {
+            // Verify expiration (L-2, security audit 2026-09-29). Three holes
+            // closed at once: a MISSING exp used to mean "valid forever" (the
+            // old check short-circuited on isset); a non-numeric exp made PHP
+            // compare string-vs-int with coercion; a non-positive exp is not a
+            // lifetime any mint path produces. Every token this server signs
+            // carries an integer exp, so anything else is a forged or corrupt
+            // payload and dies here — the signature alone is not acceptance.
+            $exp = $payload['exp'] ?? null;
+            if (!is_int($exp) && !(is_string($exp) && $exp !== '' && ctype_digit($exp))) {
+                return null;
+            }
+            $exp = (int) $exp;
+            if ($exp <= 0 || $exp < time()) {
                 return null;
             }
 

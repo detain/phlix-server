@@ -491,15 +491,29 @@ class AuthManager
      *      the claim must run inside the transaction, never before it).
      *   2. `SELECT ... FOR UPDATE` (a current read — a plain SELECT could serve
      *      a pre-block snapshot under REPEATABLE READ) returns the row's
-     *      winner. `user_id IS NULL` can only be MY uncommitted claim: every
-     *      winner stamps its id before committing, and a crash/rollback between
-     *      claim and stamp releases the row with the transaction, so a failed
-     *      first registration never bricks the election.
+     *      winner. On a FRESH install `user_id IS NULL` here can only be MY
+     *      uncommitted claim: every winner stamps its id before committing,
+     *      and a crash/rollback between claim and stamp releases the row with
+     *      the transaction, so a failed first registration never bricks the
+     *      election.
+     *   3. On an UPGRADED install the NULL sentinel is NOT proof of being
+     *      first. Migration 108 only CREATEs the table, and every pre-existing
+     *      user arrived outside register() (CLI create/promote, the admin user
+     *      UI) — none of which stamp the sentinel. So an unstamped NULL row is
+     *      honoured ONLY when `users` is empty, verified under the same FOR
+     *      UPDATE serialisation (step 1 blocks every concurrent election on
+     *      this row): a present user row ⇒ NOT first ⇒ false. Without this
+     *      check, one later unauthenticated /api/v1/auth/register would
+     *      self-elect ACTIVE ADMIN through the virgin sentinel on every
+     *      upgraded box — and the first-user branch skips the signup gate
+     *      with it. Migration 109 backfills the sentinel on upgrade; this
+     *      check is the belt that holds even before 109 has run.
      *
      * @param Connection $db The connection with the registration transaction
      *                       already open.
      *
-     * @return bool True when THIS caller won the election (no prior admin).
+     * @return bool True when THIS caller won the election (sentinel claim
+     *              held AND the users table empty).
      */
     private function claimFirstAdminElection(Connection $db): bool
     {
@@ -514,8 +528,28 @@ class AuthManager
             );
         }
         $row = $rows[0];
+        if (!is_array($row) || ($row['user_id'] ?? null) !== null) {
+            return false;
+        }
 
-        return is_array($row) && ($row['user_id'] ?? null) === null;
+        // Step 3: the sentinel is unstamped — 'first' still requires an empty
+        // `users` table. A non-array probe result is an unreadable state, so
+        // it fails CLOSED (never elect on uncertainty), same doctrine as the
+        // sentinel read above. When this returns false on an upgraded box the
+        // transaction may still commit the fresh (1, NULL) row this statement
+        // inserted; that residue is exactly what 109's UPDATE arm heals, and
+        // re-running the election later re-hits this check, so it is inert.
+        $existingUsers = $db->query('SELECT 1 FROM users LIMIT 1');
+        if (!is_array($existingUsers) || $existingUsers !== []) {
+            $this->logger->warning('First-admin election suppressed: unstamped sentinel, users present', [
+                'reason' => 'upgraded_install_backfill_pending',
+                'fix' => 'migrations/109_first_admin_election_backfill.sql',
+            ]);
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -795,9 +829,12 @@ class AuthManager
         // concurrent first registrations both saw zero rows and BOTH became
         // admin (and both bypassed a 'disabled' gate). The election is now a
         // sentinel-row claim INSIDE the transaction, so InnoDB's duplicate-key
-        // serialisation decides exactly one winner. Without a Connection the
-        // legacy count check remains (unit-test / pre-transaction callers get
-        // no protection to begin with).
+        // serialisation decides exactly one winner — and an unstamped sentinel
+        // is only honoured when `users` is genuinely empty, so an upgraded
+        // install (virgin 108 sentinel, pre-existing CLI/admin-UI users) cannot
+        // be taken over by a later register(). Without a Connection the legacy
+        // count check remains (unit-test / pre-transaction callers get no
+        // protection to begin with).
         //
         // Wrap create() + setAdmin() in a transaction for the first-user
         // path so a failure between the two does not leave the database
@@ -1594,6 +1631,14 @@ class AuthManager
      * next request here; other workers converge via the 5s TTL (the honest,
      * now-pinned ceiling — see the single-layer cache doctrine on
      * {@see self::$userStatusCache}).
+     *
+     * SECOND-GRANULARITY EDGE (documented, deliberately strict): the watermark
+     * is a DATETIME and the check is `iat <= watermark`, so a logout followed
+     * by a fresh login WITHIN THE SAME WALL-CLOCK SECOND mints a token whose
+     * `iat` equals the watermark — it is rejected until the next second ticks.
+     * The UX cost is at most one second on a path where the user just chose to
+     * end every session; loosening to `<` would let a token minted in the same
+     * second as an admin-forced revocation survive it. Strictness wins.
      *
      * @param string $userId User whose outstanding token pairs should die.
      * @param string $reason Audit context (e.g. 'password_changed').

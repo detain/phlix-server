@@ -444,12 +444,17 @@ class AuthController
     }
 
     /**
-     * Browser-form logout: clear session cookies and redirect to /login.
+     * Browser-form logout: real server-side teardown, then cookie-clear +
+     * redirect to /login.
      *
-     * The JSON API equivalent is just "drop your stored token" client
-     * side; we don't currently revoke refresh tokens server-side (that
-     * lives in SessionManager and will move into AuthManager in a
-     * later phase per the buildAuthResponse() docstring).
+     * When the request carries a resolvable identity this calls
+     * {@see AuthManager::logout()}: the per-user token-revocation watermark
+     * (`users.tokens_not_valid_after`) is bumped — killing every JWT minted up
+     * to now on both the access and refresh paths, within the 5s cache
+     * ceiling — and all device-session rows are ended (M-1, security audit
+     * 2026-09-29). The earlier "drop your stored token client-side; we don't
+     * revoke server-side" phase note is historical: the revocation it
+     * promised now ships.
      *
      * @param Request $request The HTTP request.
      * @param array<string, string> $params Path parameters (unused).

@@ -330,11 +330,13 @@ class WebAuthnManager
         string $expectedChallenge
     ): AuthResult {
         // One-shot, principal-bound challenge consumption before any parsing.
-        if (!$this->challengeStore->consume(
-            $expectedChallenge,
-            WebAuthnChallengeStore::SCOPE_AUTHENTICATE,
-            $username
-        )) {
+        if (
+            !$this->challengeStore->consume(
+                $expectedChallenge,
+                WebAuthnChallengeStore::SCOPE_AUTHENTICATE,
+                $username
+            )
+        ) {
             throw new \InvalidArgumentException('Invalid or expired authentication challenge');
         }
 

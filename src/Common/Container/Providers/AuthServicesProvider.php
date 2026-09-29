@@ -38,6 +38,7 @@ use Phlix\Server\Http\Controllers\Auth\QuickConnectController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\ProfilesController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
+use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -439,7 +440,16 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // invisible to every hand-wired unit test, which is why
                 // tests/Unit/Auth/AuthManagerProfileClaimWiringGuardTest resolves
                 // this binding out of the real container.
-                ->constructorParameter('profileManager', get(UserProfileManager::class)),
+                ->constructorParameter('profileManager', get(UserProfileManager::class))
+                // M-1 (security audit 2026-09-29, rework fix 2): the device-session
+                // teardown on logout. PHP-DI skips optional ctor params for the
+                // same reason as every line above — left unnamed,
+                // AuthManager::$sessionManager stays null, `logout()` silently
+                // skips endAllUserSessions(), and cookie-backed sessions outlive
+                // the "real server-side logout" the openapi description and the
+                // AuthController::logout() comment promise. Named for
+                // tests/Unit/Auth/AuthManagerSessionTeardownWiringGuardTest to pin.
+                ->constructorParameter('sessionManager', get(SessionManager::class)),
 
             // SV-4.15(f): register/refresh get their OWN per-surface DB-backed
             // rate limiters. AuthController is otherwise autowired; the limiter

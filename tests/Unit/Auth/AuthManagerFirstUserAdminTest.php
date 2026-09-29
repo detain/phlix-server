@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Auth;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
@@ -321,10 +323,174 @@ final class AuthManagerFirstUserAdminTest extends TestCase
         $manager->register('root', 'root@example.com', 'topsecret123');
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // H-1 rework (security review 2026-09-29): an UNSTAMPED sentinel is only
+    // honoured when `users` is genuinely empty. Upgraded installs got a virgin
+    // 108 table with pre-existing CLI/admin-UI users — honoring the bare NULL
+    // claim let any later register() self-elect ACTIVE ADMIN through it.
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * THE exploit, red before the fix: sentinel reads back NULL (nobody ever
+     * won) while the users table is non-empty (upgraded install). Must NOT
+     * promote, must NOT stamp the sentinel.
+     */
+    public function test_upgraded_install_does_not_elect_through_virgin_sentinel(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('create')->willReturn('user-9');
+        $repo->expects($this->never())->method('setAdmin');
+        $repo->method('findById')->willReturn([
+            'id' => 'user-9',
+            'username' => 'intruder',
+            'email' => 'intruder@example.com',
+            'display_name' => 'intruder',
+            'is_admin' => 0,
+            'password_hash' => 'xxx',
+        ]);
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
+
+        $stampedSentinel = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @param mixed $params */
+            static function (string $sql, $params = []) use (&$stampedSentinel): array {
+                if (str_contains($sql, 'UPDATE first_admin_election')) {
+                    $stampedSentinel++;
+                }
+
+                return self::upgradedShape($sql);
+            }
+        );
+        $db->expects($this->once())->method('commitTrans');
+
+        $manager = new AuthManager(
+            $repo,
+            new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
+            $this->createMock(AuditLogger::class),
+            $this->silentLogger(),
+            null,
+            $db,
+        );
+
+        $result = $manager->register('intruder', 'intruder@example.com', 'topsecret123');
+        $this->assertSame(0, $result['user']['is_admin'], 'the virgin sentinel must not mint an admin');
+        $this->assertSame(0, $stampedSentinel, 'a losing election must never stamp the winner row');
+    }
+
+    /**
+     * The same upgraded shape against a `disabled` signup gate: pre-fix the
+     * bogus election skipped the gate entirely (the first-user branch always
+     * bootstraps). Now the gate must answer 403-style.
+     */
+    public function test_upgraded_install_cannot_bypass_disabled_gate_through_virgin_sentinel(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->expects($this->never())->method('create');
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')->with('auth.signup_mode')->willReturn('disabled');
+
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects($this->once())->method('logFailedAuth')->with('signups_disabled', $this->anything());
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static fn (string $sql): array => self::upgradedShape($sql)
+        );
+        $db->expects($this->once())->method('beginTrans');
+        $db->expects($this->once())->method('rollBackTrans');
+
+        $manager = new AuthManager(
+            $repo,
+            new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
+            $audit,
+            $this->silentLogger(),
+            null,
+            $db,
+            null,
+            null,
+            $settings,
+        );
+
+        $this->expectException(SignupDisabledException::class);
+        $manager->register('intruder', 'intruder@example.com', 'topsecret123');
+    }
+
+    /**
+     * Fail-CLOSED doctrine: a users-emptiness probe that does not parse to an
+     * array must never elect, even with a NULL sentinel in hand.
+     */
+    public function test_unparseable_users_probe_fails_closed(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('create')->willReturn('user-9');
+        $repo->expects($this->never())->method('setAdmin');
+        $repo->method('findById')->willReturn([
+            'id' => 'user-9',
+            'username' => 'intruder',
+            'email' => 'intruder@example.com',
+            'display_name' => 'intruder',
+            'is_admin' => 0,
+            'password_hash' => 'xxx',
+        ]);
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static fn (string $sql) => match (true) {
+                str_contains($sql, 'SELECT user_id') => [['user_id' => null]],
+                str_contains($sql, 'SELECT 1 FROM users') => 'gateway exploded',
+                default => [],
+            }
+        );
+
+        $manager = new AuthManager(
+            $repo,
+            new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
+            $this->createMock(AuditLogger::class),
+            $this->silentLogger(),
+            null,
+            $db,
+        );
+
+        $result = $manager->register('intruder', 'intruder@example.com', 'topsecret123');
+        $this->assertSame(0, $result['user']['is_admin']);
+    }
+
+    /**
+     * The upgraded-install DB shape answered through a mocked Connection:
+     * the sentinel row exists UNSTAMPED (NULL) and `users` holds rows —
+     * exactly what a 108-only upgrade plus CLI-created users looks like.
+     * (The probe row's `'1'` column name arrives as an int key — PHP's
+     * numeric-string key cast — hence array-key on the inner shape.)
+     *
+     * @return array<int, array<array-key, mixed>>
+     */
+    private static function upgradedShape(string $sql): array
+    {
+        if (str_contains($sql, 'SELECT user_id')) {
+            return [['user_id' => null]];
+        }
+
+        if (str_contains($sql, 'SELECT 1 FROM users')) {
+            return [['1' => 1]];
+        }
+
+        return [];
+    }
+
     /**
      * Program the Connection mock so the L-3 election sees THIS registration as
-     * the winner: INSERT IGNORE answers with its default, and the FOR UPDATE
-     * read-back returns the unclaimed sentinel (user_id NULL ⇒ I hold it).
+     * the winner: INSERT IGNORE answers with its default, the FOR UPDATE
+     * read-back returns the unclaimed sentinel (user_id NULL ⇒ I hold it), and
+     * the users-emptiness probe answers EMPTY (fresh install).
      */
     private function electFirstWinner(Connection&MockObject $db): void
     {

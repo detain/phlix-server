@@ -361,6 +361,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Security bump: `phpseclib/phpseclib` `3.0.55` → `3.0.57` (CVE-2026-84308 / GHSA-q97c-8qh3-fpc6).**
+  The Coding Standards `Security Audit` job (`php scripts/security-audit-check.php`, which blocks any
+  advisory against `composer.lock`) went red 2026-09-29: the advisory covers a non-constant-time X25519
+  scalar multiplication permitting private-key recovery, affected `<3.0.57|>=4.0.0,<4.0.1`. The only
+  reverse-dependency is this repo's own `require: phpseclib/phpseclib ^3.0` (`composer why` shows no
+  other package pulls it), and upstream `3.0.57` was already released — a plain
+  `composer update phpseclib/phpseclib` resolves it with `composer.json` untouched and the lock diff
+  limited to the phpseclib entry (the composer 2.10 serialization side-effects — `plugin-api-version`
+  and `[]`-vs-`{}` empties — were reverted to match the repo's existing lock shape). Zero `phpseclib3`
+  references exist in `src/`, `scripts/` or `tests/`, and the bump is patch-level inside the 3.0 line.
+  Gate evidence: audit script exit 0 (`Security audit passed`), Unit suite 11364 tests / 0 failures /
+  0 errors, both phpstan corpora and both phpcs corpora zero-error, `composer validate --strict` clean.
+
 - **The `@phlix/ui` tarball pin moves `v0.99.6` → `v0.99.7`; the served bundle is byte-identical
   (cascade-currency re-pin).** The v0.99.7 tag (annotated `da9f1625663f8ddb52213f8069d2a494cd1ceee2`
   peeling to commit `bc1d29bf98cb0e847aca05e44733d41ef2381b10`, both verified via `ls-remote`;

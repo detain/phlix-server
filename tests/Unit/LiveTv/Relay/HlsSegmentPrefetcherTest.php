@@ -266,4 +266,135 @@ segment1.ts
 
         $this->assertNotEquals($key1, $key2);
     }
+
+    // ---- F-7/F-4: rendition-content bug + bounded download-before-check ----
+
+    /**
+     * Build a prefetcher whose fetcher serves a fixed URL→body map and records
+     * every dialed URL (the recording seam).
+     *
+     * @param array<string, string> $bodies
+     * @param list<string>          $fetchedOut
+     */
+    private function makeMappedPrefetcher(
+        array $bodies,
+        array &$fetchedOut,
+        int $maxCacheSize = 10485760,
+        ?int $maxPlaylistBytes = null
+    ): HlsSegmentPrefetcher {
+        return new HlsSegmentPrefetcher(
+            null,
+            3,
+            $maxCacheSize,
+            30,
+            static function (string $url, int $maxBytes) use ($bodies, &$fetchedOut): ?string {
+                $fetchedOut[] = $url;
+                $body = $bodies[$url] ?? null;
+                return $body === null ? null : substr($body, 0, $maxBytes + 1);
+            },
+            $maxPlaylistBytes
+        );
+    }
+
+    public function testBandwidthPrefetchParsesRenditionPlaylistContentNotItsUrl(): void
+    {
+        $master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\nhttp://h/low.m3u8\n"
+            . "#EXT-X-STREAM-INF:BANDWIDTH=5000000\nhttp://h/high.m3u8\n";
+        $lowMedia = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nseg1.ts\n";
+
+        $fetched = [];
+        $prefetcher = $this->makeMappedPrefetcher([
+            'http://h/master.m3u8' => $master,
+            'http://h/low.m3u8' => $lowMedia,
+            'http://h/seg1.ts' => 'SEGMENT-BYTES',
+        ], $fetched);
+
+        // 1500 kbps ceiling admits only the 1 Mbps rendition.
+        $prefetcher->prefetchWithBandwidth('http://h/master.m3u8', 1500);
+
+        $this->assertSame(
+            ['http://h/master.m3u8', 'http://h/low.m3u8', 'http://h/seg1.ts'],
+            $fetched,
+            'The rendition URL must be fetched as a PLAYLIST and its CONTENT parsed — '
+            . 'the pre-fix bug fed the URL string into the content parser, so the "segment" '
+            . 'was the rendition playlist itself and no real media was ever prefetched.'
+        );
+        $this->assertNotContains('http://h/high.m3u8', $fetched);
+        $this->assertSame('SEGMENT-BYTES', $prefetcher->getSegment('http://h/seg1.ts'));
+    }
+
+    public function testOversizedSegmentIsRefusedWithoutEvictingCachedEntries(): void
+    {
+        $fetched = [];
+        $masterBody = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nsegA.ts\n#EXTINF:10,\nsegB.ts\n";
+        $prefetcher = new HlsSegmentPrefetcher(
+            null,
+            3,
+            100,
+            30,
+            static function (string $url, int $maxBytes) use ($masterBody, &$fetched): ?string {
+                $fetched[] = $url;
+                if ($url === 'http://h/master.m3u8') {
+                    return $masterBody;
+                }
+                if ($url === 'http://h/segA.ts') {
+                    return str_repeat('A', 50); // fits
+                }
+                if ($url === 'http://h/segB.ts') {
+                    return str_repeat('B', $maxBytes + 1); // cap+1 => oversize signal
+                }
+                return null;
+            }
+        );
+
+        $prefetcher->prefetch('http://h/master.m3u8');
+
+        $this->assertSame(['http://h/master.m3u8', 'http://h/segA.ts', 'http://h/segB.ts'], $fetched);
+        $stats = $prefetcher->getCacheStats();
+        $this->assertSame(1, $stats['entries'], 'Oversized segment must not enter the cache');
+        $this->assertNotNull(
+            $prefetcher->getSegment('http://h/segA.ts'),
+            'Pre-fix code EVICTED segA to "make room" before discovering segB was too '
+            . 'large — the check must happen before any eviction.'
+        );
+    }
+
+    public function testOversizedPlaylistIsRefusedWithoutCaching(): void
+    {
+        $fetched = [];
+        $prefetcher = new HlsSegmentPrefetcher(
+            null,
+            3,
+            10485760,
+            30,
+            static function (string $url, int $maxBytes) use (&$fetched): string {
+                $fetched[] = $url;
+                return str_repeat('#', $maxBytes + 1);
+            },
+            64
+        );
+
+        $prefetcher->prefetch('http://h/huge.m3u8');
+
+        $this->assertSame(['http://h/huge.m3u8'], $fetched, 'Oversize playlist must be dropped, not parsed');
+        $this->assertSame(0, $prefetcher->getCacheStats()['entries']);
+    }
+
+    public function testUnreachableRenditionPlaylistSkipsThatRendition(): void
+    {
+        // The bandwidth loop must survive one rendition 404ing and still
+        // prefetch nothing bogus from it.
+        $master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nhttp://h/gone.m3u8\n";
+
+        $fetched = [];
+        $prefetcher = $this->makeMappedPrefetcher(
+            ['http://h/master.m3u8' => $master],
+            $fetched
+        );
+
+        $prefetcher->prefetchWithBandwidth('http://h/master.m3u8', 1000);
+
+        $this->assertSame(['http://h/master.m3u8', 'http://h/gone.m3u8'], $fetched);
+        $this->assertSame(0, $prefetcher->getCacheStats()['entries']);
+    }
 }

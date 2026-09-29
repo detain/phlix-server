@@ -350,18 +350,56 @@ class MdnsSocket
     }
 
     /**
+     * Hard ceiling on compression-pointer jumps followed for a single name.
+     *
+     * RFC 1035 §4.1.4 requires a pointer to target an EARLIER offset, which by
+     * itself bounds the walk. A strictly-backward-only pointer chain cannot form
+     * a cycle, but a label chain that keeps bouncing back can still be walked an
+     * unbounded number of times inside one 64 KiB datagram; this cap makes the
+     * per-parse work O(1) regardless, and any responder that legitimately needs
+     * more than {@see MAX_PTR_JUMPS} chained pointers is malformed for our
+     * purposes (real mDNS answers use one or two).
+     */
+    private const MAX_PTR_JUMPS = 10;
+
+    /**
+     * Per-parse budget on the total number of labels emitted, so a hostile
+     * datagram cannot make us concatenate a megabyte of one-byte labels into a
+     * single name string before the buffer-length guard trips.
+     */
+    private const MAX_NAME_LABELS = 128;
+
+    /**
      * Decode a DNS name from wire format.
+     *
+     * Handles RFC 1035 message compression with an ITERATIVE pointer walk (no
+     * recursion), so a cyclic-pointer datagram — the exact shape that crashed
+     * the pre-fix recursive decoder — is rejected instead of overflowing the
+     * stack. A pointer whose target is not strictly behind the pointer itself
+     * (forward or self-pointer) is malformed by spec and throws, letting
+     * {@see parseResponse()} drop the whole record.
      *
      * @param string $data Response data
      * @param int $offset Offset to start reading
-     * @return array{string, int} Decoded name and new offset
+     * @return array{string, int} Decoded name and new offset (offset PAST the
+     *         in-stream name when a pointer was followed, per RFC 1035)
+     * @throws \RuntimeException On a forward/self pointer or an exhausted pointer budget
      */
     private function decodeDnsName(string $data, int $offset): array
     {
         $name = '';
-        $originalOffset = $offset;
+        $dataLen = strlen($data);
+        $returnOffset = null;   // Where the caller resumes once the pointer is followed
+        $ptrJumps = 0;
+        $labels = 0;
 
-        while ($offset < strlen($data)) {
+        while (true) {
+            if ($offset < 0 || $offset >= $dataLen) {
+                // Ran off the end without a terminating label: partial name,
+                // handled by the caller's length checks.
+                break;
+            }
+
             $len = ord($data[$offset]);
 
             // End of name
@@ -370,16 +408,43 @@ class MdnsSocket
                 break;
             }
 
-            // Compression pointer
+            // Compression pointer (label type 11)
             if (($len & 0xC0) === 0xC0) {
-                if ($offset + 1 >= strlen($data)) {
+                $pointerStart = $offset;
+                if ($pointerStart + 1 >= $dataLen) {
+                    // Truncated pointer pair
+                    $offset++;
                     break;
                 }
-                $ptr = (($len & 0x3F) << 8) | ord($data[$offset + 1]);
+                $ptr = (($len & 0x3F) << 8) | ord($data[$pointerStart + 1]);
                 $offset += 2;
 
-                $target = $this->decodeDnsName($data, $ptr);
-                return [$name . $target[0], $offset];
+                // RFC 1035 §4.1.4: a pointer MUST reference an earlier offset.
+                // A forward or self-pointer is only ever a decompression bomb,
+                // so reject it as malformed and drop the record.
+                if ($ptr >= $pointerStart) {
+                    throw new \RuntimeException(
+                        "mDNS: malformed DNS compression pointer (target {$ptr} is not behind "
+                        . "pointer offset {$pointerStart})"
+                    );
+                }
+
+                // The caller continues AFTER the pointer pair, not at the tail
+                // of the jumped-to name.
+                if ($returnOffset === null) {
+                    $returnOffset = $offset;
+                }
+
+                $ptrJumps++;
+                if ($ptrJumps > self::MAX_PTR_JUMPS) {
+                    throw new \RuntimeException(
+                        'mDNS: DNS name compression-pointer budget exceeded ('
+                        . self::MAX_PTR_JUMPS . ')'
+                    );
+                }
+
+                $offset = $ptr;
+                continue;
             }
 
             if ($len > 63) {
@@ -388,7 +453,14 @@ class MdnsSocket
             }
 
             $offset++;
-            if ($offset + $len > strlen($data)) {
+            if ($offset + $len > $dataLen) {
+                break;
+            }
+
+            $labels++;
+            if ($labels > self::MAX_NAME_LABELS) {
+                // Per-parse budget exhausted: treat as truncated rather than
+                // building an unbounded name string.
                 break;
             }
 
@@ -399,7 +471,7 @@ class MdnsSocket
             $offset += $len;
         }
 
-        return [$name, $offset];
+        return [$name, $returnOffset ?? $offset];
     }
 
     /**
@@ -436,6 +508,10 @@ class MdnsSocket
             $result = $this->decodeDnsName($data, $offset);
             $offset = $result[1];
             $offset += 4; // Skip QTYPE and QCLASS
+            if ($offset > strlen($data)) {
+                // Truncated question section — nothing trustworthy left.
+                break;
+            }
         }
 
         $records = [];
@@ -447,18 +523,12 @@ class MdnsSocket
                 break;
             }
 
-            $name = '';
-            // Check for compression pointer at offset
-            if (($data[$offset] ?? '') !== '' && (ord($data[$offset]) & 0xC0) === 0xC0) {
-                $ptr = (ord($data[$offset]) & 0x3F) << 8 | ord($data[$offset + 1] ?? "\x00");
-                $nameResult = $this->decodeDnsName($data, $ptr);
-                $name = $nameResult[0];
-                $offset += 2;
-            } else {
-                $nameResult = $this->decodeDnsName($data, $offset);
-                $name = $nameResult[0];
-                $offset = $nameResult[1];
-            }
+            // decodeDnsName() follows leading compression pointers itself and
+            // resumes the caller past the pointer pair, so no special-casing
+            // is needed here (and the walk can no longer recurse unboundedly).
+            $nameResult = $this->decodeDnsName($data, $offset);
+            $name = $nameResult[0];
+            $offset = $nameResult[1];
 
             if ($offset + 10 > strlen($data)) {
                 break;
@@ -485,13 +555,19 @@ class MdnsSocket
                 break;
             }
 
+            $rdataStart = $offset;
             $rdata = substr($data, $offset, $rdlength);
             $offset += $rdlength;
 
             $record = [
                 'name' => $name,
                 'type' => $type,
-                'data' => $this->parseRecordData($type, $rdata, $name),
+                // Names embedded in RDATA are compressed against the WHOLE
+                // message (RFC 1035 §4.1.4), so the name-bearing record types
+                // get the full packet plus the absolute RDATA offset instead of
+                // only the slice — decoding pointers inside a bare slice reads
+                // the wrong bytes (and hides that real responders compress here).
+                'data' => $this->parseRecordData($type, $data, $rdataStart, $rdata, $name),
             ];
 
             $records[] = $record;
@@ -508,15 +584,17 @@ class MdnsSocket
      * Parse record data based on type.
      *
      * @param int $type DNS record type
-     * @param string $rdata Raw record data
+     * @param string $packet The FULL response packet (pointer targets are message-absolute)
+     * @param int $rdataOffset Absolute offset of the RDATA inside $packet
+     * @param string $rdata Raw record data slice
      * @param string $name Record name
      * @return mixed Parsed record data
      */
-    private function parseRecordData(int $type, string $rdata, string $name): mixed
+    private function parseRecordData(int $type, string $packet, int $rdataOffset, string $rdata, string $name): mixed
     {
         switch ($type) {
             case self::QTYPE_PTR:
-                $result = $this->decodeDnsName($rdata, 0);
+                $result = $this->decodeDnsName($packet, $rdataOffset);
                 return ['ptr' => $result[0]];
 
             case self::QTYPE_SRV:
@@ -527,7 +605,7 @@ class MdnsSocket
                 if ($srvData === false) {
                     return [];
                 }
-                $targetResult = $this->decodeDnsName($rdata, 6);
+                $targetResult = $this->decodeDnsName($packet, $rdataOffset + 6);
                 return [
                     'priority' => $srvData['priority'],
                     'weight' => $srvData['weight'],
@@ -576,6 +654,28 @@ class MdnsSocket
     /**
      * Receive responses from the socket.
      *
+     * ## Source-port gating (off-protocol datagrams are dropped)
+     *
+     * The socket binds 0.0.0.0:5353, so it is handed EVERY unicast datagram the
+     * host receives on port 5353 plus the multicast group traffic — including
+     * junk an off-segment attacker can route straight at the box. Per RFC 6762
+     * §6 an mDNS responder ALWAYS sends its replies from port 5353: both the
+     * multicast answers (to 224.0.0.251:5353) and the unicast answers delivered
+     * to a querier on an ephemeral port originate at the responder's 5353.
+     * Legacy unicast DNS from port 53 is explicitly not mDNS and this flow has
+     * no consumer for it (MdnsDiscovery only ever parses what `query()`
+     * collected from its own 5353 transactions).
+     *
+     * Destination-group inspection is NOT available here — PHP's
+     * `socket_recvfrom()` exposes only source addr/port (no IP_RECVDSTADDR),
+     * and restricting the SOURCE ADDRESS to the multicast group would break the
+     * legitimate unicast answers from resolved peers that this very method is
+     * how MdnsDiscovery::resolveService() receives them. So the safe, cheap,
+     * fully-exercised law is: **source port == 5353, everything else dropped**.
+     * Our own loopback query echoes (IP_MULTICAST_LOOP, sent from our bound
+     * 5353 socket) still pass and are discarded later as DNS queries, which is
+     * what the existing round-trip test asserts.
+     *
      * @param \Socket $socket Socket instance
      *
      * @return array<string> Collected responses
@@ -586,20 +686,37 @@ class MdnsSocket
         $responses = [];
         $attempts = 0;
         $maxAttempts = 20;
+        $receives = 0;
+        // Hard loop bound: a firehose of rejected datagrams must not spin the
+        // worker; each receive costs a real packet, so cap total absorbs too.
+        $maxReceives = 200;
 
-        while ($attempts < $maxAttempts) {
+        while ($attempts < $maxAttempts && $receives < $maxReceives) {
             $data = '';
             $port = 0;
             $from = '';
 
             $bytesReceived = @socket_recvfrom($socket, $data, 65536, 0, $from, $port);
 
-            if ($bytesReceived === false) {
+            if ($bytesReceived === false || $bytesReceived === 0) {
                 break;
             }
 
             if ($data === '') {
                 break;
+            }
+
+            $receives++;
+
+            if ($port !== self::PORT) {
+                // Off-protocol sender (see gating rationale above): drop it
+                // unseen by the parser — malformed-packet hardening stays as
+                // defence-in-depth for datagrams that DO pass this gate.
+                $this->logger->debug('mDNS: dropping datagram from non-mDNS source port', [
+                    'from' => $from,
+                    'port' => $port,
+                ]);
+                continue;
             }
 
             $responses[] = $data;

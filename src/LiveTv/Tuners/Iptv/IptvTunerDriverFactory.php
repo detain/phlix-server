@@ -72,10 +72,23 @@ final class IptvTunerDriverFactory
             isEnabled: true,
         );
 
-        $m3uParser = new M3UParser($logger);
+        $strictStreamPolicy = (bool) ($iptvConfig['strict_stream_policy'] ?? false);
+        $playlistCacheTtl = isset($iptvConfig['playlist_cache_ttl_secs'])
+            && is_int($iptvConfig['playlist_cache_ttl_secs'])
+            ? $iptvConfig['playlist_cache_ttl_secs']
+            : null;
+
+        $m3uParser = new M3UParser($logger, null, null, $strictStreamPolicy);
         $xmlTvParser = new XmlTvParser($logger);
 
-        return new IptvTunerDriver($m3uParser, $xmlTvParser, $device, $logger);
+        return new IptvTunerDriver(
+            $m3uParser,
+            $xmlTvParser,
+            $device,
+            $logger,
+            $playlistCacheTtl,
+            $strictStreamPolicy
+        );
     }
 
     /**

@@ -174,17 +174,30 @@ final class SdEpgServiceFactory
      *
      * Token is cached with a 23-hour expiration to refresh before actual expiry.
      *
+     * ## Private-file write discipline (F-6)
+     *
+     * The cache holds a live SD API bearer token. It is written with the same
+     * atomic-private pattern the hub/server key writers use: directory created
+     * 0700, body staged in a same-directory `tempnam()` (POSIX-0600), an
+     * explicit `chmod 0600` (belt-and-braces against umask interaction), then
+     * `rename()` — so a concurrent reader either sees the complete old file or
+     * the complete new file, and the token is NEVER briefly world-readable at
+     * its final path (the pre-fix `file_put_contents(..., LOCK_EX)` inherited
+     * the default 0666&~umask = 0644 under the common 022 umask).
+     *
      * @param string $cachePath Path to the cached token JSON file
      * @param string $token Token string to cache
      * @return bool True on success
      */
     private static function saveCachedToken(string $cachePath, string $token): bool
     {
-        // Ensure directory exists
+        // Ensure directory exists — owner-only, like the token it will hold.
         $dir = dirname($cachePath);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            return false;
         }
+        // mkdir() masks the mode with the process umask; pin it explicitly.
+        @chmod($dir, 0700);
 
         $data = [
             'token' => $token,
@@ -192,8 +205,30 @@ final class SdEpgServiceFactory
             'expires_at' => time() + 82800, // 23 hours
         ];
 
-        $result = @file_put_contents($cachePath, json_encode($data), LOCK_EX);
+        $json = json_encode($data);
+        if ($json === false) {
+            return false;
+        }
 
-        return $result !== false;
+        $tmp = @tempnam($dir, '.sd-token-');
+        if ($tmp === false) {
+            return false;
+        }
+
+        if (@file_put_contents($tmp, $json) === false) {
+            @unlink($tmp);
+            return false;
+        }
+
+        // tempnam() creates 0600 by POSIX; chmod keeps the guarantee independent
+        // of platform deviation before the file becomes visible at its final path.
+        @chmod($tmp, 0600);
+
+        if (!@rename($tmp, $cachePath)) {
+            @unlink($tmp);
+            return false;
+        }
+
+        return true;
     }
 }

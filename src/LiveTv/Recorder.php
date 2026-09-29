@@ -595,7 +595,7 @@ class Recorder
         $logDir = $this->storagePath;
         $outputPath = $this->getRecordingPath($recordingId);
 
-        $pid = $this->spawnRecording($streamUrl, $outputPath, $logDir);
+        $pid = $this->spawnRecording($streamUrl, $outputPath, $logDir, $recordingId);
 
         if ($pid <= 0) {
             $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Failed to spawn ffmpeg recording process');
@@ -1040,13 +1040,14 @@ class Recorder
      * @param string $streamUrl Source URL to capture (http, udp, etc.)
      * @param string $outputPath Absolute path to the output .ts file
      * @param string $logDir Directory for the ffmpeg log file
+     * @param string $recordingId Recording identifier used for the per-recording log name
      *
      * @return int The child PID (0 if spawn failed)
      *
      * @since SV-3.1
      * @since SV-4.2 Applies transcode_timeout wrapper, tracks PIDs for cleanup.
      */
-    private function spawnRecording(string $streamUrl, string $outputPath, string $logDir): int
+    private function spawnRecording(string $streamUrl, string $outputPath, string $logDir, string $recordingId): int
     {
         $ffmpegPath = $this->ffmpegPath;
 
@@ -1062,7 +1063,16 @@ class Recorder
             @mkdir($logDir, 0755, true);
         }
 
-        $logFile = $logDir . '/ffmpeg_recording.log';
+        // F-10: ONE LOG PER RECORDING. The pre-fix fixed name
+        // `ffmpeg_recording.log` made every concurrent capture O_APPEND into the
+        // same file — mutally clobbered post-mortems, so a failed recording's
+        // ffmpeg diagnostics were indistinguishable from (and interleaved with)
+        // every other one's. Logs are deliberately NOT deleted on success: they
+        // are the only post-mortem evidence for later troubleshooting of a
+        // finished capture (the ops-growth trade-off — a periodic sweep of old
+        // ffmpeg_*.log files — is flagged as a follow-up, not silently taken).
+        $safeId = preg_replace('/[^A-Za-z0-9._-]/', '_', $recordingId) ?? $recordingId;
+        $logFile = $logDir . '/ffmpeg_' . $safeId . '.log';
 
         $pid = $this->launchDetached($cmd, $logFile);
         if ($pid <= 0) {

@@ -440,8 +440,26 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * case was appended into an existing test file. Measured from
               * `git ls-files '*.php'` plus the phpunit red on the clean worktree
               * of the landed commit, not predicted.
+              * Re-pinned 1897→1906 by the LiveTv/Mdns security lane (2026-09-29):
+              * the lane ADDS seven first-party PHP files — src/LiveTv/
+              * BoundedBodyReader.php, src/LiveTv/Tuners/Iptv/StreamUrlGuard.php
+              * and M3UPlaylistOversizedException.php, plus four test files
+              * (Unit/Discovery/Mdns/MdnsNameDecompressionTest, Unit/LiveTv/
+              * Tuners/Iptv/StreamUrlGuardTest, Unit/LiveTv/Epg/SchedulesDirect/
+              * SdEpgServiceFactoryTokenCacheTest, Unit/LiveTv/RecorderSpawnLogTest);
+              * all other lane work appended into existing files. The pin ALSO
+              * absorbs the auth lane's +2 (231d76f1 added the tests
+              * FirstAdminElectionBackfill109RealDbTest and
+              * AuthManagerSessionTeardownWiringGuardTest without re-pinning —
+              * `git ls-tree -r 231d76f1 | grep -c '\.php$'` = 1899 vs pin 1897),
+              * so master goes green whole, not green-per-filter. None of the
+              * nine files names an undeclared Request property beyond what the
+              * other five rails already pin, so every other census denominator
+              * is untouched (proved by the sibling rails passing on the clean
+              * worktree of the landed commit). Measured `git ls-files
+              * '*.php' | wc -l` = 1906 on the staged tree, not predicted.
               */
-    private const EXPECTED_PHP_FILES = 1897;
+    private const EXPECTED_PHP_FILES = 1906;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

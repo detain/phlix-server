@@ -92,4 +92,55 @@ class SdApiClientTest extends TestCase
         $result = $client->getPrograms([]);
         $this->assertEquals([], $result);
     }
+
+    // ---- F-5: path interpolation boundary + response cap wiring ----
+
+    public function test_station_path_identity_for_canonical_sd_ids(): void
+    {
+        // Allowlisted bytes are already RFC-3986 path-safe: the encoder is an
+        // identity map, so legitimate request URLs are byte-for-byte unchanged.
+        $this->assertSame(
+            '/headend/USA-OTA-00000/station',
+            SdApiClient::stationPath('USA-OTA-00000')
+        );
+        $this->assertSame(
+            '/headend/CAN.NGWG_00002/station',
+            SdApiClient::stationPath('CAN.NGWG_00002')
+        );
+    }
+
+    public static function hostile_system_id_provider(): array
+    {
+        return [
+            'empty' => [''],
+            'traversal' => ['../x'],
+            'double-encoded traversal' => ['%2e%2e%2f'],
+            'embedded slash' => ['a/b'],
+            'space' => ['a b'],
+            'newline' => ["USA\nOTA"],
+            'query breakout' => ['x?y=1'],
+            'fragment breakout' => ['x#y'],
+            'unicode homoglyph' => ['USA–OTA'],
+            'control byte' => ["\x01USA"],
+        ];
+    }
+
+    /**
+     * @dataProvider hostile_system_id_provider
+     */
+    public function test_station_path_refuses_non_bare_token(string $systemId): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid Schedules Direct lineup/system ID');
+
+        SdApiClient::stationPath($systemId);
+    }
+
+    public function test_response_cap_is_above_legitimate_batch_sizes(): void
+    {
+        // SD multi-day batches are legitimately large; the cap sits above the
+        // XMLTV guide cap on purpose (see constant docblock).
+        $this->assertGreaterThanOrEqual(64 * 1024 * 1024, SdApiClient::MAX_RESPONSE_BYTES);
+        $this->assertLessThanOrEqual(256 * 1024 * 1024, SdApiClient::MAX_RESPONSE_BYTES);
+    }
 }

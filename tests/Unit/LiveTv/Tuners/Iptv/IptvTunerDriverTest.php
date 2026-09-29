@@ -242,6 +242,94 @@ class IptvTunerDriverTest extends TestCase
         $driver->getStreamUrl($this->device, 1);
     }
 
+    // ---- F-4: TTL parsed-playlist cache ----
+
+    public function testSecondTuneWithinTtlServesCacheWithoutRefetchingPlaylist(): void
+    {
+        $entries = [
+            new M3UEntry(url: 'http://example.com/ch1.m3u8', name: 'One', tvgChno: 1),
+            new M3UEntry(url: 'http://example.com/ch2.m3u8', name: 'Two', tvgChno: 2),
+        ];
+
+        // The recording seam: exactly ONE playlist fetch for TWO tunes.
+        $this->m3uParser->expects($this->once())
+            ->method('parseUrl')
+            ->with('http://example.com/playlist.m3u8')
+            ->willReturn($entries);
+
+        $driver = new IptvTunerDriver(
+            $this->m3uParser,
+            $this->xmlTvParser,
+            $this->device,
+            null,
+            300
+        );
+
+        $this->assertSame('http://example.com/ch1.m3u8', $driver->getStreamUrl($this->device, 1));
+        $this->assertSame('http://example.com/ch2.m3u8', $driver->getStreamUrl($this->device, 2));
+    }
+
+    public function testClearPlaylistCacheForcesRefetch(): void
+    {
+        $entries = [new M3UEntry(url: 'http://example.com/ch1.m3u8', name: 'One', tvgChno: 1)];
+
+        $this->m3uParser->expects($this->exactly(2))
+            ->method('parseUrl')
+            ->willReturn($entries);
+
+        $driver = new IptvTunerDriver($this->m3uParser, $this->xmlTvParser, $this->device, null, 3600);
+
+        $driver->getStreamUrl($this->device, 1);
+        $driver->clearPlaylistCache();
+        $driver->getStreamUrl($this->device, 1);
+    }
+
+    // ---- F-1: tune-time stream jail over STORED entries ----
+
+    public function testTuneOnStoredHostileEntryIsRefusedBeforeFfmpeg(): void
+    {
+        // A parser double that BYPASSES parse-time filtering (simulating an
+        // entry that entered the cache/config before the fix, or a hostile
+        // in-process producer): the tune-time gate is the last wall.
+        $entries = [new M3UEntry(url: 'file:///etc/passwd', name: 'Exfil', tvgChno: 1)];
+
+        $this->m3uParser->method('parseUrl')->willReturn($entries);
+
+        $driver = new IptvTunerDriver($this->m3uParser, $this->xmlTvParser, $this->device);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('scheme "file" is not allowed');
+
+        $driver->getStreamUrl($this->device, 1);
+    }
+
+    public function testTuneOnStoredMetadataIpEntryIsRefused(): void
+    {
+        $entries = [new M3UEntry(url: 'http://169.254.169.254/latest/meta-data/', name: 'SSRF', tvgChno: 7)];
+
+        $this->m3uParser->method('parseUrl')->willReturn($entries);
+
+        $driver = new IptvTunerDriver($this->m3uParser, $this->xmlTvParser, $this->device);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('loopback/link-local/unspecified');
+
+        $driver->getStreamUrl($this->device, 7);
+    }
+
+    public function testTuneOnLegitLanEntryStillWorks(): void
+    {
+        // The policy's other side: a private IPTV server (the common
+        // self-hosted deployment) must tune WITHOUT tripping the jail.
+        $entries = [new M3UEntry(url: 'http://192.168.1.20:8000/live/1.ts', name: 'LAN', tvgChno: 1)];
+
+        $this->m3uParser->method('parseUrl')->willReturn($entries);
+
+        $driver = new IptvTunerDriver($this->m3uParser, $this->xmlTvParser, $this->device);
+
+        $this->assertSame('http://192.168.1.20:8000/live/1.ts', $driver->getStreamUrl($this->device, 1));
+    }
+
     public function testScanChannelsFetchesXmltvWhenConfigured(): void
     {
         $entries = [

@@ -11,35 +11,122 @@ declare(strict_types=1);
 
 namespace Phlix\LiveTv\Tuners\Iptv;
 
+use Phlix\LiveTv\BoundedBodyReader;
 use Psr\Log\LoggerInterface;
 
 /**
  * Parser for M3U/M3U8 playlist files.
  *
- * Parses extended M3U files (such as those used by IPTV providers) containing
- * channel information and stream URLs. Supports:
+ * Parses extended M3U files (such as those used as IPTV provider deliverables)
+ * containing channel information and stream URLs. Supports:
  * - #EXTINF extended tag parsing
  * - tvg-id, tvg-name, tvg-chno, group-title, tvg-logo attributes
  * - Radio channel detection via radio="1" attribute
  * - HTTP fetching of remote playlists
  *
+ * ## Playlist content is UNTRUSTED input (F-1)
+ *
+ * Every entry URL passes {@see StreamUrlGuard::isTunable()}: a `file://` or
+ * metadata-IP entry is dropped at parse time (with a warning) and never becomes
+ * a channel stream URL. The same guard is re-asserted at tune time inside
+ * {@see IptvTunerDriver::getStreamUrl()} because playlist content can rotate
+ * between the two.
+ *
+ * ## Bounded fetch (F-4)
+ *
+ * {@see parseUrl()} reads at most `maxBytes + 1` bytes through the shared
+ * {@see BoundedBodyReader} cap mechanism and throws
+ * {@see M3UPlaylistOversizedException} past the limit — the exact
+ * {@see XmlTvParser::parseUrl()} idiom — so one hostile playlist endpoint
+ * cannot make a Workerman worker buffer an unbounded body.
+ *
  * @since 0.12.0
  */
 class M3UParser
 {
+    /**
+     * Default cap on bytes read from a remote M3U URL. M3U is line text —
+     * even a six-figure-channel playlist stays well under 8 MiB; anything
+     * larger is either hostile or not an M3U file.
+     */
+    public const DEFAULT_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
+
     /** @var LoggerInterface|null Optional logger */
     private ?LoggerInterface $logger;
 
+    /** Maximum number of bytes to read from a remote M3U URL. */
+    private int $maxBytes;
+
+    /**
+     * URL-body fetch seam: callable(string $url, int $timeoutSecs, int
+     * $maxBytes): string returning AT MOST $maxBytes + 1 bytes and throwing
+     * \RuntimeException when the URL cannot be fetched. Defaults to the
+     * stream-context fetch below; injectable so tests never hit the network
+     * and can exercise the oversize path deterministically.
+     *
+     * @var callable(string, int, int): string
+     */
+    private $bodyFetcher;
+
+    /** Strict stream policy forwarded to {@see StreamUrlGuard} (DNS + full private deny). */
+    private bool $strictStreamPolicy;
+
     /**
      * @param LoggerInterface|null $logger Optional logger instance
+     * @param int|null $maxBytes Maximum playlist download size in bytes (null = config / default)
+     * @param callable(string, int, int): string|null $bodyFetcher Fetch seam (null = real HTTP fetch)
+     * @param bool $strictStreamPolicy Apply {@see StreamUrlGuard} strict mode (blocking DNS)
      */
-    public function __construct(?LoggerInterface $logger = null)
-    {
+    public function __construct(
+        ?LoggerInterface $logger = null,
+        ?int $maxBytes = null,
+        ?callable $bodyFetcher = null,
+        bool $strictStreamPolicy = false,
+    ) {
         $this->logger = $logger;
+        $iptv = $this->loadIptvConfig();
+        $this->maxBytes = $maxBytes ?? (is_int($iptv['playlist_max_bytes'] ?? null)
+            ? (int) $iptv['playlist_max_bytes']
+            : self::DEFAULT_MAX_BYTES);
+        $this->bodyFetcher = $bodyFetcher ?? self::fetchViaStream(...);
+        $this->strictStreamPolicy = $strictStreamPolicy;
+    }
+
+    /**
+     * Return the configured maximum download size in bytes.
+     */
+    public function getMaxBytes(): int
+    {
+        return $this->maxBytes;
+    }
+
+    /**
+     * Load the LiveTV `iptv` config block, falling back to defaults.
+     *
+     * @return array<string, mixed>
+     */
+    private function loadIptvConfig(): array
+    {
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../../../config';
+        $configFile = $configPath . '/livetv.php';
+        if (is_file($configFile)) {
+            /** @var array<string, mixed> $config */
+            $config = include $configFile;
+            $iptv = $config['iptv'] ?? null;
+            if (is_array($iptv)) {
+                /** @var array<string, mixed> $iptv */
+                return $iptv;
+            }
+        }
+        return [];
     }
 
     /**
      * Parse an M3U playlist from a string.
+     *
+     * Entries whose stream URL fails {@see StreamUrlGuard::isTunable()} are
+     * dropped with a warning — the playlist body is third-party, rotating
+     * content and NEVER a source of fetchable-scheme instructions.
      *
      * @param string $content The M3U playlist content
      * @return M3UEntry[] Array of parsed entries
@@ -56,6 +143,7 @@ class M3UParser
         $entries = [];
         $lines = explode("\n", trim($content));
         $i = 0;
+        $dropped = 0;
 
         while ($i < count($lines)) {
             $line = trim($lines[$i]);
@@ -74,14 +162,25 @@ class M3UParser
                     $i += 2;
                     continue;
                 }
+                $dropped++;
             }
 
             // Handle entries without #EXTINF (single line format)
             if (!str_starts_with($line, '#')) {
-                $entries[] = new M3UEntry(url: $line);
+                if ($this->acceptsStreamUrl($line)) {
+                    $entries[] = new M3UEntry(url: $line);
+                } else {
+                    $dropped++;
+                }
             }
 
             $i++;
+        }
+
+        if ($dropped > 0) {
+            $this->logger?->warning('M3UParser: dropped entries failing the stream URL policy', [
+                'dropped' => $dropped,
+            ]);
         }
 
         $this->logger?->debug('M3UParser: parsed playlist', ['entry_count' => count($entries)]);
@@ -95,7 +194,8 @@ class M3UParser
      * @param string $url The URL to fetch the playlist from
      * @param int $timeoutSecs Timeout in seconds for the HTTP request (default: 10)
      * @return M3UEntry[] Array of parsed entries
-     * @throws \RuntimeException If the URL cannot be fetched
+     * @throws \RuntimeException If the URL fails the stream policy or cannot be fetched
+     * @throws M3UPlaylistOversizedException If the body exceeds the configured byte cap
      *
      * @example
      * ```php
@@ -105,28 +205,23 @@ class M3UParser
      */
     public function parseUrl(string $url, int $timeoutSecs = 10): array
     {
-        $this->logger?->info('M3UParser: fetching playlist', ['url' => $url, 'timeout' => $timeoutSecs]);
-
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => $timeoutSecs,
-                'follow_location' => true,
-                'max_redirects' => 5,
-                'user_agent' => 'Phlix/1.0 (M3U Parser)',
-            ],
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-            ],
+        $this->logger?->info('M3UParser: fetching playlist', [
+            'url' => $url,
+            'timeout' => $timeoutSecs,
+            'max_bytes' => $this->maxBytes,
         ]);
 
-        $content = @file_get_contents($url, false, $context);
+        // The playlist URL itself gets the same jail as its content: a
+        // rotated/hostile config value must not dial file:///etc/passwd either.
+        StreamUrlGuard::assertTunable($url, $this->strictStreamPolicy);
 
-        if ($content === false) {
-            $error = error_get_last();
-            throw new \RuntimeException("Failed to fetch M3U playlist from $url: " . ($error['message'] ??
-                'Unknown error'));
+        $fetch = $this->bodyFetcher;
+        $content = $fetch($url, $timeoutSecs, $this->maxBytes);
+
+        if (strlen($content) > $this->maxBytes) {
+            throw new M3UPlaylistOversizedException(
+                "M3U playlist payload from {$url} exceeds maximum allowed size of {$this->maxBytes} bytes"
+            );
         }
 
         return $this->parse($content);
@@ -137,7 +232,7 @@ class M3UParser
      *
      * @param string $extInfLine The #EXTINF line
      * @param string $urlLine The next line containing the URL
-     * @return M3UEntry|null Parsed entry or null if URL is invalid
+     * @return M3UEntry|null Parsed entry or null if URL is invalid/refused
      */
     private function parseExtInfLine(string $extInfLine, string $urlLine): ?M3UEntry
     {
@@ -151,12 +246,10 @@ class M3UParser
             return null;
         }
 
-        $duration = (int) $matches[1];
         $attributesStr = $matches[2];
         $channelName = trim($matches[3]);
 
-        // Skip non-video entries (duration -1 typically means radio or data)
-        // But still parse them if they have a valid URL
+        // Radio detection stays cheap: the attribute is a tag on the line.
         $isRadio = str_contains($attributesStr, 'radio="1"') || str_contains($attributesStr, "radio='1'");
 
         // Parse attributes
@@ -201,8 +294,12 @@ class M3UParser
 
         $url = trim($urlLine);
 
-        // Validate URL
+        // Validate URL shape, then run it through the stream jail.
         if ($url === '' || str_starts_with($url, '#') || !filter_var($url, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+
+        if (!$this->acceptsStreamUrl($url)) {
             return null;
         }
 
@@ -215,5 +312,66 @@ class M3UParser
             logo: $tvgLogo,
             isRadio: $isRadio,
         );
+    }
+
+    /**
+     * Gate one candidate stream URL, logging the specific refusal reason.
+     *
+     * Only scheme/host are logged — playlist URLs routinely carry provider
+     * tokens in the query string and those must not land in the log.
+     */
+    private function acceptsStreamUrl(string $url): bool
+    {
+        $refusal = StreamUrlGuard::refusalReason($url, $this->strictStreamPolicy);
+
+        if ($refusal === null) {
+            return true;
+        }
+
+        $this->logger?->warning('M3UParser: refusing playlist entry', [
+            'scheme' => (string) (parse_url($url, PHP_URL_SCHEME) ?? ''),
+            'host' => (string) (parse_url($url, PHP_URL_HOST) ?? ''),
+            'reason' => $refusal,
+        ]);
+
+        return false;
+    }
+
+    /**
+     * The default bounded body fetch: stream context (as the pre-cap
+     * implementation used) but reading at most $maxBytes + 1 bytes through
+     * {@see BoundedBodyReader}, so the oversize detection costs one byte, not
+     * an unbounded buffer.
+     */
+    private static function fetchViaStream(string $url, int $timeoutSecs, int $maxBytes): string
+    {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => $timeoutSecs,
+                'follow_location' => true,
+                'max_redirects' => 5,
+                'user_agent' => 'Phlix/1.0 (M3U Parser)',
+            ],
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+            ],
+        ]);
+
+        $handle = @fopen($url, 'r', false, $context);
+
+        if ($handle === false) {
+            $error = error_get_last();
+            throw new \RuntimeException(
+                "Failed to fetch M3U playlist from $url: " . ($error['message'] ?? 'Unknown error')
+            );
+        }
+
+        try {
+            return BoundedBodyReader::read($handle, $maxBytes);
+        } finally {
+            fclose($handle);
+        }
     }
 }

@@ -410,6 +410,34 @@ class GuideManager
         $programId = is_string($programIdRaw) ? $programIdRaw : $this->generateUuid();
         $channelId = is_string($data['channel_id'] ?? null) ? (string) $data['channel_id'] : '';
 
+        // F-11: guide text arrives from third-party EPG feeds (XMLTV, Schedules
+        // Direct) with NO length contract. An over-long value aborts the whole
+        // import batch with MySQL 1406 under strict mode, so every sized column
+        // is clamped mb-safe at this boundary (widths from
+        // migrations/028_livetv_base.sql). See clampToChars/clampToBytes.
+        $title = self::clampToChars(is_string($data['title'] ?? null) ? $data['title'] : 'Unknown', 512);
+        $description = isset($data['description']) && is_string($data['description'])
+            ? self::clampToBytes($data['description'], 65535) // TEXT is a BYTE budget under utf8mb4
+            : null;
+        $category = isset($data['category']) && is_string($data['category'])
+            ? self::clampToChars($data['category'], 64)
+            : ($data['category'] ?? self::CATEGORY_OTHER);
+        $seriesId = isset($data['series_id']) && is_string($data['series_id'])
+            ? self::clampToChars($data['series_id'], 255)
+            : ($data['series_id'] ?? null);
+        $episodeTitle = isset($data['episode_title']) && is_string($data['episode_title'])
+            ? self::clampToChars($data['episode_title'], 255)
+            : ($data['episode_title'] ?? null);
+        $ratingSystem = isset($data['rating_system']) && is_string($data['rating_system'])
+            ? self::clampToChars($data['rating_system'], 16)
+            : ($data['rating_system'] ?? self::RATING_SYSTEM_TV);
+        $rating = isset($data['rating']) && is_string($data['rating'])
+            ? self::clampToChars($data['rating'], 16)
+            : ($data['rating'] ?? null);
+        $seriesEpisode = isset($data['series_episode']) && is_string($data['series_episode'])
+            ? self::clampToChars($data['series_episode'], 32)
+            : ($data['series_episode'] ?? null);
+
         $this->db->query(
             "INSERT INTO livetv_programs
              (program_id, channel_id, title, description, start_time, end_time,
@@ -435,18 +463,18 @@ class GuideManager
             [
                 $programId,
                 $channelId,
-                $data['title'] ?? 'Unknown',
-                $data['description'] ?? null,
+                $title,
+                $description,
                 $data['start_time'] ?? time(),
                 $data['end_time'] ?? (time() + 3600),
-                $data['category'] ?? self::CATEGORY_OTHER,
-                $data['series_id'] ?? null,
+                $category,
+                $seriesId,
                 $data['episode_number'] ?? null,
-                $data['episode_title'] ?? null,
-                $data['rating_system'] ?? self::RATING_SYSTEM_TV,
-                $data['rating'] ?? null,
+                $episodeTitle,
+                $ratingSystem,
+                $rating,
                 $data['year'] ?? null,
-                $data['series_episode'] ?? null,
+                $seriesEpisode,
                 $data['is_repeat'] ?? false,
                 $data['is_film'] ?? false,
             ]
@@ -455,9 +483,55 @@ class GuideManager
         // Invalidate cache
         $this->invalidateCacheForChannel($channelId);
 
-        $this->logger->debug('Program upserted', ['program_id' => $programId, 'title' => $data['title'] ?? 'Unknown']);
+        $this->logger->debug('Program upserted', ['program_id' => $programId, 'title' => $title]);
 
         return $this->getProgram($programId);
+    }
+
+    /**
+     * Clamp a string to a CHARACTER budget (VARCHAR(n) under utf8mb4 counts
+     * characters, not bytes).
+     *
+     * Ellipsis policy: a clamped value ends with `…` inside the budget (budget
+     * - 1 characters + the ellipsis), signalling truncation to readers without
+     * ever exceeding the column width. Never used for binary-ish fields; guide
+     * text is UTF-8 by contract from both EPG sources.
+     */
+    private static function clampToChars(?string $value, int $charBudget): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (mb_strlen($value, 'UTF-8') <= $charBudget) {
+            return $value;
+        }
+
+        return mb_substr($value, 0, $charBudget - 1, 'UTF-8') . '…';
+    }
+
+    /**
+     * Clamp a string to a BYTE budget (TEXT columns are byte-capped
+     * regardless of charset).
+     *
+     * {@see mb_strcut()} cuts at a UTF-8 character boundary so the stored
+     * value can never end mid-sequence (a byte-wise substr would be rejected
+     * with MySQL 1366 and lose the whole batch — the exact failure mode
+     * media_streams learned the hard way, cf. MediaScanner::streamLanguage()).
+     * Ellipsis policy mirrors {@see self::clampToChars()}: `…` (3 UTF-8 bytes)
+     * occupies the tail of the budget.
+     */
+    private static function clampToBytes(?string $value, int $byteBudget): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (strlen($value) <= $byteBudget) {
+            return $value;
+        }
+
+        return mb_strcut($value, 0, $byteBudget - 3, 'UTF-8') . '…';
     }
 
     /**

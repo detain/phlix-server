@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\LiveTv\Relay;
 
+use Phlix\LiveTv\BoundedBodyReader;
 use Psr\Log\LoggerInterface;
 use Workerman\Timer;
 
@@ -20,6 +21,19 @@ use Workerman\Timer;
  * Uses an LRU cache with configurable size limit to store segments.
  * Background timers periodically fetch the next N segments from a variant
  * playlist, enabling smooth playback for remote clients.
+ *
+ * ## Bounded downloads (F-4/F-7)
+ *
+ * Every fetch — playlist or segment — goes through the shared
+ * {@see BoundedBodyReader} cap mechanism (read `limit + 1`, decide on the
+ * length) so a hostile origin can never make the worker buffer an unbounded
+ * body, and the "too large to cache" decision happens WITHOUT downloading the
+ * whole object first.
+ *
+ * NOTE: the fetches are still blocking stream reads on whatever worker drives
+ * the Timer path (async refactor is a separate, open owner call tracked with
+ * the device lane's M2 blocking-IO family — this class stays wire-compatible
+ * until that lands).
  *
  * @since 0.12.0
  */
@@ -33,6 +47,12 @@ class HlsSegmentPrefetcher
 
     /** Default TTL for cached segments in seconds. */
     private const DEFAULT_TTL_SECONDS = 30;
+
+    /**
+     * Cap for fetched playlist bodies: m3u8 is line text and even a monster
+     * live window stays far under 1 MiB; more than that is not a playlist.
+     */
+    private const MAX_PLAYLIST_BYTES = 1024 * 1024;
 
     /** @var array<string, array{data: string, timestamp: int}> LRU segment cache keyed by URL hash */
     private array $segmentCache = [];
@@ -52,6 +72,9 @@ class HlsSegmentPrefetcher
     /** @var int Number of segments to prefetch ahead */
     private int $prefetchSegments;
 
+    /** @var int Maximum playlist body bytes to read per fetch */
+    private int $maxPlaylistBytes;
+
     /** @var LoggerInterface|null Optional logger */
     private ?LoggerInterface $logger;
 
@@ -62,10 +85,22 @@ class HlsSegmentPrefetcher
     private int $nextCacheOrder = 0;
 
     /**
+     * URL fetch seam: callable(string $url, int $maxBytes): ?string returning
+     * AT MOST $maxBytes + 1 body bytes, or null when the URL cannot be
+     * fetched. Defaults to the bounded stream fetch; injectable so tests never
+     * hit the network and can drive the oversize path deterministically.
+     *
+     * @var callable(string, int): ?string
+     */
+    private $fetcher;
+
+    /**
      * @param LoggerInterface|null $logger           Optional logger instance.
      * @param int                   $prefetchSegments Number of segments to prefetch ahead.
      * @param int                   $maxCacheSize       Maximum cache size in bytes.
      * @param int                   $ttlSeconds        TTL for cached segments.
+     * @param callable(string, int): ?string|null $fetcher Bounded fetch seam (null = real HTTP fetch).
+     * @param int|null $maxPlaylistBytes Playlist body cap (null = {@see MAX_PLAYLIST_BYTES}).
      *
      * @since 0.12.0
      */
@@ -74,11 +109,15 @@ class HlsSegmentPrefetcher
         int $prefetchSegments = self::DEFAULT_PREFETCH_SEGMENTS,
         int $maxCacheSize = self::DEFAULT_MAX_CACHE_SIZE,
         int $ttlSeconds = self::DEFAULT_TTL_SECONDS,
+        ?callable $fetcher = null,
+        ?int $maxPlaylistBytes = null,
     ) {
         $this->logger = $logger;
         $this->prefetchSegments = $prefetchSegments;
         $this->maxCacheSize = $maxCacheSize;
         $this->ttlSeconds = $ttlSeconds;
+        $this->maxPlaylistBytes = $maxPlaylistBytes ?? self::MAX_PLAYLIST_BYTES;
+        $this->fetcher = $fetcher ?? self::fetchBoundedViaStream(...);
     }
 
     /**
@@ -95,18 +134,8 @@ class HlsSegmentPrefetcher
      */
     public function prefetch(string $variantPlaylistUrl): void
     {
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 10,
-                'user_agent' => 'Phlix Media Server/1.0',
-            ],
-        ]);
-
-        $playlistContent = @file_get_contents($variantPlaylistUrl, false, $context);
-        if ($playlistContent === false) {
-            $this->logger?->warning('HlsSegmentPrefetcher: failed to fetch playlist', [
-                'url' => $variantPlaylistUrl,
-            ]);
+        $playlistContent = $this->fetchPlaylist($variantPlaylistUrl);
+        if ($playlistContent === null) {
             return;
         }
 
@@ -115,6 +144,63 @@ class HlsSegmentPrefetcher
 
         foreach ($segmentsToFetch as $segmentUrl) {
             $this->fetchAndCacheSegment($segmentUrl);
+        }
+    }
+
+    /**
+     * Fetch a playlist body through the bounded seam, refusing oversize.
+     *
+     * @return string|null Playlist content, or null on fetch failure/oversize.
+     */
+    private function fetchPlaylist(string $url): ?string
+    {
+        $fetch = $this->fetcher;
+        $content = $fetch($url, $this->maxPlaylistBytes);
+
+        if ($content === null) {
+            $this->logger?->warning('HlsSegmentPrefetcher: failed to fetch playlist', [
+                'url' => $url,
+            ]);
+            return null;
+        }
+
+        if (strlen($content) > $this->maxPlaylistBytes) {
+            $this->logger?->warning('HlsSegmentPrefetcher: playlist exceeds size cap, refusing', [
+                'url' => $url,
+                'max_bytes' => $this->maxPlaylistBytes,
+            ]);
+            return null;
+        }
+
+        return $content;
+    }
+
+    /**
+     * The default bounded fetch: opens the URL with the historical stream
+     * context (10 s timeout, Phlix UA) and reads at most $maxBytes + 1 bytes
+     * via {@see BoundedBodyReader}, so neither playlists nor segments can
+     * buffer unbounded bodies.
+     */
+    private static function fetchBoundedViaStream(string $url, int $maxBytes): ?string
+    {
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 10,
+                'user_agent' => 'Phlix Media Server/1.0',
+            ],
+        ]);
+
+        $handle = @fopen($url, 'r', false, $context);
+        if ($handle === false) {
+            return null;
+        }
+
+        try {
+            return BoundedBodyReader::read($handle, $maxBytes);
+        } catch (\RuntimeException) {
+            return null;
+        } finally {
+            fclose($handle);
         }
     }
 
@@ -178,15 +264,13 @@ class HlsSegmentPrefetcher
             $this->removeFromCache($cacheKey);
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 10,
-                'user_agent' => 'Phlix Media Server/1.0',
-            ],
-        ]);
+        // Bounded read FIRST (F-7): at most maxCacheSize + 1 bytes ever land in
+        // memory, and the "too large to cache" verdict is made on that bound —
+        // the pre-fix code downloaded the ENTIRE body before checking it.
+        $fetch = $this->fetcher;
+        $data = $fetch($segmentUrl, $this->maxCacheSize);
 
-        $data = @file_get_contents($segmentUrl, false, $context);
-        if ($data === false) {
+        if ($data === null) {
             $this->logger?->warning('HlsSegmentPrefetcher: failed to fetch segment', [
                 'url' => $segmentUrl,
             ]);
@@ -195,18 +279,18 @@ class HlsSegmentPrefetcher
 
         $size = strlen($data);
 
-        // Evict old entries if needed to make room
-        while ($this->currentCacheSize + $size > $this->maxCacheSize && !empty($this->cacheOrder)) {
-            $this->evictOldest();
-        }
-
-        // Don't cache if single segment exceeds max cache size
         if ($size > $this->maxCacheSize) {
             $this->logger?->warning('HlsSegmentPrefetcher: segment too large to cache', [
                 'url' => $segmentUrl,
-                'size' => $size,
+                'size_at_least' => $size,
+                'max_cache_size' => $this->maxCacheSize,
             ]);
             return;
+        }
+
+        // Evict old entries if needed to make room
+        while ($this->currentCacheSize + $size > $this->maxCacheSize && !empty($this->cacheOrder)) {
+            $this->evictOldest();
         }
 
         $this->segmentCache[$cacheKey] = [
@@ -308,15 +392,8 @@ class HlsSegmentPrefetcher
             return;
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 10,
-                'user_agent' => 'Phlix Media Server/1.0',
-            ],
-        ]);
-
-        $playlistContent = @file_get_contents($variantPlaylistUrl, false, $context);
-        if ($playlistContent === false) {
+        $playlistContent = $this->fetchPlaylist($variantPlaylistUrl);
+        if ($playlistContent === null) {
             $this->logger?->warning('HlsSegmentPrefetcher: failed to fetch playlist for bandwidth prefetch', [
                 'url' => $variantPlaylistUrl,
             ]);
@@ -335,10 +412,26 @@ class HlsSegmentPrefetcher
             }
         }
 
+        if ($filteredRenditions === []) {
+            return;
+        }
+
         // Prefetch segments from filtered renditions (up to prefetchSegments total)
         $segmentsToFetch = [];
         foreach ($filteredRenditions as $rendition) {
-            $variantSegments = $this->parsePlaylistSegments($rendition['playlist_url'], $variantPlaylistUrl);
+            // F-7: parsePlaylistSegments() expects playlist CONTENT, not a URL.
+            // Fetch the rendition's own media playlist (bounded, same cap) and
+            // resolve its relative segments against the RENDITION url — the
+            // pre-fix code passed the rendition URL straight into the content
+            // parser, so the "segments" it produced were garbage lines of a
+            // URL string (feature is unwired today, see F-8 report; fixed here
+            // so wiring it later does not ship the bug).
+            $renditionContent = $this->fetchPlaylist($rendition['playlist_url']);
+            if ($renditionContent === null) {
+                continue;
+            }
+
+            $variantSegments = $this->parsePlaylistSegments($renditionContent, $rendition['playlist_url']);
             $segmentsToFetch = array_merge($segmentsToFetch, array_slice(
                 $variantSegments,
                 0,

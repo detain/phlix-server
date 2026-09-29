@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Tuners\Iptv\M3UEntry;
+use Phlix\LiveTv\Tuners\Iptv\M3UPlaylistOversizedException;
 use Phlix\LiveTv\Tuners\Iptv\M3UParser;
 
 class M3UParserTest extends TestCase
@@ -170,5 +171,116 @@ M3U;
 
         $entryWithChno = new M3UEntry(url: 'http://example.com/stream.m3u8', tvgChno: 10);
         $this->assertEquals(10, $entryWithChno->getChannelNumber());
+    }
+
+    // ---- F-1: playlist content is untrusted (stream URL jail) ----
+
+    public function testParseDropsFileSchemeEntry(): void
+    {
+        $content = <<<M3U
+#EXTM3U
+#EXTINF:-1,Exfil Channel
+file:///etc/passwd
+#EXTINF:-1,Good Channel
+http://iptv.example.com/live.m3u8
+M3U;
+
+        $entries = $this->parser->parse($content);
+
+        $this->assertCount(1, $entries);
+        $this->assertSame('Good Channel', $entries[0]->getName());
+    }
+
+    public function testParseDropsFileSchemeEntryInSingleLineFormat(): void
+    {
+        $content = "#EXTM3U\nfile:///etc/shadow\nhttp://iptv.example.com/ok.m3u8\n";
+
+        $entries = $this->parser->parse($content);
+
+        $this->assertCount(1, $entries);
+        $this->assertSame('http://iptv.example.com/ok.m3u8', $entries[0]->url);
+    }
+
+    public function testParseDropsMetadataIpLiteralEntry(): void
+    {
+        $content = <<<M3U
+#EXTM3U
+#EXTINF:-1,SSRF Channel
+http://169.254.169.254/latest/meta-data/
+#EXTINF:-1,Loopback Channel
+http://127.0.0.1:9999/admin
+#EXTINF:-1,LAN Channel (allowed)
+http://192.168.1.50:8000/live/1.ts
+M3U;
+
+        $entries = $this->parser->parse($content);
+
+        $this->assertCount(1, $entries);
+        $this->assertSame('LAN Channel (allowed)', $entries[0]->getName());
+    }
+
+    public function testParseUrlRefusesNonHttpPlaylistBeforeFetching(): void
+    {
+        $fetched = [];
+        $parser = new M3UParser(
+            bodyFetcher: static function (string $url, int $t, int $m) use (&$fetched): string {
+                $fetched[] = $url;
+                return "#EXTM3U\n";
+            }
+        );
+
+        try {
+            $parser->parseUrl('file:///etc/passwd');
+            $this->fail('Expected a stream-policy refusal.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('is not allowed', $e->getMessage());
+        }
+
+        $this->assertSame([], $fetched, 'Refused playlist URL must never be dialed');
+    }
+
+    // ---- F-4: bounded playlist download ----
+
+    public function testParseUrlThrowsOversizedWhenBodyExceedsCap(): void
+    {
+        $parser = new M3UParser(
+            maxBytes: 1024,
+            bodyFetcher: static fn (string $url, int $t, int $m): string => str_repeat('x', $m + 1)
+        );
+
+        $this->expectException(M3UPlaylistOversizedException::class);
+        $this->expectExceptionMessage('exceeds maximum allowed size of 1024 bytes');
+
+        $parser->parseUrl('http://evil.example.com/huge.m3u8');
+    }
+
+    public function testParseUrlAcceptsBodyExactlyAtCapAndParses(): void
+    {
+        $body = "#EXTM3U\n#EXTINF:-1,OK\nhttp://iptv.example.com/a.ts\n";
+        $parser = new M3UParser(
+            maxBytes: strlen($body),
+            bodyFetcher: static fn (string $url, int $t, int $m): string => $body
+        );
+
+        $entries = $parser->parseUrl('http://iptv.example.com/playlist.m3u8');
+
+        $this->assertCount(1, $entries);
+        $this->assertSame('OK', $entries[0]->getName());
+    }
+
+    public function testFetcherReceivesTheConfiguredCap(): void
+    {
+        $seenMax = null;
+        $parser = new M3UParser(
+            maxBytes: 4096,
+            bodyFetcher: static function (string $url, int $t, int $m) use (&$seenMax): string {
+                $seenMax = $m;
+                return "#EXTM3U\n";
+            }
+        );
+
+        $parser->parseUrl('http://iptv.example.com/p.m3u8');
+
+        $this->assertSame(4096, $seenMax);
     }
 }

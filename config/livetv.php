@@ -106,6 +106,40 @@ return [
             //     'enabled' => true,
             // ],
         ],
+
+        /**
+         * Maximum number of bytes to read from a remote M3U playlist URL.
+         *
+         * Downloads exceeding this size throw
+         * {@see \Phlix\LiveTv\Tuners\Iptv\M3UPlaylistOversizedException}.
+         *
+         * @default 8388608 (8 MiB)
+         */
+        'playlist_max_bytes' => 8 * 1024 * 1024,
+
+        /**
+         * TTL in seconds for the parsed-playlist cache held by each
+         * IptvTunerDriver instance. Tunes and lineup reads within the TTL reuse
+         * the parsed entries instead of re-fetching the entire playlist.
+         *
+         * @default 300 (5 minutes)
+         */
+        'playlist_cache_ttl_secs' => 300,
+
+        /**
+         * Strict stream policy: in addition to the default http(s) scheme jail
+         * and loopback/link-local literal-host denial, require that every
+         * playlist/stream host RESOLVES (blocking DNS, at parse/tune time) to
+         * public-only addresses, rejecting RFC1918/tailnet targets unless
+         * allowlisted via PHLIX_SSRF_ALLOW_CIDRS.
+         *
+         * Leave false when the operator intentionally runs a private/LAN IPTV
+         * server (the common self-hosted case); set true on hosts that must
+         * never dial any private address. See StreamUrlGuard's policy docblock.
+         *
+         * @default false
+         */
+        'strict_stream_policy' => false,
     ],
 
     /**

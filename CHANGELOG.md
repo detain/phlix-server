@@ -615,6 +615,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`NatPmpClient` wrote the NAT-PMP mapping request's two port slots swapped, and its
+  public-address parser treated a failed result code as success.** (1) RFC 6886 §3.3 lays the
+  12-byte mapping request out with the Internal Port at bytes 4-5 and the Suggested External
+  Port at bytes 6-7; `buildMapRequest()` emitted them the other way round. The error
+  self-cancels for the symmetric `addPortMapping($gw, $p, $p)` call PortForwardService makes —
+  equal values in either order — but an anonymous request (suggested external 0) told the
+  gateway the INTERNAL port was 0, and any mismatched pair was wired backwards.
+  `buildUnmapRequest()` needed no byte move: §3.4 keys a deletion by the Internal Port slot and
+  mandates Suggested External Port = 0 (set by the client, ignored by the gateway), so the wire
+  order there was already spec-true; the fix renames the parameter, documents the §3.4 rule,
+  and a new pin forbids mechanically copying the map swap into the deletion path, where
+  internal=0/external=0/lifetime=0 is §3.4's wildcard that deletes EVERY mapping the client owns
+  for the opcode's protocol. (2) `parseExternalIp()` never read the 16-bit Result Code at
+  bytes 2-3, so a refused lookup (§3.5: 1 Unsupported Version, 2 Not Authorized/Refused,
+  3 Network Failure, 4 Out of resources, 5 Unsupported opcode) still decoded bytes 8-11 — an
+  RFC-compliant zero-filled failure field came back as the success-looking string `0.0.0.0`.
+  The parser now gates `result !== 0` to null (logged) and ignores the address field exactly as
+  §3.2 commands. New byte-pin tests (reflection idiom per `UpnpIgdClientTest`) pin the
+  non-symmetric map request offsets, the zero-suggestion shape, the §3.4 deletion shape, every
+  §3.5 failure code against a non-compliant junk address, and the RFC-shaped success arm;
+  mutation proofs: reverting the map swap reddens 2 pins, neutering the gate reddens 6, and
+  slot-swapping the unmap reddens the deletion pin. Two residuals are documented in-place and
+  deliberately NOT changed here (beyond this pass's wire scope): the class's opcode constants
+  invert the RFC's §3.3 assignment (the class sends TCP=1/UDP=2; §3.3 defines 1=UDP, 2=TCP),
+  and `mapPort()`/`removePortMapping()` read their reply ports/ACKs without the result-code gate.
 - **`NatPmpClient::parseExternalIp()` read the external IP from the wrong bytes, and
   `StunClient::getPublicIp()` silently refused every IP-literal server config.**
   (1) RFC 6886 §3.2 lays the 12-byte public-address reply out as version(1) + opcode(1) +

@@ -28,6 +28,14 @@ class NatPmpClient
 {
     private const NAT_PMP_PORT = 5350;
     private const VERSION = 0;
+    // KNOWN RESIDUAL (wire-fidelity pass, measured against RFC 6886 §3.3 on
+    // origin): the RFC assigns "1 - Map UDP, 2 - Map TCP" — these two
+    // constants are the other way around, so a TCP request currently carries
+    // the UDP opcode on the wire (and a §3.4 deletion keyed by OP_CODE_MAP_TCP
+    // targets the client's UDP mappings). The byte-pin tests assert the values
+    // THIS class sends, not the RFC assignment; correcting the constants is a
+    // separate, deliberately out-of-scope change because it alters live wire
+    // behavior beyond the mapping-request port order this pass owns.
     private const OP_CODE_MAP_TCP = 1;
     private const OP_CODE_MAP_UDP = 2;
     private const RESPONSE_FLAG = 0x80;
@@ -140,7 +148,11 @@ class NatPmpClient
      * Removes a port mapping via NAT-PMP.
      *
      * @param string $gatewayIp   The router's LAN IP address.
-     * @param int    $externalPort The external port to remove.
+     * @param int    $externalPort The mapped port to delete. RFC 6886 §3.4
+     *     keys the deletion on the request's Internal Port slot, and this
+     *     class only ever creates symmetric mappings (internal == external,
+     *     see PortForwardService), so one number identifies the mapping
+     *     under either name.
      * @param string $protocol     Protocol (TCP or UDP).
      *
      * @return bool True on success, false on failure.
@@ -156,6 +168,10 @@ class NatPmpClient
             return false;
         }
 
+        // RFC 6886 §3.4 keys the deletion by the request's Internal Port
+        // slot and mandates Suggested External Port = 0; mappings are
+        // created here symmetrically (internal == external, see
+        // PortForwardService), so the caller's port fills the internal slot.
         $request = $this->buildUnmapRequest($opCode, $externalPort);
         $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_PORT);
         if ($sent === false) {
@@ -273,7 +289,23 @@ class NatPmpClient
     }
 
     /**
-     * Builds a NAT-PMP map request.
+     * Builds a NAT-PMP mapping request, RFC 6886 §3.3 (12 bytes):
+     *
+     *   byte 0     Version (0)
+     *   byte 1     Opcode (the OP_CODE_MAP_* constant for the protocol)
+     *   bytes 2-3  Reserved — MUST be zero on transmission, ignored on reception
+     *   bytes 4-5  Internal Port
+     *   bytes 6-7  Suggested External Port (0 = "allocate any high port")
+     *   bytes 8-11 Requested Port Mapping Lifetime in seconds
+     *
+     * The two port fields sit Internal-first on the wire. Until this
+     * wire-fidelity pass they were emitted swapped (suggested external at
+     * 4-5, internal at 6-7): harmless only for the symmetric
+     * addPortMapping($gw, $p, $p) call PortForwardService makes — the
+     * gateway read equal values from both slots whatever order they went
+     * in — but an anonymous request (external 0) told the gateway the
+     * INTERNAL port was 0, and any mismatched pair was wired backwards.
+     * Pinned byte-for-byte by NatPmpClientTest on a non-symmetric case.
      */
     private function buildMapRequest(
         int $opCode,
@@ -282,17 +314,39 @@ class NatPmpClient
         int $leaseDuration
     ): string {
         return chr(self::VERSION) . chr($opCode)
-            . pack('n', 0) . pack('n', $externalPort)
-            . pack('n', $internalPort) . pack('N', $leaseDuration);
+            . pack('n', 0) . pack('n', $internalPort)
+            . pack('n', $externalPort) . pack('N', $leaseDuration);
     }
 
     /**
-     * Builds a NAT-PMP unmap request.
+     * Builds a NAT-PMP mapping-deletion request, RFC 6886 §3.4 (12 bytes,
+     * same §3.3 layout as buildMapRequest() with lifetime 0):
+     *
+     *   bytes 4-5  Internal Port — §3.4: "a client requests explicit deletion
+     *              of a mapping by sending a message to the NAT gateway
+     *              requesting the mapping, with the Requested Lifetime in
+     *              Seconds set to zero", and the response echoes "the internal
+     *              port as indicated in the deletion request": the mapping is
+     *              keyed by this slot.
+     *   bytes 6-7  Suggested External Port — §3.4: "MUST be set to zero by the
+     *              client on sending, and MUST be ignored by the gateway on
+     *              reception".
+     *   bytes 8-11 Lifetime — 0, the deletion marker itself.
+     *
+     * The port argument therefore lives in the internal slot: callers hand
+     * this API the port they mapped, and NAT-PMP mappings are created here
+     * symmetrically (internal == external, see PortForwardService), so one
+     * number serves both roles. Note the trap this pin guards: internal 0
+     * with external 0 and lifetime 0 is NOT "delete that port" — §3.4
+     * defines that shape as the wildcard that deletes every mapping this
+     * client owns for the opcode's protocol, so mechanically swapping the
+     * pair the way buildMapRequest() needed would turn a targeted unmap
+     * into a mass deletion.
      */
-    private function buildUnmapRequest(int $opCode, int $externalPort): string
+    private function buildUnmapRequest(int $opCode, int $internalPort): string
     {
         return chr(self::VERSION) . chr($opCode)
-            . pack('n', 0) . pack('n', $externalPort)
+            . pack('n', 0) . pack('n', $internalPort)
             . pack('n', 0) . pack('N', 0);
     }
 
@@ -315,10 +369,31 @@ class NatPmpClient
      * never the external address. (The mapping reply, RFC 6886 §3.3,
      * shares the same 2+2+4 prefix and carries the mapped external port
      * at bytes 10-11 — which is exactly where mapPort() reads it.)
+     *
+     * The result code at bytes 2-3 is a hard gate, not decoration.
+     * §3: "Responses always contain a 16-bit result code in network byte
+     * order. A result code of zero indicates success." §3.2: "If the
+     * result code is non-zero, the value of the External IPv4 Address
+     * field is undefined (MUST be set to zero on transmission, and MUST
+     * be ignored on reception)." §3.5 defines 1 Unsupported Version,
+     * 2 Not Authorized/Refused, 3 Network Failure, 4 Out of resources,
+     * 5 Unsupported opcode, and requires any undefined code to be "treated
+     * as a fatal error of the request" — so every non-zero value fails
+     * here. Before this gate, an RFC-compliant failure reply (all-zero
+     * address field) decoded into the string '0.0.0.0' and was returned
+     * as a success-looking external address.
      */
     private function parseExternalIp(string $response): ?string
     {
         if (strlen($response) < 12) {
+            return null;
+        }
+
+        $result = unpack('n', substr($response, 2, 2));
+        if (!is_array($result) || !isset($result[1]) || $result[1] !== 0) {
+            $this->logger->debug('NAT-PMP: public address request failed on result code', [
+                'result_code' => is_array($result) ? ($result[1] ?? null) : null,
+            ]);
             return null;
         }
 

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Network;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Phlix\Network\NatPmpClient;
 use Psr\Log\NullLogger;
+use ReflectionMethod;
 
 class NatPmpClientTest extends TestCase
 {
@@ -152,5 +154,171 @@ class NatPmpClientTest extends TestCase
         $packed = inet_pton($ip);
         $this->assertIsString($packed);
         return chr(0) . chr(0x80) . pack('n', 0) . pack('N', 1000000) . $packed;
+    }
+
+    // ------------------------------------------------------------------
+    // Wire-fidelity pass (items 1-2): RFC 6886 §3.3 port-slot order and
+    // the §3.2/§3.5 result-code gate, pinned byte-for-byte on the private
+    // request builders / reply parser (ReflectionMethod idiom as used in
+    // UpnpIgdClientTest). These are the offsets themselves under test —
+    // a non-symmetric internal≠external request is what makes the pin
+    // mutation-honest: the pre-fix swapped order reddens the port-offset
+    // assertions, and a result-blind parser reddens the failure arms.
+    // ------------------------------------------------------------------
+
+    private function invokeWireMethod(string $name, int|string ...$args): mixed
+    {
+        $method = new ReflectionMethod(NatPmpClient::class, $name);
+        $method->setAccessible(true);
+        return $method->invoke($this->client, ...$args);
+    }
+
+    /** @return array<int, int|string> */
+    private function u16(string $packet, int $offset): array
+    {
+        $unpacked = unpack('n', substr($packet, $offset, 2));
+        $this->assertIsArray($unpacked);
+        return $unpacked;
+    }
+
+    /**
+     * §3.3 mapping request layout — 12 bytes:
+     *   byte 0 version, byte 1 opcode, bytes 2-3 reserved(0),
+     *   bytes 4-5 Internal Port, bytes 6-7 Suggested External Port,
+     *   bytes 8-11 lifetime.
+     * The ports are deliberately NON-symmetric (internal 8080, suggested
+     * external 32400): the swapped pre-fix order wrote 32400@4-5 and
+     * 8080@6-7, so both port assertions below fail if the order regresses.
+     * The opcode byte pins what THIS class sends (OP_CODE_MAP_TCP === 1);
+     * note the class constants invert the RFC's §3.3 assignment (1 = UDP,
+     * 2 = TCP) — a known residual tracked outside this pass, so the pin
+     * documents current wire truth rather than blessing it.
+     */
+    public function testMapRequestPutsInternalPortAtBytes4AndSuggestedExternalAtBytes6(): void
+    {
+        $request = $this->invokeWireMethod('buildMapRequest', 1, 32400, 8080, 7200);
+        $this->assertIsString($request);
+
+        $this->assertSame(12, strlen($request), '§3.3 mapping request is 12 bytes');
+        $this->assertSame(0, ord($request[0]), 'version 0');
+        $this->assertSame(1, ord($request[1]), 'opcode echoed at byte 1');
+        $this->assertSame(0, $this->u16($request, 2)[1], 'reserved bytes 2-3 MUST be zero');
+        $this->assertSame(8080, $this->u16($request, 4)[1], 'Internal Port lives at bytes 4-5');
+        $this->assertSame(32400, $this->u16($request, 6)[1], 'Suggested External Port lives at bytes 6-7');
+
+        $lifetime = unpack('N', substr($request, 8, 4));
+        $this->assertIsArray($lifetime);
+        $this->assertSame(7200, $lifetime[1], 'lifetime lives at bytes 8-11');
+    }
+
+    /**
+     * §3.3 anonymous-port shape: "set the Suggested External Port to zero"
+     * asks the gateway to allocate a high port. Pre-fix, that zero landed
+     * in the Internal Port slot — telling the gateway the client listened
+     * on port 0 — while the real internal port was sent as the suggestion.
+     */
+    public function testMapRequestWithZeroSuggestedExternalPortKeepsInternalPortInItsOwnSlot(): void
+    {
+        $request = $this->invokeWireMethod('buildMapRequest', 2, 0, 9000, 3600);
+        $this->assertIsString($request);
+
+        $this->assertSame(12, strlen($request));
+        $this->assertSame(9000, $this->u16($request, 4)[1], 'internal port must survive at bytes 4-5');
+        $this->assertSame(0, $this->u16($request, 6)[1], 'suggested external 0 = allocate-any-high-port');
+    }
+
+    /**
+     * §3.4 deletion request: "sending a message to the NAT gateway
+     * requesting the mapping, with the Requested Lifetime in Seconds set
+     * to zero. The Suggested External Port MUST be set to zero by the
+     * client on sending, and MUST be ignored by the gateway on reception."
+     * A deletion is keyed by the INTERNAL Port slot (bytes 4-5) — the
+     * number callers hand removePortMapping() fills it (mappings are
+     * created symmetrically, internal == external, see PortForwardService).
+     * This pin guards the swap trap: "fixing" unmap the way buildMapRequest
+     * was fixed would move the port to bytes 6-7 — a slot §3.4 requires to
+     * be zero and gateways MUST ignore — leaving internal 0, which is the
+     * wildcard shape that deletes ALL of the client's mappings for the
+     * opcode's protocol, not the targeted one.
+     */
+    public function testUnmapRequestCarriesPortInInternalSlotWithZeroExternalAndLifetime(): void
+    {
+        $request = $this->invokeWireMethod('buildUnmapRequest', 1, 32400);
+        $this->assertIsString($request);
+
+        $this->assertSame(12, strlen($request), '§3.4 deletion reuses the §3.3 12-byte request shape');
+        $this->assertSame(0, ord($request[0]), 'version 0');
+        $this->assertSame(1, ord($request[1]), 'opcode echoed at byte 1');
+        $this->assertSame(0, $this->u16($request, 2)[1], 'reserved bytes 2-3 MUST be zero');
+        $this->assertSame(
+            32400,
+            $this->u16($request, 4)[1],
+            'deletion key (the mapped port) at the Internal Port slot'
+        );
+        $this->assertSame(0, $this->u16($request, 6)[1], 'Suggested External Port MUST be zero on a deletion (§3.4)');
+
+        $lifetime = unpack('N', substr($request, 8, 4));
+        $this->assertIsArray($lifetime);
+        $this->assertSame(0, $lifetime[1], 'lifetime 0 marks the deletion');
+    }
+
+    /**
+     * §3.2 public-address reply with result code 0: the address at
+     * bytes 8-11 parses normally — the success arm the discoverGateway()
+     * fork test already exercises end-to-end, pinned here at the unit.
+     */
+    public function testParseExternalIpReturnsAddressOnSuccessResultCodeZero(): void
+    {
+        $parsed = $this->invokeWireMethod('parseExternalIp', $this->natPmpPublicAddressReply('203.0.113.9'));
+        $this->assertSame('203.0.113.9', $parsed);
+    }
+
+    /**
+     * §3.5's defined failure codes (1 Unsupported Version, 2 Not
+     * Authorized/Refused, 3 Network Failure, 4 Out of resources,
+     * 5 Unsupported opcode; undefined codes are likewise fatal per §3.5).
+     * The reply is built the way a NON-compliant gateway might send it —
+     * result code failed but the External IPv4 field still holding a real
+     * address, which §3.2 makes MUST-ignore ("MUST be set to zero on
+     * transmission, and MUST be ignored on reception"). The gate must read
+     * the RESULT, never the address bytes: pre-fix this parsed straight
+     * through to an address, and on RFC-compliant all-zero fields it
+     * returned the string '0.0.0.0' as a success-looking result.
+     */
+    #[DataProvider('failedResultCodes')]
+    public function testParseExternalIpRejectsFailedResultCodesEvenWithNonZeroAddressField(int $code): void
+    {
+        $reply = chr(0) . chr(0x80) . pack('n', $code) . pack('N', 1000000) . inet_pton('198.51.100.66');
+
+        $this->assertNull(
+            $this->invokeWireMethod('parseExternalIp', $reply),
+            'result code ' . $code . ' is a failed request and its address field must never parse'
+        );
+    }
+
+    /**
+     * The RFC-compliant failure shape: non-zero result, zero-filled
+     * address field. Pre-fix the parser returned the string '0.0.0.0' —
+     * indistinguishable downstream from a "success" whose gateway IP
+     * happens to be all zeros.
+     */
+    public function testParseExternalIpDoesNotReturnZeroAddressOnFailedResultCode(): void
+    {
+        $reply = chr(0) . chr(0x80) . pack('n', 2) . pack('N', 1000000) . pack('N', 0);
+        $this->assertNull($this->invokeWireMethod('parseExternalIp', $reply));
+    }
+
+    /**
+     * @return array<string, array{int}>
+     */
+    public static function failedResultCodes(): array
+    {
+        return [
+            'unsupported version (§3.5 code 1)' => [1],
+            'not authorized/refused (§3.5 code 2)' => [2],
+            'network failure (§3.5 code 3)' => [3],
+            'out of resources (§3.5 code 4)' => [4],
+            'unsupported opcode (§3.5 code 5)' => [5],
+        ];
     }
 }

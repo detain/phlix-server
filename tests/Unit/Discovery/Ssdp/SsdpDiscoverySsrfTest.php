@@ -14,6 +14,14 @@ use Phlix\Discovery\Ssdp\SsdpSocket;
  * non-http(s) targets are refused with ZERO fetcher invocations, RFC1918
  * targets are fetched exactly once per guarded hop, redirects re-enter the
  * gate per hop with a bounded budget, and oversized bodies are refused.
+ *
+ * The H1 rework block below pins the DNS-rebinding and address-family closes:
+ * the PRODUCTION default fetch path (no fetcher injected) must dial the
+ * verified literal IP — never the name — so a zone that answers lookup #1
+ * inside RFC1918 and every later lookup hostile cannot redirect the socket;
+ * a hostname mixing a LAN A record with a hostile AAAA is refused outright;
+ * every redirect hop re-pins on its own; and IP-literal LOCATIONs still dial
+ * their host with no Host-header override.
  */
 class SsdpDiscoverySsrfTest extends TestCase
 {
@@ -203,6 +211,160 @@ class SsdpDiscoverySsrfTest extends TestCase
 
         $this->assertNull($discovery->resolveDeviceDescription('http://nowhere.invalid/desc.xml'));
         $this->assertSame([], $this->fetched);
+    }
+
+    // ---- H1 rework: dial pinning (DNS rebinding) + family skew -------------
+
+    /**
+     * Build a discovery on the PRODUCTION default fetch path (fetcher === null)
+     * whose socket-opening step is replaced by the dial recorder seam: every
+     * would-be fopen is captured as {url, headers} and short-circuits to a
+     * transport failure, so the check→pin→dial construction is exercised with
+     * zero network.
+     *
+     * @param (callable(string): list<string>)|null $resolver
+     * @param list<array{url: string, headers: string}> $dials captured by reference
+     */
+    private function discoveryRecordingDials(?callable $resolver, array &$dials): SsdpDiscovery
+    {
+        return new SsdpDiscovery(
+            $this->createMock(SsdpSocket::class),
+            null,
+            $resolver,
+            null,
+            static function (string $url, string $headers) use (&$dials): void {
+                $dials[] = ['url' => $url, 'headers' => $headers];
+            },
+        );
+    }
+
+    public function testProductionDialPinsVerifiedIpEvenWhenDnsRebindsAfterTheGate(): void
+    {
+        $lookups = 0;
+        $resolver = static function (string $host) use (&$lookups): array {
+            $lookups++;
+            // An attacker-owned zone answers the FIRST lookup inside RFC1918
+            // (passing the gate) and every later lookup with the metadata
+            // endpoint. Pinning means production must never ask again.
+            return $lookups === 1 ? ['192.168.1.9'] : ['169.254.169.254'];
+        };
+
+        /** @var list<array{url: string, headers: string}> $dials */
+        $dials = [];
+        $discovery = $this->discoveryRecordingDials($resolver, $dials);
+
+        // The dial recorder short-circuits before the socket, so the GET
+        // legitimately ends as a transport failure — the assertions below are
+        // about WHAT the production path was about to open.
+        $this->assertNull($discovery->resolveDeviceDescription('http://tv.lan:8080/desc.xml'));
+
+        $this->assertSame(1, $lookups, 'the dial must never trigger a second resolution');
+        $this->assertCount(1, $dials);
+        $this->assertSame(
+            'http://192.168.1.9:8080/desc.xml',
+            $dials[0]['url'],
+            'the socket must open on the pinned verified literal, not the hostname',
+        );
+        $this->assertStringContainsString("Host: tv.lan:8080\r\n", $dials[0]['headers']);
+        $this->assertStringContainsString("Connection: close\r\n", $dials[0]['headers']);
+    }
+
+    public function testHostnameWithLanARecordAndPublicAaaaIsRefusedWithoutAnyDial(): void
+    {
+        $discovery = $this->discoveryResolvingTo(['192.168.1.9', '2606:4700:4700::1111']);
+
+        $this->assertNull($discovery->resolveDeviceDescription('http://skew.example/desc.xml'));
+        $this->assertSame(
+            [],
+            $this->fetched,
+            'family skew must be refused before the socket — the wrapper may prefer v6',
+        );
+    }
+
+    public function testDialRecorderSeesNoSocketForFamilySkewOnDefaultPath(): void
+    {
+        /** @var list<array{url: string, headers: string}> $dials */
+        $dials = [];
+        $discovery = $this->discoveryRecordingDials(
+            static fn(): array => ['10.1.2.3', '64:ff9b::8.8.8.8'],
+            $dials,
+        );
+
+        $this->assertNull($discovery->resolveDeviceDescription('http://skew.example/desc.xml'));
+        $this->assertSame([], $dials, 'the NAT64-embedded public answer must fail the gate');
+    }
+
+    public function testFetcherReceivesPinnedLiteralNotHostname(): void
+    {
+        $discovery = $this->discoveryResolvingTo(['192.168.30.4'], 'tv.lan');
+
+        $this->assertNotNull($discovery->resolveDeviceDescription('http://tv.lan:8080/desc.xml'));
+        $this->assertSame(['http://192.168.30.4:8080/desc.xml'], $this->fetched);
+    }
+
+    public function testEachRedirectHopPinsItsOwnVerifiedIp(): void
+    {
+        $map = [
+            'hop1.example' => ['192.168.1.10'],
+            'hop2.example' => ['192.168.1.11'],
+        ];
+        $discovery = new SsdpDiscovery(
+            $this->createMock(SsdpSocket::class),
+            null,
+            static function (string $host) use ($map): array {
+                return $map[$host] ?? [];
+            },
+            function (string $url): array {
+                $this->fetched[] = $url;
+                if (str_contains($url, '192.168.1.10')) {
+                    return self::redirect('http://hop2.example/desc2.xml');
+                }
+                return self::ok();
+            },
+        );
+
+        $result = $discovery->resolveDeviceDescription('http://hop1.example:8000/hop1.xml');
+
+        $this->assertNotNull($result);
+        $this->assertSame(
+            ['http://192.168.1.10:8000/hop1.xml', 'http://192.168.1.11/desc2.xml'],
+            $this->fetched,
+            'every hop must be dialed on ITS OWN pinned literal',
+        );
+    }
+
+    public function testIpLiteralDialsItselfWithoutHostHeaderOverrideOnDefaultPath(): void
+    {
+        /** @var list<array{url: string, headers: string}> $dials */
+        $dials = [];
+        $discovery = $this->discoveryRecordingDials(null, $dials);
+
+        $this->assertNull($discovery->resolveDeviceDescription('http://192.168.1.50:49152/desc.xml'));
+
+        $this->assertCount(1, $dials);
+        $this->assertSame('http://192.168.1.50:49152/desc.xml', $dials[0]['url']);
+        $this->assertStringNotContainsString(
+            'Host:',
+            $dials[0]['headers'],
+            'an IP-literal URL pins to itself and needs no override',
+        );
+    }
+
+    public function testIpv4MappedIpv6LiteralDialsTheCollapsedLiteral(): void
+    {
+        /** @var list<array{url: string, headers: string}> $dials */
+        $dials = [];
+        $discovery = $this->discoveryRecordingDials(null, $dials);
+
+        $this->assertNull($discovery->resolveDeviceDescription('http://[::ffff:192.168.1.5]/desc.xml'));
+
+        $this->assertCount(1, $dials);
+        $this->assertSame(
+            'http://192.168.1.5/desc.xml',
+            $dials[0]['url'],
+            'the mapped spelling must dial its verified embedded-IPv4 truth',
+        );
+        $this->assertStringContainsString('Host: [::ffff:192.168.1.5]', $dials[0]['headers']);
     }
 
     public function testRedirectWithinLanIsFollowedPerHop(): void

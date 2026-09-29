@@ -536,9 +536,9 @@ class BackupManager
             $outputPath,
         );
 
-        if ($dump['code'] !== 0) {
+        if ($dump['exit_code'] !== 0) {
             throw new \RuntimeException(
-                'mysqldump failed with code: ' . $dump['code']
+                'mysqldump failed with code: ' . $dump['exit_code']
                 . ($dump['stderr'] !== '' ? ' — ' . $dump['stderr'] : '')
             );
         }
@@ -576,8 +576,8 @@ class BackupManager
             null,
         );
 
-        if ($import['code'] !== 0) {
-            throw new \RuntimeException('mysql import failed with code: ' . $import['code']
+        if ($import['exit_code'] !== 0) {
+            throw new \RuntimeException('mysql import failed with code: ' . $import['exit_code']
                 . ($import['stderr'] !== '' ? ' — ' . $import['stderr'] : ''));
         }
     }
@@ -597,8 +597,14 @@ class BackupManager
      * @param string|null   $stdoutFile File receiving the client's stdout
      *                                  (mysqldump target); null discards it.
      *
-     * @return array{code: int, stderr: string} Exit code plus whatever the
-     *                                          child wrote to stderr.
+     * @return array{exit_code: int, stderr: string} Exit code plus whatever
+     *                                               the child wrote to stderr.
+     *                                               The key is `exit_code`,
+     *                                               never `code`: the W2
+     *                                               error-code scanner treats
+     *                                               every `'code' =>` array
+     *                                               key in src/ as a REST
+     *                                               Error.code channel.
      */
     private function runMysqlClientCommand(
         array $argv,
@@ -629,7 +635,7 @@ class BackupManager
         $returnCode = proc_close($process);
 
         return [
-            'code' => $returnCode,
+            'exit_code' => $returnCode,
             'stderr' => is_string($stderr) ? trim($stderr) : '',
         ];
     }

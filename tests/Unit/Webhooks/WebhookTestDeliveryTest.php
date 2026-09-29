@@ -129,10 +129,15 @@ final class WebhookTestDeliveryTest extends TestCase
     /**
      * Build a dispatcher whose HTTP client is the supplied double and whose
      * retry backoff does not really sleep.
+     *
+     * @param \Closure|null $clock Synthetic unix-seconds clock for the V2
+     *                             per-attempt stamp (null = real wall time).
      */
-    private function dispatcherWith(Connection $db, WebhookHttpClient $http): WebhookDispatcher
+    private function dispatcherWith(Connection $db, WebhookHttpClient $http, ?\Closure $clock = null): WebhookDispatcher
     {
-        return new class ($db, $this->createMock(StructuredLogger::class), $http) extends WebhookDispatcher {
+        $dispatcher = new class ($db, $this->createMock(StructuredLogger::class), $http) extends WebhookDispatcher {
+            public ?\Closure $testClock = null;
+
             public function __construct(
                 Connection $db,
                 StructuredLogger $logger,
@@ -150,7 +155,16 @@ final class WebhookTestDeliveryTest extends TestCase
             {
                 // No wall-clock delay between retry attempts under test.
             }
+
+            protected function nowSeconds(): int
+            {
+                return $this->testClock !== null ? (int) ($this->testClock)() : time();
+            }
         };
+
+        $dispatcher->testClock = $clock;
+
+        return $dispatcher;
     }
 
     /**
@@ -412,6 +426,107 @@ final class WebhookTestDeliveryTest extends TestCase
                 $headerTime + WebhookEvent::DEFAULT_TOLERANCE_SECONDS + 1
             ),
             'The same capture replayed after the tolerance window must be rejected.'
+        );
+    }
+
+    /**
+     * L2 rework: the V2 stamp is REBUILT per attempt — a stamp taken once
+     * before the retry loop would ride every redispatch and let the final,
+     * successful delivery arrive with a `t=` already outside the receiver's
+     * tolerance window. A synthetic clock advances past
+     * DEFAULT_TOLERANCE_SECONDS between the two attempts, pinning three
+     * consequences: each attempt carries its own exact `t=`, the LAST
+     * delivery verifies fresh at its own stamp while the FIRST capture has
+     * aged out at that same clock, and the legacy header stays byte-identical
+     * across both attempts.
+     */
+    public function test_retry_attempts_re_stamp_the_v2_header_with_a_fresh_t(): void
+    {
+        /** @var list<array{url: string, headers: array<string, string|null>, body: string}> $calls */
+        $calls = [];
+
+        // First attempt fails with a 5xx, the retry succeeds.
+        $http = $this->createMock(WebhookHttpClient::class);
+        $http->method('postWithHeaders')->willReturnCallback(
+            static function (string $url, array $headers, string $body) use (&$calls): array {
+                $calls[] = ['url' => $url, 'headers' => $headers, 'body' => $body];
+                if (count($calls) === 1) {
+                    return [
+                        'success' => false,
+                        'response_code' => 500,
+                        'response_body' => null,
+                        'error' => 'HTTP 500',
+                    ];
+                }
+                return [
+                    'success' => true,
+                    'response_code' => 200,
+                    'response_body' => 'ok',
+                    'error' => null,
+                ];
+            }
+        );
+
+        // T0 on the first attempt, T0 + tolerance + 1 on the retry: the exact
+        // distance at which a reused stamp would already be rejected.
+        $baseTime = 1_700_000_000;
+        $secondStamp = $baseTime + WebhookEvent::DEFAULT_TOLERANCE_SECONDS + 1;
+        $clockState = ['t' => $baseTime];
+        $clock = static function () use (&$clockState, $secondStamp): int {
+            $now = $clockState['t'];
+            $clockState['t'] = $secondStamp;
+            return $now;
+        };
+
+        $dispatcher = $this->dispatcherWith($this->fakeDb(), $http, $clock);
+        $result = $dispatcher->dispatchToWebhook(self::WEBHOOK_ID, $this->testEvent());
+
+        self::assertSame(1, $result->successCount, 'The retry must land as a successful delivery.');
+        self::assertSame(0, $result->failureCount);
+        self::assertCount(2, $calls, 'A failed first attempt must be retried.');
+
+        $v2First = $calls[0]['headers'][WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER] ?? null;
+        $v2Second = $calls[1]['headers'][WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER] ?? null;
+        self::assertIsString($v2First);
+        self::assertIsString($v2Second);
+
+        self::assertStringStartsWith("t={$baseTime},", $v2First);
+        self::assertStringStartsWith("t={$secondStamp},", $v2Second);
+        self::assertNotSame(
+            $v2First,
+            $v2Second,
+            'Each attempt must carry a freshly built V2 header; a reused stamp is the replay-window defect this pins.'
+        );
+
+        self::assertSame(
+            $calls[0]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null,
+            $calls[1]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null,
+            'The legacy header must remain byte-identical across attempts.'
+        );
+
+        $body = $calls[1]['body'];
+        self::assertTrue(
+            WebhookEvent::verify(
+                self::WEBHOOK_SECRET,
+                $body,
+                $v2Second,
+                $calls[1]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null,
+                WebhookEvent::DEFAULT_TOLERANCE_SECONDS,
+                $secondStamp
+            ),
+            'The delivered (last-attempt) capture must verify fresh at its own stamp.'
+        );
+
+        self::assertFalse(
+            WebhookEvent::verify(
+                self::WEBHOOK_SECRET,
+                $body,
+                $v2First,
+                $calls[0]['headers'][WebhookEvent::SIGNATURE_HEADER] ?? null,
+                WebhookEvent::DEFAULT_TOLERANCE_SECONDS,
+                $secondStamp
+            ),
+            'The first attempt\'s capture must already be outside the tolerance window at the retry clock.'
         );
     }
 

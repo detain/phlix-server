@@ -427,10 +427,10 @@ class WebhookDispatcher
         // same string by construction.
         $payload = $event->serializedPayload();
         $secret = $this->stringFromMixed($webhook['secret'] ?? null);
+        // The legacy header is timestamp-free, so it is byte-identical on every
+        // attempt by construction. The V2 stamp is NOT taken here: it is rebuilt
+        // per attempt inside the retry loop below.
         $signature = $event->getSignature($secret);
-        // Stamped per attempt (retries included) so a captured delivery ages
-        // out of the receiver's tolerance window.
-        $timestampedSignature = $event->getTimestampedSignature($secret, time());
 
         $config = $this->getConfig();
         $maxRetries = $this->intFromMixed($config['max_retries'] ?? null, 2);
@@ -445,17 +445,26 @@ class WebhookDispatcher
         // receivers; the additive X-Phlix-Signature-V2 timestamp header is
         // ignored by them (see WebhookEvent's wire-format docblock).
         $client = $this->getHttpClient();
-        $headers = [
-            'Content-Type' => 'application/json',
-            WebhookEvent::SIGNATURE_HEADER => $signature,
-            WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER => $timestampedSignature,
-        ];
 
         $retries = 0;
         $lastError = 'Unknown error';
         $responseCode = null;
 
         do {
+            // Stamped per attempt (retries included) so a captured delivery ages
+            // out of the receiver's tolerance window — a stamp taken once before
+            // the loop would ride every retry and let the final, successful
+            // delivery carry an already-stale `t=`. The legacy header stays
+            // byte-identical on every trip.
+            $headers = [
+                'Content-Type' => 'application/json',
+                WebhookEvent::SIGNATURE_HEADER => $signature,
+                WebhookEvent::TIMESTAMPED_SIGNATURE_HEADER => $event->getTimestampedSignature(
+                    $secret,
+                    $this->nowSeconds()
+                ),
+            ];
+
             $result = $client->postWithHeaders($url, $headers, $payload);
 
             if ($result['success']) {
@@ -512,6 +521,18 @@ class WebhookDispatcher
             return;
         }
         usleep($milliseconds * 1_000);
+    }
+
+    /**
+     * The unix-seconds clock feeding the per-attempt V2 timestamp stamp.
+     *
+     * Protected so tests can advance a synthetic clock and observe the
+     * per-attempt `t=` change without waiting out real wall-clock seconds —
+     * same substitution seam as {@see sleepMilliseconds()}.
+     */
+    protected function nowSeconds(): int
+    {
+        return time();
     }
 
     private function logDispatch(

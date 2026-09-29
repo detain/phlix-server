@@ -399,14 +399,26 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
              * constants and parse the vendored registry), so every other census
              * denominator is unchanged — the four sibling pins passing in the same run
              * proves it. Measured 1892 from the phpunit red, not predicted.
-             * Re-pinned 1892→1893 by the twin-flip lane: one first-party test file
-             * joined the tree — tests/Unit/Session/SyncPlay/
-             * SyncPlayTwinFlipErrorFrameTest.php. It drives the WS manager through its
-             * own test doubles and touches no Request property, so every other census
-             * denominator is unchanged — the four sibling pins passing in the same run
-             * proves it. Measured 1893 from the phpunit red, not predicted.
-             */
-    private const EXPECTED_PHP_FILES = 1893;
+              * Re-pinned 1892→1893 by the twin-flip lane: one first-party test file
+              * joined the tree — tests/Unit/Session/SyncPlay/
+              * SyncPlayTwinFlipErrorFrameTest.php. It drives the WS manager through its
+              * own test doubles and touches no Request property, so every other census
+              * denominator is unchanged — the four sibling pins passing in the same run
+              * proves it. Measured 1893 from the phpunit red, not predicted.
+              * Re-pinned 1893→1892 by the ce295f9d..9ec30913 rework: net −1
+              * first-party PHP file across the four-push batch — the signature-wiring
+              * commit added three (src/Plugins/Signature/TrustedSignaturesConfig.php,
+              * tests/Unit/Common/Container/Providers/PluginsProviderSignatureWiringTest.php,
+              * tests/Unit/Plugins/Signature/TrustedSignaturesConfigTest.php) and the
+              * hygiene sweep deleted four vestigial src/Plugin/*.php files; the
+              * relay-consumer lane modified only existing files. None of the added or
+              * deleted files reads or writes a Request property, so every other census
+              * denominator is unchanged — the four sibling pins passing in the same run
+              * proves it. Measured 1892 from the phpunit red (and `git ls-files
+              * '*.php' | wc -l` = 1892), not predicted. The next lane that moves a
+              * first-party PHP file re-pins again the same way.
+              */
+    private const EXPECTED_PHP_FILES = 1892;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

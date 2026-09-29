@@ -34,6 +34,13 @@ class UpnpIgdClient
     private const SSDP_MSEARCH = "M-SEARCH * HTTP/1.1\r\nHOST: %s:%d\r\n"
         . "MAN: \"ssdp:discover\"\r\nMX: 3\r\nST: %s\r\n\r\n";
 
+    /**
+     * Ceiling on silence between response bytes on the IGD HTTP/SOAP sockets —
+     * the same per-request budget the capped fetch paths use, so a stalled or
+     * slow-drip gateway bounds the worker exactly like a refused one.
+     */
+    private const RESPONSE_IDLE_TIMEOUT_SECONDS = LanEndpointGuard::FETCH_TIMEOUT_SECONDS;
+
     private LoggerInterface $logger;
     private int $timeout;
 
@@ -402,6 +409,56 @@ class UpnpIgdClient
     }
 
     /**
+     * Reads a full HTTP response off an already-requested socket, bounded on
+     * BOTH axes a hostile/throttling LAN gateway can attack: total bytes and
+     * idle silence.
+     *
+     * The raw `while (!feof) { fgets }` loops this replaces pinned an HTTP
+     * worker with ever-growing memory against a slow-drip device (no cap) and
+     * stalled it forever against a silent one (no read timeout) — the exact
+     * threat model docs/dev/BLOCKING_IO_EXCEPTIONS.md Exception 5 accepts only
+     * for BOUNDED reads. A reply over LanEndpointGuard::MAX_RESPONSE_BYTES or
+     * any gap over $idleTimeoutSeconds now fails loud (null), mirroring the
+     * capped fetch paths.
+     *
+     * @param resource $stream            Socket/stream already sent its request.
+     * @param int      $idleTimeoutSeconds Ceiling on silence between chunks.
+     *
+     * @return string|null The raw response, or null when the read was aborted.
+     */
+    private function readResponseBounded(
+        $stream,
+        int $idleTimeoutSeconds = self::RESPONSE_IDLE_TIMEOUT_SECONDS
+    ): ?string {
+        stream_set_timeout($stream, $idleTimeoutSeconds);
+
+        $response = '';
+        while (!feof($stream)) {
+            $chunk = @fgets($stream, 4096);
+            // A timed-out blocking read surfaces as false OR '' depending on the
+            // stream layer; only real EOF may end the read successfully.
+            if ($chunk === false || $chunk === '') {
+                $meta = stream_get_meta_data($stream);
+                if (!empty($meta['timed_out'])) {
+                    $this->logger->warning('UPnP: device response stalled past the idle read timeout, aborting');
+                    return null;
+                }
+                if ($chunk === false) {
+                    break;
+                }
+                continue;
+            }
+            $response .= $chunk;
+            if (strlen($response) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+                $this->logger->warning('UPnP: device response exceeded the size cap, aborting');
+                return null;
+            }
+        }
+
+        return $response;
+    }
+
+    /**
      * Performs an HTTP GET request using Swoole coroutine when available,
      * falling back to blocking fsockopen.
      *
@@ -430,6 +487,13 @@ class UpnpIgdClient
                 return null;
             }
 
+            // Same byte ceiling as readResponseBounded(): Swoole buffers the body
+            // itself, so an oversize reply is dropped here rather than handed on.
+            if (is_string($body) && strlen($body) > LanEndpointGuard::MAX_RESPONSE_BYTES) {
+                $this->logger->warning('UPnP: device response exceeded the size cap, dropping');
+                return null;
+            }
+
             return is_string($body) ? $body : null;
         }
 
@@ -447,15 +511,12 @@ class UpnpIgdClient
         );
         @fwrite($sock, $request);
 
-        $response = '';
-        while (!feof($sock)) {
-            $chunk = @fgets($sock, 4096);
-            if ($chunk === false) {
-                break;
-            }
-            $response .= $chunk;
-        }
+        $response = $this->readResponseBounded($sock);
         @fclose($sock);
+
+        if ($response === null) {
+            return null;
+        }
 
         if (preg_match('/\r\n\r\n(.*)$/s', $response, $matches)) {
             return $matches[1];
@@ -660,15 +721,12 @@ class UpnpIgdClient
 
         @fwrite($sock, $httpBody);
 
-        $response = '';
-        while (!feof($sock)) {
-            $chunk = @fgets($sock, 4096);
-            if ($chunk === false) {
-                break;
-            }
-            $response .= $chunk;
-        }
+        $response = $this->readResponseBounded($sock);
         @fclose($sock);
+
+        if ($response === null) {
+            return null;
+        }
 
         if (preg_match('/\r\n\r\n(.*)$/s', $response, $matches)) {
             return $matches[1];

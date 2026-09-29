@@ -230,12 +230,17 @@ Regression guard: `tests/Unit/Discovery/Ssdp/SsdpDiscoverySsrfTest.php`.
 | Site | `src/Network/UpnpIgdClient.php` — `discoverGateway()` (UDP M-SEARCH + `socket_select` loop), `asyncHttpGet()` (Swoole client or blocking `fsockopen`), `soapRequest()` (`stream_socket_client`, plain or TLS); plus the `NatPmpClient` / `StunClient` legs the same call chain drives |
 | Reached from | `POST /api/v1/admin/remote/portforward/{enable,disable}` and `GET …/status` (`AdminHubController::portForward*()`), synchronously via `PortForwardService::autoConfigure()` / `disable()` → `discoverGateway()` → `getExternalIp()` / `addPortMapping()` / `removePortMapping()`, on an HTTP worker |
 | Why it is sync | One-shot, admin-triggered control-plane operation against the LAN router; converting the whole `Phlix\Network` socket family to promises would touch every leg (SSDP, SOAP, NAT-PMP, STUN) to accelerate a call no viewer request ever makes. |
-| Bound | `discoverGateway()` is hard-bounded to `$timeout` (default 3000 ms) measured in **one** monotonic unit (`hrtime(true)` ms, H3 — the pre-fix code double-scaled elapsed-ms and fed `socket_select()` a negative timeout, busy-spinning one worker at 100 % CPU for the whole window) with `socket_select` slices ≤ 500 ms, matching `NatPmpClient`; `SO_RCVTIMEO`/`SO_SNDTIMEO` 3 s; every HTTP/SOAP socket 5 s connect. H1(d): the SSDP `LOCATION` must be an http(s) **literal IP equal to the datagram source** and every downstream fetch/SOAP target must be LAN-routable, enforced **before any socket** via `LanEndpointGuard`; `<controlURL>`s are same-host-pinned (`resolveUrl()` returns null for foreign absolutes); M4: the https SOAP branch verifies peer cert, name and SNI (self-signed IGD TLS is refused — the service falls back to NAT-PMP). L4: NAT-PMP/STUN replies from a source other than the configured gateway/STUN host are discarded. |
+| Bound | `discoverGateway()` is hard-bounded to `$timeout` (default 3000 ms) measured in **one** monotonic unit (`hrtime(true)` ms, H3 — the pre-fix code double-scaled elapsed-ms and fed `socket_select()` a negative timeout, busy-spinning one worker at 100 % CPU for the whole window) with `socket_select` slices ≤ 500 ms, matching `NatPmpClient`; `SO_RCVTIMEO`/`SO_SNDTIMEO` 3 s; every HTTP/SOAP socket 5 s connect. H1(d): the SSDP `LOCATION` must be an http(s) **literal IP equal to the datagram source** and every downstream fetch/SOAP target must be LAN-routable, enforced **before any socket** via `LanEndpointGuard`; `<controlURL>`s are same-host-pinned (`resolveUrl()` returns null for foreign absolutes); M4: the https SOAP branch verifies peer cert, name and SNI (self-signed IGD TLS is refused — the service falls back to NAT-PMP). L4: NAT-PMP/STUN replies from a source other than the configured gateway/STUN host are discarded. Reply reads in `asyncHttpGet()` (both arms) and `soapRequest()` go through `readResponseBounded()`: the same 1 MiB ceiling as the fetch paths (`LanEndpointGuard::MAX_RESPONSE_BYTES`) and a 5 s ceiling on the gap between chunks (`RESPONSE_IDLE_TIMEOUT_SECONDS`, mirroring `FETCH_TIMEOUT_SECONDS`); oversize or stalled reads fail loud (null). As in Exception 4, the caps bound bytes and per-gap silence, not wall clock — a drip attacker that keeps a chunk arriving inside every 5 s gap under the 1 MiB ceiling is the pathological bound, never an unbounded read. |
 | Cost | Zero against refused or spoofed targets (refused pre-socket); against a silent LAN router worst case ≈ the discovery budget (3 s) plus a bounded 5 s per follow-up — one of the 14 HTTP workers, only while an operator clicks port-forward. |
 
 Regression guards: `tests/Unit/Network/UpnpIgdClientTest.php` (LOCATION source-pin
-and cross-host `controlURL` refusals via reflection),
-`tests/Unit/Network/NatPmpClientTest.php`, `tests/Unit/Network/StunClientTest.php`,
+and cross-host `controlURL` refusals via reflection; bounded-read oversize abort,
+short-reply passthrough and stalled-stream timeout via reflection on
+`readResponseBounded()`),
+`tests/Unit/Network/NatPmpClientTest.php` (wrong-source discard then correct-source
+accept, forked-responder wire tests),
+`tests/Unit/Network/StunClientTest.php` (wrong-source reject, correct-source accept,
+forked-responder wire tests),
 `tests/Unit/Common/Net/LanEndpointGuardTest.php`.
 
 ---
@@ -252,7 +257,9 @@ and cross-host `controlURL` refusals via reflection),
 
 Regression guards: `tests/Unit/Dlna/DeviceRegistrySsrfTest.php`,
 `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoverySsrfTest.php`,
-`tests/Unit/Dlna/RendererControlClientTest.php` (`@group network`),
+`tests/Unit/Dlna/RendererControlClientLanGateTest.php` (constructor LAN-gate throws,
+executed pre-socket — the legacy `RendererControlClientTest.php` is `@group network`
+and needs a live renderer, so it guards nothing in the default suite),
 `tests/Unit/Common/Net/LanEndpointGuardTest.php`.
 
 ---

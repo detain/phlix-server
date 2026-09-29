@@ -73,6 +73,20 @@ final class LanEndpointGuardTest extends TestCase
         $this->assertFalse(LanEndpointGuard::isRefusedAddress('192.168.1.100'));
     }
 
+    /**
+     * Device-lane rework (item 4): IPv6 multicast must be refused the way IPv4
+     * 224.0.0.0/4 already is — ff00::/8 joins REFUSED_CIDRS. ff02::1 is the
+     * link-local "all nodes" group a device-facing fetch must never target.
+     */
+    public function testIsRefusedAddressBlocksIpv6Multicast(): void
+    {
+        $this->assertTrue(LanEndpointGuard::isRefusedAddress('ff02::1'));
+        $this->assertTrue(LanEndpointGuard::isRefusedAddress('ff12::dead:beef'));
+        $this->assertTrue(LanEndpointGuard::isRefusedAddress('::ffff:224.0.0.255'));
+        // Global-scope v6 is NOT refused — it fails the LAN allowlist instead.
+        $this->assertFalse(LanEndpointGuard::isRefusedAddress('2001:db8::1'));
+    }
+
     public function testSameHostAbsolute(): void
     {
         $this->assertSame(

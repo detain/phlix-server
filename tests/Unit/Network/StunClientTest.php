@@ -10,6 +10,7 @@ use Phlix\Network\StunClient;
 use Phlix\Tests\Support\Coroutine\RunsInCoroutine;
 use Psr\Log\AbstractLogger;
 use Psr\Log\NullLogger;
+use Socket;
 use Stringable;
 
 /**
@@ -299,6 +300,170 @@ class StunClientTest extends TestCase
         $this->assertNotFalse($colon, "unexpected socket name: {$name}");
 
         return (int) substr($name, $colon + 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Device-lane rework (item 3) — the L4 binding-reply source pin, executed.
+    // Before these cases the wrong-source discard cited in
+    // docs/dev/BLOCKING_IO_EXCEPTIONS.md Exception 5 had zero coverage: the
+    // only getPublicIp test above asserts the UNRESOLVABLE-host null, which
+    // never reaches the check.
+    //
+    // The server is configured as 'localhost' rather than an IP literal:
+    // getPublicIp() treats gethostbyname($server) === $server as a resolution
+    // failure, which an IP-literal config trips into a pre-send refusal.
+    // -----------------------------------------------------------------------
+
+    public function testGetPublicIpDiscardsBindingSuccessFromWrongSource(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl/posix are required for the forked-responder harness.');
+        }
+        if (gethostbyname('localhost') !== '127.0.0.1') {
+            $this->markTestSkipped('this host does not resolve localhost to 127.0.0.1.');
+        }
+
+        $port = $this->loopbackUdpPortOn('127.0.0.1');
+        $server = $this->bindUdp('127.0.0.1', $port);
+
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            // Child: sniffs the real binding request, then answers it with a
+            // structurally PERFECT success from a different source address.
+            $rogue = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+            if ($rogue === false || @socket_bind($rogue, '127.0.0.2', 0) === false) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            $read = [$server];
+            $write = null;
+            $except = null;
+            if (@socket_select($read, $write, $except, 5) < 1) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            $buf = '';
+            $clientIp = '';
+            $clientPort = 0;
+            if (@socket_recvfrom($server, $buf, 1024, 0, $clientIp, $clientPort) === false) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            @socket_sendto($rogue, $this->stunSuccessReply('198.51.100.7'), 32, 0, $clientIp, $clientPort);
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+
+        socket_close($server);
+
+        $client = new StunClient(new NullLogger(), 'localhost', $port);
+        try {
+            $this->assertNull(
+                $client->getPublicIp(),
+                'a STUN success from a host other than the configured server must be discarded (L4); '
+                . 'without the pin this response parses as 198.51.100.7'
+            );
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+    }
+
+    public function testGetPublicIpAcceptsReplyFromTheConfiguredSource(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl/posix are required for the forked-responder harness.');
+        }
+        if (gethostbyname('localhost') !== '127.0.0.1') {
+            $this->markTestSkipped('this host does not resolve localhost to 127.0.0.1.');
+        }
+
+        $port = $this->loopbackUdpPortOn('127.0.0.1');
+        $server = $this->bindUdp('127.0.0.1', $port);
+
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            // Same well-formed success, but from the socket the request hit —
+            // the positive control proving the discard test is not just
+            // pinning a timeout.
+            $read = [$server];
+            $write = null;
+            $except = null;
+            if (@socket_select($read, $write, $except, 5) < 1) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            $buf = '';
+            $clientIp = '';
+            $clientPort = 0;
+            if (@socket_recvfrom($server, $buf, 1024, 0, $clientIp, $clientPort) === false) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            @socket_sendto($server, $this->stunSuccessReply('203.0.113.9'), 32, 0, $clientIp, $clientPort);
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+
+        socket_close($server);
+
+        $client = new StunClient(new NullLogger(), 'localhost', $port);
+        try {
+            $this->assertSame(
+                '203.0.113.9',
+                $client->getPublicIp(),
+                'a XOR-MAPPED-ADDRESS success from the configured server must parse normally'
+            );
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+    }
+
+    /**
+     * Learn an unused loopback UDP port by binding and releasing it.
+     */
+    private function loopbackUdpPortOn(string $address): int
+    {
+        $probe = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        $this->assertNotFalse($probe);
+        $this->assertNotFalse(@socket_bind($probe, $address, 0), 'could not bind an ephemeral UDP port');
+        $port = 0;
+        $host = '';
+        $this->assertNotFalse(socket_getsockname($probe, $host, $port));
+        socket_close($probe);
+
+        return $port;
+    }
+
+    /**
+     * A UDP socket bound to address:port (kept by the caller).
+     */
+    private function bindUdp(string $address, int $port): Socket
+    {
+        $server = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        $this->assertNotFalse($server);
+        if (@socket_bind($server, $address, $port) === false) {
+            $reason = socket_strerror(socket_last_error($server));
+            socket_close($server);
+            $this->fail("cannot bind {$address}:{$port} on this host: {$reason}");
+        }
+
+        return $server;
+    }
+
+    /**
+     * RFC 5389 Binding Success with a single XOR-MAPPED-ADDRESS (0x0020):
+     * 20-byte header (type 0x0101, cookie) + attr(4-byte header + 8-byte value).
+     * The client parses attributes from STUN_HEADER_SIZE and XORs the address
+     * with the magic cookie; the transaction id is not checked, so any 12
+     * random bytes complete the frame.
+     */
+    private function stunSuccessReply(string $claimedIp): string
+    {
+        $cookie = 0x2112A442;
+        $xoredIp = '';
+        foreach (explode('.', $claimedIp) as $index => $octet) {
+            $maskByte = ($cookie >> (24 - 8 * $index)) & 0xFF;
+            $xoredIp .= chr(((int) $octet) ^ $maskByte);
+        }
+
+        $attr = pack('n', 0x0020) . pack('n', 8) . pack('n', 0x0001)
+            . pack('n', 40531 ^ 0x2112) . $xoredIp;
+
+        return pack('n', 0x0101) . pack('n', strlen($attr)) . pack('N', $cookie)
+            . random_bytes(12) . $attr;
     }
 }
 

@@ -466,8 +466,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * none names a Request property — the S433/S434 pattern again, only
               * this denominator moves. Measured 1910 from the phpunit red, not
               * predicted.
+              * Re-pinned 1910→1911 by the device-lane REWORK-LITE close (the
+              * review of d052b488): adds one first-party PHP file
+              * (tests/Unit/Dlna/RendererControlClientLanGateTest.php — the
+              * executed constructor LAN-gate coverage the Exception 6 citation
+              * demanded; the legacy @group network file guards nothing in the
+              * default suite). Every other rework test appended into an existing
+              * file. Names no Request property; only this denominator moves.
+              * Measured 1911 from the phpunit red, not predicted.
               */
-    private const EXPECTED_PHP_FILES = 1910;
+    private const EXPECTED_PHP_FILES = 1911;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

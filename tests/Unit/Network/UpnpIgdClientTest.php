@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Common\Net\LanEndpointGuard;
 use Phlix\Network\UpnpIgdClient;
 use Psr\Log\NullLogger;
 use ReflectionMethod;
@@ -114,5 +115,86 @@ class UpnpIgdClientTest extends TestCase
         $this->assertNull($method->invoke($this->client, $base, 'http://10.9.9.9/ctrl'));
         // Metadata host.
         $this->assertNull($method->invoke($this->client, $base, 'http://169.254.169.254/ctrl'));
+    }
+
+    // ------------------------------------------------------------------
+    // Device-lane rework (item 1): Exception 5 reply reads are bounded on
+    // bytes AND idle silence — the claim that soapRequest()/asyncHttpGet()
+    // were unbounded while the register said "capped the same way".
+    // ------------------------------------------------------------------
+
+    /**
+     * A hostile gateway must not grow the worker without bound: the reader
+     * aborts once the reply crosses the shared 1 MiB ceiling. The stream
+     * position proves it STOPPED there instead of draining the socket.
+     */
+    public function testReadResponseBoundedAbortsOversizedReply(): void
+    {
+        $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
+        $method->setAccessible(true);
+
+        $stream = fopen('php://memory', 'r+b');
+        $this->assertIsResource($stream);
+        // No newlines: every fgets delivers a full 4095-byte chunk.
+        fwrite($stream, str_repeat('A', LanEndpointGuard::MAX_RESPONSE_BYTES + 8192));
+        rewind($stream);
+
+        $result = $method->invoke($this->client, $stream);
+        $consumed = ftell($stream);
+        fclose($stream);
+
+        $this->assertNull($result, 'an over-cap reply must fail loud, never buffer');
+        $this->assertLessThanOrEqual(
+            LanEndpointGuard::MAX_RESPONSE_BYTES + 4096,
+            $consumed,
+            sprintf('the reader must stop at the cap plus one fgets chunk (consumed %d)', $consumed)
+        );
+    }
+
+    /**
+     * Positive control: a complete short reply passes through byte-identical.
+     */
+    public function testReadResponseBoundedReturnsCompleteShortReply(): void
+    {
+        $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
+        $method->setAccessible(true);
+
+        $payload = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\n\r\n<xml>ok</xml>";
+        $stream = fopen('php://memory', 'r+b');
+        $this->assertIsResource($stream);
+        fwrite($stream, $payload);
+        rewind($stream);
+
+        $this->assertSame($payload, $method->invoke($this->client, $stream));
+        fclose($stream);
+    }
+
+    /**
+     * The stalled-drip case: bytes arrive, then silence forever. The read must
+     * sit out exactly the idle ceiling and return null — the pre-fix loop
+     * pinned an HTTP worker on this stream indefinitely.
+     */
+    public function testReadResponseBoundedAbortsStalledStream(): void
+    {
+        $pair = @stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        if ($pair === false) {
+            $this->markTestSkipped('stream_socket_pair is unavailable on this host.');
+        }
+        [$mine, $peer] = $pair;
+        $this->assertNotFalse(fwrite($mine, "HTTP/1.1 200 OK\r\n"));
+
+        $method = new ReflectionMethod(UpnpIgdClient::class, 'readResponseBounded');
+        $method->setAccessible(true);
+
+        $start = hrtime(true);
+        $result = $method->invoke($this->client, $mine, 1);
+        $elapsedMs = (hrtime(true) - $start) / 1_000_000.0;
+
+        fclose($mine);
+        fclose($peer);
+
+        $this->assertNull($result, 'an idle timeout must abort the read, not hand on partial bytes');
+        $this->assertGreaterThanOrEqual(900.0, $elapsedMs, 'the read must really wait out the 1 s ceiling');
+        $this->assertLessThan(3000.0, $elapsedMs, '…and come back bounded, never hang');
     }
 }

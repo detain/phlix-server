@@ -311,7 +311,9 @@ class SsdpDiscovery
             return null;
         }
 
-        $xml = @simplexml_load_string($xmlContent);
+        // LIBXML_NONET: device bytes are untrusted — no external entity fetches
+        // (XXE), parity with every other device-facing parse in the family.
+        $xml = @simplexml_load_string($xmlContent, 'SimpleXMLElement', LIBXML_NONET);
         if ($xml === false) {
             $this->logger->warning('SSDP: Invalid XML in device description', ['url' => $normalized]);
             return null;

@@ -55,6 +55,7 @@ final class LanEndpointGuard
         '::1/128',          // IPv6 loopback
         'fe80::/10',        // IPv6 link-local
         'fc00::/7',         // IPv6 unique-local (mirrors the refused set for v6)
+        'ff00::/8',         // IPv6 multicast (mirrors v4 224.0.0.0/4)
     ];
 
     /** Hard ceiling on any single device-document/control response body. */

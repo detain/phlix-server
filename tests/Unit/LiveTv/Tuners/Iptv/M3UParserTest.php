@@ -283,4 +283,79 @@ M3U;
 
         $this->assertSame(4096, $seenMax);
     }
+
+    // ---- 61e27008 review follow-up: one refused entry counts once ----
+
+    public function testRefusedExtInfPairCountsExactlyOneDrop(): void
+    {
+        // Pre-fix the pair's EXTINF line counted a drop AND the refused URL
+        // line was re-tested by the bare-entry path, counting it a second
+        // time (dropped=2 for one dead entry).
+        $content = "#EXTM3U\n#EXTINF:-1,SSRF\nfile:///etc/passwd\n";
+
+        $logger = new M3UDropCountingLogger();
+        $entries = (new M3UParser($logger))->parse($content);
+
+        $this->assertCount(0, $entries);
+        $this->assertSame([1], $logger->droppedTotals, 'A refused EXTINF pair must count as ONE dropped entry');
+    }
+
+    public function testConsecutiveRefusedExtInfPairsEachCountOnce(): void
+    {
+        $content = "#EXTM3U\n"
+            . "#EXTINF:-1,A\nhttp://127.0.0.1:9999/a\n"
+            . "#EXTINF:-1,B\nhttp://169.254.169.254/b\n";
+
+        $logger = new M3UDropCountingLogger();
+        $entries = (new M3UParser($logger))->parse($content);
+
+        $this->assertCount(0, $entries);
+        $this->assertSame([2], $logger->droppedTotals, 'Two dead pairs count two drops, not four');
+    }
+
+    public function testCommalessExtInfStillFallsBackToBareUrlEntry(): void
+    {
+        // The malformed-TAG path must NOT consume the URL line: comma-less
+        // EXTINF tags fail the tag regex, and the single-line fallback below
+        // still turns the following URL into an entry (pre-existing law).
+        $content = "#EXTM3U\n#EXTINF:-1 No Comma Channel\nhttp://iptv.example.com/live.m3u8\n";
+
+        $logger = new M3UDropCountingLogger();
+        $entries = (new M3UParser($logger))->parse($content);
+
+        $this->assertCount(1, $entries);
+        $this->assertSame('http://iptv.example.com/live.m3u8', $entries[0]->url);
+        $this->assertSame([1], $logger->droppedTotals, 'The dead TAG line is the one counted drop');
+    }
+
+    public function testRefusedBareLinesStillCountOnceEach(): void
+    {
+        $content = "#EXTM3U\nfile:///etc/shadow\nhttp://127.0.0.1:1/x\n";
+
+        $logger = new M3UDropCountingLogger();
+        $entries = (new M3UParser($logger))->parse($content);
+
+        $this->assertCount(0, $entries);
+        $this->assertSame([2], $logger->droppedTotals);
+    }
+}
+
+/**
+ * Collects the parser's end-of-run 'dropped' summaries so the tests can pin
+ * the count-once law. Co-located double (phpcs-tests allows multiple classes
+ * per file).
+ */
+class M3UDropCountingLogger extends \Psr\Log\AbstractLogger
+{
+    /** @var array<int, int> the 'dropped' value of each summary log */
+    public array $droppedTotals = [];
+
+    public function log($level, $message, array $context = []): void
+    {
+        if ($message === 'M3UParser: dropped entries failing the stream URL policy') {
+            /** @var int $dropped */
+            $dropped = $context['dropped'];
+            $this->droppedTotals[] = $dropped;
+        }
+    }
 }

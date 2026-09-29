@@ -151,6 +151,12 @@ final class AdminLiveTvController
      *
      * PUT /api/v1/admin/livetv/tuners/{id}
      *
+     * Only name/enabled are mutable through this endpoint — the IPTV
+     * playlist URL is boot-config data (config/livetv.php), so nothing
+     * written here can stale
+     * {@see \Phlix\LiveTv\Tuners\Iptv\IptvTunerDriver::clearPlaylistCache()};
+     * see that method's docblock for the documented staleness vectors.
+     *
      * @param Request              $request Body: { name?: string, enabled?: bool }
      * @param array<string, string> $params  Must contain 'id'.
      *

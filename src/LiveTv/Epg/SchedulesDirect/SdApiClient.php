@@ -170,7 +170,11 @@ class SdApiClient
      * RFC-3986 path-safe, so the encoder is an identity map on valid input.
      *
      * @throws \InvalidArgumentException On any character outside [A-Za-z0-9._-]
-     *         (empty strings included).
+     *         (empty strings included), and on dot-only tokens — a bare run of
+     *         dots passes that byte allowlist yet {@see rawurlencode()} keeps
+     *         "." literal (it is an RFC-3986 unreserved character), so
+     *         ".." would ride through as the traversal segment
+     *         "/headend/../station".
      */
     public static function stationPath(string $systemId): string
     {
@@ -179,6 +183,13 @@ class SdApiClient
                 'Invalid Schedules Direct lineup/system ID %s: expected a bare token matching %s.',
                 json_encode($systemId),
                 self::SYSTEM_ID_PATTERN
+            ));
+        }
+
+        if (preg_match('/^\.+$/', $systemId)) {
+            throw new \InvalidArgumentException(sprintf(
+                'Invalid Schedules Direct lineup/system ID %s: dot-only tokens are refused (path-segment traversal).',
+                json_encode($systemId)
             ));
         }
 

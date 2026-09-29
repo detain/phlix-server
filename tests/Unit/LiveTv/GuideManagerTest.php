@@ -233,4 +233,81 @@ class GuideManagerTest extends TestCase
         $this->assertSame(16, mb_strlen((string) $params[11]));
         $this->assertSame(32, mb_strlen((string) $params[13]));
     }
+
+    // ---- F-11 follow-up: oversized feed ids are REFUSED, never clamped ----
+
+    public function testOverlongProgramIdIsRefusedWithoutInsert(): void
+    {
+        $insert = $this->captureNextInsert();
+
+        try {
+            $this->manager->upsertProgram([
+                'program_id' => str_repeat('p', 37),
+                'channel_id' => 'ch1',
+                'title' => 'ok',
+                'start_time' => 1000,
+                'end_time' => 2000,
+            ]);
+            $this->fail('Expected an oversized program_id refusal.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('program_id exceeds the 36-character id column width', $e->getMessage());
+        }
+
+        $this->assertNull($insert(), 'A refused record must never reach the INSERT');
+    }
+
+    public function testOverlongChannelIdIsRefusedWithoutInsert(): void
+    {
+        $insert = $this->captureNextInsert();
+
+        try {
+            $this->manager->upsertProgram([
+                'channel_id' => str_repeat('c', 37),
+                'title' => 'ok',
+                'start_time' => 1000,
+                'end_time' => 2000,
+            ]);
+            $this->fail('Expected an oversized channel_id refusal.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('channel_id exceeds the 36-character id column width', $e->getMessage());
+        }
+
+        $this->assertNull($insert(), 'A refused record must never reach the INSERT');
+    }
+
+    public function testIdOfExactlyColumnWidthIsAccepted(): void
+    {
+        $insert = $this->captureNextInsert();
+        $id36 = str_repeat('a', 36);
+
+        $this->manager->upsertProgram([
+            'program_id' => $id36,
+            'channel_id' => $id36,
+            'title' => 'ok',
+            'start_time' => 1000,
+            'end_time' => 2000,
+        ]);
+
+        $params = $insert();
+        $this->assertNotNull($params);
+        $this->assertSame($id36, $params[0]);
+        $this->assertSame($id36, $params[1]);
+    }
+
+    public function testImportGuideDataCountsOversizedIdRefusalAsError(): void
+    {
+        // The throw must land in the batch loop's per-record error counting —
+        // one malformed id may neither abort the batch nor count as imported.
+        $this->mockDb->method('query')->willReturn(null);
+
+        $result = $this->manager->importGuideData([
+            ['channel_id' => 'ch-ok', 'title' => 'Good', 'start_time' => 1000, 'end_time' => 2000],
+            ['channel_id' => str_repeat('x', 40), 'title' => 'Bad', 'start_time' => 1000, 'end_time' => 2000],
+            ['channel_id' => 'ch-ok2', 'title' => 'Good2', 'start_time' => 1000, 'end_time' => 2000],
+        ]);
+
+        $this->assertSame(2, $result['imported']);
+        $this->assertCount(1, $result['errors']);
+        $this->assertStringContainsString('channel_id exceeds the 36-character id column width', $result['errors'][0]);
+    }
 }

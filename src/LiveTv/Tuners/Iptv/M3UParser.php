@@ -156,13 +156,22 @@ class M3UParser
 
             // Parse extended info line
             if (str_starts_with($line, '#EXTINF:')) {
-                $entry = $this->parseExtInfLine($line, $lines[$i + 1] ?? '');
-                if ($entry !== null) {
-                    $entries[] = $entry;
+                $parsed = $this->parseExtInfLine($line, $lines[$i + 1] ?? '');
+                if ($parsed['entry'] !== null) {
+                    $entries[] = $parsed['entry'];
                     $i += 2;
                     continue;
                 }
                 $dropped++;
+                // A refused EXTINF pair is ONE dropped entry. When the pair
+                // died on its URL line the refusal was reached against that
+                // exact line here; re-testing it as a bare entry below
+                // counted the same drop twice. A malformed TAG line (or a
+                // URL line the single-line path would still accept) never
+                // consumes: comma-less "#EXTINF:-1 Name" playlists rely on
+                // the fallback below picking up the URL that follows.
+                $i += $parsed['urlRefused'] ? 2 : 1;
+                continue;
             }
 
             // Handle entries without #EXTINF (single line format)
@@ -232,9 +241,14 @@ class M3UParser
      *
      * @param string $extInfLine The #EXTINF line
      * @param string $urlLine The next line containing the URL
-     * @return M3UEntry|null Parsed entry or null if URL is invalid/refused
+     *
+     * @return array{entry: M3UEntry|null, urlRefused: bool} `entry` is the
+     *         parsed pair or null on refusal; `urlRefused` is true exactly
+     *         when the pair died on a URL-bearing line that the bare-line
+     *         path would refuse identically — telling {@see self::parse()}
+     *         to consume both lines so one dropped entry is counted once.
      */
-    private function parseExtInfLine(string $extInfLine, string $urlLine): ?M3UEntry
+    private function parseExtInfLine(string $extInfLine, string $urlLine): array
     {
         // Parse #EXTINF:-1 attributes... channel name
         // Format: #EXTINF:-1 tvg-id="1" tvg-name="Name" tvg-chno="5" group-title="Group",Channel Name
@@ -243,7 +257,7 @@ class M3UParser
         // Extract attributes and channel name
         // Note: Duration can be -1 for radio channels, so we use -?\d+
         if (!preg_match('/^#EXTINF:(-?\d+)\s*(.*)?,(.+)$/', $extInfLine, $matches)) {
-            return null;
+            return ['entry' => null, 'urlRefused' => false];
         }
 
         $attributesStr = $matches[2];
@@ -294,16 +308,31 @@ class M3UParser
 
         $url = trim($urlLine);
 
-        // Validate URL shape, then run it through the stream jail.
-        if ($url === '' || str_starts_with($url, '#') || !filter_var($url, FILTER_VALIDATE_URL)) {
-            return null;
+        if ($url === '' || str_starts_with($url, '#')) {
+            // No URL datum to consume: the next line stands on its own and
+            // the main loop judges it exactly as before.
+            return ['entry' => null, 'urlRefused' => false];
         }
 
-        if (!$this->acceptsStreamUrl($url)) {
-            return null;
+        // Validate URL shape, then run it through the stream jail. The jail
+        // verdict also decides line consumption: whatever it refuses here the
+        // bare-line path would refuse identically below, so the pair owns
+        // that line and reports it refused (count-once law).
+        $shapeOk = filter_var($url, FILTER_VALIDATE_URL) !== false;
+        $guardOk = $this->acceptsStreamUrl($url);
+
+        if (!$guardOk) {
+            return ['entry' => null, 'urlRefused' => true];
         }
 
-        return new M3UEntry(
+        if (!$shapeOk) {
+            // Shape-invalid yet jail-clean: keep the pre-existing behaviour
+            // of handing the line to the single-line fallback below, which
+            // accepts jail-clean URLs without the filter_var check.
+            return ['entry' => null, 'urlRefused' => false];
+        }
+
+        return ['entry' => new M3UEntry(
             url: $url,
             name: $channelName,
             tvgId: $tvgId,
@@ -311,7 +340,7 @@ class M3UParser
             group: $groupTitle,
             logo: $tvgLogo,
             isRadio: $isRadio,
-        );
+        ), 'urlRefused' => false];
     }
 
     /**

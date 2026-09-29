@@ -114,6 +114,9 @@ class SdApiClientTest extends TestCase
         return [
             'empty' => [''],
             'traversal' => ['../x'],
+            'bare dot-dot' => ['..'],
+            'bare dot-dot-dot' => ['...'],
+            'single dot' => ['.'],
             'double-encoded traversal' => ['%2e%2e%2f'],
             'embedded slash' => ['a/b'],
             'space' => ['a b'],

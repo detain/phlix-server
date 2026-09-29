@@ -410,6 +410,21 @@ class GuideManager
         $programId = is_string($programIdRaw) ? $programIdRaw : $this->generateUuid();
         $channelId = is_string($data['channel_id'] ?? null) ? (string) $data['channel_id'] : '';
 
+        // F-11 follow-up: program_id/channel_id are CHAR(36) (migrations/
+        // 028_livetv_base.sql:56/:57), so an oversized feed id hits the same
+        // MySQL 1406 batch-abort the text clamps above defend against — but
+        // unlike guide TEXT an id must NEVER be clamped: a truncated id
+        // silently mis-keys the row, and the ON DUPLICATE KEY UPDATE below
+        // would then overwrite an unrelated sibling program while orphaning
+        // the real one. Legit ids are fixed-width by construction (UUIDs,
+        // the SD md5 ids), so an over-long id is malformed feed data by
+        // definition: refuse it loud and SKIP the record. Both import paths
+        // (importGuideData, SdEpgService) wrap every record in try/catch
+        // with an error counter, so the throw is counted per-record and the
+        // batch survives — the honest shape of "skip with counted log" here.
+        self::assertFitsIdColumn('program_id', $programId);
+        self::assertFitsIdColumn('channel_id', $channelId);
+
         // F-11: guide text arrives from third-party EPG feeds (XMLTV, Schedules
         // Direct) with NO length contract. An over-long value aborts the whole
         // import batch with MySQL 1406 under strict mode, so every sized column
@@ -486,6 +501,37 @@ class GuideManager
         $this->logger->debug('Program upserted', ['program_id' => $programId, 'title' => $title]);
 
         return $this->getProgram($programId);
+    }
+
+    /**
+     * Width of the CHAR(36) id columns on livetv_programs (program_id,
+     * channel_id — migrations/028_livetv_base.sql:56/:57).
+     */
+    private const ID_COLUMN_CHARS = 36;
+
+    /**
+     * Refuse a record whose id-column value cannot fit CHAR(36).
+     *
+     * Deliberately NOT a clamp (see the F-11 follow-up note in
+     * {@see self::upsertProgram()}): truncation of an id silently re-keys
+     * the row, so malformed feed ids fail loud instead. The echoed value is
+     * bounded — a hostile feed could carry megabytes in these fields and
+     * exception text flows into import error lists and logs.
+     *
+     * @throws \InvalidArgumentException When the value exceeds the column width.
+     */
+    private static function assertFitsIdColumn(string $column, string $value): void
+    {
+        if (mb_strlen($value, 'UTF-8') <= self::ID_COLUMN_CHARS) {
+            return;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            'Refusing guide program record: %s exceeds the %d-character id column width: %s',
+            $column,
+            self::ID_COLUMN_CHARS,
+            json_encode(mb_substr($value, 0, 80, 'UTF-8') . '…')
+        ));
     }
 
     /**

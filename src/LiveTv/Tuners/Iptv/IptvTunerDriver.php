@@ -306,6 +306,23 @@ class IptvTunerDriver implements TunerDriverInterface
     /**
      * Drop all cached playlists (e.g. after the operator edits the source).
      *
+     * Reviewed wiring verdict (61e27008 follow-up): this seam has NO product
+     * callers today, and none can exist yet. The only tuner-mutating admin
+     * endpoint ({@see \Phlix\Server\Http\Controllers\Admin\AdminLiveTvController::updateTuner()})
+     * writes just name/enabled to the livetv_tuners row — a playlist URL is
+     * boot-config data (config/livetv.php `iptv.sources[].playlist_url`,
+     * read once by {@see IptvTunerDriverFactory::build()}; the DB table has
+     * no playlist_url column) and the driver does not consult the enabled
+     * flag. So no API path can change what this cache stores. Remaining
+     * staleness vectors, by design: (a) direct config-file/DB edits —
+     * realised at the next boot or discovery re-register — and (b) content
+     * rotation at an unchanged playlist URL, bounded by
+     * `playlist_cache_ttl_secs`. The cache is per process-local driver
+     * instance; a cross-worker purge is out of scope until such a caller
+     * exists. When a future endpoint DOES make playlist_url mutable, it must
+     * call this on the live instance(s) (LiveTvManager keeps drivers only
+     * via its ctor `$additionalDrivers`; none are wired into DI today).
+     *
      * @return void
      */
     public function clearPlaylistCache(): void

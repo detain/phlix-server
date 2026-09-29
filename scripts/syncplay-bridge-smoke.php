@@ -27,6 +27,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Session\SyncPlay\Messages;
+use Phlix\Session\SyncPlay\SyncPlayBridge;
 use Phlix\Session\SyncPlay\SyncPlayBridgeListener;
 use Phlix\Session\SyncPlay\SyncPlayBridgePublisher;
 use Phlix\Session\SyncPlay\SyncPlayManager;
@@ -40,6 +41,12 @@ $socket = $argv[1] ?? (sys_get_temp_dir() . '/syncplay-bridge-smoke-' . getmypid
 @unlink($socket);
 
 $groupId = 'sp_' . bin2hex(random_bytes(8));
+
+// Pin the bridge token BEFORE the fork — exactly what start.php does pre-Worker::runAll().
+// initToken() resolves config → PHLIX_SYNCPLAY_BRIDGE_TOKEN → fresh random; forking after
+// the pin makes the child inherit the SAME secret through memory. Without this each
+// process lazy-boots its own random token and every cross-process frame fails closed.
+SyncPlayBridge::initToken();
 
 $pid = pcntl_fork();
 if ($pid < 0) {

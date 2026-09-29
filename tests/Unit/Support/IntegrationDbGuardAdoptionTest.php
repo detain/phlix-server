@@ -417,8 +417,19 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * PK-ness of `instance_id`, `ON DUPLICATE KEY UPDATE` freezing `first_seen_at`
      * while `last_seen_at` rides, and CHAR(64) PAD SPACE equality are live-server
      * properties the upsert depends on.
+     *
+     * 62 since the H-1 security rework's (commit 231d76f1)
+     * `tests/Integration/Auth/FirstAdminElectionBackfill109RealDbTest.php`: the
+     * first-admin sentinel takeover rides a DATA-STATE interaction across three
+     * real tables — the virgin `first_admin_election` a 108-only upgrade leaves
+     * behind, CLI-seeded `users` rows that never stamp it, and the transactional
+     * `INSERT IGNORE … SELECT … FOR UPDATE` serialisation the election rides —
+     * and the 109 backfill's INSERT-SELECT gating, COALESCE stamp choice,
+     * nil-marker healing and replay-safety are live DML semantics no stub can
+     * model, so the proof drives the REAL MigrationRunner and AuthManager::register()
+     * against throwaway scratch databases.
      */
-    private const EXPECTED_ADOPTERS = 61;
+    private const EXPECTED_ADOPTERS = 62;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

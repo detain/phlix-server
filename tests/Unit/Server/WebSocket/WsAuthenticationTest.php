@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\JwtHandler;
 use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionPool;
+use Phlix\Server\WebSocket\SyncPlayAuthMiddleware;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Server\WebSocket\WebSocketServer;
 use Phlix\Session\SyncPlay\Messages;
@@ -638,5 +639,369 @@ class WsAuthenticationTest extends TestCase
     private function frameData(array $frame): array
     {
         return $frame;
+    }
+
+    // ------------------------------------------------------------------
+    // Transitional dual-carrier handshake law: `Sec-WebSocket-Protocol:
+    // bearer, <jwt>` alongside the legacy `?token=<jwt>` (estate policy
+    // WEBSOCKET_URL_QUERY_REFUSED; mirrors phlix-hub :8804 S237/S355).
+    // ------------------------------------------------------------------
+
+    /**
+     * Build a REAL parsed WS upgrade Request with optional query + subprotocol
+     * carriers, exactly as a client would send them on the wire.
+     */
+    private function makeHandshakeRequest(?string $queryToken, ?string $subprotocol = null): \Workerman\Protocols\Http\Request
+    {
+        $query = $queryToken === null ? '' : '?token=' . $queryToken;
+        $raw = "GET /syncplay{$query} HTTP/1.1\r\nHost: localhost\r\n";
+        if ($subprotocol !== null) {
+            $raw .= "Sec-WebSocket-Protocol: {$subprotocol}\r\n";
+        }
+
+        return new \Workerman\Protocols\Http\Request($raw . "\r\n");
+    }
+
+    /**
+     * @return array{host: string, port: int, jwt_secret: string}
+     */
+    private function authConfig(): array
+    {
+        return ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+    }
+
+    /**
+     * Bearer-subprotocol-only carrier authenticates and gets the marker echoed
+     * on the 101 — never the token.
+     */
+    public function testBearerSubprotocolCarrierAuthenticatesAndEchoesMarker(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-bearer');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect(
+            $mockConnection,
+            $this->makeHandshakeRequest(null, 'bearer, ' . $token)
+        );
+
+        $connections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $connections);
+        $this->assertTrue($connections[0]->isAuthenticated());
+        $this->assertSame('user-bearer', $connections[0]->getUserId());
+        $this->assertFalse($callTracker['close']);
+        $this->assertSame(
+            ['Sec-WebSocket-Protocol: bearer'],
+            $mockConnection->headers,
+            'The 101 must echo the bearer marker so the browser WHATWG negotiation succeeds'
+        );
+        foreach ($mockConnection->headers as $header) {
+            $this->assertStringNotContainsString($token, $header, 'A credential is not a protocol-id.');
+        }
+    }
+
+    /**
+     * Legacy ?token=-only carrier still authenticates (compat) and, negotiating
+     * no subprotocol, must get NO echo (RFC 6455 §4.1: answering an offer the
+     * client never made is itself the violation).
+     */
+    public function testQueryOnlyCarrierStillAuthenticatesWithoutEcho(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-query');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeHandshakeRequest($token));
+
+        $connections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $connections);
+        $this->assertSame('user-query', $connections[0]->getUserId());
+        $this->assertSame([], $mockConnection->headers, 'No subprotocol offered → no echo.');
+    }
+
+    /**
+     * Both carriers, identical credential: accepted (header wins), echo applies
+     * because `bearer` was offered.
+     */
+    public function testBothCarriersIdenticalTokenAccepted(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-both');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect(
+            $mockConnection,
+            $this->makeHandshakeRequest($token, 'bearer, ' . $token)
+        );
+
+        $connections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $connections);
+        $this->assertSame('user-both', $connections[0]->getUserId());
+        $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $mockConnection->headers);
+    }
+
+    /**
+     * Both carriers, DIFFERENT credentials: rejected pre-101 — a half-migrated
+     * client must fail loudly, not authenticate on a credential other than the
+     * one it presents.
+     */
+    public function testCarrierMismatchRejectedPreUpgrade(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $bearerToken = $this->jwtHandler->createAccessToken('user-a');
+        $queryToken = $this->jwtHandler->createAccessToken('user-b');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect(
+            $mockConnection,
+            $this->makeHandshakeRequest($queryToken, 'bearer, ' . $bearerToken)
+        );
+
+        $this->assertTrue($callTracker['close'], 'Mismatched carriers must reject the handshake.');
+        $this->assertCount(0, ConnectionPool::getInstance()->all());
+        $this->assertSame([], $mockConnection->headers, 'A rejected handshake answers no negotiation.');
+    }
+
+    /**
+     * Bearer carrier with an INVALID credential: rejected pre-101 like any
+     * other invalid token (no echo can reach a client that never upgrades).
+     */
+    public function testBearerCarrierWithInvalidTokenRejected(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect(
+            $mockConnection,
+            $this->makeHandshakeRequest(null, 'bearer, not-a-jwt')
+        );
+
+        $this->assertTrue($callTracker['close']);
+        $this->assertCount(0, ConnectionPool::getInstance()->all());
+    }
+
+    /**
+     * `bearer` offered WITHOUT a token entry falls back to the legacy query
+     * carrier (transitional clients mid-retirement) and still gets the echo,
+     * because negotiation is offer-driven, not carrier-driven — the hub law.
+     */
+    public function testBearerMarkerWithoutTokenEntryFallsBackToQueryAndEchoes(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-fallback');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeHandshakeRequest($token, 'bearer'));
+
+        $connections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $connections);
+        $this->assertSame('user-fallback', $connections[0]->getUserId());
+        $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $mockConnection->headers);
+    }
+
+    /**
+     * Dev path (no secret): anonymous connect that OFFERED bearer still gets the
+     * echo — subprotocol negotiation is transport-level, independent of auth.
+     */
+    public function testDevModeAnonymousBearerOfferEchoes(): void
+    {
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeHandshakeRequest(null, 'bearer, anything'));
+
+        $this->assertFalse($callTracker['close']);
+        $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $mockConnection->headers);
+    }
+
+    /**
+     * `bearer-chat` is a DIFFERENT protocol-id: not a bearer offer. Mirrors the
+     * hub extraction quirk faithfully — the first non-`bearer` entry IS the
+     * token candidate, so 'bearer-chat' becomes the (invalid) credential and
+     * the handshake rejects.
+     */
+    public function testNearMissSubprotocolIdIsNotBearer(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-near');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect(
+            $mockConnection,
+            $this->makeHandshakeRequest(null, 'bearer-chat, ' . $token)
+        );
+
+        $this->assertTrue($callTracker['close']);
+        $this->assertCount(0, ConnectionPool::getInstance()->all());
+        $this->assertFalse(SyncPlayAuthMiddleware::offersBearerSubprotocol('bearer-chat'));
+    }
+
+    /**
+     * resolveHandshakeToken priority matrix (pure unit of the carrier law).
+     */
+    public function testResolveHandshakeTokenMatrix(): void
+    {
+        // Header carrier wins (identical tokens on both carriers resolve bearer).
+        $this->assertSame(
+            ['token' => 'T1', 'carrier' => 'bearer', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken('bearer, T1', 'T1')
+        );
+        // Query fallback.
+        $this->assertSame(
+            ['token' => 'T2', 'carrier' => 'query', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken(null, 'T2')
+        );
+        // Neither.
+        $this->assertSame(
+            ['token' => null, 'carrier' => 'none', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken(null, null)
+        );
+        // Mismatch.
+        $this->assertSame(
+            ['token' => null, 'carrier' => 'none', 'mismatch' => true],
+            SyncPlayAuthMiddleware::resolveHandshakeToken('bearer, T1', 'T2')
+        );
+        // Empty ?token= carries no credential: absent, NOT a false mismatch.
+        $this->assertSame(
+            ['token' => 'T1', 'carrier' => 'bearer', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken('bearer, T1', '')
+        );
+        $this->assertSame(
+            ['token' => null, 'carrier' => 'none', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken(null, '')
+        );
+        // Bearer marker with no token entry → no header credential.
+        $this->assertSame(
+            ['token' => 'T3', 'carrier' => 'query', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken('bearer', 'T3')
+        );
+        $this->assertSame(
+            ['token' => null, 'carrier' => 'none', 'mismatch' => false],
+            SyncPlayAuthMiddleware::resolveHandshakeToken('bearer', null)
+        );
+    }
+
+    /**
+     * bearerSubprotocolToken / offersBearerSubprotocol entry parsing mirrors
+     * phlix-hub's per-entry RFC 7230 comparison (trim, exact-match marker).
+     */
+    public function testBearerCarrierParsingMirrorsHubLaw(): void
+    {
+        $this->assertSame('JWT', SyncPlayAuthMiddleware::bearerSubprotocolToken('bearer, JWT'));
+        $this->assertSame('JWT', SyncPlayAuthMiddleware::bearerSubprotocolToken('JWT, bearer'));
+        $this->assertSame('JWT', SyncPlayAuthMiddleware::bearerSubprotocolToken(' bearer ,  JWT '));
+        $this->assertNull(SyncPlayAuthMiddleware::bearerSubprotocolToken('bearer'));
+        $this->assertNull(SyncPlayAuthMiddleware::bearerSubprotocolToken('bearer, , '));
+        $this->assertNull(SyncPlayAuthMiddleware::bearerSubprotocolToken(null));
+        $this->assertNull(SyncPlayAuthMiddleware::bearerSubprotocolToken(''));
+
+        $this->assertTrue(SyncPlayAuthMiddleware::offersBearerSubprotocol('bearer, JWT'));
+        $this->assertTrue(SyncPlayAuthMiddleware::offersBearerSubprotocol(' JWT, bearer '));
+        $this->assertTrue(SyncPlayAuthMiddleware::offersBearerSubprotocol('bearer'));
+        $this->assertFalse(SyncPlayAuthMiddleware::offersBearerSubprotocol('bearer-chat'));
+        $this->assertFalse(SyncPlayAuthMiddleware::offersBearerSubprotocol('Bearer'));
+        $this->assertFalse(SyncPlayAuthMiddleware::offersBearerSubprotocol(null));
+    }
+
+    /**
+     * redactTokenQuery masks the credential but nothing else — the guarantee
+     * behind every handshake URI that reaches a log line while legacy query
+     * clients are still in the field.
+     */
+    public function testRedactTokenQueryMasksOnlyTheTokenParam(): void
+    {
+        $this->assertSame(
+            '/syncplay?token=[redacted]',
+            SyncPlayAuthMiddleware::redactTokenQuery('/syncplay?token=eyJhbGciOi.hidden.sig')
+        );
+        $this->assertSame(
+            '/x?token=[redacted]&room=1',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?token=abc&room=1')
+        );
+        $this->assertSame(
+            '/x?room=1&token=[redacted]',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?room=1&token=abc')
+        );
+        $this->assertSame(
+            '/x?token=[redacted]#frag',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?token=abc#frag')
+        );
+        $this->assertSame(
+            '/x?a=1&token=[redacted]&b=2&token=[redacted]',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?a=1&token=p&b=2&token=q')
+        );
+        // Whole-name matching: near-miss param names are NOT touched.
+        $this->assertSame(
+            '/x?mytoken=secret&tokens=1',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?mytoken=secret&tokens=1')
+        );
+        $this->assertSame('/syncplay', SyncPlayAuthMiddleware::redactTokenQuery('/syncplay'));
+    }
+
+    /**
+     * Log-masking PROOF: a carrier mismatch logs the rejected handshake URI
+     * with the legacy query credential REDACTED — the raw JWT appears nowhere
+     * in the written log line (nor does the bearer-carried one).
+     */
+    public function testMismatchLogNeverContainsTheCredential(): void
+    {
+        $logFile = tempnam(sys_get_temp_dir(), 'phlix-ws-log-');
+        $configFile = tempnam(sys_get_temp_dir(), 'phlix-ws-cfg-');
+        $this->assertNotFalse($logFile);
+        $this->assertNotFalse($configFile);
+
+        file_put_contents(
+            $configFile,
+            '<?php return ' . var_export([
+                'handlers' => [
+                    ['type' => 'stream', 'path' => $logFile, 'channels' => ['websocket']],
+                ],
+            ], true) . ';'
+        );
+
+        try {
+            \Phlix\Common\Logger\LoggerFactory::reset();
+            \Phlix\Common\Logger\LoggerFactory::init($configFile);
+
+            $server = new WebSocketServer($this->authConfig());
+            $callTracker = [];
+            $mockConnection = $this->createMockTcpConnection($callTracker);
+            $bearerToken = $this->jwtHandler->createAccessToken('user-x');
+            $queryToken = $this->jwtHandler->createAccessToken('user-y');
+
+            $server->onConnect($mockConnection);
+            $server->onWebSocketConnect(
+                $mockConnection,
+                $this->makeHandshakeRequest($queryToken, 'bearer, ' . $bearerToken)
+            );
+
+            $this->assertTrue($callTracker['close'], 'precondition: mismatch rejected');
+
+            $logged = (string) file_get_contents($logFile);
+            $this->assertStringContainsString('handshake rejected', $logged);
+            $this->assertStringContainsString('token=[redacted]', $logged);
+            $this->assertStringNotContainsString($queryToken, $logged, 'Legacy query credential must never reach the log.');
+            $this->assertStringNotContainsString($bearerToken, $logged, 'Bearer-carried credential must never reach the log.');
+        } finally {
+            \Phlix\Common\Logger\LoggerFactory::reset();
+            @unlink($logFile);
+            @unlink($configFile);
+        }
     }
 }

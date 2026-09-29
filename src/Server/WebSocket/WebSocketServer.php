@@ -407,10 +407,16 @@ class WebSocketServer
      * Enforcement (Gap 2/3):
      * - No JWT secret configured ($authMiddleware === null) → allow anonymous
      *   connections (dev).
-     * - Secret configured → delegate to {@see SyncPlayAuthMiddleware::authenticateConnection()}
-     *   (auth REQUIRED): a valid token marks the connection authenticated with
+     * - Secret configured → resolve the handshake credential from the
+     *   transitional carriers ({@see SyncPlayAuthMiddleware::resolveHandshakeToken()}:
+     *   `Sec-WebSocket-Protocol: bearer, <jwt>` preferred, legacy `?token=<jwt>`
+     *   fallback, disagreement between the two rejected), then delegate to
+     *   {@see SyncPlayAuthMiddleware::authenticateConnection()} (auth REQUIRED):
+     *   a valid token marks the connection authenticated with
      *   its derived user id; a missing/invalid/expired token causes the handshake
      *   to be REJECTED — the connection is removed from the pool and closed.
+     * - A client that offered the `bearer` subprotocol and passes the gate gets
+     *   it echoed on the 101 ({@see echoBearerSubprotocol()}).
      *
      * @param TcpConnection $connection The Workerman TCP connection.
      * @param Request       $request    The parsed WebSocket upgrade request.
@@ -495,20 +501,84 @@ class WebSocketServer
         }
 
         // No secret configured (dev): allow the connection anonymously.
+        // Subprotocol negotiation is transport-level and independent of auth,
+        // so the 101 echo still applies on this path.
         if ($this->authMiddleware === null) {
+            $this->echoBearerSubprotocol($connection, $request);
             return;
         }
 
+        // Transitional dual-carrier handshake law (estate policy
+        // WEBSOCKET_URL_QUERY_REFUSED; phlix-syncplay SPEC.md §8.4 — `:8097`
+        // CURRENT=?token query, TARGET=bearer subprotocol). Mirrors the carrier
+        // phlix-hub `:8804` ships (S237: SyncPlayRelayWorker +
+        // ClientRelayWorker::extractClientToken): the JWT rides the
+        // `Sec-WebSocket-Protocol: bearer, <jwt>` subprotocol — browsers cannot
+        // set Authorization on a WebSocket upgrade — or, until clients retire
+        // it, the legacy `?token=<jwt>` query. Header wins; both present with
+        // DIFFERENT tokens rejects pre-101 so a half-migrated client fails
+        // loudly instead of authenticating on a credential other than the one
+        // it presents. See SyncPlayAuthMiddleware::resolveHandshakeToken().
         $tokenRaw = $request->get('token');
-        $token = is_string($tokenRaw) ? $tokenRaw : null;
+        $resolved = SyncPlayAuthMiddleware::resolveHandshakeToken(
+            self::upgradeHeader($request, 'sec-websocket-protocol'),
+            is_string($tokenRaw) ? $tokenRaw : null,
+        );
 
-        if (!$this->authMiddleware->authenticateConnection($wsConnection, $token)) {
+        if ($resolved['mismatch']) {
+            // Forensics keep the requested path but NEVER the credential: the
+            // URI passes through redactTokenQuery so even a legacy query
+            // client's token cannot land in the log line.
+            LoggerFactory::get(LogChannels::WEBSOCKET)->warning(
+                'WebSocket handshake rejected: bearer subprotocol token disagrees with ?token= query',
+                [
+                    'client_ip' => $clientIp,
+                    'uri' => SyncPlayAuthMiddleware::redactTokenQuery($request->uri()),
+                ],
+            );
+            $this->connections->remove($wsConnection->getId());
+            unset($this->openedConnectionIds[$wsConnection->getId()]);
+            $connection->close();
+            return;
+        }
+
+        if (!$this->authMiddleware->authenticateConnection($wsConnection, $resolved['token'])) {
             // Secret configured + missing/invalid token: reject the handshake.
             $this->connections->remove($wsConnection->getId());
             // As above: reap the opened-id tracking entry on the reject path.
             unset($this->openedConnectionIds[$wsConnection->getId()]);
             $connection->close();
+            return;
         }
+
+        $this->echoBearerSubprotocol($connection, $request);
+    }
+
+    /**
+     * Echo the negotiated `bearer` subprotocol back on the 101 response.
+     *
+     * RFC 6455 §4.1/§4.2.2: a client that offered subprotocols and gets none
+     * selected back fails the connection outright (WHATWG WebSocket §2.4 — the
+     * measured 1006 on the ui carrier `new WebSocket(url, ['bearer', token])`).
+     * Workerman composes the 101 AFTER this callback returns and appends every
+     * entry of `$connection->headers` verbatim — that array is the only echo
+     * extension point on this path
+     * (vendor/workerman/workerman/src/Protocols/Websocket.php:449-455).
+     *
+     * The echo is gated on the client HAVING OFFERED `bearer` (selecting a
+     * protocol the client never offered is itself the §4.1 violation, so query
+     * carriers that negotiate nothing keep receiving no echo) and answers with
+     * the MARKER only — never the token (a credential is not a protocol-id;
+     * echoing it would re-publish on the response wire the secret the carrier
+     * law exists to keep off URLs). Same law phlix-hub S355 ships.
+     */
+    private function echoBearerSubprotocol(TcpConnection $connection, Request $request): void
+    {
+        if (!SyncPlayAuthMiddleware::offersBearerSubprotocol(self::upgradeHeader($request, 'sec-websocket-protocol'))) {
+            return;
+        }
+
+        $connection->headers[] = SyncPlayAuthMiddleware::BEARER_SUBPROTOCOL_ECHO;
     }
 
     /**

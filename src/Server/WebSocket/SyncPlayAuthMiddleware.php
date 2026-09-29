@@ -24,7 +24,11 @@ use Phlix\Common\Logger\LogChannels;
  *
  * ## Authentication Flow
  *
- * 1. Client initiates WebSocket handshake with `?token=<jwt>` query param
+ * 1. Client initiates the WebSocket handshake carrying its JWT either in the
+ *    `Sec-WebSocket-Protocol: bearer, <jwt>` subprotocol (preferred — the same
+ *    carrier law phlix-hub `:8804` ships, S237) or in the legacy `?token=<jwt>`
+ *    query param (transitional; clients retire per estate policy
+ *    WEBSOCKET_URL_QUERY_REFUSED). {@see resolveHandshakeToken()} is the law.
  * 2. Middleware validates the JWT token
  * 3. If invalid/expired: connection is closed with code 4001
  * 4. If valid: userId is extracted and attached to the connection context
@@ -65,6 +69,22 @@ class SyncPlayAuthMiddleware
      * Close code for server error during auth.
      */
     public const CLOSE_CODE_SERVER_ERROR = 4003;
+
+    /**
+     * Subprotocol marker id of the bearer credential carrier — the exact name
+     * phlix-hub `:8804` uses (`SyncPlayRelayWorker::BEARER_SUBPROTOCOL`, S237)
+     * so one estate law has one wire vocabulary.
+     */
+    public const BEARER_SUBPROTOCOL = 'bearer';
+
+    /**
+     * The 101 response header line selecting the bearer marker back to the
+     * client. NEVER the token — a credential is not a protocol-id, and
+     * echoing it would re-publish on the RESPONSE wire the very secret the
+     * carrier exists to keep off URLs (RFC 6455 §4.2.2 permits answering only
+     * with a protocol the server actually supports; `bearer` is the only one).
+     */
+    public const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: bearer';
 
     /**
      * JWT handler for token validation.
@@ -136,7 +156,9 @@ class SyncPlayAuthMiddleware
      * superglobal — it authenticates the {@see Connection} wrapper directly.
      *
      * @param Connection  $connection The WebSocket connection wrapper to authenticate.
-     * @param string|null $token      The `token` query param from the handshake request.
+     * @param string|null $token      The handshake credential resolved by
+     *                                {@see resolveHandshakeToken()} (bearer
+     *                                subprotocol or legacy query carrier).
      * @return bool True if the connection may proceed; false if it must be rejected/closed.
      */
     public function authenticateConnection(Connection $connection, ?string $token): bool
@@ -373,5 +395,114 @@ class SyncPlayAuthMiddleware
     public function setAuthRequired(bool $required): void
     {
         $this->requireAuth = $required;
+    }
+
+    /**
+     * Whether a `Sec-WebSocket-Protocol` offer list includes the `bearer` marker.
+     *
+     * Per-entry RFC 7230 token comparison after OWS trim: `bearer-chat` is a
+     * different protocol-id and does NOT count as an offer. Mirrors phlix-hub
+     * `SyncPlayRelayWorker::negotiatedSubprotocolEcho()` — the echo gate for the
+     * 101 answer lives here so server and hub negotiate identically.
+     *
+     * @param string|null $offeredProtocols Raw header value (absent = null).
+     */
+    public static function offersBearerSubprotocol(?string $offeredProtocols): bool
+    {
+        if ($offeredProtocols === null || $offeredProtocols === '') {
+            return false;
+        }
+
+        foreach (explode(',', $offeredProtocols) as $protocolId) {
+            if (trim($protocolId) === self::BEARER_SUBPROTOCOL) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The JWT carried by the `bearer` subprotocol carrier, or null when it holds none.
+     *
+     * Browser WebSocket APIs cannot set an Authorization header, so the carrier
+     * form is `Sec-WebSocket-Protocol: bearer, <jwt>`: the `bearer` entry is the
+     * marker and the first other non-empty entry is the credential. Mirrors
+     * phlix-hub `ClientRelayWorker::extractClientToken()` subprotocol step.
+     *
+     * @param string|null $offeredProtocols Raw header value (absent = null).
+     */
+    public static function bearerSubprotocolToken(?string $offeredProtocols): ?string
+    {
+        if ($offeredProtocols === null || $offeredProtocols === '') {
+            return null;
+        }
+
+        foreach (explode(',', $offeredProtocols) as $entry) {
+            $candidate = trim($entry);
+            if ($candidate !== '' && $candidate !== self::BEARER_SUBPROTOCOL) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve the handshake credential from the two transitional carriers.
+     *
+     * The priority law (estate policy WEBSOCKET_URL_QUERY_REFUSED; phlix-syncplay
+     * SPEC.md §8.4 — `:8097` CURRENT=query, TARGET=bearer subprotocol):
+     *
+     * 1. The `bearer` subprotocol carrier wins when it carries a token.
+     * 2. `?token=<jwt>` is the legacy fallback while clients retire it.
+     * 3. Both carriers present with DIFFERENT tokens → reject (`mismatch`): a
+     *    half-migrated client must fail loudly at the handshake instead of
+     *    silently authenticating with one credential while presenting another.
+     * 4. An empty `?token=` value carries no credential and counts as absent.
+     *
+     * @param string|null $offeredProtocols Raw `Sec-WebSocket-Protocol` header value.
+     * @param string|null $queryToken       Raw `token` query param value.
+     * @return array{token: ?string, carrier: 'bearer'|'query'|'none', mismatch: bool}
+     *         `token` is the credential to validate (null when absent or
+     *         mismatched); `carrier` names the winning carrier for diagnostics
+     *         and never carries credential material itself.
+     */
+    public static function resolveHandshakeToken(?string $offeredProtocols, ?string $queryToken): array
+    {
+        $bearerToken = self::bearerSubprotocolToken($offeredProtocols);
+        $legacyToken = ($queryToken === null || $queryToken === '') ? null : $queryToken;
+
+        if ($bearerToken !== null && $legacyToken !== null && $bearerToken !== $legacyToken) {
+            return ['token' => null, 'carrier' => 'none', 'mismatch' => true];
+        }
+
+        if ($bearerToken !== null) {
+            return ['token' => $bearerToken, 'carrier' => 'bearer', 'mismatch' => false];
+        }
+
+        if ($legacyToken !== null) {
+            return ['token' => $legacyToken, 'carrier' => 'query', 'mismatch' => false];
+        }
+
+        return ['token' => null, 'carrier' => 'none', 'mismatch' => false];
+    }
+
+    /**
+     * Mask every `token=` query value in a URL/URI so it can reach a log line.
+     *
+     * Bearer credentials in query strings land in access logs, proxy logs and
+     * histories — the exact exposure the estate carrier law removes from the
+     * URL. While legacy `?token=` clients still exist, any handshake URI this
+     * package logs passes through here first, so diagnostics can record the
+     * requested path without ever echoing the credential back. Matches only
+     * whole param names (`[?&]token=`), so `?mytoken=` is left alone, and stops
+     * at `&`/`#` boundaries.
+     */
+    public static function redactTokenQuery(string $uri): string
+    {
+        $redacted = preg_replace('/([?&])token=[^&#]*/', '$1token=[redacted]', $uri);
+
+        return $redacted ?? $uri;
     }
 }

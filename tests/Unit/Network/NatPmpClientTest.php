@@ -133,17 +133,24 @@ class NatPmpClientTest extends TestCase
     }
 
     /**
-     * NAT-PMP public-address reply sized to the 12-byte floor discoverGateway()
-     * requires, with the address field placed exactly where the CURRENT
-     * parseExternalIp() reads it (bytes 4-7 — an RFC 6886 §3.5 offset deviation
-     * flagged to the orchestrator, deliberately NOT re-pinned as "correct"
-     * here; the guarantee this test owns is the L4 source discard + the
-     * poll-loop continuation, both of which sit downstream of the size gate).
+     * NAT-PMP public-address reply built per RFC 6886 §3.2, byte for byte:
+     * version(1)=0, opcode(1)=128+0, result code(2)=0 success, seconds
+     * since start of epoch(4), external IPv4(4) at bytes 8-11 — the size
+     * floor discoverGateway() requires and the field parseExternalIp()
+     * reads.
+     *
+     * Earlier revisions of this fixture placed the address at the parser's
+     * then-wrong offset (bytes 4-7) and documented the deviation instead of
+     * blessing it; the epoch is deliberately non-zero here so the fixture
+     * is RFC-constructed and mutation-honest: a parser reverted to bytes
+     * 4-7 would decode 0.15.66.64, never the asserted address. The
+     * guarantee this test owns — L4 source discard plus poll-loop
+     * continuation — now runs against the spec-correct wire shape.
      */
     private function natPmpPublicAddressReply(string $ip): string
     {
         $packed = inet_pton($ip);
         $this->assertIsString($packed);
-        return chr(0) . chr(0) . pack('n', 0) . $packed . pack('N', 0);
+        return chr(0) . chr(0x80) . pack('n', 0) . pack('N', 1000000) . $packed;
     }
 }

@@ -297,7 +297,24 @@ class NatPmpClient
     }
 
     /**
-     * Parses the external IP from a NAT-PMP response.
+     * Parses the external IP from a NAT-PMP public address reply.
+     *
+     * RFC 6886 §3.2 fixes the wire layout of the 12-byte reply, and §3
+     * fixes the Result Code width ("Responses always contain a 16-bit
+     * result code in network byte order"), which pins every offset:
+     *
+     *   byte 0     Version (unused, 0)
+     *   byte 1     Opcode (128 + 0)
+     *   bytes 2-3  Result Code (16-bit, network byte order)
+     *   bytes 4-7  Seconds Since Start of Epoch (32-bit)
+     *   bytes 8-11 External IPv4 Address (4 octets, no byte swapping)
+     *
+     * The address lives at BYTES 8-11. Reading bytes 4-7 — what this
+     * method did until the device rework lane flagged it — returned the
+     * high octets of the gateway's epoch counter as if they were an IP,
+     * never the external address. (The mapping reply, RFC 6886 §3.3,
+     * shares the same 2+2+4 prefix and carries the mapped external port
+     * at bytes 10-11 — which is exactly where mapPort() reads it.)
      */
     private function parseExternalIp(string $response): ?string
     {
@@ -305,7 +322,7 @@ class NatPmpClient
             return null;
         }
 
-        $ipBytes = substr($response, 4, 4);
+        $ipBytes = substr($response, 8, 4);
         if (strlen($ipBytes) < 4) {
             return null;
         }

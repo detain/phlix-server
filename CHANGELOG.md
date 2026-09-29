@@ -602,6 +602,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`NatPmpClient::parseExternalIp()` read the external IP from the wrong bytes, and
+  `StunClient::getPublicIp()` silently refused every IP-literal server config.**
+  (1) RFC 6886 §3.2 lays the 12-byte public-address reply out as version(1) + opcode(1) +
+  16-bit result code(2) + Seconds Since Start of Epoch(4) + External IPv4(4): the address is at
+  bytes 8-11, but the parser read bytes 4-7 — the gateway's epoch counter — and the device
+  rework lane's fixture had pinned that deviation. The parser now reads bytes 8-11 with the
+  layout table in its docblock, and `natPmpPublicAddressReply()` is RFC-constructed (opcode
+  128, non-zero epoch), mutation-proven: reverting the offset reddens the L4 wrong-source test
+  with `0.15.66.64`. The mapping reply needs no change — §3.3 puts the mapped external port at
+  bytes 10-11, which is where `mapPort()` already reads it. (2) `gethostbyname()` returns its
+  input unchanged both for an IP literal and for a failed lookup, so the old equality test read
+  a pre-resolved/numeric `stunServer` as a resolution failure and never probed. New
+  `resolveStunServerIp()` short-circuits IPv4 literals to themselves first and only then treats
+  an unresolved NAME as failure; tests pin all three arms (literal config probes and parses over
+  a real loopback exchange, unresolvable name refuses loudly through the logged gate, name path
+  unaffected).
 - **Three long-red CI jobs greened (`test-server` PHPUnit, `Psalm-on-tests`, S180 probe), none of
   them by weakening what they test.**
   (1) `BackupControllerBodyPersistenceTest::test_supplied_label_reaches_the_persisted_backup_row`

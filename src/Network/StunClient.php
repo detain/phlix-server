@@ -79,8 +79,8 @@ class StunClient
         // internally and discard which address it actually used, so resolve the
         // configured STUN server to a literal ONCE, send to that literal, and
         // accept a binding response only from the exact address we asked.
-        $stunIp = gethostbyname($this->stunServer);
-        if ($stunIp === $this->stunServer || filter_var($stunIp, FILTER_VALIDATE_IP) === false) {
+        $stunIp = $this->resolveStunServerIp();
+        if ($stunIp === null) {
             $this->logger->warning('STUN: could not resolve STUN server, refusing to probe', [
                 'server' => $this->stunServer,
             ]);
@@ -124,6 +124,34 @@ class StunClient
         }
 
         return $this->parseXorMappedAddress($response, self::STUN_HEADER_SIZE);
+    }
+
+    /**
+     * Resolves the configured STUN server to the IPv4 literal to probe.
+     *
+     * An IP-literal config — a pre-resolved address, '1.1.1.1', or a
+     * loopback test server — is usable directly. gethostbyname() returns
+     * its input UNCHANGED both for an IP literal and for a failed
+     * lookup, so the equality test that used to stand as the sole
+     * resolution-failure signal read every valid literal config as a
+     * failure and silently never probed. The literal check therefore runs
+     * FIRST; only a NAME that neither equals an IP nor resolves to one is
+     * a failure (null). FILTER_FLAG_IPV4 because the transport socket is
+     * AF_INET — an IPv6 literal is not probeable here and fails the same
+     * loud refusal as an unresolvable name.
+     */
+    private function resolveStunServerIp(): ?string
+    {
+        if (filter_var($this->stunServer, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            return $this->stunServer;
+        }
+
+        $resolved = gethostbyname($this->stunServer);
+        if ($resolved === $this->stunServer) {
+            return null;
+        }
+
+        return filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false ? $resolved : null;
     }
 
     /**

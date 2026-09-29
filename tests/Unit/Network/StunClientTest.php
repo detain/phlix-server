@@ -309,9 +309,11 @@ class StunClientTest extends TestCase
     // only getPublicIp test above asserts the UNRESOLVABLE-host null, which
     // never reaches the check.
     //
-    // The server is configured as 'localhost' rather than an IP literal:
-    // getPublicIp() treats gethostbyname($server) === $server as a resolution
-    // failure, which an IP-literal config trips into a pre-send refusal.
+    // These two cases stay on the 'localhost' NAME path so it keeps its
+    // positive and negative coverage. An IP-literal config used to be
+    // refused pre-send (gethostbyname($server) === $server doubled as the
+    // resolution-failure signal); resolveStunServerIp() now short-circuits
+    // literals, pinned by testGetPublicIpProbesAnIpLiteralServerConfig below.
     // -----------------------------------------------------------------------
 
     public function testGetPublicIpDiscardsBindingSuccessFromWrongSource(): void
@@ -412,6 +414,79 @@ class StunClientTest extends TestCase
     }
 
     /**
+     * An IP-literal stunServer config must PROBE, not refuse pre-send.
+     *
+     * Pre-fix, getPublicIp() called gethostbyname() unconditionally and
+     * treated "returned input unchanged" as failure — which is exactly
+     * what gethostbyname() does for a numeric address — so a valid
+     * literal config (pre-resolved 'stun.l.google.com', '1.1.1.1', a
+     * loopback test server) silently never sent a binding request. This
+     * harness only goes green if a request actually arrives: the child
+     * blocks in socket_select() for it and answers with a well-formed
+     * success, and the parent must parse the address back out.
+     */
+    public function testGetPublicIpProbesAnIpLiteralServerConfig(): void
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl/posix are required for the forked-responder harness.');
+        }
+
+        $port = $this->loopbackUdpPortOn('127.0.0.1');
+        $server = $this->bindUdp('127.0.0.1', $port);
+
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            $read = [$server];
+            $write = null;
+            $except = null;
+            if (@socket_select($read, $write, $except, 5) < 1) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            $buf = '';
+            $clientIp = '';
+            $clientPort = 0;
+            if (@socket_recvfrom($server, $buf, 1024, 0, $clientIp, $clientPort) === false) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            @socket_sendto($server, $this->stunSuccessReply('203.0.113.9'), 32, 0, $clientIp, $clientPort);
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+
+        socket_close($server);
+
+        $client = new StunClient(new NullLogger(), '127.0.0.1', $port);
+        try {
+            $this->assertSame(
+                '203.0.113.9',
+                $client->getPublicIp(),
+                'an IP-literal config must resolve to itself and probe; the old code '
+                . 'refused it pre-send as an apparent resolution failure'
+            );
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+    }
+
+    /**
+     * The other side of resolveStunServerIp(): a NAME that does not
+     * resolve still refuses — and refuses through the logged pre-send
+     * refusal, not by accidentally timing out on a socket it never sent
+     * on (which is what testGetPublicIpReturnsNullForFailure alone could
+     * not distinguish).
+     */
+    public function testGetPublicIpRefusesAnUnresolvableNameWithALoggedRefusal(): void
+    {
+        $logger = new ProbeRecordingLogger();
+        $client = new StunClient($logger, 'phlix-s169.invalid', 19302);
+
+        $this->assertNull($client->getPublicIp());
+        $this->assertTrue(
+            $logger->sawMessageContaining('could not resolve STUN server'),
+            'the refusal must be the resolution gate, and it must be loud'
+        );
+    }
+
+    /**
      * Learn an unused loopback UDP port by binding and releasing it.
      */
     private function loopbackUdpPortOn(string $address): int
@@ -500,5 +575,19 @@ final class ProbeRecordingLogger extends AbstractLogger
         }
 
         return null;
+    }
+
+    /**
+     * Whether any logged message contains the given needle.
+     */
+    public function sawMessageContaining(string $needle): bool
+    {
+        foreach ($this->records as $record) {
+            if (str_contains($record['message'], $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

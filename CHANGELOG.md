@@ -9,6 +9,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The `:8097` SyncPlay WebSocket now accepts the `Sec-WebSocket-Protocol: bearer, <jwt>`
+  carrier alongside the legacy `?token=<jwt>` query (transitional dual-carrier law,
+  mirroring phlix-hub `:8804`'s S237/S355 carrier so the estate policy
+  WEBSOCKET_URL_QUERY_REFUSED has one wire vocabulary).**
+  `SyncPlayAuthMiddleware::resolveHandshakeToken()` is the single SSOT: the bearer
+  subprotocol entry (per-entry RFC 7230 marker match — `bearer-chat` is a different
+  protocol-id) wins; the query param is the fallback while clients retire it; both
+  carriers presenting DIFFERENT credentials is rejected pre-101 so a half-migrated
+  client fails loudly instead of authenticating on a credential other than the one it
+  presents. A client that offered `bearer` and passes the gate gets
+  `Sec-WebSocket-Protocol: bearer` echoed on the 101 — the MARKER only, never the token
+  (RFC 6455 §4.2.2; without an answer, WHATWG browsers fail an offered-subprotocol
+  connect outright) — via the `$connection->headers` extension point Workerman appends
+  after `onWebSocketConnect` returns; query-only clients negotiate nothing and see a
+  byte-identical 101. Every handshake URI that reaches a log line now passes through
+  the new `redactTokenQuery()` (`?token=[redacted]`, whole-param-name match), which
+  closes the credential-in-logs exposure even for legacy query clients. Dev mode (no
+  JWT secret) still allows anonymous connects but now honors the offer-gated echo,
+  because negotiation is transport-level. Client retirement path (ui `syncplay.ts`,
+  tizen `useSyncPlayStore`, mobile `wsEndpoint`, roku/console) is documented in
+  `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`; no client is flipped here, and the SPEC.md
+  §8.4 CURRENT/TARGET status line awaits a doc-lane flip now that `:8097` implements
+  the TARGET carrier. Handshake matrix, echo matrix, and log-masking proof pinned in
+  `tests/Unit/Server/WebSocket/WsAuthenticationTest.php`.
+
 - **Error-code-first emit doctrine: the vendored @phlix/contracts registry is now law (`W2`).**
   `tests/Fixtures/Contracts/error-codes.json` is a byte-copy of `dist/error-codes.json` from the
   @phlix/contracts `v0.5.1` tag (202 codes / 37 domains) with a sidecar pin file, guarded by
@@ -615,6 +640,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`NatPmpClient` mapped TCP as UDP (inverted RFC 6886 §3.3 opcodes), returned a refused
+  mapping's zeroed port as success, and padded the §3.2 address request with slack bytes.**
+  The closing half of the wire-fidelity pass a34f698d left documented in-place. (1) §3.3 assigns
+  "1 - Map UDP, 2 - Map TCP" (rfc-editor.org/rfc/rfc6886.txt lines 526-528); the class constants
+  were the other way round, so every TCP forward `PortForwardService::autoConfigure()` requested
+  rode the wire as a UDP mapping request — gateways created wrong-protocol mappings, and the
+  §3.4 teardown keyed by the same inverted constant deleted them again (add/delete flipped
+  together, so the pair stayed self-consistent while never opening the TCP port the API names).
+  The corrected constants finally request the protocol the API advertises; the UPnP-IGD leg of the
+  fallback chain is unaffected (its SOAP `NewProtocol` string was already `TCP`). (2) `mapPort()`
+  now parses the 16-bit Result Code at bytes 2-3 of the §3.3 mapping reply via a new
+  `parseMappingResponse()` before reading the port/lifetime slots: §3.5 mandates zeroed
+  "Mapped External Port" and lifetime on any failure, which the old reader returned as int `0` —
+  `PortForwardService` would then persist the endpoint `ip:0` as a successful forward. Every
+  defined code (1-5) and any undefined code (§3.5: "MUST be treated as fatal errors of the
+  request") now yields null. (3) `buildPublicAddressRequest()` sent 4 bytes against §3.2's
+  2-byte diagram (`Vers|OP` only, no Reserved field); servers ignore datagram slack so there was
+  no live impact — pinned end-to-end by the unchanged fork-responder round trip — but the request
+  is now spec-true. Deliberately NOT changed: the `NAT_PMP_PORT = 5350` destination (the RFC
+  sends requests to 5351; 5350 is the client-side announcement listener — separate lane, own
+  live-wire decision) and `removePortMapping()`'s ACK check, which still returns true on any
+  opcode-matching reply without gating its §3.5 result code (same class as fixed here, left for
+  its own scoped pass per the unmap decision). Byte-pin tests gained an anti-inversion constant
+  tripwire, a non-symmetric per-protocol opcode pair, the 2-byte address-request shape, and two
+  real socket round trips through the public API (captured on-wire TCP opcode 2 + assigned-port
+  passthrough; refused reply yields null, not `0`). Mutation proofs: re-inverting the constants
+  reddens 5 pins, neutering the mapping gate reddens 7, re-adding the address slack reddens 1,
+  dropping the reply-opcode match guard reddens 1.
 - **`NatPmpClient` wrote the NAT-PMP mapping request's two port slots swapped, and its
   public-address parser treated a failed result code as success.** (1) RFC 6886 §3.3 lays the
   12-byte mapping request out with the Internal Port at bytes 4-5 and the Suggested External

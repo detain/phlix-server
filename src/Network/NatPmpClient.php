@@ -28,16 +28,18 @@ class NatPmpClient
 {
     private const NAT_PMP_PORT = 5350;
     private const VERSION = 0;
-    // KNOWN RESIDUAL (wire-fidelity pass, measured against RFC 6886 §3.3 on
-    // origin): the RFC assigns "1 - Map UDP, 2 - Map TCP" — these two
-    // constants are the other way around, so a TCP request currently carries
-    // the UDP opcode on the wire (and a §3.4 deletion keyed by OP_CODE_MAP_TCP
-    // targets the client's UDP mappings). The byte-pin tests assert the values
-    // THIS class sends, not the RFC assignment; correcting the constants is a
-    // separate, deliberately out-of-scope change because it alters live wire
-    // behavior beyond the mapping-request port order this pass owns.
-    private const OP_CODE_MAP_TCP = 1;
-    private const OP_CODE_MAP_UDP = 2;
+    // RFC 6886 §3.3, "Opcodes supported: 1 - Map UDP, 2 - Map TCP"
+    // (rfc-editor.org/rfc/rfc6886.txt lines 526-528). Earlier revisions of
+    // this class had the pair inverted (TCP=1, UDP=2), so every TCP forward
+    // PortForwardService requested rode the wire as a UDP mapping request —
+    // a functional bug: gateways created (and later deleted) wrong-protocol
+    // mappings. Add and delete flipped together, so the pair stayed
+    // self-consistent; the corrected constants keep them consistent while
+    // finally requesting the protocol the API names. Pinned by
+    // testOpcodeConstantsMatchRfc6886Section33 and the per-protocol wire
+    // byte tests in NatPmpClientTest.
+    private const OP_CODE_MAP_UDP = 1;
+    private const OP_CODE_MAP_TCP = 2;
     private const RESPONSE_FLAG = 0x80;
 
     private LoggerInterface $logger;
@@ -219,6 +221,9 @@ class NatPmpClient
 
     /**
      * Maps a port via NAT-PMP and returns the assigned external port.
+     *
+     * The reply is parsed by {@see self::parseMappingResponse()}; only a
+     * §3.5 result code of zero counts as a created mapping.
      */
     private function mapPort(
         string $gatewayIp,
@@ -264,14 +269,8 @@ class NatPmpClient
 
             socket_close($socket);
 
-            if ($recvLen !== false && $recvLen >= 16 && strlen($response) >= 12) {
-                $responseOpCode = ord($response[1]);
-                if ($responseOpCode === ($opCode | self::RESPONSE_FLAG)) {
-                    $parts = unpack('n', substr($response, 10, 2));
-                    if (is_array($parts) && isset($parts[1]) && is_int($parts[1])) {
-                        return $parts[1];
-                    }
-                }
+            if ($recvLen !== false && $recvLen >= 16) {
+                return $this->parseMappingResponse($response, $opCode);
             }
             return null;
         }
@@ -281,11 +280,73 @@ class NatPmpClient
     }
 
     /**
-     * Builds a NAT-PMP public address request.
+     * Parses a NAT-PMP mapping reply, RFC 6886 §3.3 (16 bytes):
+     *
+     *   byte 0     Version (0)
+     *   byte 1     Opcode — 128 + x, "x MUST match what the client requested"
+     *   bytes 2-3  Result Code (16-bit, network byte order)
+     *   bytes 4-7  Seconds Since Start of Epoch
+     *   bytes 8-9  Internal Port (echoed)
+     *   bytes 10-11 Mapped External Port
+     *   bytes 12-15 Port Mapping Lifetime
+     *
+     * §3 ("Responses always contain a 16-bit result code... A result code
+     * of zero indicates success") makes the result code a hard gate, and
+     * §3.5 requires a failed mapping reply to carry "Mapped External Port
+     * and Port Mapping Lifetime MUST be set appropriately -- i.e., zero if
+     * no successful port mapping was created" — so before this gate the
+     * client read the reply's zeroed port slot and RETURNED 0 as if the
+     * gateway had assigned port 0. Every §3.5 code (1 Unsupported Version,
+     * 2 Not Authorized/Refused, 3 Network Failure, 4 Out of resources,
+     * 5 Unsupported opcode, and any undefined code — "Undefined results
+     * codes MUST be treated as fatal errors of the request") now fails
+     * here, mirroring parseExternalIp()'s gate on the §3.2 reply.
+     *
+     * @param string $response Raw reply payload.
+     * @param int    $opCode   Request opcode (OP_CODE_MAP_UDP/OP_CODE_MAP_TCP).
+     *
+     * @return int|null The assigned external port, or null on any failure.
+     */
+    private function parseMappingResponse(string $response, int $opCode): ?int
+    {
+        if (strlen($response) < 12) {
+            return null;
+        }
+
+        if (ord($response[1]) !== ($opCode | self::RESPONSE_FLAG)) {
+            return null;
+        }
+
+        $result = unpack('n', substr($response, 2, 2));
+        if (!is_array($result) || !isset($result[1]) || $result[1] !== 0) {
+            $this->logger->debug('NAT-PMP: mapping request failed on result code', [
+                'result_code' => is_array($result) ? ($result[1] ?? null) : null,
+            ]);
+            return null;
+        }
+
+        $parts = unpack('n', substr($response, 10, 2));
+        if (is_array($parts) && isset($parts[1]) && is_int($parts[1])) {
+            return $parts[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Builds a NAT-PMP public address request — exactly the 2-byte §3.2
+     * shape: "Vers = 0 | OP = 0" is the whole diagram (one 16-bit row, no
+     * Reserved field; RFC 6886 §3.2). Until this pass the builder appended
+     * two extra zero bytes. Real-world impact was nil — servers parse the
+     * fixed-offset header and ignore datagram slack, and the fork-responder
+     * round trip in NatPmpClientTest answers without a length check — but
+     * the spec request is 2 bytes, so this now sends 2 bytes. Deliberately
+     * scoped to the ADDRESS request: the §3.3/§3.4 mapping builders were
+     * already exactly 12 bytes and are untouched.
      */
     private function buildPublicAddressRequest(): string
     {
-        return chr(self::VERSION) . chr(0) . pack('n', 0);
+        return chr(self::VERSION) . chr(0);
     }
 
     /**

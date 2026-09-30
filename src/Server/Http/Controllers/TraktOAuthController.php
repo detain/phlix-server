@@ -103,6 +103,20 @@ final class TraktOAuthController
      *                                                      config/scrobblers/trakt.php or
      *                                                      TRAKT_TOKEN_ENCRYPTION_KEY env
      *                                                      var.
+     * @param \Closure|null             $adminGate          M-4 (security audit 2026-09-30):
+     *                                                      privileged-callback gate,
+     *                                                      `fn(Request): ?Response` —
+     *                                                      non-null return short-circuits
+     *                                                      the callback with that Response
+     *                                                      (the production wiring is
+     *                                                      {@see \Phlix\Server\Http\Middleware\AdminMiddleware},
+     *                                                      which 401s anonymous callers and
+     *                                                      403s non-admins with the registered
+     *                                                      `auth.required`/`auth.not_admin`
+     *                                                      codes). FAIL-CLOSED: a null gate
+     *                                                      denies the callback with 403
+     *                                                      `auth.not_admin` — the gate can
+     *                                                      never be skipped by omission.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
@@ -112,6 +126,7 @@ final class TraktOAuthController
         ?Connection $db = null,
         ?PluginRepository $plugins = null,
         ?string $tokenEncryptionKey = null,
+        private readonly ?\Closure $adminGate = null,
     ) {
         $this->logger = $logger;
         $this->configFile = $configFile;
@@ -174,7 +189,14 @@ final class TraktOAuthController
         $api = new TraktApi(new HttpClient(), $clientId, $clientSecret);
         $authUrl = $api->getAuthUrl($state, $codeVerifier, $redirectUri);
 
-        $this->stateStore->put($state, $codeVerifier);
+        // M-4 (security audit 2026-09-30): bind the state to the identity that
+        // initiated the flow. The callback requires an admin whose id matches
+        // this binding, so neither an anonymous-issued state nor one issued to
+        // another user can ever complete a server-wide Trakt bind.
+        $initiatingUserId = is_string($request->userId) && $request->userId !== ''
+            ? $request->userId
+            : null;
+        $this->stateStore->put($state, $codeVerifier, $initiatingUserId);
 
         return (new Response())
             ->status(302)
@@ -195,6 +217,15 @@ final class TraktOAuthController
      */
     public function callback(Request $request, array $params): Response
     {
+        // M-4 (security audit 2026-09-30): the admin gate runs BEFORE any
+        // state handling — a caller who may never complete the bind must not
+        // be able to burn (consume) a legitimately-issued one-shot state
+        // either. Deny returns the gate's own 401/403 Response.
+        $denial = $this->denyUnlessAdmin($request);
+        if ($denial !== null) {
+            return $denial;
+        }
+
         $code = $request->queryString('code') ?? '';
         $state = $request->queryString('state') ?? '';
         $error = $request->queryString('error') ?? '';
@@ -209,7 +240,7 @@ final class TraktOAuthController
         }
 
         try {
-            $codeVerifier = $this->consumeState($state);
+            $entry = $this->consumeState($state);
         } catch (InvalidOAuthStateException $e) {
             $this->logger?->warning(
                 'Trakt OAuth state validation failed',
@@ -219,6 +250,24 @@ final class TraktOAuthController
             );
             return $this->redirect('/app/admin/services?trakt=error');
         }
+
+        // M-4: the admin COMPLETING the bind must be the SAME identity that
+        // INITIATED it, and the state must have been issued to somebody at all.
+        // An unbound row (pre-M-4 issuance, or authorize() reached without an
+        // authenticated session) is refused outright — never a wildcard pass.
+        $callerUserId = is_string($request->userId) ? $request->userId : '';
+        $boundUserId = $entry['user_id'];
+        if ($boundUserId === null || !hash_equals($boundUserId, $callerUserId)) {
+            $this->logger?->warning(
+                'Trakt OAuth callback identity mismatch',
+                [
+                'reason' => $boundUserId === null ? 'state_not_bound_to_an_identity' : 'state_bound_to_another_user',
+                ]
+            );
+            return $this->redirect('/app/admin/services?trakt=error');
+        }
+
+        $codeVerifier = $entry['code_verifier'];
 
         $config = $this->loadConfig();
 
@@ -306,20 +355,44 @@ final class TraktOAuthController
     }
 
     /**
-     * Consume the saved (state, code_verifier) pair for an inbound callback.
+     * Consume the saved (state, code_verifier) pair for an inbound callback,
+     * reporting the identity the entry was bound to at initiation (M-4).
+     *
+     * @return array{code_verifier: string, user_id: ?string}
      *
      * @throws InvalidOAuthStateException when the state has never been
      *     issued, was already consumed, or does not match.
      */
-    private function consumeState(string $state): string
+    private function consumeState(string $state): array
     {
-        $verifier = $this->stateStore->consume($state);
-        if ($verifier === null) {
+        $entry = $this->stateStore->consumeWithIdentity($state);
+        if ($entry === null) {
             throw new InvalidOAuthStateException(
                 'state mismatch or already consumed'
             );
         }
-        return $verifier;
+        return $entry;
+    }
+
+    /**
+     * Run the M-4 privileged-callback gate.
+     *
+     * Returns the gate's denial Response (401 `auth.required` / 403
+     * `auth.not_admin`) when the caller may not complete the bind, or null to
+     * continue. A MISSING gate denies: fail-closed by construction, so the
+     * gate can never be skipped by forgetting to wire it (S282 lesson — the
+     * old nullable-and-skip shape failed OPEN; here null means REFUSE).
+     */
+    private function denyUnlessAdmin(Request $request): ?Response
+    {
+        if ($this->adminGate === null) {
+            return (new Response())->status(403)->json([
+                'error' => 'Forbidden',
+                'code'  => 'auth.not_admin',
+            ]);
+        }
+
+        return ($this->adminGate)($request);
     }
 
     /**
@@ -403,7 +476,20 @@ final class TraktOAuthController
      */
     private function configPath(): string
     {
-        return $this->configFile ?? dirname(__DIR__, 4) . '/config/scrobblers/trakt.php';
+        return $this->configFile ?? self::defaultConfigFile();
+    }
+
+    /**
+     * Absolute path to the shipped Trakt operator-creds config file.
+     *
+     * Public so the composition root ({@see \Phlix\Server\Core\Application})
+     * resolves the SAME file/env the controller will read at request time —
+     * including the `token_encryption_key` it must pass into this controller's
+     * constructor (M-4b) — instead of re-deriving the path and drifting.
+     */
+    public static function defaultConfigFile(): string
+    {
+        return dirname(__DIR__, 4) . '/config/scrobblers/trakt.php';
     }
 
     /**

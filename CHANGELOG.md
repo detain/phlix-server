@@ -5104,6 +5104,94 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   corrected comment names the real mechanism so future re-pinners don't misjudge counts; all
   census pins (1877 files / 391 reads / 973 writes) are unchanged.
 
+### Security
+
+- **Trakt OAuth binds the SERVER-WIDE account, so only an admin may complete it, and the
+  completing admin must be the one who started the flow (M-4).** Both `/api/v1/oauth/trakt`
+  rails were registered with no middleware and the controller checked nothing: any
+  authenticated (or, absent a session cookie, anonymous) user could drive the PKCE dance and
+  the callback overwrote `plugins.settings_json` for `phlix-plugin-trakt` — swapping the
+  household's scrobble/sync identity to the attacker's Trakt account. Three closes:
+  **(a) admin gate.** The factory now wraps the container's `AdminMiddleware` as the
+  callback's gate — anonymous 401 `auth.required`, non-admin 403 `auth.not_admin` (both
+  registered codes; no new literals), with the middleware's own permission-denied audit.
+  The gate runs BEFORE the state lookup, so anonymous or refused traffic never burns the
+  one-shot PKCE entry. A missing gate/`AdminMiddleware` yields `null`, which the controller
+  treats as DENY (fail-closed — the S282 lesson, no "skip the check when unwired" arm).
+  **(b) identity-bound state.** `authorize()` persists `$request->userId` into the state row
+  — new nullable `user_id CHAR(36)` column on `oauth_state_store` via
+  `migrations/110_oauth_state_store_user_id.sql` (additive, idempotent INFORMATION_SCHEMA
+  guard, no FK — the table is TTL-transient and provider-unified); `callback()` requires the
+  completing identity to `hash_equals` the bound initiator, refusing never-bound states
+  (log reasons `state_not_bound_to_an_identity` / `state_bound_to_another_user`) — so an
+  attacker cannot issue a state as themselves and have a logged-in admin complete it into
+  their browser. `TraktOAuthStateStore::put()` gains the third optional parameter and a
+  `consumeWithIdentity()` read; both the DB and session stores implement it and normalize
+  an empty-string identity to `null` at the boundary. **(c) tokens at rest.** The
+  documented `token_encryption_key` config (file/env) existed only in prose: the factory
+  never passed `tokenEncryptionKey`, so every OAuth token landed in `plugins.settings_json`
+  as PLAINTEXT. The factory now loads the documented key through `TraktOperatorConfig::load`
+  (deliberately no `server_settings` overlay — the key is config/env-only) and hands it to
+  the controller, whose `toStorageArray($cipher)` path encrypts with `SodiumTokenCipher`
+  (`v1:`-tagged secretbox). The documented read-side contract — `decrypt()` passes any
+  un-prefixed value through UNCHANGED, and returns corrupt/wrong-key payloads as-is rather
+  than throwing inside a resident worker — is now pinned by `SodiumTokenCipherTest`
+  (first test this cipher ever had), and `TraktOAuthFactoryWiringGuardTest` pins the wiring
+  itself: gate is a Closure in production shape, anonymous/non-admin dispatch through the
+  WIRED gate yields 401/403 with the registered codes, and a valid env key builds the
+  cipher while its absence degrades exactly as documented. No migration data backfill:
+  existing plaintext tokens stay readable via the passthrough and re-encrypt on the next
+  refresh cycle.
+
+- **Book and audiobook progress endpoints actually work now (M-6).** `BookController` and
+  `AudiobookController` resolved the user through a `setUserId()` seam that NOTHING in
+  production ever called (the factories build the controllers per-route and never stamp
+  identity), so every GET/POST `/api/v1/{books,audiobooks}/{id}/progress` answered 401
+  `Authentication required` to fully-authenticated users, and both POST handlers parsed
+  `$request->query['body']` — a key that is never populated (the canonical parsed payload is
+  `$request->body`) — so even the shape was dead. Worse, the two BOOKS rails were only ever
+  registered in the long-dead `Router::books()` helper, so `BookReaderPage`'s saves 404'd
+  into its silent-catch and reading progress never persisted anywhere. Handlers now resolve
+  identity from `$request->userId` — the house pattern every sibling already uses — and parse
+  `$request->body`; the dead property + setter are deleted; and GET+POST
+  `/api/v1/books/{id}/progress` are registered inside the same `AuthMiddleware` group as the
+  browse routes, bending the code TO the spec's declared behavior for the audiobook pair
+  (`openapi.yaml` `x-phlix-middleware: [AuthMiddleware]`). `readBook`/`readAudiobook` resume
+  progress off the request identity too, which — once the rails exist — restores the
+  "continue where you left off" the UI was already coded for. Same-commit tripwires: the
+  spec gains the books pair (currency 348→349 path templates), the composed-route inventory
+  373→375 (GET 196→197, POST 128→129), the wire-path manifest records both new rails with
+  `[AuthMiddleware]`, and the Request census re-pins 1913→1916 files / 398→423 declared
+  reads / 1000→1014 declared writes (all measured from the phpunit red, never predicted).
+  Wire-verified by rewritten controller tests: request-identity GET/POST for a known user,
+  anonymous 401 with the store `never()` touched, body-array payloads asserted at the store
+  boundary, and clamp semantics (negative page → 1, percent clamped 0–100) pinned on the
+  books side.
+
+- **`GET /api/v1/servers` is authenticated, and the unenrolled-server id stopped
+  re-randomising per request (L-1).** The rail was registered with no middleware, leaking
+  server name, id, hostname candidates and enrollment timestamp to anyone. Estate-wide search
+  found exactly one consumer — phlix-ui's `AdminServersApi` (MetricsPage/ServerSelector),
+  whose `ApiClient` defaults to the Bearer-sending `LocalStorageTokenStore` — and hub-relay
+  traffic reaches the rail with a populated `$request->userId` (the `hub-relay` sentinel), so
+  gating breaks nothing; the spec flips to `x-phlix-middleware: [AuthMiddleware]` +
+  bearerAuth in the same commit, S437 sibling parity. The closure also minted a fresh
+  `Uuid::v4()` on EVERY request whenever the server was neither enrolled nor configured with
+  an id — the dropdown's server identity churned on every poll. That fallback is now memoised
+  per process (enrollment/config ids still re-read per request, so enrolling takes effect
+  without a restart). Pinned by `tests/Unit/Server/Core/ServersAndJobsAuthGateTest.php`: the
+  route table shows `AuthMiddleware`, anonymous dispatch is 401 `auth.required` with the
+  payload keys absent, and two dispatches on one Application answer with the SAME id.
+
+- **`/admin/health/jobs` is authenticated (L-2).** The F6 job-stats rail — transcode/scan
+  running counts, oldest-job ages, reaper timing — sat under the `/admin` prefix while
+  registered with no middleware at all. Zero consumers found anywhere in the estate except
+  generated route manifests (contracts TS, client/hub test fixtures); infra probes target the
+  deliberately-open bare `/health`, which stays unauthenticated (Docker `HEALTHCHECK`, k8s
+  probes, boot-smoke). Gated in the nested `''`-prefix group so the METHOD+PATH tuple is
+  byte-identical and only the middleware column moves (`[]` → `[AuthMiddleware]` in the
+  wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

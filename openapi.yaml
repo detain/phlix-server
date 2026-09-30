@@ -123,8 +123,9 @@ paths:
       tags: ["Administration"]
       summary: "Jobs"
       description: "Jobs (get /admin/health/jobs)."
-      x-phlix-middleware: []
-      security: []
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: "Success."
@@ -133,6 +134,12 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1":
     get:
       operationId: "get_api_v1"
@@ -5413,6 +5420,69 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/books/{id}/progress":
+    get:
+      operationId: "get_api_v1_books_id_progress"
+      tags: ["Music & Books"]
+      summary: "Get progress"
+      description: "Get progress (get /api/v1/books/{id}/progress)."
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_books_id_progress"
+      tags: ["Music & Books"]
+      summary: "Save progress"
+      description: "Save progress (post /api/v1/books/{id}/progress)."
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/books/{id}/read":
     get:
       operationId: "get_api_v1_books_id_read"
@@ -9891,8 +9961,9 @@ paths:
       tags: ["System"]
       summary: "Servers"
       description: "Servers (get /api/v1/servers)."
-      x-phlix-middleware: []
-      security: []
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: "Success."
@@ -9901,6 +9972,10 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/sessions":

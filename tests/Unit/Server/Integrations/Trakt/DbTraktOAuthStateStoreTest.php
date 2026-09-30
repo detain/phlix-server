@@ -73,7 +73,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_round_trip_returns_verifier(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [
+            'SELECT data, user_id FROM oauth_state_store' => [
                 ['data' => json_encode(['code_verifier' => 'verifier-abc'])],
             ],
         ]);
@@ -87,7 +87,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_consume_with_mismatched_state_returns_null(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [],
+            'SELECT data, user_id FROM oauth_state_store' => [],
         ]);
 
         $store = new DbTraktOAuthStateStore($db);
@@ -104,7 +104,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         $db->method('query')->willReturnCallback(
             function (string $sql) use (&$firstCall): mixed {
                 $this->seenSql[] = $sql;
-                if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
                     if ($firstCall) {
                         $firstCall = false;
                         return [['data' => json_encode(['code_verifier' => 'verifier-abc'])]];
@@ -129,7 +129,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_consume_when_never_issued_returns_null(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [],
+            'SELECT data, user_id FROM oauth_state_store' => [],
         ]);
 
         $store = new DbTraktOAuthStateStore($db);
@@ -145,7 +145,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         $db->method('query')->willReturnCallback(
             function (string $sql) use (&$callCount): mixed {
                 $this->seenSql[] = $sql;
-                if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
                     $callCount++;
                     // First call returns nothing (wrong state), second call also nothing (wiped)
                     return [];
@@ -202,9 +202,11 @@ final class DbTraktOAuthStateStoreTest extends TestCase
             }
         }
         self::assertNotNull($insertIndex, 'INSERT statement not found');
-        // Verify the JSON data contains the code_verifier (params: id, provider, state, data, expires)
+        // Verify the JSON data contains the code_verifier
+        // (params: id, provider, state, user_id, data, expires — M-4 inserted
+        // the bound identity column between state and data).
         /** @var string $insertData */
-        $insertData = $this->seenParams[$insertIndex][3];
+        $insertData = $this->seenParams[$insertIndex][4];
         $data = json_decode($insertData, true);
         self::assertIsArray($data);
         self::assertSame('my-code-verifier', $data['code_verifier']);
@@ -213,7 +215,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_consume_queries_with_correct_provider_filter(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [],
+            'SELECT data, user_id FROM oauth_state_store' => [],
         ]);
         $store = new DbTraktOAuthStateStore($db);
 
@@ -222,7 +224,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         // Find the SELECT statement index
         $selectIndex = null;
         foreach ($this->seenSql as $i => $sql) {
-            if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+            if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
                 $selectIndex = $i;
                 break;
             }
@@ -236,7 +238,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_cleanup_runs_after_successful_consume(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [
+            'SELECT data, user_id FROM oauth_state_store' => [
                 ['data' => json_encode(['code_verifier' => 'verifier'])],
             ],
         ]);
@@ -254,7 +256,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_cleanup_runs_after_failed_consume(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [],
+            'SELECT data, user_id FROM oauth_state_store' => [],
         ]);
         $store = new DbTraktOAuthStateStore($db);
 
@@ -299,7 +301,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         $db->method('query')->willReturnCallback(
             function (string $sql): mixed {
                 $this->seenSql[] = $sql;
-                if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
                     return 'error'; // Simulate error
                 }
                 return true;
@@ -328,7 +330,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         $db->method('query')->willReturnCallback(
             function (string $sql) use (&$firstCall): mixed {
                 $this->seenSql[] = $sql;
-                if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
                     return [['data' => json_encode(['code_verifier' => 'verifier'])]];
                 }
                 if (str_contains($sql, 'DELETE FROM oauth_state_store')) {
@@ -351,7 +353,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_empty_json_data_returns_null(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [
+            'SELECT data, user_id FROM oauth_state_store' => [
                 ['data' => '{}'], // Empty JSON object
             ],
         ]);
@@ -365,7 +367,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     public function test_missing_code_verifier_in_data_returns_null(): void
     {
         $db = $this->mockConnection([
-            'SELECT data FROM oauth_state_store' => [
+            'SELECT data, user_id FROM oauth_state_store' => [
                 ['data' => json_encode(['nonce' => 'some-nonce'])], // Missing code_verifier
             ],
         ]);
@@ -451,5 +453,128 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         $store->put('state-123', 'verifier-123');
 
         $this->addToAssertionCount(1); // reaching here without a throw IS the assertion
+    }
+
+    // -----------------------------------------------------------------
+    // M-4: initiating-identity binding (column + consumeWithIdentity)
+    // -----------------------------------------------------------------
+
+    /**
+     * put() must persist the bound identity into the dedicated user_id column
+     * (positionally between state_value and data) — not into the provider-
+     * opaque `data` JSON, so every provider on the unified table reads it the
+     * same way.
+     */
+    public function test_put_persists_bound_identity_into_user_id_column(): void
+    {
+        $db = $this->mockConnection();
+
+        $store = new DbTraktOAuthStateStore($db);
+        $store->put('state-123', 'verifier-abc', 'admin-42');
+
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        self::assertStringContainsString('user_id', (string) $this->seenSql[$insertIndex]);
+        self::assertSame('admin-42', $this->seenParams[$insertIndex][3]);
+        // data JSON must NOT duplicate the identity.
+        $data = json_decode((string) $this->seenParams[$insertIndex][4], true);
+        self::assertIsArray($data);
+        self::assertArrayNotHasKey('user_id', $data);
+    }
+
+    public function test_put_stores_null_identity_when_unbound(): void
+    {
+        $db = $this->mockConnection();
+
+        $store = new DbTraktOAuthStateStore($db);
+        $store->put('state-123', 'verifier-abc');
+
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex);
+        self::assertNull($this->seenParams[$insertIndex][3]);
+    }
+
+    public function test_consume_with_identity_returns_verifier_and_bound_user(): void
+    {
+        $db = $this->mockConnection([
+            'SELECT data, user_id FROM oauth_state_store' => [
+                [
+                    'data' => json_encode(['code_verifier' => 'verifier-abc']),
+                    'user_id' => 'admin-42',
+                ],
+            ],
+        ]);
+
+        $store = new DbTraktOAuthStateStore($db);
+
+        self::assertSame(
+            ['code_verifier' => 'verifier-abc', 'user_id' => 'admin-42'],
+            $store->consumeWithIdentity('state-123'),
+        );
+    }
+
+    public function test_consume_with_identity_reports_null_for_unbound_row(): void
+    {
+        $db = $this->mockConnection([
+            'SELECT data, user_id FROM oauth_state_store' => [
+                [
+                    'data' => json_encode(['code_verifier' => 'verifier-abc']),
+                    'user_id' => null,
+                ],
+            ],
+        ]);
+
+        $store = new DbTraktOAuthStateStore($db);
+
+        self::assertSame(
+            ['code_verifier' => 'verifier-abc', 'user_id' => null],
+            $store->consumeWithIdentity('state-123'),
+        );
+    }
+
+    /**
+     * The legacy `consume()` surface must keep returning just the verifier and
+     * must still one-shot the row — the identity plumbing may not silently
+     * change what pre-existing callers see.
+     */
+    public function test_consume_delegates_and_still_returns_plain_verifier(): void
+    {
+        $firstCall = true;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$firstCall): mixed {
+                if (str_contains($sql, 'SELECT data, user_id FROM oauth_state_store')) {
+                    if ($firstCall) {
+                        $firstCall = false;
+                        return [[
+                            'data' => json_encode(['code_verifier' => 'verifier-abc']),
+                            'user_id' => 'admin-42',
+                        ]];
+                    }
+                    return [];
+                }
+                return true;
+            }
+        );
+        $db->method('beginTrans')->willReturn(true);
+        $db->method('commitTrans')->willReturn(true);
+        $db->method('rollBackTrans')->willReturn(true);
+
+        $store = new DbTraktOAuthStateStore($db);
+
+        self::assertSame('verifier-abc', $store->consume('state-123'));
+        self::assertNull($store->consume('state-123'));
     }
 }

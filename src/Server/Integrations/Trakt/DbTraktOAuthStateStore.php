@@ -64,21 +64,25 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
     /**
      * Persist a PKCE code verifier keyed by the state value.
      *
-     * @param string $state       Unique state identifier
-     * @param string $codeVerifier PKCE code verifier
+     * @param string      $state        Unique state identifier
+     * @param string      $codeVerifier PKCE code verifier
+     * @param string|null $userId       Identity that initiated the flow
+     *                                  (migration 110); NULL for unbound rows.
      *
      * @throws \RuntimeException If database insert fails
      */
-    public function put(string $state, string $codeVerifier): void
+    public function put(string $state, string $codeVerifier, ?string $userId = null): void
     {
         $id = Uuid::v4();
         $expiresAt = time() + $this->ttlSeconds;
         $data = json_encode(['code_verifier' => $codeVerifier]);
+        // M-4: parse at the boundary — an empty identity is NO identity.
+        $boundUserId = ($userId === '') ? null : $userId;
 
         $result = $this->db->query(
-            "INSERT INTO oauth_state_store (id, provider, state_value, data, expires_at)
-             VALUES (?, ?, ?, ?, FROM_UNIXTIME(?))",
-            [$id, self::PROVIDER, $state, $data, $expiresAt]
+            "INSERT INTO oauth_state_store (id, provider, state_value, user_id, data, expires_at)
+             VALUES (?, ?, ?, ?, ?, FROM_UNIXTIME(?))",
+            [$id, self::PROVIDER, $state, $boundUserId, $data, $expiresAt]
         );
 
         // This was `$result === false`, which could never fire: the client
@@ -106,16 +110,33 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
      */
     public function consume(string $state): ?string
     {
+        $entry = $this->consumeWithIdentity($state);
+
+        return $entry === null ? null : $entry['code_verifier'];
+    }
+
+    /**
+     * One-shot consume that also reports the identity (migration 110
+     * `user_id` column) the entry was bound to at initiation.
+     *
+     * @return array{code_verifier: string, user_id: ?string}|null null with the
+     *         same refusal semantics as {@see consume()}; a row whose user_id
+     *         is NULL (issued before M-4, or by a 2-arg put) comes back bound
+     *         to null so the CALLER decides — the Trakt callback refuses
+     *         unbound state.
+     */
+    public function consumeWithIdentity(string $state): ?array
+    {
         // Atomic consume: SELECT within transaction, then DELETE
-        $verifier = $this->fetchAndDelete($state);
-        if ($verifier === null) {
+        $entry = $this->fetchAndDelete($state);
+        if ($entry === null) {
             $this->cleanupExpiredEntries();
             return null;
         }
 
         $this->cleanupExpiredEntries();
 
-        return $verifier;
+        return $entry;
     }
 
     /**
@@ -123,14 +144,16 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
      *
      * @param string $state State value to look up
      *
-     * @return string|null The code verifier if found, null otherwise
+     * @return array{code_verifier: string, user_id: ?string}|null The consumed
+     *         entry, or null when nothing valid was found.
      */
-    private function fetchAndDelete(string $state): ?string
+    private function fetchAndDelete(string $state): ?array
     {
         $this->db->beginTrans();
         try {
             $result = $this->db->query(
-                "SELECT data FROM oauth_state_store WHERE provider = ? AND state_value = ? AND expires_at > NOW()",
+                "SELECT data, user_id FROM oauth_state_store"
+                . " WHERE provider = ? AND state_value = ? AND expires_at > NOW()",
                 [self::PROVIDER, $state]
             );
 
@@ -139,7 +162,7 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
                 return null;
             }
 
-            /** @var array<string, string> $row */
+            /** @var array<string, string|null> $row */
             $row = $result[0];
 
             $deleteResult = $this->db->query(
@@ -179,7 +202,11 @@ final class DbTraktOAuthStateStore implements TraktOAuthStateStore
                 return null;
             }
 
-            return $codeVerifier;
+            $boundUserId = is_string($row['user_id'] ?? null) && $row['user_id'] !== ''
+                ? $row['user_id']
+                : null;
+
+            return ['code_verifier' => $codeVerifier, 'user_id' => $boundUserId];
         } catch (\Throwable) {
             $this->db->rollBackTrans();
             return null;

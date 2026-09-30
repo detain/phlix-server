@@ -45,9 +45,6 @@ class BookController
     /** @var OpdsFeedBuilder OPDS feed builder */
     private OpdsFeedBuilder $opdsBuilder;
 
-    /** @var string|null Current user ID (from auth context) */
-    private ?string $userId = null;
-
     /** @var BookProgressStore|null Progress store for reading progress */
     private ?BookProgressStore $progressStore = null;
 
@@ -66,17 +63,6 @@ class BookController
     public function setProgressStore(BookProgressStore $progressStore): void
     {
         $this->progressStore = $progressStore;
-    }
-
-    /**
-     * Sets the current user ID from the request context.
-     *
-     * @param string $userId The authenticated user's ID
-     * @return void
-     */
-    public function setUserId(string $userId): void
-    {
-        $this->userId = $userId;
     }
 
     /**
@@ -390,10 +376,16 @@ class BookController
         $chapters = $this->buildChapterList($metadata);
         $totalPages = is_int($metadata['pages'] ?? null) ? (int) $metadata['pages'] : count($chapters);
 
-        // Get reading progress if user is authenticated and progress store is available
+        // Get reading progress if the viewer is session-authenticated and the
+        // progress store is available. M-6 (security/correctness audit
+        // 2026-09-30): identity comes from THE REQUEST (the entry points fill
+        // $request->userId before dispatch) — the controller-held userId this
+        // replaced had no production caller, so progress silently never loaded.
+        // A bare signed-token request has no userId and stays progress-less.
         $progress = null;
-        if ($this->userId !== null && $this->progressStore !== null) {
-            $progress = $this->progressStore->getProgress($this->userId, $bookId);
+        $viewerId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+        if ($viewerId !== null && $this->progressStore !== null) {
+            $progress = $this->progressStore->getProgress($viewerId, $bookId);
         }
 
         // Return book data with signed URLs and progress info for client reader
@@ -427,7 +419,9 @@ class BookController
             return (new Response())->status(400)->json(['error' => 'Book ID is required']);
         }
 
-        if ($this->userId === null) {
+        $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+
+        if ($userId === null) {
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
@@ -435,10 +429,10 @@ class BookController
             return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
         }
 
-        $progress = $this->progressStore->getProgress($this->userId, $bookId);
+        $progress = $this->progressStore->getProgress($userId, $bookId);
 
         return (new Response())->json([
-            'progress' => $progress?->toArray() ?? BookProgress::fresh($bookId, $this->userId)->toArray(),
+            'progress' => $progress?->toArray() ?? BookProgress::fresh($bookId, $userId)->toArray(),
         ]);
     }
 
@@ -467,7 +461,10 @@ class BookController
             return (new Response())->status(400)->json(['error' => 'Book ID is required']);
         }
 
-        if ($this->userId === null) {
+        // M-6: the save endpoint reads the request's authenticated identity.
+        $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+
+        if ($userId === null) {
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
@@ -475,9 +472,9 @@ class BookController
             return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
         }
 
-        $body = $request->query['body'] ?? '{}';
-        $rawData = is_string($body) ? json_decode($body, true) : null;
-        $data = is_array($rawData) ? $rawData : [];
+        // M-6: $request->body is the canonical parsed JSON body (Request::$body);
+        // the old $request->query['body'] read was never populated in production.
+        $data = is_array($request->body) ? $request->body : [];
 
         $positionMsRaw = $data['position_ms'] ?? 0;
         $positionMs = is_int($positionMsRaw) || is_float($positionMsRaw)
@@ -505,7 +502,7 @@ class BookController
 
         $progress = new BookProgress(
             $bookId,
-            $this->userId,
+            $userId,
             $positionMs,
             $currentPage,
             $totalPages,

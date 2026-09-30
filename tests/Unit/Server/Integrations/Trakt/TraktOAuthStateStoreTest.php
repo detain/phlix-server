@@ -71,4 +71,58 @@ final class TraktOAuthStateStoreTest extends TestCase
         self::assertNull($store->consume('state-WRONG'));
         self::assertNull($store->consume('state-123'));
     }
+
+    // -----------------------------------------------------------------
+    // M-4: initiating-identity binding on the session surface too
+    // -----------------------------------------------------------------
+
+    public function test_consume_with_identity_round_trips_bound_user(): void
+    {
+        $store = new SessionTraktOAuthStateStore();
+        $store->put('state-123', 'verifier-abc', 'admin-42');
+
+        self::assertSame(
+            ['code_verifier' => 'verifier-abc', 'user_id' => 'admin-42'],
+            $store->consumeWithIdentity('state-123'),
+        );
+    }
+
+    public function test_consume_with_identity_reports_null_for_unbound_put(): void
+    {
+        $store = new SessionTraktOAuthStateStore();
+        $store->put('state-123', 'verifier-abc');
+
+        self::assertSame(
+            ['code_verifier' => 'verifier-abc', 'user_id' => null],
+            $store->consumeWithIdentity('state-123'),
+        );
+    }
+
+    public function test_identity_is_wiped_with_the_rest_of_the_entry(): void
+    {
+        $store = new SessionTraktOAuthStateStore();
+        $store->put('state-123', 'verifier-abc', 'admin-42');
+
+        // A wrong-state consume wipes EVERYTHING — the bound identity must not
+        // survive for a later probe to correlate against.
+        self::assertNull($store->consumeWithIdentity('state-WRONG'));
+        self::assertNull($store->consumeWithIdentity('state-123'));
+        self::assertArrayNotHasKey('trakt_oauth_user_id', $_SESSION);
+    }
+
+    /**
+     * Contract: an empty-string identity is normalised to NO identity at the
+     * store boundary (M-4 parse-don't-validate) — never a stored '' that a
+     * forged empty userId could later match via hash_equals.
+     */
+    public function test_empty_string_identity_is_normalised_to_null(): void
+    {
+        $store = new SessionTraktOAuthStateStore();
+        $store->put('state-123', 'verifier-abc', '');
+
+        self::assertSame(
+            ['code_verifier' => 'verifier-abc', 'user_id' => null],
+            $store->consumeWithIdentity('state-123'),
+        );
+    }
 }

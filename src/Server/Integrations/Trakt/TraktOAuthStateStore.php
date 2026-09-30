@@ -34,8 +34,17 @@ interface TraktOAuthStateStore
 {
     /**
      * Persist a `(state, code_verifier)` pair for later one-shot lookup.
+     *
+     * The optional `$userId` records WHO initiated the flow (the authenticated
+     * id at `authorize()` time). M-4 (security audit 2026-09-30): the callback
+     * refuses any state whose bound identity does not match the admin
+     * completing it, so an attacker can never ride a state issued to somebody
+     * else — nor bind the server-wide Trakt account through an unbound flow.
+     * `null` means "no identity was resolvable at initiation"; such rows exist
+     * for pre-M-4 state issued before a deploy, and MUST be refused by the
+     * Trakt callback rather than treated as a wildcard.
      */
-    public function put(string $state, string $codeVerifier): void;
+    public function put(string $state, string $codeVerifier, ?string $userId = null): void;
 
     /**
      * Look up the code_verifier matching the supplied state and atomically
@@ -43,4 +52,13 @@ interface TraktOAuthStateStore
      * MUST be treated as a CSRF failure by callers.
      */
     public function consume(string $state): ?string;
+
+    /**
+     * One-shot consume that also reports the identity the entry was bound to.
+     *
+     * @return array{code_verifier: string, user_id: ?string}|null null when the
+     *         state was never issued, already consumed, or expired — identical
+     *         refusal semantics to {@see self::consume()}.
+     */
+    public function consumeWithIdentity(string $state): ?array;
 }

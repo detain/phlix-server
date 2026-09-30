@@ -516,8 +516,10 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // GET /api/v1/music/album), re-measured from this phpunit red; 348 after
         // S518's quick-connect pairing quartet (initiate + {code}/status + {code}/approve
         // + {code}/token), the consent-gated telemetry heartbeat and its admin census read
-        // — 404→410 operations — re-measured from this phpunit red.
-        $this->assertCount(348, $doc['paths'], 'the served surface is 348 distinct path templates');
+        // — 404→410 operations — re-measured from this phpunit red; 349 after the M-6
+        // security lane registered /api/v1/books/{id}/progress (GET+POST, one template)
+        // so BookReaderPage's silent-catch POST actually lands — re-measured here.
+        $this->assertCount(349, $doc['paths'], 'the served surface is 349 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

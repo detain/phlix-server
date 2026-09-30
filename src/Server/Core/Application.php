@@ -258,39 +258,48 @@ class Application
 
         // F6: Job health endpoint - reports stuck/running transcode + scan job
         // counts, oldest age, and the last reaper run time.
-        $this->router->get('/admin/health/jobs', function (Request $request): Response {
-            // The container is always set when loadRoutes() is called (from the
-            // constructor), but PHPStan sees the property as ?ContainerInterface.
-            // Guard against null to satisfy the type checker.
-            if ($this->container === null) {
-                return (new Response())->status(500)->json(['error' => 'Server misconfiguration']);
-            }
+        // L-2 (security audit 2026-09-30): GATED. Despite living under the
+        // `/admin` prefix this rail was registered with no middleware at all,
+        // leaking job counts, oldest-job ages and reaper timing to anonymous
+        // callers. Estate-wide grep found ZERO consumers of this path — only
+        // generated route manifests (contracts TS, client/hub test fixtures);
+        // infra probes use `/health`. Same-forearm parity: the sibling
+        // `/api/v1/health/network` S437 flip (AuthMiddleware above).
+        $this->router->group('', function (Router $r): void {
+            $r->get('/admin/health/jobs', function (Request $request): Response {
+                // The container is always set when loadRoutes() is called (from the
+                // constructor), but PHPStan sees the property as ?ContainerInterface.
+                // Guard against null to satisfy the type checker.
+                if ($this->container === null) {
+                    return (new Response())->status(500)->json(['error' => 'Server misconfiguration']);
+                }
 
-            /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
-            $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
-            /** @var \Phlix\Media\Library\ScanJobRepository $scanRepo */
-            $scanRepo = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
+                /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
+                $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+                /** @var \Phlix\Media\Library\ScanJobRepository $scanRepo */
+                $scanRepo = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
 
-            $transcodeStats = $transcodeManager->getTranscodeJobStats();
-            $scanStats = $scanRepo->getRunningJobStats();
-            $lastReaperRun = $transcodeManager->getLastReaperRun();
+                $transcodeStats = $transcodeManager->getTranscodeJobStats();
+                $scanStats = $scanRepo->getRunningJobStats();
+                $lastReaperRun = $transcodeManager->getLastReaperRun();
 
-            return (new Response())->json([
-                'transcode_jobs' => [
-                    'running' => $transcodeStats['running'],
-                    'oldest_age_seconds' => $transcodeStats['oldest_age_seconds'],
-                    'oldest_started_at' => $transcodeStats['oldest_started_at'],
-                ],
-                'scan_jobs' => [
-                    'running' => $scanStats['running'],
-                    'oldest_age_seconds' => $scanStats['oldest_age_seconds'],
-                    'oldest_started_at' => $scanStats['oldest_started_at'],
-                ],
-                'reaper' => [
-                    'last_run_at' => $lastReaperRun !== null ? date('c', $lastReaperRun) : null,
-                ],
-            ]);
-        });
+                return (new Response())->json([
+                    'transcode_jobs' => [
+                        'running' => $transcodeStats['running'],
+                        'oldest_age_seconds' => $transcodeStats['oldest_age_seconds'],
+                        'oldest_started_at' => $transcodeStats['oldest_started_at'],
+                    ],
+                    'scan_jobs' => [
+                        'running' => $scanStats['running'],
+                        'oldest_age_seconds' => $scanStats['oldest_age_seconds'],
+                        'oldest_started_at' => $scanStats['oldest_started_at'],
+                    ],
+                    'reaper' => [
+                        'last_run_at' => $lastReaperRun !== null ? date('c', $lastReaperRun) : null,
+                    ],
+                ]);
+            });
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
         // P3B-S7: Network health monitoring endpoints.
         // S211: resolves through {@see self::resolveConfigDir()} — in production
@@ -375,85 +384,117 @@ class Application
 
         // Servers list endpoint — returns the local server info for the admin
         // "all servers" dropdown (Issue 1 fix)
-        $this->router->get('/api/v1/servers', function (Request $request): Response {
-            // Get server name from config
-            $serverConfig = $this->config['server'] ?? [];
-            $serverName = is_array($serverConfig) && isset($serverConfig['name']) && is_string($serverConfig['name'])
-                ? $serverConfig['name']
-                : 'Phlix Media Server';
+        // L-1 (security audit 2026-09-30): GATED. Estate-wide grep found the
+        // only consumer to be phlix-ui's AdminServersApi (MetricsPage /
+        // ServerSelector), which authenticates via Bearer through ApiClient's
+        // default LocalStorageTokenStore — no anonymous dependency. Hub relay
+        // traffic reaches this rail with a populated $request->userId (the
+        // 'hub-relay' sentinel fallback in RelayConsumer), so hub mode is
+        // unaffected. Sibling parity: /api/v1/health/network (S437) gate flip.
+        //
+        // The generated-id fallback is memoised per process: before this, an
+        // UNENROLLED server handed out a fresh random UUID on EVERY request,
+        // so the dropdown's "server" identity churned with every poll (and the
+        // endpoint made its cache/monitoring useless). Enrollment/config ids
+        // still re-read per request — a live enrollment must take effect
+        // without a restart; only the anonymous fallback is stabilised.
+        /** @var string|null Process-stable fallback id for an unenrolled server. */
+        $resolvedServerId = null;
+        $this->router->group('', function (Router $r) use (&$resolvedServerId): void {
+            $r->get('/api/v1/servers', function (Request $request) use (&$resolvedServerId): Response {
+                // Get server name from config
+                $serverConfig = $this->config['server'] ?? [];
+                $serverName = (
+                    is_array($serverConfig)
+                    && isset($serverConfig['name'])
+                    && is_string($serverConfig['name'])
+                )
+                    ? $serverConfig['name']
+                    : 'Phlix Media Server';
 
-            // Get server ID: try hub enrollment first, then config, then generate
-            $serverId = null;
-            $enrolledAt = null;
+                // Get server ID: try hub enrollment first, then config, then generate
+                $serverId = null;
+                $enrolledAt = null;
 
-            $configDir = $this->resolveConfigDir();
-            $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
+                $configDir = $this->resolveConfigDir();
+                $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
 
-            if (file_exists($enrollmentPath)) {
-                $content = @file_get_contents($enrollmentPath);
-                if ($content !== false) {
-                    $data = json_decode($content, true);
-                    if (is_array($data)) {
-                        if (isset($data['server_id']) && is_string($data['server_id'])) {
-                            $serverId = $data['server_id'];
-                        }
-                        if (isset($data['enrolled_at']) && is_int($data['enrolled_at'])) {
-                            $enrolledAt = $data['enrolled_at'];
+                if (file_exists($enrollmentPath)) {
+                    $content = @file_get_contents($enrollmentPath);
+                    if ($content !== false) {
+                        $data = json_decode($content, true);
+                        if (is_array($data)) {
+                            if (isset($data['server_id']) && is_string($data['server_id'])) {
+                                $serverId = $data['server_id'];
+                            }
+                            if (isset($data['enrolled_at']) && is_int($data['enrolled_at'])) {
+                                $enrolledAt = $data['enrolled_at'];
+                            }
                         }
                     }
                 }
-            }
 
-            // Fall back to config server.id if not enrolled
-            if ($serverId === null || $serverId === '') {
-                if (is_array($serverConfig) && isset($serverConfig['id']) && is_string($serverConfig['id'])) {
-                    $serverId = $serverConfig['id'];
+                // Fall back to config server.id if not enrolled
+                if ($serverId === null || $serverId === '') {
+                    if (is_array($serverConfig) && isset($serverConfig['id']) && is_string($serverConfig['id'])) {
+                        $serverId = $serverConfig['id'];
+                    }
                 }
-            }
 
-            // Generate a persistent ID if still missing (first run)
-            if ($serverId === null || $serverId === '') {
-                $serverId = \Phlix\Common\Uuid::v4();
-            }
+                // Generate a persistent ID if still missing (first run) — memoised
+                // per process so repeated unenrolled requests report a STABLE id
+                // (was a fresh Uuid::v4() per request: the dropdown's server id
+                // churned on every poll).
+                if ($serverId === null || $serverId === '') {
+                    if (!is_string($resolvedServerId) || $resolvedServerId === '') {
+                        $resolvedServerId = \Phlix\Common\Uuid::v4();
+                    }
+                    $serverId = $resolvedServerId;
+                }
 
-            // Build hostname from hub config
-            $hubConfig = $this->config['hub'] ?? [];
-            $publicUrl = is_array($hubConfig) && isset($hubConfig['public_url']) && is_string($hubConfig['public_url'])
-                ? $hubConfig['public_url'] : '';
+                // Build hostname from hub config
+                $hubConfig = $this->config['hub'] ?? [];
+                $publicUrl = (
+                    is_array($hubConfig)
+                    && isset($hubConfig['public_url'])
+                    && is_string($hubConfig['public_url'])
+                )
+                    ? $hubConfig['public_url'] : '';
 
-            if (
-                $publicUrl === ''
-                && is_array($hubConfig)
-                && isset($hubConfig['domain'])
-                && is_string($hubConfig['domain'])
-            ) {
-                $tlsEnabled = is_bool($hubConfig['tls_enabled'] ?? null)
-                    ? $hubConfig['tls_enabled']
-                    : true;
-                $publicUrl = ($tlsEnabled ? 'https://' : 'http://') . $hubConfig['domain'];
-            }
+                if (
+                    $publicUrl === ''
+                    && is_array($hubConfig)
+                    && isset($hubConfig['domain'])
+                    && is_string($hubConfig['domain'])
+                ) {
+                    $tlsEnabled = is_bool($hubConfig['tls_enabled'] ?? null)
+                        ? $hubConfig['tls_enabled']
+                        : true;
+                    $publicUrl = ($tlsEnabled ? 'https://' : 'http://') . $hubConfig['domain'];
+                }
 
-            $hostnameCandidates = [];
-            if ($publicUrl !== '') {
-                $hostnameCandidates[] = $publicUrl;
-            }
-            // Always include localhost as a fallback candidate
-            $hostnameCandidates[] = 'http://localhost:8096';
+                $hostnameCandidates = [];
+                if ($publicUrl !== '') {
+                    $hostnameCandidates[] = $publicUrl;
+                }
+                // Always include localhost as a fallback candidate
+                $hostnameCandidates[] = 'http://localhost:8096';
 
-            return (new Response())->json([
-                'success' => true,
-                'data' => [
-                    [
-                        'id' => $serverId,
-                        'name' => $serverName,
-                        'hostname' => $publicUrl ?: 'http://localhost:8096',
-                        'online' => true,
-                        'last_seen_at' => $enrolledAt ?? time(),
-                        'hostname_candidates' => array_values(array_unique($hostnameCandidates)),
+                return (new Response())->json([
+                    'success' => true,
+                    'data' => [
+                        [
+                            'id' => $serverId,
+                            'name' => $serverName,
+                            'hostname' => $publicUrl ?: 'http://localhost:8096',
+                            'online' => true,
+                            'last_seen_at' => $enrolledAt ?? time(),
+                            'hostname_candidates' => array_values(array_unique($hostnameCandidates)),
+                        ],
                     ],
-                ],
-            ]);
-        });
+                ]);
+            });
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
         // Username/password authentication endpoints. The controller validates
         // input and delegates to AuthManager; `me` enforces 401 internally by
@@ -2337,7 +2378,7 @@ class Application
      * Wires endpoints for:
      * - BookController: opdsRoot, opdsLibraries, opdsLibraryBooks,
      *   opdsBookCover, listBooks, getBook, readBook, getCover,
-     *   downloadBook (9 routes)
+     *   downloadBook (9 routes) + the per-user progress pair (2 routes, M-6)
      *
      * @since 0.17.0
      */
@@ -2364,6 +2405,15 @@ class Application
         $this->router->group('', function (Router $r) use ($controller): void {
             $r->get('/api/v1/books', [$controller, 'listBooks']);
             $r->get('/api/v1/books/{id}', [$controller, 'getBook']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+
+        // M-6: per-user reading progress. These rails existed only in the dead
+        // Router::books() helper, so BookReaderPage's POST 404'd into its
+        // silent-catch and progress never persisted. Same audience as the
+        // browse group: a signed-in user (the SPA client always sends Bearer).
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/books/{id}/progress', [$controller, 'getBookProgress']);
+            $r->post('/api/v1/books/{id}/progress', [$controller, 'saveBookProgress']);
         }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
         // Binary serving (read/cover/download) can't attach a Bearer header from
@@ -5052,6 +5102,37 @@ class Application
 
         $db = $this->connectionPool->getPooledConnection('mysql');
 
+        // M-4a (security audit 2026-09-30): the OAuth callback binds the
+        // SERVER-WIDE Trakt account, so it is an admin act. Wrap the
+        // container's AdminMiddleware (401 anonymous / 403 non-admin, with the
+        // middleware's own permission-denied audit) as the controller's gate.
+        // A missing gate/CONTAINER yields null — which the controller treats
+        // as DENY (fail-closed), never as "skip the check".
+        $adminGate = null;
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+                $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+                $adminGate = static fn (\Phlix\Server\Http\Request $request): ?\Phlix\Server\Http\Response
+                    => $adminMiddleware($request);
+            } catch (\Throwable) {
+                // Admin middleware unavailable — leave the gate null so the
+                // callback fails closed instead of running ungated.
+            }
+        }
+
+        // M-4b: read the documented-at-rest key from the SAME file/env the
+        // controller reads for credentials (settings overlay deliberately NOT
+        // applied — the key is config/env-only, never a server_settings value).
+        // SodiumTokenCipher::fromConfig() validates shape and degrades to
+        // plaintext storage on an unusable value, exactly as documented.
+        $traktFileConfig = \Phlix\Server\Integrations\Trakt\TraktOperatorConfig::load(
+            \Phlix\Server\Http\Controllers\TraktOAuthController::defaultConfigFile(),
+            null
+        );
+        $tokenKeyRaw = $traktFileConfig['token_encryption_key'] ?? getenv('TRAKT_TOKEN_ENCRYPTION_KEY');
+        $tokenEncryptionKey = is_string($tokenKeyRaw) && $tokenKeyRaw !== '' ? $tokenKeyRaw : null;
+
         return new \Phlix\Server\Http\Controllers\TraktOAuthController(
             logger: $logger,
             stateStore: null,
@@ -5059,6 +5140,8 @@ class Application
             settings: $settings,
             plugins: $plugins,
             db: $db,
+            tokenEncryptionKey: $tokenEncryptionKey,
+            adminGate: $adminGate,
         );
     }
 

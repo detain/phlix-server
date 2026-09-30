@@ -45,4 +45,15 @@ return [
      * Set TRAKT_SYNC_INTERVAL. Default 30; min 5, max 1440.
      */
     'sync_interval' => (int) (getenv('TRAKT_SYNC_INTERVAL') ?: '30'),
+
+    /**
+     * Token-at-rest encryption key for the OAuth tokens stored in
+     * `plugins.settings_json` (M-4b, security audit 2026-09-30 — this key was
+     * documented by TraktOAuthController and SodiumTokenCipher::fromConfig()
+     * since 0.14.0 but never read by ANY wiring, so tokens were always written
+     * in plaintext). Accepts raw 32 bytes, 64-char hex, or base64 of 32 bytes;
+     * an unusable value degrades to plaintext BY DESIGN (see fromConfig).
+     * Set TRAKT_TOKEN_ENCRYPTION_KEY; empty = encryption off (legacy behaviour).
+     */
+    'token_encryption_key' => getenv('TRAKT_TOKEN_ENCRYPTION_KEY') ?: '',
 ];

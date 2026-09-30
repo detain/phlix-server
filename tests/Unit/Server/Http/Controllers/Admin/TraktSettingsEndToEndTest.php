@@ -97,13 +97,21 @@ final class TraktSettingsEndToEndTest extends TestCase
         return new TraktOAuthController(
             logger: null,
             stateStore: new class implements TraktOAuthStateStore {
-                public function put(string $state, string $codeVerifier): void
+                public function put(string $state, string $codeVerifier, ?string $userId = null): void
                 {
+                }
+
+                /**
+                 * @return array{code_verifier: string, user_id: ?string}|null
+                 */
+                public function consumeWithIdentity(string $state): ?array
+                {
+                    return null;
                 }
 
                 public function consume(string $state): ?string
                 {
-                    return null;
+                    return $this->consumeWithIdentity($state)['code_verifier'] ?? null;
                 }
             },
             configFile: $this->traktConfigFile,

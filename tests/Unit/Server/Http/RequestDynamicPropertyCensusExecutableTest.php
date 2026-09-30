@@ -474,8 +474,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * default suite). Every other rework test appended into an existing
               * file. Names no Request property; only this denominator moves.
               * Measured 1911 from the phpunit red, not predicted.
+              * (Bridge note — da70cfa8 M-1/M-2/M-3 lane moved 1911→1913 with
+              * its two new test files, StreamLimitSyntheticSessionBucketTest and
+              * MusicScanAdminGateTest, without prose; verified via
+              * `git diff --name-status 9e765895..da70cfa8`.)
+              * Re-pinned 1913→1916 by the M-4/M-6/L-1/L-2 security lane
+              * (2026-09-30): adds three first-party test files — Unit/Server/
+              * Integrations/Trakt/SodiumTokenCipherTest.php, Unit/Server/Core/
+              * ServersAndJobsAuthGateTest.php and Unit/Server/Core/
+              * TraktOAuthFactoryWiringGuardTest.php; all other lane work appended
+              * into existing files. Measured 1916 from the phpunit red, not
+              * predicted.
               */
-    private const EXPECTED_PHP_FILES = 1913;
+    private const EXPECTED_PHP_FILES = 1916;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -506,8 +517,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * inline). The signed-URL/OPDS middleware changes call only methods
      * (`getTrustedClientIp()`), never properties; the five new files touch no
      * Request at all. Measured from the phpunit red on the final tree.
+     * Re-pinned 398→423 by the M-4/M-6/L-1/L-2 security lane (2026-09-30): the
+     * M-6 fix replaces the dead `setUserId()` property with request-identity
+     * reads (`$request->userId` ×6 across the five book/audiobook handlers)
+     * and canonical-body reads (`$request->body` ×2 in the two POST handlers);
+     * the M-4 fix reads `$request->userId` in `authorize()` (initiator binding)
+     * and `callback()` (identity match), and its test doubles read the declared
+     * members their fixtures assert on. Every read names a DECLARED member.
+     * Measured 423 from the phpunit red on the MERGED tree (which already
+     * carries the da70cfa8 M-1/M-2/M-3 lane: an undocumented 397→398 bump from
+     * its MediaItemController read sites), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 398;
+    private const EXPECTED_DECLARED_READS = 423;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -578,8 +599,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * +1 write (AuthControllerTest's logout identity-stamp, the same S435
      * entry-point shape) and +2 reads (documented under census number 2).
      * Every assignment lands on a DECLARED property; S427 license intact.
+     * Re-pinned 1000→1014 by the M-4/M-6/L-1/L-2 security lane (2026-09-30):
+     * the lane's request builders assign declared members only — `method`/
+     * `path`/`remoteIp` in the two new production-router guard tests' helpers
+     * (ServersAndJobsAuthGateTest, TraktOAuthFactoryWiringGuardTest), `query`/
+     * `userId` in the rewritten Trakt callback fixture, and the book/audiobook
+     * progress fixtures' `userId`/`body` stamps (the S435/S438 entry-point
+     * shape again). Measured 1014 from the phpunit red on the MERGED tree
+     * (absorbing da70cfa8's undocumented 991→1000 bump — its StreamLimit/
+     * synthetic-session test request stamps), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1000;
+    private const EXPECTED_DECLARED_WRITES = 1014;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

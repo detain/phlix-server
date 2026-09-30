@@ -44,9 +44,6 @@ class AudiobookController
     /** @var AudiobookLibraryManager Library manager for audiobook operations */
     private AudiobookLibraryManager $libraryManager;
 
-    /** @var string|null Current user ID (from auth context) */
-    private ?string $userId = null;
-
     /**
      * Constructor for AudiobookController.
      *
@@ -61,17 +58,6 @@ class AudiobookController
     ) {
         $this->itemRepo = $itemRepo;
         $this->libraryManager = $libraryManager;
-    }
-
-    /**
-     * Sets the current user ID from the request context.
-     *
-     * @param string $userId The authenticated user's ID
-     * @return void
-     */
-    public function setUserId(string $userId): void
-    {
-        $this->userId = $userId;
     }
 
     /**
@@ -236,11 +222,15 @@ class AudiobookController
             return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
         }
 
-        if ($this->userId === null) {
+        // M-6: progress is per the request's authenticated identity (the old
+        // $this->userId seam had no production caller, so this always 401'd).
+        $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+
+        if ($userId === null) {
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
-        $progress = $this->libraryManager->getProgress($this->userId, $audiobookId);
+        $progress = $this->libraryManager->getProgress($userId, $audiobookId);
 
         return (new Response())->json([
             'progress' => $progress->toArray(),
@@ -272,13 +262,16 @@ class AudiobookController
             return (new Response())->status(400)->json(['error' => 'Audiobook ID is required']);
         }
 
-        if ($this->userId === null) {
+        // M-6: identity comes from the authenticated request, never a setter.
+        $userId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+
+        if ($userId === null) {
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
-        $body = $request->query['body'] ?? '{}';
-        $rawData = is_string($body) ? json_decode($body, true) : null;
-        $data = is_array($rawData) ? $rawData : [];
+        // M-6: $request->body is the canonical parsed JSON body (Request::$body);
+        // the old $request->query['body'] read was never populated in production.
+        $data = is_array($request->body) ? $request->body : [];
 
         $positionMsRaw = $data['position_ms'] ?? 0;
         $positionMs = is_int($positionMsRaw)
@@ -303,7 +296,7 @@ class AudiobookController
 
         $progress = new AudiobookProgress(
             $audiobookId,
-            $this->userId,
+            $userId,
             $positionMs,
             $currentChapterIndex,
             $completedChapters,
@@ -311,7 +304,7 @@ class AudiobookController
             time()
         );
 
-        $this->libraryManager->saveProgress($this->userId, $audiobookId, $progress);
+        $this->libraryManager->saveProgress($userId, $audiobookId, $progress);
 
         return (new Response())->json([
             'message' => 'Progress saved',
@@ -371,10 +364,12 @@ class AudiobookController
         $signer = SignedUrl::fromEnv();
         $base = '/api/v1/audiobooks/' . $audiobookId;
 
-        // Get progress if authenticated
+        // Get progress if authenticated (M-6: the request carries the resolved
+        // identity; a bare signed-token read has none and yields no progress).
         $progress = null;
-        if ($this->userId !== null) {
-            $progress = $this->libraryManager->getProgress($this->userId, $audiobookId);
+        $viewerId = is_string($request->userId) && $request->userId !== '' ? $request->userId : null;
+        if ($viewerId !== null) {
+            $progress = $this->libraryManager->getProgress($viewerId, $audiobookId);
         }
 
         return (new Response())->json([

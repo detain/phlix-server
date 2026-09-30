@@ -176,15 +176,35 @@ class AudiobookControllerTest extends TestCase
             time()
         );
 
-        $libraryManager->method('getProgress')->willReturn($progress);
+        $libraryManager->expects($this->once())
+            ->method('getProgress')
+            ->with('user-456', 'audiobook-123')
+            ->willReturn($progress);
 
         $controller = new AudiobookController($itemRepo, $libraryManager);
-        $controller->setUserId('user-456');
 
+        // M-6: identity arrives on the request — the old setUserId() seam had no
+        // production caller, so this endpoint 401'd for every real signed-in user.
         $request = new Request();
+        $request->userId = 'user-456';
+
         $response = $controller->getProgress($request, ['id' => 'audiobook-123']);
 
         $this->assertEquals(200, $response->statusCode);
+    }
+
+    public function testGetProgressRejectsAnonymous(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $libraryManager->expects($this->never())->method('getProgress');
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $response = $controller->getProgress(new Request(), ['id' => 'audiobook-123']);
+
+        $this->assertEquals(401, $response->statusCode);
     }
 
     public function testSaveProgressAcceptsProgressPayload(): void
@@ -192,30 +212,57 @@ class AudiobookControllerTest extends TestCase
         $itemRepo = $this->createMockItemRepo();
         $libraryManager = $this->createMockLibraryManager();
 
+        $saved = null;
         $libraryManager->expects($this->once())
             ->method('saveProgress')
             ->with(
                 'user-456',
                 'audiobook-123',
-                $this->isInstanceOf(AudiobookProgress::class)
+                $this->callback(function (AudiobookProgress $progress) use (&$saved): bool {
+                    $saved = $progress;
+                    return true;
+                })
             );
 
         $controller = new AudiobookController($itemRepo, $libraryManager);
-        $controller->setUserId('user-456');
 
+        // M-6: the payload rides the canonical parsed $request->body (the old
+        // $request->query['body'] read was never populated in production, so
+        // every save silently stored ZEROES even when identity was present).
         $request = new Request();
-        $request->query = [
-            'body' => json_encode([
-                'position_ms' => 5000,
-                'current_chapter_index' => 1,
-                'completed_chapters' => [0 => 300000],
-                'percent_complete' => 15.5,
-            ]),
+        $request->userId = 'user-456';
+        $request->body = [
+            'position_ms' => 5000,
+            'current_chapter_index' => 1,
+            'completed_chapters' => [0 => 300000],
+            'percent_complete' => 15.5,
         ];
 
         $response = $controller->saveProgress($request, ['id' => 'audiobook-123']);
 
         $this->assertEquals(200, $response->statusCode);
+        $this->assertInstanceOf(AudiobookProgress::class, $saved);
+        $this->assertSame(5000, $saved->position_ms);
+        $this->assertSame(1, $saved->current_chapter_index);
+        $this->assertSame([0 => 300000], $saved->completed_chapters);
+        $this->assertSame(15.5, $saved->percent_complete);
+    }
+
+    public function testSaveProgressRejectsAnonymous(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $libraryManager->expects($this->never())->method('saveProgress');
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $request = new Request();
+        $request->body = ['position_ms' => 5000];
+
+        $response = $controller->saveProgress($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(401, $response->statusCode);
     }
 
     public function testStreamAudiobookResumesInChapter(): void

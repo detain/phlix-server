@@ -422,4 +422,84 @@ class PortForwardServiceTest extends TestCase
 
         $this->assertTrue($service->disable());
     }
+
+    // ---------------------------------------------------------------------
+    // RFC 6886 §3.3 renewal bookkeeping on the NAT-PMP leg.
+    //
+    // addPortMapping() now returns the GRANTED lifetime (reply bytes 12-15),
+    // not just the port — because §3.3 (lines 664-666) lets the gateway
+    // reduce the lease below what was requested, and §3.3 (lines 679-681)
+    // makes the client renew "halfway to expiry time, like DHCP". These pin
+    // what autoConfigure()/disable() persist around that deadline. The
+    // renewal TIMER itself is deliberately absent: no resident worker owns
+    // port-forward state yet (see the TODO(arch) block on the natpmp leg in
+    // PortForwardService::autoConfigure()), so the half-life deadline is
+    // recorded in config/port-forward.json for whichever owner decision
+    // eventually arms it.
+    // ---------------------------------------------------------------------
+
+    public function testAutoConfigurePersistsGrantedLifetimeAndHalfLifeRenewalDeadline(): void
+    {
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $upnp->method('discoverGateway')->willReturn(null);
+        $natpmp->method('discoverGateway')->willReturn('203.0.113.7');
+        // The gateway REDUCED the requested 7200 s lease to 1800 (§3.3
+        // lines 664-666) — the persisted deadline must be half of THIS.
+        $natpmp->method('addPortMapping')->willReturn(['external_port' => 32400, 'granted_lifetime' => 1800]);
+        $stun->method('getPublicIp')->willReturn(null);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+        $result = $service->autoConfigure();
+        $this->skipIfNoLocalIp($result);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('natpmp', $result['method']);
+        $this->assertSame('203.0.113.7:32400', $result['public_endpoint']);
+
+        $configFile = $this->tmpDir . '/config/port-forward.json';
+        $this->assertFileExists($configFile);
+        $persisted = json_decode((string) file_get_contents($configFile), true);
+        $this->assertIsArray($persisted);
+        $this->assertSame(1800, $persisted['mapping_granted_lifetime'], 'the GRANTED lifetime is persisted, not the requested one');
+        $this->assertIsInt($persisted['mapping_renew_at']);
+        $this->assertGreaterThanOrEqual(time() + 900 - 5, $persisted['mapping_renew_at'], 'renewal deadline is half the granted lifetime (§3.3 lines 679-681)');
+        $this->assertLessThanOrEqual(time() + 900 + 5, $persisted['mapping_renew_at']);
+    }
+
+    public function testDisableClearsRenewalBookkeeping(): void
+    {
+        $configFile = $this->tmpDir . '/config/port-forward.json';
+        $configDir = dirname($configFile);
+        if (!is_dir($configDir)) {
+            mkdir($configDir, 0755, true);
+        }
+        file_put_contents($configFile, json_encode([
+            'enabled' => true,
+            'method' => 'natpmp',
+            'external_ip' => '203.0.113.7',
+            'port' => 32400,
+            'mapping_granted_lifetime' => 1800,
+            'mapping_renew_at' => time() + 900,
+        ]));
+
+        $upnp = $this->createMock(UpnpIgdClient::class);
+        $stun = $this->createMock(StunClient::class);
+        $natpmp = $this->createMock(NatPmpClient::class);
+
+        $upnp->method('discoverGateway')->willReturn(null);
+
+        $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
+        $this->assertTrue($service->disable());
+
+        // A dead mapping's deadline must not linger for a future renewal
+        // owner to act on.
+        $persisted = json_decode((string) file_get_contents($configFile), true);
+        $this->assertIsArray($persisted);
+        $this->assertFalse($persisted['enabled']);
+        $this->assertNull($persisted['mapping_granted_lifetime']);
+        $this->assertNull($persisted['mapping_renew_at']);
+    }
 }

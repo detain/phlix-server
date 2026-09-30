@@ -69,9 +69,10 @@ class NatPmpClientTest extends TestCase
      * because discoverGateway() keeps polling after a discard, the gateway's
      * own reply 150 ms later must still be the one the client returns.
      *
-     * Harness: the "gateway" is bound to 127.0.0.99:5350 (every 127/8 address
-     * is local on Linux — no interface alias needed) and the "rogue" to
-     * 127.0.0.1; a forked child learns the client's real source from the
+     * Harness: the "gateway" is bound to 127.0.0.99:5351 — where RFC 6886
+     * §3.1/§3.2.1 says a NAT-PMP server listens for requests (every 127/8
+     * address is local on Linux — no interface alias needed) — and the
+     * "rogue" to 127.0.0.1; a forked child learns the client's real source from the
      * request the gateway receives, fires the bogus reply from the rogue,
      * then the correct reply from the gateway. Remove the L4 check in
      * NatPmpClient and this test reddens with '198.51.100.66' — it is a true
@@ -86,10 +87,10 @@ class NatPmpClientTest extends TestCase
         $gateway = '127.0.0.99';
         $server = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
         $this->assertNotFalse($server);
-        if (@socket_bind($server, $gateway, 5350) === false) {
+        if (@socket_bind($server, $gateway, 5351) === false) {
             $reason = socket_strerror(socket_last_error($server));
             socket_close($server);
-            $this->markTestSkipped('cannot bind ' . $gateway . ':5350 on this host: ' . $reason);
+            $this->markTestSkipped('cannot bind ' . $gateway . ':5351 on this host: ' . $reason);
         }
 
         $pid = pcntl_fork();
@@ -420,17 +421,26 @@ class NatPmpClientTest extends TestCase
     }
 
     /**
-     * Success arm: result 0 -> the Mapped External Port at bytes 10-11 is
-     * returned. The reply's mapped port (41000) deliberately differs from
-     * any port the request could have carried, so a parser that echoed the
-     * request (or read the wrong slot) cannot pass.
+     * Success arm: result 0 -> the full §3.3 record is returned: the Mapped
+     * External Port at bytes 10-11 AND the GRANTED Port Mapping Lifetime at
+     * bytes 12-15. The reply's mapped port (41000) deliberately differs from
+     * any port the request could have carried, and the granted lifetime
+     * (1800) from any lease a request could have asked for (§3.3 lines
+     * 664-666: "The NAT gateway MAY reduce the lifetime from what the client
+     * requested"), so neither field can pass by echoing the request — and
+     * the half-life renewal deadline (§3.3 lines 679-681, applied by
+     * PortForwardService) must be computed from THIS number, not the
+     * requested one.
      */
-    public function testParseMappingResponseReturnsMappedPortOnSuccessResultCodeZero(): void
+    public function testParseMappingResponseReturnsMappedPortAndGrantedLifetimeOnSuccess(): void
     {
-        $reply = $this->natPmpMappingReply(2, 0, 32400, 41000, 7200);
+        $reply = $this->natPmpMappingReply(2, 0, 32400, 41000, 1800);
         $this->assertSame(16, strlen($reply), '§3.3 mapping reply is 16 bytes');
 
-        $this->assertSame(41000, $this->invokeWireMethod('parseMappingResponse', $reply, 2));
+        $this->assertSame(
+            ['external_port' => 41000, 'granted_lifetime' => 1800],
+            $this->invokeWireMethod('parseMappingResponse', $reply, 2)
+        );
     }
 
     /**
@@ -472,27 +482,83 @@ class NatPmpClientTest extends TestCase
     }
 
     /**
-     * Binds the fork-responder "gateway" on loopback (every 127/8 address is
-     * local on Linux — see testDiscoverGatewayDiscardsWrongSourceThenAcceptsGatewayReply).
+     * The lifetime field is now part of the returned record, so the parser
+     * demands the full 16-byte §3.3 reply: a 12-byte datagram carries the
+     * port but not the granted lifetime — and a mapping whose expiry cannot
+     * be answered must fail loud (returning it would seed the half-life
+     * renewal deadline from a missing field).
+     */
+    public function testParseMappingResponseRejectsReplyWithoutLifetimeField(): void
+    {
+        $twelveByteReply = substr($this->natPmpMappingReply(2, 0, 32400, 41000, 1800), 0, 12);
+
+        $this->assertNull($this->invokeWireMethod('parseMappingResponse', $twelveByteReply, 2));
+    }
+
+    /**
+     * Binds the fork-responder "gateway" on loopback at UDP 5351 — the RFC
+     * 6886 §3.1 request port ("servers listen on UDP 5351", §3.2.1 note,
+     * line 482; see testGatewayRequestsRfc6886Section31DestinationPort5351)
+     * — so a client that regresses to the old 5350 destination simply never
+     * reaches the responder and its round trips time out red. Every 127/8
+     * address is local on Linux — see
+     * testDiscoverGatewayDiscardsWrongSourceThenAcceptsGatewayReply.
      */
     private function bindLoopbackGateway(string $gateway): \Socket
     {
         $server = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
         $this->assertNotFalse($server);
-        if (@socket_bind($server, $gateway, 5350) === false) {
+        if (@socket_bind($server, $gateway, 5351) === false) {
             $reason = socket_strerror(socket_last_error($server));
             socket_close($server);
-            $this->markTestSkipped('cannot bind ' . $gateway . ':5350 on this host: ' . $reason);
+            $this->markTestSkipped('cannot bind ' . $gateway . ':5351 on this host: ' . $reason);
         }
         return $server;
     }
 
     /**
-     * End-to-end wire truth through the PUBLIC API: addPortMapping() must
-     * put RFC opcode 2 on the socket, and a successful RFC-shaped reply's
+     * RFC 6886 §3.1 (line 323): "a NAT-PMP client sends its request packet
+     * to port 5351 of its configured gateway address"; §3.2 (line 378) and
+     * §3.3 (line 512) repeat 5351 for the address and mapping requests. 5350
+     * is the opposite half of the §3.2.1 split (lines 481-482): "clients
+     * listen on UDP 5350" — the announcement LISTEN port, for the 224.0.0.1
+     * multicast the gateway "MUST send ... to link-local multicast address
+     * 224.0.0.1, port 5350" (lines 432-433). Until this fix the client sent
+     * ALL THREE request kinds to 5350, where a spec-compliant gateway never
+     * listens. The constant name is pinned too: renaming it back would let
+     * a future "restore the old value" edit dodge this tripwire by name.
+     */
+    public function testGatewayRequestsRfc6886Section31DestinationPort5351(): void
+    {
+        $reflection = new ReflectionClass(NatPmpClient::class);
+        $this->assertTrue(
+            $reflection->hasConstant('NAT_PMP_GATEWAY_PORT'),
+            'the request-port constant must be named for its role (gateway REQUEST port), '
+            . 'not the ambiguous pre-fix NAT_PMP_PORT'
+        );
+        $this->assertFalse(
+            $reflection->hasConstant('NAT_PMP_PORT'),
+            'the ambiguous pre-fix constant name must not come back'
+        );
+        $this->assertSame(
+            5351,
+            $reflection->getConstant('NAT_PMP_GATEWAY_PORT'),
+            '§3.1: requests go to gateway UDP 5351, never the 5350 announcement LISTEN port'
+        );
+    }
+
+    /**
+     * End-to-end wire truth through the PUBLIC API on the §3.1 request port:
+     * addPortMapping() must put RFC opcode 2 on the socket, ride the default
+     * §3.3 RECOMMENDED 7200 s lease (line 575 — bytes 8-11 of the captured
+     * packet, not a builder guess), and return the reply's FULL record: the
      * mapped port (the reply's 41000, different from the requested 32400)
-     * must come back out. The child captures the exact request bytes to a
-     * probe file, so this asserts the live packet, not a builder guess.
+     * and the granted lifetime (the reply's 1800, a gateway reduction per
+     * lines 664-666, different from the requested 7200). The child captures
+     * the exact request bytes to a probe file, so this asserts the live
+     * packet, not a builder guess. The responder only ever hears requests on
+     * 5351 (bindLoopbackGateway) — a destination-port regression turns this
+     * round trip into a timeout red.
      */
     public function testAddPortMappingSendsTcpOpcodeTwoAndParsesMappedPortOnTheWire(): void
     {
@@ -521,9 +587,11 @@ class NatPmpClientTest extends TestCase
             }
             file_put_contents($probeFile, $buf);
             // Echo the requested opcode's reply (per §3.3 "128 + x") with a
-            // zero result code, internal port echoed, and a DIFFERENT
-            // assigned external port.
-            $reply = $this->natPmpMappingReply(ord($buf[1]), 0, 32400, 41000, 7200);
+            // zero result code, internal port echoed, and BOTH fields
+            // differing from anything the request carried: assigned
+            // external port 41000 (requested 32400) and granted lifetime
+            // 1800 (requested default 7200).
+            $reply = $this->natPmpMappingReply(ord($buf[1]), 0, 32400, 41000, 1800);
             @socket_sendto($server, $reply, strlen($reply), 0, $clientIp, $clientPort);
             posix_kill(posix_getpid(), SIGKILL);
         }
@@ -532,7 +600,7 @@ class NatPmpClientTest extends TestCase
 
         $client = new NatPmpClient(new NullLogger(), 3000);
         try {
-            $assigned = $client->addPortMapping($gateway, 32400, 32400);
+            $mapping = $client->addPortMapping($gateway, 32400, 32400);
         } finally {
             pcntl_waitpid($pid, $status);
         }
@@ -545,7 +613,14 @@ class NatPmpClientTest extends TestCase
         $this->assertSame(2, ord($observed[1]), 'the TCP API must put opcode 2 ("Map TCP") on the wire');
         $this->assertSame(32400, $this->u16($observed, 4)[1], 'internal port at bytes 4-5');
         $this->assertSame(32400, $this->u16($observed, 6)[1], 'suggested external at bytes 6-7');
-        $this->assertSame(41000, $assigned, 'the reply\'s Mapped External Port (not the request) is returned');
+
+        $requestedLifetime = unpack('N', substr($observed, 8, 4));
+        $this->assertIsArray($requestedLifetime);
+        $this->assertSame(7200, $requestedLifetime[1], 'default lease is the §3.3 RECOMMENDED 7200 s (line 575)');
+
+        $this->assertIsArray($mapping, 'a successful mapping returns the §3.3 record');
+        $this->assertSame(41000, $mapping['external_port'], 'the reply\'s Mapped External Port (not the request) is returned');
+        $this->assertSame(1800, $mapping['granted_lifetime'], 'the reply\'s GRANTED lifetime (bytes 12-15), not the requested 7200');
     }
 
     /**
@@ -597,5 +672,100 @@ class NatPmpClientTest extends TestCase
         } finally {
             pcntl_waitpid($pid, $status);
         }
+    }
+
+    /**
+     * Shared fork-responder skeleton for the §3.4 deletion round trips:
+     * the parent reads the unmap REQUEST off the wire (proving the §3.1
+     * 5351 destination, since the responder only binds there), the child
+     * answers with a caller-supplied reply built from the request's real
+     * opcode byte, and the parent returns whatever removePortMapping()
+     * said. Both arms ride the SAME packet shape (§3.4: the deletion
+     * reply "is formatted as defined in Section 3.3") so only the result
+     * code separates them — exactly the field the pre-fix client ignored.
+     *
+     * @param callable(int):string $replyFor Request opcode -> raw reply bytes.
+     */
+    private function runUnmapAgainstResponder(callable $replyFor): array
+    {
+        if (!function_exists('pcntl_fork') || !function_exists('posix_kill')) {
+            $this->markTestSkipped('pcntl/posix are required for the forked-responder harness.');
+        }
+
+        $gateway = '127.0.0.99';
+        $server = $this->bindLoopbackGateway($gateway);
+        $probeFile = tempnam(sys_get_temp_dir(), 'natpmp-unmap-probe-');
+        $this->assertIsString($probeFile);
+
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            $read = [$server];
+            $write = null;
+            $except = null;
+            if (@socket_select($read, $write, $except, 5) < 1) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            $buf = '';
+            $clientIp = '';
+            $clientPort = 0;
+            if (@socket_recvfrom($server, $buf, 1024, 0, $clientIp, $clientPort) === false) {
+                posix_kill(posix_getpid(), SIGKILL);
+            }
+            file_put_contents($probeFile, $buf);
+            $reply = $replyFor(ord($buf[1]));
+            @socket_sendto($server, $reply, strlen($reply), 0, $clientIp, $clientPort);
+            posix_kill(posix_getpid(), SIGKILL);
+        }
+
+        socket_close($server);
+
+        $client = new NatPmpClient(new NullLogger(), 3000);
+        try {
+            $acknowledged = $client->removePortMapping($gateway, 32400);
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+
+        $observed = file_get_contents($probeFile);
+        unlink($probeFile);
+        $this->assertIsString($observed);
+
+        return [$acknowledged, $observed];
+    }
+
+    /**
+     * §3.4 success arm (lines 706-712): deletion of a live — or already-gone
+     * (idempotent retransmit, lines 712-717) — mapping answers result code 0
+     * with "an external port of 0, and a lifetime of 0". removePortMapping()
+     * must return true.
+     */
+    public function testRemovePortMappingAcknowledgesOnlyAfterResultCodeZeroRoundTrip(): void
+    {
+        [$acknowledged, $observed] = $this->runUnmapAgainstResponder(
+            fn(int $requestOpCode): string => $this->natPmpMappingReply($requestOpCode, 0, 32400, 0, 0)
+        );
+
+        $this->assertSame(12, strlen($observed), '§3.4 deletion reuses the §3.3 12-byte request shape');
+        $this->assertSame(2, ord($observed[1]), 'the TCP deletion rode opcode 2 to the gateway');
+        $this->assertTrue($acknowledged, 'a code-0 deletion reply is the §3.4 success acknowledgement');
+    }
+
+    /**
+     * The mutation tripwire for the result-code gate: §3.4 (lines 718-723)
+     * says an unsuccessful deletion — e.g. a manually-assigned mapping
+     * answered "Not Authorized", result code 2 — still carries the request's
+     * opcode echo and the requested mapping. Pre-gate, removePortMapping()
+     * returned true on that echo alone: PortForwardService::disable() told
+     * the operator the mapping was gone while it stayed alive on the router.
+     * With the gate, the same packet must yield false.
+     */
+    public function testRemovePortMappingRefusesToAcknowledgeNonZeroResultCodeRoundTrip(): void
+    {
+        [$acknowledged, $observed] = $this->runUnmapAgainstResponder(
+            fn(int $requestOpCode): string => $this->natPmpMappingReply($requestOpCode, 2, 32400, 32400, 0)
+        );
+
+        $this->assertSame(12, strlen($observed), 'the deletion request reached the responder on 5351');
+        $this->assertFalse($acknowledged, '§3.5 code 2 (Not Authorized) is a failed deletion, never an ack');
     }
 }

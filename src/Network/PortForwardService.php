@@ -133,20 +133,51 @@ class PortForwardService
         if ($gatewayIp !== null) {
             $externalIp = $this->natpmp->discoverGateway($gatewayIp);
             if ($externalIp !== null) {
-                $assignedPort = $this->natpmp->addPortMapping($gatewayIp, $this->port, $this->port);
-                if ($assignedPort !== null) {
+                $mapping = $this->natpmp->addPortMapping($gatewayIp, $this->port, $this->port);
+                if ($mapping !== null) {
+                    $assignedPort = $mapping['external_port'];
+                    $grantedLifetime = $mapping['granted_lifetime'];
+                    // RFC 6886 §3.3 (lines 679-681): "The client SHOULD
+                    // begin trying to renew the mapping halfway to expiry
+                    // time, like DHCP." Half of the GRANTED lifetime — not
+                    // the requested one, which §3.3 (lines 664-666) lets
+                    // the gateway reduce — is the renewal deadline.
+                    $renewAt = time() + intdiv($grantedLifetime, 2);
                     $endpoint = $externalIp . ':' . $assignedPort;
                     $this->logger->info('NAT-PMP port mapping added', [
                         'endpoint' => $endpoint,
                         'local_ip' => $localIp,
                         'port' => $assignedPort,
+                        'granted_lifetime' => $grantedLifetime,
+                        'renew_at' => $renewAt,
                     ]);
                     $this->persistConfig([
                         'method' => 'natpmp',
                         'external_ip' => $externalIp,
                         'port' => $assignedPort,
                         'enabled' => true,
+                        'mapping_granted_lifetime' => $grantedLifetime,
+                        'mapping_renew_at' => $renewAt,
                     ]);
+                    // TODO(arch): nothing acts on `mapping_renew_at` yet.
+                    // Renewal needs a resident timer, and NO worker owns
+                    // port-forward state today: autoConfigure() runs
+                    // request-scoped from AdminHubController (a fresh
+                    // `new PortForwardService(...)` per call) and one-shot
+                    // from scripts/port-forward.php, while the only
+                    // resident holder — the HubClient heartbeat worker —
+                    // just calls discoverHostnameCandidates(), which never
+                    // renews. A Workerman\Timer armed here would die with
+                    // the request that armed it, so the deadline is
+                    // recorded (config/port-forward.json) and the alarm is
+                    // left to an owner decision: either a resident worker
+                    // takes ownership of port-forward state and re-sends
+                    // the §3.3 renewal packet (request shape, Suggested
+                    // External Port = the previously-MAPPED port per lines
+                    // 680-681) before `mapping_renew_at`, or a periodic
+                    // admin tick polls the persisted deadline. Do NOT bolt
+                    // a background loop onto this class until that seam
+                    // exists.
                     return $this->result(true, $endpoint, 'natpmp', $externalIp);
                 }
             }
@@ -327,7 +358,14 @@ TEXT;
             $this->natpmp->removePortMapping($gatewayIp, $this->port);
         }
 
-        $this->persistConfig(['enabled' => false]);
+        // Teardown also clears the §3.3 renewal bookkeeping: a dead mapping's
+        // granted-lifetime/renew-at deadline must not linger in the config
+        // for a future renewal owner to act on.
+        $this->persistConfig([
+            'enabled' => false,
+            'mapping_granted_lifetime' => null,
+            'mapping_renew_at' => null,
+        ]);
         return true;
     }
 

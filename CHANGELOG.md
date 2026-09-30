@@ -386,6 +386,50 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **NAT-PMP wire residuals closed against fetched RFC 6886: request destination port 5351,
+  deletion result-code gate, granted-lifetime-aware lease and renewal bookkeeping.**
+  Three audited residuals in `src/Network/NatPmpClient.php` (plus one consequence in
+  `PortForwardService`) were verified line-by-line against `rfc-editor.org/rfc/rfc6886.txt`.
+  (1) **Request port.** Every NAT-PMP request (address, mapping, deletion) was being sent to
+  UDP **5350** — but §3.1 (line 323) says "a NAT-PMP client sends its request packet to port
+  **5351** of its configured gateway address", §3.2 (line 378) and §3.3 (line 512) repeat it,
+  and the §3.2.1 engineering note (lines 481-482) pins the split: "clients listen on UDP 5350
+  and servers listen on UDP 5351" — 5350 is where a client listens for the gateway's
+  224.0.0.1 announcement multicast (§3.2.1, lines 432-433), never a request target. A
+  spec-compliant gateway therefore never saw any of our requests. The constant is now
+  `NAT_PMP_GATEWAY_PORT = 5351` (renamed from the ambiguous `NAT_PMP_PORT`), and the
+  fork-responder tests bind exactly where the RFC says the server listens, making every
+  round trip a destination-port tripwire. The client-side announcement listener on 5350
+  (§3.2.1/§3.6 reboot detection) remains **not implemented** — documented in the class
+  docblock; no code path in `src/` binds 5350 or 224.0.0.1.
+  (2) **Deletion result gate.** `removePortMapping()` returned `true` on the reply's opcode
+  echo alone, so a §3.4 "Not Authorized" refusal (result code 2, lines 718-723: an
+  unsuccessful deletion "MUST contain a non-zero result code and the requested mapping")
+  acknowledged as teardown success while the mapping stayed alive on the router. Deletion
+  replies are now gated on result code 0 via a new shared `readResultCode()` helper (the
+  same §3 bytes-2-3 extract `parseExternalIp()`/`parseMappingResponse()` use; both refactored
+  onto it); idempotent re-deletes of gone mappings still ack true because §3.4 (lines
+  712-717) mandates a code-0 response for them.
+  (3) **Granted lifetime and renewal bookkeeping (§3.3).** The client requested a fixed
+  3600 s lease — half the RFC's "RECOMMENDED Port Mapping Lifetime is 7200 seconds" (line
+  575) — and threw away the reply's granted lifetime, which §3.3 (lines 664-666) lets the
+  gateway reduce below the request. `parseMappingResponse()` now returns
+  `array{external_port:int, granted_lifetime:int}` (length guard raised 12→16: a reply
+  without bytes 12-15 cannot answer the expiry question), `addPortMapping()`/`mapPort()`
+  pass the record through, and the default lease is 7200. `PortForwardService::autoConfigure()`
+  logs the granted lifetime and persists `mapping_granted_lifetime` plus
+  `mapping_renew_at = now + granted/2` — §3.3 (lines 679-681): "The client SHOULD begin
+  trying to renew the mapping halfway to expiry time, like DHCP" — and `disable()` clears
+  both keys. **No renewal timer is armed**: renewal needs a resident timer, no worker owns
+  port-forward state today (autoConfigure is request-scoped in `AdminHubController` and
+  one-shot in `scripts/port-forward.php`; the resident HubClient worker only reads
+  candidates), and a `Workerman\Timer` armed from a request dies with the request. The
+  deadline is persisted for whichever owner decision assigns a renewal owner; the rationale
+  is pinned in a `TODO(arch)` block on the natpmp leg rather than hacked into an event loop.
+  Pins: destination-port constant test, 5351-bound fork round trips (add/unmap-success/
+  unmap-refused), granted-lifetime-differs-from-request wire assertions, half-life persistence
+  proof, disable-clears-keys proof — each mutation-proven red on the pre-fix shapes.
+
 - **Security bump: `phpseclib/phpseclib` `3.0.55` → `3.0.57` (CVE-2026-84308 / GHSA-q97c-8qh3-fpc6).**
   The Coding Standards `Security Audit` job (`php scripts/security-audit-check.php`, which blocks any
   advisory against `composer.lock`) went red 2026-09-29: the advisory covers a non-constant-time X25519

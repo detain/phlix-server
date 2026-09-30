@@ -18,15 +18,42 @@ use Socket;
 /**
  * NAT-PMP client (RFC 6886) for Apple NAT-PMP compatible routers.
  *
- * Communicates with the NAT-PMP gateway on UDP port 5350/5351 to
- * request port mappings without requiring SSDP discovery.
+ * Sends every NAT-PMP REQUEST to UDP port 5351 of the gateway — RFC 6886
+ * §3.1: "a NAT-PMP client sends its request packet to port 5351 of its
+ * configured gateway address" (rfc-editor.org/rfc/rfc6886.txt line 323),
+ * restated for the address request in §3.2 (line 378) and for the mapping
+ * request in §3.3 (line 512). Port 5350 is NOT a request port: §3.2.1
+ * reserves it for the gateway's announcement multicast — the NAT gateway
+ * "MUST send a gratuitous response to the link-local multicast address
+ * 224.0.0.1, port 5350" (lines 432-433) — and the §3.2.1 engineering note
+ * (lines 481-482): "it is convenient to have clients listen on UDP 5350
+ * and servers listen on UDP 5351". Earlier revisions of this class sent
+ * requests to 5350, the client-side LISTEN port, so a spec-compliant
+ * gateway never saw them. Pinned by
+ * testGatewayRequestsRfc6886Section31DestinationPort5351 and proven
+ * end-to-end by the fork-responder round trips in NatPmpClientTest, which
+ * bind the responder exactly where the RFC says the server listens.
+ *
+ * NOTE (not implemented): the client-side half of that split — listening
+ * on UDP 5350 for the gateway's unsolicited announcements (§3.2.1/§3.6
+ * reboot and SSSoE-change detection) — has no code here or anywhere in
+ * src/ (no 224.0.0.1 bind exists). Mappings therefore age out silently
+ * after a gateway reboot until the next explicit (re)configure. Renewal
+ * guidance lives in {@see self::parseMappingResponse()} and the
+ * PortForwardService natpmp leg.
+ *
+ * Requests port mappings without requiring SSDP discovery.
  *
  * @package Phlix\Network
  * @since 0.11.0
  */
 class NatPmpClient
 {
-    private const NAT_PMP_PORT = 5350;
+    // RFC 6886 §3.1/§3.2/§3.3: every client REQUEST targets gateway UDP
+    // port 5351 ("servers listen on UDP 5351", §3.2.1 note, line 482).
+    // The value was 5350 — the client-side announcement LISTEN port —
+    // until this fix; see the class docblock for the full cite chain.
+    private const NAT_PMP_GATEWAY_PORT = 5351;
     private const VERSION = 0;
     // RFC 6886 §3.3, "Opcodes supported: 1 - Map UDP, 2 - Map TCP"
     // (rfc-editor.org/rfc/rfc6886.txt lines 526-528). Earlier revisions of
@@ -81,7 +108,7 @@ class NatPmpClient
         }
 
         $request = $this->buildPublicAddressRequest();
-        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_PORT);
+        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_GATEWAY_PORT);
         if ($sent === false) {
             socket_close($socket);
             return null;
@@ -133,16 +160,28 @@ class NatPmpClient
      * @param string $gatewayIp   The router's LAN IP address.
      * @param int    $externalPort The external port to request.
      * @param int    $internalPort The internal port on the server.
-     * @param int    $leaseDuration Mapping lease in seconds (3600 default).
+     * @param int    $leaseDuration Mapping lease in seconds. Default 7200 —
+     *     RFC 6886 §3.3: "The RECOMMENDED Port Mapping Lifetime is 7200
+     *     seconds (two hours)." (rfc-editor.org/rfc/rfc6886.txt line 575.)
+     *     The PREVIOUS default of 3600 halved every lease for no cited
+     *     reason; the gateway is free to reduce the offered lifetime
+     *     further either way (§3.3, lines 664-666: "The NAT gateway MAY
+     *     reduce the lifetime from what the client requested"), which is
+     *     exactly why the GRANTED lifetime travels back in the return
+     *     record instead of the request value being trusted.
      *
-     * @return int|null The assigned external port or null on failure.
+     * @return array{external_port: int, granted_lifetime: int}|null The
+     *     assigned external port AND the lifetime the gateway actually
+     *     granted (reply bytes 12-15), or null on failure. Renew guidance:
+     *     §3.3 (lines 679-681) "The client SHOULD begin trying to renew the
+     *     mapping halfway to expiry time, like DHCP."
      */
     public function addPortMapping(
         string $gatewayIp,
         int $externalPort,
         int $internalPort,
-        int $leaseDuration = 3600
-    ): ?int {
+        int $leaseDuration = 7200
+    ): ?array {
         return $this->mapPort($gatewayIp, self::OP_CODE_MAP_TCP, $externalPort, $internalPort, $leaseDuration);
     }
 
@@ -157,7 +196,18 @@ class NatPmpClient
      *     under either name.
      * @param string $protocol     Protocol (TCP or UDP).
      *
-     * @return bool True on success, false on failure.
+     * @return bool True only when the gateway's reply carries §3.5 result
+     *     code 0. §3.4 (rfc-editor.org/rfc/rfc6886.txt lines 706-717): a
+     *     successful deletion reply "MUST contain a result code of 0", and
+     *     deleting an already-gone mapping "MUST respond ... as if the
+     *     request were successful" (idempotent teardown answers code 0, so
+     *     true is correct there); an UNSUCCESSFUL deletion "MUST contain a
+     *     non-zero result code and the requested mapping" (lines 718-719),
+     *     and deleting a manually-assigned mapping answers "Not Authorized"
+     *     error, result code 2 (lines 721-723). Until this gate the reply's
+     *     opcode echo alone returned true over a code-2 refusal — the
+     *     mapping stayed alive on the router while teardown reported
+     *     success.
      */
     public function removePortMapping(
         string $gatewayIp,
@@ -175,7 +225,7 @@ class NatPmpClient
         // created here symmetrically (internal == external, see
         // PortForwardService), so the caller's port fills the internal slot.
         $request = $this->buildUnmapRequest($opCode, $externalPort);
-        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_PORT);
+        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_GATEWAY_PORT);
         if ($sent === false) {
             socket_close($socket);
             return false;
@@ -206,13 +256,27 @@ class NatPmpClient
 
             socket_close($socket);
 
-            if ($recvLen !== false && $recvLen >= 12 && strlen($response) >= 2) {
-                $responseOpCode = ord($response[1]);
-                if ($responseOpCode === ($opCode | self::RESPONSE_FLAG)) {
-                    return true;
-                }
+            if ($recvLen === false || $recvLen < 12 || strlen($response) < 12) {
+                return false;
             }
-            return false;
+
+            // The deletion reply is "formatted as defined in Section 3.3"
+            // (§3.4, line 708), so the opcode echo is 128 + the request's
+            // opcode and the result code sits at bytes 2-3.
+            if (ord($response[1]) !== ($opCode | self::RESPONSE_FLAG)) {
+                return false;
+            }
+
+            $resultCode = $this->readResultCode($response);
+            if ($resultCode !== 0) {
+                $this->logger->debug('NAT-PMP: mapping deletion failed on result code', [
+                    'result_code' => $resultCode,
+                    'port' => $externalPort,
+                ]);
+                return false;
+            }
+
+            return true;
         }
 
         socket_close($socket);
@@ -220,10 +284,12 @@ class NatPmpClient
     }
 
     /**
-     * Maps a port via NAT-PMP and returns the assigned external port.
+     * Maps a port via NAT-PMP and returns the reply's mapping record.
      *
      * The reply is parsed by {@see self::parseMappingResponse()}; only a
      * §3.5 result code of zero counts as a created mapping.
+     *
+     * @return array{external_port: int, granted_lifetime: int}|null
      */
     private function mapPort(
         string $gatewayIp,
@@ -231,14 +297,14 @@ class NatPmpClient
         int $externalPort,
         int $internalPort,
         int $leaseDuration
-    ): ?int {
+    ): ?array {
         $socket = $this->createUdpSocket();
         if ($socket === null) {
             return null;
         }
 
         $request = $this->buildMapRequest($opCode, $externalPort, $internalPort, $leaseDuration);
-        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_PORT);
+        $sent = @socket_sendto($socket, $request, strlen($request), 0, $gatewayIp, self::NAT_PMP_GATEWAY_PORT);
         if ($sent === false) {
             socket_close($socket);
             return null;
@@ -302,14 +368,27 @@ class NatPmpClient
      * codes MUST be treated as fatal errors of the request") now fails
      * here, mirroring parseExternalIp()'s gate on the §3.2 reply.
      *
+     * The GRANTED lifetime (bytes 12-15) is part of the returned record,
+     * not decoration: §3.3 (lines 664-666) — "The NAT gateway MAY reduce
+     * the lifetime from what the client requested" — so the request's
+     * lease value says nothing about when the mapping actually expires,
+     * and §3.3 (lines 679-681) — "The client SHOULD begin trying to renew
+     * the mapping halfway to expiry time, like DHCP" — makes the granted
+     * number the input to the renewal deadline. The length guard therefore
+     * moved from 12 to the full 16-byte reply: a datagram without the
+     * lifetime field cannot answer the question this parser now has to
+     * answer.
+     *
      * @param string $response Raw reply payload.
      * @param int    $opCode   Request opcode (OP_CODE_MAP_UDP/OP_CODE_MAP_TCP).
      *
-     * @return int|null The assigned external port, or null on any failure.
+     * @return array{external_port: int, granted_lifetime: int}|null
+     *     The assigned external port and the gateway-granted lifetime in
+     *     seconds, or null on any failure.
      */
-    private function parseMappingResponse(string $response, int $opCode): ?int
+    private function parseMappingResponse(string $response, int $opCode): ?array
     {
-        if (strlen($response) < 12) {
+        if (strlen($response) < 16) {
             return null;
         }
 
@@ -317,15 +396,46 @@ class NatPmpClient
             return null;
         }
 
-        $result = unpack('n', substr($response, 2, 2));
-        if (!is_array($result) || !isset($result[1]) || $result[1] !== 0) {
+        $resultCode = $this->readResultCode($response);
+        if ($resultCode !== 0) {
             $this->logger->debug('NAT-PMP: mapping request failed on result code', [
-                'result_code' => is_array($result) ? ($result[1] ?? null) : null,
+                'result_code' => $resultCode,
             ]);
             return null;
         }
 
-        $parts = unpack('n', substr($response, 10, 2));
+        $port = unpack('n', substr($response, 10, 2));
+        $lifetime = unpack('N', substr($response, 12, 4));
+        if (
+            is_array($port) && isset($port[1]) && is_int($port[1])
+            && is_array($lifetime) && isset($lifetime[1]) && is_int($lifetime[1])
+        ) {
+            return ['external_port' => $port[1], 'granted_lifetime' => $lifetime[1]];
+        }
+
+        return null;
+    }
+
+    /**
+     * Reads the 16-bit Result Code (bytes 2-3, network byte order) that
+     * RFC 6886 §3 says every reply carries: "Responses always contain a
+     * 16-bit result code in network byte order. A result code of zero
+     * indicates success" — the single gate shared by parseExternalIp()
+     * (§3.2), parseMappingResponse() (§3.3) and removePortMapping()
+     * (§3.4, whose reply §3.4 defines as "formatted as defined in
+     * Section 3.3").
+     *
+     * @return int|null The result code, or null when the datagram is too
+     *     short to hold one — which callers must treat as failure (fail
+     *     loud: an unreadable code never reads as success).
+     */
+    private function readResultCode(string $response): ?int
+    {
+        if (strlen($response) < 4) {
+            return null;
+        }
+
+        $parts = unpack('n', substr($response, 2, 2));
         if (is_array($parts) && isset($parts[1]) && is_int($parts[1])) {
             return $parts[1];
         }
@@ -450,10 +560,10 @@ class NatPmpClient
             return null;
         }
 
-        $result = unpack('n', substr($response, 2, 2));
-        if (!is_array($result) || !isset($result[1]) || $result[1] !== 0) {
+        $resultCode = $this->readResultCode($response);
+        if ($resultCode !== 0) {
             $this->logger->debug('NAT-PMP: public address request failed on result code', [
-                'result_code' => is_array($result) ? ($result[1] ?? null) : null,
+                'result_code' => $resultCode,
             ]);
             return null;
         }

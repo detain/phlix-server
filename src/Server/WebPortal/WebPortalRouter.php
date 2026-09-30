@@ -437,9 +437,14 @@ class WebPortalRouter
             //     music_tracks.id (the internal int PK) with `stream_url: null`,
             //     so playback 404'd;
             //   * and there was no `/albums` list route here at all.
-            // `POST /api/v1/music/scan` STAYS: Application registers no POST
-            // music route, so this is the only registration of that path.
-            $r->post('/api/v1/music/scan', [$this, 'scanMusicDirectory']);
+            // M-1 (security scan @9e765895): `POST /api/v1/music/scan` USED to be
+            // registered here, auth-only. Application registers no POST music
+            // route, so this file remains the only registration of that path —
+            // but the route now lives in the AdminMiddleware group below, next to
+            // the other destructive rails, because the handler walks an
+            // operator-supplied ABSOLUTE path with synchronous filesystem I/O
+            // inside a resident HTTP worker. That never belongs to every
+            // authenticated user; see {@see self::scanMusicDirectory()}.
         }, [$auth]);
 
         // Admin-only: delete a media item (Step 11.6). Gate with AdminMiddleware
@@ -451,6 +456,15 @@ class WebPortalRouter
                 '',
                 function (Router $r) use ($adminMiddleware): void {
                     $r->delete('/api/v1/media/{id}', [$this, 'deleteMediaItem']);
+
+                    // M-1: arbitrary-path music scan — admin-only, mirroring the
+                    // sibling `LibraryController::scan` posture through the same
+                    // house gate (AdminMiddleware: 401 unauthenticated, 403 +
+                    // permission-denied audit for non-admins, before any disk I/O).
+                    // Registered ONLY while both admin collaborators are wired, so
+                    // a legacy unwired construction fails closed (no route at all),
+                    // never degrades to auth-only — the S282 lesson.
+                    $r->post('/api/v1/music/scan', [$this, 'scanMusicDirectory']);
 
                     // Candidate poster listing (Step 15.1) and poster selection (Step 15.2).
                     //
@@ -3121,7 +3135,24 @@ class WebPortalRouter
     /**
      * Triggers a music directory scan.
      *
-     * POST /api/v1/music/scan
+     * POST /api/v1/music/scan  — **ADMIN ONLY** (M-1, security scan @9e765895).
+     *
+     * The `path` is an operator-supplied ABSOLUTE filesystem path walked with
+     * synchronous I/O inside the resident HTTP worker (a `count = 14` Workerman
+     * process). That blast radius is exactly why this used to sit behind bare
+     * `AuthMiddleware` and no longer does: it now shares `LibraryController::scan`'s
+     * posture via the {@see AdminMiddleware} group registered in
+     * {@see self::registerRoutes()} — unauthenticated 401, non-admin 403 (audited),
+     * enforced BEFORE the handler runs so a denied caller never touches the disk.
+     *
+     * The blocking-IO exposure that remains (an ADMIN inline scan of a legitimately
+     * huge tree) is registered honestly in `docs/dev/BLOCKING_IO_EXCEPTIONS.md`.
+     * Routing the scan through the maintenance queue was rejected because no queue
+     * mechanism exists for music scans today: `MaintenanceTask::MODE_QUEUED` covers
+     * only `storage-snapshot` and `dedupe-paths`, and `library_scan_jobs` is
+     * library-scoped (`library_id NOT NULL` FK) whereas this endpoint takes a raw
+     * path with no library context. Inventing that infrastructure is out of scope;
+     * the admin gate is the correct containment.
      *
      * Request body: {"path": "/music/rock"}
      *

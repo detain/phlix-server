@@ -53,9 +53,10 @@ use ReflectionClass;
  *
  * ## Coverage statement — read this before trusting the file's name
  *
- * `WebPortalRouter` registers **47** routes (44 when the admin dependencies are
- * unwired). This file covers them at two different strengths, and the
- * difference matters:
+ * `WebPortalRouter` registers **47** routes (43 when the admin dependencies are
+ * unwired — the fourth joined the admin group with M-1, scan @9e765895:
+ * `POST /api/v1/music/scan`). This file covers them at two different strengths,
+ * and the difference matters:
  *
  * - **All 47 rails, REGISTRATION-level.** {@see testTheRegisteredWirePathsMatchTheManifestExactly()}
  *   pins verb + exact path literal + handler method + middleware stack for
@@ -70,9 +71,10 @@ use ReflectionClass;
  *   facets/index/letter-index, transcode, favorites/ratings/like/watched,
  *   settings, playback preferences, avatars, collections, themes
  *   (`ThemeEndpointsReachabilityTest` dispatch-covers those two separately),
- *   recommendations, music scan, history deletes, and the three admin-gated
- *   poster/delete routes. Their response envelopes are NOT asserted here. Do
- *   not read this file as an end-to-end guard for the whole router.
+ *   recommendations, history deletes, and the four admin-gated
+ *   poster/delete/music-scan routes (`MusicScanAdminGateTest` dispatch-covers
+ *   that one's gate separately). Their response envelopes are NOT asserted
+ *   here. Do not read this file as an end-to-end guard for the whole router.
  */
 final class WebPortalRouterWirePathGuardTest extends TestCase
 {
@@ -167,7 +169,7 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
         'POST /api/v1/media/{id}/transcode -> WebPortalRouter::startTranscode [AuthMiddleware]',
         'POST /api/v1/media/{id}/unwatched -> WebPortalRouter::markUnwatched [AuthMiddleware]',
         'POST /api/v1/media/{id}/watched -> WebPortalRouter::markWatched [AuthMiddleware]',
-        'POST /api/v1/music/scan -> WebPortalRouter::scanMusicDirectory [AuthMiddleware]',
+        'POST /api/v1/music/scan -> WebPortalRouter::scanMusicDirectory [AdminMiddleware]',
         'POST /api/v1/users/me/avatar -> WebPortalRouter::uploadAvatar [AuthMiddleware]',
         'PUT /api/v1/me/playback/preferences -> WebPortalRouter::updatePlaybackPreferences [AuthMiddleware]',
         'PUT /api/v1/media/{id}/like -> WebPortalRouter::setLikeLevel [AuthMiddleware]',
@@ -177,13 +179,14 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
     ];
 
     /**
-     * The three routes that only exist when both admin collaborators are wired.
+     * The four routes that only exist when both admin collaborators are wired.
      *
      * @var list<string>
      */
     private const ADMIN_GATED_ROUTES = [
         'DELETE /api/v1/media/{id} -> WebPortalRouter::deleteMediaItem [AdminMiddleware]',
         'GET /api/v1/media/{id}/posters -> MediaPosterController::listPosters [AdminMiddleware]',
+        'POST /api/v1/music/scan -> WebPortalRouter::scanMusicDirectory [AdminMiddleware]',
         'PUT /api/v1/media/{id}/poster -> MediaPosterController::setPoster [AdminMiddleware]',
     ];
 
@@ -647,10 +650,10 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
     }
 
     /**
-     * The three admin-gated registrations are CONDITIONAL on both admin
+     * The four admin-gated registrations are CONDITIONAL on both admin
      * collaborators being wired. Pinning that keeps the conditional honest: if
-     * it were inverted, the poster/delete routes would register without an
-     * `AdminMiddleware` group in some container configurations.
+     * it were inverted, the poster/delete/music-scan routes would register
+     * without an `AdminMiddleware` group in some container configurations.
      */
     public function testTheAdminGatedRoutesAreAbsentWhenTheAdminCollaboratorsAreUnwired(): void
     {
@@ -671,7 +674,7 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
         $this->assertSame(
             $expected,
             $rendered,
-            'the unwired router must register exactly the manifest MINUS the three admin-gated routes'
+            'the unwired router must register exactly the manifest MINUS the four admin-gated routes'
         );
     }
 }

@@ -29,6 +29,11 @@ use Phlix\Server\Http\Response;
  *  - No userId in context (not authenticated) → continue (let AuthMiddleware handle)
  *  - Stream limit exceeded → 429 JSON with StreamLimitExceeded error
  *  - Stream registered successfully → continue routing
+ *  - Authenticated stream WITHOUT a session id → counted under a synthetic,
+ *    stable `(profileId, deviceId)` bucket (M-3, scan @9e765895 — the pre-fix
+ *    pass-through let any client dodge the cap by omitting `session_id`).
+ *    Only a request with no device name at all (no X-Device-ID, no UA) still
+ *    passes unregistered.
  *
  * Heartbeat: A background timer is registered that calls heartbeat() every
  * 30 seconds for the duration of the streaming request. This is handled via
@@ -99,13 +104,34 @@ final class StreamLimitMiddleware
             }
         }
 
-        // Extract device and session from the request
+        // Extract device and session from the request.
         $deviceId = $this->getDeviceId($request);
-        $sessionId = $this->getSessionId($request);
 
-        if ($sessionId === null || $deviceId === null) {
+        // With no device name at all (no X-Device-ID header AND no User-Agent)
+        // there is nothing stable to key even a synthetic bucket on; this stays
+        // the documented pass-through. Real traffic always carries a UA.
+        if ($deviceId === null) {
             return null;
         }
+
+        // M-3 (security scan @9e765895): a missing session id used to bail out
+        // of registration entirely, so ANY authenticated client could dodge the
+        // per-profile concurrency cap just by never sending `session_id`. When
+        // none is supplied, fall back to a SYNTHETIC stable bucket keyed on
+        // (profileId, deviceId): the same device on the same profile always
+        // derives the same id, so its streams occupy exactly one slot
+        // (registerStream() dedupes on (profile_id, session_id) and refreshes
+        // the heartbeat), while different devices still get distinct slots.
+        //
+        // The synthetic row rides the NORMAL lifecycle end to end — heartbeat
+        // timer, releaseStream(), and cleanupStaleStreams(). GC keys on
+        // last_heartbeat_at, never on id shape, so a bucket whose device goes
+        // silent is deleted by the 60 s sweep inside
+        // StreamSessionService::cleanupStaleStreams() on the next registration
+        // attempt: synthetic buckets cannot leak rows. The id fits the column
+        // ('synthetic:' + 64 hex = 74 chars <= VARCHAR(100)).
+        $sessionId = $this->getSessionId($request)
+            ?? 'synthetic:' . hash('sha256', $profileId . '|' . $deviceId);
 
         // Try to register the stream
         $registered = $this->streamSessionService->registerStream($profileId, $deviceId, $sessionId);

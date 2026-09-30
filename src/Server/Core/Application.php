@@ -694,10 +694,15 @@ class Application
 
         // Trickplay sprite and timeline URLs (public, no auth required).
         // These point to the existing /trickplay/{itemId}/ routes.
+        // M-2 (scan @9e765895): "public" stays true for UNIDENTIFIED callers;
+        // a Bearer-carrying request is now rating-gated handler-side, exactly
+        // like show(), so an over-cap identified caller gets the 404 shape.
         $this->router->get('/api/v1/media/{id}/trickplay', [$mediaItemController, 'getTrickplay']);
 
         // Chapter thumbnail endpoint (public, no auth required).
-        // Returns the thumbnail image for a specific chapter.
+        // Returns the thumbnail image for a specific chapter. Same M-2 note as
+        // the trickplay rail above: anonymous posture unchanged, identified
+        // over-cap requests are handler-side 404s.
         $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController,
             'getChapterThumbnail']);
 

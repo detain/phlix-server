@@ -148,6 +148,36 @@ class MediaItemController
     }
 
     /**
+     * Over-cap predicate for the two ASSET rails that are registered PUBLIC on
+     * Application (`/api/v1/media/{id}/trickplay`, `…/chapters/{index}/thumbnail`).
+     *
+     * M-2 (security scan @9e765895): those rails carry the media file's own
+     * S235 rating invariant — but ONLY for IDENTIFIED requests. A public route
+     * has no session to filter, and `resolveRatingFilter()` deliberately answers
+     * `denyAll()` for an unidentified caller (the S235 handler-side posture that
+     * protects the authed rails). Reusing it verbatim here would silently
+     * convert the DOCUMENTED anonymous posture of these two public routes
+     * ("public, no auth required", Application's route comments) into a 404
+     * storm. So: an empty user id is explicitly not over-cap here —
+     * byte-identical anonymous behavior — while any Bearer-carrying request
+     * gets the exact same effective-rating gate {@see self::show()} applies,
+     * including the 404-never-403 shape so a refusal cannot confirm existence.
+     *
+     * @param array<string, mixed> $item The already-loaded media row.
+     */
+    private function identifiedRequestIsOverCap(Request $request, array $item): bool
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '' || $this->ratingGate === null) {
+            return false;
+        }
+
+        $filter = $this->resolveRatingFilter($request);
+
+        return $filter !== null && !$this->ratingGate->isAllowed($item, $filter);
+    }
+
+    /**
      * @param array<string, string> $params
      */
     public function index(Request $request, array $params): Response
@@ -536,7 +566,8 @@ class MediaItemController
      * @param array<string, string> $params Route params with 'id' key
      *
      * @return Response 200 with {sprite_url, timeline_url, trickplay_bif_url?},
-     *                  404 if the item does not exist
+     *                  404 if the item does not exist — or if an IDENTIFIED
+     *                  request is over the item's effective parental cap (M-2)
      */
     public function getTrickplay(Request $request, array $params): Response
     {
@@ -548,6 +579,14 @@ class MediaItemController
 
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // M-2: the trickplay sprite/timeline/BIF set is a frame-accurate copy of
+        // the media itself, so an identified caller over the item's effective
+        // rating gets the exact show() refusal (404, never 403). Anonymous hits
+        // keep the documented public posture — see identifiedRequestIsOverCap().
+        if ($this->identifiedRequestIsOverCap($request, $item)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
@@ -585,7 +624,9 @@ class MediaItemController
      * @param Request $request HTTP request
      * @param array<string, string> $params Route params with 'id' and 'index' keys
      *
-     * @return Response 200 with image content, 404 if not found
+     * @return Response 200 with image content; 404 if not found — or if an
+     *                  IDENTIFIED request is over the item's effective parental
+     *                  cap (M-2, security scan @9e765895)
      */
     public function getChapterThumbnail(Request $request, array $params): Response
     {
@@ -604,6 +645,14 @@ class MediaItemController
         // First verify the media item exists
         $item = $this->itemRepository->findById($itemId);
         if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // M-2: same invariant as getTrickplay() — a chapter thumbnail is a frame
+        // of the media. Identified over-cap callers get the show() 404 shape
+        // BEFORE any chapter parsing or file I/O; anonymous requests are
+        // unaffected (documented public posture).
+        if ($this->identifiedRequestIsOverCap($request, $item)) {
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 

@@ -264,6 +264,28 @@ and needs a live renderer, so it guards nothing in the default suite),
 
 ---
 
+## Exception 7 — admin-inline arbitrary-path music scan (`POST /api/v1/music/scan`)
+
+| | |
+|---|---|
+| Site | `src/Server/WebPortal/WebPortalRouter.php::scanMusicDirectory()` → `MusicLibraryService::scanDirectory()` → `MusicLibraryScanner::scanDirectory()` — synchronous recursive tree walk + per-new-file tag/ffprobe work, inline on the request |
+| Reached from | `POST /api/v1/music/scan`, registered ONLY inside WebPortalRouter's `AdminMiddleware` group (M-1, security scan @9e765895). Before M-1 this sat behind bare `AuthMiddleware`, so ANY authenticated user could stall a worker on an arbitrary absolute path; the gate now rejects unauthenticated (401) and non-admin (403, audited) callers before the handler runs — a denied caller performs zero disk I/O (`tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`) |
+| Why it is sync | The endpoint takes a raw operator path with no library context. The queue mechanisms that exist are shape-incompatible: `library_scan_jobs` requires `library_id NOT NULL` (FK) and `MaintenanceTask::MODE_QUEUED` covers only `storage-snapshot` and `dedupe-paths` (`MusicLibraryScanner` itself documents that this legacy path runs "WITHOUT a sink — there is no job row"). Building an arbitrary-path scan queue is NEW infrastructure, explicitly out of scope for M-1; the admin gate is the containment shipped instead |
+| Bound | **HONEST STATEMENT: there is no enforced timeout on this call.** Unlike Exceptions 1/4, the walk length is unbounded by construction (bounded only by the tree the admin names). What IS bounded: WHO may invoke it (admin role check, `users.is_admin`, pre-handler), HOW OFTEN (an operator action, not a viewer path — no client calls it on playback), and the failure evidence (non-admin attempts reach the audit log via `AdminMiddleware::checkAccess()`). The duration scale is measured upstream: `LibraryController::rescan()`'s S145 note records 9 h 55 m for the 61,111-track production rescan; this endpoint's incremental mode is the "minutes" side of that S145 comparison (post-S151 wall clock is UNMEASURED for the incremental path — stated, not assumed) |
+| Cost | One of the 14 HTTP workers (`start.php:169`, `count = 14`) is frozen for the whole scan — ~1/14 of HTTP capacity — for as long as an admin scans a tree. No WS/heartbeat/timer/relay worker is involved. Concurrent scans multiply the stall across workers, one per request |
+
+If a future step moves this route behind a queue (the honest long-term fix,
+per this file's own rule that a timerless exception "is an unbounded stall with
+a comment next to it"), this entry retires with it. Until then the entry exists
+so the stall is REGISTERED rather than discovered: the M-1 scan finding was
+about exposure to every user; the residual exposure is admin-triggered only.
+
+Regression guards: `tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`
+(gate + zero-disk-I/O-on-refusal), `tests/Unit/Server/WebPortal/WebPortalRouterWirePathGuardTest.php`
+(route lives in the admin-conditional group and vanishes unwired).
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

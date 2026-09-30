@@ -684,6 +684,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Three security-scan findings (M-1/M-2/M-3, scan @9e765895).**
+  **M-1 — `POST /api/v1/music/scan` is now ADMIN-ONLY.** The handler walks an
+  operator-supplied ABSOLUTE path with synchronous filesystem I/O inside a
+  resident HTTP worker but sat behind bare `AuthMiddleware`, so any authenticated
+  user could stall a worker on an arbitrary tree. It moved into WebPortalRouter's
+  `AdminMiddleware` group, mirroring `LibraryController::scan`'s posture through the
+  same house gate (401 unauthenticated, 403 + permission-denied audit for non-admins,
+  enforced before the handler so a refusal touches zero disk); the route is now one of
+  the FOUR admin-collaborator-conditional registrations, so an unwired construction
+  fails closed to a 404 rather than degrading to auth-only (the S282 lesson). The
+  admin-inline blocking-IO exposure that remains is registered honestly as Exception 7
+  in `docs/dev/BLOCKING_IO_EXCEPTIONS.md`; a queue was rejected because none exists for
+  raw-path music scans today (out-of-scope new infra). `openapi.yaml` `x-phlix-middleware`
+  flipped to `[AdminMiddleware]`. Pinned by `tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`
+  + the `WebPortalRouterWirePathGuardTest`/`OpenapiSpecCurrencyTest` cascade.
+  **M-2 — trickplay + chapter-thumbnail asset rails now honor the file's own S235
+  rating invariant for IDENTIFIED requests.** `MediaItemController::getTrickplay()`
+  and `::getChapterThumbnail()` are registered PUBLIC but returned derived copies of
+  the media (frame-accurate sprites, chapter stills) with no cap check. A Bearer-carrying
+  request over the item's effective rating now gets the exact `show()` 404 (never 403)
+  before any chapter parsing or file I/O, via the new `identifiedRequestIsOverCap()`
+  helper; the DOCUMENTED anonymous posture ("public, no auth required") stays
+  byte-identical because that helper treats an empty user id as not-over-cap rather
+  than reusing `resolveRatingFilter()`'s handler-side deny-all. `realpath` containment on
+  the withFile path was assessed and skipped — the sole writer (`MediaAssetGenerationJob`)
+  only ever emits `<transcodeDir>/chapters/<itemId>/<index>.jpg`, so provenance is safe
+  and adding containment would need new DI plumbing (out of scope). Pinned in
+  `MediaItemControllerParentalTest`.
+  **M-3 — the stream limit no longer skips session-less authenticated streams.**
+  `StreamLimitMiddleware` returned `null` (never registered) when no `session_id`
+  was supplied, so any authenticated client could dodge the per-profile concurrency
+  cap by omitting it. It now falls back to a SYNTHETIC stable bucket
+  `synthetic:<sha256(profileId|deviceId)>` (deviceId already carries its UA-hash
+  fallback): the same device/profile always derives the same id, so its streams occupy
+  exactly one slot that rides the normal heartbeat + 60s stale-GC lifecycle and cannot
+  leak rows. Only a request with no device name at all still passes unregistered. No new
+  error-code literals — a full synthetic bucket hits the same 429 `stream.limit_exceeded`.
+  Pinned in `tests/Unit/Server/Http/Middleware/StreamLimitSyntheticSessionBucketTest.php`.
+
 - **The S60 CSP browser control no longer depends on task-queue luck (E2E flake, run
   36645892753).** `Fmp4HlsThroughControllerE2ETest::testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy`
   failed attempt 1 with `Failed asserting that an array contains 'media-src'` and went green on

@@ -8616,7 +8616,7 @@ paths:
       tags: ["Music & Books"]
       summary: "Scan music directory"
       description: "Scan music directory (post /api/v1/music/scan)."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
       responses:

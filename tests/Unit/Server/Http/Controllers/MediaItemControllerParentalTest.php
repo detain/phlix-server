@@ -23,6 +23,10 @@ use Workerman\MySQL\Connection;
 /**
  * Parental-control ACCESS gate coverage for MediaItemController: show(),
  * getDownload(), getPlaybackInfo() deny over-cap items (404, no signed URL);
+ * M-2 (scan @9e765895): getTrickplay() and getChapterThumbnail() deny
+ * over-cap items for IDENTIFIED requests with the exact show() 404 — while
+ * the documented anonymous posture on those two public routes (Application's
+ * "public, no auth required" registrations) stays byte-identical;
  * the S97 music shuffle path honours the cap on the tracks it resolves from
  * `music_*`; the owner is never gated.
  */
@@ -447,5 +451,188 @@ class MediaItemControllerParentalTest extends TestCase
         $resp = $controller->shufflePlay($this->shuffleRequest('al-1'), []);
 
         $this->assertSame(404, $resp->statusCode);
+    }
+
+    // -----------------------------------------------------------------
+    // M-2 (security scan @9e765895) — trickplay + chapter-thumbnail assets
+    // carry the file's own S235 rating invariant for identified requests.
+    // -----------------------------------------------------------------
+
+    /**
+     * @param array<string, mixed>                 $item        media_items row.
+     * @param list<array<string, mixed>>           $markerRows  media_markers rows.
+     * @return Connection&\PHPUnit\Framework\MockObject\MockObject
+     */
+    private function assetConnection(array $item, array $markerRows = [])
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use ($item, $markerRows): array {
+                if (str_contains($sql, 'FROM media_items WHERE id = ?')) {
+                    return [$item];
+                }
+                if (str_contains($sql, 'FROM media_markers WHERE media_item_id = ?')) {
+                    return $markerRows;
+                }
+                return [];
+            }
+        );
+        return $db;
+    }
+
+    /**
+     * @param array<string, mixed>      $item        media_items row.
+     * @param list<array<string, mixed>> $markerRows media_markers rows for the
+     *                                               chapter-thumbnail lookup.
+     */
+    private function assetController(array $item, RatingGate $gate, array $markerRows = []): MediaItemController
+    {
+        $repo = new ItemRepository($this->assetConnection($item, $markerRows));
+
+        // The chapter marker lookup runs through Phlix\Media\MarkerService over
+        // its OWN connection double — script it with the same rows so the
+        // pre-fix path really reaches the 200 it must be reddened on.
+        $markerDb = $this->createMock(Connection::class);
+        $markerDb->method('query')->willReturn($markerRows);
+
+        return new MediaItemController(
+            $repo,
+            new \Phlix\Media\Markers\MarkerService($repo, new MarkerCandidateRepository($repo)),
+            $this->createMock(GaplessPlaybackManager::class),
+            new TrickplayController('/tmp/trickplay', ''),
+            new ChapterMarkerService($markerDb),
+            null,
+            $gate,
+            null
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function overCapTrickplayItem(): array
+    {
+        return [
+            'id' => 'm1', 'name' => 'Mature', 'type' => 'movie',
+            'content_rating' => 'R', 'metadata_json' => '{}', 'path' => '/x.mkv',
+            'trickplay_sprite_path' => '/data/trickplay/m1/sprite.jpg',
+            'trickplay_timeline_path' => '/data/trickplay/m1/timeline.json',
+        ];
+    }
+
+    public function testGetTrickplayBlocksOverCapItemForIdentifiedRequest(): void
+    {
+        $controller = $this->assetController(
+            $this->overCapTrickplayItem(),
+            $this->gate($this->pg13Filter())
+        );
+
+        $resp = $controller->getTrickplay($this->cappedRequest(), ['id' => 'm1']);
+
+        // The exact show() refusal shape: 404 'Item not found' — never a 403,
+        // so the answer cannot confirm the item exists.
+        $this->assertSame(404, $resp->statusCode);
+        $this->assertStringNotContainsString('sprite_url', $resp->body);
+        $this->assertStringNotContainsString('trickplay', $resp->body);
+    }
+
+    public function testGetTrickplayWithinCapStillServesIdentifiedRequest(): void
+    {
+        $item = $this->overCapTrickplayItem();
+        $item['content_rating'] = 'PG';
+        $controller = $this->assetController($item, $this->gate($this->pg13Filter()));
+
+        $resp = $controller->getTrickplay($this->cappedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $resp->statusCode);
+        $decoded = json_decode($resp->body, true);
+        $this->assertIsArray($decoded);
+        $this->assertIsString($decoded['sprite_url'] ?? null);
+    }
+
+    public function testGetTrickplayAnonymousPostureIsUnchanged(): void
+    {
+        // The documented public posture (Application: "Trickplay sprite and
+        // timeline URLs (public, no auth required)") must survive byte-for-byte:
+        // an UNIDENTIFIED request is not rating-filtered here.
+        $controller = $this->assetController(
+            $this->overCapTrickplayItem(),
+            $this->gate($this->pg13Filter())
+        );
+
+        $resp = $controller->getTrickplay($this->anonymousRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $resp->statusCode);
+        $decoded = json_decode($resp->body, true);
+        $this->assertIsArray($decoded);
+        $this->assertIsString($decoded['sprite_url'] ?? null);
+        $this->assertIsString($decoded['timeline_url'] ?? null);
+    }
+
+    public function testGetChapterThumbnailBlocksOverCapItemForIdentifiedRequest(): void
+    {
+        $thumb = sys_get_temp_dir() . '/phlix_m2_thumb_' . bin2hex(random_bytes(4)) . '.jpg';
+        file_put_contents($thumb, 'JPEGDATA');
+        $this->addToAssertionCount(1);
+
+        try {
+            $item = $this->overCapTrickplayItem();
+            $item['chapters_json'] = json_encode([['start' => 0, 'title' => 'Chapter 1']]);
+
+            // A fully-resolvable marker + on-disk thumbnail: PRE-FIX this
+            // identified over-cap request returns 200 with the image — the red
+            // proof this test exists.
+            $markerRows = [[
+                'id' => 7,
+                'media_item_id' => 'm1',
+                'marker_type' => 'chapter',
+                'start_time_ms' => 0,
+                'end_time_ms' => 60000,
+                'label' => 'Chapter 1',
+                'user_id' => null,
+                'thumbnail_path' => $thumb,
+            ]];
+
+            $controller = $this->assetController($item, $this->gate($this->pg13Filter()), $markerRows);
+
+            $resp = $controller->getChapterThumbnail($this->cappedRequest(), ['id' => 'm1', 'index' => '0']);
+
+            $this->assertSame(404, $resp->statusCode);
+            $decoded = json_decode($resp->body, true);
+            $this->assertIsArray($decoded);
+            $this->assertSame('Item not found', $decoded['error'] ?? null);
+        } finally {
+            @unlink($thumb);
+        }
+    }
+
+    public function testGetChapterThumbnailAnonymousPostureIsUnchanged(): void
+    {
+        $thumb = sys_get_temp_dir() . '/phlix_m2_thumb_' . bin2hex(random_bytes(4)) . '.jpg';
+        file_put_contents($thumb, 'JPEGDATA');
+
+        try {
+            $item = $this->overCapTrickplayItem();
+            $item['chapters_json'] = json_encode([['start' => 0, 'title' => 'Chapter 1']]);
+            $markerRows = [[
+                'id' => 7,
+                'media_item_id' => 'm1',
+                'marker_type' => 'chapter',
+                'start_time_ms' => 0,
+                'end_time_ms' => 60000,
+                'label' => 'Chapter 1',
+                'user_id' => null,
+                'thumbnail_path' => $thumb,
+            ]];
+
+            $controller = $this->assetController($item, $this->gate($this->pg13Filter()), $markerRows);
+
+            $resp = $controller->getChapterThumbnail($this->anonymousRequest(), ['id' => 'm1', 'index' => '0']);
+
+            $this->assertSame(200, $resp->statusCode);
+            $this->assertSame('image/jpeg', $resp->headers['Content-Type'] ?? null);
+        } finally {
+            @unlink($thumb);
+        }
     }
 }

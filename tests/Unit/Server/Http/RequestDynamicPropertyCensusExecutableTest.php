@@ -475,7 +475,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * file. Names no Request property; only this denominator moves.
               * Measured 1911 from the phpunit red, not predicted.
               */
-    private const EXPECTED_PHP_FILES = 1911;
+    private const EXPECTED_PHP_FILES = 1913;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -507,7 +507,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (`getTrustedClientIp()`), never properties; the five new files touch no
      * Request at all. Measured from the phpunit red on the final tree.
      */
-    private const EXPECTED_DECLARED_READS = 397;
+    private const EXPECTED_DECLARED_READS = 398;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -579,7 +579,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * entry-point shape) and +2 reads (documented under census number 2).
      * Every assignment lands on a DECLARED property; S427 license intact.
      */
-    private const EXPECTED_DECLARED_WRITES = 991;
+    private const EXPECTED_DECLARED_WRITES = 1000;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

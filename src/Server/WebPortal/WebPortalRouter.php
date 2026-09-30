@@ -780,11 +780,24 @@ class WebPortalRouter
     }
 
     /**
-     * Determines whether the given user ID belongs to an admin user.
+     * Determines whether the given user ID belongs to an ACTIVE admin user.
+     *
+     * Delegates to {@see \Phlix\Auth\UserRepository::findAdminById()} — the same
+     * shared seam {@see \Phlix\Server\Http\Middleware\AdminMiddleware} gates on
+     * (`is_admin = 1 AND status = 'active'`) — so the soft disclosure predicates
+     * here can never be looser than the hard admin gate. The previous shape
+     * (`findById` + `is_admin` only) would treat a disabled/pending/suspended
+     * admin holding a still-live token as admin for path/`files` disclosure.
+     * That window is bounded to ≤5s on direct HTTP (AuthManager re-checks the
+     * account status per request through its 5s auth-state cache, failing closed)
+     * but NOT on the hub-relay path, where the server trusts the hub-stamped
+     * relay principal and never re-reads its own users table per request —
+     * defense-in-depth there is load-bearing, not decorative.
      *
      * @param string $userId The authenticated user's ID (empty string if unauthenticated).
      *
-     * @return bool True when the user exists and has is_admin = 1; false otherwise.
+     * @return bool True when the user is an active admin; false otherwise (incl.
+     *              inactive accounts that still carry is_admin = 1).
      */
     private function isAdminUser(string $userId): bool
     {
@@ -792,9 +805,7 @@ class WebPortalRouter
             return false;
         }
 
-        $user = $this->userRepository->findById($userId);
-
-        return $user !== null && ($user['is_admin'] ?? 0) == 1;
+        return $this->userRepository->findAdminById($userId) !== null;
     }
 
     /**

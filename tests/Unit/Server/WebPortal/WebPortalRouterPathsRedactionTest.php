@@ -28,18 +28,29 @@ use PHPUnit\Framework\TestCase;
  * the media surface has always admin-gated its raw-file `files` block via
  * {@see WebPortalRouter::isAdminUser()} — the library surface now mirrors it.
  * The two handlers run under AuthMiddleware (WirePathGuard-pinned), so
- * `$request->userId` is the authenticated subject; the gate predicate is
- * `is_admin = 1` through the wired UserRepository.
+ * `$request->userId` is the authenticated subject; the gate predicate is the
+ * repo-wide admin predicate `is_admin = 1 AND status = 'active'` (AdminMiddleware
+ * / findAdminById — see UserRepository::findAdminById) through the wired
+ * UserRepository. Disabled/pending admins are NOT admin for disclosure purposes.
  */
 final class WebPortalRouterPathsRedactionTest extends TestCase
 {
     /**
-     * @param array<string, mixed>|null $userRow findById() answer for the caller.
+     * @param array<string, mixed>|null $userRow findById() answer for the caller;
+     *                                         findAdminById() is stubbed to mirror
+     *                                         the real SQL (`is_admin = 1 AND
+     *                                         status = 'active'`), so the fixtures
+     *                                         stay faithful to UserRepository under
+     *                                         either side of the predicate swap.
      */
     private function router(?array $userRow, LibraryManager $libraryManager): WebPortalRouter
     {
         $users = $this->createMock(UserRepository::class);
         $users->method('findById')->willReturn($userRow);
+        $isActiveAdmin = $userRow !== null
+            && ($userRow['is_admin'] ?? 0) === 1
+            && ($userRow['status'] ?? '') === 'active';
+        $users->method('findAdminById')->willReturn($isActiveAdmin ? $userRow : null);
 
         return new WebPortalRouter(
             $libraryManager,
@@ -137,6 +148,61 @@ final class WebPortalRouterPathsRedactionTest extends TestCase
         $response = $this->router($this->nonAdminUser(), $libraryManager)
             ->getLibrary($this->request('user-1'), ['id' => 'lib-1']);
 
+        $decoded = $this->json($response);
+        $this->assertArrayNotHasKey('paths', $decoded['library']);
+        $this->assertSame('lib-1', $decoded['library']['id']);
+    }
+
+    /**
+     * A user row that satisfies the SOFTER legacy predicate (exists, is_admin=1)
+     * but not the repo-wide active-only admin predicate — e.g. an account
+     * disabled mid-session whose token is still inside the revocation latency
+     * window (direct HTTP: AuthManager's 5s status cache; relay: hub-stamped
+     * identity the server never re-checks locally per-request).
+     */
+    private function inactiveAdminUser(string $status): array
+    {
+        return ['id' => 'admin-1', 'is_admin' => 1, 'status' => $status];
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function nonActiveStatuses(): array
+    {
+        return ['disabled' => ['disabled'], 'pending' => ['pending'], 'suspended' => ['suspended']];
+    }
+
+    /**
+     * @dataProvider nonActiveStatuses
+     */
+    public function testGetLibrariesRedactsPathsForInactiveAdmins(string $status): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->method('getAllLibraries')->willReturn($this->libraryRows());
+
+        $response = $this->router($this->inactiveAdminUser($status), $libraryManager)
+            ->getLibraries($this->request('admin-1'), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $decoded = $this->json($response);
+        $this->assertArrayNotHasKey('paths', $decoded['libraries'][0]);
+        // Redaction must not break the browse contract beside it.
+        $this->assertSame('lib-1', $decoded['libraries'][0]['id']);
+    }
+
+    /**
+     * @dataProvider nonActiveStatuses
+     */
+    public function testGetLibraryRedactsPathsForInactiveAdmins(string $status): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->method('getLibrary')->willReturn($this->libraryRows()[0]);
+
+        $response = $this->router($this->inactiveAdminUser($status), $libraryManager)
+            ->getLibrary($this->request('admin-1'), ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
         $decoded = $this->json($response);
         $this->assertArrayNotHasKey('paths', $decoded['library']);
         $this->assertSame('lib-1', $decoded['library']['id']);

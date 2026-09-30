@@ -684,6 +684,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`WebPortalRouter::isAdminUser()` now demands an ACTIVE admin (reviewer-flagged predicate alignment).**
+  The L-4 paths-redaction gate (and the `files` disclosure on media detail) resolved the caller via
+  `UserRepository::findById()` + `is_admin == 1` — a softer predicate than the repo-wide standard
+  `is_admin = 1 AND status = 'active'` that `AdminMiddleware::checkAccess()`/`isAdmin()` and the
+  daemon-twin `LibraryController` redaction enforce via `findAdminById()`. A disabled/pending/suspended
+  admin inside the token-revocation latency window therefore satisfied the disclosure gate while failing
+  the hard admin gate. On direct HTTP the window is ≤5 s (AuthManager re-checks account status per
+  request through its 5 s auth-state cache, failing closed — `AuthManagerRevocationCeilingTest`), and the
+  relay path was audited as the load-bearing consumer: the server trusts the hub-stamped relay principal
+  and never re-reads its own users table per relayed request. `isAdminUser()` now delegates to the same
+  shared seam (`findAdminById() !== null`), mirroring `AdminMiddleware` exactly (one indexed PK lookup,
+  same uncached cost the soft admin gate already pays). No caller needed "admin regardless of status" —
+  all three call sites are disclosure gates. Pins: `WebPortalRouterPathsRedactionTest` gains
+  disabled/pending/suspended × both library handlers (red-first: each leaked `paths` pre-fix), and the
+  fixture user-mock now mirrors `findAdminById`'s real SQL beside `findById` so both sides of the swap
+  stay faithful.
+
 - **The SPA `/app/library/scan` route is admin-gated (L-4 follow-up, layer 2 of 2).** L-4 stopped
   shipping `paths` to non-admins on `/api/v1/libraries`, but the scan page still mounted for them:
   the route in `web-ui/src/main.ts` carried no gate, and the page's `v-if="library.paths.length"`

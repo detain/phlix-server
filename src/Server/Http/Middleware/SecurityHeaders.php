@@ -20,10 +20,15 @@ use Phlix\Server\Http\Response;
  *  - X-Content-Type-Options: nosniff
  *  - X-Frame-Options: SAMEORIGIN
  *  - Strict-Transport-Security (HSTS) with a 1-year max-age
- *  - Content-Security-Policy scoped to the SPA (script/style self-only;
- *    `media-src`/`worker-src 'self' blob:` so hls.js can attach its MSE
- *    `blob:` object URL and spawn its transmux Web Worker; frame-ancestors
- *    SAMEORIGIN so the SPA can embed itself but no external domain can)
+ *  - Content-Security-Policy scoped to the SPA (`script-src 'self'` — never
+ *    `'unsafe-inline'`, with an opt-in per-request nonce for the SPA shell's
+ *    inline bootstrap block; `style-src 'self' 'unsafe-inline'` — inline STYLE
+ *    is deliberate, the SPA applies theme tokens as per-element inline styles
+ *    via `el.style.setProperty()`, and element style attributes are exactly
+ *    what `'unsafe-inline'` in `style-src` governs; `media-src`/`worker-src
+ *    'self' blob:` so hls.js can attach its MSE `blob:` object URL and spawn
+ *    its transmux Web Worker; frame-ancestors SAMEORIGIN so the SPA can embed
+ *    itself but no external domain can)
  *
  * Called from {@see \Phlix\Server\Workerman\HttpHandler} after CORS decoration
  * on every response that passes through the Workerman entrypoint. The CGI entry
@@ -47,26 +52,40 @@ final class SecurityHeaders
     {
         $headers = $response->headers;
 
-        // Guard: don't overwrite an existing value (caller wins).
-        if (!isset($headers['X-Content-Type-Options'])) {
+        // Guard: don't overwrite an existing value (caller wins). HTTP header
+        // names are case-insensitive (RFC 9110 SS4.2) and Response::header() keys
+        // by the exact case it was handed, so the lookup must be case-insensitive
+        // too — a caller that set 'content-security-policy' (lowercase) still
+        // "wins", and decorating on top of it would ship two CSPs (browsers
+        // enforce the UNION of all policies, so the weaker-looking duplicate key
+        // silently changes semantics). Mirrors Response::asHeadReply()'s
+        // strcasecmp scan.
+        if (!self::hasHeader($headers, 'X-Content-Type-Options')) {
             $response->header('X-Content-Type-Options', 'nosniff');
         }
 
-        if (!isset($headers['X-Frame-Options'])) {
+        if (!self::hasHeader($headers, 'X-Frame-Options')) {
             $response->header('X-Frame-Options', 'SAMEORIGIN');
         }
 
         // HSTS: only on secure connections. An http response should not declare
         // HSTS because a MITM could inject it on the plain-text response and
         // lock the browser into https for subsequent visits.
-        if (!isset($headers['Strict-Transport-Security'])) {
+        if (!self::hasHeader($headers, 'Strict-Transport-Security')) {
             $response->header('Strict-Transport-Security', 'max-age=' . self::HSTS_MAX_AGE . '; includeSubDomains');
         }
 
-        // CSP: restrictive by default — no inline scripts/styles, only same-origin.
-        // frame-ancestors SAMEORIGIN lets the SPA embed its own pages but blocks
-        // clickjacking from external iframes. Base-uri NONE further restricts
-        // any injected base-tag attacks.
+        // CSP: restrictive by default. script-src is 'self' only — inline SCRIPT
+        // is never whitelisted wholesale; the SPA shell opts into a per-request
+        // nonce instead (see below). style-src CARRIES 'unsafe-inline' on
+        // purpose: the SPA themes by setting CSS custom properties through
+        // el.style.setProperty(), which lands in element style attributes — the
+        // exact construct 'unsafe-inline' in style-src permits (and what
+        // AGENTS.md's theming note calls "no script-src relaxation").
+        // frame-ancestors 'self' lets the SPA embed its own pages but blocks
+        // clickjacking from external iframes. base-uri 'self' (not NONE — the
+        // SPA shell resolves relative asset URLs against its own origin)
+        // restricts injected <base> tags to same-origin.
         //
         // Guard: a caller that already set its own CSP wins. The SPA shell
         // ({@see \Phlix\Server\WebPortal\Controllers\SharedUiController}) does
@@ -74,11 +93,33 @@ final class SecurityHeaders
         // carrying a per-request `'nonce-…'` (built via {@see contentSecurityPolicy()})
         // so the inline block executes without weakening `script-src` to
         // `'unsafe-inline'`.
-        if (!isset($headers['Content-Security-Policy'])) {
+        if (!self::hasHeader($headers, 'Content-Security-Policy')) {
             $response->header('Content-Security-Policy', self::contentSecurityPolicy());
         }
 
         return $response;
+    }
+
+    /**
+     * Case-insensitive presence check over a response's header map.
+     *
+     * Response::header() stores the key in the exact case it was called with,
+     * while HTTP treats field names case-insensitively — so a plain isset()
+     * guard misses a caller that wrote 'content-security-policy' or
+     * 'x-frame-options' and decorates a second copy beside it.
+     *
+     * @param array<string, string> $headers The response header map.
+     * @param string                $name    The field name to look up.
+     */
+    private static function hasHeader(array $headers, string $name): bool
+    {
+        foreach (array_keys($headers) as $key) {
+            if (strcasecmp($key, $name) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -93,6 +134,13 @@ final class SecurityHeaders
      * spins up a `blob:`-sourced transmux Web Worker. Without these a strict
      * browser rejects the load with `MEDIA_ELEMENT_ERROR: Media load rejected by
      * URL safety check`, blocking ALL HLS/transcoded playback.
+     *
+     * `style-src` deliberately carries `'unsafe-inline'`: the SPA applies theme
+     * tokens by writing CSS custom properties through `el.style.setProperty()`,
+     * which produces element-level inline styles — the construct this keyword
+     * governs. `script-src` correspondingly has NO `'unsafe-inline'`; inline
+     * script only ever runs under a per-request nonce (the `$scriptNonce`
+     * argument), so the CSP retains its XSS value where it matters.
      *
      * `img-src` explicitly allowlists the two TMDB image CDN hosts
      * (`https://image.tmdb.org` and `https://tmdb.org`) — with no wildcard — so

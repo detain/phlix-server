@@ -161,8 +161,14 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
         self::assertSame('profile_not_found', $body['denial_type']);
     }
 
-    /** A resolvable profile with no device/session identifiers passes through. */
-    public function testMissingDeviceOrSessionSkipsEnforcementAndServes(): void
+    /**
+     * A resolvable profile with NO device name at all (neither X-Device-ID nor
+     * User-Agent — here neither is set) passes through unregistered: the one
+     * documented skip. A missing SESSION id no longer skips — it registers
+     * under the synthetic bucket, pinned by
+     * {@see PreRouterFastPathsSyntheticSessionBucketTest} (M-3 twin).
+     */
+    public function testMissingDeviceNameSkipsEnforcementAndServes(): void
     {
         $fastPaths = $this->makeFastPaths(['id' => 'p1']);
 

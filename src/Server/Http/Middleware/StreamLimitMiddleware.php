@@ -131,7 +131,7 @@ final class StreamLimitMiddleware
         // attempt: synthetic buckets cannot leak rows. The id fits the column
         // ('synthetic:' + 64 hex = 74 chars <= VARCHAR(100)).
         $sessionId = $this->getSessionId($request)
-            ?? 'synthetic:' . hash('sha256', $profileId . '|' . $deviceId);
+            ?? self::syntheticSessionBucket($profileId, $deviceId);
 
         // Try to register the stream
         $registered = $this->streamSessionService->registerStream($profileId, $deviceId, $sessionId);
@@ -149,6 +149,24 @@ final class StreamLimitMiddleware
         $this->streamSessionService->registerHeartbeatTimer($sessionId);
 
         return null;
+    }
+
+    /**
+     * The synthetic session id for an authenticated stream with no session id.
+     *
+     * SINGLE SOURCE OF TRUTH for the M-3 derivation — {@see self::__invoke()}
+     * and the pre-router direct-play fast path
+     * ({@see \Phlix\Server\Http\FastPath\PreRouterFastPaths::checkStreamLimit()},
+     * which bypasses the router — MUST land on byte-identical ids so a device
+     * that hits both paths occupies the SAME bucket slot instead of doubling up.
+     *
+     * Stable by construction: same (profileId, deviceId) → same id; the
+     * `'synthetic:'` prefix keeps the id distinct from any real UUID session
+     * and fits the CHAR(100) column ('synthetic:' + 64 hex = 74 chars).
+     */
+    public static function syntheticSessionBucket(string $profileId, string $deviceId): string
+    {
+        return 'synthetic:' . hash('sha256', $profileId . '|' . $deviceId);
     }
 
     /**

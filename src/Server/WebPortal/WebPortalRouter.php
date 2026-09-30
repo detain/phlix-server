@@ -540,6 +540,17 @@ class WebPortalRouter
         }
         unset($lib);
 
+        // L-4 (security scan): absolute filesystem roots are admin-only detail,
+        // mirroring the admin-gated media `files` block below and the daemon
+        // twin LibraryController::index() — both surfaces keep returning the
+        // SAME shape. Local-copy redaction; the LibraryManager cache is intact.
+        if (!$this->isAdminUser($request->userId ?? '')) {
+            foreach ($libraries as &$lib) {
+                unset($lib['paths']);
+            }
+            unset($lib);
+        }
+
         return (new Response())->json(['libraries' => $libraries]);
     }
 
@@ -571,6 +582,11 @@ class WebPortalRouter
 
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        // L-4: admin-only `paths`, same as getLibraries() (see there).
+        if (!$this->isAdminUser($request->userId ?? '')) {
+            unset($library['paths']);
         }
 
         return (new Response())->json(['library' => $library]);

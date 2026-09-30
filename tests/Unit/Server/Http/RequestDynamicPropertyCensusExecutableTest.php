@@ -486,7 +486,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
               * into existing files. Measured 1916 from the phpunit red, not
               * predicted.
               */
-    private const EXPECTED_PHP_FILES = 1916;
+    /**
+     * Re-pinned 1916→1920 by the L-bundle security-hygiene lane (2026-09-30):
+     * −2 first-party files (L-5 deleted the dead-wired HubJwtMiddleware class
+     * and its test), +6 new test files (SystemInfoPayloadHygiene,
+     * LibraryControllerPathsRedaction, SecurityHeadersCaseInsensitiveGuard,
+     * PreRouterFastPathsSyntheticSessionBucket, ChromecastControllerErrorHygiene,
+     * WebPortalRouterPathsRedaction). Measured from the phpunit red on the
+     * final tree (the scan is filesystem-recursive, so the count is commit-
+     * invariant).
+     */
+    private const EXPECTED_PHP_FILES = 1920;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -527,8 +537,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Measured 423 from the phpunit red on the MERGED tree (which already
      * carries the da70cfa8 M-1/M-2/M-3 lane: an undocumented 397→398 bump from
      * its MediaItemController read sites), not predicted.
+     * Re-pinned 423→422 by the L-bundle security-hygiene lane (2026-09-30):
+     * net −1 declared-member READ — the L-5 deletion removed more Request
+     * property reads (HubJwtMiddleware::__invoke + its test's hubUser asserts)
+     * than the six new/updated test fixtures added. Every read still names a
+     * declared member. Measured from the phpunit red, not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 423;
+    private const EXPECTED_DECLARED_READS = 422;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -608,8 +623,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * shape again). Measured 1014 from the phpunit red on the MERGED tree
      * (absorbing da70cfa8's undocumented 991→1000 bump — its StreamLimit/
      * synthetic-session test request stamps), not predicted.
+     * Re-pinned 1014→1018 by the L-bundle security-hygiene lane (2026-09-30):
+     * net +4 declared-member WRITE — the six added test files stamp request
+     * fixtures (`method`/`path`/`userId`/`headers`/`body`), minus the writes
+     * removed with the L-5 HubJwtMiddleware deletion (its `$request->hubUser`
+     * assignment) and its test. Measured from the phpunit red on the final
+     * tree, not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1014;
+    private const EXPECTED_DECLARED_WRITES = 1018;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

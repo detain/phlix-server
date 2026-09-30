@@ -241,7 +241,18 @@ class Application
             ]);
         });
 
-        // System info endpoint - returns server metadata
+        // System info endpoint - returns server metadata.
+        // L-3 (security scan): this route is registered with NO middleware
+        // (openapi `x-phlix-middleware: []`), so every key here is anonymous
+        // public. It used to also ship `php_version` (PHP_VERSION) and
+        // `workerman_version` (Workerman\Worker::VERSION) — a free stack-
+        // fingerprint telling any internet scanner exactly which published
+        // CVEs apply to this host. The estate consumer sweep found ONE
+        // reader (phlix-windows-client src/main/versionCheck.ts, re-targeted
+        // in 992c7f0) and it reads only the top-level `version`, falling back
+        // open on 404 — so the two extras are DROPPED outright rather than
+        // admin-gated: gating keys nobody fetches adds surface, not safety.
+        // `server` + `version` remain: that IS the update-check contract.
         $this->router->get('/system/info', function (Request $request): Response {
             $serverConfig = $this->config['server'] ?? [];
             $serverName = is_array($serverConfig) && isset($serverConfig['name']) && is_string($serverConfig['name'])
@@ -251,8 +262,6 @@ class Application
             return (new Response())->json([
                 'server' => $serverName,
                 'version' => Version::STRING,
-                'php_version' => PHP_VERSION,
-                'workerman_version' => \Workerman\Worker::VERSION,
             ]);
         });
 

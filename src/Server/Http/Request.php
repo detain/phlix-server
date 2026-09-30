@@ -121,7 +121,13 @@ class Request
      */
     public ?string $profileId = null;
 
-    /** @var \Phlix\Hub\HubUserClaims|null Hub user claims (set by HubJwtMiddleware when using hub auth) */
+    /**
+     * @var \Phlix\Hub\HubUserClaims|null Hub user claims slot for hub-authenticated
+     *      requests. RESERVED: declared part of the Request shape (pinned by the
+     *      dynamic-property census), currently unwritten — the dead-wired
+     *      HubJwtMiddleware that used to fill it was deleted in L-5 (2026-09-30);
+     *      live hub-auth paths validate via HubJwtValidator in their controllers.
+     */
     public ?\Phlix\Hub\HubUserClaims $hubUser = null;
 
     /** @var array<string, string> Extracted path parameters from route patterns */

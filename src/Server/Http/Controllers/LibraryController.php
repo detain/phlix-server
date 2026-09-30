@@ -349,6 +349,27 @@ class LibraryController
             unset($lib);
         }
 
+        // L-4 (security scan): `paths` are the library's absolute filesystem
+        // roots — server topology, not browse data. Mirror the media surface,
+        // which has always admin-gated its raw-file `files` block
+        // (WebPortalRouter::getMediaItem → MediaItemShaper::shapeDetail(...,
+        // $isAdmin)). Estate consumer sweep: `paths` is read ONLY by admin
+        // surfaces (phlix-ui admin LibrariesPage + api/admin/libraries.ts,
+        // console Admin{Libraries,Duplicates}Screen, mobile admin screen,
+        // LibraryScanPage — an admin-scoped page whose v-if degrades cleanly);
+        // nothing a normal member sees needs them, so the key stops shipping
+        // instead of being replaced by a presence flag nobody asked for.
+        // Redaction runs on the local array copy (PHP value semantics), so the
+        // LibraryManager's process-static cache keeps `paths` for the next
+        // admin request. Soft gate (isAdmin), NOT checkAccess: browsing must
+        // not audit as permission-denied for every non-admin (see helper).
+        if (!$this->adminMiddleware->isAdmin($request)) {
+            foreach ($libraries as &$lib) {
+                unset($lib['paths']);
+            }
+            unset($lib);
+        }
+
         return (new Response())->json(['libraries' => $libraries]);
     }
 
@@ -365,6 +386,10 @@ class LibraryController
         $library = $this->libraryManager->getLibrary($params['id']);
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+        // L-4: same absolute-fs-path redaction as index() — see there.
+        if (!$this->adminMiddleware->isAdmin($request)) {
+            unset($library['paths']);
         }
         return (new Response())->json(['library' => $library]);
     }

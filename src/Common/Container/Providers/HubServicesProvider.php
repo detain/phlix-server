@@ -33,7 +33,6 @@ use Phlix\Hub\RelayMessageFramer;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\HubTokenController;
-use Phlix\Server\Http\Middleware\HubJwtMiddleware;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -179,9 +178,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('validator', get(HubJwtValidator::class))
                 ->constructorParameter('jwtHandler', get(JwtHandler::class)),
 
-            HubJwtMiddleware::class => autowire()
-                ->constructorParameter('validator', get(HubJwtValidatorInterface::class)),
-
+            // L-5 (security hygiene, dead-code deletion à la src/Plugin/ @b0007060):
+            // HubJwtMiddleware was autowired here but attached to NO route on any
+            // dispatch surface (Application/WebPortalRouter/HttpHandler — estate
+            // grep, 2026-09-30) and its only output, $request->hubUser, was read
+            // by nothing. Hub-auth decisions live in AccountLinkController +
+            // HubTokenController, which validate via HubJwtValidator directly;
+            // a dead "middleware" next to the live path was a security mirage.
+            // The class, its test, and this registration are removed together.
             HubJwtValidatorInterface::class => get(HubJwtValidator::class),
 
             RelayConfig::class => factory(

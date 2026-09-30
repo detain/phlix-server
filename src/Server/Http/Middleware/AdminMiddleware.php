@@ -147,4 +147,34 @@ final class AdminMiddleware
 
         return null;
     }
+
+    /**
+     * SOFT admin gate: does this (already-authenticated) request belong to an
+     * active admin?
+     *
+     * Deliberately NOT {@see checkAccess()}: that helper exists to GATE
+     * routes, so a false answer audits a permission denial and a true answer
+     * publishes RequestContext state. Controllers that merely need to decide
+     * how much of an already-permitted payload a caller may see (L-4: the
+     * library `paths` redaction) must not mint denial-audit noise for every
+     * ordinary browse, and must not touch the coroutine-local context as a
+     * read side effect. This helper is the pure predicate — one indexed
+     * lookup (same `is_admin = 1 AND status = 'active'` predicate as the hard
+     * gate, so "admin" means exactly one thing repo-wide), zero writes.
+     *
+     * @param Request $request Incoming request; {@see Request::$userId} is
+     *                         expected to be populated (an unauthenticated
+     *                         request is simply "not admin" here).
+     *
+     * @return bool True only for a user row with is_admin = 1 AND active status.
+     */
+    public function isAdmin(Request $request): bool
+    {
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return false;
+        }
+
+        return $this->users->findAdminById($userId) !== null;
+    }
 }

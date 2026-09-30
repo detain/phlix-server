@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Chromecast;
 
 use Phlix\Chromecast\CastManager;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -177,7 +179,17 @@ class ChromecastController
             $this->castManager->stopSession($deviceId);
             return (new Response())->json(['success' => true, 'message' => 'Session stopped']);
         } catch (\Throwable $e) {
-            return (new Response())->status(500)->json(['error' => $e->getMessage()]);
+            // L-6 (d052b488 convention): the client gets a CONSTANT message —
+            // cast exceptions carry the receiver's LAN host:port
+            // ("Connection refused to 192.168.1.50:8009"), which is network-
+            // topology detail that never belongs in a response body. The full
+            // message goes to the MEDIA channel log beside the manager's own.
+            LoggerFactory::get(LogChannels::MEDIA)->error('Chromecast stop failed', [
+                'device_id' => $deviceId,
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+            return (new Response())->status(500)->json(['error' => 'Failed to stop cast session']);
         }
     }
 
@@ -219,7 +231,13 @@ class ChromecastController
                 'position_ms' => $positionMs,
             ]);
         } catch (\Throwable $e) {
-            return (new Response())->status(500)->json(['error' => $e->getMessage()]);
+            // L-6: constant client message, exception detail to the log (see stop()).
+            LoggerFactory::get(LogChannels::MEDIA)->error('Chromecast seek failed', [
+                'device_id' => $deviceId,
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+            return (new Response())->status(500)->json(['error' => 'Failed to seek cast session']);
         }
     }
 
@@ -293,7 +311,16 @@ class ChromecastController
                 'state' => $session->getState(),
             ]);
         } catch (\Throwable $e) {
-            return (new Response())->status(500)->json(['error' => $e->getMessage()]);
+            // L-6: constant client message, exception detail to the log (see stop()).
+            // $action is the internal 'play'/'pause' discriminator only, so
+            // interpolating it can never echo attacker input.
+            LoggerFactory::get(LogChannels::MEDIA)->error('Chromecast control failed', [
+                'device_id' => $deviceId,
+                'action' => $action,
+                'exception' => get_class($e),
+                'error' => $e->getMessage(),
+            ]);
+            return (new Response())->status(500)->json(['error' => 'Failed to ' . $action . ' cast session']);
         }
     }
 }

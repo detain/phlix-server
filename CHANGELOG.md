@@ -684,6 +684,79 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Seven security-scan hygiene findings (L-3/L-4/L-5/L-6/L-7/L-8 + the M-3 twin).**
+  **L-3 — anonymous `GET /system/info` stops fingerprinting the runtime stack.** The
+  route carries NO middleware, and it used to answer `php_version` (`PHP_VERSION`)
+  plus `workerman_version` (`Workerman\Worker::VERSION`) beside `server`/`version` —
+  a free CVE-targeting hint to every internet scanner. The estate consumer sweep
+  found exactly ONE reader (`phlix-windows-client` `src/main/versionCheck.ts`,
+  re-targeted in 992c7f0) and it reads only the top-level `version`; the two extras
+  have ZERO consumers, so they are DROPPED outright rather than admin-gated (gating
+  keys nobody fetches adds surface, not safety). `openapi.yaml` declares the payload
+  `additionalProperties: true` with no properties — spec-compatible, no edit needed.
+  Pinned by `SystemInfoPayloadHygieneTest` (full production-container dispatch).
+  **L-4 — library `paths` (absolute filesystem roots) are admin-only.**
+  `LibraryController::index()/show()` and `WebPortalRouter::getLibraries()/getLibrary()`
+  returned the raw row — `paths` included — to any authenticated user, while the
+  sibling media surface has always admin-gated its raw-file `files` block. Consumers
+  of `paths` are exclusively admin surfaces (phlix-ui admin LibrariesPage +
+  api/admin client, console/mobile Admin screens; LibraryScanPage's admin-scoped
+  `v-if` degrades cleanly; roku/tizen/windows read it nowhere), so the key simply
+  stops shipping for non-admins — redaction runs on the local array copy, leaving
+  the LibraryManager process-static cache intact for the next admin. New side-effect-
+  free soft gate `AdminMiddleware::isAdmin()` (NOT `checkAccess()`, which would
+  audit every ordinary non-admin browse as a permission denial); WebPortalRouter
+  reuses its existing `isAdminUser()` predicate. Pinned by
+  `LibraryControllerPathsRedactionTest` + `WebPortalRouterPathsRedactionTest`.
+  **L-5 — the dead-wired `HubJwtMiddleware` is deleted.** Autowired in
+  `HubServicesProvider` but attached to NO route on any dispatch surface (estate-wide
+  grep, 2026-09-30), and its only output `$request->hubUser` was read by nothing — a
+  security mirage beside the live hub-auth path (AccountLinkController/HubTokenController
+  validate via `HubJwtValidator` directly). Class + DI registration + its 18-case test
+  removed (precedent: the `src/Plugin/` deletion b0007060); `Request::$hubUser` stays
+  as a census-pinned RESERVED declared slot with corrected prose. `hub.jwt_invalid`
+  remains emitted (and contracts-registered) from its live sites; the contracts
+  `errors.ts` JWT_INVALID cite's `HubJwtMiddleware.php:73` coordinate is retired in a
+  companion contracts-repo commit. Census re-pinned from red: files 1916→1920,
+  declared reads 423→422, writes 1014→1018.
+  **L-6 — Chromecast 500-handlers stop echoing `getMessage()`.** `stop()`, `seek()`
+  and the shared `controlSession()` (play/pause) returned cast-layer exception text
+  verbatim — which carries the receiver's LAN `host:port` ("Connection refused to
+  192.168.1.50:8009"). Now constant client messages ('Failed to stop/seek/play/pause
+  cast session') with the detail to the MEDIA log channel, per the d052b488
+  CastApiClient convention; `ChromecastControllerErrorHygieneTest` pins exactness
+  (assertSame on the constant + assertStringNotContainsString on the host + positive
+  controls so the throwing fixtures can't pass vacuously).
+  **L-7 — SecurityHeaders prose now tells the truth, and the caller-wins guards are
+  case-insensitive.** The class docblock claimed "script/style self-only" and "Base-uri
+  NONE" while the shipped policy carries `style-src 'self' 'unsafe-inline'` and
+  `base-uri 'self'` — the inline-style allowance is DELIBERATE (the SPA themes via
+  `el.style.setProperty()`, i.e. element style attributes), now documented as such;
+  `script-src` remains nonce-only. Separately, the "don't overwrite a caller-set
+  header" guards were case-sensitive `isset()` lookups over Response's exact-case
+  header map: a caller writing lowercase `content-security-policy` was missed and
+  decorate() emitted a SECOND CSP key — browsers enforce the UNION of duplicate
+  policies, silently overriding the caller's intent. Guards now scan with
+  `strcasecmp` (mirroring `Response::asHeadReply()`); pinned by
+  `SecurityHeadersCaseInsensitiveGuardTest` (RED 3/4 pre-fix).
+  **L-8 — `Router::dispatch()`'s six per-request `error_log('[DEBUG] …')` calls are
+  deleted.** Zero test dependencies (the only repo mention is IntegrationDbGuard's
+  comment citing this very hazard: PHPUnit dies on error_log stdout under stdout
+  capture — the ConnectionPool precedent 8e72825d). Gated dispatch ran this hot for
+  every request in production logs; deleting beats env-gating.
+  **M-3 twin — the pre-router direct-play fast path no longer skips stream limiting
+  on a missing `session_id`.** `PreRouterFastPaths::checkStreamLimit()` still carried
+  the middleware's pre-fix bail-out, so any `/media/{id}/stream` client that omitted
+  `session_id` dodged the per-profile concurrency cap before the router (and thus
+  StreamLimitMiddleware) ever ran. It now falls back to the SAME synthetic
+  `(profileId, deviceId)` bucket as the middleware — derivation extracted to the
+  single shared helper `StreamLimitMiddleware::syntheticSessionBucket()` so a device
+  crossing both paths occupies the identical slot; the documented no-device-name
+  pass-through is preserved. Pinned by `PreRouterFastPathsSyntheticSessionBucketTest`
+  (registration/stability/cap-bite/pass-through; RED 3/5 pre-fix).
+  No new error-code literals anywhere (all sites reuse registered codes or keep
+  their existing ones).
+
 - **Three security-scan findings (M-1/M-2/M-3, scan @9e765895).**
   **M-1 — `POST /api/v1/music/scan` is now ADMIN-ONLY.** The handler walks an
   operator-supplied ABSOLUTE path with synchronous filesystem I/O inside a

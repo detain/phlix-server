@@ -18,6 +18,7 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Controllers\ByteRangeParser;
+use Phlix\Server\Http\Middleware\StreamLimitMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
@@ -552,12 +553,21 @@ final class PreRouterFastPaths
         }
 
         $deviceId = $this->getStreamDeviceId($request);
-        $sessionId = $this->getStreamSessionId($request);
-        if ($sessionId === null || $deviceId === null) {
-            // Missing session/device info — skip stream limit enforcement and let
-            // the request proceed (stream won't be tracked, but we don't block).
+        if ($deviceId === null) {
+            // With no device name at all (no X-Device-ID header AND no
+            // User-Agent) there is nothing stable to key even a synthetic
+            // bucket on — the SAME documented pass-through as
+            // StreamLimitMiddleware. Real traffic always carries a UA.
             return null;
         }
+
+        // M-3 twin (pre-fix this line skipped enforcement on a missing
+        // session_id, letting any direct-play client dodge the cap by simply
+        // never sending one): fall back to the synthetic (profileId, deviceId)
+        // bucket, derived by the middleware's SHARED helper so a device
+        // crossing both paths lands in the identical slot.
+        $sessionId = $this->getStreamSessionId($request)
+            ?? StreamLimitMiddleware::syntheticSessionBucket($profileId, $deviceId);
 
         /** @var \Phlix\Access\StreamSessionService $streamSessionService */
         $streamSessionService = $this->container()->get(\Phlix\Access\StreamSessionService::class);

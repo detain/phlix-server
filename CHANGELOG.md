@@ -684,6 +684,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`SyncPlayAuthMiddleware::redactTokenQuery()` now masks `token` query params case-insensitively
+  (bearer-law review residual).** HTTP query param names are case-insensitive server-side —
+  Workerman parses the query with `parse_str`, which lowercases every key and collapses repeats
+  last-wins — so `?TOKEN=jwt&token=<valid>` reads as a single `token`, but the redaction regex
+  matched only the lowercase spelling and let the upper-case decoy's value reach the mismatch
+  log line unredacted (auth-invalid text; low severity, but redaction must be exhaustive).
+  The pattern gains the `/i` flag on the whole-name match, masking every token-named occurrence
+  regardless of which repeat the server-side parse collapsed to (over-redacting a log line is
+  safe; leaking one unmasked spelling is not), normalising the masked name to `token=[redacted]`.
+  Near-miss names (`?mytoken=`, `?MYTOKEN=`) and non-token queries stay byte-identical — pinned
+  alongside the new upper/mixed-case and repeat-param proofs in
+  `tests/Unit/Server/WebSocket/WsAuthenticationTest.php`.
+
 - **`NatPmpClient` mapped TCP as UDP (inverted RFC 6886 §3.3 opcodes), returned a refused
   mapping's zeroed port as success, and padded the §3.2 address request with slack bytes.**
   The closing half of the wire-fidelity pass a34f698d left documented in-place. (1) §3.3 assigns

@@ -495,13 +495,21 @@ class SyncPlayAuthMiddleware
      * histories — the exact exposure the estate carrier law removes from the
      * URL. While legacy `?token=` clients still exist, any handshake URI this
      * package logs passes through here first, so diagnostics can record the
-     * requested path without ever echoing the credential back. Matches only
-     * whole param names (`[?&]token=`), so `?mytoken=` is left alone, and stops
-     * at `&`/`#` boundaries.
+     * requested path without ever echoing the credential back.
+     *
+     * Matching is exhaustive over token-named params: whole names only (a
+     * case-insensitive `[?&]token=` — HTTP query names reach PHP lowercased by
+     * parse_str, so `?TOKEN=`, `?Token=` and `?token=` are the SAME param
+     * server-side and every spelling gets masked here), and values stop at
+     * `&`/`#` boundaries. Repeat params (`?TOKEN=jwt&token=secret`) are all
+     * redacted regardless of which one the server-side parse collapsed to
+     * (last-wins) — over-redacting a log line is always safe; leaking one
+     * unmasked spelling is not. Near-miss names (`?mytoken=`) are untouched.
+     * The masked occurrence is normalised to lowercase `token=[redacted]`.
      */
     public static function redactTokenQuery(string $uri): string
     {
-        $redacted = preg_replace('/([?&])token=[^&#]*/', '$1token=[redacted]', $uri);
+        $redacted = preg_replace('/([?&])token=[^&#]*/i', '$1token=[redacted]', $uri);
 
         return $redacted ?? $uri;
     }

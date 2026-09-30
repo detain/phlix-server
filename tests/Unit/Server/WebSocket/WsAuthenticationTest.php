@@ -946,12 +946,45 @@ class WsAuthenticationTest extends TestCase
             '/x?a=1&token=[redacted]&b=2&token=[redacted]',
             SyncPlayAuthMiddleware::redactTokenQuery('/x?a=1&token=p&b=2&token=q')
         );
-        // Whole-name matching: near-miss param names are NOT touched.
+        // Whole-name matching: near-miss param names are NOT touched — the
+        // case-insensitive pin applies to the NAME, never to name substrings.
         $this->assertSame(
             '/x?mytoken=secret&tokens=1',
             SyncPlayAuthMiddleware::redactTokenQuery('/x?mytoken=secret&tokens=1')
         );
+        $this->assertSame(
+            '/x?MYTOKEN=secret&ToKeNs=1',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?MYTOKEN=secret&ToKeNs=1')
+        );
         $this->assertSame('/syncplay', SyncPlayAuthMiddleware::redactTokenQuery('/syncplay'));
+        // Non-token queries are left byte-identical.
+        $this->assertSame(
+            '/x?room=42&profile=kids#seg',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?room=42&profile=kids#seg')
+        );
+
+        // Query param names are case-insensitive server-side (parse_str
+        // lowercases them), so every spelling of `token` is a credential
+        // carrier and must be masked — the masked name normalises to
+        // lowercase `token=[redacted]`.
+        $this->assertSame(
+            '/syncplay?token=[redacted]',
+            SyncPlayAuthMiddleware::redactTokenQuery('/syncplay?TOKEN=eyJhbGciOi.upper.sig')
+        );
+        $this->assertSame(
+            '/x?room=1&token=[redacted]&lang=en',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?room=1&Token=abc&lang=en')
+        );
+        $this->assertSame(
+            '/x?token=[redacted]&token=[redacted]',
+            SyncPlayAuthMiddleware::redactTokenQuery('/x?TOKEN=jwt&token=secret')
+        );
+        // Mismatch-attack shape from the bearer-law review: the upper-case
+        // decoy must not survive unredacted whichever repeat won server-side.
+        $this->assertStringNotContainsString(
+            'jwt',
+            SyncPlayAuthMiddleware::redactTokenQuery('/syncplay?TOKEN=jwt&token=eyJhbGciOi.hidden.sig')
+        );
     }
 
     /**

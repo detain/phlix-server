@@ -684,6 +684,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`PATCH /api/v1/media/{id}/metadata` now parses `metadata_json` against a closed allowlist at the HTTP boundary (scan residual F-08).**
+  The handler merged the user-supplied `metadata_json` object straight into the stored provider blob
+  unvalidated. Two exposures closed: (1) any authenticated user (the route is `AuthMiddleware`-only) could
+  plant `rating`/`official_rating` in the blob, which `ItemRepository::update()` materializes into the
+  `content_rating` COLUMN the parental gate reads — `{"rating":null}` nulled the column and leaked the item
+  into kids profiles; plus `canonical_key` (dedup identity), `source`/`streams` (ABR-ladder input),
+  poster/trailer/`theme_audio_url` (the last ships to clients un-sanitized at emit) and the matcher-identity
+  `external_ids` family were all user-writable. (2) `hydrateItem()` keeps `metadata_json` as the raw JSON
+  string and only the decoded array in `metadata`, so the old `is_array($item['metadata_json'])` merge base
+  collapsed to `[]` in production and every PATCH REPLACED the stored blob, clobbering provider metadata —
+  the merge base is now the decoded `metadata` slot. The patch is parsed, not validated: twelve
+  reader-evidenced descriptive keys (`summary`, `overview`, `tagline`, `episode_title`, `artist`, `album` —
+  strings; `year`, `runtime`, `season`, `episode` — non-negative ints; `genres`, `tags` — lists of ≤64
+  non-empty strings ≤255 bytes) are the only accepted top-level keys, each coerced to its declared shape;
+  unknown keys are REFUSED with 400 naming them (zero legitimate HTTP senders of `metadata_json` exist in
+  the estate — web-ui never PATCHes this route, phlix-ui's `updateMetadata` caller sends only `title`, and
+  the native clients never call it — so fail-loud costs nothing and a future legit key arrives in the same
+  change that reads it), as are non-object payloads, patches over 65536 serialized bytes (documented bound;
+  the column itself is MySQL `JSON`), nested object/array-of-array bombs and scalar-shape mismatches. The
+  allowlist guards the HTTP boundary ONLY — scanner, matcher and `MediaPosterController` keep writing the
+  full provider vocabulary through `ItemRepository::update()`, which stays permissive (pinned). Proofs in
+  `tests/Unit/Server/Http/Controllers/MediaItemControllerMetadataMergeTest.php`.
+
 - **`WebPortalRouter::isAdminUser()` now demands an ACTIVE admin (reviewer-flagged predicate alignment).**
   The L-4 paths-redaction gate (and the `files` disclosure on media detail) resolved the caller via
   `UserRepository::findById()` + `is_admin == 1` — a softer predicate than the repo-wide standard

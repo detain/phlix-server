@@ -981,8 +981,61 @@ class MediaItemController
         ]);
     }
 
+    private const SHAPE_STRING = 'string';
+    private const SHAPE_INT = 'int';
+    private const SHAPE_STRING_LIST = 'string-list';
+
+    /**
+     * Serialized-size cap for a submitted `metadata_json` patch. The column is
+     * MySQL `JSON` (migrations/001_initial_schema.sql), whose practical bound is
+     * max_allowed_packet; this endpoint-level bound is far tighter and documented
+     * so a PATCH can never carry a multi-megabyte blob into the merged row.
+     */
+    private const METADATA_PATCH_MAX_BYTES = 65536;
+
+    /** Upper sanity bound for the allowlisted integer keys (not a semantic range). */
+    private const METADATA_INT_MAX = 1_000_000;
+
+    /** Genre/tag lists are fan-out inputs (join table rows), so both bounds are pinned. */
+    private const METADATA_LIST_MAX_ITEMS = 64;
+    private const METADATA_LIST_ITEM_MAX_BYTES = 255;
+
+    /**
+     * Closed top-level allowlist for the user-supplied `metadata_json` PATCH,
+     * mapping each accepted key to its parsed value shape. Every entry is a
+     * descriptive field with a proven consumer (reader file:line proof per key in
+     * the introducing commit); the full exclusion rationale for rejected families
+     * is in {@see parseMetadataPatch()}. New keys land only together with the
+     * reader that consumes them.
+     *
+     * @var array<string, string>
+     */
+    private const METADATA_PATCH_KEYS = [
+        'summary' => self::SHAPE_STRING,
+        'overview' => self::SHAPE_STRING,
+        'tagline' => self::SHAPE_STRING,
+        'episode_title' => self::SHAPE_STRING,
+        'artist' => self::SHAPE_STRING,
+        'album' => self::SHAPE_STRING,
+        'year' => self::SHAPE_INT,
+        'runtime' => self::SHAPE_INT,
+        'season' => self::SHAPE_INT,
+        'episode' => self::SHAPE_INT,
+        'genres' => self::SHAPE_STRING_LIST,
+        'tags' => self::SHAPE_STRING_LIST,
+    ];
+
     /**
      * Update media item metadata (title, summary, etc.).
+     *
+     * The `metadata_json` patch is parsed here, at the HTTP boundary, against a
+     * closed top-level allowlist ({@see parseMetadataPatch()}) BEFORE it is
+     * merged into the stored provider blob — unknown keys, wrong value shapes and
+     * oversized payloads are refused with 400. The allowlist guards this endpoint
+     * ONLY: internal writers (MediaScanner, LibraryMetadataMatcher,
+     * MediaPosterController, TranscodeManager) keep writing the full provider
+     * vocabulary straight through ItemRepository::update(), which stays
+     * intentionally permissive.
      *
      * @param Request $request Current request with JSON body
      * @param array<string, string> $params Path parameters with 'id'
@@ -1008,25 +1061,27 @@ class MediaItemController
         }
 
         if (isset($body['summary']) && is_string($body['summary'])) {
-            $summary = trim($body['summary']);
-            $metadataJson = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
-            $metadataJson['summary'] = $summary;
+            $metadataJson = $this->metadataMergeBase($item);
+            $metadataJson['summary'] = trim($body['summary']);
             $updateData['metadata_json'] = $metadataJson;
         }
 
         if (isset($body['overview']) && is_string($body['overview'])) {
-            $overview = trim($body['overview']);
-            $existingMeta = $updateData['metadata_json'] ?? null;
-            $itemMeta = $item['metadata_json'] ?? null;
-            $metadataJson = is_array($existingMeta) ? $existingMeta
-                : (is_array($itemMeta) ? $itemMeta : []);
-            $metadataJson['overview'] = $overview;
+            $metadataJson = $updateData['metadata_json'] ?? $this->metadataMergeBase($item);
+            $metadataJson['overview'] = trim($body['overview']);
             $updateData['metadata_json'] = $metadataJson;
         }
 
-        if (isset($body['metadata_json']) && is_array($body['metadata_json'])) {
-            $existingMetadata = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
-            $updateData['metadata_json'] = array_merge($existingMetadata, $body['metadata_json']);
+        if (array_key_exists('metadata_json', $body)) {
+            $patch = $this->parseMetadataPatch($body['metadata_json'], $errorResponse);
+            if ($errorResponse !== null) {
+                return $errorResponse;
+            }
+            /** @var array<string, mixed> $patch */
+            $updateData['metadata_json'] = array_merge(
+                $updateData['metadata_json'] ?? $this->metadataMergeBase($item),
+                $patch
+            );
         }
 
         if (empty($updateData)) {
@@ -1038,5 +1093,152 @@ class MediaItemController
         $updatedItem = $this->itemRepository->findById($params['id']);
 
         return (new Response())->json(['item' => $updatedItem]);
+    }
+
+    /**
+     * The blob a PATCH merges onto. ItemRepository::hydrateItem() keeps the raw
+     * JSON string in `metadata_json` and the decoded array in `metadata`, so the
+     * decoded slot is the real base — reading the string slot (the pre-F-08 bug)
+     * made every PATCH replace the stored provider metadata instead of merging
+     * into it.
+     *
+     * @param array<string, mixed> $item Hydrated media row
+     * @return array<string, mixed>
+     */
+    private function metadataMergeBase(array $item): array
+    {
+        $decoded = $item['metadata'] ?? $item['metadata_json'] ?? [];
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Parse-don't-validate boundary for the user-supplied `metadata_json` patch.
+     *
+     * Accepts only the closed set of descriptive keys in METADATA_PATCH_KEYS, each
+     * parsed into its declared shape. Everything else is refused loudly: unknown
+     * top-level keys (400 naming them), non-object payloads, patches over
+     * METADATA_PATCH_MAX_BYTES, and value/shape mismatches (nested objects,
+     * array-of-array bombs, wrong scalars). Refusing rather than silently dropping
+     * is safe because no legitimate HTTP sender of metadata_json exists in the
+     * estate today (web-ui, phlix-ui callers, and the native clients never PATCH
+     * this field) — a future legit key arrives in the same change that reads it.
+     *
+     * Excluded families and why: rating/official_rating/content_rating/certification
+     * materialize the content_rating column the parental gate reads (a PATCH
+     * `{"rating":null}` was a kids-profile bypass); canonical_key is the dedup
+     * identity column; source/streams/duration_seconds feed the ABR ladder and
+     * probe pipeline; the poster, backdrop, logo, trailer and theme_audio_url keys
+     * belong to the artwork subsystem (MediaPosterController is the sanctioned
+     * writer, and theme_audio_url ships to clients un-sanitized at emit);
+     * external_ids and the tmdb_id/imdb_id/tvdb_id/mal_id keys are matcher
+     * identity; cast/crew/actors/directors/networks/studio/
+     * production_companies are provider-rich array-of-object blocks; chapters and
+     * intro/outro candidates belong to the marker pipelines.
+     *
+     * @param mixed $submitted Raw body value for metadata_json
+     * @param Response|null $errorResponse 400 response when parsing fails
+     * @return array<string, mixed>|null Parsed patch, null together with $errorResponse
+     */
+    private function parseMetadataPatch(mixed $submitted, ?Response &$errorResponse): ?array
+    {
+        $errorResponse = null;
+
+        if (!is_array($submitted)) {
+            $errorResponse = (new Response())->status(400)
+                ->json(['error' => 'metadata_json must be a JSON object']);
+            return null;
+        }
+
+        if (strlen((string) json_encode($submitted)) > self::METADATA_PATCH_MAX_BYTES) {
+            $errorResponse = (new Response())->status(400)->json([
+                'error' => 'metadata_json exceeds the ' . self::METADATA_PATCH_MAX_BYTES . '-byte limit',
+            ]);
+            return null;
+        }
+
+        $unknownKeys = array_keys(array_diff_key($submitted, self::METADATA_PATCH_KEYS));
+        if ($unknownKeys !== []) {
+            $names = array_map(static fn (int|string $key): string => (string) $key, $unknownKeys);
+            $errorResponse = (new Response())->status(400)->json([
+                'error' => 'metadata_json contains unsupported keys: ' . implode(', ', $names),
+            ]);
+            return null;
+        }
+
+        $parsed = [];
+        foreach ($submitted as $key => $value) {
+            $shape = self::METADATA_PATCH_KEYS[$key];
+            $parsed[$key] = match ($shape) {
+                self::SHAPE_INT => $this->parseMetadataInt((string) $key, $value, $errorResponse),
+                self::SHAPE_STRING_LIST => $this->parseMetadataStringList((string) $key, $value, $errorResponse),
+                default => $this->parseMetadataString((string) $key, $value, $errorResponse),
+            };
+            if ($errorResponse !== null) {
+                return null;
+            }
+        }
+
+        return $parsed;
+    }
+
+    private function parseMetadataString(string $key, mixed $value, ?Response &$errorResponse): string
+    {
+        if (!is_string($value)) {
+            $errorResponse = $this->metadataShapeViolation($key, 'a string');
+            return '';
+        }
+
+        return trim($value);
+    }
+
+    private function parseMetadataInt(string $key, mixed $value, ?Response &$errorResponse): int
+    {
+        // Strict: JSON numbers decode to int; digit-strings, floats and bools are
+        // shape violations, not things to coerce.
+        if (!is_int($value) || $value < 0 || $value > self::METADATA_INT_MAX) {
+            $errorResponse = $this->metadataShapeViolation($key, 'a non-negative integer');
+            return 0;
+        }
+
+        return $value;
+    }
+
+    /** @return list<string> */
+    private function parseMetadataStringList(string $key, mixed $value, ?Response &$errorResponse): array
+    {
+        if (!is_array($value) || !array_is_list($value) || count($value) > self::METADATA_LIST_MAX_ITEMS) {
+            $errorResponse = $this->metadataShapeViolation(
+                $key,
+                'a list of at most ' . self::METADATA_LIST_MAX_ITEMS . ' strings'
+            );
+            return [];
+        }
+
+        $list = [];
+        foreach ($value as $entry) {
+            if (!is_string($entry)) {
+                $errorResponse = $this->metadataShapeViolation($key, 'a list of strings');
+                return [];
+            }
+            $entry = trim($entry);
+            if ($entry === '' || strlen($entry) > self::METADATA_LIST_ITEM_MAX_BYTES) {
+                $errorResponse = $this->metadataShapeViolation(
+                    $key,
+                    'a list of non-empty strings up to ' . self::METADATA_LIST_ITEM_MAX_BYTES . ' bytes'
+                );
+                return [];
+            }
+            $list[] = $entry;
+        }
+
+        return $list;
+    }
+
+    private function metadataShapeViolation(string $key, string $expectedShape): Response
+    {
+        return (new Response())->status(400)->json([
+            'error' => "metadata_json.{$key} must be {$expectedShape}",
+        ]);
     }
 }

@@ -492,11 +492,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * and its test), +6 new test files (SystemInfoPayloadHygiene,
      * LibraryControllerPathsRedaction, SecurityHeadersCaseInsensitiveGuard,
      * PreRouterFastPathsSyntheticSessionBucket, ChromecastControllerErrorHygiene,
-     * WebPortalRouterPathsRedaction). Measured from the phpunit red on the
-     * final tree (the scan is filesystem-recursive, so the count is commit-
-     * invariant).
+     * WebPortalRouterPathsRedaction). Re-pinned 1920→1921 by the F-08 metadata
+     * allowlist lane (+1 test file, MediaItemControllerMetadataMerge). Measured
+     * from the phpunit red on the final tree (the scan is filesystem-recursive,
+     * so the count is commit-invariant).
      */
-    private const EXPECTED_PHP_FILES = 1920;
+    private const EXPECTED_PHP_FILES = 1921;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -627,10 +628,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * net +4 declared-member WRITE — the six added test files stamp request
      * fixtures (`method`/`path`/`userId`/`headers`/`body`), minus the writes
      * removed with the L-5 HubJwtMiddleware deletion (its `$request->hubUser`
-     * assignment) and its test. Measured from the phpunit red on the final
-     * tree, not predicted.
+     * assignment) and its test. Re-pinned 1018→1019 by the F-08 metadata
+     * allowlist lane: the new MediaItemControllerMetadataMerge test's single
+     * `$request->body` patch-builder stamp. Measured from the phpunit red on
+     * the final tree, not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1018;
+    private const EXPECTED_DECLARED_WRITES = 1019;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

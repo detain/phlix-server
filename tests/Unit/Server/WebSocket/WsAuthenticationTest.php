@@ -963,9 +963,10 @@ class WsAuthenticationTest extends TestCase
             SyncPlayAuthMiddleware::redactTokenQuery('/x?room=42&profile=kids#seg')
         );
 
-        // Query param names are case-insensitive server-side (parse_str
-        // lowercases them), so every spelling of `token` is a credential
-        // carrier and must be masked — the masked name normalises to
+        // Server-side reads are exact-key (parse_str preserves case, so
+        // ?TOKEN= never authenticates) — but the redactor sees the RAW logged
+        // URI, where a live JWT can ride any case spelling of `token`. Every
+        // whole-name spelling must be masked; the masked name normalises to
         // lowercase `token=[redacted]`.
         $this->assertSame(
             '/syncplay?token=[redacted]',
@@ -979,8 +980,10 @@ class WsAuthenticationTest extends TestCase
             '/x?token=[redacted]&token=[redacted]',
             SyncPlayAuthMiddleware::redactTokenQuery('/x?TOKEN=jwt&token=secret')
         );
-        // Mismatch-attack shape from the bearer-law review: the upper-case
-        // decoy must not survive unredacted whichever repeat won server-side.
+        // Mismatch-attack shape from the bearer-law review: the exact-key
+        // read consumes the lowercase decoy and the mismatch log writes the
+        // raw URI — the wrong-case live JWT beside it must not survive
+        // unredacted in that log line.
         $this->assertStringNotContainsString(
             'jwt',
             SyncPlayAuthMiddleware::redactTokenQuery('/syncplay?TOKEN=jwt&token=eyJhbGciOi.hidden.sig')

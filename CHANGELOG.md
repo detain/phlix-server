@@ -702,16 +702,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   the block. Test-infra only: no `src/`, and no assertion was weakened.
 
 - **`SyncPlayAuthMiddleware::redactTokenQuery()` now masks `token` query params case-insensitively
-  (bearer-law review residual).** HTTP query param names are case-insensitive server-side —
-  Workerman parses the query with `parse_str`, which lowercases every key and collapses repeats
-  last-wins — so `?TOKEN=jwt&token=<valid>` reads as a single `token`, but the redaction regex
-  matched only the lowercase spelling and let the upper-case decoy's value reach the mismatch
-  log line unredacted (auth-invalid text; low severity, but redaction must be exhaustive).
-  The pattern gains the `/i` flag on the whole-name match, masking every token-named occurrence
-  regardless of which repeat the server-side parse collapsed to (over-redacting a log line is
-  safe; leaking one unmasked spelling is not), normalising the masked name to `token=[redacted]`.
-  Near-miss names (`?mytoken=`, `?MYTOKEN=`) and non-token queries stay byte-identical — pinned
-  alongside the new upper/mixed-case and repeat-param proofs in
+  (bearer-law review residual).** Query-name case survives server-side — `parse_str` does NOT
+  lowercase keys, and Workerman's `Request::get('token')` is an exact-key lookup, so `?TOKEN=`
+  never populates the credential read and never authenticates the handshake. The exposure was
+  purely in the logs: the one mismatch-forensics call site (WebSocketServer's `onWebSocketConnect`
+  reject branch) writes the raw URI through `redactTokenQuery`, and a request carrying a live JWT
+  (valid against REST) under a wrong-case name beside a lowercase decoy `?token=` — the exact
+  half-migration shape that fires the mismatch — leaked that real credential past the
+  lowercase-only regex while only the decoy was masked. The pattern gains the `/i` flag on the
+  whole-name match, masking every token-named spelling in the logged URI regardless of case; the
+  cost is mild over-redaction of spellings the exact-key read would never treat as credentials,
+  which is the safe direction on a log-only path (over-redacting a log line is safe; leaking one
+  unmasked spelling is not). Near-miss names (`?mytoken=`, `?MYTOKEN=`) and non-token queries stay
+  byte-identical — pinned alongside the new upper/mixed-case and repeat-param proofs in
   `tests/Unit/Server/WebSocket/WsAuthenticationTest.php`.
 
 - **`NatPmpClient` mapped TCP as UDP (inverted RFC 6886 §3.3 opcodes), returned a refused

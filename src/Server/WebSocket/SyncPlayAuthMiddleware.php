@@ -497,15 +497,25 @@ class SyncPlayAuthMiddleware
      * package logs passes through here first, so diagnostics can record the
      * requested path without ever echoing the credential back.
      *
-     * Matching is exhaustive over token-named params: whole names only (a
-     * case-insensitive `[?&]token=` — HTTP query names reach PHP lowercased by
-     * parse_str, so `?TOKEN=`, `?Token=` and `?token=` are the SAME param
-     * server-side and every spelling gets masked here), and values stop at
-     * `&`/`#` boundaries. Repeat params (`?TOKEN=jwt&token=secret`) are all
-     * redacted regardless of which one the server-side parse collapsed to
-     * (last-wins) — over-redacting a log line is always safe; leaking one
-     * unmasked spelling is not. Near-miss names (`?mytoken=`) are untouched.
-     * The masked occurrence is normalised to lowercase `token=[redacted]`.
+     * Matching is exhaustive over token-named params: whole names only,
+     * case-insensitively (`[?&]token=` with `/i`), values stopping at `&`/`#`
+     * boundaries. The case-insensitivity is a REDACTION statement, not an
+     * auth statement: parse_str preserves key case and Workerman's
+     * `Request::get('token')` is an exact-key lookup, so a wrong-case spelling
+     * like `?TOKEN=` never populates the credential read and never
+     * authenticates the handshake. It still matters here because this helper
+     * masks the RAW URI that the mismatch-forensics log line writes verbatim:
+     * a request can carry a live JWT (valid against REST) under any case
+     * spelling beside a lowercase decoy `?token=` — the exact half-migration
+     * shape that fires the mismatch — and a lowercase-only regex masked only
+     * the decoy while the real credential reached the log unredacted. So
+     * every token-named spelling gets masked; the cost is mild
+     * over-redaction of spellings the exact-key read would never treat as
+     * credentials, which is the safe direction on a log-only path —
+     * over-redacting a log line is always safe; leaking one unmasked
+     * spelling is not. Near-miss names (`?mytoken=`) are untouched: the
+     * case-insensitivity applies to the NAME, never to name substrings. The
+     * masked occurrence is normalised to lowercase `token=[redacted]`.
      */
     public static function redactTokenQuery(string $uri): string
     {

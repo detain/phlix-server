@@ -58,8 +58,17 @@ const app = createPhlixApp({
         {
             // Must carry the /app prefix like every other route — the router's
             // history base is '/', so the prefix lives in the path itself.
+            //
+            // L-4 follow-up: ADMIN-ONLY. The page lists libraries with their
+            // scan controls, and b3aece4e strips absolute-fs `paths` from
+            // /api/v1/libraries for non-admins — the surface exists for the
+            // operator, not members. `meta.requiresAdmin` is the exact key
+            // ui's authGuard checks (to.meta?.requiresAdmin === true): a
+            // logged-in non-admin is bounced to home, never rendered. Pinned
+            // in tests/library-scan-route.test.ts.
             path: '/app/library/scan',
             name: 'library-scan',
+            meta: { requiresAdmin: true },
             component: LibraryScanPage,
         },
         // Media reader/browser pages ported to Vue in @phlix/ui but previously

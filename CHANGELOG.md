@@ -684,6 +684,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The SPA `/app/library/scan` route is admin-gated (L-4 follow-up, layer 2 of 2).** L-4 stopped
+  shipping `paths` to non-admins on `/api/v1/libraries`, but the scan page still mounted for them:
+  the route in `web-ui/src/main.ts` carried no gate, and the page's `v-if="library.paths.length"`
+  turns a stripped payload into a render TypeError (`undefined.length`), not the clean degradation
+  the L-4 comment assumed. The route now declares `meta: { requiresAdmin: true }` — the exact key
+  `@phlix/ui`'s `authGuard` checks (`to.meta?.requiresAdmin === true`, v0.99.7 already honors it) —
+  so a logged-in non-admin is bounced to home before the page renders, and the anonymous flow goes
+  to login. `web-ui/tests/library-scan-route.test.ts` pins the meta against the LIVE
+  `buildAdminRoutes()` sibling shape, not a frozen string. The independent second layer —
+  `paths?: string[]` on the ui Library view-models + `?.` guards on every library-payload read site
+  — landed in phlix-ui 5c9cf4ed and rides the next tag cascade (the vendored v0.99.7 bundle needs
+  no rebuild for it). The committed `/app` bundle under `public/assets/app` is regenerated from the
+  gated `main.ts` (entry-hash cascade renames every lazy page chunk; byte-deterministic across
+  three consecutive local rebuilds on the CI-paired toolchain).
 - **Seven security-scan hygiene findings (L-3/L-4/L-5/L-6/L-7/L-8 + the M-3 twin).**
   **L-3 — anonymous `GET /system/info` stops fingerprinting the runtime stack.** The
   route carries NO middleware, and it used to answer `php_version` (`PHP_VERSION`)

@@ -757,6 +757,13 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      * Cheap by design: it fails as soon as the blob URL is refused, so it does
      * not pay for four seconds of real-time playback or for four on-demand
      * encodes.
+     *
+     * ⚠ The violation the two assertions name is dispatched by the browser as
+     * its OWN task, unordered against the task that latches the probe's `done`.
+     * The probe therefore keeps re-reading the page until the violation queue
+     * settles (`settleViolations`, `tests/Support/Browser/hls-playback-probe.mjs`)
+     * — without that flush this case flakes on a loaded runner (attempt 1 of
+     * run 36645892753) exactly while the policy is biting as intended.
      */
     public function testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy(): void
     {

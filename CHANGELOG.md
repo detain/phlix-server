@@ -684,6 +684,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The S60 CSP browser control no longer depends on task-queue luck (E2E flake, run
+  36645892753).** `Fmp4HlsThroughControllerE2ETest::testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy`
+  failed attempt 1 with `Failed asserting that an array contains 'media-src'` and went green on
+  rerun: `tests/Support/Browser/hls-playback-probe.mjs` serialized its report at the first poll
+  that observed `window.__probe.done`, but the browser dispatches the refusal's
+  `securitypolicyviolation` event as its own task, unordered against the hls.js error task that
+  latches `done` — on a loaded runner the violation landed after the snapshot and the control
+  reported "playback failed with no named violation" while the policy was biting exactly as
+  designed. `done` is now the START of a settle, not the end: while the caller's `--timeout`
+  budget runs, the probe keeps re-reading the page until `cspViolations` has been unchanged for
+  a 600 ms quiet window (a late violation restarts it; a policy that refuses nothing costs one
+  window; non-CSP runs never settle). Proven both directions — a synthetic 500 ms delivery delay
+  reddens the OLD loop deterministically with the exact CI signature and the fixed probe catches
+  the same delayed violation (`OK (27 assertions)`); commenting out the CSP header emission still
+  reddens the control via `assertFalse($probe['ok'])`, so the assertion genuinely still proves
+  the block. Test-infra only: no `src/`, and no assertion was weakened.
+
 - **`SyncPlayAuthMiddleware::redactTokenQuery()` now masks `token` query params case-insensitively
   (bearer-law review residual).** HTTP query param names are case-insensitive server-side —
   Workerman parses the query with `parse_str`, which lowercases every key and collapses repeats

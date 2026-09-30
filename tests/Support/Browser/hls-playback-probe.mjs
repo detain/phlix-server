@@ -58,7 +58,12 @@
  * Violations are reported: the page listens for `securitypolicyviolation` and every
  * event lands in `cspViolations` with its `effectiveDirective` and `blockedURI`.
  * That gives the PHP test a denominator — 0 on a policy that permits playback, and
- * a NAMED directive on one that does not.
+ * a NAMED directive on one that does not. Because that event is dispatched as its
+ * own task, with nothing ordering it against the task that latches `done`, the poll
+ * loop does not report the array the instant `done` appears — it waits for the
+ * violation queue to go quiet first (see `settleViolations`). Without that, a loaded
+ * runner serialized an empty array beside a `done` the violation had not yet reached,
+ * and the CSP control flaked.
  */
 
 import { createServer } from 'node:http';
@@ -271,6 +276,69 @@ async function cdp(ws, method, params = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Cadence and quiescence window for `settleViolations` — see there for why a
+ * settled read of `cspViolations` is the only honest one after `done`.
+ */
+const SETTLE_POLL_MS = 100;
+const SETTLE_QUIET_MS = 600;
+
+/**
+ * The page's probe state right now, or null if the page has not installed
+ * `window.__probe` yet. One serialized read; the verdict stays in PHP.
+ */
+async function readProbe(ws) {
+  const r = await cdp(ws, 'Runtime.evaluate', {
+    expression: 'JSON.stringify(window.__probe || null)',
+    returnByValue: true,
+  });
+  const raw = r.result && r.result.value;
+  if (typeof raw !== 'string' || raw === 'null') return null;
+  return JSON.parse(raw);
+}
+
+/**
+ * `done` latches when the player gives up (or hits its target); the
+ * `securitypolicyviolation` event for the SAME refusal is dispatched as its own
+ * task, and nothing in the platform orders the two. On an unloaded machine the
+ * violation lands first and every snapshot after `done` already carries it; on a
+ * loaded CI runner it can land after, and a report serialized at the first
+ * `done`-observing poll says "playback failed with NO named violation" — which
+ * is exactly how the S60 CSP control flaked on attempt 1 of run 36645892753
+ * (`Failed asserting that an array contains 'media-src'`, green on rerun).
+ *
+ * So once `done` is observed, keep re-reading the page until the violation
+ * count has been unchanged for a full quiet window. That is a settle deadline,
+ * not a sleep: a late violation restarts the window (the array demonstrably
+ * moved), a policy that refuses nothing costs exactly one window, and the
+ * caller's overall `--timeout` budget is never extended — the hard deadline
+ * ends the wait and the last good snapshot is reported. The probe still
+ * asserts nothing; it just stops reporting a half-arrived truth.
+ *
+ * @param {any} latest last good snapshot, `done` true
+ * @param {number} hardDeadline absolute ms ceiling shared with the main poll
+ * @returns {Promise<any>} the settled snapshot
+ */
+async function settleViolations(ws, latest, hardDeadline) {
+  let count = (latest.cspViolations || []).length;
+  let changedAt = Date.now();
+  for (;;) {
+    const remaining = hardDeadline - Date.now();
+    if (remaining <= 0) return latest;
+    await sleep(Math.min(SETTLE_POLL_MS, remaining));
+    const p = await readProbe(ws);
+    if (p === null) return latest;
+    const next = (p.cspViolations || []).length;
+    if (next !== count) {
+      count = next;
+      changedAt = Date.now();
+      latest = p;
+      continue;
+    }
+    if (Date.now() - changedAt >= SETTLE_QUIET_MS) return p;
+  }
+}
+
 let chrome = null;
 let profile = null;
 let exitCode = 0;
@@ -318,17 +386,18 @@ try {
   let probe = null;
   while (Date.now() < deadline) {
     await sleep(200);
-    const r = await cdp(ws, 'Runtime.evaluate', {
-      expression: 'JSON.stringify(window.__probe || null)',
-      returnByValue: true,
-    });
-    const raw = r.result && r.result.value;
-    if (typeof raw === 'string' && raw !== 'null') {
-      probe = JSON.parse(raw);
+    const p = await readProbe(ws);
+    if (p !== null) {
+      probe = p;
       if (probe.done) break;
     }
   }
   if (probe === null) throw new Error('the page never installed window.__probe');
+  // A policy was served, so `cspViolations` is load-bearing in the report — and
+  // its last events may still be in flight (see settleViolations). Without a
+  // policy nothing can violate it, so no case that never asked about CSP pays
+  // the settle window.
+  if (probe.done && csp !== null) probe = await settleViolations(ws, probe, deadline);
   if (!probe.done) { probe.ok = false; probe.reason = 'timed out after ' + timeoutMs + 'ms'; }
   probe.playlist = playlist;
   // Which server answered. Emitted so the PHP test can REFUSE a report produced in

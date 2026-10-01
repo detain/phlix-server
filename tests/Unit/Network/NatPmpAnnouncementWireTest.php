@@ -187,7 +187,13 @@ final class NatPmpAnnouncementWireTest extends TestCase
         $before = $this->readStateFile();
 
         $datagram = self::announcement('198.51.100.99', 7);
-        $outcome = $this->exchange($datagram, fromIp: self::GATEWAY_IP, toMulticastGroup: null, natpmp: $natpmp, sendCopies: 3);
+        $outcome = $this->exchange(
+            $datagram,
+            fromIp: self::GATEWAY_IP,
+            toMulticastGroup: null,
+            natpmp: $natpmp,
+            sendCopies: 3
+        );
 
         // 3 retransmits of the same change announcement: FIRST must commit +
         // cascade (outcome regardless of cascade success — the mocked client
@@ -554,8 +560,10 @@ final class NatPmpAnnouncementWireTest extends TestCase
             return null;
         }
         foreach ($unicast as $addr) {
-            if (is_array($addr) && isset($addr['address']) && is_string($addr['address'])
-                && filter_var($addr['address'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            if (
+                is_array($addr) && isset($addr['address']) && is_string($addr['address'])
+                && filter_var($addr['address'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            ) {
                 return $addr['address'];
             }
         }

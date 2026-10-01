@@ -111,13 +111,25 @@ final class NatPmpMaintenanceWorkerTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * Venue seam: discoverDefaultGateway() reads the HOST routing table, and
+     * that answer is not portable — this dev box has no LAN interface so it
+     * falls back to '192.168.1.1', while a CI runner's 10.x/172.x fabric (and
+     * a probeable gateway) makes it return a different address. Tests here
+     * drive real autoConfigure()/renewOnce() cascades that PERSIST the gateway
+     * pin, and the §3.2.1 retransmit-storm test then replays announcements
+     * sourced from '192.168.1.1' against that pin — venue-dependent pinning
+     * made the replays drop as source-mismatch on CI (red on run 36914069005).
+     * The anonymous subclass pins the gateway so the pin-or-drop law is
+     * asserted deterministically on every venue; production stays untouched.
+     */
     private function service(
         NatPmpClient $natpmp,
         ?UpnpIgdClient $upnp = null,
         ?StunClient $stun = null,
         bool $autoEnabled = true
     ): PortForwardService {
-        return new PortForwardService(
+        return new class (
             $upnp ?? $this->createMock(UpnpIgdClient::class),
             $stun ?? $this->createMock(StunClient::class),
             $natpmp,
@@ -125,7 +137,13 @@ final class NatPmpMaintenanceWorkerTest extends TestCase
             32400,
             $autoEnabled,
             $this->tmpDir
-        );
+        ) extends PortForwardService {
+            /** Covariant narrowing: this seam always pins a concrete gateway. */
+            protected function discoverDefaultGateway(): string
+            {
+                return '192.168.1.1';
+            }
+        };
     }
 
     /**

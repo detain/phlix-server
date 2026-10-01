@@ -637,8 +637,17 @@ TEXT;
 
     /**
      * Discovers the default gateway IP address.
+     *
+     * Protected, not private: this is the class's only venue-dependent probe
+     * (net_get_interfaces + LAN gateway TCP probe + '192.168.1.1' fallback),
+     * and the NAT-PMP maintenance tests must pin it deterministically — a
+     * development host with no LAN interface falls to the fallback while a CI
+     * runner's 10.x/172.x fabric returns a real gateway, which would make
+     * gateway-pin assertions venue-dependent (the §3.2.1 retransmit-storm test
+     * reddened exactly that way on the first CI run). Production visibility
+     * is unchanged: nothing outside the class or its test subclasses calls it.
      */
-    private function discoverDefaultGateway(): ?string
+    protected function discoverDefaultGateway(): ?string
     {
         $connections = @net_get_interfaces();
         if (!is_array($connections)) {

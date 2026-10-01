@@ -2152,8 +2152,22 @@ class Application
      * - CollectionController: index, create, show, update, delete,
      *   addItem, removeItem, bulkAdd, refresh, forLibrary (10 routes)
      *
-     * All collection routes require authentication as collections are
-     * per-user private data.
+     * M-5 INTERIM posture (owner ruling): `migrations/005_collections.sql`
+     * carries no owner column, so every collection row is server-global.
+     * Until the ownership model lands (open owner decision #6) the SPLIT is:
+     *  - READS (`index`, `show`, `forLibrary`) stay member-accessible under
+     *    {@see \Phlix\Server\Http\Middleware\AuthMiddleware}.
+     *  - WRITES (create/update/delete/addItem/removeItem/bulkAdd/refresh and
+     *    the `/playlists` create alias) require an admin: a lone
+     *    {@see \Phlix\Server\Http\Middleware\AdminMiddleware} group — the same
+     *    idiom as `DELETE /api/v1/media/{id}` (Step 11.6). AdminMiddleware
+     *    itself answers anonymous → 401 `auth.required` and authenticated
+     *    NON-ADMIN → 403 `auth.not_admin` (with a permission-denied audit),
+     *    so no AuthMiddleware companion is stacked on the group.
+     *
+     * REVERT PATH: when the ownership model ships, fold the write group back
+     * into the member group (one group edit) and gate per-owner inside
+     * CollectionController — pinned by tests/Unit/Server/Core/CollectionsAdminGateTest.php.
      *
      * @since 0.14.0
      */
@@ -2162,29 +2176,48 @@ class Application
         $controller = $this->getCollectionController();
         $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-        // All collection routes require authentication
+        // Collection reads — authentication only (M-5 interim: member-visible).
         $this->router->group('', function (Router $r) use ($controller): void {
-            // Collection CRUD routes
             $r->get('/api/v1/collections', [$controller, 'index']);
-            $r->post('/api/v1/collections', [$controller, 'create']);
             $r->get('/api/v1/collections/{id}', [$controller, 'show']);
-            $r->put('/api/v1/collections/{id}', [$controller, 'update']);
-            $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
-
-            // Playlist alias (UI-3.8) — creates a collection
-            $r->post('/api/v1/playlists', [$controller, 'create']);
-
-            // Collection item management
-            $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
-            $r->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
-
-            // Bulk operations and smart collection refresh
-            $r->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
-            $r->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
 
             // Library-scoped collections
             $r->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
         }, [$authMiddleware]);
+
+        // Collection mutations — admin only (M-5 interim; see docblock for the
+        // revert path). Registered only when the gate resolves: an
+        // unresolvable AdminMiddleware leaves the writes structurally absent
+        // (404), never registered-ungated.
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+                $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($controller): void {
+                        // Collection CRUD routes
+                        $r->post('/api/v1/collections', [$controller, 'create']);
+                        $r->put('/api/v1/collections/{id}', [$controller, 'update']);
+                        $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
+
+                        // Playlist alias (UI-3.8) — creates a collection
+                        $r->post('/api/v1/playlists', [$controller, 'create']);
+
+                        // Collection item management
+                        $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
+                        $r->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
+
+                        // Bulk operations and smart collection refresh
+                        $r->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
+                        $r->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
+                    },
+                    [$adminMiddleware]
+                );
+            } catch (\Throwable) {
+                // AdminMiddleware unavailable — write routes not registered
+            }
+        }
     }
 
     /**

@@ -5763,7 +5763,7 @@ paths:
       tags: ["Collections"]
       summary: "Create"
       description: "Create (post /api/v1/collections)."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
       responses:
@@ -5819,7 +5819,7 @@ paths:
       tags: ["Collections"]
       summary: "Update"
       description: "Update (put /api/v1/collections/{id})."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -5852,7 +5852,7 @@ paths:
       tags: ["Collections"]
       summary: "Delete"
       description: "Delete (delete /api/v1/collections/{id})."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -5886,7 +5886,7 @@ paths:
       tags: ["Collections"]
       summary: "Bulk add"
       description: "Bulk add (post /api/v1/collections/{id}/bulk-add)."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -5920,7 +5920,7 @@ paths:
       tags: ["Collections"]
       summary: "Add item"
       description: "Add item (post /api/v1/collections/{id}/items/{mediaItemId})."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -5959,7 +5959,7 @@ paths:
       tags: ["Collections"]
       summary: "Remove item"
       description: "Remove item (delete /api/v1/collections/{id}/items/{mediaItemId})."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -5999,7 +5999,7 @@ paths:
       tags: ["Collections"]
       summary: "Refresh"
       description: "Refresh (post /api/v1/collections/{id}/refresh)."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       parameters:
         - name: "id"
           in: path
@@ -9072,7 +9072,7 @@ paths:
       tags: ["Collections"]
       summary: "Create"
       description: "Create (post /api/v1/playlists)."
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
       responses:

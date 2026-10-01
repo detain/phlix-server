@@ -425,6 +425,48 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **M-5 interim gate: collection MUTATIONS are admin-only while the collections
+  ownership model stays unresolved (open owner decision #6); the three reads stay
+  member-accessible.** `migrations/005_collections.sql` has no owner column, so every
+  collection row is server-global — and `CollectionController` carries zero internal
+  authz, so before this change ANY authenticated user (kid profiles included) could
+  create, rename, delete and bulk-mutate the shared collection set through the ten
+  `AuthMiddleware`-only rails of `Application::loadCollectionRoutes()`. The block now
+  splits into a read group (`GET /api/v1/collections`, `GET /api/v1/collections/{id}`,
+  `GET /api/v1/libraries/{libraryId}/collections` — unchanged `[AuthMiddleware]`) and a
+  write group (`POST /collections`, `PUT|DELETE /collections/{id}`, `POST /playlists`
+  create-alias, `POST|DELETE /collections/{id}/items/{mediaItemId}`,
+  `POST …/bulk-add`, `POST …/refresh` — a lone `[AdminMiddleware]` resolved from the
+  container, the same idiom as `DELETE /api/v1/media/{id}` (Step 11.6): the middleware
+  itself answers anonymous → 401 `auth.required` and authenticated NON-ADMIN → 403
+  `auth.not_admin` plus a `logPermissionDenied` audit row, and the try/catch keeps the
+  write group structurally unregistered (404) if the gate cannot resolve — never
+  registered-ungated. Cascade: the eight wire-path-guard manifest rows label-flip
+  `[AuthMiddleware]`→`[AdminMiddleware]` (tuples unchanged — proved by regenerating the
+  @phlix/contracts route manifest from the HEAD and worktree ROUTE_MANIFEST sources:
+  byte-identical 412 tuples, md5 `636c420ecb0375ff895fac437230c6f3`, so NO contracts
+  re-vendor and no consumer pin moves; `composed-route-inventory.json` keys are plain
+  `"VERB /path"` strings and also ride untouched), and the same eight `openapi.yaml`
+  ops re-annotate their `x-phlix-middleware` (all already documented a 403 response).
+  Census re-pins measured from the phpunit red: `EXPECTED_PHP_FILES` 1926→1927
+  (new `CollectionsAdminGateTest`), `EXPECTED_DECLARED_WRITES` 1019→1024 (its
+  five `$request->` fixture stamps); declared reads stayed 422 (verified from the
+  same run). **Accepted interim per owner ruling: every non-admin write now 403s.**
+  Known consumer impact (reported, not client-fixed here): phlix-ui's member-facing
+  "Add to playlist" (`MediaCard.vue` → `createPlaylist` POST /playlists + `addToPlaylist`
+  POST /collections/{id}/items/{mediaId}) and phlix-mobile's `CollectionManager`
+  full CRUD now 403 for non-admin users; phlix-console's `deletePlaylist` likewise;
+  phlix-roku's item add/remove helpers likewise (its F8 collections browse is GET-only
+  and unaffected); the hub's relay scope map deliberately allowlists exactly ONE
+  collection write — anchored `POST /api/v1/playlists` (HB-3.1) — and proxies the
+  MEMBER's own identity via `X-Phlix-Relay-User`, so non-admin relay playlist-creation
+  is the precise member-UX regression path over the hub; every other collection write
+  already fails closed hub-side (`proxy.scope_denied`) before reaching the server.
+  **REVERT PATH: when the ownership model lands, fold the write group back into the
+  member group — one group edit in `loadCollectionRoutes()` — and gate per-owner
+  inside `CollectionController`; the flip is pinned both ways by
+  `tests/Unit/Server/Core/CollectionsAdminGateTest.php`.**
+
 - **Wave-3C cascade: the vendored @phlix/contracts registry re-vendors `v0.5.1` → `v0.5.3` and the
   SyncPlay queue-overflow refusal stops stretching `syncplay.group_limit_reached` — it now emits its
   own registered code `syncplay.queue_limit_exceeded`.** The fixture is the byte-copy of

@@ -506,8 +506,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * no Request property; the reads/writes denominators are re-verified from
      * the same run that reddened this pin (they stayed green). Measured 1926
      * from the phpunit red, not predicted.
+     * Re-pinned 1926→1927 by the M-5 collections interim admin-gate lane
+     * (2026-10-01): +1 file — tests/Unit/Server/Core/CollectionsAdminGateTest.php.
+     * Measured from the phpunit red, not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1926;
+    private const EXPECTED_PHP_FILES = 1927;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -642,8 +645,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * allowlist lane: the new MediaItemControllerMetadataMerge test's single
      * `$request->body` patch-builder stamp. Measured from the phpunit red on
      * the final tree, not predicted.
+     * Re-pinned 1019→1024 by the M-5 collections interim admin-gate lane
+     * (2026-10-01): +5 declared-member WRITES — the new
+     * CollectionsAdminGateTest dispatch helper stamps request fixtures
+     * (`method`/`path`/`remoteIp`/`userId`/`body`). Measured from the phpunit
+     * red, not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1019;
+    private const EXPECTED_DECLARED_WRITES = 1024;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

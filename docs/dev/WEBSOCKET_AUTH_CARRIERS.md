@@ -70,7 +70,7 @@ Each client flips its `:8097` connect to the two-entry subprotocol form
 
 | Client | Site | Follow-up |
 |---|---|---|
-| phlix-ui | `syncplay.ts` (~:477 TODO) | remove `?token=`, pass `['bearer', token]` |
+| phlix-ui | `syncplay.ts` | **DONE** — flipped in phlix-ui (delivered by the v0.99.8 re-pin; the served `/app` bundle now dials `['bearer', token]` with zero `?token=` in its corpus) |
 | tizen | `useSyncPlayStore` (~:503/:629) | same |
 | mobile | `wsEndpoint.ts` direct lane | same |
 | roku / console | native `Sec-WebSocket-Protocol` request header | same (non-browser clients may also adopt an `Authorization: Bearer` lane later; not accepted by `:8097` today) |

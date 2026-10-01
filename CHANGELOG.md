@@ -386,6 +386,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The `@phlix/ui` tarball pin moves `v0.99.7` → `v0.99.8` and the served `/app` bundle is
+  regenerated — the SPA's SyncPlay handshake flips from the `?token=` query carrier to the
+  `Sec-WebSocket-Protocol: bearer, <jwt>` carrier, retiring the last `?token=` producer in the
+  estate-served corpus.** The v0.99.8 tag (commit `a580410f`, tag-form pin per the
+  ui-pin-skew gate) carries four real deltas into this repo's build inputs, unlike the v0.99.7
+  zero-delta re-pin: (1) the syncplay WS dialer sends `['bearer', token]` and no longer appends
+  `?token=` to the `:8097` URL — the browser half of the dual-carrier law `SyncPlayAuthMiddleware`
+  already accepts, closing the retirement ledger's `phlix-ui` row in
+  `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`; (2) `LibraryScanPage`/`LibrariesPage` now guard every
+  `.paths` read with `paths?.` (the second L-4 layer 114c9aaf called out as riding "the next
+  owner-gated tag cascade" — it has now landed in the served bundle, not just behind the route
+  gate); (3) the invite-links DTO moves to the create-token/`/redeem` shape; (4) the
+  `ui.css`→`player.css` export rename (this app imports only root/`style.css`/`fonts.css`, so it
+  rides along unused). Vendored-blob identity was proven at install: `node_modules/@phlix/ui/dist/
+  phlix-ui.js` is sha256 `63fe4ab3696d3e46e89cedae9147fccb07da86df91e7047ba03b220c92c8ef63` —
+  the same blob windows and tizen pinned at this tag — and the lock's tarball `sha512` integrity
+  matches an independently fetched tag archive. Lock regen is minimal (npm 11.19.0 / node 24.20.0,
+  `npm_config_userconfig=/dev/null`): the root echo, the `@phlix/ui` node (honest `version: 0.99.8`,
+  new resolved+integrity, `pinia`/`vue`/`vue-router` moved out of its `dependencies` as they became
+  peer-only upstream), and npm's `"peer": true` markers on the auto-installed peer subtree — zero
+  version/resolved/integrity moves anywhere else, and the nested `@phlix/contracts #v0.5.2` /
+  `@phlix/syncplay #v0.1.5` git resolutions are untouched (the tarball still declares both).
+  `public/assets/app/` was rebuilt CI-faithfully: 212 files, `npm ci` clean, two consecutive
+  `vite build`s byte-identical, the S253 gate's `git diff --exit-code` + index-vs-disk set check
+  green against the committed tree. Grep proofs on the new served corpus: zero `[?&]token=` hits
+  (incl. source maps; the old `SyncPlayModal-*.js` carrier is gone), `bearer` subprotocol live in
+  the entry + SyncPlayModal chunks, `paths?.` guards live in the entry + LibrariesPage chunks.
+  `web-ui` `node --test` is 33/33 against the new pin, including the registry-parity drift guard
+  and the `buildAdminRoutes()` meta cross-check. Zero PHP is touched.
+
 - **NAT-PMP wire residuals closed against fetched RFC 6886: request destination port 5351,
   deletion result-code gate, granted-lifetime-aware lease and renewal bookkeeping.**
   Three audited residuals in `src/Network/NatPmpClient.php` (plus one consequence in

@@ -1394,6 +1394,98 @@ try {
 }
 
 // -----------------------------------------------------------------------------
+// 4f-bis. NAT-PMP maintenance worker (RFC 6886 §3.3 renewals + §3.2.1 listener).
+//
+// The resident owner of the persisted `mapping_renew_at` deadline and of the
+// UDP 5350 announcement socket — the two gaps PortForwardService documented as
+// TODO(arch) until this owner decision (2026-10-01). One process, count=1:
+// renewal is once-per-deadline bookkeeping against a state FILE, so a second
+// copy would double-renew against the same gateway and race the JSON ledger.
+// This worker is the ONLY daemon call site of PortForwardService::renewOnce()
+// (the other is scripts/port-forward.php `renew`), which is what makes
+// double-execution structurally impossible; the timer arming itself is
+// idempotency-guarded inside NatPmpMaintenanceWorker::arm().
+//
+// Same spawn-gate split as §4f: the master cannot read the settings store, so
+// the FORK decision uses config/port-forward.php's `port_forwarding.auto`
+// (fail-CLOSED on a malformed file, loud); the EFFECTIVE value — admin
+// `port-forward.*` overrides — is applied inside the fork via the container
+// that builds the PortForwardService, and the worker's tick/announcements
+// additionally self-gate on the persisted `enabled` flag. A port-forwarding
+// install that never enabled anything costs this worker an idle 60s stat of a
+// missing file; an operator disable() is respected (the nulls in state stop
+// the renewal and mute the listener). A :5350 bind conflict degrades the
+// worker to renewal-only mode inside its own listen() override — it can never
+// crash the server.
+//
+// Blocking-IO: renewOnce()/autoConfigure() are bounded sync UDP exchanges
+// running HERE, in a dedicated count=1 process, never in HTTP/WS/heartbeat —
+// see docs/dev/BLOCKING_IO_EXCEPTIONS.md Exception 8.
+// -----------------------------------------------------------------------------
+
+try {
+    /** @var mixed $portForwardFileConfig */
+    $portForwardFileConfig = require __DIR__ . '/config/port-forward.php';
+    $portForwardSection = is_array($portForwardFileConfig)
+        && is_array($portForwardFileConfig['port_forwarding'] ?? null)
+        ? $portForwardFileConfig['port_forwarding']
+        : null;
+    if ($portForwardSection === null) {
+        trigger_error(
+            'config/port-forward.php did not return a port_forwarding array;'
+            . ' NAT-PMP maintenance worker will not be spawned.',
+            E_USER_WARNING
+        );
+    }
+    if ($portForwardSection !== null && ($portForwardSection['auto'] ?? true) !== false) {
+        $natpmpMaintenanceWorker = new \Phlix\Network\NatPmpMaintenanceWorker();
+        $natpmpMaintenanceWorker->count = 1;
+        $natpmpMaintenanceWorker->name = 'phlix-natpmp-maintenance';
+        $natpmpMaintenanceWorker->onWorkerStart = static function (\Phlix\Network\NatPmpMaintenanceWorker $natpmpWorker) use (
+            $config,
+            $applyCuratedCoroutineHooks
+        ): void {
+            // Whole-body guard like §4c-bis: an uncaught throwable in a forked
+            // child crash-loops the process (and systemd restarts the service);
+            // NAT-PMP maintenance is strictly best-effort for availability.
+            try {
+                $applyCuratedCoroutineHooks();
+                // Built inside the fork so the child owns its own DB state,
+                // and so the admin `port-forward.*` overrides participate —
+                // container resolution is the single source for how a
+                // PortForwardService is configured (NetworkServicesProvider).
+                $config = EffectiveConfig::bootstrapAndOverlay($config);
+                $container = ContainerFactory::create($config);
+                $service = $container->get(\Phlix\Network\PortForwardService::class);
+                if (!$service instanceof \Phlix\Network\PortForwardService) {
+                    throw new \RuntimeException('Container did not resolve PortForwardService');
+                }
+                $logger = null;
+                if ($container->has('logger.network')) {
+                    $candidate = $container->get('logger.network');
+                    if ($candidate instanceof \Psr\Log\LoggerInterface) {
+                        $logger = $candidate;
+                    }
+                }
+                $natpmpWorker->serve($service, $logger);
+            } catch (\Phlix\Server\Runtime\HookDeliveryException $e) {
+                // S433 doctrine: undelivered hook allowlist is NOT best-effort.
+                throw $e;
+            } catch (\Throwable $e) {
+                trigger_error(
+                    'NAT-PMP maintenance worker failed to start: ' . $e->getMessage(),
+                    E_USER_WARNING
+                );
+            }
+        };
+    }
+} catch (\Throwable $e) {
+    // Best-effort, exactly like the SSDP advertiser: a maintenance-worker setup
+    // failure must never stop the HTTP server from booting.
+    trigger_error('Failed to set up NAT-PMP maintenance worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 4g. Worker-stop DB cleanup.
 //
 // Close every DB connection inside onWorkerStop — which still runs in a
@@ -1412,6 +1504,7 @@ foreach (
         $relayTunnelWorker ?? null,
         $dlnaSsdpWorker ?? null,
         $backgroundTimerWorker ?? null,
+        $natpmpMaintenanceWorker ?? null,
     ] as $stopCleanupWorker
 ) {
     if ($stopCleanupWorker instanceof Worker) {

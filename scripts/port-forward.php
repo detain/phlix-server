@@ -51,6 +51,30 @@ function cmdStatus(): void
     echo "Port:     " . $status['port'] . "\n";
     echo "Endpoint: " . ($status['endpoint'] ?? 'n/a') . "\n";
 
+    // §3.3/§3.2.1 maintenance ledger acted on by the resident
+    // NatPmpMaintenanceWorker (start.php §4f-bis).
+    $state = $svc->getState();
+    if (is_array($state)) {
+        echo "\nNAT-PMP Maintenance:\n";
+        $renewAt = $state['mapping_renew_at'] ?? null;
+        $renewLine = 'n/a';
+        if (is_int($renewAt)) {
+            $renewLine = date(DATE_ATOM, $renewAt) . ($renewAt <= time() ? ' (due)' : ' (pending)');
+        }
+        echo "  Renew at:     " . $renewLine . "\n";
+        $granted = $state['mapping_granted_lifetime'] ?? null;
+        echo "  Granted:      " . (is_int($granted) ? $granted . 's' : 'n/a') . "\n";
+        $gatewayIp = $state['gateway_ip'] ?? null;
+        echo "  Gateway pin:  " . (is_string($gatewayIp) && $gatewayIp !== '' ? $gatewayIp : 'unpinned') . "\n";
+        $retryAt = $state['mapping_retry_at'] ?? null;
+        $failedAttempts = $state['mapping_failed_attempts'] ?? null;
+        $backoff = ' none';
+        if (is_int($retryAt) && $retryAt > time() && is_int($failedAttempts)) {
+            $backoff = ' until ' . date(DATE_ATOM, $retryAt) . " ({$failedAttempts} consecutive failures)";
+        }
+        echo "  Retry backoff:" . $backoff . "\n";
+    }
+
     echo "\nHostname Candidates:\n";
     $candidates = $svc->discoverHostnameCandidates();
     foreach ($candidates as $candidate) {
@@ -82,6 +106,31 @@ function cmdDisable(): void
     $svc = getPortForwardService();
     $svc->disable();
     echo "Port forwarding disabled. Mappings removed.\n";
+}
+
+/**
+ * Force one RFC 6886 §3.3 renewal attempt NOW, bypassing the persisted
+ * deadline and the backoff ledger (which is what the resident
+ * NatPmpMaintenanceWorker consults — see start.php §4f-bis). Success re-rolls
+ * `mapping_renew_at` to half the newly-granted lifetime; failure records the
+ * next backoff slot exactly like the worker's tick would.
+ */
+function cmdRenew(): void
+{
+    $svc = getPortForwardService();
+    echo "Attempting NAT-PMP mapping renewal (§3.3)...\n";
+    $result = $svc->renewOnce();
+
+    if ($result['renewed']) {
+        echo "SUCCESS: Mapping renewed via NAT-PMP\n";
+        echo "External IP: {$result['external_ip']}\n";
+        echo "Granted lifetime: {$result['granted_lifetime']}s\n";
+        return;
+    }
+
+    echo "FAILED: Renewal did not succeed (reason: {$result['reason']}).\n";
+    echo "A backoff retry slot has been recorded; the maintenance worker will retry on its own cadence.\n";
+    echo "Run `php scripts/port-forward.php status` to see it, or `enable` for a full re-cascade.\n";
 }
 
 function cmdInfo(): void
@@ -148,6 +197,7 @@ function cmdHelp(): void
     echo "\nCommands:\n";
     echo "  status   Show current port forwarding status\n";
     echo "  enable   Attempt automatic port forwarding\n";
+    echo "  renew    Force one NAT-PMP §3.3 renewal attempt now\n";
     echo "  disable  Remove port mappings and disable\n";
     echo "  info     Display network info and candidate hostnames\n";
     echo "  help     Show this help message\n";
@@ -158,6 +208,7 @@ $command = $argv[1] ?? 'help';
 match ($command) {
     'status' => cmdStatus(),
     'enable' => cmdEnable(),
+    'renew' => cmdRenew(),
     'disable' => cmdDisable(),
     'info' => cmdInfo(),
     'help' => cmdHelp(),

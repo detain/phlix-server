@@ -156,28 +156,31 @@ class PortForwardService
                         'external_ip' => $externalIp,
                         'port' => $assignedPort,
                         'enabled' => true,
+                        // Source-pin for the §3.2.1 announcement listener:
+                        // replies are only honored from THIS address (the LAN
+                        // gateway the grant was negotiated with). See
+                        // \Phlix\Network\NatPmpMaintenanceWorker::handleAnnouncement().
+                        'gateway_ip' => $gatewayIp,
                         'mapping_granted_lifetime' => $grantedLifetime,
                         'mapping_renew_at' => $renewAt,
+                        // A fresh grant ends any previous failure ledger.
+                        'mapping_retry_at' => null,
+                        'mapping_failed_attempts' => 0,
                     ]);
-                    // TODO(arch): nothing acts on `mapping_renew_at` yet.
-                    // Renewal needs a resident timer, and NO worker owns
-                    // port-forward state today: autoConfigure() runs
-                    // request-scoped from AdminHubController (a fresh
-                    // `new PortForwardService(...)` per call) and one-shot
-                    // from scripts/port-forward.php, while the only
-                    // resident holder — the HubClient heartbeat worker —
-                    // just calls discoverHostnameCandidates(), which never
-                    // renews. A Workerman\Timer armed here would die with
-                    // the request that armed it, so the deadline is
-                    // recorded (config/port-forward.json) and the alarm is
-                    // left to an owner decision: either a resident worker
-                    // takes ownership of port-forward state and re-sends
-                    // the §3.3 renewal packet (request shape, Suggested
-                    // External Port = the previously-MAPPED port per lines
-                    // 680-681) before `mapping_renew_at`, or a periodic
-                    // admin tick polls the persisted deadline. Do NOT bolt
-                    // a background loop onto this class until that seam
-                    // exists.
+                    // RENEWAL OWNERSHIP — CLOSED (owner decision 2026-10-01).
+                    // `mapping_renew_at` is acted on by the dedicated count=1
+                    // \Phlix\Network\NatPmpMaintenanceWorker (start.php §4f-bis):
+                    // it ticks every TICK_SECONDS, asks
+                    // \Phlix\Network\NatPmpMaintenance::plan() whether the
+                    // persisted deadline passed, and calls renewOnce() below —
+                    // the same §3.3 renewal packet this leg just sent, with
+                    // Suggested External Port = the previously-MAPPED port per
+                    // RFC 6886 lines 680-681. The same worker also listens on
+                    // UDP 224.0.0.1:5350 for §3.2.1 gratuitous announcements
+                    // (gateway reboot detection). CLI-equivalent:
+                    // `php scripts/port-forward.php renew`. Blocking-IO bounds
+                    // of the whole chain: docs/dev/BLOCKING_IO_EXCEPTIONS.md
+                    // Exception 8.
                     return $this->result(true, $endpoint, 'natpmp', $externalIp);
                 }
             }
@@ -339,6 +342,173 @@ TEXT;
     }
 
     /**
+     * Reads the persisted port-forward state (config/port-forward.json).
+     *
+     * The public door onto the state the maintenance worker plans from — the
+     * file format's owner stays this class ({@see self::persistConfig()}).
+     *
+     * @return array<string,mixed>|null Null when absent or unreadable.
+     *
+     * @since 1.8.0
+     */
+    public function getState(): ?array
+    {
+        return $this->loadConfig();
+    }
+
+    /**
+     * Merges a patch into the persisted state (same merge semantics as the
+     * internal persist path: array union on top of existing keys, LOCK_EX).
+     *
+     * Exposed for the announcement listener's observation ledger
+     * (`mapping_last_sssoe`, `mapping_last_announcement_at`, adopted
+     * `external_ip`) — bookkeeping keys only; renewal deadlines should be
+     * written by {@see self::renewOnce()} so the grant response stays the
+     * single source of `mapping_renew_at`.
+     *
+     * @param array<string,mixed> $patch
+     *
+     * @since 1.8.0
+     */
+    public function mergeState(array $patch): void
+    {
+        $this->persistConfig($patch);
+    }
+
+    /**
+     * Attempts one RFC 6886 §3.3 renewal of the NAT-PMP mapping.
+     *
+     * Mirrors autoConfigure()'s NAT-PMP leg EXACTLY in discovery order and
+     * packet shape (gateway discovery → §3.2 address request → §3.3 mapping
+     * request) with two renewal-specific differences:
+     *
+     *  - the UPnP leg is not re-run — a lease granted over NAT-PMP is renewed
+     *    over NAT-PMP; a full re-cascade happens only on announcement-driven
+     *    reconfiguration (see NatPmpMaintenanceWorker::handleAnnouncement());
+     *  - Suggested External Port is the PREVIOUSLY-MAPPED port from persisted
+     *    state, per §3.3 lines 679-681 ("The Suggested External Port ... the
+     *    port number ... which the mapping was previously allocated"), so a
+     *    gateway that reassigned a port keeps the same assignment renewed.
+     *
+     * Success re-persists the grant and rolls `mapping_renew_at` to half the
+     * newly-GRANTED lifetime (a shortened grant therefore shortens the next
+     * renewal cycle automatically). Failure records the exponential backoff
+     * ledger ({@see NatPmpMaintenance::nextRetryDelay()}) and keeps the old
+     * state — the mapping may still be alive; only its renewal was refused.
+     *
+     * Every branch is bounded by NatPmpClient's per-exchange timeout; the
+     * whole call is two exchanges plus one ≤1s gateway probe. Registered as
+     * Exception 8 in docs/dev/BLOCKING_IO_EXCEPTIONS.md.
+     *
+     * @return array{renewed: bool, reason: string, external_ip: string|null, granted_lifetime: int|null}
+     *
+     * @since 1.8.0
+     */
+    public function renewOnce(): array
+    {
+        if (!$this->autoEnabled) {
+            return $this->renewalResult(false, 'disabled', null, null);
+        }
+
+        $gatewayIp = $this->discoverDefaultGateway();
+        if ($gatewayIp === null) {
+            return $this->recordRenewalFailure('no-gateway', null);
+        }
+
+        $externalIp = $this->natpmp->discoverGateway($gatewayIp);
+        if ($externalIp === null) {
+            return $this->recordRenewalFailure('gateway-silent', $gatewayIp);
+        }
+
+        $state = $this->loadConfig();
+        $previousExternalPort = $this->port;
+        if (is_array($state) && is_int($state['port'] ?? null)) {
+            $previousExternalPort = (int) $state['port'];
+        }
+
+        $mapping = $this->natpmp->addPortMapping($gatewayIp, $previousExternalPort, $this->port);
+        if ($mapping === null) {
+            return $this->recordRenewalFailure('mapping-refused', $gatewayIp);
+        }
+
+        $grantedLifetime = (int) $mapping['granted_lifetime'];
+        $renewAt = time() + intdiv($grantedLifetime, 2);
+        $this->persistConfig([
+            'method' => 'natpmp',
+            'external_ip' => $externalIp,
+            'port' => $mapping['external_port'],
+            'enabled' => true,
+            'gateway_ip' => $gatewayIp,
+            'mapping_granted_lifetime' => $grantedLifetime,
+            'mapping_renew_at' => $renewAt,
+            'mapping_retry_at' => null,
+            'mapping_failed_attempts' => 0,
+        ]);
+        $this->logger->info('NAT-PMP mapping renewed', [
+            'gateway' => $gatewayIp,
+            'external_ip' => $externalIp,
+            'port' => $mapping['external_port'],
+            'granted_lifetime' => $grantedLifetime,
+            'renew_at' => $renewAt,
+        ]);
+
+        return $this->renewalResult(true, 'renewed', $externalIp, $grantedLifetime);
+    }
+
+    /**
+     * Records a failed renewal: increments the consecutive-failure ledger and
+     * parks `mapping_retry_at` at the next backoff slot so the tick stops
+     * hot-looping. A resolved gateway (even when the exchange then failed) is
+     * pinned into state so the announcement source filter keeps working while
+     * the gateway is unreachable.
+     *
+     * @return array{renewed: bool, reason: string, external_ip: string|null, granted_lifetime: int|null}
+     */
+    private function recordRenewalFailure(string $reason, ?string $gatewayIp): array
+    {
+        $state = $this->loadConfig();
+        $previousAttempts = is_array($state) && is_int($state['mapping_failed_attempts'] ?? null)
+            ? (int) $state['mapping_failed_attempts']
+            : 0;
+        $attempts = $previousAttempts + 1;
+        $delay = NatPmpMaintenance::nextRetryDelay($attempts);
+
+        $patch = [
+            'mapping_retry_at' => time() + $delay,
+            'mapping_failed_attempts' => $attempts,
+        ];
+        if ($gatewayIp !== null) {
+            $patch['gateway_ip'] = $gatewayIp;
+        }
+        $this->persistConfig($patch);
+
+        $this->logger->warning('NAT-PMP renewal failed, backing off', [
+            'reason' => $reason,
+            'consecutive_failures' => $attempts,
+            'retry_in_seconds' => $delay,
+        ]);
+
+        return $this->renewalResult(false, $reason, null, null);
+    }
+
+    /**
+     * @return array{renewed: bool, reason: string, external_ip: string|null, granted_lifetime: int|null}
+     */
+    private function renewalResult(
+        bool $renewed,
+        string $reason,
+        ?string $externalIp,
+        ?int $grantedLifetime
+    ): array {
+        return [
+            'renewed' => $renewed,
+            'reason' => $reason,
+            'external_ip' => $externalIp,
+            'granted_lifetime' => $grantedLifetime,
+        ];
+    }
+
+    /**
      * Disables port forwarding by removing mappings and clearing config.
      *
      * @return bool True on success, false on failure.
@@ -358,13 +528,20 @@ TEXT;
             $this->natpmp->removePortMapping($gatewayIp, $this->port);
         }
 
-        // Teardown also clears the §3.3 renewal bookkeeping: a dead mapping's
-        // granted-lifetime/renew-at deadline must not linger in the config
-        // for a future renewal owner to act on.
+        // Teardown also clears the §3.3 renewal bookkeeping AND the
+        // maintenance worker's ledger: a dead mapping's granted-lifetime,
+        // renew-at deadline, failure backoff, gateway source-pin and
+        // announcement observations must not linger in the config for the
+        // resident NatPmpMaintenanceWorker (or any future owner) to act on.
         $this->persistConfig([
             'enabled' => false,
             'mapping_granted_lifetime' => null,
             'mapping_renew_at' => null,
+            'mapping_retry_at' => null,
+            'mapping_failed_attempts' => 0,
+            'gateway_ip' => null,
+            'mapping_last_sssoe' => null,
+            'mapping_last_announcement_at' => null,
         ]);
         return true;
     }

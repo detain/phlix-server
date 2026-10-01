@@ -32,14 +32,17 @@
  *      `Swoole\Runtime::enableCoroutine` (the only physically-effective API),
  *      drives the sibling ticker with `Coroutine::create`, and compares the
  *      sample against `YIELD_TICK_FLOOR` behind `HookDeliveryException` throws;
- *   3. the one silent-success hole among the six worker types — the background
+ *   3. the one silent-success hole among the worker types — the background
  *      timer worker's whole-body `catch (\Throwable)` that `trigger_error`s
  *      best-effort — rethrows `HookDeliveryException` BEFORE that warning, so
  *      a no-delivery worker still dies loudly there;
- *   4. the census: exactly six per-worker call sites (http, ws, hub-heartbeat,
- *      background-timers, relay-tunnel, managed) — the same six the defect
- *      statement filed, pinned so a new worker type that forgets the hook
- *      reddens a number instead of shipping silently;
+ *   4. the census: exactly seven per-worker call sites (http, ws, hub-heartbeat,
+ *      background-timers, relay-tunnel, managed, natpmp-maintenance) — the same
+ *      six the defect statement filed, plus the NAT-PMP maintenance worker added
+ *      by the full-RFC-citizenship lane (2026-10-01), which re-asserts the mask
+ *      in its own onWorkerStart and rethrows HookDeliveryException like the
+ *      background-timer worker; pinned so a new worker type that forgets the
+ *      hook reddens a number instead of shipping silently;
  *   5. the survival token is code-resident here and absent from the
  *      production bootstrap.
  *
@@ -195,11 +198,14 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
         $start = self::code(self::START_PHP);
 
         self::assertSame(
-            6,
+            7,
             substr_count($start, '$applyCuratedCoroutineHooks();'),
-            'S433: the curated-mask re-assert must run in exactly six onWorkerStart bodies '
-            . '(http, ws, hub-heartbeat, background-timers, relay-tunnel, managed) — a seventh '
-            . 'worker type added without it, or a delivery point removed, is the census this pins.'
+            'S433: the curated-mask re-assert must run in exactly seven onWorkerStart bodies '
+            . '(http, ws, hub-heartbeat, background-timers, relay-tunnel, managed, '
+            . 'natpmp-maintenance) — an eighth worker type added without it, or a delivery '
+            . 'point removed, is the census this pins. Re-pinned 6→7 by the NAT-PMP '
+            . 'full-RFC-citizenship lane (2026-10-01), which added the seventh body WITH '
+            . 'the re-assert, measured from the phpunit red.'
         );
     }
 

@@ -34,13 +34,15 @@ use Socket;
  * end-to-end by the fork-responder round trips in NatPmpClientTest, which
  * bind the responder exactly where the RFC says the server listens.
  *
- * NOTE (not implemented): the client-side half of that split — listening
- * on UDP 5350 for the gateway's unsolicited announcements (§3.2.1/§3.6
- * reboot and SSSoE-change detection) — has no code here or anywhere in
- * src/ (no 224.0.0.1 bind exists). Mappings therefore age out silently
- * after a gateway reboot until the next explicit (re)configure. Renewal
- * guidance lives in {@see self::parseMappingResponse()} and the
- * PortForwardService natpmp leg.
+ * The client-side half of that split is implemented (owner decision
+ * 2026-10-01) in {@see \Phlix\Network\NatPmpMaintenanceWorker}: a dedicated
+ * count=1 daemon process binds udp://0.0.0.0:5350, joins 224.0.0.1,
+ * source-pins replies to the gateway the mapping was granted through, and
+ * re-cascades on §3.2.1 reboot/SSSoE-change detection — while
+ * {@see \Phlix\Network\PortForwardService::renewOnce()} keeps §3.3 halfway
+ * renewals honest between announcements. This class stays request/response
+ * only by design (it is also used request-scoped by the admin controller and
+ * the CLI); it holds no socket listener and owns no timers.
  *
  * Requests port mappings without requiring SSDP discovery.
  *

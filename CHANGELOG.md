@@ -9,6 +9,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **NAT-PMP is now a full RFC 6886 citizen: the two documented gaps — §3.3 lease
+  renewal and the §3.2.1 `224.0.0.1:5350` announcement listener — are closed by a
+  dedicated resident worker (owner decision executing the `TODO(arch)` left open
+  by c11bd4ac/a34f698d).**
+  `src/Network/NatPmpMaintenance.php` is the pure decision core: `plan()` decides
+  renew/skip/wait from the persisted state (half-lease `mapping_renew_at` deadline,
+  `mapping_retry_at` backoff gate — enabled + `method=natpmp` + a real deadline are
+  all required, so `disable()` nulls stop all work and a deleted mapping is never
+  resurrected), `parseAnnouncement()` accepts only the §3.2.1 gratuitous address-reply
+  shape (version 0, opcode 128, result 0), `detectChange()` treats an announced-IP
+  mismatch **or** an SSSoE regression (gateway reboot clock reset) as "mappings are
+  gone", and `nextRetryDelay()` gives the documented exponential backoff (60 s base,
+  900 s cap). `src/Network/NatPmpMaintenanceWorker.php` extends `Workerman\Worker`
+  on `udp://0.0.0.0:5350` (`so_reuseport`, array-form `MCAST_JOIN_GROUP` per the
+  SSDP house pattern and its raw-12-byte no-op trap), armed exactly once in a
+  dedicated `count = 1` worker spawned by `start.php` §4f-bis behind the same
+  master-side config-file gate style as §4f DLNA (malformed config fails CLOSED;
+  effective admin overrides re-read in-fork through the container's admin-aware
+  `PortForwardService`, so this process and the admin UI can never disagree). A
+  15 s one-shot boot-catchup plus a persistent 60 s tick call the new
+  `PortForwardService::renewOnce()` — which re-issues the mapping for the
+  previously-MAPPED external port (RFC 6886 lines 679-681), refreshes
+  `mapping_renew_at` from the GRANTED lifetime, and parks failures behind the
+  backoff so a silent gateway costs one bounded chain per slot, never a hot loop.
+  Announcements are never trusted blindly: the source must equal the `gateway_ip`
+  pinned at grant/renew time (unpinned → drop), and the handler commits the new
+  baseline BEFORE acting, so a retransmit storm of one reboot announcement
+  triggers exactly one full `autoConfigure()` cascade even if that cascade fails.
+  Listener bind failure degrades to renewal-only mode with one loud log line —
+  the worker never crashes. `scripts/port-forward.php` gains a `renew` command and
+  a maintenance block in `status`; the renewal/reconfigure blocking legs are
+  registered as **Exception 8** in `docs/dev/BLOCKING_IO_EXCEPTIONS.md` with
+  measured bounds (renewal ≈6.1 s worst case against a silent gateway; 3004/3005 ms
+  legs measured 2026-10-01). Pinned by `tests/Unit/Network/NatPmpMaintenanceTest.php`
+  (15 decision-core tests), `tests/Unit/Network/NatPmpMaintenanceWorkerTest.php`
+  (20 wiring/tick/announcement/degrade tests) and
+  `tests/Unit/Network/NatPmpAnnouncementWireTest.php` (5 loopback wire tests incl. a
+  real `224.0.0.1` join → production-listener receive).
+
 - **The `:8097` SyncPlay WebSocket now accepts the `Sec-WebSocket-Protocol: bearer, <jwt>`
   carrier alongside the legacy `?token=<jwt>` query (transitional dual-carrier law,
   mirroring phlix-hub `:8804`'s S237/S355 carrier so the estate policy

@@ -497,7 +497,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * from the phpunit red on the final tree (the scan is filesystem-recursive,
      * so the count is commit-invariant).
      */
-    private const EXPECTED_PHP_FILES = 1921;
+    /**
+     * Re-pinned 1921→1926 by the NAT-PMP full-RFC-citizenship lane (2026-10-01):
+     * +5 first-party files — src/Network/NatPmpMaintenance.php (pure decision
+     * core) and src/Network/NatPmpMaintenanceWorker.php (resident listener/timer
+     * worker) plus their three test files (NatPmpMaintenanceTest,
+     * NatPmpMaintenanceWorkerTest, NatPmpAnnouncementWireTest). The lane touches
+     * no Request property; the reads/writes denominators are re-verified from
+     * the same run that reddened this pin (they stayed green). Measured 1926
+     * from the phpunit red, not predicted.
+     */
+    private const EXPECTED_PHP_FILES = 1926;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

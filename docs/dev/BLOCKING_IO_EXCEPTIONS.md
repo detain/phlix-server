@@ -15,14 +15,16 @@ the call does not belong on this list — move it off the event loop.
 
 ## Blast radius, once
 
-`start.php:169` sets `$httpWorker->count = 14`. Workerman/Swoole runs many
+`start.php:204` sets `$httpWorker->count = 14`. Workerman/Swoole runs many
 coroutines per worker process, so a blocking syscall freezes **every connection
 that worker is currently serving**, not just the caller's — one worker is ~1/14
-of HTTP capacity. The WS worker (`start.php:546`), the hub-heartbeat worker
-(`:711`), the background-timer worker (`:765`) and the relay-tunnel worker
-(`:813`) are all `count = 1`, so a stall there is a 100 % outage of that
-subsystem. No exception below runs in those workers — every listed exception is
-HTTP-side.
+of HTTP capacity. The WS worker (`start.php:611`), the hub-heartbeat worker
+(`:819`), the background-timer worker (`:873`) and the relay-tunnel worker
+(`:929`) are all `count = 1`, so a stall there is a 100 % outage of that
+subsystem. Exceptions 1–7 are all HTTP-side; Exception 8 is the one resident
+exception in this register, and it was placed on its **own** dedicated
+`count = 1` worker (`phlix-natpmp-maintenance`, `start.php:1441`) precisely so
+its stall costs nothing outside the NAT-PMP maintenance subsystem.
 
 ---
 
@@ -283,6 +285,27 @@ about exposure to every user; the residual exposure is admin-triggered only.
 Regression guards: `tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`
 (gate + zero-disk-I/O-on-refusal), `tests/Unit/Server/WebPortal/WebPortalRouterWirePathGuardTest.php`
 (route lives in the admin-conditional group and vanishes unwired).
+
+---
+
+## Exception 8 — resident NAT-PMP maintenance (`phlix-natpmp-maintenance` worker)
+
+| | |
+|---|---|
+| Site | `src/Network/NatPmpMaintenanceWorker.php` — the persistent 60 s tick and the one-shot 15 s boot-catchup `Workerman\Timer` call `PortForwardService::renewOnce()` inline; the §3.2.1 announcement path `handleAnnouncement()` calls `PortForwardService::autoConfigure()` inline when a source-pinned announcement changes the announced external IP or regresses the gateway uptime stamp. The UDP receive side itself (Workerman `onMessage` on `udp://0.0.0.0:5350`, multicast-joined to `224.0.0.1`) is event-loop-native and never blocks. |
+| Reached from | The dedicated `count = 1` worker `phlix-natpmp-maintenance` (`start.php:1441`, §4f-bis — spawned only when `config/port-forward.php` still asks for port forwarding; effective admin overrides are re-read inside the worker via the container). Renewal runs ONLY when due: the persisted `mapping_renew_at` deadline (half the GRANTED lease, DHCP-style, RFC 6886 §3.3) gates every tick through the pure `NatPmpMaintenance::plan()`, and `disable()` nulls the deadline so the tick stops without resurrecting a deleted mapping. Reconfigure runs ONLY on a genuine announcement change and is commit-before-act deduped: the first packet adopts the new baseline synchronously, every retransmit of the same announcement settles to `observed-unchanged` with zero I/O. |
+| Why it is sync | The `Phlix\Network` client family is already the registered sync set of Exception 5; maintenance moves those same bounded exchanges OFF the 14 HTTP workers onto a worker whose only job is this subsystem — the daemon previously had NO resident owner for lease renewal (requests were admin-click-only), so the alternative to this entry was mappings silently aging out, not a non-blocking implementation. Duplicating four socket clients as promise-based variants to serve a once-per-half-lease tick is exactly the "accelerate a call no viewer request ever makes" cost Exception 5 declined. |
+| Bound | Every leg inherits its Exception 5 bound: NAT-PMP exchanges hard-stop at the ctor `$timeout` (default **3000 ms**) tracked in monotonic `hrtime` with `socket_select` slices ≤ 500 ms, replies source-pinned to the gateway; STUN binding select 3 s; IGD M-SEARCH 3 s with `LanEndpointGuard` pre-socket refusals and 1 MiB / 5 s-idle bounded follow-ups. Failures park `mapping_retry_at` on an exponential backoff — base 60 s, doubling per consecutive failure, capped at **900 s** (`NatPmpMaintenance::nextRetryDelay`) — so a persistently silent gateway costs at most ONE bounded chain per backoff slot instead of hot-looping every 60 s. Announcements arriving during a renewal stall queue in the kernel socket buffer and are processed next loop turn; a bind failure at boot degrades to renewal-only mode with one loud log line and never crashes the worker. |
+| Cost | Measured 2026-10-01 on the dev host against a silent-but-reachable peer (loopback, no responder): `discoverGateway` **3004 ms** + `addPortMapping` **3005 ms** → renewal chain ≈ **6.1 s** worst case, at most once per half-lease deadline (default 7200 s lease → every ~1 h, or every 15 min at the smallest honest half-lease), plus a single boot-catchup attempt. An ICMP-refused / unroutable gateway short-circuits `sendto` in ≈ 1 ms (measured). The announcement-triggered full cascade is IGD 3 s + NAT-PMP 6 s + STUN 3 s ≈ **12 s** worst case with every leg silent — and only ever on a real gateway IP change, which is by nature rare (reboot / re-assign). Blast radius: the dedicated worker only; zero HTTP/WS/heartbeat capacity is touched. Non-due ticks are pure state reads (µs). |
+
+Regression guards: `tests/Unit/Network/NatPmpMaintenanceTest.php` (plan
+precedence, announcement parser, change detection, backoff curve),
+`tests/Unit/Network/NatPmpMaintenanceWorkerTest.php` (timer set exactly
+{15 one-shot, 60 persistent}, double-arm idempotence, tick matrix against real
+state files, source filter, commit-first dedup, bind-failure degrade),
+`tests/Unit/Network/NatPmpAnnouncementWireTest.php` (loopback wire test incl. a
+real `224.0.0.1` multicast join → production listener receive, gated on a
+pre-built raw-socket round-trip probe).
 
 ---
 

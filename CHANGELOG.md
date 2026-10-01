@@ -386,6 +386,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Wave-3C cascade: the vendored @phlix/contracts registry re-vendors `v0.5.1` → `v0.5.3` and the
+  SyncPlay queue-overflow refusal stops stretching `syncplay.group_limit_reached` — it now emits its
+  own registered code `syncplay.queue_limit_exceeded`.** The fixture is the byte-copy of
+  `dist/error-codes.json` from the `v0.5.3` tag tarball (codeload `refs/tags/v0.5.3`; content md5
+  `40c1da48787f37d00a6fc9af6c64a1ac`): 202 → 204 codes, additive (old list verified an order-preserving
+  subsequence of the new; added `leaf_hub_id_already_bound` + `syncplay.queue_limit_exceeded`; zero
+  removals). `CONTRACTS_TAG`, the sidecar pin, and the emit-law provenance docblock move in lockstep;
+  `MIN_REGISTRY_CODES` stays a 147 FLOOR (not a pin), so no count-rotation was measured. The emit switch
+  is a same-line string swap in `SyncPlayManager`'s PLAYBACK_QUEUE handler (`count($parsedQueue) >
+  GroupState::MAX_QUEUE_SIZE` arm) with a net-zero line delta ON PURPOSE: @phlix/contracts `errors.ts`
+  cite coordinates into this file (via `scripts/check-error-cites.mjs`) verified 431/0 immediately after;
+  the group-count cap in `createGroup()` (`count($this->groups) >= MAX_GROUPS`) KEEPS
+  `syncplay.group_limit_reached` — that is the documented split. The server's `openapi.yaml` `Error.code`
+  enum deliberately does NOT gain the two new members: the exact-equality law
+  (`ErrorCodesOpenApiEnumContractTest`) pins it to the REST-emittable scan, and both codes are
+  non-REST-channel (`queue_limit_exceeded` rides the WS `error_code` envelope; `leaf_hub_id_already_bound`
+  is hub-federation vocabulary) — the enum comment restamps to v0.5.3 order accordingly. Wire-compatible
+  for pass-through clients: `Messages::error()` forwards the code verbatim; ui `errorCodeMessage` degrades
+  locale-catalog → en → server-text fallback without throwing, and mobile `describeSyncPlayError` falls
+  back to the server message on unmapped codes — no client drops the new value (their registries re-pin in
+  their own 3C lanes; mobile's catalog-pinning test will demand the one added row at its v0.5.3 re-pin).
+
 - **The `@phlix/ui` tarball pin moves `v0.99.7` → `v0.99.8` and the served `/app` bundle is
   regenerated — the SPA's SyncPlay handshake flips from the `?token=` query carrier to the
   `Sec-WebSocket-Protocol: bearer, <jwt>` carrier, retiring the last `?token=` producer in the

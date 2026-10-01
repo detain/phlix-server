@@ -1227,7 +1227,7 @@ class SyncPlayManager
         if (count($parsedQueue) > GroupState::MAX_QUEUE_SIZE) {
             $this->sendError(
                 $connection,
-                'syncplay.group_limit_reached',
+                'syncplay.queue_limit_exceeded', // queue overflow; group-count cap keeps group_limit_reached
                 sprintf(
                     'Playback queue exceeds the %d-item cap; queue unchanged',
                     GroupState::MAX_QUEUE_SIZE

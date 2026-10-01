@@ -898,7 +898,9 @@ class SyncPlayManagerTest extends TestCase
 
         $frames = $host->getSentMessages();
         $this->assertNotEmpty($frames, 'the overflow refusal must answer with at least one frame');
-        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.group_limit_reached');
+        // Wave-3C: the queue-overflow arm emits its own registered code;
+        // syncplay.group_limit_reached is reserved for the group-count cap.
+        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.queue_limit_exceeded');
 
         $state = $wire->getGroupState($groupId);
         $this->assertSame(

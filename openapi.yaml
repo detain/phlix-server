@@ -11541,7 +11541,10 @@ components:
           description: "Machine-readable dotted error code (e.g. auth.not_admin)."
           enum:
             # W2 error-code doctrine: pinned by tests/Unit/Contracts/ErrorCodesOpenApiEnumContractTest
-            # to the set of codes src/ can actually place on this field (@phlix/contracts v0.5.1 order).
+            # to the set of codes src/ can actually place on this field (@phlix/contracts v0.5.3 order).
+            # v0.5.3 added two registry codes; neither is REST-emittable from src/ (leaf_hub_id_already_bound
+            # is hub-federation, syncplay.queue_limit_exceeded rides the WS error_code channel), so the
+            # exact-equality law correctly keeps them out of this enum.
             - "auth.required"
             - "auth.not_admin"
             - "auth.signups_disabled"

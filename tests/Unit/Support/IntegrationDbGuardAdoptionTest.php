@@ -437,7 +437,10 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
      * `test-server` job that is an absent capability, not a defect, so the
      * drive gates on the shared guard and runs fully wherever MySQL lives.
      */
-    private const EXPECTED_ADOPTERS = 63;
+    // 63→64 by the device-M1 shared casting-register lane (2026-10-02):
+    // +tests/Integration/Casting/CastingSessionStoreRealDbTest.php (real-MySQL
+    // proof of the casting_sessions register). Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 64;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

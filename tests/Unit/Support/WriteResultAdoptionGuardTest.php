@@ -69,11 +69,14 @@ use RecursiveIteratorIterator;
  * client has no silent failure return).
 *
  * The denominator the guard prints is the exact count it examined:
- * **95 `INSERT`/`REPLACE` `->query()` call tokens** (87 with a literal first
- * argument, 8 resolved through a `$sql` variable — including the try/catch
- * retry arms of the two ScanJobRepository sites), of which **15 consume the
- * result** (13 logical sites: the retry arms share one consumption; S331's
- * `ensurePlaceholderArtist()` adds the fifteenth). The plan
+ * **101 `INSERT`/`REPLACE` `->query()` call tokens** (95 with a literal first
+ * argument, 6 resolved through a `$sql` variable — including the try/catch
+ * retry arms of the two ScanJobRepository sites and of the Device-M1
+ * casting_sessions register), of which **20 consume the result** (18 logical
+ * sites; the retry arms share consumption; S331's `ensurePlaceholderArtist()`
+ * added one, and CastingSessionStore's two INSERT arms feed the one
+ * `wroteNothing` verdict the same shared-consumption way — re-measured from
+ * the phpunit red by the device-M1 lane, 2026-10-02). The plan
  * recorded 86/11; this scan is what a faithful token walk of the tree actually
  * finds, and it is pinned below so a change to the landscape reddens here
  * rather than silently drifting the inventory.
@@ -181,8 +184,14 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * `WriteResult::wroteNothing()` so a zero-row insert can never hand a
      * caller a phantom-stored challenge — same contract as S518's pairing
      * site). Measured 99 from the phpunit red.
+     * Re-pinned 99→101 by the device-M1 shared casting-register lane
+     * (2026-10-02): +2 literal INSERT ->query() sites — both the primary and
+     * the replace-race retry INSERT in `CastingSessionStore::insert()`, each
+     * consumed through `WriteResult::wroteNothing()` (an unwritable row fails
+     * the manager's start closed — same phantom-write contract as S518).
+     * Measured 101 from the phpunit red.
      */
-    private const EXPECTED_TOTAL_INSERT_CALLS = 99;
+    private const EXPECTED_TOTAL_INSERT_CALLS = 101;
 
     /**
      * The denominator, part 2: how many of those 99 consume their result.
@@ -198,8 +207,13 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * because the total assertion above fails first inside the same test — the
      * 18 was read from the scan output after the total re-pin, then confirmed
      * by this test's green run.
+     * Re-pinned 18→20 by the device-M1 shared casting-register lane
+     * (2026-10-02): `CastingSessionStore::insert()` is 1 logical site whose
+     * try arm and replace-race retry arm both feed the single
+     * `WriteResult::wroteNothing()` verdict — the same 2-tokens/1-site shape
+     * the two ScanJobRepository arms contribute. Measured 20 from the red.
      */
-    private const EXPECTED_CONSUMED_INSERT_RESULTS = 18;
+    private const EXPECTED_CONSUMED_INSERT_RESULTS = 20;
 
     /**
      * Helper call names whose first argument is the consumed result, plus the
@@ -210,6 +224,24 @@ final class WriteResultAdoptionGuardTest extends TestCase
 
     /** Tokens that never carry meaning for any rule here. */
     private const IGNORED_TOKENS = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+
+    /**
+     * Statement keywords that mean a query result is tested bare / passed on
+     * inline — the `!$result` accident family written directly (`if (...)`,
+     * `return ...`, ...). One constant so the classifier reads as one rule.
+     */
+    private const BARE_TEST_KEYWORDS = [
+        T_IF,
+        T_WHILE,
+        T_FOR,
+        T_FOREACH,
+        T_SWITCH,
+        T_RETURN,
+        T_ECHO,
+        T_PRINT,
+        T_ISSET,
+        T_EMPTY,
+    ];
 
     /**
      * The whole-tree scan, computed once per PHPUnit process.
@@ -771,7 +803,7 @@ final class WriteResultAdoptionGuardTest extends TestCase
             // A statement keyword (`if (...)`, `return ...`, ...) means the
             // result is tested bare / passed on — the `!$result` accident
             // family written inline.
-            if (is_array($name) && in_array($name[0], [T_IF, T_WHILE, T_FOR, T_FOREACH, T_SWITCH, T_RETURN, T_ECHO, T_PRINT, T_ISSET, T_EMPTY], true)) {
+            if (is_array($name) && in_array($name[0], self::BARE_TEST_KEYWORDS, true)) {
                 return 'inline bare-truthiness';
             }
 

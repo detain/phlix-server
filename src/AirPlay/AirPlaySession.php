@@ -328,6 +328,32 @@ class AirPlaySession
     }
 
     /**
+     * Re-attach constructor (Device-M1): rebuild a session object around a
+     * stored row WITHOUT re-issuing ANNOUNCE/RECORD.
+     *
+     * AirPlay needs no special re-attach permission here — this is the simplest
+     * class in the family: {@see RaopClient} opens a FRESH `fsockopen` per
+     * command and closes it again, and the session object holds no live socket
+     * and no poll timer at all, so a second worker can reconstruct the exact
+     * same control surface from host/port alone. Restoring the media context
+     * and the streaming state lets a cross-worker status/pause/stop/RESUME hit
+     * behave as if the start had landed on this worker.
+     *
+     * @param string $mediaUrl Audio stream URL the session casts
+     * @param string $contentType MIME type of that stream
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function restoreStreamContext(string $mediaUrl, string $contentType): void
+    {
+        $this->mediaUrl = $mediaUrl;
+        $this->contentType = $contentType;
+        $this->state = self::STATE_STREAMING;
+    }
+
+    /**
      * Send ANNOUNCE command via RAOP.
      *
      * @param string $payload ANNOUNCE payload

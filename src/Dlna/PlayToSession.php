@@ -96,6 +96,15 @@ class PlayToSession
     /** @var callable|null State change callback */
     private $onStateChange = null;
 
+    /** @var callable(PlayToSession): void|null Self-teardown notifier (Device-M1) */
+    private $onSelfDestruct = null;
+
+    /** @var callable(): bool|null Shared-store liveness touch (Device-M1); false = row gone */
+    private $onTouch = null;
+
+    /** @var bool Whether the self-destruct notifier has already fired (fires at most once) */
+    private bool $destructFired = false;
+
     /**
      * @param string $sessionId Unique session identifier
      * @param string $rendererId Renderer identifier (UDN)
@@ -354,6 +363,19 @@ class PlayToSession
 
         $this->consecutivePollFailures = 0;
 
+        // Device-M1: a successful poll is fleet-visible liveness. If our row is
+        // gone (replaced by another worker's start, or swept), THIS object is
+        // the orphan — abandon quietly; the renderer now answers to whoever
+        // holds the live row, and a device Stop here would kill their playback.
+        if ($this->onTouch !== null && !($this->onTouch)()) {
+            $this->logger->info('Renderer session row gone, abandoning local session', [
+                'session_id' => $this->sessionId,
+                'renderer_id' => $this->rendererId,
+            ]);
+            $this->abandon();
+            return;
+        }
+
         // Parse RelTime from response; a missing/blank RelTime is NOT a position of zero —
         // leave the last known position untouched rather than corrupting watch history.
         $relTimeRaw = $result['RelTime'] ?? $result['relTime'] ?? null;
@@ -421,6 +443,105 @@ class PlayToSession
     }
 
     /**
+     * Register the manager-side self-teardown notifier (Device-M1).
+     *
+     * Fired exactly once from {@see destroy()}/{@see abandon()} so the owning
+     * manager can evict this object from its map and delete the shared-store
+     * row — closing the hole where a timer-driven `destroy()` left a stale
+     * map entry nobody could reach or stop.
+     *
+     * @param callable(PlayToSession): void $handler
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function setSelfDestructHandler(callable $handler): void
+    {
+        $this->onSelfDestruct = $handler;
+    }
+
+    /**
+     * Register the shared-store liveness touch (Device-M1).
+     *
+     * Called after every successful position poll. A `false` answer means the
+     * `casting_sessions` row for THIS session id is gone — replaced by another
+     * worker's start or swept as stale — and the honest response is to
+     * {@see abandon()} WITHOUT a device Stop: the renderer, if it is playing
+     * anything, now belongs to whoever replaced us.
+     *
+     * @param callable(): bool $handler
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function setTouchHandler(callable $handler): void
+    {
+        $this->onTouch = $handler;
+    }
+
+    /**
+     * Re-attach constructor: restore the media context on a session rebuilt
+     * from a stored row, WITHOUT sending any device command.
+     *
+     * The stored `media_item_id`/`uri` are what keep progress reporting alive
+     * after a cross-worker re-attach (the old object died with another
+     * worker); position continues to come from the renderer itself on the next
+     * poll, which is the truth for a device we never controlled.
+     *
+     * @param string $itemId Media item ID the session casts
+     * @param string $uri Media URI the session casts
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function restoreMediaContext(string $itemId, string $uri): void
+    {
+        $this->itemId = $itemId;
+        $this->uri = $uri;
+    }
+
+    /**
+     * Re-attach constructor: resume position polling on a rebuilt session.
+     *
+     * Public seam over the private {@see startPolling()} so a manager can put
+     * a re-attached session back on the poll cadence without re-issuing
+     * SetAVTransportURI/Play (a status check must never restart playback).
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function resumePolling(): void
+    {
+        $this->startPolling();
+    }
+
+    /**
+     * Abandon the session WITHOUT touching the device (Device-M1).
+     *
+     * For the row-gone path: this worker's object is the orphan, the device may
+     * be actively serving a REPLACEMENT session, so only local state — timer,
+     * context, map entry — may be torn down here. {@see destroy()} keeps its
+     * existing device-Stop semantics for genuine stops.
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function abandon(): void
+    {
+        $this->consecutivePollFailures = 0;
+        $this->stopPolling();
+        $this->setState(self::STATE_IDLE);
+        $this->itemId = null;
+        $this->uri = null;
+        $this->fireSelfDestruct();
+    }
+
+    /**
      * Destroy the session and clean up.
      *
      * @return void
@@ -435,6 +556,20 @@ class PlayToSession
         $this->setState(self::STATE_IDLE);
         $this->itemId = null;
         $this->uri = null;
+        $this->fireSelfDestruct();
+    }
+
+    /**
+     * Fire the self-destruct notifier at most once.
+     */
+    private function fireSelfDestruct(): void
+    {
+        if ($this->onSelfDestruct === null || $this->destructFired) {
+            return;
+        }
+
+        $this->destructFired = true;
+        ($this->onSelfDestruct)($this);
     }
 
     /**

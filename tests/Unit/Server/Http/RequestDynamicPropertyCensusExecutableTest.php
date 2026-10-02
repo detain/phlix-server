@@ -509,8 +509,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1926→1927 by the M-5 collections interim admin-gate lane
      * (2026-10-01): +1 file — tests/Unit/Server/Core/CollectionsAdminGateTest.php.
      * Measured from the phpunit red, not predicted.
+     * Re-pinned 1927→1938 by the device-M1 shared casting-register lane
+     * (2026-10-02): +11 first-party files — src/Casting/{CastingSessionRecord,
+     * CastingSessionStoreInterface,CastingSessionStore}.php, the
+     * CastingServicesProvider, and seven test files (Unit/Casting store test,
+     * the Support/Casting fake, four *ManagerSharedStoreTest, the
+     * Integration/Casting real-DB proof). Measured from the phpunit red,
+     * not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1927;
+    private const EXPECTED_PHP_FILES = 1938;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -556,8 +563,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * property reads (HubJwtMiddleware::__invoke + its test's hubUser asserts)
      * than the six new/updated test fixtures added. Every read still names a
      * declared member. Measured from the phpunit red, not predicted.
+     * Re-pinned 422→444 by the device-M1 shared casting-register lane
+     * (2026-10-02): +22 declared-member READS — every casting controller now
+     * threads the authenticated owner into the managers' ownership gate
+     * ($request->userId: RendererListController 6, RokuController 4,
+     * ChromecastController 6, AirPlayController 6). The managers themselves
+     * take the id as a plain string param, so no new Request surface appeared.
+     * Measured from the phpunit red, not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 422;
+    private const EXPECTED_DECLARED_READS = 444;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request

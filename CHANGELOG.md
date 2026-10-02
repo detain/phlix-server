@@ -9,6 +9,64 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Device-M1: casting sessions are now a cross-worker register, not per-worker memory
+  (owner decision — the audit finding: the HTTP pool runs `count = 14`, each of the four
+  casting managers keyed its live-session map process-locally, so a cast started on
+  worker A answered pause/stop/status on worker B with a spurious 404 while worker A's
+  poll timer kept firing for a session nobody could reach).**
+  New table `casting_sessions` (migration 111: `session_id CHAR(36)` PK, `type`,
+  `device_id` with a UNIQUE `(type, device_id)` register, `user_id CHAR(36)`, `state
+  JSON`, `created_at`/`last_seen_at` with `NOW()` defaults — MySQL-5.7-safe, additive).
+  `src/Casting/CastingSessionStore` (interface + record VO alongside) speaks the house
+  pooled-`Connection` idiom: `WriteResult::wroteNothing`-guarded inserts with one
+  delete-then-retry through the unique register (the replace race), a monotonic-clock
+  touch throttle (60 s memo window so 5 s polls don't amplify writes into a column the
+  sweep is the only reader of), `touch()`'s zero-affected path disambiguated by one
+  bounded existence read — MySQL's `rowCount()` counts CHANGED rows, so a same-second
+  re-touch of an identical DATETIME is not a death signal (caught by the real-DB proof,
+  the doubled unit sibling could not see it) — and a lazy 24 h-horizon sweep riding
+  every `find()`/`insert()` (bounded `DELETE … LIMIT 200`, best-effort like every other
+  janitor here; deliberately no new resident timer: the table is only consulted on
+  requests, so the sweep is exactly as fresh as the register is read).
+  All four managers (`PlayToManager`, `RokuManager`, `CastManager`, `AirPlayManager`)
+  take a trailing-optional `?CastingSessionStoreInterface` (store-less = byte-identical
+  pre-lane behavior — 22 existing construction sites unchanged);
+  `CastingServicesProvider` (appended to `ContainerFactory::defaultProviders()`) injects
+  it in production because PHP-DI skips optional ctor params during autowiring.
+  The local map stays the worker-local HOT CACHE; every control op is local-first, then
+  re-attach from the row. All four device classes proved stateless-per-command on disk
+  and therefore re-attachable — DLNA SOAP POST (`RendererControlClient` rebuilt from the
+  stored AVTransport URL, re-passing `LanEndpointGuard`), Roku ECP HTTP, Cast HTTP JSON,
+  AirPlay RAOP fresh-socket-per-command (`AirPlaySession` holds no socket — its
+  ANNOUNCE/RECORD layer is command-simulated and carries no timer) — so no 409
+  stale-worker posture was needed anywhere. Genuinely-dead rows still answer the exact
+  pre-lane 404 wire; no new error literals, routes/middleware tuples unchanged.
+  Ownership moved with the lookup: controllers now thread `$request->userId` into every
+  manager call; with a store active the manager refuses a local-hit whose owner mirror
+  differs (no round trip), re-attaches only for the row's owner (cross-user → the same
+  honest 404, refused-with-log), and start refuses closed without an authenticated
+  identity. Start-path REPLACE semantics are preserved (stop-then-start, last writer
+  wins) but now fleet-visible: the displaced worker's next poll `touch()` answers false
+  and its object self-evicts.
+  Orphan discipline completed: the DLNA 3-strike poll teardown (d052b488) gained the
+  eviction seam it never had (self-destruct → map/owner cleanup + row delete; previously
+  a strike-teardown left a dead object parked in the manager map), and Roku and Cast
+  polls — which swallowed every failure and could poll forever — got the same
+  `MAX_CONSECUTIVE_POLL_FAILURES = 3` strike counter plus the row-gone check on healthy
+  polls. A DB blip never breaks a verified local session (control ops fail OPEN against
+  their warm cache; re-attach fails CLOSED).
+  Tests: 71 new — per-manager shared-store suites (identity gate, fleet registration,
+  re-attach per class incl. device-tuple fidelity, cross-user refusal both directions,
+  corrupt-row purge, replace-eviction, strike teardown via the real dead-endpoint
+  transport, blip postures) on an in-memory `FakeCastingSessionStore`, a doubled-
+  `Connection` store unit suite pinning statement shapes/order and the throttle memo,
+  and a `RequiresRealDatabase` proof of the register (JSON round-trip, `uk_type_device`
+  collapse, `NOW()`/`DATE_SUB` sweep math, cross-connection visibility). Census pins
+  rotated from the phpunit red: files 1927→1938, declared reads 422→444, guard adopters
+  63→64, INSERT tokens 99→101 / consumed 18→20, provider stack 15→16.
+
+- **NAT-PMP is now a full RFC 6886 citizen: the two documented gaps — §3.3 lease
+
 - **NAT-PMP is now a full RFC 6886 citizen: the two documented gaps — §3.3 lease
   renewal and the §3.2.1 `224.0.0.1:5350` announcement listener — are closed by a
   dedicated resident worker (owner decision executing the `TODO(arch)` left open

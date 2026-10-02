@@ -14,6 +14,7 @@ namespace Phlix\Common\Container;
 use DI\ContainerBuilder;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Common\Container\Providers\CastingServicesProvider;
 use Phlix\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Common\Container\Providers\DlnaServicesProvider;
 use Phlix\Common\Container\Providers\EventServicesProvider;
@@ -135,6 +136,7 @@ final class ContainerFactory
             new PluginsProvider(),
             new ThemingServicesProvider(),
             new DlnaServicesProvider(),
+            new CastingServicesProvider(),
         ];
     }
 

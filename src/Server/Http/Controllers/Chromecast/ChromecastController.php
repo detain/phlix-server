@@ -109,7 +109,14 @@ class ChromecastController
             return (new Response())->status(400)->json(['error' => 'media_url is required']);
         }
 
-        $session = $this->castManager->startSession($deviceId, $mediaUrl, $mimeType, $title, $duration);
+        $session = $this->castManager->startSession(
+            $deviceId,
+            $mediaUrl,
+            $mimeType,
+            $title,
+            $duration,
+            $request->userId,
+        );
 
         if ($session === null) {
             return (new Response())->status(500)->json(['error' => 'Failed to start cast session']);
@@ -136,7 +143,7 @@ class ChromecastController
      */
     public function play(Request $request, array $params): Response
     {
-        return $this->controlSession($params['id'] ?? null, 'play');
+        return $this->controlSession($params['id'] ?? null, 'play', $request->userId);
     }
 
     /**
@@ -153,7 +160,7 @@ class ChromecastController
      */
     public function pause(Request $request, array $params): Response
     {
-        return $this->controlSession($params['id'] ?? null, 'pause');
+        return $this->controlSession($params['id'] ?? null, 'pause', $request->userId);
     }
 
     /**
@@ -176,7 +183,7 @@ class ChromecastController
         }
 
         try {
-            $this->castManager->stopSession($deviceId);
+            $this->castManager->stopSession($deviceId, $request->userId);
             return (new Response())->json(['success' => true, 'message' => 'Session stopped']);
         } catch (\Throwable $e) {
             // L-6 (d052b488 convention): the client gets a CONSTANT message —
@@ -215,7 +222,7 @@ class ChromecastController
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
-        $session = $this->castManager->getSession($deviceId);
+        $session = $this->castManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
         }
@@ -260,7 +267,7 @@ class ChromecastController
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
-        $session = $this->castManager->getSession($deviceId);
+        $session = $this->castManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->json([
                 'device_id' => $deviceId,
@@ -288,13 +295,13 @@ class ChromecastController
      *
      * @return Response JSON response
      */
-    private function controlSession(?string $deviceId, string $action): Response
+    private function controlSession(?string $deviceId, string $action, ?string $userId): Response
     {
         if ($deviceId === null) {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
-        $session = $this->castManager->getSession($deviceId);
+        $session = $this->castManager->getSession($deviceId, $userId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
         }

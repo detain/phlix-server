@@ -128,7 +128,14 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'media_url is required']);
         }
 
-        $session = $this->rokuManager->startSession($deviceId, $mediaUrl, $mimeType, $title, $thumbnail);
+        $session = $this->rokuManager->startSession(
+            $deviceId,
+            $mediaUrl,
+            $mimeType,
+            $title,
+            $thumbnail,
+            $request->userId,
+        );
 
         if ($session === null) {
             return (new Response())->status(500)->json(['error' => 'Failed to start Roku session']);
@@ -172,7 +179,7 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'Channel ID must be numeric']);
         }
 
-        $session = $this->rokuManager->getSession($deviceId);
+        $session = $this->rokuManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
         }
@@ -228,7 +235,7 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'Unsupported key name']);
         }
 
-        $session = $this->rokuManager->getSession($deviceId);
+        $session = $this->rokuManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json(['error' => 'No active session for device']);
         }
@@ -270,7 +277,7 @@ class RokuController
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
-        $session = $this->rokuManager->getSession($deviceId);
+        $session = $this->rokuManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->json([
                 'device_id' => $deviceId,

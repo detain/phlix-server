@@ -61,7 +61,9 @@ class RendererListController
         $result = [];
         foreach ($renderers as $renderer) {
             $rendererId = is_string($renderer['udn'] ?? null) ? $renderer['udn'] : '';
-            $session = $rendererId !== '' ? $this->playToManager->getSession($rendererId) : null;
+            // Device-M1: the requester's identity gates session visibility — the
+            // manager returns null for another profile's session (fail-closed).
+            $session = $rendererId !== '' ? $this->playToManager->getSession($rendererId, $request->userId) : null;
 
             $renderer['has_active_session'] = $session !== null;
             if ($session !== null) {
@@ -111,7 +113,7 @@ class RendererListController
             ]);
         }
 
-        $session = $this->playToManager->startSession($rendererId, $mediaItemId, $uri, $metadata);
+        $session = $this->playToManager->startSession($rendererId, $mediaItemId, $uri, $metadata, $request->userId);
 
         if ($session === null) {
             return (new Response())->status(500)->json([
@@ -148,7 +150,7 @@ class RendererListController
             ]);
         }
 
-        $session = $this->playToManager->getSession($rendererId);
+        $session = $this->playToManager->getSession($rendererId, $request->userId);
 
         if ($session === null) {
             return (new Response())->status(404)->json([
@@ -184,7 +186,7 @@ class RendererListController
             ]);
         }
 
-        $session = $this->playToManager->getSession($rendererId);
+        $session = $this->playToManager->getSession($rendererId, $request->userId);
 
         if ($session === null) {
             return (new Response())->status(404)->json([
@@ -219,7 +221,7 @@ class RendererListController
             ]);
         }
 
-        $session = $this->playToManager->getSession($rendererId);
+        $session = $this->playToManager->getSession($rendererId, $request->userId);
 
         if ($session === null) {
             return (new Response())->status(404)->json([
@@ -264,7 +266,7 @@ class RendererListController
             ]);
         }
 
-        $session = $this->playToManager->getSession($rendererId);
+        $session = $this->playToManager->getSession($rendererId, $request->userId);
 
         if ($session === null) {
             // Check if renderer is available

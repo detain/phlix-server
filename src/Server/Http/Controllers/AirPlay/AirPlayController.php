@@ -100,7 +100,7 @@ class AirPlayController
             ]);
         }
 
-        $session = $this->airPlayManager->startSession($deviceId, $audioUrl, $contentType, $duration);
+        $session = $this->airPlayManager->startSession($deviceId, $audioUrl, $contentType, $duration, $request->userId);
 
         if ($session === null) {
             return (new Response())->status(404)->json([
@@ -130,7 +130,7 @@ class AirPlayController
     {
         $deviceId = $params['id'] ?? '';
 
-        $session = $this->airPlayManager->getSession($deviceId);
+        $session = $this->airPlayManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json([
                 'error' => 'No active session for device',
@@ -160,7 +160,7 @@ class AirPlayController
     {
         $deviceId = $params['id'] ?? '';
 
-        $session = $this->airPlayManager->getSession($deviceId);
+        $session = $this->airPlayManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json([
                 'error' => 'No active session for device',
@@ -190,14 +190,14 @@ class AirPlayController
     {
         $deviceId = $params['id'] ?? '';
 
-        $session = $this->airPlayManager->getSession($deviceId);
+        $session = $this->airPlayManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->status(404)->json([
                 'error' => 'No active session for device',
             ]);
         }
 
-        $this->airPlayManager->stopSession($deviceId);
+        $this->airPlayManager->stopSession($deviceId, $request->userId);
 
         return (new Response())->json([
             'status' => 'stopped',
@@ -219,7 +219,7 @@ class AirPlayController
     {
         $deviceId = $params['id'] ?? '';
 
-        $session = $this->airPlayManager->getSession($deviceId);
+        $session = $this->airPlayManager->getSession($deviceId, $request->userId);
         if ($session === null) {
             return (new Response())->json([
                 'device_id' => $deviceId,

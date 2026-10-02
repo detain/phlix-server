@@ -46,6 +46,17 @@ class RokuSession
     /** Polling interval in seconds */
     private const POLL_INTERVAL = 5;
 
+    /**
+     * Consecutive failed player-state polls tolerated before teardown (Device-M1).
+     *
+     * {@see getPlayerState()} swallows every throwable and answers `[]`, so an
+     * unreachable Roku used to poll forever as an orphan timer (the exact leak
+     * class the PlayTo 3-strike from d052b488 already closed for DLNA). `[]` is
+     * also what a live-but-idle device parses to, and for a session that is the
+     * same honest outcome: nothing left to report — tear down.
+     */
+    private const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
     /** @var string Unique session identifier */
     private string $sessionId;
 
@@ -72,6 +83,18 @@ class RokuSession
 
     /** @var int|null Polling timer ID */
     private ?int $pollTimer = null;
+
+    /** @var int Consecutive failed polls since the last success (Device-M1) */
+    private int $consecutivePollFailures = 0;
+
+    /** @var callable(RokuSession): void|null Self-teardown notifier (Device-M1) */
+    private $onSelfDestruct = null;
+
+    /** @var callable(): bool|null Shared-store liveness touch (Device-M1); false = row gone */
+    private $onTouch = null;
+
+    /** @var bool Whether the self-destruct notifier has already fired (fires at most once) */
+    private bool $destructFired = false;
 
     /**
      * @param string $sessionId Unique session identifier
@@ -146,6 +169,7 @@ class RokuSession
             $result = $this->client->playMedia($mediaUrl, $mimeType, $title, $thumbnail);
 
             $this->state = self::STATE_PLAYING;
+            $this->consecutivePollFailures = 0;
             $this->startPolling();
 
             $this->logger->info('Media playing on Roku', [
@@ -365,6 +389,143 @@ class RokuSession
     }
 
     /**
+     * Register the manager-side self-teardown notifier (Device-M1).
+     *
+     * Fired at most once from {@see abandon()} so the owning manager evicts this
+     * object from its map and deletes the shared-store row.
+     *
+     * @param callable(RokuSession): void $handler
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function setSelfDestructHandler(callable $handler): void
+    {
+        $this->onSelfDestruct = $handler;
+    }
+
+    /**
+     * Register the shared-store liveness touch (Device-M1).
+     *
+     * Called after every successful poll; `false` means this session's
+     * `casting_sessions` row is gone (replaced/swept) and the local object must
+     * {@see abandon()} WITHOUT sending any device command.
+     *
+     * @param callable(): bool $handler
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function setTouchHandler(callable $handler): void
+    {
+        $this->onTouch = $handler;
+    }
+
+    /**
+     * Re-attach constructor: restore the media URL that gates progress
+     * reporting, WITHOUT sending any device command. Position is re-derived
+     * from the device on the next poll — the device is the truth.
+     *
+     * @param string $mediaUrl Media URL the session streams
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function restoreMediaContext(string $mediaUrl): void
+    {
+        $this->mediaUrl = $mediaUrl;
+    }
+
+    /**
+     * Re-attach constructor: resume player-state polling on a rebuilt session
+     * (public seam over the private {@see startPolling()}; re-attaching from a
+     * status/control request must never relaunch media).
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function resumePolling(): void
+    {
+        $this->startPolling();
+    }
+
+    /**
+     * Abandon the session WITHOUT touching the device (Device-M1).
+     *
+     * Used both by the strike horizon (device unreachable — a Stop command
+     * would only fail again) and the row-gone path (the device may be serving a
+     * REPLACEMENT session whose playback a Stop would kill). Local timer and
+     * context only, then the self-destruct notifier.
+     *
+     * @return void
+     *
+     * @since 1.5.0
+     */
+    public function abandon(): void
+    {
+        $this->consecutivePollFailures = 0;
+        $this->stopPolling();
+        $this->state = self::STATE_IDLE;
+        $this->fireSelfDestruct();
+    }
+
+    /**
+     * Fire the self-destruct notifier at most once.
+     */
+    private function fireSelfDestruct(): void
+    {
+        if ($this->onSelfDestruct === null || $this->destructFired) {
+            return;
+        }
+
+        $this->destructFired = true;
+        ($this->onSelfDestruct)($this);
+    }
+
+    /**
+     * One poll tick with orphan discipline (Device-M1).
+     *
+     * {@see getPlayerState()} cannot throw — its contract is `[]` on any
+     * failure — so the empty answer doubles as the strike signal, mirroring the
+     * DLNA session's `MAX_CONSECUTIVE_POLL_FAILURES` teardown. After a healthy
+     * poll, the shared-store touch answers whether this row still exists; a
+     * `false` means another worker's start replaced us (or the sweep collected
+     * us) and this object must evict itself rather than poll forever.
+     */
+    private function pollPlayerStateOnce(): void
+    {
+        $state = $this->getPlayerState();
+
+        if ($state === []) {
+            $this->consecutivePollFailures++;
+
+            if ($this->consecutivePollFailures >= self::MAX_CONSECUTIVE_POLL_FAILURES) {
+                $this->logger->error('Roku player-state polling failed repeatedly, ending session', [
+                    'session_id' => $this->sessionId,
+                    'device_id' => $this->device->deviceId,
+                ]);
+                $this->abandon();
+            }
+
+            return;
+        }
+
+        $this->consecutivePollFailures = 0;
+
+        if ($this->onTouch !== null && !($this->onTouch)()) {
+            $this->logger->info('Roku session row gone, abandoning local session', [
+                'session_id' => $this->sessionId,
+                'device_id' => $this->device->deviceId,
+            ]);
+            $this->abandon();
+        }
+    }
+
+    /**
      * Update internal state from player state string.
      *
      * @param string $playerState Player state from ECP
@@ -402,7 +563,7 @@ class RokuSession
 
         try {
             $this->pollTimer = Timer::add(self::POLL_INTERVAL, function (): void {
-                $this->getPlayerState();
+                $this->pollPlayerStateOnce();
             });
 
             $this->logger->debug('Started position polling', [

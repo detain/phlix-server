@@ -269,7 +269,10 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(15, $providers);
+        // Device-M1 (2026-10-02): 15→16 — CastingServicesProvider appended after
+        // Dlna. Without it PHP-DI skips the managers' optional $store param and
+        // the shared casting register silently never activates.
+        $this->assertCount(16, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         // DlnaServicesProvider (added 1.3.0) registers DlnaServer/CdsServer.
         // Without it CdsServer cannot resolve at all and every DLNA browse
@@ -277,6 +280,10 @@ final class ContainerFactoryTest extends TestCase
         $this->assertInstanceOf(
             \Phlix\Common\Container\Providers\DlnaServicesProvider::class,
             $providers[14],
+        );
+        $this->assertInstanceOf(
+            \Phlix\Common\Container\Providers\CastingServicesProvider::class,
+            $providers[15],
         );
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);

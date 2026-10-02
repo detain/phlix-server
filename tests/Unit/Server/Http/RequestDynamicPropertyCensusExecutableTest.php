@@ -528,7 +528,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * tests/Integration/Collections/CollectionsOwnershipMigration112RealDbTest.php).
       * Measured from the phpunit red, not predicted.
       */
-     private const EXPECTED_PHP_FILES = 1945;
+    private const EXPECTED_PHP_FILES = 1945;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -695,7 +695,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * parameter out of the counted roots. Measured from the phpunit red,
       * not predicted.
       */
-     private const EXPECTED_DECLARED_WRITES = 1030;
+    private const EXPECTED_DECLARED_WRITES = 1030;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -147,7 +147,11 @@ class CollectionManager
     }
 
     /**
-     * Get a collection with its items hydrated.
+     * Get a collection with its items hydrated — deliberately UNSCOPED (no
+     * owner clause, mirroring CollectionRepository::findById). The HTTP layer
+     * resolves the row, then runs the ownership predicate in-handler; the
+     * identity-free smart-refresh consumers share this surface and must keep
+     * seeing every row.
      *
      * @param string $id Collection UUID
      * @return CollectionWithItems|null Collection with items or null if not found
@@ -283,5 +287,39 @@ class CollectionManager
     public function findAll(int $limit = 1000, int $offset = 0): array
     {
         return $this->repo->findAll($limit, $offset);
+    }
+
+    /**
+     * Owner-scoped collections for a member: own rows + NULL-owner legacy
+     * rows (migration 112 policy). Active admins never call this — the
+     * controller hands them the raw findAll() set.
+     *
+     * @param string $userId Actor user id (non-empty — the controller guards)
+     * @param int $limit Maximum number of collections to return (default: 1000)
+     * @param int $offset Number of collections to skip (default: 0)
+     * @return array<int, Collection> Array of visible collections
+     *
+     * @since 0.15.0 (collections ownership, Option A)
+     */
+    public function findAllVisibleTo(string $userId, int $limit = 1000, int $offset = 0): array
+    {
+        return $this->repo->findAllVisibleTo($userId, $limit, $offset);
+    }
+
+    /**
+     * Owner-scoped collections for a member within one library: own rows +
+     * NULL-owner legacy rows (mirrors findAllVisibleTo). Active admins never
+     * call this — the controller hands them the raw getCollectionsForLibrary()
+     * set.
+     *
+     * @param string $libraryId Library UUID
+     * @param string $userId Actor user id (non-empty — the controller guards)
+     * @return array<int, Collection> Array of visible collections
+     *
+     * @since 0.15.0 (collections ownership, Option A)
+     */
+    public function getCollectionsForLibraryVisibleTo(string $libraryId, string $userId): array
+    {
+        return $this->repo->findVisibleByLibraryId($libraryId, $userId);
     }
 }

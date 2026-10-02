@@ -2154,24 +2154,26 @@ class Application
      *
      * Wires endpoints for:
      * - CollectionController: index, create, show, update, delete,
-     *   addItem, removeItem, bulkAdd, refresh, forLibrary (10 routes)
+     *   addItem, removeItem, bulkAdd, refresh, forLibrary (10 handlers,
+     *   11 registrations — `create` is also the `/playlists` alias)
      *
-     * M-5 INTERIM posture (owner ruling): `migrations/005_collections.sql`
-     * carries no owner column, so every collection row is server-global.
-     * Until the ownership model lands (open owner decision #6) the SPLIT is:
-     *  - READS (`index`, `show`, `forLibrary`) stay member-accessible under
-     *    {@see \Phlix\Server\Http\Middleware\AuthMiddleware}.
-     *  - WRITES (create/update/delete/addItem/removeItem/bulkAdd/refresh and
-     *    the `/playlists` create alias) require an admin: a lone
-     *    {@see \Phlix\Server\Http\Middleware\AdminMiddleware} group — the same
-     *    idiom as `DELETE /api/v1/media/{id}` (Step 11.6). AdminMiddleware
-     *    itself answers anonymous → 401 `auth.required` and authenticated
-     *    NON-ADMIN → 403 `auth.not_admin` (with a permission-denied audit),
-     *    so no AuthMiddleware companion is stacked on the group.
+     * OWNERSHIP MODEL (shipped 2026-10-02, migration 112, Option A): all
+     * eleven registrations run under the member
+     * {@see \Phlix\Server\Http\Middleware\AuthMiddleware} group; per-row
+     * authorization lives inside CollectionController against the
+     * `collections.created_by` column (migration 112) — members act on rows
+     * they own, ACTIVE admins (UserRepository::findAdminById, never the soft
+     * is_admin flag) act on everything, legacy NULL-owner rows stay visible
+     * to every authenticated user but writable only by active admins, and
+     * every ownership miss replays the byte-identical 404
+     * "Collection not found" that genuine absence produces (no 403 oracle).
+     * List reads are SQL-scoped (findAllVisibleTo / findVisibleByLibraryId);
+     * single reads and writes resolve the unscoped row then run the predicate
+     * in-handler. Pinned by tests/Unit/Server/Core/CollectionsOwnerGateTest.php.
      *
-     * REVERT PATH: when the ownership model ships, fold the write group back
-     * into the member group (one group edit) and gate per-owner inside
-     * CollectionController — pinned by tests/Unit/Server/Core/CollectionsAdminGateTest.php.
+     * History: the interim posture of c53b1490 (2026-10-01) admin-gated the
+     * eight write registrations while decision #6 was open — that gate, and
+     * its documented member 403 regressions, are superseded by this model.
      *
      * @since 0.14.0
      */
@@ -2180,48 +2182,31 @@ class Application
         $controller = $this->getCollectionController();
         $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-        // Collection reads — authentication only (M-5 interim: member-visible).
+        // Collections CRUD — authentication at the gate, ownership in-handler.
         $this->router->group('', function (Router $r) use ($controller): void {
+            // Collection reads
             $r->get('/api/v1/collections', [$controller, 'index']);
             $r->get('/api/v1/collections/{id}', [$controller, 'show']);
 
             // Library-scoped collections
             $r->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
+
+            // Collection CRUD routes
+            $r->post('/api/v1/collections', [$controller, 'create']);
+            $r->put('/api/v1/collections/{id}', [$controller, 'update']);
+            $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
+
+            // Playlist alias (UI-3.8) — creates a collection
+            $r->post('/api/v1/playlists', [$controller, 'create']);
+
+            // Collection item management
+            $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
+            $r->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
+
+            // Bulk operations and smart collection refresh
+            $r->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
+            $r->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
         }, [$authMiddleware]);
-
-        // Collection mutations — admin only (M-5 interim; see docblock for the
-        // revert path). Registered only when the gate resolves: an
-        // unresolvable AdminMiddleware leaves the writes structurally absent
-        // (404), never registered-ungated.
-        if ($this->container !== null) {
-            try {
-                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
-                $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-                $this->router->group(
-                    '',
-                    function (Router $r) use ($controller): void {
-                        // Collection CRUD routes
-                        $r->post('/api/v1/collections', [$controller, 'create']);
-                        $r->put('/api/v1/collections/{id}', [$controller, 'update']);
-                        $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
-
-                        // Playlist alias (UI-3.8) — creates a collection
-                        $r->post('/api/v1/playlists', [$controller, 'create']);
-
-                        // Collection item management
-                        $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
-                        $r->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
-
-                        // Bulk operations and smart collection refresh
-                        $r->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
-                        $r->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
-                    },
-                    [$adminMiddleware]
-                );
-            } catch (\Throwable) {
-                // AdminMiddleware unavailable — write routes not registered
-            }
-        }
     }
 
     /**
@@ -4692,6 +4677,14 @@ class Application
     /**
      * Returns a CollectionController instance.
      *
+     * The container branch wires UserRepository as the controller's
+     * active-admin predicate source (migration 112 ownership model — see
+     * loadCollectionRoutes). The no-container fallback stays UNWIRED on
+     * purpose, mirroring getSyncPlayController: an unwired predicate fails
+     * closed to non-admin, so the degenerate path keeps owner-scoped member
+     * behavior without ever inventing admin omniscience from a hardcoded
+     * credential stack.
+     *
      * @return \Phlix\Server\Http\Controllers\CollectionController The controller instance.
      */
     private function getCollectionController(): \Phlix\Server\Http\Controllers\CollectionController
@@ -4721,7 +4714,9 @@ class Application
 
         /** @var \Phlix\Collections\CollectionManager */
         $collectionManager = $this->container->get(\Phlix\Collections\CollectionManager::class);
-        return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager);
+        /** @var \Phlix\Auth\UserRepository $userRepo */
+        $userRepo = $this->container->get(\Phlix\Auth\UserRepository::class);
+        return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager, $userRepo);
     }
 
     /**

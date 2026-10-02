@@ -516,13 +516,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1941→1942 by the LiveTV parental-gate lane (2026-10-02):
      * +1 file — tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php.
      * Measured from the phpunit red, not predicted.
-     * Re-pinned 1942→1943 by the device-M1 ship-review micro-lane (2026-10-02):
-     * +1 file — tests/Unit/Casting/CastingWiringGuardTest.php (the real-DB
-     * cross-connection proof joined the EXISTING CastingSessionStoreRealDbTest,
-     * so EXPECTED_ADOPTERS stays 65 — per-file census). Measured from the
-     * phpunit red, not predicted.
-     */
-    private const EXPECTED_PHP_FILES = 1944;
+      * Re-pinned 1942→1943 by the device-M1 ship-review micro-lane (2026-10-02):
+      * +1 file — tests/Unit/Casting/CastingWiringGuardTest.php (the real-DB
+      * cross-connection proof joined the EXISTING CastingSessionStoreRealDbTest,
+      * so EXPECTED_ADOPTERS stays 65 — per-file census). Measured from the
+      * phpunit red, not predicted.
+      * Re-pinned 1944→1945 by the collections-ownership lane (2026-10-02):
+      * net +1 — +2 new files (tests/Unit/Server/Core/CollectionsOwnerGateTest.php
+      * replacing the deleted tests/Unit/Server/Core/CollectionsAdminGateTest.php
+      * 1:1, plus the new
+      * tests/Integration/Collections/CollectionsOwnershipMigration112RealDbTest.php).
+      * Measured from the phpunit red, not predicted.
+      */
+     private const EXPECTED_PHP_FILES = 1945;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -671,11 +677,25 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * SyncPlayVisibilityRestTest and SyncPlaySnapshotMembershipsRealDbTest
      * each stamp `method`/`path`/`userId`/`body` (4×2). Measured from the
      * phpunit red, not predicted.
-     * Re-pinned 1032→1033 by the LiveTV parental-gate lane (2026-10-02):
-     * +1 declared-member WRITE — the new test's cappedRequest() fixture
-     * stamps `$req->userId`. Measured from the phpunit red, not predicted.
-     */
-    private const EXPECTED_DECLARED_WRITES = 1033;
+      * Re-pinned 1032→1033 by the LiveTV parental-gate lane (2026-10-02):
+      * +1 declared-member WRITE — the new test's cappedRequest() fixture
+      * stamps `$req->userId`. Measured from the phpunit red, not predicted.
+      * Re-pinned 1033→1030 by the collections-ownership lane (2026-10-02):
+      * net −3 declared-member WRITES — CollectionsOwnerGateTest replaces
+      * CollectionsAdminGateTest at +3 (the dispatch() quintet survives
+      * verbatim; a new structural GET probe adds method/path/body), while
+      * CollectionControllerTest collapses its eight per-test inline body
+      * stamps into one shared request() helper at 2 write sites
+      * (`$request->userId` + conditional `$request->body`, the S435
+      * entry-point shape, S427 license intact). The src/ change reads only
+      * (one new `$request->userId` read inside actorUserId()); the READS
+      * denominator was re-verified green at its existing pin in the same
+      * run — the last-parameter root-registration blind spot documented
+      * under census number 2 keeps `actorUserId(Request $request)`'s single
+      * parameter out of the counted roots. Measured from the phpunit red,
+      * not predicted.
+      */
+     private const EXPECTED_DECLARED_WRITES = 1030;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

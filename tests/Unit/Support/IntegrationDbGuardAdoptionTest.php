@@ -444,7 +444,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // +tests/Integration/Session/SyncPlay/SyncPlaySnapshotMembershipsRealDbTest.php
     // (real JSON_EXTRACT membership read under the members-or-admin filter).
     // Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 65;
+    // 65→66 by the collections-ownership lane (2026-10-02):
+    // +tests/Integration/Collections/CollectionsOwnershipMigration112RealDbTest.php
+    // (real-MySQL proof of the migration-112 owner-column guard, election-
+    // anchored backfill arms, and replay-idempotence through the production
+    // MigrationRunner). Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 66;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

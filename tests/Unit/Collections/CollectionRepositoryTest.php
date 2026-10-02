@@ -23,15 +23,21 @@ class CollectionRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with(
-                $this->stringContains('INSERT INTO collections'),
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO collections'),
+                    // Migration 112: created_by is an INSERT column — a row
+                    // can never be written without stating its owner slot.
+                    $this->stringContains('created_by')
+                ),
                 $this->callback(function ($params) {
-                    return count($params) === 8
+                    return count($params) === 9
                         && $params[0] === 'col-1'
                         && $params[1] === 'Oscar Winners'
                         && $params[2] === 'lib-1'
                         && $params[3] === null
                         && $params[4] === null
-                        && $params[5] === 0;
+                        && $params[5] === 0
+                        && $params[8] === null; // unstamped VO defaults to legacy-NULL owner
                 })
             );
 
@@ -48,6 +54,32 @@ class CollectionRepositoryTest extends TestCase
         );
 
         $repo->insert($collection);
+    }
+
+    public function testInsertPersistsStampedOwner(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('INSERT INTO collections'),
+                $this->callback(function ($params) {
+                    return count($params) === 9 && $params[8] === 'user-7';
+                })
+            );
+
+        $db->method('query')->willReturn([]);
+
+        $repo = new CollectionRepository($db);
+        $repo->insert(new Collection(
+            id: 'col-9',
+            name: 'Stamped',
+            libraryId: 'lib-1',
+            smartPlaylistId: null,
+            parentId: null,
+            sortOrder: 0,
+            createdBy: 'user-7',
+        ));
     }
 
     public function testUpdateModifiesRow(): void
@@ -240,5 +272,81 @@ class CollectionRepositoryTest extends TestCase
         $result = $repo->findAll(50, 10);
 
         $this->assertSame([], $result);
+    }
+
+    // ─── ownership scoping (migration 112) ────────────────────────────────────
+
+    public function testFindAllVisibleToCarriesOwnerClauseAndBindsActorFirst(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('created_by = ?'),
+                    $this->stringContains('OR created_by IS NULL'),
+                    $this->stringContains('LIMIT ? OFFSET ?')
+                ),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 3
+                        && $params[0] === 'user-7'
+                        && $params[1] === 1000
+                        && $params[2] === 0;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new CollectionRepository($db);
+        $this->assertSame([], $repo->findAllVisibleTo('user-7'));
+    }
+
+    public function testFindVisibleByLibraryIdCarriesLibraryAndOwnerClauses(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('library_id = ?'),
+                    $this->stringContains('(created_by = ? OR created_by IS NULL)')
+                ),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 2
+                        && $params[0] === 'lib-1'
+                        && $params[1] === 'user-7';
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new CollectionRepository($db);
+        $this->assertSame([], $repo->findVisibleByLibraryId('lib-1', 'user-7'));
+    }
+
+    /**
+     * ANTI-ROT (explicit, per the lane spec): the identity-free consumers —
+     * the scan-time SmartPlaylistRefreshSubscriber path and the controller's
+     * resolve-then-predicate reads — REQUIRE these statements to stay
+     * owner-blind. A future sweep "helpfully" adding an owner clause here
+     * would silently rot every user's smart collections.
+     */
+    public function testOwnerBlindReadsNeverMentionCreatedBy(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$sqls) {
+                $sqls[] = $sql;
+                return [];
+            });
+
+        $repo = new CollectionRepository($db);
+        $this->assertNull($repo->findById('col-1'));
+        $this->assertSame([], $repo->findBySmartPlaylistId('sp-1'));
+
+        $this->assertCount(2, $sqls);
+        $this->assertStringNotContainsString('created_by', $sqls[0], 'findById must stay unscoped');
+        $this->assertStringNotContainsString('created_by', $sqls[1], 'findBySmartPlaylistId must stay owner-blind');
     }
 }

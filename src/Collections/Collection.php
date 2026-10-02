@@ -31,6 +31,8 @@ final class Collection
      * @param int $sortOrder Display order within parent or library
      * @param \DateTimeImmutable $createdAt Creation timestamp
      * @param \DateTimeImmutable $updatedAt Last update timestamp
+     * @param string|null $createdBy Owning user id (migration 112); null = legacy/unowned —
+     *                               visible to every authenticated user, writable only by active admins
      */
     public function __construct(
         public readonly string $id,
@@ -41,6 +43,7 @@ final class Collection
         public readonly int $sortOrder = 0,
         public readonly \DateTimeImmutable $createdAt = new \DateTimeImmutable(),
         public readonly \DateTimeImmutable $updatedAt = new \DateTimeImmutable(),
+        public readonly ?string $createdBy = null,
     ) {
     }
 
@@ -77,6 +80,9 @@ final class Collection
             : (is_numeric($sortOrderRaw) ? (int)$sortOrderRaw : 0);
         $createdAt = is_string($row['created_at'] ?? null) ? $row['created_at'] : 'now';
         $updatedAt = is_string($row['updated_at'] ?? null) ? $row['updated_at'] : 'now';
+        // Missing key (pre-112 fixtures) and SQL NULL both hydrate to null —
+        // the legacy/unowned policy value, not a parse failure.
+        $createdBy = is_string($row['created_by'] ?? null) ? $row['created_by'] : null;
 
         return new self(
             id: $id,
@@ -87,6 +93,7 @@ final class Collection
             sortOrder: $sortOrder,
             createdAt: new \DateTimeImmutable($createdAt),
             updatedAt: new \DateTimeImmutable($updatedAt),
+            createdBy: $createdBy,
         );
     }
 
@@ -109,6 +116,7 @@ final class Collection
             'is_smart' => $this->isSmart(),
             'created_at' => $this->createdAt->format('Y-m-d H:i:s'),
             'updated_at' => $this->updatedAt->format('Y-m-d H:i:s'),
+            'created_by' => $this->createdBy,
         ];
     }
 }

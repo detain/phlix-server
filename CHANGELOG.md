@@ -507,6 +507,73 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **Collections ownership (Option A): per-user collections replace the interim
+  admin gate — members regain self-service CRUD, foreign rows answer the
+  not-found shape, active admins stay omniscient (owner decision #6 landed,
+  superseding the c53b1490 interim posture from 2026-10-01).**
+  `migrations/112_collections_created_by.sql` adds `collections.created_by
+  CHAR(36) NULL` + `KEY idx_col_owner` (both guarded in the migration-107
+  INFORMATION_SCHEMA/PREPARE idiom) and backfills legacy rows in the same
+  file with pure DML in the migration-109 election shape: the earliest
+  ACTIVE admin (`is_admin = 1 AND status = 'active'`, `ORDER BY created_at
+  ASC, id ASC`) is the anchor; with no active admin the earliest-created
+  user of ANY status takes it; an empty `users` table leaves rows NULL.
+  NULL-row policy (documented + enforced in code): legacy/unowned rows stay
+  visible to every authenticated user but writable only by active admins —
+  the degenerate-case mirror of the interim gate.
+  Authz mirrors the syncplay room-visibility precedent (1ef503b7) exactly
+  where possible: `CollectionController` gains a trailing-optional
+  `?UserRepository $adminUsers = null` predicate source (unwired = fails
+  closed to non-admin) and every handler fails closed to the byte-identical
+  AuthMiddleware 401 envelope (`{error:Unauthorized, code:auth.required}`)
+  when `$request->userId` is absent, even though the routes are already
+  `[AuthMiddleware]`-gated. LIST reads are SQL-scoped: members get the new
+  `CollectionRepository::findAllVisibleTo()` /
+  `findVisibleByLibraryId()` (`created_by = ? OR created_by IS NULL`),
+  active admins get the raw `findAll()` / `findByLibraryId()` sets. SINGLE
+  reads and writes resolve the unscoped row first (`findById` /
+  `getCollectionWithItems` stay deliberately unscoped — pinned owner-clause
+  ABSENT so identity-free consumers keep working) and then run the
+  in-handler predicate; the owner-hit fast path never consults the users
+  table at all (laziness pinned). Every ownership miss — including legacy
+  NULL rows faced by members — replays the existing 404
+  `{error:"Collection not found"}` byte-for-byte: an ownership miss is
+  indistinguishable from absence, no 403 oracle.
+  `create` (both `/api/v1/collections` and the `/playlists` alias) stamps
+  `created_by = actor`; `update` carries the anchor forward immutably.
+  The response envelope gains an additive `created_by` key on the Collection
+  VO (openapi response schemas are generic additionalProperties — no schema
+  edit needed). `Application::loadCollectionRoutes` folds all eleven
+  registrations (8 writes + the create alias + 3 reads) back into the lone
+  member `[AuthMiddleware]` group — the documented one-edit revert path of
+  c53b1490, now superseded by real authz in-handler. `findBySmartPlaylistId`
+  stays OWNER-BLIND by law: the scan-time
+  `SmartPlaylistRefreshSubscriber → SmartPlaylistRefreshHandler` path is
+  identity-free and re-scoping it would silently rot every user's smart
+  collections (SQL-shape pinned).
+  Hub proxy needs ZERO hub changes: the relay path already resolves
+  `$request->userId` from `X-Phlix-Relay-User` server-side
+  (`src/Hub/RelayConsumer.php`), so a member create via hub lands as a
+  correct member-owned create.
+  Cascades: `ApplicationRouterWirePathGuardTest` 8 rows flip
+  `[AdminMiddleware]`→`[AuthMiddleware]` (total 353 routes unchanged);
+  `openapi.yaml` the same 8 `x-phlix-middleware` labels; the census
+  re-pins 1944→1945 files / 1033→1030 writes (measured from red);
+  `CollectionsAdminGateTest` is rewritten as `CollectionsOwnerGateTest`
+  (member-A writes, member-B refused-with-404, admin omniscience, NULL-legacy
+  policy both directions, anonymous fail-closed, stamping, carry-forward,
+  lazy-predicate, structural route-fold proof) plus a real-MySQL
+  `CollectionsOwnershipMigration112RealDbTest` (election arms incl.
+  inactive-admin, backfill, replay-idempotence) and repository SQL-shape
+  pins incl. the owner-blind anti-rot proof.
+  HONEST TRADEOFF (owner-ratified): legacy rows become the earliest-admin's
+  OWNED collections, so members LOSE visibility of pre-existing global lists
+  they could see before the gate era — the non-destructive alternative to
+  deleting shared rows — and GAIN self-service CRUD on their own
+  collections, closing the interim gate's documented member-403 regressions
+  (ui MediaCard playlist flows, mobile CollectionManager CRUD, console
+  deletePlaylist, roku item ops, hub-relay creates).
+
 - **MED-2 (SyncPlay audit): SyncPlay room visibility is members-or-admin — the
   estate's rosters are no longer public to every authenticated user (owner
   ruling).** Before this change the WS `group_list` reply and the REST reads

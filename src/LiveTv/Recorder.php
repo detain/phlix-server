@@ -2183,6 +2183,11 @@ class Recorder
             'storage_path' => RowAccess::stringOrNull($row, 'storage_path'),
             'storage_size' => RowAccess::int($row, 'storage_size'),
             'status' => RowAccess::string($row, 'status'),
+            // The library-side registration link (migration 077). NULL until
+            // RecordingMediaRegistrar registers the completed capture as a
+            // media_items row; the serve-time parental re-check in
+            // LiveTvStreamController keys on exactly this value.
+            'media_item_id' => RowAccess::stringOrNull($row, 'media_item_id'),
             'pid' => self::asPid($row['pid'] ?? null),
             'error_message' => RowAccess::stringOrNull($row, 'error_message'),
             'series_rule_id' => RowAccess::stringOrNull($row, 'series_rule_id'),

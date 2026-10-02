@@ -513,8 +513,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * +3 test files — Unit WS visibility, Unit REST visibility and the
      * Integration real-DB membership proof. Measured from the phpunit red,
      * not predicted.
+     * Re-pinned 1941→1942 by the LiveTV parental-gate lane (2026-10-02):
+     * +1 file — tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php.
+     * Measured from the phpunit red, not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1941;
+    private const EXPECTED_PHP_FILES = 1942;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -564,8 +567,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * declared-member READS — the SyncPlayController read rails now gate on
      * the requester's identity ($request->userId in listGroups + getGroup).
      * Measured from the phpunit red, not predicted.
+     * Re-pinned 446→448 by the LiveTV parental-gate lane (2026-10-02): +2
+     * declared-member READS — LiveTvStreamController::recordingOverCap()
+     * ($request->userId, production) and the new test's anonymous-signature
+     * pin ($anonymous->userId assertNull). Measured from the phpunit red,
+     * not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 446;
+    private const EXPECTED_DECLARED_READS = 448;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -658,8 +666,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * SyncPlayVisibilityRestTest and SyncPlaySnapshotMembershipsRealDbTest
      * each stamp `method`/`path`/`userId`/`body` (4×2). Measured from the
      * phpunit red, not predicted.
+     * Re-pinned 1032→1033 by the LiveTV parental-gate lane (2026-10-02):
+     * +1 declared-member WRITE — the new test's cappedRequest() fixture
+     * stamps `$req->userId`. Measured from the phpunit red, not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1032;
+    private const EXPECTED_DECLARED_WRITES = 1033;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

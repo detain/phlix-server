@@ -4868,7 +4868,16 @@ class Application
         $liveTvManager = $this->container->get(\Phlix\LiveTv\LiveTvManager::class);
         $recorder = $liveTvManager->getRecorder();
 
-        return new \Phlix\Server\Http\Controllers\LiveTvStreamController($recorder, $storagePath);
+        // Wave I parental-gate close: the recording stream route re-checks the
+        // requester's rating cap against the linked media_items row, exactly as
+        // the HLS/DASH controllers get it (trailing-optional param — the
+        // fa30b871 law: container-built `new` sites need the explicit arg,
+        // pinned by LiveTvRecordingParentalGateTest's factory wiring test).
+        return new \Phlix\Server\Http\Controllers\LiveTvStreamController(
+            $recorder,
+            $storagePath,
+            $this->optionalRatingGate()
+        );
     }
 
     /**

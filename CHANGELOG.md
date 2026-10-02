@@ -913,6 +913,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`GET /livetv/recording/{id}/stream` now honours the parental rating cap (wave I close — the audit finding: the serve-time over-cap gate covered HLS/DASH jobs only; LiveTV streams bypassed it).**
+  A completed DVR recording is registered as a `media_items` row by `RecordingMediaRegistrar` and linked
+  back through `livetv_recordings.media_item_id` (migration 077), so the library rails already gate that
+  content: `show`/`getPlaybackInfo`/`getDownload` refuse over-cap items (S235 handler-side deny-all) and the
+  HLS/DASH byte paths re-check via `TranscodeFileServer::transcodeJobOverCap()`. The recording stream route
+  served the IDENTICAL `.ts` bytes from the recording id alone with no gate anywhere on the path — and the
+  recording uuid is not secret: the registered item's absolute `path` (`{storage}/{recordingId}.ts`) ships
+  in the member-facing item payload (`MediaItemShaper::shape()['path']`), so a capped member can derive the
+  bypass URL from any visible row, on top of the leaked/replayed signed-URL posture Finding 1b closed for
+  HLS. `LiveTvStreamController::streamRecording()` now runs the exact same predicate: the recording's linked
+  media id through `RatingGate::resolveFilterForSignedRequest()` (this route sits behind
+  `SignedUrlMiddleware` like `/hls`, so the S235 signature-only opt-out carries over unchanged — bare
+  signed fetches keep playing, pinned) and `isAllowed()`, refusing over-cap streams with a 404 whose body
+  is byte-identical to the existing not-found answer (no existence oracle). An UNLINKED recording
+  (in-progress capture, or a failed/zero-length completion the registrar never registered) has no library
+  counterpart to key on and stays ungated — the trait's stale-job pass-through posture.
+  `Recorder::mapRecording()` surfaces `media_item_id` (the `SELECT *` already carried it) so the gate reads
+  it without a second query. Deliberate non-change, documented in the controller: the timeshift routes
+  serve the live tuner's rolling window — session rows carry only `channel_id`, channels have no rating
+  concept, and `livetv_programs.rating` is ingest/display-only with zero gate consumers estate-wide — so
+  operator-configured lineups remain unrated-by-design; a profile-level channel restriction would be a NEW
+  concept (owner decision), not gate parity. Red-first proofs (outsider over-cap fetch served 200 pre-fix →
+  refused post-fix; admin/owner, within-cap, unlinked and anonymous-signed postures pinned green across the
+  flip) in `tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php`; the Application factory
+  wiring is guarded by a whole-line source pin in the same file (fa30b871 law: a trailing-optional param no
+  factory passes is a silent no-op). No new error codes, no route/middleware tuple moves; census
+  tripwires re-pinned from measured reds (files 1941→1942, declared reads 446→448, writes 1032→1033).
+
 - **`PATCH /api/v1/media/{id}/metadata` now parses `metadata_json` against a closed allowlist at the HTTP boundary (scan residual F-08).**
   The handler merged the user-supplied `metadata_json` object straight into the stored provider blob
   unvalidated. Two exposures closed: (1) any authenticated user (the route is `AuthMiddleware`-only) could

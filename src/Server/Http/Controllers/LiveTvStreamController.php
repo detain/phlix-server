@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\LiveTv\Recorder;
+use Phlix\Media\Library\RatingGate;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -22,6 +23,18 @@ use Phlix\Server\Http\Response;
  *   - GET /livetv/recording/{id}/stream          — completed/in-progress `.ts` file
  *   - GET /livetv/timeshift/{sessionId}/stream    — rolling HLS buffer playlist
  *   - GET /livetv/timeshift/{sessionId}/{segment} — a rolling-buffer HLS segment
+ *
+ * Parental posture (wave I close): the recording route re-checks the
+ * requester's active-profile rating cap against the recording's linked
+ * `media_items` row ({@see Recorder::getRecording()} `media_item_id`, written
+ * by the library registrar) before any file work — the same predicate and the
+ * same S235 signed-request opt-out as the serve-time HLS/DASH re-check in the
+ * {@see TranscodeFileServer} trait, so a library-gated recording is gated on
+ * this route too. The timeshift routes serve the live tuner's rolling
+ * window-over-air: session rows carry only a `channel_id` (no media linkage,
+ * no rating data — channel lineups are operator-configured and unrated), so
+ * there is nothing for a rating gate to key on and they stay ungated by
+ * design.
  *
  * The timeshift buffer is a rolling HLS window written by the DVR recorder
  * (SV-3.1 f-b): a `buffer.m3u8` playlist plus `seg_NNNNN.ts` segments under the
@@ -60,16 +73,25 @@ class LiveTvStreamController
     /** @var string Storage path for recordings */
     private string $storagePath;
 
+    /** @var RatingGate|null Serve-time parental re-check gate (null = gate disabled) */
+    private ?RatingGate $ratingGate;
+
     /**
      * Creates a new LiveTvStreamController.
      *
      * @param Recorder $recorder DVR recorder for path lookups
      * @param string $storagePath Recording storage path (e.g. /var/recordings)
+     * @param RatingGate|null $ratingGate Parental gate for linked recordings;
+     *        trailing-optional so pre-gate 2-arg construction keeps working.
      */
-    public function __construct(Recorder $recorder, string $storagePath = '/var/recordings')
-    {
+    public function __construct(
+        Recorder $recorder,
+        string $storagePath = '/var/recordings',
+        ?RatingGate $ratingGate = null
+    ) {
         $this->recorder = $recorder;
         $this->storagePath = $storagePath;
+        $this->ratingGate = $ratingGate;
     }
 
     /**
@@ -108,6 +130,15 @@ class LiveTvStreamController
             return (new Response())->status(404)->json(['error' => 'Recording not available']);
         }
 
+        // Parental re-check (wave I): a DVR capture registered into the media
+        // library is the SAME rated media the library routes gate — the stream
+        // route must not bypass it. Refusal is byte-identical to the not-found
+        // shape above so an over-cap recording reveals nothing (no existence
+        // oracle), mirroring the serve-time HLS/DASH re-check.
+        if ($this->recordingOverCap($request, $recording)) {
+            return (new Response())->status(404)->json(['error' => 'Recording not found']);
+        }
+
         $filePath = $this->storagePath . '/' . $recordingId . '.ts';
 
         if (!file_exists($filePath)) {
@@ -115,6 +146,47 @@ class LiveTvStreamController
         }
 
         return $this->serveRecordingFile($request, $filePath);
+    }
+
+    /**
+     * Whether the requesting session's parental filter refuses this recording.
+     *
+     * 🔓 S235 NAMED OPT-OUT (deliberate, not an oversight): the route lives in
+     * the SignedUrlMiddleware streaming group — a fetch carrying only a valid
+     * signature and NO session (anonymous `$userId`) resolves to a null filter
+     * via {@see RatingGate::resolveFilterForSignedRequest()} and is SERVED,
+     * exactly like signed HLS/DASH fetches. The signature is the capability.
+     * A session-bearing request (Bearer populates `$request->userId`) is held
+     * to the same active-profile cap as every library route; admins bypass.
+     *
+     * Guards mirror {@see TranscodeFileServer::transcodeJobOverCap()}: gate
+     * disabled → allow; unlinked recording (`media_item_id` NULL — registrar
+     * has not run or the capture failed) → allow, there is no rated row to key
+     * on; empty profile filter → allow (no cap configured).
+     *
+     * @param Request $request HTTP request
+     * @param array<string, mixed> $recording Mapped recording row
+     *
+     * @return bool True when the recording is linked to library media the
+     *              requester's cap refuses
+     */
+    private function recordingOverCap(Request $request, array $recording): bool
+    {
+        if ($this->ratingGate === null) {
+            return false;
+        }
+
+        $mediaItemId = $recording['media_item_id'] ?? null;
+        if (!is_string($mediaItemId) || $mediaItemId === '') {
+            return false;
+        }
+
+        $filter = $this->ratingGate->resolveFilterForSignedRequest($request->userId ?? '');
+        if ($filter === null) {
+            return false;
+        }
+
+        return !$this->ratingGate->isAllowed($mediaItemId, $filter);
     }
 
     /**

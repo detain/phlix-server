@@ -13,7 +13,9 @@ namespace Phlix\Tests\Integration\Casting;
 
 use Phlix\Casting\CastingSessionStore;
 use Phlix\Casting\CastingSessionStoreInterface;
+use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Common\Uuid;
+use Phlix\Tests\Support\Database\IntegrationDbGuard;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -35,6 +37,19 @@ use Workerman\MySQL\Connection;
  * SAFETY: self-heals the table with the verbatim migration-111
  * `CREATE TABLE IF NOT EXISTS`, rows are namespaced by freshly minted UUIDs
  * this file created, and tearDown deletes exactly those session ids.
+ *
+ * ## 2026-10-02 ship-review correction note (forward-only)
+ *
+ * The ship review of e1f1fa05 caught this header PHANTOM-CLAIMING its own
+ * evidence: every test in this file up to that date ran on ONE shared
+ * pool connection, so "cross-connection visibility — the literal fleet
+ * posture of fourteen workers" was prose about the venue, not a proven
+ * property of a test. {@see testCrossConnectionFleetVisibilitySecondSocketSeesFirstsWrites}
+ * now exercises exactly that posture with two independent MySQL connections
+ * (the pool front for the writer, a hand-built {@see PhlixMySQLConnection}
+ * for the reader, the house idiom of
+ * `tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php`), so the
+ * claim above is true as of this commit rather than aspirational.
  */
 final class CastingSessionStoreRealDbTest extends TestCase
 {
@@ -78,6 +93,9 @@ final class CastingSessionStoreRealDbTest extends TestCase
             }
         }
         $this->sessionIds = [];
+        // The second socket of the fleet-posture proof needs no explicit drop:
+        // the vendor Connection has no close API (StatsStorageUniqueKeyUpsertGuardTest
+        // precedent) and the test-local reference rides into the destructor.
         $this->db = null;
     }
 
@@ -274,5 +292,116 @@ final class CastingSessionStoreRealDbTest extends TestCase
         self::assertLessThanOrEqual(5, (int) $rows[0]['age'], 'NOW() defaults stamp the row at write time');
 
         $store->delete($sessionId);
+    }
+
+    /**
+     * The fleet posture itself: TWO independent MySQL connections over the one
+     * register — writer on the shared pool front (connection 1, the socket
+     * every other test in this file used), reader on a hand-built second
+     * socket (connection 2, the house idiom of
+     * `tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php`).
+     *
+     * Each leg proves the store's contract from the OTHER socket's seat:
+     *  1. a row committed through connection 1 is fully readable — hydrated
+     *     record, JSON state and all — through connection 2;
+     *  2. `touch()` from connection 2 lands a real UPDATE on a row this socket
+     *     did not create;
+     *  3. the same-second zero-changed path disambiguates across connections:
+     *     a FRESH store (empty throttle memo) re-stamping a row already stamped
+     *     in the current DB second gets rowCount 0, and the bounded existence
+     *     read must answer "alive" from connection 2's view of connection 1's
+     *     row. (Both legs of that branch return true for a live row; the age
+     *     probe pins the precondition, and leg 4 pins the dead-row leg of the
+     *     same disambiguation deterministically.)
+     *  4. an eviction through connection 1 is a death signal through
+     *     connection 2 — rowCount 0 AND an empty existence read, so the new
+     *     store on the reader socket answers false: the exact "your session is
+     *     gone, evict yourself" answer one worker's poll loop needs when
+     *     another worker's stop deleted the row.
+     */
+    public function testCrossConnectionFleetVisibilitySecondSocketSeesFirstsWrites(): void
+    {
+        $writerDb = $this->db;
+        self::assertNotNull($writerDb);
+        $readerDb = $this->openSecondConnection();
+
+        // Verbatim idempotent DDL again on the reader socket: proves the table
+        // exists to THIS connection and keeps the test runnable in isolation.
+        $readerDb->query(self::SCHEMA_SQL);
+
+        $writer = new CastingSessionStore($writerDb, 1);
+        $reader = new CastingSessionStore($readerDb, 1);
+
+        $sessionId = $this->mint();
+        $deviceId = $this->deviceKey('crossconn');
+        $state = ['media_url' => 'http://fleet-proof/stream', 'friendly_name' => 'Cross TV'];
+
+        // Leg 1 — writer socket INSERT, reader socket full read path.
+        self::assertTrue($writer->insert($sessionId, 'playto', $deviceId, 'user-cross', $state));
+
+        $record = $reader->find('playto', $deviceId);
+        self::assertNotNull($record, 'a row committed on connection 1 must be visible on an independent connection 2');
+        self::assertSame($sessionId, $record->sessionId);
+        self::assertSame('user-cross', $record->userId);
+        self::assertSame(
+            self::canonicalize($state),
+            self::canonicalize($record->state),
+            'the JSON payload crosses the connection boundary key-for-key',
+        );
+
+        // Leg 2 — a real UPDATE from socket 2 against socket 1's row.
+        self::assertTrue($reader->touch($sessionId), 'touch from the reader socket must succeed on the writer row');
+
+        // Leg 3 — precondition probe then the same-second re-stamp through a
+        // fresh store (its throttle memo is empty, so the UPDATE really runs).
+        $age = $readerDb->query(
+            'SELECT TIMESTAMPDIFF(SECOND, last_seen_at, NOW()) AS age FROM casting_sessions WHERE session_id = ?',
+            [$sessionId],
+        );
+        self::assertIsArray($age);
+        self::assertCount(1, $age, 'connection 2 reads its own just-stamped row');
+        self::assertLessThanOrEqual(
+            1,
+            (int) $age[0]['age'],
+            'leg 2 stamped within the current or immediately previous DB second',
+        );
+
+        self::assertTrue(
+            (new CastingSessionStore($readerDb, 1))->touch($sessionId),
+            'a same-second re-stamp across connections is not a death signal — the SELECT-1 '
+            . 'existence read must answer from connection 2\'s view of the row connection 1 created',
+        );
+
+        // Leg 4 — eviction through socket 1 is death for socket 2 (deterministic
+        // negative leg of the same zero-affected disambiguation).
+        $writer->delete($sessionId);
+
+        self::assertFalse(
+            (new CastingSessionStore($readerDb, 1))->touch($sessionId),
+            'after connection 1 deletes the row, connection 2 must report the eviction',
+        );
+        self::assertNull($reader->find('playto', $deviceId), 'the device key is free on the reader socket too');
+    }
+
+    /**
+     * Open a second, fully independent connection to the same configured DB.
+     *
+     * The {@see IntegrationDbGuard} call in setUp has already separated
+     * "absent" (skip) from "unusable" (red) for this venue, so the direct
+     * construction below cannot resurrect the S126 defect; the `SELECT 1`
+     * round-trip proves this socket is genuinely live on its own.
+     */
+    private function openSecondConnection(): PhlixMySQLConnection
+    {
+        $reader = new PhlixMySQLConnection(
+            IntegrationDbGuard::host(),
+            IntegrationDbGuard::port(),
+            (string) (getenv('DB_USER') ?: 'root'),
+            (string) (getenv('DB_PASSWORD') ?: ''),
+            (string) (getenv('DB_DATABASE') ?: 'phlix_test'),
+        );
+        $reader->query('SELECT 1');
+
+        return $reader;
     }
 }

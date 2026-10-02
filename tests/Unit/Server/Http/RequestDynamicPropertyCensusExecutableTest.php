@@ -516,8 +516,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Re-pinned 1941→1942 by the LiveTV parental-gate lane (2026-10-02):
      * +1 file — tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php.
      * Measured from the phpunit red, not predicted.
+     * Re-pinned 1942→1943 by the device-M1 ship-review micro-lane (2026-10-02):
+     * +1 file — tests/Unit/Casting/CastingWiringGuardTest.php (the real-DB
+     * cross-connection proof joined the EXISTING CastingSessionStoreRealDbTest,
+     * so EXPECTED_ADOPTERS stays 65 — per-file census). Measured from the
+     * phpunit red, not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1942;
+    private const EXPECTED_PHP_FILES = 1943;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

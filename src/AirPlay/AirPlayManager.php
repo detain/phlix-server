@@ -33,8 +33,16 @@ use Phlix\Common\Uuid;
  * object is pure metadata over a per-call transport. So there is no 409
  * "stale_worker" refusal posture needed here and no orphan-timer vector to
  * police: a second worker rebuilds the identical control surface from
- * host/raopPort and re-issues whatever the request asks for (pause = FLUSH,
- * resume/stop = their own RAOP requests). With the shared store attached,
+ * host/raopPort and re-issues whatever the request asks for — with the wire
+ * honesty the ship review demanded: of those control calls, only pause's
+ * FLUSH currently reaches the device through RaopClient; resume and stop are
+ * answered by AirPlaySession's private RECORD/TEARDOWN wire stubs, which
+ * return response arrays without opening a socket (documented at
+ * AirPlaySession::sendRecord()/sendTeardown()). The RE-ATTACH claim is
+ * unaffected — a session rebuilt on another worker behaves byte-identically
+ * to the same request on the originating worker, stubs included; what the
+ * re-attach does NOT conjure is a control command the transport never sent.
+ * With the shared store attached,
  * starts register, control ops verify ownership, and local misses re-attach
  * from the row; without one the manager is byte-identical to its pre-Device-M1
  * self.

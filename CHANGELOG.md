@@ -65,6 +65,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   rotated from the phpunit red: files 1927→1938, declared reads 422→444, guard adopters
   63→64, INSERT tokens 99→101 / consumed 18→20, provider stack 15→16.
 
+- **Device-M1 ship review (2026-10-02) — three follow-ups closed, forward note on
+  the entry above.** (1) The "cross-connection visibility" claim in both the
+  e1f1fa05 commit message and the `CastingSessionStoreRealDbTest` header was
+  PHANTOM: every test in that file ran on one shared connection. Now genuinely
+  proven — `testCrossConnectionFleetVisibilitySecondSocketSeesFirstsWrites` opens a
+  second, independent `PhlixMySQLConnection` (house idiom of
+  `StatsStorageUniqueKeyUpsertGuardTest`): writer on the pool front, reader on the
+  second socket; legs cover cross-socket full read, real cross-socket touch, the
+  same-second zero-changed → SELECT-1 disambiguation answering from the OTHER
+  socket's view, and the deterministic eviction leg (delete on socket 1 →
+  `touch()` false on socket 2). Mutation-proven: pointing the reader socket at a
+  same-schema scratch DB reddens leg 1. (2) New
+  `tests/Unit/Casting/CastingWiringGuardTest.php` mirrors
+  `AuthManagerSessionTeardownWiringGuardTest`'s exact construction (real
+  `ContainerFactory::defaultProviders()`, only `Connection` doubled): all four
+  managers resolved FROM THE CONTAINER carry a live shared `CastingSessionStore`
+  (mutation-proven: retiring the provider registration reddens it — the PHP-DI
+  skips-optional-params silent-null class of defect pinned for casting).
+  (3) `AirPlayManager`'s re-attach docblock no longer overstates the wire: of the
+  control calls, only pause's FLUSH actually reaches the device; resume/stop are
+  answered by `AirPlaySession`'s private RECORD/TEARDOWN wire stubs, now cited as
+  such. Census: files 1942→1943 (the one new test file), guard adopters unchanged
+  at 65 (the cross-connection proof joined the existing real-DB file).
+
 - **NAT-PMP is now a full RFC 6886 citizen: the two documented gaps — §3.3 lease
 
 - **NAT-PMP is now a full RFC 6886 citizen: the two documented gaps — §3.3 lease

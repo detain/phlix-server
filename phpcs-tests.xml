@@ -7,7 +7,9 @@
         with zero exclusions.
 
         THE MEASUREMENT THAT CHOSE THESE TWO EXCLUSIONS (origin/master @ 12bdea6c,
-        phpcs 3.13.5, `--standard=PSR12 tests/`):
+        phpcs 3.13.5, one-off `--standard=PSR12 tests/ --report=summary` run — the
+        totals footer and the per-sniff table quoted below are `summary`-report
+        output, not what the CI gate's default `full` report prints):
 
             A TOTAL OF 2155 ERRORS AND 288 WARNINGS WERE FOUND IN 293 FILES
 
@@ -48,8 +50,14 @@
         `-n` on the src/ gate SUPPRESSED 8 real PSR-12 warnings for months. So the
         `ignore_warnings_on_exit` config below is set instead — it changes only the exit
         code. Every warning is still counted and still printed in the job log, and the
-        "A TOTAL OF n ERRORS AND m WARNINGS" line is the thing to read. Do NOT add `-n`
-        and do NOT exclude Generic.Files.LineLength; src/ keeps both, and so does this.
+        per-file "FOUND n ERRORS … AFFECTING m LINES" footers of the default `full`
+        report are the lines to read there. No "A TOTAL OF" line ever appears in this
+        job's log — that footer belongs to the `summary` report, which the CI invocation
+        (`--standard=phpcs-tests.xml --colors`) never requests; a grep for it could
+        never fire. The gate is phpcs's nonzero exit code, read directly by the runner,
+        not a log line (see the corrected step comment in
+        .github/workflows/coding-standards.yml @ 4c96f085). Do NOT add `-n` and do NOT
+        exclude Generic.Files.LineLength; src/ keeps both, and so does this.
 
         The two remaining errors are carved out per-file below, each naming the thing
         that makes fixing it wrong rather than merely inconvenient. The 2 SideEffects

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Session\SyncPlay;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Controllers\SyncPlayController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\WebSocket\ConnectionInterface;
@@ -117,7 +118,7 @@ final class SyncPlayWriteThroughBridgeTest extends TestCase
         // no hydrate/bridge reads from the DB (its REST facts arrive only as
         // frames).
         $httpManager = new SyncPlayManager();
-        $wsManager = new SyncPlayManager();
+        $wsManager = new SyncPlayManager(adminUsers: $this->probeAdminRepo());
         $wsManager->setSnapshotService(new SyncPlaySnapshotService());
         $this->armWsApplier($wsManager);
 
@@ -206,7 +207,7 @@ final class SyncPlayWriteThroughBridgeTest extends TestCase
     public function test_a_rest_only_mutation_reddens_the_served_state_assertion(): void
     {
         $httpManager = new SyncPlayManager();
-        $wsManager = new SyncPlayManager();
+        $wsManager = new SyncPlayManager(adminUsers: $this->probeAdminRepo());
         $this->armWsApplier($wsManager);
 
         // LEG A (the reddener): production write-through rail — visible.
@@ -307,6 +308,24 @@ final class SyncPlayWriteThroughBridgeTest extends TestCase
         }
 
         return $ids;
+    }
+
+    /**
+     * MED-2 awareness: the served-state probe connects as 'jwt-probe', a
+     * non-member of every room. Now that group_list visibility is
+     * members-or-admin, the probe is wired as an ACTIVE admin so it keeps
+     * mirroring the worker's full table — this venue's subject is write-through
+     * CONVERGENCE, not visibility (the members-or-admin law is pinned in
+     * SyncPlayGroupListVisibilityTest; do not loosen this double to "test" it).
+     */
+    private function probeAdminRepo(): UserRepository
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findAdminById')->willReturnCallback(
+            static fn (string $id): ?array => $id === 'jwt-probe' ? ['id' => $id, 'is_admin' => 1] : null
+        );
+
+        return $repo;
     }
 
     /**

@@ -75,6 +75,31 @@ final class InMemorySyncPlaySnapshotService extends SyncPlaySnapshotService
         return $groups;
     }
 
+    /**
+     * Membership view over the retained rows — the in-memory stand-in for the
+     * real store's JSON_EXTRACT read (MED-2 visibility filtering). The member
+     * keys of a serialized GroupState are the JWT-subject user ids, exactly
+     * what the real store's `$.members` dict yields.
+     *
+     * @return array<string, list<string>> group id → list of member user ids
+     */
+    public function listGroupMemberships(): array
+    {
+        $memberships = [];
+        foreach ($this->rows as $groupId => $serialized) {
+            $members = $serialized['members'] ?? [];
+            $ids = [];
+            foreach (array_keys(is_array($members) ? $members : []) as $memberId) {
+                if (is_string($memberId)) {
+                    $ids[] = $memberId;
+                }
+            }
+            $memberships[$groupId] = $ids;
+        }
+
+        return $memberships;
+    }
+
     /** @return array<string, array<string, mixed>> retained rows (assertion surface) */
     public function rows(): array
     {

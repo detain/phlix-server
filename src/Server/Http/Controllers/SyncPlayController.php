@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Session\SyncPlay\SyncPlayBridgePublisher;
@@ -76,6 +77,15 @@ class SyncPlayController
     private ?SyncPlayBridgePublisher $bridgePublisher;
 
     /**
+     * MED-2 (SyncPlay audit): active-admin lookup for the read-rail visibility
+     * filter. Null (legacy/unwired construction) FAILS CLOSED — nobody resolves
+     * as admin, so reads narrow to members-only instead of staying public.
+     *
+     * @var UserRepository|null
+     */
+    private ?UserRepository $adminUsers;
+
+    /**
      * Creates a new SyncPlayController instance.
      *
      * @param SyncPlayManager         $syncPlayManager The SyncPlay manager (mutations)
@@ -83,23 +93,34 @@ class SyncPlayController
      * @param SyncPlayBridgePublisher|null $bridgePublisher Write-through publisher to the WS
      *     worker (S445); null leaves the rail persist-only (the WS worker self-heals on that
      *     group's next mutation) — used by legacy/no-container construction paths.
+     * @param UserRepository|null $adminUsers Active-admin predicate for the MED-2
+     *     read-rail visibility filter (trailing-optional: existing constructions
+     *     stay legal and fail closed to members-only).
      */
     public function __construct(
         SyncPlayManager $syncPlayManager,
         SyncPlaySnapshotService $snapshotService,
-        ?SyncPlayBridgePublisher $bridgePublisher = null
+        ?SyncPlayBridgePublisher $bridgePublisher = null,
+        ?UserRepository $adminUsers = null
     ) {
         $this->syncPlayManager = $syncPlayManager;
         $this->snapshotService = $snapshotService;
         $this->bridgePublisher = $bridgePublisher;
+        $this->adminUsers = $adminUsers;
     }
 
     /**
-     * List all available SyncPlay groups.
+     * List the SyncPlay groups VISIBLE to the requester (MED-2: members-or-admin).
      *
      * GET /api/v1/syncplay/groups
      *
-     * Reads from the database snapshot published by the authoritative WS worker.
+     * Reads from the database snapshot published by the authoritative WS worker,
+     * then keeps only rooms whose member set contains the requester's JWT subject
+     * — unless the requester is an ACTIVE admin ({@see UserRepository::findAdminById()},
+     * the same S1-hardened predicate the admin routes enforce), who sees all.
+     * Non-members get their (possibly empty) slice, never an error — discovery
+     * of other people's rooms is exactly what the ruling removed. Joining a
+     * KNOWN room is unaffected.
      *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters (unused)
@@ -108,6 +129,16 @@ class SyncPlayController
     public function listGroups(Request $request, array $params): Response
     {
         $groups = $this->snapshotService->listGroups();
+
+        $userId = $request->userId ?? '';
+        if (!$this->isAdminUser($userId)) {
+            $memberships = $this->snapshotService->listGroupMemberships();
+            $groups = array_values(array_filter(
+                $groups,
+                static fn (array $group): bool => in_array($userId, $memberships[$group['id']] ?? [], true)
+            ));
+        }
+
         return (new Response())->json(['groups' => $groups]);
     }
 
@@ -161,11 +192,20 @@ class SyncPlayController
     }
 
     /**
-     * Get details of a specific SyncPlay group.
+     * Get the state of one SyncPlay group — members-or-admin only (MED-2).
      *
      * GET /api/v1/syncplay/groups/{id}
      *
-     * Reads from the database snapshot published by the authoritative WS worker.
+     * Reads the full state (including the members roster) from the database
+     * snapshot published by the authoritative WS worker. The roster is exactly
+     * why this rail is now visibility-gated: only a member of the room (or an
+     * ACTIVE admin, for support workflows) may read it.
+     *
+     * Refusal shape law: a non-member asking for an EXISTING room receives the
+     * byte-identical 404 a missing room gets. A 403 would confirm the id's
+     * existence and turn this endpoint into a group-id oracle; the pre-existing
+     * miss arm is the honest, existence-agnostic answer (mirrors how the audit
+     * directive and the codebase's privacy refusals read).
      *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters with 'id' for group ID
@@ -182,6 +222,14 @@ class SyncPlayController
         $group = $this->snapshotService->getGroupState($groupId);
 
         if ($group === null) {
+            return (new Response())->status(404)->json(['error' => 'Group not found']);
+        }
+
+        $userId = $request->userId ?? '';
+        $isMember = array_key_exists($userId, is_array($group['members'] ?? null) ? $group['members'] : []);
+        if (!$isMember && !$this->isAdminUser($userId)) {
+            // Existence-agnostic refusal — same envelope, same status as the
+            // missing-room arm above (MED-2: no id oracle, no roster exfil).
             return (new Response())->status(404)->json(['error' => 'Group not found']);
         }
 
@@ -342,5 +390,22 @@ class SyncPlayController
 
         $this->snapshotService->publishGroup($group);
         $this->bridgePublisher?->publishUpsert($group);
+    }
+
+    /**
+     * Active-admin predicate for the MED-2 read-rail visibility filter.
+     *
+     * Uses {@see UserRepository::findAdminById()} — the S1-hardened, active-only
+     * lookup the AdminMiddleware routes enforce (is_admin = 1 AND status = 'active'),
+     * never a soft flag from a session or token claim. Fail-closed in both
+     * directions: empty user id and unwired repository are never admin.
+     */
+    private function isAdminUser(string $userId): bool
+    {
+        if ($userId === '' || $this->adminUsers === null) {
+            return false;
+        }
+
+        return $this->adminUsers->findAdminById($userId) !== null;
     }
 }

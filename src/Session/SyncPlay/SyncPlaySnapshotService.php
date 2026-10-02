@@ -160,6 +160,54 @@ class SyncPlaySnapshotService
     }
 
     /**
+     * Group id → member user-ids, for every snapshotted room (MED-2 visibility).
+     *
+     * Reads the members dict keys out of `serialized_state` server-side
+     * (MySQL JSON_EXTRACT over the real JSON column — no state blobs cross
+     * the wire for a membership question). The member keys are the JWT-subject
+     * user ids exactly as {@see \Phlix\Session\SyncPlay\GroupState} indexes them,
+     * which is what the REST read rails compare `$request->userId` against.
+     *
+     * @return array<string, list<string>> group id → list of member user ids
+     */
+    public function listGroupMemberships(): array
+    {
+        $db = $this->getDb();
+
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $db->query(
+            "SELECT group_id, JSON_EXTRACT(serialized_state, '\$.members') AS members
+             FROM syncplay_snapshots"
+        );
+
+        $memberships = [];
+        foreach ($rows as $row) {
+            $groupId = $row['group_id'] ?? null;
+            if (!is_string($groupId)) {
+                continue;
+            }
+
+            $members = $row['members'] ?? null;
+            if (is_string($members)) {
+                $decoded = json_decode($members, true);
+                $members = is_array($decoded) ? $decoded : [];
+            }
+
+            $ids = [];
+            if (is_array($members)) {
+                foreach (array_keys($members) as $memberId) {
+                    if (is_string($memberId)) {
+                        $ids[] = $memberId;
+                    }
+                }
+            }
+            $memberships[$groupId] = $ids;
+        }
+
+        return $memberships;
+    }
+
+    /**
      * Get a single group snapshot by ID.
      *
      * Returns the full serialized state, deserialized into the same format

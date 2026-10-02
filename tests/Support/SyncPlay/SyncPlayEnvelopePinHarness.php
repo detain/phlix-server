@@ -190,6 +190,25 @@ final class SyncPlayEnvelopePinHarness
                         return [];
                     }
 
+                    // MED-2 visibility: the read rails (listGroups/getGroup) now
+                    // resolve the active-admin predicate against `users` before
+                    // answering. 'pin_user' is enumerated as an ACTIVE ADMIN —
+                    // admins may read every room, so the pinned response bytes
+                    // stay identical to the pre-MED-2 dump (and the contracts
+                    // digest cross-check is untouched). Any other id resolves
+                    // non-admin, mirroring UserRepository::findAdminById's rows.
+                    if (
+                        str_contains($sql, 'SELECT * FROM users WHERE id = ?')
+                        && str_contains($sql, "AND is_admin = 1 AND status = 'active'")
+                    ) {
+                        $lookupId = is_array($values) ? ($values[0] ?? null) : null;
+                        if ($lookupId === 'pin_user') {
+                            return [['id' => 'pin_user', 'is_admin' => 1, 'status' => 'active']];
+                        }
+
+                        return [];
+                    }
+
                     throw new \RuntimeException(sprintf(
                         "SyncPlayEnvelopePin venue: unexpected SQL reached the Connection double: %s\n"
                         . 'This venue doubles ONLY MySQL and enumerates ONLY the snapshot SELECTs plus the '

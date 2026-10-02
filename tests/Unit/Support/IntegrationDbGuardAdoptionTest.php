@@ -440,7 +440,11 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // 63→64 by the device-M1 shared casting-register lane (2026-10-02):
     // +tests/Integration/Casting/CastingSessionStoreRealDbTest.php (real-MySQL
     // proof of the casting_sessions register). Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 64;
+    // 64→65 by the MED-2 room-visibility lane (2026-10-02):
+    // +tests/Integration/Session/SyncPlay/SyncPlaySnapshotMembershipsRealDbTest.php
+    // (real JSON_EXTRACT membership read under the members-or-admin filter).
+    // Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 65;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -628,7 +628,13 @@ try {
         // message handler so SyncPlay message types are routed to their handlers.
         /** @var \Phlix\Common\Logger\StructuredLogger $logger */
         $logger = $container->get('logger.websocket');
-        $syncPlayManager = new \Phlix\Session\SyncPlay\SyncPlayManager($logger);
+        // MED-2 (SyncPlay audit): group_list visibility is members-or-admin —
+        // wire the same active-only admin predicate (findAdminById) the REST
+        // admin routes enforce so admins still see every room from the WS rail.
+        $syncPlayManager = new \Phlix\Session\SyncPlay\SyncPlayManager(
+            $logger,
+            adminUsers: $container->get(\Phlix\Auth\UserRepository::class),
+        );
         $syncPlayManager->initialize($messageHandler);
 
         // SP5: Set the snapshot service so mutations are published to the DB

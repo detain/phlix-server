@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Session\SyncPlay;
 
+use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;
@@ -109,6 +110,15 @@ class SyncPlayManager
     private ?SyncPlaySnapshotService $snapshotService = null;
 
     /**
+     * MED-2 (SyncPlay audit): active-admin lookup used by the `group_list`
+     * visibility filter. Null (legacy/unwired constructions) FAILS CLOSED —
+     * nobody resolves as admin, so the members-only rule still holds.
+     *
+     * @var UserRepository|null
+     */
+    private ?UserRepository $adminUsers;
+
+    /**
      * S445 write-through bridge: last applied frame stamp per group id
      * (group id → issued_at_ms of the newest applied/adopted bridge frame).
      * Re-delivered or out-of-order frames carry an older-or-equal stamp and
@@ -122,10 +132,12 @@ class SyncPlayManager
 
     public function __construct(
         ?StructuredLogger $logger = null,
-        int $positionTolerance = self::DEFAULT_POSITION_TOLERANCE
+        int $positionTolerance = self::DEFAULT_POSITION_TOLERANCE,
+        ?UserRepository $adminUsers = null
     ) {
         $this->logger = $logger;
         $this->positionTolerance = $positionTolerance;
+        $this->adminUsers = $adminUsers;
         $this->timeSync = new TimeSync();
     }
 
@@ -977,11 +989,16 @@ class SyncPlayManager
     }
 
     /**
-     * List all available SyncPlay groups.
+     * List all available SyncPlay groups — UNFILTERED internal accessor.
      *
      * Returns a summary of all groups including member count, password protection,
      * current media, and playback state. Does not include password-protected
      * details unless verified.
+     *
+     * MED-2 note: this is NOT a visibility-gated wire surface. The WS
+     * `group_list` reply answers from {@see visibleGroupSummaries()} instead
+     * (members-or-admin); nothing on a response path to an untrusted caller
+     * may call this method directly.
      *
      * @return array<int, array{id: string, name: string, member_count: int, has_password: bool,
      *     current_media: string|null, is_playing: bool}> Array of group summaries
@@ -999,14 +1016,7 @@ class SyncPlayManager
         $list = [];
 
         foreach ($this->groups as $id => $group) {
-            $list[] = [
-                'id' => $id,
-                'name' => $group->getName(),
-                'member_count' => $group->getMemberCount(),
-                'has_password' => $group->hasPassword(),
-                'current_media' => $group->getCurrentMediaId(),
-                'is_playing' => $group->isPlaying(),
-            ];
+            $list[] = $this->groupSummary($id, $group);
         }
 
         return $list;
@@ -1655,12 +1665,72 @@ class SyncPlayManager
             return;
         }
 
-        $groups = $this->listGroups();
+        $groups = $this->visibleGroupSummaries($memberId);
 
         $connection->send(Messages::frame(Messages::TYPE_GROUP_LIST, [
             'groups' => $groups,
             'count' => count($groups),
         ]));
+    }
+
+    /**
+     * MED-2 (SyncPlay audit) — room visibility is members-or-admin.
+     *
+     * Owner ruling: `group_list` exposes only rooms the requester is a member
+     * of, unless the requester is an ACTIVE admin (the S1-hardened
+     * {@see UserRepository::findAdminById()} predicate the REST admin paths
+     * use — NOT the soft is_admin flag read). The admin lookup runs lazily
+     * once, and only if the requester is outside at least one room.
+     *
+     * Consequence (deliberate): non-members lose room DISCOVERY — the ui
+     * watch-party browse list shows only the viewer's own rooms. Joining a
+     * KNOWN room by id (+password) is untouched; this gates reading, not
+     * joining. {@see listGroups()} stays raw for admin/bridge internals.
+     *
+     * Fail-closed: with no admin repository wired, isAdmin is permanently
+     * false, so the filter narrows exposure instead of widening it.
+     *
+     * @return array<int, array{id: string, name: string, member_count: int, has_password: bool,
+     *     current_media: string|null, is_playing: bool}>
+     */
+    private function visibleGroupSummaries(string $memberId): array
+    {
+        $isAdmin = null;
+
+        $visible = [];
+        foreach ($this->groups as $id => $group) {
+            if ($group->hasMember($memberId)) {
+                $visible[] = $this->groupSummary($id, $group);
+                continue;
+            }
+
+            // Cheapest correct order: only ask "is this an admin?" once a
+            // foreign room actually shows up (DB hit, so amortize it).
+            $isAdmin ??= $this->adminUsers?->findAdminById($memberId) !== null;
+            if ($isAdmin) {
+                $visible[] = $this->groupSummary($id, $group);
+            }
+        }
+
+        return $visible;
+    }
+
+    /**
+     * Wire-shaped summary of one group (the six keys group_list has always carried).
+     *
+     * @return array{id: string, name: string, member_count: int, has_password: bool,
+     *     current_media: string|null, is_playing: bool}
+     */
+    private function groupSummary(string $id, GroupState $group): array
+    {
+        return [
+            'id' => $id,
+            'name' => $group->getName(),
+            'member_count' => $group->getMemberCount(),
+            'has_password' => $group->hasPassword(),
+            'current_media' => $group->getCurrentMediaId(),
+            'is_playing' => $group->isPlaying(),
+        ];
     }
 
     /**

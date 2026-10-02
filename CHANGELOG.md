@@ -483,6 +483,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **MED-2 (SyncPlay audit): SyncPlay room visibility is members-or-admin — the
+  estate's rosters are no longer public to every authenticated user (owner
+  ruling).** Before this change the WS `group_list` reply and the REST reads
+  `GET /api/v1/syncplay/groups` + `GET /api/v1/syncplay/groups/{id}` served EVERY
+  room to ANY authenticated caller — including password-protected rooms' names,
+  member counts, what's-watching and, via the single-room state, the full member
+  roster (user-ids + display names). Now: `SyncPlayManager::handleGroupList` answers
+  from a new `visibleGroupSummaries()` (member of the room, or ACTIVE admin via the
+  S1-hardened `UserRepository::findAdminById` — never a soft flag; the admin lookup
+  runs lazily once per request, only when a foreign room is present);
+  `SyncPlaySnapshotService::listGroupMemberships()` exposes group-id → member-ids via
+  a server-side `JSON_EXTRACT(serialized_state,'$.members')` over the real JSON
+  column; and `SyncPlayController::listGroups` filters the same predicate on
+  `$request->userId` while `getGroup` refuses non-members with the EXISTING
+  missing-room 404 envelope, byte-identical, so the endpoint never becomes a
+  group-id oracle (deliberate 404-not-403: a 403 would confirm the id exists).
+  Both admin predicates arrive as trailing-optional ctor params (estate DI law —
+  20+ existing constructions stay legal) and FAIL CLOSED: unwired = members-only,
+  never public. Wired where authority lives: `start.php` §4a (the :8097 WS worker),
+  `SessionServicesProvider` (`constructorParameter('adminUsers', ...)` — PHP-DI
+  skips optional params), `Application::getSyncPlayController` (HTTP container
+  path). JOINING IS UNTOUCHED: a non-member who knows a room id (+password) still
+  joins over both transports — this gates READING/discovery, not joining — and
+  creation, leaving and host-transfer rails are unchanged.
+  DOCUMENTED CONSEQUENCE (the ruling's product effect): non-members lose room
+  DISCOVERY — the browse list is now own-rooms-only for regular users (the phlix-ui
+  watch-party modal's client-side public filter receives an empty set for
+  outsiders); admins and members see exactly their own slice. Wire shape is
+  unchanged (same six summary keys, same frames), so old clients degrade to a
+  shorter list, never a parse break. SPEC.md §syncplay_group_list note lands in
+  phlix-syncplay as a separate docs commit. Tests: new
+  `SyncPlayGroupListVisibilityTest` (WS, 6) + `SyncPlayVisibilityRestTest` (REST, 8)
+  + `SyncPlaySnapshotMembershipsRealDbTest` (real MySQL JSON read, 3; guard census
+  64→65); the S415 envelope pin venue enumerates the new admin SELECT with
+  `pin_user` pinned as ACTIVE admin so the byte-pinned envelopes and the contracts
+  digest cross-check are untouched; the write-through bridge probe is likewise
+  admin-wired (its subject is convergence, not visibility).
+
 - **M-5 interim gate: collection MUTATIONS are admin-only while the collections
   ownership model stays unresolved (open owner decision #6); the three reads stay
   member-accessible.** `migrations/005_collections.sql` has no owner column, so every

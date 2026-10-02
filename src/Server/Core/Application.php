@@ -1569,8 +1569,12 @@ class Application
         $syncPlayManager = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayManager::class);
         /** @var \Phlix\Session\SyncPlay\SyncPlayBridgePublisher|null */
         $bridgePublisher = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayBridgePublisher::class);
+        // MED-2: active-admin predicate for the read-rail visibility filter
+        // (the same UserRepository AdminMiddleware enforces with).
+        /** @var \Phlix\Auth\UserRepository $adminUsers */
+        $adminUsers = $this->container->get(\Phlix\Auth\UserRepository::class);
 
-        return new SyncPlayController($syncPlayManager, $snapshotService, $bridgePublisher);
+        return new SyncPlayController($syncPlayManager, $snapshotService, $bridgePublisher, $adminUsers);
     }
 
     /**

@@ -123,7 +123,11 @@ final class SessionServicesProvider implements ServiceProviderInterface
             // from the WS process remains the point - the WS worker must never
             // become a DB reader (owner ruling 2026-09-12).
             SyncPlayManager::class => autowire()
-                ->constructorParameter('logger', get('logger.session')),
+                ->constructorParameter('logger', get('logger.session'))
+                // MED-2: group_list visibility is members-or-admin; PHP-DI skips
+                // optional ctor params during autowiring, so the admin predicate
+                // must be named explicitly (active-only findAdminById repo).
+                ->constructorParameter('adminUsers', get(\Phlix\Auth\UserRepository::class)),
 
             // S445 bridge publisher: see $bridgePublisher above (the closure is
             // hoisted out of the definitions array purely for line budget).

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\WebSocket;
 
+use Phlix\Auth\UserRepository;
 use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Session\SyncPlay\SyncPlayManager;
@@ -16,9 +17,9 @@ use Phlix\Session\SyncPlay\SyncPlayManager;
  */
 class TestableSyncPlayManager extends SyncPlayManager
 {
-    public function __construct(MessageHandler $handler)
+    public function __construct(MessageHandler $handler, ?UserRepository $adminUsers = null)
     {
-        parent::__construct();
+        parent::__construct(adminUsers: $adminUsers);
         $this->initialize($handler);
     }
 

@@ -965,6 +965,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   factory passes is a silent no-op). No new error codes, no route/middleware tuple moves; census
   tripwires re-pinned from measured reds (files 1941→1942, declared reads 446→448, writes 1032→1033).
 
+  **Correction (2026-10-02, wave-I review) — the derivability claim above is
+  overstated, forward-only note (the shipped commit message is not rewritten).**
+  Capped surfaces filter over-cap rows by the active profile's cap BEFORE shaping
+  (the `ItemRepository` content-rating allowlist plus the S235 handler-side
+  denials), so a capped member is not handed the row whose `path` would leak the
+  recording uuid; registered recordings are additionally unrated-at-birth — the
+  registrar writes no `rating`/`official_rating` metadata, so `content_rating` is
+  NULL and only a deny-unrated cap filters them at all. The real pre-fix vectors
+  were signed-URL replay under the deliberate S235 signature-only opt-out,
+  shared-account profile-switch boundaries, and uuids learned via UNCAPPED
+  household surfaces (admin/uncapped payloads do ship `path`). The fix posture
+  stands unchanged — the serve-time re-check answers every session-bearing
+  request however the URL was learned; only the justification narrative is
+  corrected. A container-resolution wiring guard (`tests/Unit/Server/Core/`
+  `LiveTvStreamControllerWiringGuardTest.php`) now complements the whole-line
+  source pin: it resolves the production provider stack and fails on the null
+  gate that `optionalRatingGate()`'s catch would otherwise swallow silently.
+
 - **`PATCH /api/v1/media/{id}/metadata` now parses `metadata_json` against a closed allowlist at the HTTP boundary (scan residual F-08).**
   The handler merged the user-supplied `metadata_json` object straight into the stored provider blob
   unvalidated. Two exposures closed: (1) any authenticated user (the route is `AuthMiddleware`-only) could

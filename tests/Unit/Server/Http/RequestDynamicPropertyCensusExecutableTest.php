@@ -522,7 +522,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * so EXPECTED_ADOPTERS stays 65 — per-file census). Measured from the
      * phpunit red, not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1943;
+    private const EXPECTED_PHP_FILES = 1944;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

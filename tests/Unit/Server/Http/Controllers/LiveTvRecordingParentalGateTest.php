@@ -27,12 +27,19 @@ use Workerman\MySQL\Connection;
  * to that row is S235-gated (show / playbackInfo / download / the
  * `transcodeJobOverCap` HLS-and-DASH serve re-check) — but the recording route
  * served the IDENTICAL `.ts` bytes from the recording id alone, with no
- * RatingGate call anywhere on the path. And the recording uuid is not secret:
- * the registered item's absolute `path` (`{storage}/{recordingId}.ts`) ships in
- * the member-facing item payload (`MediaItemShaper::shape()['path']`), so any
- * capped member can derive the bypass URL from an item row they CAN see — plus
- * the classic leaked/replayed signed URL, same posture Finding 1b closed for
- * HLS.
+ * RatingGate call anywhere on the path. The recording uuid is not secret — the
+ * registered item's absolute `path` (`{storage}/{recordingId}.ts`) ships in the
+ * item payload (`MediaItemShaper::shape()['path']`) — but (2026-10-02 wave-I
+ * review correction, forward-only) CAPPED members generally do not see over-cap
+ * rows to mine: capped surfaces filter by the active profile's cap BEFORE
+ * shaping, and registered recordings are unrated-at-birth (the registrar writes
+ * no `rating`/`official_rating` metadata, so `content_rating` is NULL and only
+ * a deny-unrated cap filters them at all). The pre-fix exposure ran through
+ * signed-URL replay under the S235 signature-only opt-out, shared-account
+ * profile-switch boundaries, and uuids learned via UNCAPPED household surfaces
+ * (admin/uncapped payloads do ship `path`) — not "any row a capped member can
+ * see". Either way, the serve-time re-check below closes the route for every
+ * session-bearing request however the URL was learned.
  *
  * ## The close (parity, no new predicate)
  *
@@ -333,6 +340,15 @@ final class LiveTvRecordingParentalGateTest extends TestCase
      * argument — whole-LINE strict match (no substring fuzz), matching the
      * S236 wire-path discipline: the exact mutation "someone drops the gate
      * argument" must redden it.
+     *
+     * This pin sees the CALL SITE only. `Application::optionalRatingGate()`
+     * resolves the gate inside a catch-all that returns null, so container drift
+     * (a broken `RatingGate` binding) keeps this regex green while making the
+     * threaded argument a silent no-op — that half is covered by
+     * {@see \Phlix\Tests\Unit\Server\Core\LiveTvStreamControllerWiringGuardTest},
+     * which composes the PRODUCTION container and asserts the resolved
+     * controller's gate is non-null (mutation-proven: forcing the resolver to
+     * null reddens the runtime guard while this pin passes).
      */
     public function testApplicationFactoryPassesTheRatingGateToTheStreamController(): void
     {

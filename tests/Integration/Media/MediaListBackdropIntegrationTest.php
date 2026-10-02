@@ -227,6 +227,39 @@ final class MediaListBackdropIntegrationTest extends TestCase
         $this->assertNull($item['backdrop_srcset']);
     }
 
+    /**
+     * The list endpoint must ship each row's real `library_id` — the column the
+     * ui 'Add to playlist' flow needs (2026-10-02 follow-through). Pinned against
+     * the database itself, not a mock: every fixture row was created under
+     * `$this->libraryId`, so EVERY item in the response must carry it, and the
+     * enriched row's wire value must equal a direct `SELECT library_id` of the
+     * stored column.
+     */
+    public function testEveryListRowCarriesItsLibraryIdFromTheDatabase(): void
+    {
+        $items = $this->listItems();
+        $this->assertNotEmpty($items);
+
+        foreach ($items as $item) {
+            $this->assertArrayHasKey('library_id', $item, 'the LIST whitelist must carry the column');
+            $this->assertSame(
+                $this->libraryId,
+                $item['library_id'],
+                'every fixture row belongs to this test library',
+            );
+        }
+
+        $db = $this->db;
+        $this->assertNotNull($db);
+        $rows = $db->query('SELECT library_id FROM media_items WHERE id = ?', [$this->ids['enriched']]);
+        $this->assertIsArray($rows);
+        $this->assertSame(
+            $rows[0]['library_id'],
+            $this->listItem('enriched')['library_id'],
+            'the wire value equals the stored column byte-for-byte',
+        );
+    }
+
     // -- fixture ---------------------------------------------------------------
 
     private function seedFixtures(): void

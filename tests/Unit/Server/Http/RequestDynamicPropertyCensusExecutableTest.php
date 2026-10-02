@@ -690,12 +690,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * entry-point shape, S427 license intact). The src/ change reads only
       * (one new `$request->userId` read inside actorUserId()); the READS
       * denominator was re-verified green at its existing pin in the same
-      * run — the last-parameter root-registration blind spot documented
-      * under census number 2 keeps `actorUserId(Request $request)`'s single
-      * parameter out of the counted roots. Measured from the phpunit red,
-      * not predicted.
-      */
-    private const EXPECTED_DECLARED_WRITES = 1030;
+       * run — the last-parameter root-registration blind spot documented
+       * under census number 2 keeps `actorUserId(Request $request)`'s single
+       * parameter out of the counted roots. Measured from the phpunit red,
+       * not predicted.
+       * Re-pinned 1030→1033 by the shaper `library_id` lane (2026-10-02):
+       * +3 declared-member WRITES — the new dispatch()-seam wire pin in
+       * WebPortalRouterMediaTest stamps `$request->method`/`->path`/`->userId`
+       * on its own `new Request()` root, the same S101 dispatch-test shape it
+       * sits beside. All three name declared members; S427 license intact.
+       * Measured from the phpunit red (1033), not predicted.
+       */
+    private const EXPECTED_DECLARED_WRITES = 1033;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

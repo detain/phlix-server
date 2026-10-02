@@ -242,6 +242,15 @@ final class MediaItemShaper
             'sort_title' => SortTitle::from($name),
             'type' => $type,
             'path' => $item['path'] ?? null,
+            // Owning library — normalized with the same idiom as `parent_id`
+            // below (scalar → string, empty/absent → null) so the wire type stays
+            // `string|null` on every row. The list queries are `SELECT *`, so the
+            // column was already in the row; the whitelist was the only thing
+            // dropping it. The ui 'Add to playlist' flow resolves/creates a
+            // playlist against this id straight off grid rows.
+            'library_id' => is_scalar($item['library_id'] ?? null) && ($item['library_id'] ?? null) !== ''
+                ? (string) $item['library_id']
+                : null,
             'poster_url' => $posterUrl,
             // Responsive poster variants (TMDB width swap) for the client's
             // `srcset`; null for non-TMDB posters → the card uses `poster_url`.

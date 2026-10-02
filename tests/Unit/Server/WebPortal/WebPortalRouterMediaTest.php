@@ -231,6 +231,53 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertNull($body['items'][1]['backdrop_srcset']);
     }
 
+    /**
+     * `library_id` reaches the wire on `GET /api/v1/media` (2026-10-02 ui
+     * playlist-create follow-through): the flow reads it off grid items and was
+     * inert because the LIST whitelist dropped the column. Driven through
+     * `dispatch()` — the seam `Phlix\Server\Workerman\HttpHandler` shares — and
+     * pinned both ways: a real row value ships verbatim, a row without the column
+     * ships the key with null.
+     */
+    public function testDispatchMediaListingCarriesLibraryIdOnEveryRow(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('query')->willReturn([
+            'items' => [
+                [
+                    'id' => 'movie-1',
+                    'name' => 'Test Movie',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'path' => '/movies/test.mkv',
+                    'metadata' => [],
+                ],
+                [
+                    'id' => 'movie-2',
+                    'name' => 'Legacy Row',
+                    'type' => 'movie',
+                    'path' => '/movies/legacy.mkv',
+                    'metadata' => [],
+                ],
+            ],
+            'total' => 2,
+            'limit' => 50,
+            'offset' => 0,
+        ]);
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media';
+        $request->userId = 'user-1';
+
+        $body = $this->decodeBody($this->makeRouter($itemRepo)->dispatch($request)->body);
+
+        $this->assertArrayHasKey('library_id', $body['items'][0]);
+        $this->assertSame('lib-1', $body['items'][0]['library_id']);
+        $this->assertArrayHasKey('library_id', $body['items'][1]);
+        $this->assertNull($body['items'][1]['library_id']);
+    }
+
     public function testGetMediaWithSearchParam(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

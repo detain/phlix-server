@@ -9,6 +9,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The LIST shape now carries `library_id` (owner-approved micro-feature, 2026-10-02
+  adversarial-review follow-through on the ui playlist-create fix).**
+  `MediaItemShaper::shape()` emits a fixed whitelist built from the row, and it dropped
+  `media_items.library_id` even though every list query is a `SELECT *` — the column
+  existed pre-shape and only the whitelist removed it. Consequence: every grid/rail
+  surface (`GET /api/v1/media` via `getMedia`, `getLibraryItems`, MostWatched, favorites
+  rails) shipped items without `library_id`, so the ui 'Add to playlist' flow — which
+  reads it off the item to resolve/create a playlist — was inert on exactly those
+  surfaces, while `shapeDetail()` kept the key only via its raw-row merge. The new key
+  is normalized with the same idiom as `parent_id` (scalar → string, empty/absent →
+  null), so the wire type stays `string|null` on every row; hand-built rail payloads that
+  never carry the column (`PlaybackController::getContinueWatching`'s projection,
+  `WatchHistory`) ship null and stay null-safe. Detail behavior is byte-identical for
+  real rows (shape()'s normalized value overwrites the raw merge with the identical
+  string). No new routes, error codes, or migrations; the additive key is tolerant for
+  dict-style clients. Tests: 7 new, all red-first against the pre-change tip — the exact
+  ORDERED key-set whitelist pin (27 keys, `library_id` sixth, `path` fifth), value
+  round-trip, absent-row null, empty-string null, list/detail single-source equality, a
+  `dispatch()`-seam wire pin through `WebPortalRouter` (row value verbatim / key present
+  + null without it), and a real-DB integration proof that EVERY
+  `GET /api/v1/media` row carries the stored `library_id` and that the wire value equals
+  a direct `SELECT library_id` byte-for-byte.
+
 - **Device-M1: casting sessions are now a cross-worker register, not per-worker memory
   (owner decision — the audit finding: the HTTP pool runs `count = 14`, each of the four
   casting managers keyed its live-session map process-locally, so a cast started on

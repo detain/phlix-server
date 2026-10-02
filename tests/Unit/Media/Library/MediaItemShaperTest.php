@@ -145,6 +145,109 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('Pilot', $shaped['episode_title']);
     }
 
+    /**
+     * The LIST-shape whitelist pinned as an exact ORDERED key set. Every key here
+     * is wire contract: clients read grid rows off `GET /api/v1/media` and depend
+     * on exactly this set (the ui 'Add to playlist' flow needs `library_id`).
+     * Adding, dropping, or silently reordering a key must fail this pin loudly
+     * instead of surfacing as a client regression.
+     */
+    public function testShapeEmitsExactlyThePinnedListWhitelist(): void
+    {
+        $shaped = MediaItemShaper::shape(['id' => 'm', 'name' => 'M', 'type' => 'movie']);
+
+        $this->assertSame([
+            'id',
+            'name',
+            'sort_title',
+            'type',
+            'path',
+            'library_id',
+            'poster_url',
+            'poster_srcset',
+            'backdrop_url',
+            'backdrop_srcset',
+            'genres',
+            'year',
+            'rating',
+            'runtime',
+            'duration',
+            'overview',
+            'actors',
+            'director',
+            'parent_id',
+            'season_number',
+            'episode_number',
+            'episode_title',
+            'air_date',
+            'artist',
+            'album',
+            'created_at',
+            'updated_at',
+        ], array_keys($shaped));
+    }
+
+    /**
+     * `library_id` on the LIST shape (2026-10-02 ui playlist-create follow-through):
+     * the flow resolves/creates a playlist against the item's library from grid
+     * rows, but shape() dropped the column even though every list query is a
+     * `SELECT *`. Normalized with the same idiom as `parent_id` — scalar → string,
+     * empty/absent → null — so the wire type stays `string|null` for every row.
+     */
+    public function testShapeExposesLibraryIdFromTheRow(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'library_id' => 'lib-9',
+        ]);
+
+        $this->assertSame('lib-9', $shaped['library_id']);
+    }
+
+    /**
+     * Hand-built rails (continue-watching projections) may arrive without the
+     * column; the key must still ship, null, so every row in a page keeps one
+     * stable shape.
+     */
+    public function testShapeLibraryIdIsNullWhenTheRowLacksIt(): void
+    {
+        $shaped = MediaItemShaper::shape(['id' => 'm', 'name' => 'M', 'type' => 'movie']);
+
+        $this->assertArrayHasKey('library_id', $shaped);
+        $this->assertNull($shaped['library_id']);
+    }
+
+    public function testShapeLibraryIdNormalizesEmptyStringToNull(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'library_id' => '',
+        ]);
+
+        $this->assertArrayHasKey('library_id', $shaped);
+        $this->assertNull($shaped['library_id'], 'an empty column value never ships as an empty-string id');
+    }
+
+    /**
+     * shapeDetail() merges the raw row UNDER shape(), so the detail surface must
+     * report the identical normalized value — one definition, no drift between
+     * the two shapes (the pre-lane detail value came from the raw merge; the
+     * list value did not exist).
+     */
+    public function testShapeDetailLibraryIdComesFromTheSameNormalizationAsTheListShape(): void
+    {
+        $row = ['id' => 'm', 'name' => 'M', 'type' => 'movie', 'library_id' => 'lib-9'];
+
+        $this->assertSame(
+            MediaItemShaper::shape($row)['library_id'],
+            MediaItemShaper::shapeDetail($row, [])['library_id'],
+        );
+    }
+
     public function testShapeSurfacesMovieOfficialRatingAsRating(): void
     {
         // Phase C: the resolver stores the movie cert under `official_rating`

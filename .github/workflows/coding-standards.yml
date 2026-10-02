@@ -96,8 +96,19 @@ jobs:
         # ⚠ Do NOT add `-n` and do NOT add `|| true`. Warnings are non-blocking via
         # `ignore_warnings_on_exit` INSIDE the ruleset, which still finds, counts
         # and prints every one of them; `-n` would delete them from the report,
-        # which is exactly the S109 defect. Judge this step by the
-        # "A TOTAL OF n ERRORS AND m WARNINGS" line in the log.
+        # which is exactly the S109 defect.
+        #
+        # THE GATE IS phpcs's NONZERO EXIT CODE, read directly by the runner —
+        # errors exit 2, warnings exit 1 (neutralized to 0 here only by the ruleset's
+        # `ignore_warnings_on_exit`), clean exits 0 — plus the per-file `full` report
+        # in the log ("FOUND n ERRORS..."). Do NOT judge this step by grepping the
+        # log for a "A TOTAL OF n ERRORS" line: that line exists ONLY in phpcs's
+        # `summary` report, which this invocation never requests, so it can never
+        # appear. A "repair" that adds such a grep (typically wrapped in `|| true`)
+        # is a known dead-gate pattern — it disabled the phpcs gate in the console
+        # client repo (phlix-console-client ci.yml), where the grep could never fire
+        # and `|| true` swallowed the exit code, leaving the step structurally green
+        # no matter how many errors phpcs found (same defect class as S146).
         run: ./vendor/bin/phpcs --standard=phpcs-tests.xml --colors
 
   phpstan:

@@ -73,6 +73,32 @@ return [
     // server-settings.schema.json `metadata.overwrite_existing` default.
     'overwrite_existing' => true,
 
+    // W3/F3 — minimum title/year SIMILARITY HEURISTIC (0..1) a TMDB search
+    // result must reach for {@see \Phlix\Media\Metadata\MovieMetadataResolver}
+    // to accept its FIRST result as the match; below it the search counts as a
+    // NO-MATCH (same path as an empty result set). The score is a cheap
+    // character-overlap + year-exactness model computed in-resolver
+    // ({@see \Phlix\Media\Metadata\MatchConfidencePolicy} for the honest
+    // semantics and weight table) — it is NOT a provider-side relevance score
+    // and no precision beyond "bounded heuristic" should be claimed in admin
+    // copy. 0.0 (default) keeps today's blind `$results[0]` behaviour
+    // byte-preserved. Read LIVE via SettingsRepository by
+    // Phlix\Media\Metadata\MatchConfidencePolicy — this file is NOT composed
+    // into config/server.php, so the settings store is the only live read
+    // path. KNOWN LIMIT: no admin-UI surface until detain/phlix-shared's
+    // server-settings.schema.json declares the key (follow-up); until then an
+    // override is a server_settings row.
+    'min_match_confidence' => 0.0,
+
+    // W3 — how many HOURS a per-provider metadata refresh stays "recent"
+    // before {@see \Phlix\Media\Metadata\MetadataManager} re-fetches it
+    // (the 24h window `hasRecentMetadata()` used to hardcode as 86400
+    // seconds). Clamped in-code to 1..8760 hours by
+    // Phlix\Media\Metadata\MetadataCachePolicy; 24 (default) reproduces the
+    // old constant byte-for-byte. Read LIVE via SettingsRepository — same
+    // non-composed-file caveat as above, same KNOWN LIMIT re schema surface.
+    'cache_ttl_hours' => 24,
+
     // S89 — whether the embedded-tag writer may rewrite tags INSIDE media
     // files at all. FALSE (default) is strict opt-in for a DESTRUCTIVE mode:
     // nothing here is "behaviour-preserving" because embedded writing did not

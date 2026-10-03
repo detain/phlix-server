@@ -527,8 +527,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * 1:1, plus the new
       * tests/Integration/Collections/CollectionsOwnershipMigration112RealDbTest.php).
       * Measured from the phpunit red, not predicted.
+      * Re-pinned 1945→1951 by the W3 settings-program metadata lane (2026-10-03):
+      * net +6 — 2 new src/ files (src/Media/Metadata/MatchConfidencePolicy.php,
+      * src/Media/Metadata/MetadataCachePolicy.php) and 4 new tests/Unit/Media/
+      * Metadata/ files (MatchConfidencePolicyTest, MetadataCachePolicyTest,
+      * MovieMetadataResolverConfidenceTest, MetadataManagerCacheTtlTest). Zero
+      * Request-root read/write sites added (metadata services touch no HTTP
+      * Request), so EXPECTED_DECLARED_READS/WRITES stay untouched. Measured
+      * from the phpunit red, not predicted.
       */
-    private const EXPECTED_PHP_FILES = 1945;
+    private const EXPECTED_PHP_FILES = 1951;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

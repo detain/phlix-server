@@ -65,6 +65,26 @@ class MovieMetadataResolver
     private ?SourceRegistry $sourceRegistry;
 
     /**
+     * @var MatchConfidencePolicy Threshold gate for the title-search path (F3).
+     *     A store-less instance (legacy construction / unit tests) yields the
+     *     shipped default 0.0, which keeps the blind-first-result behaviour
+     *     byte-for-byte identical to before the setting existed.
+     */
+    private MatchConfidencePolicy $confidencePolicy;
+
+    /**
+     * Title weight of the bounded title/year similarity heuristic (see
+     * {@see matchConfidence()}). The two weights sum to 1.0 so the score stays
+     * inside its advertised 0..1 domain by construction.
+     */
+    public const TITLE_WEIGHT = 0.7;
+
+    /**
+     * Year-exactness weight of the heuristic; see {@see self::TITLE_WEIGHT}.
+     */
+    public const YEAR_WEIGHT = 0.3;
+
+    /**
      * @param TmdbProvider               $tmdb           Online TMDB provider.
      * @param ImdbLookup                 $imdb           Offline IMDb dataset lookup.
      * @param StructuredLogger|null      $logger         Optional logger; defaults to the MEDIA channel.
@@ -75,6 +95,9 @@ class MovieMetadataResolver
      * @param SourceRegistry|null        $sourceRegistry Enabled plugin metadata sources. Only consulted when
      *     {@see resolve()} is called with `$includePluginSources = true`; null (unit tests / legacy) makes
      *     plugin consultation a no-op, so behaviour is byte-for-byte identical to today.
+     * @param MatchConfidencePolicy|null $confidencePolicy F3 gate for `metadata.min_match_confidence`.
+     *     Null (unit tests / legacy) builds a store-less policy that returns the shipped default 0.0 =
+     *     gate off = today's blind `$results[0]` behaviour preserved byte-for-byte.
      *
      * @since 0.21.0
      */
@@ -84,7 +107,8 @@ class MovieMetadataResolver
         ?StructuredLogger $logger = null,
         ?PriorityConfig $priorityConfig = null,
         ?PriorityFieldResolver $fieldResolver = null,
-        ?SourceRegistry $sourceRegistry = null
+        ?SourceRegistry $sourceRegistry = null,
+        ?MatchConfidencePolicy $confidencePolicy = null
     ) {
         $this->tmdb = $tmdb;
         $this->imdb = $imdb;
@@ -94,6 +118,7 @@ class MovieMetadataResolver
         $this->priorityConfig = $priorityConfig ?? new PriorityConfig(['movie' => ['tmdb', 'imdb']]);
         $this->fieldResolver = $fieldResolver ?? new PriorityFieldResolver();
         $this->sourceRegistry = $sourceRegistry;
+        $this->confidencePolicy = $confidencePolicy ?? new MatchConfidencePolicy();
     }
 
     /**
@@ -371,6 +396,21 @@ class MovieMetadataResolver
     /**
      * Resolve the TMDB movie id: by IMDb id when known, else by title search.
      *
+     * F3 (`metadata.min_match_confidence`): the title-search path used to accept
+     * `$results[0]` BLIND — TMDB orders results by its own popularity ranking,
+     * so a wrong-but-popular first hit silently became the match. When the
+     * effective threshold is above 0, the first result is now scored against
+     * the requested title/year via {@see matchConfidence()} and a score below
+     * the threshold routes to the SAME no-match path an empty result set takes
+     * (null → merge proceeds IMDb-only or bails). The gate does not re-rank the
+     * result list — it only accepts/rejects the candidate the old code would
+     * have taken unconditionally. At the shipped default 0.0 the scorer is not
+     * even invoked, so today's behaviour is byte-preserved by construction.
+     *
+     * The IMDb-id path is deliberately UNGATED: an `tt…` id match is an exact
+     * external-identity lookup, not a fuzzy title guess — there is nothing for
+     * a similarity heuristic to score.
+     *
      * @param string      $title  Movie title.
      * @param int|null    $year   Optional year.
      * @param string|null $imdbId Known IMDb id, if any.
@@ -392,6 +432,24 @@ class MovieMetadataResolver
             $results = $this->tmdb->search($title, ['year' => $year]);
             $first = $results[0] ?? null;
             if (is_array($first)) {
+                $threshold = $this->confidencePolicy->minConfidence();
+                if ($threshold > 0.0) {
+                    $confidence = self::matchConfidence($first, $title, $year);
+                    if ($confidence < $threshold) {
+                        $this->logger->info(
+                            'MovieMetadataResolver: first TMDB search result rejected below confidence',
+                            [
+                                'title' => $title,
+                                'year' => $year,
+                                'candidate_id' => MetadataValue::asNullableString($first['id'] ?? null),
+                                'candidate_title' => MetadataValue::asNullableString($first['title'] ?? null),
+                                'confidence' => $confidence,
+                                'threshold' => $threshold,
+                            ]
+                        );
+                        return null;
+                    }
+                }
                 return MetadataValue::asNullableString($first['id'] ?? null);
             }
             return null;
@@ -403,6 +461,135 @@ class MovieMetadataResolver
             ]);
             return null;
         }
+    }
+
+    /**
+     * Bounded title/year similarity heuristic (0..1) for one TMDB search result.
+     *
+     * ## What this IS
+     *
+     * A cheap, deterministic, in-resolver guess that the first search result
+     * plausibly IS the requested film. Pure (no I/O, no clock) so the whole
+     * table is unit-testable. Deliberately NOT provider-side TMDB relevance
+     * scoring (popularity/vote-weighted) — that is a follow-up ticket; this
+     * function's name and bounds must never be described as an accuracy or
+     * probability claim.
+     *
+     * ## Score model
+     *
+     *  - `titleSim`: 1.0 when the normalized titles are equal (case, edges and
+     *    interior whitespace normalized; no diacritic folding, no article
+     *    handling — `Matrix, The` ≠ `The Matrix`); else the `similar_text`
+     *    common-character fraction (a byte-overlap measure; ASCII-titles only
+     *    are precisely modelled, non-ASCII degrades conservatively).
+     *  - Requested year KNOWN:  `0.7*titleSim + 0.3*(candidate year exactly equal ? 1 : 0)`.
+     *    A candidate WITHOUT a usable release year earns no year credit (0.7
+     *    ceiling) — absence of corroboration is not corroboration.
+     *  - Requested year UNKNOWN: year is not a comparable signal at all, so the
+     *    score is titleSim alone.
+     *
+     * Table anchors: exact title + exact year = 1.0; exact title + year
+     * mismatch (or missing candidate year) = 0.7; empty candidate title = the
+     * bare year credit (≤0.3).
+     *
+     * @param array<array-key, mixed> $candidate One formatted `TmdbProvider::search()`
+     *     result row (`id`/`title`/`original_title`/`release_date`).
+     * @param string                  $wantedTitle  Title the file is being matched under.
+     * @param int|null                $wantedYear   Year parsed from the filename, if any.
+     *
+     * @return float Confidence in 0..1.
+     *
+     * @since 1.8.0
+     */
+    public static function matchConfidence(array $candidate, string $wantedTitle, ?int $wantedYear): float
+    {
+        $candidateTitle = self::candidateTitle($candidate);
+        $titleSim = self::titleSimilarity($wantedTitle, $candidateTitle);
+
+        if ($wantedYear === null) {
+            return $titleSim;
+        }
+
+        $candidateYear = self::candidateYear($candidate);
+        $yearCredit = ($candidateYear !== null && $candidateYear === $wantedYear) ? 1.0 : 0.0;
+
+        return max(0.0, min(1.0, (self::TITLE_WEIGHT * $titleSim) + (self::YEAR_WEIGHT * $yearCredit)));
+    }
+
+    /**
+     * Best available display title on a search-result row (title, else original).
+     *
+     * @param array<array-key, mixed> $candidate Search-result row.
+     */
+    private static function candidateTitle(array $candidate): string
+    {
+        $title = MetadataValue::asString($candidate['title'] ?? null);
+        if ($title !== '') {
+            return $title;
+        }
+
+        return MetadataValue::asString($candidate['original_title'] ?? null);
+    }
+
+    /**
+     * Release YEAR parsed from a TMDB `release_date` ('Y-m-d') string, if any.
+     *
+     * Only an unambiguous year counts: `YYYY` and `YYYY-MM-DD` (TMDB's two
+     * real shapes) parse; empty, month-partial (`'2024-08'`) or otherwise
+     * malformed dates yield null — the heuristic never guesses a year.
+     *
+     * @param array<array-key, mixed> $candidate Search-result row.
+     */
+    private static function candidateYear(array $candidate): ?int
+    {
+        $releaseDate = MetadataValue::asString($candidate['release_date'] ?? null);
+        if (preg_match('/^(\d{4})(?:-\d{2}-\d{2})?$/', $releaseDate, $m) === 1) {
+            return (int) $m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalized-title equality (1.0) or `similar_text` character-overlap
+     * fraction (0..1) between the wanted and candidate titles.
+     *
+     * Normalization is intentionally shallow — trim, lowercase, collapse
+     * whitespace — because every extra fold (articles, punctuation, diacritics)
+     * is a precision CLAIM the byte-overlap model cannot back. Either side
+     * empty means there is no title to compare at all: 0.0.
+     */
+    private static function titleSimilarity(string $wanted, string $candidate): float
+    {
+        $a = self::normalizeTitle($wanted);
+        $b = self::normalizeTitle($candidate);
+        if ($a === '' || $b === '') {
+            return 0.0;
+        }
+        if ($a === $b) {
+            return 1.0;
+        }
+
+        $percent = 0.0;
+        similar_text($a, $b, $percent);
+
+        return max(0.0, min(1.0, $percent / 100));
+    }
+
+    /**
+     * Lowercase, trim, and collapse interior whitespace of a title.
+     *
+     * `mb_strtolower` for correct Unicode casing; the whitespace fold uses the
+     * `/u` modifier with a plain-space fallback so an invalid-UTF-8 byte
+     * sequence (from a corrupt filename upstream) cannot turn comparison into a
+     * preg-null silent "unequal" against everything.
+     */
+    private static function normalizeTitle(string $title): string
+    {
+        $lower = mb_strtolower(trim($title), 'UTF-8');
+        $collapsed = preg_replace('/\s+/u', ' ', $lower);
+
+        return $collapsed ?? $lower;
     }
 
     /**

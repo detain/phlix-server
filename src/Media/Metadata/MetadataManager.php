@@ -25,6 +25,9 @@ use Phlix\Media\Metadata\RatingType;
  * This class manages registration of metadata providers (TMDB, TVDB, Fanart.tv, local NFO),
  * prioritizes them by media type, and handles the refresh workflow for items.
  * It supports cascading provider fallback when one provider fails to return results.
+ * Per-provider refreshes are skipped while "recent" — the LIVE effective
+ * `metadata.cache_ttl_hours` window (shipped default 24h, via
+ * {@see MetadataCachePolicy}) on `metadata_refreshed_at`.
  *
  * **Memory safety:** The library-refresh methods page through items in fixed-size
  * batches so a huge library (10K+ items) never loads every row into memory at once.
@@ -95,6 +98,18 @@ class MetadataManager
     private ?RatingService $ratingService;
 
     /**
+     * Freshness window for {@see hasRecentMetadata()} — the W3 home of the
+     * `metadata.cache_ttl_hours` effective read. A store-less instance (legacy
+     * construction / unit tests) returns the shipped default 24h, i.e. exactly
+     * the 86400 this method hardcoded before the setting existed, so behaviour
+     * at the default is byte-preserved. Read LIVE per check (resident-process
+     * law — no static cache), so a TTL change applies to the very next refresh.
+     *
+     * @var MetadataCachePolicy
+     */
+    private MetadataCachePolicy $cachePolicy;
+
+    /**
      * Constructor for MetadataManager.
      *
      * @param ItemRepository $itemRepository Repository for media item operations
@@ -114,17 +129,23 @@ class MetadataManager
      *     (PHP-DI skips defaulted optional ctor params during autowiring
      *     unless named — the same landmine documented on `libraries`/
      *     `ratingService` above).
+     * @param MetadataCachePolicy|null $cachePolicy Freshness window gate for
+     *     `metadata.cache_ttl_hours`. Null (legacy call sites / unit tests)
+     *     builds a store-less policy pinned to the historical 24h window —
+     *     byte-identical to the old hardcoded `86400`.
      */
     public function __construct(
         ItemRepository $itemRepository,
         ?LibraryManager $libraries = null,
         ?RatingService $ratingService = null,
         ?array $providerPriority = null,
+        ?MetadataCachePolicy $cachePolicy = null,
     ) {
         $this->itemRepository = $itemRepository;
         $this->libraries = $libraries;
         $this->ratingService = $ratingService;
         $this->providerPriority = $providerPriority ?? self::defaultProviderPriority();
+        $this->cachePolicy = $cachePolicy ?? new MetadataCachePolicy();
         $this->logger = LoggerFactory::get(LogChannels::MEDIA);
     }
 
@@ -596,6 +617,10 @@ class MetadataManager
     /**
      * Check if metadata was recently refreshed from a specific provider.
      *
+     * "Recently" is the LIVE effective `metadata.cache_ttl_hours` window owned
+     * by {@see MetadataCachePolicy} (shipped default 24h — the exact constant
+     * this method hardcoded before the setting existed).
+     *
      * @param array<string, mixed> $metadata The current metadata array
      * @param string $providerName The provider name to check
      * @return bool True if recent metadata exists from this provider
@@ -608,18 +633,11 @@ class MetadataManager
             return false;
         }
 
-        // Check refresh timestamp (within last 24 hours)
-        $refreshedAtRaw = MetadataValue::asNullableString($metadata['metadata_refreshed_at'] ?? null);
-        if ($refreshedAtRaw === null) {
-            return false;
-        }
-
-        $refreshedAt = strtotime($refreshedAtRaw);
-        if ($refreshedAt === false) {
-            return false;
-        }
-
-        return (time() - $refreshedAt) < 86400; // 24 hours
+        // Check refresh timestamp (within the effective cache TTL)
+        return $this->cachePolicy->isFresh(
+            MetadataValue::asNullableString($metadata['metadata_refreshed_at'] ?? null),
+            time(),
+        );
     }
 
     /**

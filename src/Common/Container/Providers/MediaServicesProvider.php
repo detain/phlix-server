@@ -52,6 +52,8 @@ use Phlix\Media\Metadata\Enrichment\PluginEnrichmentQueue;
 use Phlix\Media\Metadata\Enrichment\PluginMetadataEnricher;
 use Phlix\Media\Metadata\Enrichment\SourceRateLimiter;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
+use Phlix\Media\Metadata\MatchConfidencePolicy;
+use Phlix\Media\Metadata\MetadataCachePolicy;
 use Phlix\Media\Metadata\MetadataOverwritePolicy;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
@@ -568,7 +570,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // defaulted optional ctor params during autowiring. Consulted only
                 // when resolve() is called with includePluginSources=true (the
                 // quota-safe on-demand path); the bulk scan leaves it dormant.
-                ->constructorParameter('sourceRegistry', get(SourceRegistry::class)),
+                ->constructorParameter('sourceRegistry', get(SourceRegistry::class))
+                // W3/F3 gate for `metadata.min_match_confidence`. Named for the
+                // same PHP-DI reason as every entry above — an unnamed optional
+                // param is SKIPPED during autowiring, which would leave the
+                // resolver on a store-less policy (threshold always 0.0 = blind
+                // first result) and make the setting inert while a server_settings
+                // row silently does nothing.
+                ->constructorParameter('confidencePolicy', get(MatchConfidencePolicy::class)),
 
             // Theme-music (M3) producer. The validated config is built once from
             // the coerced config array; the default fetcher uses the same
@@ -726,7 +735,34 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     factory(static function (): array {
                         return MetadataManager::defaultProviderPriority();
                     })
-                ),
+                )
+                // W3 gate for `metadata.cache_ttl_hours`. Named for the same
+                // PHP-DI reason as every entry above — an unnamed optional param
+                // is SKIPPED during autowiring, which would leave the manager on
+                // a store-less policy (permanently the shipped 24h default) and
+                // make the setting inert while a server_settings row silently
+                // does nothing.
+                ->constructorParameter('cachePolicy', get(MetadataCachePolicy::class)),
+
+            // Gate for `metadata.min_match_confidence` (W3/F3), read live at each
+            // title-search decision. Same optional-store rationale as
+            // ArtworkDownloadPolicy below: an unavailable settings store degrades
+            // to the shipped default (0.0 = blind first result, today's behaviour)
+            // instead of throwing.
+            MatchConfidencePolicy::class => factory(
+                static fn(ContainerInterface $c): MatchConfidencePolicy
+                    => new MatchConfidencePolicy(self::optionalSettings($c))
+            ),
+
+            // Gate for `metadata.cache_ttl_hours` (W3), read live at each
+            // freshness check. Same optional-store rationale as the policies
+            // around it: an unavailable settings store degrades to the shipped
+            // default (24h — the historical hardcoded window) instead of
+            // throwing.
+            MetadataCachePolicy::class => factory(
+                static fn(ContainerInterface $c): MetadataCachePolicy
+                    => new MetadataCachePolicy(self::optionalSettings($c))
+            ),
 
             // Rating persistence: stores TMDB/IMDb/user scores and aggregates them.
             // The service takes only the Workerman MySQL Connection (autowirable).
@@ -1490,8 +1526,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
             DegradedBuild::warnUnlessAbsent(
                 $c,
                 LogChannels::MEDIA,
-                'The settings store is bound but could not be built; artwork-download and '
-                . 'scan-ignore policies fall back to their shipped defaults. Admin-saved '
+                'The settings store is bound but could not be built; the artwork-download, '
+                . 'scan-ignore and metadata (overwrite / embedded-write / match-confidence / '
+                . 'cache-ttl) policies fall back to their shipped defaults. Admin-saved '
                 . 'values stay ignored by this worker until it is recycled.',
                 $e
             );

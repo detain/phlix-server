@@ -31,17 +31,35 @@ use Phlix\Common\Logger\StructuredLogger;
  * ## Read path
  *
  * Class (a) LIVE, exactly like {@see PasswordPolicy}: every answer comes from
- * a fresh settings read, so an override applies on the next request with no
- * restart. There is deliberately NO static/process cache (resident-process
- * law). One {@see SettingsRepository::getAllOverrides()} snapshot per instance
- * keeps a request that consults several methods at a single SELECT;
- * instances are request-scoped through the container, so the snapshot cannot
- * outlive a request. A snapshot whose five answers are ALL false is a state
- * the write guards make API-unreachable; if it is ever forced into the table
- * by hand (direct SQL, restored backup) the read path falls back to
- * password-only sign-in and logs {@see self::FALLBACK_EVENT} loudly on every
- * activation. The fallback is NEVER persisted — the emergency stays visible
- * to the operator instead of silently rewriting their data.
+ * a fresh settings read, so an override applies on the very next decision —
+ * no restart, no worker recycle. There is deliberately NO cross-decision
+ * cache of any kind (resident-process law): PHP-DI MEMOIZES built instances
+ * and a Workerman worker keeps one container for its whole life, so a
+ * container-held policy lives as long as the worker — the same in-repo
+ * admission behind {@see AuthManager} accumulating its in-memory rate-limit
+ * entries "on a busy, long-running resident worker" and behind
+ * {@see AuthProviderBootstrapper::ensureProviderRegistered()}'s request-path
+ * self-heal. A per-instance snapshot would therefore be a process cache in a
+ * request-scoped costume: it froze the toggle answers at the first read, so
+ * live disables arrived late (writes-guarded base: never) on warm workers.
+ * Instead every public decision method — {@see self::isEnabled()} and
+ * {@see self::currentState()} (which is the write guards' live base) — takes
+ * EXACTLY ONE {@see SettingsRepository::getAllOverrides()} snapshot per call:
+ * fresh ACROSS decisions, single-SELECT WITHIN one. The added cost is one
+ * settings SELECT per login attempt — the same request already pays a user
+ * SELECT, an Argon2ID verify, and the bootstrapper's per-call
+ * {@see SettingsRepository::getOverride()} in
+ * {@see AuthProviderBootstrapper::isEnabled()} — and one per admin toggle
+ * write: measured noise against the I/O surrounding it, and simplicity wins
+ * over inventing request-lifecycle machinery the container does not offer.
+ *
+ * A snapshot whose five answers are ALL false is a state the write guards
+ * make API-unreachable; if it is ever forced into the table by hand (direct
+ * SQL, restored backup) the read path falls back to password-only sign-in
+ * and logs {@see self::FALLBACK_EVENT} loudly — once per instance (the
+ * bounded-alarm precedent), which in production means once per worker life.
+ * The fallback is NEVER persisted — the emergency stays visible to the
+ * operator instead of silently rewriting their data.
  *
  * ## Per-method absent-key semantics (no forked truth)
  *
@@ -68,6 +86,19 @@ use Phlix\Common\Logger\StructuredLogger;
  *     probe, so the reverse direction (an admin whose only factor was the
  *     provider being disabled) is covered by the same code path, not a
  *     special case.
+ *
+ * ## Accepted residual (owner-reviewed at the F7 rework)
+ *
+ * Turning `password` OFF while `auth.signup_mode` stays open does NOT stop
+ * fresh accounts from being minted and signed in: registration is governed by
+ * signup_mode ({@see AuthManager::register()} reads it), never by the method
+ * toggles, and the R2 probe protects only EXISTING active admins. Password-off
+ * + open signup therefore still yields a working new account (the account's
+ * own first sign-in issues tokens without consulting the login gate). That is
+ * the accepted boundary of this control: the quintet is a sign-in-FACTOR
+ * switch, not an account-creation switch — operators who want no new
+ * password-backed accounts close signup, and the toggles cannot substitute for
+ * that.
  *
  * Fail-fast: an unreadable settings store THROWS out of {@see self::state()}
  * and callers on the enforcement path must fail CLOSED (deny the sign-in),
@@ -132,16 +163,11 @@ final class AuthMethodPolicy
     }
 
     /**
-     * Per-instance snapshot; request-scoped like the rest of the class, so
-     * this is a within-one-request memo, not a process cache.
-     *
-     * @var array<string, bool>|null
-     */
-    private ?array $stateCache = null;
-
-    /**
      * One-shot fallback alarm per instance (precedent: WebAuthnManager's
-     * bounded metrics-failure flag).
+     * bounded metrics-failure flag). NOTE: in production an instance lives as
+     * long as its worker (PHP-DI memoizes; see class docblock "Read path"),
+     * so this alarm is deliberately bounded at once per worker life while the
+     * password-only fallback posture keeps enforcing on every decision.
      */
     private bool $fallbackLogged = false;
 
@@ -186,6 +212,10 @@ final class AuthMethodPolicy
      * so write guards validate against what the server actually ENFORCES
      * rather than against a raw table view.
      *
+     * Takes ONE fresh settings snapshot per call — this value is the write
+     * guards' base, and a stale base is a live R2 bypass (class docblock,
+     * "Read path").
+     *
      * @return array<string, bool> All five {@see self::METHODS}, booleans.
      */
     public function currentState(): array
@@ -195,6 +225,10 @@ final class AuthMethodPolicy
 
     /**
      * Is this sign-in method usable right now?
+     *
+     * Takes ONE fresh settings snapshot per call (bootstrapper isEnabled()
+     * precedent) — enforcement on a resident worker must never answer from a
+     * pre-disable view of the table.
      *
      * @throws \InvalidArgumentException for a name outside {@see self::METHODS}.
      * @throws \Throwable when the settings store is unreadable — enforcement
@@ -320,16 +354,19 @@ final class AuthMethodPolicy
     }
 
     /**
-     * Snapshot of the five enforced booleans, fallback applied.
+     * One fresh snapshot of the five enforced booleans, fallback applied.
+     *
+     * Every public decision method calls this EXACTLY once per invocation:
+     * fresh across decisions (no stale answers on a resident worker),
+     * single-SELECT within one. Do NOT re-add a per-instance memo here — the
+     * container memoizes THIS object for the worker's lifetime, which is the
+     * CRITICAL the F7 rework fixed; the liveness pins in
+     * tests/Unit/Auth/AuthMethodPolicyTest.php reddens on a re-plant.
      *
      * @return array<string, bool>
      */
     private function state(): array
     {
-        if ($this->stateCache !== null) {
-            return $this->stateCache;
-        }
-
         $overrides = $this->settings->getAllOverrides();
 
         $state = [];
@@ -351,8 +388,6 @@ final class AuthMethodPolicy
         if (!in_array(true, $state, true)) {
             $state = $this->applyAllDisabledFallback($state);
         }
-
-        $this->stateCache = $state;
 
         return $state;
     }

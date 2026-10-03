@@ -5849,6 +5849,31 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   byte-identical and only the middleware column moves (`[]` → `[AuthMiddleware]` in the
   wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
 
+### Fixed
+
+- **F7 rework (CRITICAL): `AuthMethodPolicy` no longer memoizes its settings snapshot.**
+  The class shipped in 1f8a09cc carried a per-instance `stateCache` whose docblock premise —
+  "instances are request-scoped through the container" — is FALSE in production: PHP-DI memoizes
+  built instances and each Workerman worker builds ONE container for its lifetime (the same
+  resident-worker fact `AuthManager` admits for its in-memory rate-limit buckets and that forces
+  the `AuthProviderBootstrapper` request-path self-heal). Consequences pinned by the reviewer:
+  the write guards' base (`assertSafeTransition(currentState() + change)`) ran stale, enabling a
+  live R2 bypass via any external/legacy DB write, and enforcement on warm workers kept honoring
+  a method after it was disabled — contradicting the "applies immediately" help text.
+  Design: the per-instance memo is deleted; every public decision (`isEnabled`, `currentState`)
+  now takes exactly ONE fresh `getAllOverrides()` snapshot per call — fresh ACROSS decisions,
+  single-SELECT WITHIN one (the ≤1-read-per-decision law is re-pinned, honestly re-counted).
+  Cost: one small settings SELECT per login attempt (which already pays a user SELECT, an
+  Argon2ID verify, and the bootstrapper's own per-call `getOverride`) and per admin toggle write —
+  noise against the I/O around it; no request-lifecycle machinery invented.
+  Regression pins: resident-instance liveness (build ONCE, flip the row through the same repo
+  seam, both directions) and the production call-shape R2-bypass test
+  (`array_merge(currentState(), touched)` → must now reject); self-mutation proof: re-planting
+  the memo reddens exactly these three law pins. Docblocks corrected in the same commit (truth
+  law), incl. the bounded once-per-worker-life fallback alarm and the accepted residual that
+  password-off + open `auth.signup_mode` still mints fresh-account sessions (signup_mode is the
+  account-creation control; the quintet governs sign-in factors only).
+
 ## [1.2.3] — 2026-07-12
 
 ### Fixed

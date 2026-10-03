@@ -22,7 +22,11 @@ use RuntimeException;
  * external three reproduce AuthProviderBootstrapper's absent=OFF rule), the
  * all-disabled fallback posture (password-only, loud, ONE-SHOT, never
  * persisted), the R1/R2/R2-bis transition rules, the proposed-map parsing,
- * the per-instance snapshot memo, and fail-fast on an unreadable store.
+ * the ONE-SNAPSHOT-PER-DECISION read discipline, and resident-instance
+ * liveness (F7 rework CRITICAL: the container memoizes this service for the
+ * worker's lifetime, so answers must be re-read per decision, never memoized
+ * per instance — see test_resident_instance_observes_external_flag_flip_*).
+ * Fail-fast on an unreadable store is pinned at the end.
  */
 final class AuthMethodPolicyTest extends TestCase
 {
@@ -247,12 +251,22 @@ final class AuthMethodPolicyTest extends TestCase
         $this->assertTrue($policy->isEnabled('password'));
     }
 
-    // ── snapshot memo + fail-fast ────────────────────────────────────
+    // ── one snapshot per DECISION + resident liveness + fail-fast ────
 
-    public function test_one_snapshot_per_instance_across_queries(): void
+    /**
+     * The ≤1-read-per-decision law, re-pinned for the rework design: each
+     * public decision (isEnabled, currentState) takes EXACTLY ONE
+     * getAllOverrides snapshot — three decisions here, three reads, and the
+     * answers are still the parsed ones. (This test replaced
+     * test_one_snapshot_per_instance_across_queries, which pinned the
+     * per-instance memo the F7 rework deleted: the memo was proven stale in
+     * production because PHP-DI memoizes built instances and Workerman
+     * workers hold one container for their lifetime.)
+     */
+    public function test_one_snapshot_per_decision_not_per_instance(): void
     {
         $settings = $this->createMock(SettingsRepository::class);
-        $settings->expects($this->once())
+        $settings->expects($this->exactly(3))
             ->method('getAllOverrides')
             ->willReturn([self::PW => false]);
 
@@ -267,6 +281,115 @@ final class AuthMethodPolicyTest extends TestCase
         $this->assertFalse($policy->isEnabled('password'));
         $this->assertTrue($policy->isEnabled('webauthn'));
         $this->assertCount(5, $policy->currentState());
+    }
+
+    /**
+     * Cross-"request" liveness (the rework's point): build the policy ONCE —
+     * exactly what the production container hands a resident worker — flip
+     * the DB row through the same repository seam between decisions (mirrors
+     * the AuthProviderBootstrapper request-path self-heal idiom, where the
+     * persisted flag must re-decide every call), and demand that every
+     * decision sees the new state, in BOTH directions.
+     */
+    public function test_resident_instance_observes_external_flag_flip_between_decisions(): void
+    {
+        // Mutable override set behind ONE SettingsRepository double: the DB
+        // row changing under a warm instance is the production reality
+        // (external/legacy write, another worker's admin API write, restored
+        // backup) the deleted per-instance memo could never catch up with.
+        $overrides = [self::PW => true];
+        $settings = $this->createMock(SettingsRepository::class);
+        // By-REFERENCE capture on purpose: an arrow fn would freeze the array
+        // at creation and every later flip would be invisible to the double.
+        $settings->method('getAllOverrides')
+            ->willReturnCallback(static function () use (&$overrides): array {
+                return $overrides;
+            });
+        $settings->method('getDefault')->willReturn(true);
+
+        $policy = new AuthMethodPolicy(
+            $settings,
+            $this->createMock(UserRepository::class),
+            new WebAuthnCredentialRepository($this->emptyWaDb()),
+            $this->createMock(UserIdentityRepository::class),
+            $this->createMock(AuthProviderBootstrapper::class),
+        );
+
+        $this->assertTrue($policy->isEnabled('password'), 'warm-up decision');
+
+        $overrides[self::PW] = false; // an out-of-band disable lands in the table
+
+        $this->assertFalse(
+            $policy->isEnabled('password'),
+            'isEnabled() answered from a stale snapshot on a resident instance — '
+            . 'the F7 rework CRITICAL (enforcement lags a live disable forever).',
+        );
+        $this->assertFalse(
+            $policy->currentState()['password'],
+            'currentState() (the write guards' . "' base) answered from a stale "
+            . 'snapshot — a stale base is a live R2 bypass.',
+        );
+
+        $overrides[self::PW] = true; // re-enable must be live too (both directions)
+
+        $this->assertTrue($policy->isEnabled('password'));
+    }
+
+    /**
+     * The bypass itself, pinned through the PRODUCTION call shape
+     * (AdminSettingsController::authMethodLockoutResponse):
+     * array_merge(currentState(), touched) → assertSafeTransition. With the
+     * deleted memo, the first currentState() froze password=ON while the
+     * table had already been flipped to OFF, so disabling webauthn merged
+     * onto a false base and sailed through R2 while the real state locked out
+     * the only admin. Fresh per-decision snapshots make the base live, so the
+     * guard must now reject.
+     */
+    public function test_stale_base_r2_bypass_is_impossible_through_the_production_call_shape(): void
+    {
+        $overrides = []; // defaults: password ON, webauthn ON, externals OFF
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getAllOverrides')
+            ->willReturnCallback(static function () use (&$overrides): array {
+                return $overrides;
+            });
+        $settings->method('getDefault')->willReturnCallback(
+            static fn (string $key): mixed => match ($key) {
+                self::PW, self::WA => true,
+                default => false,
+            },
+        );
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findActiveAdminsForLockoutProbe')
+            ->willReturn([['id' => 'admin-1', 'has_password' => true]]);
+
+        $policy = new AuthMethodPolicy(
+            $settings,
+            $users,
+            new WebAuthnCredentialRepository($this->emptyWaDb()),
+            $this->createMock(UserIdentityRepository::class),
+            $this->createMock(AuthProviderBootstrapper::class),
+        );
+
+        $this->assertTrue($policy->currentState()['password'], 'warm-up decision (memo poison under the old code)');
+
+        $overrides[self::PW] = false; // password ALREADY off in the table (out-of-band write)
+
+        // Operator now disables webauthn (and enables github, which the admin
+        // has no identity for — so under the TRUE state admin-1 is stranded).
+        /** @var array<string, bool> $proposed */
+        $proposed = array_merge($policy->currentState(), ['webauthn' => false, 'github' => true]);
+
+        $this->assertFalse($proposed['password'], 'the merged base must carry the LIVE table view');
+
+        try {
+            $policy->assertSafeTransition($proposed);
+            $this->fail('R2 must reject: the only admin is left without any factor');
+        } catch (AuthMethodLockoutException $e) {
+            $this->assertSame(AuthMethodLockoutException::REASON_ADMIN_LOCKOUT, $e->reason());
+            $this->assertSame(['admin-1'], $e->blockedAdminIds());
+        }
     }
 
     public function test_unreadable_store_throws_to_the_caller_which_must_deny(): void

@@ -5873,6 +5873,18 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   law), incl. the bounded once-per-worker-life fallback alarm and the accepted residual that
   password-off + open `auth.signup_mode` still mints fresh-account sessions (signup_mode is the
   account-creation control; the quintet governs sign-in factors only).
+- **W3 rework (P2): the two metadata settings policies now have a production-DI binding guard.**
+  The adversarial review dropped BOTH `constructorParameter` lines (`confidencePolicy` on
+  `MovieMetadataResolver`, `cachePolicy` on `MetadataManager`) and the full suite stayed green —
+  each consumer silently falls back to a STORE-LESS `new MatchConfidencePolicy()` /
+  `new MetadataCachePolicy()`, freezing `metadata.min_match_confidence` at gate-off and
+  `metadata.cache_ttl_hours` at 24 h while every hand-built test passes the policy positionally.
+  New `tests/Unit/Media/Metadata/MetadataPoliciesWiringGuardTest.php` copies the
+  DiscoveryPolicyWiringGuardTest (W2) / SecurityHeadersPolicyWiringGuardTest (W4) shape: the
+  production container must yield both policies store-backed AND thread them (store-intact) into
+  both consumers. Mutation-proven: each single drop reddens exactly its consumer pin, the double
+  drop reddens both, restore is byte-identical green. Test-only; census rotated 1972→1973 from
+  the measured red.
 
 ## [1.2.3] — 2026-07-12
 

@@ -557,12 +557,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * SecurityHeadersEmissionTest, SecurityHeadersPolicyWiringGuardTest;
       * Unit/Admin/PhaseW2W4SettingsReachabilityTest;
       * Unit/Server/Core/StatsBootstrapSingleSourceTest). Zero Request-root
-      * read/write sites added — the emission tests construct Requests only
-      * via declared constructor params (S427 shape), so the reads/writes
-      * denominators stay untouched. Measured from the phpunit red (1972),
-      * not predicted.
-      */
-    private const EXPECTED_PHP_FILES = 1972;
+     * read/write sites added — the emission tests construct Requests only
+     * via declared constructor params (S427 shape), so the reads/writes
+     * denominators stay untouched. Measured from the phpunit red (1972),
+     * not predicted.
+     * Re-pinned 1972→1973 by the F7-rework + W3-wiring-guard lane (2026-10-03):
+     * net +1 — 1 new tests/Unit/Media/Metadata/ file
+     * (MetadataPoliciesWiringGuardTest.php, the W3 settings-policies
+     * binding-guard the P2 review demanded). The AuthMethodPolicy staleness
+     * fix touched only existing files. Zero Request-root read/write sites
+     * added, so EXPECTED_DECLARED_READS/WRITES stay untouched. Measured from
+     * the phpunit red (1973), not predicted.
+     */
+    private const EXPECTED_PHP_FILES = 1973;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

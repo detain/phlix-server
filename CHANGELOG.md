@@ -530,6 +530,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **The `@phlix/ui` tarball pin moves `v0.99.8` → `v0.99.9` and the served `/app` bundle is
+  regenerated — the grid 'Add to playlist' flow now honors the server create contract in the
+  shipped SPA.** The v0.99.9 tag (commit `cc931723`, tag-form pin per the ui-pin-skew gate)
+  carries the playlist fix `09bf8248` (dist `7792546c`): `createPlaylist(name, libraryId)`
+  sends exactly `{name, library_id}` to `POST /api/v1/playlists` — matching
+  `CollectionController::create`'s required key (the flow 400ed for every role before) —
+  parses the `{collection}` 201 envelope with fail-loud `ApiError`s on malformed 200s, and
+  chains `POST /api/v1/collections/{id}/items/{mediaItemId}` so the item actually lands. This
+  closes with the server's own `library_id` shape() addition (`c42e166a`, the Unreleased Added
+  entry above): fix and column arrive together on the same render path. Riding along: the
+  contracts `#v0.5.3` re-pin (204-code error catalog — `syncplay.queue_limit_exceeded` now
+  present in the served corpus; dist `db114905`) and the `library_id` wire-truth doc pass
+  (dist `06b1253b`). Vendored identity proven at install: `node_modules/@phlix/ui/dist/phlix-ui.js`
+  is sha256 `5efa7cb5de88ee6941095361164ebc8e602ce8590fa7db51edd912858aa78cdc` — byte-identical
+  to the tag's tree blob at v0.99.9. Lock regen is minimal (npm 11.19.0 / node 24.20.0,
+  `npm_config_userconfig=/dev/null`): 7+/7− — the root echo, the `@phlix/ui` node (honest
+  `0.99.9`, new resolved+integrity, contracts dep `#v0.5.2`→`#v0.5.3`), and the
+  `@phlix/contracts` git resolution rotating to `430981e3…` (npm kept the stale lock entry on
+  the first pass; the node was dropped and re-resolved from ui's declaration).
+  `@phlix/syncplay #v0.1.5` untouched; `npm ci` clean. `public/assets/app/` rebuilt
+  CI-faithfully (212 files, three consecutive `vite build`s byte-identical via md5 census; the
+  S253 gate's `git diff --exit-code` + index-vs-disk set checks replay green against the
+  committed tree). Grep proofs on the new served corpus: the `{name:t,library_id:n}` create
+  payload lives in `client-*.js`, the per-leg failure toasts in the `MediaCard`/`MediaDetail`
+  chunks, the `['bearer', …]` WS carrier is still live, zero `[?&]token=` hits (incl. source
+  maps). `web-ui` `node --test` is 33/33 against the new pin, including the registry-parity
+  drift guard. Zero PHP is touched.
+
 - **Collections ownership (Option A): per-user collections replace the interim
   admin gate — members regain self-service CRUD, foreign rows answer the
   not-found shape, active admins stay omniscient (owner decision #6 landed,

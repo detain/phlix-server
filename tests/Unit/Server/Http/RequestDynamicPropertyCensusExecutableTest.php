@@ -546,8 +546,23 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * Server/Http/Controllers/Admin/AdminSettingsControllerAuthGuardTest,
       * Admin/AuthMethodFlagsReachabilityTest). Measured from the phpunit red
       * (1961), not predicted.
+      * Re-pinned 1961→1972 by the W2+W4 discovery/security settings lane
+      * (2026-10-03): net +11 — 2 new src/ policy classes
+      * (src/Discovery/DiscoveryPolicy.php,
+      * src/Server/Http/Middleware/SecurityHeadersPolicy.php), 1 new config/
+      * file (config/security.php — the W4 defaults, net-new-file precedent
+      * stats.php/dlna.php), and 8 new tests (Unit/Discovery/: DiscoveryPolicy-
+      * Test, DiscoveryServerGateTest, DiscoveryPolicyWiringGuardTest;
+      * Unit/Server/Http/Middleware/: SecurityHeadersPolicyTest,
+      * SecurityHeadersEmissionTest, SecurityHeadersPolicyWiringGuardTest;
+      * Unit/Admin/PhaseW2W4SettingsReachabilityTest;
+      * Unit/Server/Core/StatsBootstrapSingleSourceTest). Zero Request-root
+      * read/write sites added — the emission tests construct Requests only
+      * via declared constructor params (S427 shape), so the reads/writes
+      * denominators stay untouched. Measured from the phpunit red (1972),
+      * not predicted.
       */
-    private const EXPECTED_PHP_FILES = 1961;
+    private const EXPECTED_PHP_FILES = 1972;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

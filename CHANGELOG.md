@@ -9,6 +9,84 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **W2+W4 settings exposure: discovery probe gates + security-header knobs (+ the
+  W3 duo's schema half).** Three related slices, one lane (both schema-touching
+  waves consolidated to avoid a phlix-shared collision):
+
+  - **`discovery.ssdp.enabled` / `discovery.mdns.enabled` (W2, defaults TRUE — pure
+    opt-out).** `DiscoveryServer::start()` previously armed its SSDP (60 s) and mDNS
+    (30 s) advertisement timers UNCONDITIONALLY. New `src/Discovery/DiscoveryPolicy.php`
+    (live `SettingsRepository` reads, no static caches, defaults-true coercion table)
+    gates BOTH the boot-time timer registration and every tick body — the tick
+    re-check makes flipping a probe OFF go live within one interval; flipping it back
+    ON needs a process re-running `start()`, so the schema carries an honest
+    `restart:true` with the asymmetry disclosed in its helpText. PHP-DI wiring via
+    `DlnaServicesProvider` (named `constructorParameter`, mutation-proven by
+    `DiscoveryPolicyWiringGuardTest`). **Reachability disclosed honestly:**
+    `DiscoveryServer` is only started from `Application::run()`, which has no
+    production caller (S171; `PublicFrontControllerRemovalGuardTest` pins the
+    absence) — the Workerman daemon's discovery traffic is the separately-gated
+    `phlix-dlna-ssdp` worker (`SsdpAdvertiser::isEnabledForConfig`). The keys exist to
+    make the class correct-if-reached, mirroring the config/discovery.php
+    `ssdp.enabled`/`mdns.enabled` names the file layer already carried.
+  - **`security.hsts_max_age_seconds` (integer 0..31536000, default 31536000) +
+    `security.frame_options` (enum `DENY|SAMEORIGIN|NONE`, default `SAMEORIGIN`)
+    (W4, both `restart:false` — per-request header emission reads live).** New
+    `src/Server/Http/Middleware/SecurityHeadersPolicy.php` clamps/coerces
+    (negative → 0 = clear-the-policy intent, out-of-set frame value → `SAMEORIGIN`);
+    `SecurityHeaders::decorate()` consults it per request (`HttpHandler` resolves via
+    the container with a fail-safe default-policy fallback, memoised), so the shipped
+    defaults emit a byte-identical pair to the old hardcoded constants. `NONE` is a
+    structured sentinel that OMITS `X-Frame-Options` (CSP `frame-ancestors` stays).
+    **CSP exposure deliberately refused** (DO-NOT-EXPOSE law, now docblocked at the
+    generator): `media-src`/`worker-src blob:` and `style-src 'unsafe-inline'` are
+    force-inject laws for hls.js MSE playback and runtime theming — free-form admin
+    CSP would break the product. Bounds on both keys are mandatory in-schema (F9
+    lesson); out-of-bounds PUTs are rejected 400 by the existing
+    `validateAgainstSchema` (justinrainbow) stage — no new wire codes.
+    New `config/security.php` declares the defaults (net-new-file precedent:
+    stats.php/dlna.php), which is what makes the keys resolve through the config
+    layer TODAY, pre-vendor.
+  - **W3's schema half + the owed entry.** `metadata.min_match_confidence` (number
+    0..1, default 0.0 = gate off) and `metadata.cache_ttl_hours` (integer 1..8760,
+    default 24) were shipped SERVER-side at 6cbe692a (`MatchConfidencePolicy`,
+    `MetadataCachePolicy`) without a CHANGELOG entry and without schema declaration —
+    that attribution is this bullet. The schema keys now land in phlix-shared
+    (5c4b59f); both policies' `KNOWN LIMIT` docblocks were rewritten to record the
+    remaining vendor seam. Out-of-band `server_settings` rows are effective today via
+    `getEffective()`'s DB layer.
+
+  **Admin-API admission mechanism (report):** there is no separate allowlist to edit —
+  `AdminSettingsController::allowedKeys()` is DERIVED from the vendored
+  `server-settings.schema.json` (`loadAllowedKeysFromSchema`). The vendored copy is
+  pinned at v0.49.1/73 keys by owner-gated seam; all six new keys (plus the F7
+  quintet) are admitted automatically when the schema is re-vendored at the next
+  phlix-shared tag (v0.51.0 owed). `AdminSettingsControllerTest`'s 73-count pins
+  rotate at that re-vendor, not now.
+  **F16 stats dual-entry — verdict: superseded, pinned.** The literal dual-entry
+  premise (start.php vs public/index.php bootstraps) died with S171's deletion of
+  `public/index.php`; the surviving law — stats timers flow ONLY through
+  `Application::startBackgroundTimers()`, called by both `run()` and the daemon's
+  timer worker, all fork sites overlay via `EffectiveConfig::bootstrapAndOverlay`
+  (7 sites) — is now structurally pinned by `StatsBootstrapSingleSourceTest`.
+  **Deliberate non-ship dispositions (Phase-5 remainder):** IP allow/deny rows —
+  NOT shipped: no enforcement point exists outside the reverse proxy and a settings
+  key that nothing reads is the 213fce9d trap; revisiting needs a middleware
+  design first. HTTPS-only (`force_https`) — NOT shipped: the server terminates
+  plain HTTP on :8097 by contract (LAN/streaming clients), so a global toggle would
+  be either inert or self-lockout; TLS-termination posture belongs to deployment.
+  **Pre-existing defect disclosed (unfixed, no behavior change):**
+  `SecurityHeaders` doccomments historically described HSTS as emitted "on secure
+  connections" while the code always emitted it — the class has no TLS context;
+  the comment now records the reality instead of the intent.
+  Tests: `DiscoveryPolicyTest`, `DiscoveryServerGateTest` (timer-table reflection,
+  6 cases incl. live-flip tick silence), `DiscoveryPolicyWiringGuardTest`,
+  `SecurityHeadersPolicyTest` (coercion/clamp table), `SecurityHeadersEmissionTest`
+  (default pair byte-ident + configured values reach the wire twice per LIVE law),
+  `SecurityHeadersPolicyWiringGuardTest`, `PhaseW2W4SettingsReachabilityTest`
+  (all six keys over the REAL config dir with an empty-override-table stand-in),
+  `StatsBootstrapSingleSourceTest`. Schema: phlix-shared 78→80 (568655e) →84 (5c4b59f).
+
 - **F7 auth-method toggles + lock-out fail-safe (owner-authorized flagship).** Five
   booleans — `auth.password.enabled`, `auth.webauthn.enabled` (default ON, absent-safe)
   and `auth.oidc.enabled` / `auth.ldap.enabled` / `auth.github.enabled` (absent = OFF,

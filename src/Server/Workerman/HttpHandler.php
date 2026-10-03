@@ -24,6 +24,7 @@ use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Server\Http\FastPath\PreRouterFastPaths;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
+use Phlix\Server\Http\Middleware\SecurityHeadersPolicy;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\RequestContext;
@@ -101,6 +102,17 @@ final class HttpHandler
      */
     private ?PreRouterFastPaths $fastPaths = null;
 
+    /**
+     * Memoised {@see SecurityHeaders} decorator for this worker (W4).
+     *
+     * Same instance-field shape as {@see self::$fastPaths}: the decorator
+     * holds NO request state — its two settings-backed values are re-read
+     * LIVE inside decorate() on every response — so one instance per worker
+     * is both bounded and correct. Built on first use by
+     * {@see securityHeaders()}.
+     */
+    private ?SecurityHeaders $securityDecorator = null;
+
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly RequestAuthenticator $authenticator,
@@ -149,7 +161,7 @@ final class HttpHandler
             // this seam; it is now this handler's alone). With an
             // empty allowlist this is always null and behavior is unchanged.
             $cors = CorsManager::fromEnv();
-            $securityHeaders = new SecurityHeaders();
+            $securityHeaders = $this->securityHeaders();
             $preflight = $cors->preflightResponse($request);
             if ($preflight !== null) {
                 $responseStatus = $preflight->statusCode;
@@ -322,16 +334,20 @@ final class HttpHandler
             // compression decoration the success branches use. A cross-origin XHR
             // needs the CORS headers to even READ the 429 (and its Retry-After);
             // without them the browser surfaces an opaque network error instead of
-            // the rate-limit signal. Rebuild the decorators locally (cheap,
-            // deterministic) so this is robust even if the throw beat their
-            // in-try assignment; CORS-decorate only when $request is available.
+            // the rate-limit signal. CORS-decorate only when $request is available.
             $responseStatus = 429;
             $rateResponse = Application::rateLimitResponse($e);
             $rateCors = CorsManager::fromEnv();
             if ($request instanceof Request) {
                 $rateResponse = $rateCors->decorate($request, $rateResponse);
             }
-            $rateResponse = (new SecurityHeaders())->decorate($rateResponse);
+            // SV-4.15 F4 (W4 shape): the 429 reuses the SAME per-worker
+            // decorator as the success branches — settings values are read
+            // live inside decorate(), so this is identical to the old
+            // "rebuild locally" behavior while additionally honouring the
+            // two security keys, and stays robust even if the throw beat
+            // the in-try assignment ($request alone gates the CORS echo).
+            $rateResponse = $this->securityHeaders()->decorate($rateResponse);
             $this->compressResponse($wr, $rateResponse);
             // S113 (site 3): the 429 is built outside any router — the limiter throws
             // out of dispatch — so it too had no head-only flag and shipped its JSON
@@ -839,6 +855,36 @@ final class HttpHandler
         // services) lazily — exactly as the deleted private serveMediaStream()
         // did — instead of every request paying for them.
         return $this->fastPaths = new PreRouterFastPaths($artworkStorage, $avatarStorage, $this->container);
+    }
+
+    /**
+     * The per-worker security-header decorator (W4).
+     *
+     * The {@see SecurityHeadersPolicy} comes from the container so both
+     * settings-backed values reach every response — including the 429 branch,
+     * which shares this instance. A container WITHOUT the binding (hand-built
+     * test doubles, trimmed boots) falls back to the policy's shipped
+     * constants, which are exactly the hardcoded values this file emitted
+     * before the keys existed: the fallback is the historical SAFE pair, not
+     * a downgrade, so it may be silent. With the binding present, a store
+     * that throws at BUILD time degrades inside the policy itself (per-read
+     * defaults), never here.
+     */
+    private function securityHeaders(): SecurityHeaders
+    {
+        if ($this->securityDecorator !== null) {
+            return $this->securityDecorator;
+        }
+
+        try {
+            $policy = $this->container->get(SecurityHeadersPolicy::class);
+        } catch (\Throwable) {
+            $policy = null;
+        }
+
+        return $this->securityDecorator = new SecurityHeaders(
+            $policy instanceof SecurityHeadersPolicy ? $policy : null
+        );
     }
 
     /**

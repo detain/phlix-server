@@ -63,12 +63,17 @@ use Phlix\Admin\SettingsRepository;
  * cover a `server_settings` row written by direct SQL, a restored backup, or
  * an orphaned row left behind by a renamed key.
  *
- * ## KNOWN LIMIT (honest scope)
+ * ## ADMIN-UI SURFACE (W4 follow-up closed the schema half)
  *
- * Until `detain/phlix-shared`'s server-settings.schema.json declares this key
- * (a follow-up — outside this lane), it has no admin-UI surface and the only
- * way to set an override is a `server_settings` row, exactly like
- * `metadata.embedded_write_enabled` shipped first.
+ * `detain/phlix-shared` declares this key in server-settings.schema.json
+ * (5c4b59f) with the SAME bounds this class clamps to. Admin-API admission
+ * still lags one seam behind, exactly like the F7 auth quintet: this repo's
+ * vendored phlix-shared is the 73-key v0.49.1 copy, and
+ * AdminSettingsController::allowedKeys() derives from the VENDORED schema —
+ * the key becomes PUT-able when the owner-gated re-vendor (tag v0.51.0
+ * cascade) lands. Until then the effective-value path is fully live: this
+ * policy reads any `server_settings` row (or config/metadata.php default)
+ * today, so a row written out-of-band already takes effect per lookup.
  *
  * @package Phlix\Media\Metadata
  * @since 1.8.0

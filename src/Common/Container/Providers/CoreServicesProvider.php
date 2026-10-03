@@ -12,12 +12,16 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Server\Http\Middleware\SecurityHeadersPolicy;
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -112,6 +116,40 @@ final class CoreServicesProvider implements ServiceProviderInterface
 
         // Plugin-safe alias so $container->get(LoggerInterface::class) resolves correctly.
         $definitions[LoggerInterface::class] = $definitions[StructuredLogger::class];
+
+        // W4 — the two configurable security-header values, threaded from the
+        // effective-settings store. Bound HERE (not in the Admin provider that
+        // owns SettingsRepository) because its consumer is the repo-wide HTTP
+        // surface: every response passes through HttpHandler, which resolves
+        // this policy once per worker and re-reads values LIVE per decorate().
+        // The store is fetched OPTIONAL-ly: a container built without the admin
+        // subsystem must still yield a policy answering the shipped constants
+        // (byte-identical to the pre-key hardcoded headers) — never a build
+        // failure on the hot HTTP path. A store that IS bound but cannot build
+        // is loudly degraded via DegradedBuild, same idiom as the artwork /
+        // metadata / discovery policy factories.
+        $definitions[SecurityHeadersPolicy::class] = factory(
+            static function (ContainerInterface $c): SecurityHeadersPolicy {
+                try {
+                    $settings = $c->get(SettingsRepository::class);
+                    $store = $settings instanceof SettingsRepository ? $settings : null;
+                } catch (\Throwable $e) {
+                    DegradedBuild::warnUnlessAbsent(
+                        $c,
+                        LogChannels::HTTP,
+                        'The settings store is bound but could not be built; the '
+                        . 'HSTS max-age and X-Frame-Options headers fall back to their '
+                        . 'shipped (strict, pre-key) defaults. Admin-saved security-header '
+                        . 'overrides stay ignored by this worker until it is recycled.',
+                        $e
+                    );
+
+                    $store = null;
+                }
+
+                return new SecurityHeadersPolicy($store);
+            }
+        );
 
         $definitions[AuditLogger::class] = factory(static function () use ($loggerConfigPath): AuditLogger {
             if (is_string($loggerConfigPath) && $loggerConfigPath !== '') {

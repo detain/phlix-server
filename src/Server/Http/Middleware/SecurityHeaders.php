@@ -18,8 +18,12 @@ use Phlix\Server\Http\Response;
  *
  * Adds:
  *  - X-Content-Type-Options: nosniff
- *  - X-Frame-Options: SAMEORIGIN
- *  - Strict-Transport-Security (HSTS) with a 1-year max-age
+ *  - X-Frame-Options: from {@see SecurityHeadersPolicy::frameOptions()}
+ *    (settings key `security.frame_options`, default SAMEORIGIN — the value
+ *    this class hardcoded before the key existed; NONE omits the header)
+ *  - Strict-Transport-Security with max-age from
+ *    {@see SecurityHeadersPolicy::hstsMaxAgeSeconds()} (settings key
+ *    `security.hsts_max_age_seconds`, default 1 year + includeSubDomains)
  *  - Content-Security-Policy scoped to the SPA (`script-src 'self'` — never
  *    `'unsafe-inline'`, with an opt-in per-request nonce for the SPA shell's
  *    inline bootstrap block; `style-src 'self' 'unsafe-inline'` — inline STYLE
@@ -31,15 +35,27 @@ use Phlix\Server\Http\Response;
  *    itself but no external domain can)
  *
  * Called from {@see \Phlix\Server\Workerman\HttpHandler} after CORS decoration
- * on every response that passes through the Workerman entrypoint. The CGI entry
- * point ({@see public/index.php}) applies the same headers via the same calls.
+ * on every response that passes through the Workerman entrypoint. (The
+ * historical second caller — the pre-S171 CGI front controller `public/index.php`
+ * — no longer exists; this handler is the sole production entry.)
  *
  * @package Phlix\Server\Http\Middleware
  */
 final class SecurityHeaders
 {
-    /** One-year HSTS max-age (in seconds). */
-    private const HSTS_MAX_AGE = 31536000;
+    /** @var SecurityHeadersPolicy Per-request effective values (live reads) */
+    private SecurityHeadersPolicy $policy;
+
+    /**
+     * @param SecurityHeadersPolicy|null $policy Settings-backed values; NULL
+     *        (the pre-W4 construction shape) emits the historical hardcoded
+     *        pair — SAMEORIGIN + max-age=31536000 — because a policy built
+     *        without a store answers exactly those shipped constants.
+     */
+    public function __construct(?SecurityHeadersPolicy $policy = null)
+    {
+        $this->policy = $policy ?? new SecurityHeadersPolicy();
+    }
 
     /**
      * Apply security headers to a response.
@@ -64,15 +80,29 @@ final class SecurityHeaders
             $response->header('X-Content-Type-Options', 'nosniff');
         }
 
-        if (!self::hasHeader($headers, 'X-Frame-Options')) {
-            $response->header('X-Frame-Options', 'SAMEORIGIN');
+        // X-Frame-Options via the policy's CLOSED value set — frameOptions()
+        // can only return DENY, SAMEORIGIN or the NONE sentinel; NONE omits
+        // the legacy header (the always-on CSP frame-ancestors 'self' below
+        // is what modern browsers obey either way — see the policy's
+        // DO-NOT-EXPOSE note for why the CSP itself is not settings-backed).
+        $frameOptions = $this->policy->frameOptions();
+        if ($frameOptions !== SecurityHeadersPolicy::NONE && !self::hasHeader($headers, 'X-Frame-Options')) {
+            $response->header('X-Frame-Options', $frameOptions);
         }
 
-        // HSTS: only on secure connections. An http response should not declare
-        // HSTS because a MITM could inject it on the plain-text response and
-        // lock the browser into https for subsequent visits.
+        // HSTS: emitted with the policy's clamped max-age + the fixed
+        // includeSubDomains suffix (not configurable by design — a shorter
+        // subdomain pin needs its own structured key, not a raw header box).
+        // NOTE (pre-existing, disclosed not introduced): the historical
+        // comment here said "only on secure connections", but this class has
+        // never had request/TLS context and always emitted the header; the
+        // plain-text MITM-injection concern remains a known open item.
+        // max-age=0 is the standard clear-the-pin signal.
         if (!self::hasHeader($headers, 'Strict-Transport-Security')) {
-            $response->header('Strict-Transport-Security', 'max-age=' . self::HSTS_MAX_AGE . '; includeSubDomains');
+            $response->header(
+                'Strict-Transport-Security',
+                'max-age=' . $this->policy->hstsMaxAgeSeconds() . '; includeSubDomains'
+            );
         }
 
         // CSP: restrictive by default. script-src is 'self' only — inline SCRIPT
@@ -150,6 +180,18 @@ final class SecurityHeaders
      * (updates.md #47 / S71-S73) proxies all remote artwork through our own origin,
      * the explicit TMDB hosts should be removed. See the inline `TODO` at the
      * `img-src` directive below.
+     *
+     * DO-NOT-EXPOSE LAW (W4): nothing in this string is ever plumbed to a
+     * settings key. `media-src`/`worker-src 'self' blob:` may not be dropped
+     * (hls.js MSE playback + its transmux Web Worker die without them — every
+     * transcoded stream estate-wide), and `style-src 'unsafe-inline'` may not
+     * be dropped either (the token-theme surface writes CSS custom properties
+     * via el.style.setProperty(), which lands in element style attributes).
+     * A free-form CSP text box would let one admin PUT break playback for
+     * everyone with a value no schema could validate; if any directive ever
+     * becomes operator-tunable it must be a STRUCTURED key with a closed
+     * value set per the frame_options precedent — and the force-inject
+     * fallback (blob: trio) must stay non-negotiable in code.
      *
      * @param string|null $scriptNonce Optional cryptographically-random nonce.
      *                                  When non-empty, `'nonce-<value>'` is added

@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\AuthMethodLockoutException;
+use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Server\Http\Request;
@@ -45,13 +47,30 @@ final class AuthProviderController
     private AuthProviderBootstrapper $bootstrapper;
 
     /**
+     * F7 lock-out guard consulted by {@see self::disableProvider()} before the
+     * persisted flag is turned off. Optional so hand-built call sites (unit
+     * tests that only exercise list/enable/schema paths) keep working; the DI
+     * binding names it explicitly — an unnamed policy would leave the
+     * integrations-panel disable button as an unguarded write path, exactly
+     * the hole this closes.
+     *
+     * @var AuthMethodPolicy|null
+     */
+    private ?AuthMethodPolicy $authPolicy;
+
+    /**
      * @param AuthProviderRegistry     $registry     The auth provider registry.
      * @param AuthProviderBootstrapper $bootstrapper Enable-state store + (de)registration.
+     * @param AuthMethodPolicy|null    $authPolicy   F7 R1/R2 transition guard.
      */
-    public function __construct(AuthProviderRegistry $registry, AuthProviderBootstrapper $bootstrapper)
-    {
+    public function __construct(
+        AuthProviderRegistry $registry,
+        AuthProviderBootstrapper $bootstrapper,
+        ?AuthMethodPolicy $authPolicy = null,
+    ) {
         $this->registry = $registry;
         $this->bootstrapper = $bootstrapper;
+        $this->authPolicy = $authPolicy;
     }
 
     /**
@@ -143,6 +162,14 @@ final class AuthProviderController
      * Persists `auth.<name>.enabled = false` and removes it from the current
      * worker's registry. Other workers stop offering it on their next boot pass.
      *
+     * F7: the write goes through {@see AuthMethodPolicy::assertSafeTransition()}
+     * first — a provider that is some active administrator's ONLY usable factor
+     * cannot be disabled here (R2-bis), and this route can never be the write
+     * that empties the last enabled method (R1). A refused transition persists
+     * NOTHING and answers 422 with the machine reason; the integrations panel
+     * keeps its Enabled state untouched. With no policy wired (hand-built test
+     * controllers) the guard is inert, which is why the DI binding names it.
+     *
      * @param Request $request
      * @param array<string, string> $params Must contain 'name'.
      * @return Response
@@ -153,6 +180,30 @@ final class AuthProviderController
 
         if (!$this->bootstrapper->isToggleable($name)) {
             return $this->unknownProvider($name);
+        }
+
+        if ($this->authPolicy !== null) {
+            try {
+                $this->authPolicy->assertSafeTransition(
+                    array_merge($this->authPolicy->currentState(), [$name => false]),
+                );
+            } catch (AuthMethodLockoutException $e) {
+                return (new Response())->status(422)->json([
+                    'success' => false,
+                    'error' => 'Validation failed',
+                    'errors' => [AuthProviderBootstrapper::flagKey($name) => $e->getMessage()],
+                    'reason' => $e->reason(),
+                    'message' => $e->getMessage(),
+                ]);
+            } catch (\Throwable $e) {
+                // Fail closed: an unreadable policy must not wave an
+                // unvalidated disable through.
+                return (new Response())->status(500)->json([
+                    'success' => false,
+                    'error' => 'Auth-method policy check failed',
+                    'message' => $e->getMessage(),
+                ]);
+            }
         }
 
         $this->bootstrapper->disable($name);

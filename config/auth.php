@@ -47,6 +47,60 @@ return [
          * the policy past the historical baseline of 8.
          */
         'min_length' => 8,
+
+        /**
+         * Whether username-and-password sign-in is accepted (F7 toggle).
+         *
+         * Addressed by the dotted setting key `auth.password.enabled`. This
+         * file value is the DEFAULT; the live answer comes from
+         * {@see \Phlix\Auth\AuthMethodPolicy::isEnabled()} (override when
+         * present, else this default, absent-safe true). Enforced at
+         * `AuthManager::login()` and `AuthManager::verifyCredentials()` (OPDS
+         * HTTP-Basic); write-time lock-out guards (never all-off, never
+         * lock-out-an-active-admin) live in
+         * {@see \Phlix\Auth\AuthMethodPolicy::assertSafeTransition()}.
+         */
+        'enabled' => true,
+    ],
+
+    /**
+     * Passkey (WebAuthn) sign-in toggle (F7).
+     *
+     * Addressed by the dotted setting key `auth.webauthn.enabled`, consumed by
+     * the same {@see \Phlix\Auth\AuthMethodPolicy} as the password toggle.
+     * NOTE the namespace collision deliberately avoided: this is the `auth`
+     * file's `webauthn` subtree, NOT the top-level `$appConfig['webauthn']`
+     * relying-party block (rp_id/rp_name/rp_origin) composed elsewhere —
+     * `config/server.php` declares no `auth` key and no top-level `webauthn`
+     * key, so the two never meet (213fce9d dotted-path near-miss law; pinned
+     * by `tests/Unit/Admin/AuthMethodFlagsReachabilityTest.php`). Switching
+     * this off gates the login and NEW-enrolment routes but keeps credential
+     * management routes live, and never deletes stored credentials.
+     */
+    'webauthn' => [
+        'enabled' => true,
+    ],
+
+    /**
+     * External provider toggles (F7).
+     *
+     * `auth.oidc.enabled` / `auth.ldap.enabled` / `auth.github.enabled` are the
+     * same `server_settings` rows {@see \Phlix\Auth\AuthProviderBootstrapper}
+     * has always owned: ABSENT means OFF, and the bootstrapper ignores config
+     * defaults for these keys — so the `false` values below exist to satisfy
+     * the schema-defaults resolvability contract and to DOCUMENT the effective
+     * absence semantics, not to act as a second switch.
+     */
+    'oidc' => [
+        'enabled' => false,
+    ],
+
+    'ldap' => [
+        'enabled' => false,
+    ],
+
+    'github' => [
+        'enabled' => false,
     ],
 
     /**

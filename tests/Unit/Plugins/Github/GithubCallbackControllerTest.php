@@ -1369,4 +1369,34 @@ final class GithubCallbackControllerTest extends TestCase
 
         return $http;
     }
+
+    /**
+     * F7 regression pin: authorize reconciles this worker's registry through
+     * ensureProviderRegistered(GITHUB) before the provider gate — flag OFF
+     * (false, empty registry) yields the 503 provider_not_configured body.
+     */
+    public function test_authorize_reconciles_registry_before_provider_gate(): void
+    {
+        $bootstrapper = $this->createMock(\Phlix\Auth\AuthProviderBootstrapper::class);
+        $bootstrapper->expects($this->once())
+            ->method('ensureProviderRegistered')
+            ->with(\Phlix\Auth\AuthProviderBootstrapper::GITHUB)
+            ->willReturn(false);
+
+        $controller = new GithubCallbackController(
+            new AuthProviderRegistry(), // empty
+            $this->createMock(UserRepository::class),
+            $this->createMock(JwtHandler::class),
+            new InMemoryOAuth2StateStore(),
+            null,
+            $bootstrapper,
+        );
+
+        $response = $controller->authorize($this->authorizeRequest('/app'), []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('provider_not_configured', $body['error']);
+    }
 }

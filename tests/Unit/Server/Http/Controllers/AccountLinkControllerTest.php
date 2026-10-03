@@ -852,4 +852,37 @@ final class AccountLinkControllerTest extends TestCase
 
         $this->assertSame(409, $response->statusCode);
     }
+
+    /**
+     * F7 regression pin: linkLdap reconciles the per-worker registry through
+     * ensureProviderRegistered(LDAP) before the hasProvider gate — flag OFF
+     * (false) against an empty registry yields the stable 503
+     * provider_unavailable envelope, never a bind attempt.
+     */
+    public function test_link_ldap_reconciles_registry_before_provider_gate(): void
+    {
+        $bootstrapper = $this->createMock(\Phlix\Auth\AuthProviderBootstrapper::class);
+        $bootstrapper->expects($this->once())
+            ->method('ensureProviderRegistered')
+            ->with(\Phlix\Auth\AuthProviderBootstrapper::LDAP)
+            ->willReturn(false);
+
+        $controller = new AccountLinkController(
+            $this->createMock(UserIdentityRepository::class),
+            new AuthProviderRegistry(),
+            $bootstrapper,
+            $this->existingUser(),
+        );
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['username' => 'alice', 'password' => 'secretpw'];
+
+        $response = $controller->linkLdap($request, []);
+
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('provider_unavailable', $body['error']);
+    }
 }

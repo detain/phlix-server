@@ -194,6 +194,50 @@ class UserRepository
     }
 
     /**
+     * The active-admin set for the auth-method lock-out guard (F7 R2).
+     *
+     * Deliberately narrow projection — id + whether a password credential
+     * exists — over exactly the population the guard protects: `is_admin = 1
+     * AND status = 'active'`, the same predicate as
+     * {@see self::findAdminById()} (an admin account disabled mid-incident is
+     * not someone the toggles must keep a door open for). `password_hash` has
+     * been nullable since migration 091 (external-provider-only accounts), so
+     * NULL or '' both mean "no password factor".
+     *
+     * The remaining factors (passkeys, provider identities) are probed per
+     * candidate by {@see AuthMethodPolicy} only when the cheap ones cannot
+     * answer, so this query stays a single unindexed-but-tiny scan of the
+     * admin minority of `users`.
+     *
+     * @return list<array{id: string, has_password: bool}>
+     */
+    public function findActiveAdminsForLockoutProbe(): array
+    {
+        $result = $this->db->query(
+            "SELECT id, (password_hash IS NOT NULL AND password_hash <> '') AS has_password"
+                . " FROM users WHERE is_admin = 1 AND status = 'active'",
+        );
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $admins = [];
+        foreach ($result as $row) {
+            if (!is_array($row) || !is_string($row['id'] ?? null)) {
+                continue;
+            }
+            $admins[] = [
+                'id' => $row['id'],
+                // MySQL answers the boolean expression as 1/0 (int or
+                // numeric string depending on emulated prepares).
+                'has_password' => (bool) $row['has_password'],
+            ];
+        }
+
+        return $admins;
+    }
+
+    /**
      * Look up only a user's account status by id.
      *
      * S1 security fix: the authenticated hot path (token refresh + per-request

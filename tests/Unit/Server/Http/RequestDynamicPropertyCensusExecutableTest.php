@@ -535,8 +535,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * Request-root read/write sites added (metadata services touch no HTTP
       * Request), so EXPECTED_DECLARED_READS/WRITES stay untouched. Measured
       * from the phpunit red, not predicted.
+      * Re-pinned 1951→1961 by the F7 auth-method-policy lane (2026-10-03):
+      * net +10 — 3 new src/Auth/ files (AuthMethodPolicy.php,
+      * AuthMethodLockoutException.php, AuthMethodDisabledException.php) and 7
+      * new tests/Unit/ files (Auth/AuthMethodPolicyTest,
+      * Auth/AuthManagerAuthMethodGateTest,
+      * Auth/WebAuthn/WebAuthnControllerAuthMethodGateTest,
+      * Auth/AuthProviderControllerDisableGuardTest,
+      * Auth/AuthMethodPolicyWiringGuardTest,
+      * Server/Http/Controllers/Admin/AdminSettingsControllerAuthGuardTest,
+      * Admin/AuthMethodFlagsReachabilityTest). Measured from the phpunit red
+      * (1961), not predicted.
       */
-    private const EXPECTED_PHP_FILES = 1951;
+    private const EXPECTED_PHP_FILES = 1961;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -708,8 +719,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
        * on its own `new Request()` root, the same S101 dispatch-test shape it
        * sits beside. All three name declared members; S427 license intact.
        * Measured from the phpunit red (1033), not predicted.
+       * Re-pinned 1033→1039 by the F7 auth-method-policy lane (2026-10-03):
+       * +6 declared-member WRITES, all request-stamp helpers in the new/
+       * extended tests — WebAuthnControllerAuthMethodGateTest's request()
+       * helper (`->body` + `->userId`, 2), AdminSettingsControllerAuthGuard-
+       * Test's makeRequest (`->body`, 1), and the F7 site pins' inline stamps
+       * (AccountLinkControllerTest `->userId` + `->body`, 2;
+       * AuthControllerLdapLoginTest `->body`, 1). All name declared members;
+       * S427 license intact. Measured from the phpunit red (1039), not
+       * predicted.
        */
-    private const EXPECTED_DECLARED_WRITES = 1033;
+    private const EXPECTED_DECLARED_WRITES = 1039;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

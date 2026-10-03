@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Common\RateLimit\RateLimiterInterface;
@@ -43,6 +44,17 @@ final class WebAuthnController
     private ?RateLimiterInterface $finishAuthLimiter;
 
     /**
+     * F7 auth-method policy for the `auth.webauthn.enabled` toggle. Optional
+     * so direct-construction test call sites keep working; the DI binding
+     * names it explicitly (PHP-DI skips optional ctor params during
+     * autowiring — an unbound policy would silently leave the toggle inert,
+     * the same class (g) trap documented across the sibling providers).
+     *
+     * @var AuthMethodPolicy|null
+     */
+    private ?AuthMethodPolicy $authPolicy;
+
+    /**
      * The limiters are optional so existing direct-construction call sites keep
      * working; the DI factory binds each explicitly to its
      * {@see RateLimitProfiles} container id (PHP-DI skips optional ctor params
@@ -54,11 +66,68 @@ final class WebAuthnController
         AuthManager $authManager,
         ?RateLimiterInterface $startAuthLimiter = null,
         ?RateLimiterInterface $finishAuthLimiter = null,
+        ?AuthMethodPolicy $authPolicy = null,
     ) {
         $this->webauthnManager = $webauthnManager;
         $this->authManager = $authManager;
         $this->startAuthLimiter = $startAuthLimiter;
         $this->finishAuthLimiter = $finishAuthLimiter;
+        $this->authPolicy = $authPolicy;
+    }
+
+    /**
+     * F7 gate predicate: is the WEBAUTHN method available right now?
+     *
+     * NULL policy answers true (pre-F7 behaviour for hand-built controllers;
+     * the container always injects one). A THROWING policy read FAILS CLOSED
+     * (answers false): the whole ceremony is DB-backed anyway, so a store
+     * failure would sink it regardless, and an auth control must never
+     * degrade toward "let the ceremony run".
+     */
+    private function webauthnMethodAvailable(): bool
+    {
+        if ($this->authPolicy === null) {
+            return true;
+        }
+
+        try {
+            return $this->authPolicy->isEnabled(AuthMethodPolicy::WEBAUTHN);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * The 401 answer shared by the two login-ceremony routes. Same fixed
+     * body as every disabled-method rejection — it never reveals which
+     * other methods remain enabled. Body shape is the code-channel-free
+     * `{'error': ...}` exactly like the password login 401 (AuthController
+     * :271) — ErrorCodesContractTest forbids inventing code-channel
+     * literals outside the vendored contracts registry, and the S44
+     * precedent deliberately keeps the generic credential-rejection body
+     * minimal. The server-side audit log carries the precise
+     * `auth_method_disabled` reason.
+     */
+    private function disabledMethodResponse(): Response
+    {
+        return (new Response())->status(401)->json([
+            'error' => 'Invalid credentials',
+        ]);
+    }
+
+    /**
+     * The 403 answer for the two enrolment routes: the caller IS signed in
+     * (authenticated), the SERVER policy simply refuses new passkey
+     * enrolment while the method is off. No `code` field: the contracts
+     * registry has no method-disabled member and the emit law forbids
+     * inventing one — the `error` text channel (not scanned, not pinned)
+     * carries the explanation to the signed-in admin UI.
+     */
+    private function disabledEnrollmentResponse(): Response
+    {
+        return (new Response())->status(403)->json([
+            'error' => 'Passkey enrolment is disabled on this server',
+        ]);
     }
 
     /**
@@ -117,6 +186,16 @@ final class WebAuthnController
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
+        // F7: enrolment is part of the sign-in METHOD, so the toggle refuses
+        // NEW credentials while off — but the credential-management routes
+        // (list/delete) below stay LIVE always, per the gate-the-route-never-
+        // delete-the-config law: stored passkeys survive a toggle, and the
+        // R2 write guard guarantees an admin can never have switched off a
+        // method while it was their only factor.
+        if (!$this->webauthnMethodAvailable()) {
+            return $this->disabledEnrollmentResponse();
+        }
+
         $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
 
@@ -141,6 +220,12 @@ final class WebAuthnController
         $userId = $request->userId ?? null;
         if (!$userId) {
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        // F7: same enrolment gate as startRegistration — a ceremony cannot
+        // finish what the toggle forbids it from starting.
+        if (!$this->webauthnMethodAvailable()) {
+            return $this->disabledEnrollmentResponse();
         }
 
         $data = is_array($request->body) ? $request->body : [];
@@ -178,6 +263,13 @@ final class WebAuthnController
      */
     public function startAuthentication(Request $request, array $params): Response
     {
+        // F7: gate the unauthenticated login ceremony BEFORE any per-username
+        // work, right after the throttle so a disabled surface still costs the
+        // prober budget. Fixed-body 401 mirrors the password path's opacity.
+        if (!$this->webauthnMethodAvailable()) {
+            return $this->disabledMethodResponse();
+        }
+
         $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
 
@@ -208,6 +300,12 @@ final class WebAuthnController
      */
     public function finishAuthentication(Request $request, array $params): Response
     {
+        // F7: same login-ceremony gate as startAuthentication — with the
+        // method off, neither half of the ceremony runs.
+        if (!$this->webauthnMethodAvailable()) {
+            return $this->disabledMethodResponse();
+        }
+
         $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
         $credential = $data['credential'] ?? null;

@@ -14,6 +14,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\DbLoginRateLimitStore;
@@ -335,7 +336,17 @@ final class AuthServicesProvider implements ServiceProviderInterface
             AuthProviderBootstrapper::class => autowire()
                 ->constructorParameter('githubPlugin', get(\Phlix\Plugins\Github\Plugin::class)),
 
-            AuthProviderController::class => autowire(),
+            // F7: the auth-method policy (SSOT for the five `auth.<method>.enabled`
+            // toggles + the R1/R2 lock-out guard). Its `logger` is an optional
+            // ctor param PHP-DI would otherwise skip — bind it to the AUTH
+            // channel so the all-disabled fallback event is never unheard. Every
+            // other ctor dep (settings, users, webauthn creds, identities,
+            // bootstrapper) autowires from the bindings above.
+            AuthMethodPolicy::class => autowire()
+                ->constructorParameter('logger', get('logger.auth')),
+
+            AuthProviderController::class => autowire()
+                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class)),
 
             // S48: the GitHub OAuth2 authorize/callback + link controller. Same DI
             // shape as OidcCallbackController — `db` builds the DB-backed OAuth2
@@ -449,7 +460,9 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // the "real server-side logout" the openapi description and the
                 // AuthController::logout() comment promise. Named for
                 // tests/Unit/Auth/AuthManagerSessionTeardownWiringGuardTest to pin.
-                ->constructorParameter('sessionManager', get(SessionManager::class)),
+                ->constructorParameter('sessionManager', get(SessionManager::class))
+                // F7 (auth.method_disabled gate): the password-toggle policy.
+                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class)),
 
             // SV-4.15(f): register/refresh get their OWN per-surface DB-backed
             // rate limiters. AuthController is otherwise autowired; the limiter
@@ -496,7 +509,9 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // as AuthController above.
             WebAuthnController::class => autowire()
                 ->constructorParameter('startAuthLimiter', get(RateLimitProfiles::WEBAUTHN_START))
-                ->constructorParameter('finishAuthLimiter', get(RateLimitProfiles::WEBAUTHN_FINISH)),
+                ->constructorParameter('finishAuthLimiter', get(RateLimitProfiles::WEBAUTHN_FINISH))
+                // F7: the `auth.webauthn.enabled` gate on both login ceremonies.
+                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class)),
 
             // S81: the self-service profile PIN-verify endpoint is a
             // brute-force oracle unless throttled, so the controller's limiter

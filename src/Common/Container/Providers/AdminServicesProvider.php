@@ -20,6 +20,7 @@ use Phlix\Admin\Maintenance\MaintenanceTaskRunner;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
@@ -194,7 +195,13 @@ final class AdminServicesProvider implements ServiceProviderInterface
 
             // Server-wide settings store + admin API (Step 0.5).
             SettingsRepository::class      => autowire(),
-            AdminSettingsController::class => autowire(),
+            // F7: `authPolicy` is an optional ctor param, so PHP-DI would skip
+            // it during autowiring and the five auth-method toggles would be
+            // an UNGUARDED write surface (class (g) inert-setting trap) —
+            // bind it explicitly. AuthMethodPolicy is wired in
+            // AuthServicesProvider (same definitions container).
+            AdminSettingsController::class => autowire()
+                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class)),
 
             // Admin user management (Step 1.2a). `authManager` is named
             // explicitly (SV-2.7): PHP-DI skips optional ctor params with

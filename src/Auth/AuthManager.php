@@ -111,6 +111,23 @@ class AuthManager
     private ?SessionManager $sessionManager;
 
     /**
+     * Optional F7 auth-method policy (`auth.password.enabled` toggle).
+     *
+     * When wired, password sign-in via {@see AuthManager::login()} and the OPDS
+     * HTTP-Basic path ({@see AuthManager::verifyCredentials()}) are refused —
+     * before any credential is consulted — while the toggle is off, and an
+     * unreadable policy FAILS CLOSED (the sign-in is denied). When null (legacy
+     * hand-built managers, unit-test callers) password sign-in behaves exactly
+     * as it did before F7: `AuthServicesProvider` names this parameter so the
+     * container never ships the inert form — the same PHP-DI optional-param
+     * trap as every ctor param above it, pinned by
+     * tests/Unit/Auth/AuthMethodPolicyWiringGuardTest.
+     *
+     * @var AuthMethodPolicy|null
+     */
+    private ?AuthMethodPolicy $authPolicy;
+
+    /**
      * In-memory fallback rate limit store used when no DbLoginRateLimitStore
      * is injected (tests / legacy callers).
      *
@@ -273,7 +290,8 @@ class AuthManager
         ?SettingsRepository $settingsRepository = null,
         ?DbLoginRateLimitStore $loginRateLimitStore = null,
         ?UserProfileManager $profileManager = null,
-        ?SessionManager $sessionManager = null
+        ?SessionManager $sessionManager = null,
+        ?AuthMethodPolicy $authPolicy = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -287,6 +305,7 @@ class AuthManager
         $this->loginRateLimitStore = $loginRateLimitStore;
         $this->profileManager = $profileManager;
         $this->sessionManager = $sessionManager;
+        $this->authPolicy = $authPolicy;
         // Built from the already-explicitly-wired settings store rather than
         // taken as its own optional ctor param: PHP-DI skips optional params
         // during autowiring, so an unnamed PasswordPolicy param would silently
@@ -987,6 +1006,25 @@ class AuthManager
         $clientIp = $this->getClientIp();
         $this->checkRateLimit($clientIp);
 
+        // F7: when password sign-in is switched off (`auth.password.enabled`),
+        // refuse BEFORE any identifier lookup or credential compare — the
+        // password never reaches the verifier. The rejection deliberately
+        // mirrors the unknown-user branch below (burn a full Argon2id verify,
+        // count the attempt against the rate budget, audit, 401-shaped throw)
+        // so a disabled method leaks nothing new: same timing envelope, same
+        // "invalid credentials" opacity via the fixed AuthMethodDisabled
+        // message, and brute-force probing of a disabled surface still burns
+        // its budget.
+        if (!$this->passwordMethodAvailable()) {
+            $this->userRepository->burnPasswordVerifyTime($password);
+            $this->recordFailedAttempt($clientIp);
+            $this->auditLogger->logFailedAuth('auth_method_disabled', [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+            throw new AuthMethodDisabledException();
+        }
+
         // Accept either a username or an email as the identifier — the SPA login
         // field is "Username or email" and submits whichever the user typed.
         $user = $this->userRepository->findByUsername($username);
@@ -1083,6 +1121,19 @@ class AuthManager
      */
     public function verifyCredentials(string $usernameOrEmail, string $password): ?string
     {
+        // F7: the OPDS HTTP-Basic path authenticates with a PASSWORD, so the
+        // same toggle gates it. This method's contract is silent nulls — no
+        // audit, no exception — and the disabled branch honours that: burn the
+        // verify time (the L-1 envelope applies here exactly as in the unknown-
+        // user branch below), answer null, and let the Basic-auth middleware
+        // emit its own 401. The write-time R2 guard means an admin can never
+        // switch this off while themselves lacking another factor; members
+        // with passkeys/providers are unaffected either way.
+        if (!$this->passwordMethodAvailable()) {
+            $this->userRepository->burnPasswordVerifyTime($password);
+            return null;
+        }
+
         $user = $this->userRepository->findByUsername($usernameOrEmail);
         if ($user === null) {
             $user = $this->userRepository->findByEmail($usernameOrEmail);
@@ -1108,6 +1159,35 @@ class AuthManager
         }
 
         return $userId;
+    }
+
+    /**
+     * F7 gate predicate: is the PASSWORD sign-in method available right now?
+     *
+     * NULL policy (legacy/unwired callers) answers true — pre-F7 behaviour,
+     * and the container wiring guard keeps that form out of production. A
+     * THROWING policy read fails CLOSED (answers false): the settings store
+     * and the user store share one MySQL backend, so an unreadable policy at
+     * this point means the login could not have completed anyway, and an
+     * auth-method control must never degrade toward "sign everybody in". The
+     * loud log line is what tells the operator which of the two rare states
+     * they are in.
+     */
+    private function passwordMethodAvailable(): bool
+    {
+        if ($this->authPolicy === null) {
+            return true;
+        }
+
+        try {
+            return $this->authPolicy->isEnabled(AuthMethodPolicy::PASSWORD);
+        } catch (Throwable $e) {
+            $this->logger->error('Auth-method policy unreadable; password sign-in denied (fail closed)', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 
     /**

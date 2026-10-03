@@ -9,6 +9,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **F7 auth-method toggles + lock-out fail-safe (owner-authorized flagship).** Five
+  booleans — `auth.password.enabled`, `auth.webauthn.enabled` (default ON, absent-safe)
+  and `auth.oidc.enabled` / `auth.ldap.enabled` / `auth.github.enabled` (absent = OFF,
+  the live `AuthProviderBootstrapper::flagKey()` semantics, NOT re-migrated) — are now
+  policy-enforced by a new SSOT, `src/Auth/AuthMethodPolicy.php` (DI'd, zero static
+  caches, live reads like `PasswordPolicy`). Two rules: **R1** a state with all five
+  methods OFF is refused; **R2/R2-bis** disabling a method is refused while ANY active
+  admin (`findActiveAdminsForLockoutProbe()`, `is_admin=1 AND status='active'`) lacks a
+  usable alternative factor under the proposed state (password hash / passkey rows /
+  provider identity with the provider enabled AND configured). Both write surfaces are
+  guarded BEFORE persistence and atomically: `AdminSettingsController::update()` (422
+  `{errors, reason}` when the batch touches a toggle) and
+  `AuthProviderController::disableProvider()` (422; previously zero guard). Enforcement
+  points fail CLOSED on policy errors: `AuthManager::login()` and the OPDS
+  `verifyCredentials()` consumer refuse before any verify with the timing-flat
+  `AuthMethodDisabledException` (`auth.method_disabled` rides the message/error
+  text channel; the emit law forbids inventing code-channel literals outside the
+  vendored registry, so no new wire `code` member); `WebAuthnController` login
+  ceremonies answer the generic 401 `Invalid credentials` and NEW-credential
+  enrolment 403 while the method is off, but credential list/delete stay LIVE always
+  (gate the route, never delete the config — the escape hatch). The external providers
+  keep self-healing through `ensureProviderRegistered` at all four request sites, now
+  regression-pinned. If persisted state is somehow all-disabled (manual DB edit; API-
+  reachable: zero), the policy answers password-ONLY and logs the one-time
+  `auth.methods_all_disabled_fallback` audit event — never persisted. Config defaults
+  declared in `config/auth.php` (`password.enabled`, new `webauthn.enabled` subtree,
+  externals documented OFF). Schema side lands in phlix-shared (five properties, group
+  `auth`, restart:false); server consumption of the new keys waits on the
+  `detain/phlix-shared` re-vendor seam. Tests: `AuthMethodPolicyTest` (transition
+  matrix + fallback posture), `AuthManagerAuthMethodGateTest` (pre-verify refusal,
+  rate-budget charging, timing-flat burn), `WebAuthnControllerAuthMethodGateTest`,
+  `AuthProviderControllerDisableGuardTest`, `AdminSettingsControllerAuthGuardTest`
+  (synthetic-key seam — flips to real keys at re-vendor, zero test changes),
+  `AuthMethodFlagsReachabilityTest` (213fce9d near-miss law) and a DI wiring guard.
+
 - **The LIST shape now carries `library_id` (owner-approved micro-feature, 2026-10-02
   adversarial-review follow-through on the ui playlist-create fix).**
   `MediaItemShaper::shape()` emits a fixed whitelist built from the row, and it dropped

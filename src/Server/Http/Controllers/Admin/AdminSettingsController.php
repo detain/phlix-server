@@ -13,6 +13,8 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use JsonSchema\Validator;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Auth\AuthMethodLockoutException;
+use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -126,14 +128,23 @@ final class AdminSettingsController
     /** @var SettingsRepository Server-settings store. */
     private SettingsRepository $settings;
 
+    /** @var AuthMethodPolicy|null F7 auth-method lock-out guard (see update()). */
+    private ?AuthMethodPolicy $authPolicy;
+
     /**
-     * @param SettingsRepository $settings Server-settings store.
+     * @param SettingsRepository   $settings   Server-settings store.
+     * @param AuthMethodPolicy|null $authPolicy Cross-key guard for the five
+     *        `auth.<method>.enabled` toggles. NULL keeps the guard inert —
+     *        acceptable only in hand-built test doubles; `AdminServicesProvider`
+     *        names this parameter explicitly so the container never ships the
+     *        inert form (`tests/Unit/Auth/AuthMethodPolicyWiringGuardTest`).
      *
      * @since 0.5
      */
-    public function __construct(SettingsRepository $settings)
+    public function __construct(SettingsRepository $settings, ?AuthMethodPolicy $authPolicy = null)
     {
         $this->settings = $settings;
+        $this->authPolicy = $authPolicy;
     }
 
     /**
@@ -681,6 +692,16 @@ final class AdminSettingsController
                 ]);
             }
 
+            // F7 cross-key semantic guard: after per-key validation, BEFORE
+            // anything persists. Active only when this write-set touches one
+            // of the five auth-method toggles; a rejected transition persists
+            // NOTHING (the persist loop below is unreachable from here), so a
+            // batched settings save stays atomic with respect to the guard.
+            $lockout = $this->authMethodLockoutResponse($validated);
+            if ($lockout !== null) {
+                return $lockout;
+            }
+
             foreach ($validated as $key => $entry) {
                 $this->settings->set($key, $entry['value'], $entry['type']);
             }
@@ -702,6 +723,74 @@ final class AdminSettingsController
                 'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * F7 auth-method lock-out guard for {@see update()}.
+     *
+     * Inspects the per-key-validated write-set; when it touches any of the
+     * five `auth.<method>.enabled` toggles, overlays the new values on the
+     * live policy state and asks {@see AuthMethodPolicy::assertSafeTransition()}
+     * (R1: never all-off; R2: never strand an active admin without a factor)
+     * BEFORE the first `set()` runs. A non-null return means nothing was
+     * persisted.
+     *
+     * @param array<string, array{value: mixed, type: string}> $validated
+     */
+    private function authMethodLockoutResponse(array $validated): ?Response
+    {
+        $touched = [];
+        foreach ($validated as $key => $entry) {
+            $method = AuthMethodPolicy::methodForSettingsKey((string) $key);
+            if ($method !== null) {
+                $touched[$method] = $entry['value'] === true;
+            }
+        }
+
+        if ($touched === []) {
+            return null;
+        }
+
+        if ($this->authPolicy === null) {
+            // Fail closed: an unwired guard must never degrade into
+            // unguarded toggle writes. The wiring test keeps this unreachable
+            // in the container; it is here for the null-default constructor.
+            return (new Response())->status(500)->json([
+                'success' => false,
+                'error'   => 'Auth-method lock-out guard unavailable',
+                'message' => 'The server cannot validate auth-method toggles without the auth policy service.',
+            ]);
+        }
+
+        /** @var array<string, bool> $proposed */
+        $proposed = array_merge($this->authPolicy->currentState(), $touched);
+
+        try {
+            $this->authPolicy->assertSafeTransition($proposed);
+        } catch (AuthMethodLockoutException $e) {
+            $errors = [];
+            foreach (array_keys($touched) as $method) {
+                $errors[AuthMethodPolicy::settingsKey($method)] = $e->getMessage();
+            }
+
+            return (new Response())->status(422)->json([
+                'success' => false,
+                'error'   => 'Validation failed',
+                'errors'  => $errors,
+                'reason'  => $e->reason(),
+                'message' => $e->getMessage(),
+            ]);
+        } catch (Throwable $e) {
+            // Fail closed on ANY other policy error (unreadable store,
+            // malformed state): refuse the write, persist nothing, stay loud.
+            return (new Response())->status(500)->json([
+                'success' => false,
+                'error'   => 'Auth-method policy check failed',
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 
     /**

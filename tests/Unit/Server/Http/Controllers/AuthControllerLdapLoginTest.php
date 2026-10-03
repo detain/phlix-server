@@ -197,4 +197,35 @@ final class AuthControllerLdapLoginTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertSame('pw-access', $body['access_token']);
     }
+
+    /**
+     * F7 regression pin (S44 Finding 3 self-heal): the request path must call
+     * ensureProviderRegistered(LDAP) BEFORE touching the auth manager, so a
+     * worker whose in-memory registry drifted from the persisted
+     * `auth.ldap.enabled` flag reconciles per-request. When the flag is OFF
+     * (ensure returns false, provider never registered) the provider flow
+     * rejects and the login collapses to the generic 401 — no 503-storm, no
+     * per-worker split-brain, and the bootstrapper is provably on the path.
+     */
+    public function test_ldap_login_reconciles_registry_via_bootstrapper_before_auth(): void
+    {
+        $bootstrapper = $this->createMock(\Phlix\Auth\AuthProviderBootstrapper::class);
+        $bootstrapper->expects($this->once())
+            ->method('ensureProviderRegistered')
+            ->with(\Phlix\Auth\AuthProviderBootstrapper::LDAP)
+            ->willReturn(false);
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('loginWithProvider')
+            ->willThrowException(new InvalidArgumentException('provider_unavailable'));
+
+        $controller = new AuthController($authManager, null, null, $bootstrapper);
+
+        $request = new Request();
+        $request->body = ['username' => 'ldap:alice', 'password' => 'secretpw'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(401, $response->statusCode);
+    }
 }

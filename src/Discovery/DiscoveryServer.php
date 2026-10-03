@@ -22,6 +22,14 @@ use Workerman\Timer;
  * Uses Workerman Timer to periodically send M-SEARCH and mDNS queries
  * to keep the device list fresh. Runs as part of the Workerman worker lifecycle.
  *
+ * Both probe families are gated by {@see DiscoveryPolicy}
+ * (`discovery.ssdp.enabled` / `discovery.mdns.enabled`, both default true —
+ * pure opt-out). Gate points: timer registration in {@see self::start()}
+ * (boot-time read; a process booted with a gate off never holds that timer,
+ * hence the schema `restart: true`) and the head of each perform* method
+ * (per-tick re-check, so switching OFF goes quiet within one interval with
+ * no restart).
+ *
  * @since 0.12.0
  */
 class DiscoveryServer
@@ -38,6 +46,9 @@ class DiscoveryServer
     /** @var StructuredLogger */
     private StructuredLogger $logger;
 
+    /** @var DiscoveryPolicy Settings gate for both probe families */
+    private DiscoveryPolicy $policy;
+
     /** @var int|null Timer ID for SSDP */
     private ?int $ssdpTimerId = null;
 
@@ -50,19 +61,28 @@ class DiscoveryServer
     /**
      * @param DiscoveryManager $manager Discovery manager instance
      * @param StructuredLogger|null $logger Optional structured logger
+     * @param DiscoveryPolicy|null $policy Optional settings gate; NULL degrades
+     *        to both probes enabled (the pre-key behaviour). NOTE for DI:
+     *        PHP-DI SKIPS optional constructor parameters during autowiring —
+     *        a binding that wants the settings honoured must name this
+     *        parameter (see DlnaServicesProvider).
      */
     public function __construct(
         DiscoveryManager $manager,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?DiscoveryPolicy $policy = null
     ) {
         $this->manager = $manager;
         $this->logger = $logger ?? $this->createDefaultLogger();
+        $this->policy = $policy ?? new DiscoveryPolicy();
     }
 
     /**
      * Start listening for SSDP NOTIFY and mDNS responses.
      *
-     * Sets up periodic timers to send discovery queries.
+     * Sets up periodic timers to send discovery queries — for each protocol
+     * ONLY while its settings gate is enabled at boot. The immediate initial
+     * probes run through the same gated perform* methods.
      *
      * @since 0.12.0
      */
@@ -77,17 +97,28 @@ class DiscoveryServer
 
         $this->logger->info('DiscoveryServer: Starting');
 
-        // Set up periodic SSDP discovery
-        $this->ssdpTimerId = Timer::add(self::SSDP_INTERVAL, function () {
-            $this->performSsdpDiscovery();
-        });
+        // Set up periodic SSDP discovery — boot-time gate: with the key off
+        // this process never registers the timer (the tick re-check inside
+        // performSsdpDiscovery() only silences an ALREADY-registered probe).
+        if ($this->policy->ssdpEnabled()) {
+            $this->ssdpTimerId = Timer::add(self::SSDP_INTERVAL, function () {
+                $this->performSsdpDiscovery();
+            });
+        } else {
+            $this->logger->info('DiscoveryServer: SSDP probe disabled by settings — timer not registered');
+        }
 
-        // Set up periodic mDNS discovery
-        $this->mdnsTimerId = Timer::add(self::MDNS_INTERVAL, function () {
-            $this->performMdnsDiscovery();
-        });
+        // Set up periodic mDNS discovery — same boot-time gate.
+        if ($this->policy->mdnsEnabled()) {
+            $this->mdnsTimerId = Timer::add(self::MDNS_INTERVAL, function () {
+                $this->performMdnsDiscovery();
+            });
+        } else {
+            $this->logger->info('DiscoveryServer: mDNS probe disabled by settings — timer not registered');
+        }
 
-        // Perform initial discovery
+        // Perform initial discovery (each method re-checks its own gate, so
+        // a disabled protocol sends nothing here either).
         $this->performSsdpDiscovery();
         $this->performMdnsDiscovery();
     }
@@ -130,9 +161,19 @@ class DiscoveryServer
 
     /**
      * Perform SSDP discovery.
+     *
+     * Per-tick gate: an already-registered timer goes silent within one
+     * interval of the admin flipping `discovery.ssdp.enabled` off — no
+     * restart needed to STOP (re-STARTing needs a process that re-runs
+     * start(), where the timer is registered).
      */
     private function performSsdpDiscovery(): void
     {
+        if (!$this->policy->ssdpEnabled()) {
+            $this->logger->debug('DiscoveryServer: SSDP probe suppressed by settings');
+            return;
+        }
+
         try {
             $this->logger->debug('DiscoveryServer: Performing SSDP discovery');
 
@@ -152,9 +193,16 @@ class DiscoveryServer
 
     /**
      * Perform mDNS discovery.
+     *
+     * Per-tick gate, same semantics as {@see self::performSsdpDiscovery()}.
      */
     private function performMdnsDiscovery(): void
     {
+        if (!$this->policy->mdnsEnabled()) {
+            $this->logger->debug('DiscoveryServer: mDNS probe suppressed by settings');
+            return;
+        }
+
         try {
             $this->logger->debug('DiscoveryServer: Performing mDNS discovery');
 

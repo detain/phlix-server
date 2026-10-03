@@ -12,12 +12,15 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\DegradedBuild;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Config\EffectiveConfig;
+use Phlix\Discovery\DiscoveryPolicy;
+use Phlix\Discovery\DiscoveryServer;
 use Phlix\Dlna\CdsServer;
 use Phlix\Dlna\ContentDirectory;
 use Phlix\Dlna\DlnaAdvertisedHost;
@@ -28,7 +31,9 @@ use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
 use Psr\Container\ContainerInterface;
 
+use function DI\autowire;
 use function DI\factory;
+use function DI\get;
 
 /**
  * Registers the DLNA/UPnP MediaServer: {@see DlnaServer}, {@see CdsServer} and
@@ -191,6 +196,21 @@ final class DlnaServicesProvider implements ServiceProviderInterface
                     return new CdsServer(self::dlnaServer($c), null, $logger);
                 }
             ),
+            // W2 background-probe gates. DiscoveryServer stays AUTOWIRED for
+            // everything else (its manager tree — SsdpDiscovery/MdnsDiscovery
+            // over their sockets — has only optional/defaulted parameters);
+            // this binding names ONLY the policy, because PHP-DI skips
+            // optional constructor params and leaving `policy` unnamed would
+            // make the two settings inert by construction (the exact
+            // 2e63b30-class trap the MediaServicesProvider policy bindings
+            // document). The boot-time fallback autowire still works: a
+            // container built WITHOUT this provider yields the default
+            // DiscoveryPolicy (both probes on = historical behaviour).
+            DiscoveryPolicy::class => factory(
+                static fn (ContainerInterface $c): DiscoveryPolicy => new DiscoveryPolicy(self::optionalSettings($c))
+            ),
+            DiscoveryServer::class => autowire(DiscoveryServer::class)
+                ->constructorParameter('policy', get(DiscoveryPolicy::class)),
         ]);
     }
 
@@ -213,6 +233,36 @@ final class DlnaServicesProvider implements ServiceProviderInterface
         }
 
         return $server;
+    }
+
+    /**
+     * Resolve the settings store, NULL when it is not bound at all.
+     *
+     * Same shape as MediaServicesProvider::optionalSettings(): the store is
+     * OPTIONAL by design — a container built without the admin subsystem
+     * (tests, trimmed boots) must still produce a working policy on its
+     * shipped defaults, while a store that IS bound but fails to build is
+     * loudly degraded via {@see DegradedBuild} rather than silently ignored.
+     */
+    private static function optionalSettings(ContainerInterface $c): ?SettingsRepository
+    {
+        try {
+            $settings = $c->get(SettingsRepository::class);
+
+            return $settings instanceof SettingsRepository ? $settings : null;
+        } catch (\Throwable $e) {
+            DegradedBuild::warnUnlessAbsent(
+                $c,
+                LogChannels::MEDIA,
+                'The settings store is bound but could not be built; the background '
+                . 'SSDP/mDNS discovery gates fall back to their shipped defaults '
+                . '(both probes on). Admin-saved discovery settings stay ignored by '
+                . 'this worker until it is recycled.',
+                $e
+            );
+
+            return null;
+        }
     }
 
     /**

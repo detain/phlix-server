@@ -9,6 +9,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Owner-gated vendor seam CLOSED: phlix-shared v0.51.0 re-vendored — the eleven
+  deferred keys are admin-API-LIVE.** Tag `v0.51.0` cut on shared's release commit
+  `01bd2a9` (annotated, peel-verified; 84-key `server-settings.schema.json`), and
+  this repo moved `detain/phlix-shared` `^0.49.0`→`^0.51.0` with a surgical lock
+  (only the package node + content-hash; the composer 2.9 `stability-flags`/
+  `platform-dev`/`plugin-api-version` tool churn was hand-reverted to keep the diff
+  precedent-clean per the 0a2b95d0 shape; the vendored schema byte-matches the tag
+  tree). What this admits: the F7 auth quintet (`auth.{password,webauthn,oidc,ldap,
+  github}.enabled`), W2's discovery duo, W4's security duo (`hsts_max_age_seconds`
+  bounds + `frame_options` enum now ENFORCED on PUT), and W3's metadata duo — the
+  policies' "becomes PUT-able when the re-vendor lands" KNOWN-LIMIT docblocks are
+  now post-seam truth. Pin rotations: `AdminSettingsControllerTest`'s hand-written
+  allow-list map + both 73-counts → 84 (the family breakdown is annotated in the
+  map itself); `SettingsDefaultResolvabilityTest` auto-covered all eleven keys at
+  84 with zero edits (their config defaults shipped ahead of the seam, as designed).
+  The deferred F7 integration duty SHIPS: `tests/Integration/Admin/
+  AdminSettingsRealSchemaPutTest.php` — real MySQL, real vendored schema, real
+  repositories — proving quintet admission + persistence, batch all-five-off →
+  422 `all_methods_disabled` with ZERO rows, R2 `admin_lockout` → 422 with zero
+  rows, type violation (`1.5` for a bool) → 400 before the guard, schema-bounds
+  rejects (`min_match_confidence=-0.5`, `hsts_max_age_seconds=99999999`, off-enum
+  `frame_options`) → 400, and the in-range accepts persisting 200. Census:
+  files 1973→1974, declared writes 1039→1040 (put() `$request->body` stamp),
+  IntegrationDbGuard adopters 66→67. No new wire codes (contract law: 422 carries
+  the F7 `reason`, 400 the existing validation envelope).
+
 - **W2+W4 settings exposure: discovery probe gates + security-header knobs (+ the
   W3 duo's schema half).** Three related slices, one lane (both schema-touching
   waves consolidated to avoid a phlix-shared collision):
@@ -63,6 +89,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   quintet) are admitted automatically when the schema is re-vendored at the next
   phlix-shared tag (v0.51.0 owed). `AdminSettingsControllerTest`'s 73-count pins
   rotate at that re-vendor, not now.
+  **[CLOSED 2026-10-05:** v0.51.0 tagged and re-vendored at the top of this
+  section — all 84 keys admitted, pins rotated, integration venue shipped.**]**
   **F16 stats dual-entry — verdict: superseded, pinned.** The literal dual-entry
   premise (start.php vs public/index.php bootstraps) died with S171's deletion of
   `public/index.php`; the surviving law — stats timers flow ONLY through

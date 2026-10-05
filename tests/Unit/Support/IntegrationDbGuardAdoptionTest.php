@@ -449,7 +449,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // (real-MySQL proof of the migration-112 owner-column guard, election-
     // anchored backfill arms, and replay-idempotence through the production
     // MigrationRunner). Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 66;
+    // 66→67 by the v0.51.0 re-vendor lane (2026-10-05):
+    // +tests/Integration/Admin/AdminSettingsRealSchemaPutTest.php (real-MySQL
+    // proof of schema admission, bounds/enum enforcement, F7 R1/R2 write
+    // guards, and server_settings persistence through the vendored 84-key
+    // v0.51.0 schema). Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 67;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

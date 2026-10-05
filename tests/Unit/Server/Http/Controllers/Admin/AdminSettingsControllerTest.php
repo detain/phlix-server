@@ -248,6 +248,16 @@ final class AdminSettingsControllerTest extends TestCase
             // UserProfileManager::maxProfiles(); the admin controller's
             // pre-check calls it too, and that is the guard that fires.
             'auth.max_profiles'                         => 'int',
+            // phlix-shared v0.51.0 (F7): the auth-method quintet. Enforcement
+            // has lived in AuthMethodPolicy since server f4326191; these five
+            // keys are what makes the toggles admin-API-PUT-able. Admission +
+            // the F7 422 guards THROUGH THE REAL VENDORED SCHEMA are proven by
+            // tests/Integration/Admin/AdminSettingsRealSchemaPutTest.
+            'auth.password.enabled'                     => 'bool',
+            'auth.webauthn.enabled'                     => 'bool',
+            'auth.oidc.enabled'                         => 'bool',
+            'auth.ldap.enabled'                         => 'bool',
+            'auth.github.enabled'                       => 'bool',
             // Per-playback fallback in StreamSessionService::getStreamLimit().
             'access.default_concurrent_streams'         => 'int',
             // The server.rate_limit.* block. Class (b) RESTART — the limiters
@@ -339,12 +349,35 @@ final class AdminSettingsControllerTest extends TestCase
             // `restrict_to_lan` is a boolean → `bool`.
             'dlna.allowed_cidrs'                        => 'json',
             'dlna.restrict_to_lan'                      => 'bool',
+
+            // phlix-shared v0.51.0 (W2): discovery toggles (config/discovery.php).
+            // Enforcement lived in DiscoveryPolicy since server 5f7e4f52; restart
+            // class (b) — the advertisers boot with the worker.
+            'discovery.ssdp.enabled'                    => 'bool',
+            'discovery.mdns.enabled'                    => 'bool',
+
+            // phlix-shared v0.51.0 (W4): security headers (config/security.php).
+            // Enforcement lived in SecurityHeadersPolicy since server f4ac242f;
+            // `hsts_max_age_seconds` carries the schema bounds (0..31536000) the
+            // PUT path now enforces, `frame_options` the DENY|SAMEORIGIN|NONE enum.
+            'security.hsts_max_age_seconds'             => 'int',
+            'security.frame_options'                    => 'string',
+
+            // phlix-shared v0.51.0 (W3): metadata tunables (config/metadata.php).
+            // Enforcement lived in MatchConfidencePolicy / MetadataCachePolicy
+            // since server 6cbe692a; `min_match_confidence` is the schema's only
+            // `number` property → internal `float`.
+            'metadata.min_match_confidence'             => 'float',
+            'metadata.cache_ttl_hours'                  => 'int',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
         // 72 -> 73 in phlix-shared v0.49.0: transcoding.segment_format (S313).
-        $this->assertCount(73, $actual);
+        // 73 -> 84 in phlix-shared v0.51.0: F7 auth quintet, W2 discovery duo,
+        // W4 security duo, W3 metadata duo — the owner-gated re-vendor seam
+        // CLOSED; all 84 keys are admitted by the vendored schema above.
+        $this->assertCount(84, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -423,7 +456,9 @@ final class AdminSettingsControllerTest extends TestCase
         // schemaMeta() covers EVERY declared property, not just the typed ones
         // that reach allowedKeys().
         // 72 -> 73 in phlix-shared v0.49.0: transcoding.segment_format (S313).
-        $this->assertCount(73, $meta);
+        // 73 -> 84 in phlix-shared v0.51.0: the eleven v0.51.0 keys (see the
+        // allowedKeys pin above for the family breakdown).
+        $this->assertCount(84, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

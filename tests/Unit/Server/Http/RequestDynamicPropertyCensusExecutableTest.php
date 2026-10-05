@@ -568,8 +568,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * fix touched only existing files. Zero Request-root read/write sites
      * added, so EXPECTED_DECLARED_READS/WRITES stay untouched. Measured from
      * the phpunit red (1973), not predicted.
+     * Re-pinned 1973→1974 by the v0.51.0 re-vendor lane (2026-10-05):
+     * net +1 — the deferred F7 integration proof
+     * tests/Integration/Admin/AdminSettingsRealSchemaPutTest.php (real-MySQL
+     * PUT admission/bounds/guard/persistence through the newly vendored
+     * 84-key schema). Measured from the phpunit red (1974), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1973;
+    private const EXPECTED_PHP_FILES = 1974;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -750,8 +755,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
        * AuthControllerLdapLoginTest `->body`, 1). All name declared members;
        * S427 license intact. Measured from the phpunit red (1039), not
        * predicted.
+       * Re-pinned 1039→1040 by the v0.51.0 re-vendor lane (2026-10-05):
+       * +1 declared-member WRITE — AdminSettingsRealSchemaPutTest's put()
+       * helper stamps `$request->body` (the declared Request member, same
+       * S101 shape as the F7 lane's helpers above). S427 license intact.
+       * Measured from the phpunit red (1040), not predicted.
        */
-    private const EXPECTED_DECLARED_WRITES = 1039;
+    private const EXPECTED_DECLARED_WRITES = 1040;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

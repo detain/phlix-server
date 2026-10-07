@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Auth;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthMethodPolicy;
+use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
@@ -86,6 +88,40 @@ final class AuthMethodPolicyWiringGuardTest extends TestCase
     }
 
     // ---- helpers -------------------------------------------------------------
+
+    /**
+     * B2 provider-parity precondition: the serialization protocol (BEGIN →
+     * FOR UPDATE → locked re-read → persist → COMMIT) is only real if the
+     * guard's locks and the surface's writes traverse the SAME connection.
+     * Production gets that from the PHP-DI singleton SettingsRepository —
+     * this pins it between the policy (which locks) and the bootstrapper
+     * (whose disable()/enable() writes inside the transaction). A future
+     * factory-scoped split would silently unserialize the protocol while
+     * every hand-wired unit test stays green; it must redden HERE first.
+     */
+    public function testPolicyAndBootstrapperShareOneSettingsRepositorySingleton(): void
+    {
+        $container = $this->container();
+
+        $policy = $container->get(AuthMethodPolicy::class);
+        $bootstrapper = $container->get(AuthProviderBootstrapper::class);
+
+        $extract = static function (object $instance): SettingsRepository {
+            $property = (new ReflectionClass($instance))->getProperty('settings');
+            $property->setAccessible(true);
+
+            /** @var SettingsRepository */
+            return $property->getValue($instance);
+        };
+
+        $this->assertSame(
+            $extract($policy),
+            $extract($bootstrapper),
+            'AuthMethodPolicy and AuthProviderBootstrapper resolved to DIFFERENT SettingsRepository '
+            . 'instances — the provider protocol would lock one connection while disable() writes '
+            . 'another (lock theater). The container must memoize one singleton.',
+        );
+    }
 
     /**
      * The PRODUCTION container: `ContainerFactory::defaultProviders()`, with only

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\AuthMethodGuardCheckFailedException;
 use Phlix\Auth\AuthMethodLockoutException;
 use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Auth\AuthProviderBootstrapper;
@@ -126,6 +127,16 @@ final class AuthProviderController
      * settings) cannot be brought live, so enabling it is rejected with a clear
      * message rather than reporting a false "enabled" state.
      *
+     * No F7 guard, no B2 transaction — deliberately: enabling a method is
+     * MONOTONE-SAFE for lock-out. It can only ever ADD a sign-in factor, so
+     * no concurrent writer can turn this direction into an all-off landing
+     * (R1 stays satisfied) or strip anybody a factor (R2 unaffected). The
+     * flag write is a single idempotent upsert; wrapping it in the
+     * five-key FOR UPDATE protocol would only widen the lock window the
+     * disable path needs, for zero safety. Pinned as a zero-transaction
+     * absence assertion in
+     * tests/Unit/Server/Http/Controllers/Admin/AdminSettingsProviderLockParityTest.php.
+     *
      * @param Request $request
      * @param array<string, string> $params Must contain 'name'.
      * @return Response
@@ -170,6 +181,23 @@ final class AuthProviderController
      * keeps its Enabled state untouched. With no policy wired (hand-built test
      * controllers) the guard is inert, which is why the DI binding names it.
      *
+     * B2 provider parity (closes the review's provider×admin interleave
+     * residual): guard AND flag write now run inside ONE
+     * {@see AuthMethodPolicy::guardAndPersist()} transaction — BEGIN →
+     * `FOR UPDATE` over the same five canonical toggle keys in the same
+     * canonical order as the admin settings PUT → guard re-read against the
+     * LOCKED latest-committed state → {@see AuthProviderBootstrapper::disable()}
+     * → COMMIT; any rejection ROLLBACKs and answers the byte-identical
+     * 422/500 envelopes. Because both surfaces lock the IDENTICAL key set in
+     * the IDENTICAL order (universal overlap), concurrent admin∥provider
+     * writers fully serialize — neither can certify against a snapshot the
+     * other is about to invalidate, and the all-off landing is unreachable
+     * through EITHER API. The registry mutation inside disable() is
+     * process-local memory and intentionally outside rollback: a failed
+     * commit un-persists nothing the registry kept, and the request-path
+     * self-heal ({@see AuthProviderBootstrapper::ensureProviderRegistered()})
+     * re-reconciles every worker to the persisted flag anyway.
+     *
      * @param Request $request
      * @param array<string, string> $params Must contain 'name'.
      * @return Response
@@ -182,10 +210,18 @@ final class AuthProviderController
             return $this->unknownProvider($name);
         }
 
-        if ($this->authPolicy !== null) {
+        if ($this->authPolicy === null) {
+            // Hand-built legacy/test construction without the guard: exactly
+            // the old unguarded route (the DI binding names the policy, so
+            // production never lands here — pinned by the wiring guard).
+            $this->bootstrapper->disable($name);
+        } else {
             try {
-                $this->authPolicy->assertSafeTransition(
-                    array_merge($this->authPolicy->currentState(), [$name => false]),
+                $this->authPolicy->guardAndPersist(
+                    [$name => false],
+                    function () use ($name): void {
+                        $this->bootstrapper->disable($name);
+                    },
                 );
             } catch (AuthMethodLockoutException $e) {
                 return (new Response())->status(422)->json([
@@ -195,9 +231,13 @@ final class AuthProviderController
                     'reason' => $e->reason(),
                     'message' => $e->getMessage(),
                 ]);
-            } catch (\Throwable $e) {
-                // Fail closed: an unreadable policy must not wave an
-                // unvalidated disable through.
+            } catch (AuthMethodGuardCheckFailedException $e) {
+                // Fail closed: an unreadable/broken policy must not wave an
+                // unvalidated disable through. Persist-phase and
+                // transaction-infrastructure failures deliberately do NOT
+                // arrive here — the protocol re-raises those unwrapped after
+                // rollback, exactly as a throwing disable() escaped the old
+                // pre-write try, keeping the dispatcher 500 shape unchanged.
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error' => 'Auth-method policy check failed',
@@ -205,8 +245,6 @@ final class AuthProviderController
                 ]);
             }
         }
-
-        $this->bootstrapper->disable($name);
 
         return (new Response())->json([
             'name' => $name,

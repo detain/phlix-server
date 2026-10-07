@@ -252,10 +252,16 @@ class SettingsRepository
      *    transaction (error 1213), which surfaces here as a throw, rolls the
      *    whole guarded write back, and answers 500 — a SAFE abort: the
      *    all-off state is never reached, only the doomed write is lost.
-     *  - **Not locked** — writers that bypass this protocol (the provider-API
-     *    disable surface, raw SQL, restores). The read-path password fallback
-     *    in {@see \Phlix\Auth\AuthMethodPolicy} remains the last-resort
-     *    backstop for those.
+     *  - **Not locked** — writers that bypass this protocol entirely (raw
+     *    SQL, restored backups). The provider-API disable surface is NOT in
+     *    that set any more: since the provider-parity close it runs the same
+     *    BEGIN → FOR UPDATE (same five canonical keys, same order) → locked
+     *    re-read → persist → COMMIT protocol through
+     *    {@see \Phlix\Auth\AuthMethodPolicy::guardAndPersistThrough()}, so
+     *    admin∥provider writers fully serialize on the universal lock set.
+     *    The read-path password fallback in
+     *    {@see \Phlix\Auth\AuthMethodPolicy} remains the last-resort
+     *    backstop for the raw-SQL/restore class.
      *
      * Must be called inside an open {@see beginTransaction()} window: in
      * autocommit mode InnoDB releases each lock the instant the statement

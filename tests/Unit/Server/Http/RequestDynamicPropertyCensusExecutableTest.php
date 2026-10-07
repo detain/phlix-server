@@ -581,8 +581,20 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Integration/Admin/AdminSettingsAuthLockB2Test.php (real-MySQL
      * sequential double-disable + two-connection FOR UPDATE blocking probe).
      * Measured from the phpunit red (1976), not predicted.
+     * Re-pinned 1976→1980 by the B2 provider-parity lane (2026-10-07):
+     * net +4 — the shared-protocol extraction
+     * src/Auth/AuthMethodGuardUnwiredException.php +
+     * src/Auth/AuthMethodGuardCheckFailedException.php (typed protocol
+     * failures both guarded surfaces map to their byte-identical 500
+     * envelopes), tests/Unit/Server/Http/Controllers/Admin/
+     * AdminSettingsProviderLockParityTest.php (statement-order/lock-set/
+     * rollback/enable-zero-txn pins on the same recording-fake lens as the
+     * admin suite) and tests/Integration/Admin/
+     * AdminSettingsProviderLockParityB2Test.php (real-MySQL cross-surface
+     * blocking probes in both directions). Measured from the phpunit red
+     * (1980), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1976;
+    private const EXPECTED_PHP_FILES = 1980;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

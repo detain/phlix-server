@@ -9,6 +9,55 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **Provider parity CLOSED: the B2 serialization protocol now guards BOTH auth
+  write surfaces — the residual provider×admin interleave the B2 entry above
+  documented as owed is eliminated, forward-correcting its "remains a
+  documented residual" sentence (history kept verbatim above).** The
+  transaction choreography was extracted verbatim from
+  `AdminSettingsController::updateAuthGuarded()` into
+  `AuthMethodPolicy::guardAndPersistThrough()` (+ the instance form
+  `guardAndPersist()`): BEGIN → `lockSettingRows` over the five canonical
+  `auth.<method>.enabled` keys in canonical order (the key set now lives as
+  one private constant path, `AuthMethodPolicy::lockKeys()` — single source) →
+  guard re-read against the locked latest-committed view → persist callback →
+  COMMIT, ROLLBACK with zero persistence on any rejection. The admin surface
+  kept its envelope mapping byte-identically on the wire — the extraction
+  proof is `AdminSettingsControllerAuthLockTest` (6) +
+  `AdminSettingsControllerAuthGuardTest` (6) + `AdminSettingsControllerTest`
+  (43) + `AdminSettingsRealSchemaPutTest` (6) all green UNMODIFIED.
+  `AuthProviderController::disableProvider()` now wraps
+  `AuthProviderBootstrapper::disable()` in the same protocol via
+  `guardAndPersist()`; typed failures arrive as new
+  `AuthMethodGuardUnwiredException` / `AuthMethodGuardCheckFailedException`
+  (500 fail-closed envelopes byte-identical to the pre-parity shapes).
+  Because both surfaces lock the IDENTICAL five-key set in the IDENTICAL
+  order (universal overlap), admin∥provider writers fully serialize and a
+  partial-overlap deadlock pair cannot form. `enableProvider` stays outside
+  the protocol — enabling is monotone-safe for lock-out (pins the zero-txn
+  absence). Tests: NEW `AdminSettingsProviderLockParityTest` (7, real
+  store/policy/bootstrapper on one recording Connection — accepted disable
+  serializes BEGIN→LOCK→SELECT_ALL→UPSERT→COMMIT with the canonical 5-key
+  lockParams, race-visibility via the same onLock injection idiom,
+  ROLLBACK-with-zero-writes on both refusal reasons, enable zero-txn, 404
+  precedes the protocol, recorder tripwire law carried); NEW
+  `AdminSettingsProviderLockParityB2Test` (3, real MySQL `phlix_b2p_*`
+  scratch) — two-connection cross-surface probes in BOTH directions
+  (admin-commits-password-OFF forces the provider revalidation to 422;
+  admin-commits-password-ON lets the blocked provider disable proceed to
+  200; `innodb_lock_wait_timeout=1` as the sync primitive, no sleeps), final
+  states asserted never-all-off. `AuthMethodPolicyWiringGuardTest` +1: the
+  policy's locks and the bootstrapper's writes provably traverse ONE
+  container-singleton `SettingsRepository` (the same-connection precondition
+  — a factory-scoped split would be lock theater and reddens HERE first).
+  Census: files 1976→1980 (+2 exception classes, +1 unit, +1 integration
+  file), IntegrationDbGuard adopters 68→69, declared reads 448 / writes 1042
+  held (new tests stamp no `$request->` properties). No new wire codes; no
+  migrations. Residuals honestly outside the protocol: raw-SQL/restore
+  writers (read-path password fallback stays the backstop), and the
+  bootstrapper's process-local registry mutation, which rollback cannot undo
+  by design — the request-path self-heal re-reconciles every worker to the
+  persisted flag.
+
 - **B2: the F7 auth-method lock-out guard now re-validates INSIDE a transaction
   under `FOR UPDATE` row locks — concurrent admin PUTs can no longer land the
   server all-off.** Re-verified at 759b0a79: `AdminSettingsController::update()`

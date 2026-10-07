@@ -459,7 +459,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // sequential last-man-standing refusal + two-connection FOR UPDATE
     // protocol-lock blocking probe for the auth-method lock-out guard).
     // Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 68;
+    // 68→69 by the B2 provider-parity lane (2026-10-07):
+    // +tests/Integration/Admin/AdminSettingsProviderLockParityB2Test.php
+    // (real-MySQL admin∥provider cross-surface FOR UPDATE serialization —
+    // blocking probe + revalidation in both the refuse and accept
+    // directions). Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 69;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

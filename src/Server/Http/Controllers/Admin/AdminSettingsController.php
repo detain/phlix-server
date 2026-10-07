@@ -13,6 +13,8 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use JsonSchema\Validator;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Auth\AuthMethodGuardCheckFailedException;
+use Phlix\Auth\AuthMethodGuardUnwiredException;
 use Phlix\Auth\AuthMethodLockoutException;
 use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Plugins\SettingsMasker;
@@ -698,9 +700,13 @@ final class AdminSettingsController
             // locks, so two concurrent admin PUTs (one disabling password,
             // one disabling webauthn) can each no longer validate against a
             // snapshot that still shows the other's method ON and then both
-            // persist to an all-off landing. A write-set without toggles
-            // takes the plain path below — zero new locks, zero transaction
-            // starts, byte-identical behavior to before B2.
+            // persist to an all-off landing. The protocol lives in
+            // AuthMethodPolicy::guardAndPersistThrough() and is SHARED with
+            // the provider-integrations disable surface — both lock the same
+            // five keys in the same order, so admin∥provider writers fully
+            // serialize too. A write-set without toggles takes the plain
+            // path below — zero new locks, zero transaction starts,
+            // byte-identical behavior to before B2.
             if ($this->authTouchedMethods($validated) !== []) {
                 return $this->updateAuthGuarded($validated);
             }
@@ -731,56 +737,89 @@ final class AdminSettingsController
     /**
      * Persist an auth-toggle write-set under the B2 serialization protocol.
      *
-     * Order of operations, all on the repository's own connection:
-     *   1. BEGIN
-     *   2. `SELECT ... FOR UPDATE` over the five toggle keys
-     *      ({@see SettingsRepository::lockSettingRows()} — present rows take
-     *      X locks, absent keys take next-key gap locks under REPEATABLE
-     *      READ; see that docblock for the honest coverage analysis).
-     *   3. RE-RUN the F7 guard ({@see authMethodLockoutResponse()}) — its
-     *      `currentState()` read now happens AFTER the lock, so the policy
-     *      validates against the locked, latest committed view, not the
-     *      pre-transaction snapshot that made the original guard a
-     *      read-probe-write race.
-     *   4. Reject → ROLLBACK, return the byte-identical 422/500 envelope.
-     *   5. Accept → persist every key, COMMIT. The whole write-set is now
-     *      atomic (a mid-loop `set()` failure rolls back all keys, including
-     *      non-auth keys batched into the same PUT — a deliberate improvement
-     *      over the old per-key partial-persistence, confined to auth-
-     *      touching write-sets; non-auth PUTs keep the plain loop).
+     * The choreography — BEGIN → `SELECT ... FOR UPDATE` over the five
+     * canonical toggle keys (present rows take X locks, absent keys next-key
+     * gap locks; honest coverage in
+     * {@see \Phlix\Admin\SettingsRepository::lockSettingRows()}) → LOCKED
+     * guard re-read → persist → COMMIT, ROLLBACK on any rejection — lives in
+     * {@see AuthMethodPolicy::guardAndPersistThrough()}, the ONE dialect
+     * shared byte-for-byte with the provider-integrations disable surface
+     * ({@see \Phlix\Server\Http\Controllers\AuthProviderController::disableProvider()}).
+     * Both lock the identical five-key set in the identical canonical order
+     * (universal overlap), so admin∥provider writers fully serialize; the B2
+     * review's provider×admin interleave residual is closed here.
      *
-     * A commit/lock failure propagates to update()'s outer catch(Throwable)
-     * as the existing 500 'Failed to update settings' envelope; the rollback
-     * in the catch mirrors the house transaction idiom (a secondary rollback
-     * failure after a dead connection throws past us — accepted, documented,
-     * same as CollectionItemRepository::applyMemberDiff()).
+     * This method is the admin surface's ENVELOPE MAPPING only: the
+     * protocol's typed failures translate to the byte-identical 422/500
+     * contract surface pinned by AdminSettingsControllerAuthGuardTest, and
+     * the statement laws (BEGIN→LOCK→READ→WRITE→READ→COMMIT ordering,
+     * rollback-with-zero-persists, the unwired BEGIN→LOCK→ROLLBACK shape)
+     * are pinned against this shared implementation by
+     * AdminSettingsControllerAuthLockTest. The whole write-set commits
+     * atomically — a mid-loop `set()` failure rolls back ALL keys, including
+     * non-auth keys batched into the same PUT (deliberate B2 improvement;
+     * non-auth PUTs keep the plain loop below with zero new locks).
+     *
+     * BEGIN/lock/persist/COMMIT failures deliberately escape to update()'s
+     * outer catch(Throwable) as the existing 500 'Failed to update settings'
+     * envelope — the protocol re-raises those UNWRAPPED after rolling back
+     * (a secondary rollback failure after a dead connection throws past
+     * both, accepted house idiom, same as
+     * {@see \Phlix\Collections\CollectionItemRepository::applyMemberDiff()}).
      *
      * @param array<string, array{value: mixed, type: string}> $validated
      */
     private function updateAuthGuarded(array $validated): Response
     {
-        $this->settings->beginTransaction();
+        $touched = self::authTouchedMethods($validated);
 
         try {
-            $this->settings->lockSettingRows(self::authMethodSettingKeys());
+            /** @var array{values: array<string, mixed>, overridden: list<string>} $merged */
+            $merged = AuthMethodPolicy::guardAndPersistThrough(
+                $this->authPolicy,
+                $this->settings,
+                $touched,
+                function () use ($validated): array {
+                    foreach ($validated as $key => $entry) {
+                        $this->settings->set($key, $entry['value'], $entry['type']);
+                    }
 
-            $lockout = $this->authMethodLockoutResponse($validated);
-            if ($lockout !== null) {
-                $this->settings->rollbackTransaction();
-
-                return $lockout;
+                    // Response payload read BEFORE commit, on the same locked
+                    // connection — the exact statement position B2 pinned.
+                    return $this->settings->getEffectiveMany(array_keys(self::allowedKeys()));
+                },
+            );
+        } catch (AuthMethodLockoutException $e) {
+            $errors = [];
+            foreach (array_keys($touched) as $method) {
+                $errors[AuthMethodPolicy::settingsKey($method)] = $e->getMessage();
             }
 
-            foreach ($validated as $key => $entry) {
-                $this->settings->set($key, $entry['value'], $entry['type']);
-            }
-
-            $merged = $this->settings->getEffectiveMany(array_keys(self::allowedKeys()));
-            $this->settings->commitTransaction();
-        } catch (Throwable $e) {
-            $this->settings->rollbackTransaction();
-
-            throw $e;
+            return (new Response())->status(422)->json([
+                'success' => false,
+                'error'   => 'Validation failed',
+                'errors'  => $errors,
+                'reason'  => $e->reason(),
+                'message' => $e->getMessage(),
+            ]);
+        } catch (AuthMethodGuardUnwiredException $e) {
+            // Fail closed: an unwired guard never persists. The wiring test
+            // keeps this unreachable in the container; it exists for the
+            // nullable constructor default.
+            return (new Response())->status(500)->json([
+                'success' => false,
+                'error'   => 'Auth-method lock-out guard unavailable',
+                'message' => $e->getMessage(),
+            ]);
+        } catch (AuthMethodGuardCheckFailedException $e) {
+            // Fail closed on any guard-window blow-up (unreadable store,
+            // malformed state): the write is refused, nothing persisted,
+            // and the original message is preserved verbatim by the wrapper.
+            return (new Response())->status(500)->json([
+                'success' => false,
+                'error'   => 'Auth-method policy check failed',
+                'message' => $e->getMessage(),
+            ]);
         }
 
         return (new Response())->json([
@@ -811,81 +850,6 @@ final class AdminSettingsController
         }
 
         return $touched;
-    }
-
-    /**
-     * The five `auth.<method>.enabled` setting keys, in canonical method order.
-     *
-     * @return list<string>
-     */
-    private static function authMethodSettingKeys(): array
-    {
-        return array_map([AuthMethodPolicy::class, 'settingsKey'], AuthMethodPolicy::METHODS);
-    }
-
-    /**
-     * F7 auth-method lock-out guard for {@see update()}.
-     *
-     * Inspects the per-key-validated write-set; when it touches any of the
-     * five `auth.<method>.enabled` toggles, overlays the new values on the
-     * live policy state and asks {@see AuthMethodPolicy::assertSafeTransition()}
-     * (R1: never all-off; R2: never strand an active admin without a factor)
-     * BEFORE the first `set()` runs. A non-null return means nothing was
-     * persisted. On the admin settings PUT this runs INSIDE the B2
-     * transaction, after {@see SettingsRepository::lockSettingRows()} — the
-     * `currentState()` read is therefore the locked view, not a racy
-     * snapshot.
-     *
-     * @param array<string, array{value: mixed, type: string}> $validated
-     */
-    private function authMethodLockoutResponse(array $validated): ?Response
-    {
-        $touched = self::authTouchedMethods($validated);
-
-        if ($touched === []) {
-            return null;
-        }
-
-        if ($this->authPolicy === null) {
-            // Fail closed: an unwired guard must never degrade into
-            // unguarded toggle writes. The wiring test keeps this unreachable
-            // in the container; it is here for the null-default constructor.
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'error'   => 'Auth-method lock-out guard unavailable',
-                'message' => 'The server cannot validate auth-method toggles without the auth policy service.',
-            ]);
-        }
-
-        /** @var array<string, bool> $proposed */
-        $proposed = array_merge($this->authPolicy->currentState(), $touched);
-
-        try {
-            $this->authPolicy->assertSafeTransition($proposed);
-        } catch (AuthMethodLockoutException $e) {
-            $errors = [];
-            foreach (array_keys($touched) as $method) {
-                $errors[AuthMethodPolicy::settingsKey($method)] = $e->getMessage();
-            }
-
-            return (new Response())->status(422)->json([
-                'success' => false,
-                'error'   => 'Validation failed',
-                'errors'  => $errors,
-                'reason'  => $e->reason(),
-                'message' => $e->getMessage(),
-            ]);
-        } catch (Throwable $e) {
-            // Fail closed on ANY other policy error (unreadable store,
-            // malformed state): refuse the write, persist nothing, stay loud.
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'error'   => 'Auth-method policy check failed',
-                'message' => $e->getMessage(),
-            ]);
-        }
-
-        return null;
     }
 
     /**

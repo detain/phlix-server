@@ -14,6 +14,7 @@ namespace Phlix\Auth;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
 use Phlix\Common\Logger\StructuredLogger;
+use Throwable;
 
 /**
  * Single source of truth for the five `auth.<method>.enabled` toggles (F7).
@@ -26,16 +27,23 @@ use Phlix\Common\Logger\StructuredLogger;
  *     class re-reads the five keys.
  *   - {@see self::assertSafeTransition()} — would a proposed toggle state lock
  *     anyone out? Consulted by BOTH write surfaces BEFORE anything is
- *     persisted, under different concurrency guarantees since B2: the admin
- *     settings API re-validates INSIDE an open transaction after taking
- *     `SELECT ... FOR UPDATE` row locks on the five toggle keys (see
- *     {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::updateAuthGuarded()}
- *     and {@see \Phlix\Admin\SettingsRepository::lockSettingRows()}), so its
- *     view of the current state is the locked latest-committed one, not a
- *     race-prone pre-write snapshot; the provider integrations API keeps the
- *     plain pre-write guard (its residual interleave against the admin path
- *     is mitigated by the read-path password fallback below and is owed a
- *     matching serialization in a follow-up).
+ *     persisted, and since the provider-parity close BOTH under the SAME
+ *     serialization protocol: {@see self::guardAndPersistThrough()} runs
+ *     BEGIN → `SELECT ... FOR UPDATE` row locks on the five toggle keys (see
+ *     {@see \Phlix\Admin\SettingsRepository::lockSettingRows()}) → guard
+ *     re-read against the locked latest-committed view (never a race-prone
+ *     pre-write snapshot) → persist → COMMIT, rejecting with ROLLBACK and
+ *     zero persistence. The admin settings API
+ *     ({@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::updateAuthGuarded()})
+ *     and the provider integrations API
+ *     ({@see \Phlix\Server\Http\Controllers\AuthProviderController::disableProvider()})
+ *     are the two protocol callers. Deadlock symmetry / universal overlap:
+ *     every guarded writer locks the IDENTICAL five-key set in the IDENTICAL
+ *     canonical order, so any two of them fully serialize — a partial-overlap
+ *     deadlock pair cannot form — and the B2 review's provider×admin
+ *     interleave residual is closed rather than mitigated. Writes that bypass
+ *     the API entirely (raw SQL, restores) remain outside any lock; the
+ *     read-path password fallback below stays their last-resort backstop.
  *
  * ## Read path
  *
@@ -277,6 +285,144 @@ final class AuthMethodPolicy
         if ($blocked !== []) {
             throw new AuthMethodLockoutException(AuthMethodLockoutException::REASON_ADMIN_LOCKOUT, $blocked);
         }
+    }
+
+    /**
+     * THE B2 serialization protocol — one dialect, both guarded write surfaces.
+     *
+     * Order of operations, every statement on the SAME connection (the one
+     * `$settings` writes through — a lock taken on a second connection would
+     * be theater):
+     *   1. BEGIN
+     *   2. `SELECT ... FOR UPDATE` over the five canonical toggle keys in
+     *      canonical order ({@see self::lockKeys()} — THE lock target; both
+     *      callers inherit it from here, so the universal-overlap /
+     *      deadlock-symmetry property cannot drift per surface).
+     *   3. Locked re-read: `currentState() + $diff` → {@see self::assertSafeTransition()}.
+     *      The read happens AFTER the lock, so the guard certifies the write
+     *      against the latest-committed state the competitors can no longer
+     *      change under us — this is the exact step the pre-B2 read-probe-write
+     *      got wrong.
+     *   4. Rejection (or an unwired guard, or a blown probe) → ROLLBACK, then
+     *      the typed throw — nothing was persisted, no half-state exists.
+     *   5. Accept → run `$persist()` INSIDE the open transaction, COMMIT, and
+     *      return its result verbatim (surfaces typically read their response
+     *      payload inside the callback, before COMMIT, so it reflects the
+     *      locked state).
+     *
+     * Failure classification is deliberate and byte-pinned by the surfaces'
+     * envelopes: guard-window blow-ups arrive as
+     * {@see AuthMethodGuardCheckFailedException} (original message preserved,
+     * previous chained) so both controllers keep answering their 500
+     * 'Auth-method policy check failed'; BEGIN/lock/persist/COMMIT failures
+     * re-propagate UNWRAPPED after ROLLBACK (the admin PUT's outer catch
+     * keeps its 'Failed to update settings' path; the provider route's
+     * dispatcher 500 for a bootstrapper failure stays a dispatcher 500).
+     * The ROLLBACK itself mirrors the house idiom (a secondary rollback
+     * failure after a dead connection throws past us — accepted, documented,
+     * same as {@see \Phlix\Collections\CollectionItemRepository::applyMemberDiff()}).
+     *
+     * Same-connection precondition: in production the container memoizes one
+     * {@see SettingsRepository} (PHP-DI singleton), so the policy's reads, the
+     * protocol's locks, and each surface's persist callback all traverse one
+     * connection. That identity is pinned by
+     * `tests/Unit/Auth/AuthMethodPolicyWiringGuardTest` — a future factory-
+     * scoped split would silently unserialize the protocol and MUST redden
+     * that guard first.
+     *
+     * @template T
+     *
+     * @param self|null               $policy   The guard; NULL only reaches the
+     *        fail-closed {@see AuthMethodGuardUnwiredException} arm after the
+     *        lock (never an unguarded persist).
+     * @param SettingsRepository      $settings The store the transaction — and
+     *        therefore the locks — runs on. Must be the same connection
+     *        `$persist` writes through (see precondition above).
+     * @param array<string, bool>     $diff     Methods this write-set changes,
+     *        method => proposed value; overlaid on the LOCKED currentState().
+     * @param callable(): T           $persist  Runs only after the guard
+     *        passed, inside the still-open transaction.
+     *
+     * @return T Whatever `$persist` returned.
+     *
+     * @throws AuthMethodLockoutException R1/R2 rejected — rolled back, nothing persisted.
+     * @throws AuthMethodGuardUnwiredException no policy instance — rolled back.
+     * @throws AuthMethodGuardCheckFailedException the guard probe blew up mid-check — rolled back.
+     * @throws Throwable any BEGIN/lock/persist/COMMIT failure — rolled back, re-raised unwrapped.
+     */
+    public static function guardAndPersistThrough(
+        ?self $policy,
+        SettingsRepository $settings,
+        array $diff,
+        callable $persist,
+    ): mixed {
+        $settings->beginTransaction();
+
+        try {
+            $settings->lockSettingRows(self::lockKeys());
+
+            if ($policy === null) {
+                // Fail closed: an unwired guard must never degrade into
+                // unguarded toggle writes. The container keeps this arm
+                // unreachable (wiring guard); it exists for the nullable
+                // constructor default, and it still serializes + rolls its
+                // (empty) transaction back so the statement law the surfaces
+                // pinned (BEGIN → LOCK → ROLLBACK) is unchanged.
+                throw new AuthMethodGuardUnwiredException(
+                    'The server cannot validate auth-method toggles without the auth policy service.',
+                );
+            }
+
+            try {
+                // One locked re-read per call (class docblock, "Read path"):
+                // currentState() IS the base the proposal overlays, and under
+                // the open FOR UPDATE locks it is the latest-committed view.
+                $policy->assertSafeTransition(array_merge($policy->currentState(), $diff));
+            } catch (AuthMethodLockoutException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                throw new AuthMethodGuardCheckFailedException($e->getMessage(), 0, $e);
+            }
+
+            $result = $persist();
+            $settings->commitTransaction();
+
+            return $result;
+        } catch (Throwable $e) {
+            $settings->rollbackTransaction();
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Instance form of {@see self::guardAndPersistThrough()} for surfaces that
+     * hold the policy but write through the SAME store this policy reads
+     * (production: the container-memoized singleton — precondition documented
+     * there).
+     *
+     * @template T
+     *
+     * @param array<string, bool> $diff
+     * @param callable(): T       $persist
+     *
+     * @return T
+     */
+    public function guardAndPersist(array $diff, callable $persist): mixed
+    {
+        return self::guardAndPersistThrough($this, $this->settings, $diff, $persist);
+    }
+
+    /**
+     * The five `auth.<method>.enabled` keys in canonical lock order — THE
+     * single lock target every protocol writer serializes on (universal
+     * overlap; see {@see self::guardAndPersistThrough()}).
+     *
+     * @return list<string>
+     */
+    private static function lockKeys(): array
+    {
+        return array_map([self::class, 'settingsKey'], self::METHODS);
     }
 
     /**

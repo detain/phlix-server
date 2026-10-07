@@ -41,7 +41,6 @@ final class AuthLockRecorder
 
     /** @var (callable(array<string, array{setting_key: string, setting_value: string, value_type: string}>): void)|null */
     public $onLock = null;
-
 }
 
 /**
@@ -98,7 +97,7 @@ final class AdminSettingsControllerAuthLockTest extends TestCase
                     return [];
                 }
 
-                $this->fail('unexpected statement: ' . $sql);
+                throw new \RuntimeException('unexpected statement: ' . $sql);
             },
         );
         $db->method('beginTrans')->willReturnCallback(static function () use ($recorder): bool {
@@ -287,5 +286,30 @@ final class AdminSettingsControllerAuthLockTest extends TestCase
         $this->assertSame('Auth-method lock-out guard unavailable', $body['error']);
         $this->assertNotContains('UPSERT', $recorder->statements);
         $this->assertSame(['BEGIN', 'LOCK', 'ROLLBACK'], $recorder->statements);
+    }
+
+    /**
+     * The recorder's default arm is a fail-loud tripwire, not decoration:
+     * any statement shape the protocol must never emit (a bare DELETE, an
+     * unpinned SELECT, a foreign UPDATE) aborts with the offending SQL in the
+     * message instead of silently returning []. A silent [] would let a
+     * statement-shape regression masquerade as a passing protocol test.
+     */
+    public function test_recorder_fails_loud_on_any_unclassified_statement(): void
+    {
+        $recorder = new AuthLockRecorder();
+        $db       = $this->buildConnection($recorder);
+
+        try {
+            $db->query('DELETE FROM server_settings WHERE 1 = 1');
+            $this->fail('the default arm should have tripped');
+        } catch (\RuntimeException $tripwire) {
+            $this->assertStringContainsString(
+                'unexpected statement: DELETE FROM server_settings',
+                $tripwire->getMessage()
+            );
+        }
+
+        $this->assertSame([], $recorder->statements);
     }
 }

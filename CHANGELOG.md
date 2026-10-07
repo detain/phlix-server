@@ -9,6 +9,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **B2: the F7 auth-method lock-out guard now re-validates INSIDE a transaction
+  under `FOR UPDATE` row locks — concurrent admin PUTs can no longer land the
+  server all-off.** Re-verified at 759b0a79: `AdminSettingsController::update()`
+  validated via `AuthMethodPolicy::currentState()` (a plain SELECT) before the
+  persist loop with no lock — two concurrent PUTs (disable-password vs
+  disable-webauthn) could each read a live snapshot showing the other's method
+  still ON, both pass R1, both persist. Shipped: when (and only when) the
+  validated write-set touches any of `auth.{password,webauthn,oidc,ldap,github}
+  .enabled`, the write now runs `beginTransaction → lockSettingRows(5 keys,
+  canonical order) → re-read guard state (current read under the locks) →
+  assertSafeTransition → persist → commit`; any rejection ROLLBACKs and returns
+  the byte-identical 422/500 envelope (contract surface unchanged —
+  `AdminSettingsControllerAuthGuardTest` stayed green unmodified). The auth path
+  additionally gains batch atomicity (all-or-nothing persistence, house idiom
+  `CollectionItemRepository::applyMemberDiff`). `SettingsRepository` grows four
+  public primitives (`beginTransaction`/`commitTransaction`/`rollbackTransaction`
+  /`lockSettingRows`); honest lock coverage in the docblock: present keys take X
+  row locks on `uq_server_settings_key`, absent keys serialize via RR next-key/gap
+  locks (worst case a mutual gap-block deadlocks 1213 — the victim aborts
+  fail-loud, so all-off still never lands; availability residue only), and
+  writers OUTSIDE the protocol (the provider-integrations API keeps its plain
+  pre-write guard — provider×admin interleave remains a documented residual; the
+  read-path password fallback stays the backstop). `GET_LOCK` deliberately NOT
+  shipped: it is connection-scoped and the pool borrows per-query, so it would
+  leak; txn-scoped `FOR UPDATE` auto-releases on commit/rollback/connection
+  death. Non-auth write-sets: zero new statements, zero new locks (pinned).
+  Tests: `SettingsRepositoryTest` +3 (lock SQL shape/binds, empty-key fail-fast,
+  txn delegation); NEW `AdminSettingsControllerAuthLockTest` (5) — real
+  repository+policies over a recording fake Connection pinning statement order
+  BEGIN→LOCK→READ→WRITE→READ→COMMIT, guard-liveness (a concurrent commit
+  injected at the lock point becomes visible to the re-read and is refused),
+  rollback-with-zero-persists on rejection, and non-auth zero-lock absence; NEW
+  `AdminSettingsAuthLockB2Test` (2, real MySQL) — sequential last-man-standing
+  refusal, and a two-connection probe proving the second writer BLOCKS on A's
+  uncommitted lock (`innodb_lock_wait_timeout=1` as the sync primitive, no
+  sleeps) and re-validates to 422 after A commits. Census: files 1974→1976,
+  declared writes 1040→1042 (two put()-helper `$request->body` stamps), reads 448
+  held, IntegrationDbGuard adopters 67→68. Unit suite 11956→11964 (+8, measured
+  against a 759b0a79 worktree baseline). No new wire codes; no migrations.
+
 - **Owner-gated vendor seam CLOSED: phlix-shared v0.51.0 re-vendored — the eleven
   deferred keys are admin-API-LIVE.** Tag `v0.51.0` cut on shared's release commit
   `01bd2a9` (annotated, peel-verified; 84-key `server-settings.schema.json`), and

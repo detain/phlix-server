@@ -25,8 +25,17 @@ use Phlix\Common\Logger\StructuredLogger;
  *     verification, WebAuthn login/enrolment) and by nothing else; no other
  *     class re-reads the five keys.
  *   - {@see self::assertSafeTransition()} — would a proposed toggle state lock
- *     anyone out? Consulted by BOTH write surfaces (the admin settings API and
- *     the provider integrations API) BEFORE anything is persisted.
+ *     anyone out? Consulted by BOTH write surfaces BEFORE anything is
+ *     persisted, under different concurrency guarantees since B2: the admin
+ *     settings API re-validates INSIDE an open transaction after taking
+ *     `SELECT ... FOR UPDATE` row locks on the five toggle keys (see
+ *     {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::updateAuthGuarded()}
+ *     and {@see \Phlix\Admin\SettingsRepository::lockSettingRows()}), so its
+ *     view of the current state is the locked latest-committed one, not a
+ *     race-prone pre-write snapshot; the provider integrations API keeps the
+ *     plain pre-write guard (its residual interleave against the admin path
+ *     is mitigated by the read-path password fallback below and is owed a
+ *     matching serialization in a follow-up).
  *
  * ## Read path
  *

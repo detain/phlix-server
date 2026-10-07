@@ -573,8 +573,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Integration/Admin/AdminSettingsRealSchemaPutTest.php (real-MySQL
      * PUT admission/bounds/guard/persistence through the newly vendored
      * 84-key schema). Measured from the phpunit red (1974), not predicted.
+     * Re-pinned 1974→1976 by the B2 auth-lock lane (2026-10-07):
+     * net +2 — the in-transaction re-validation proofs
+     * tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerAuthLock-
+     * Test.php (statement-order/liveness/rollback/zero-lock pins on a
+     * recording fake Connection) and
+     * tests/Integration/Admin/AdminSettingsAuthLockB2Test.php (real-MySQL
+     * sequential double-disable + two-connection FOR UPDATE blocking probe).
+     * Measured from the phpunit red (1976), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1974;
+    private const EXPECTED_PHP_FILES = 1976;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -758,10 +766,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
        * Re-pinned 1039→1040 by the v0.51.0 re-vendor lane (2026-10-05):
        * +1 declared-member WRITE — AdminSettingsRealSchemaPutTest's put()
        * helper stamps `$request->body` (the declared Request member, same
-       * S101 shape as the F7 lane's helpers above). S427 license intact.
-       * Measured from the phpunit red (1040), not predicted.
+     * S101 shape as the F7 lane's helpers above). S427 license intact.
+     * Measured from the phpunit red (1040), not predicted.
+     * Re-pinned 1040→1042 by the B2 auth-lock lane (2026-10-07):
+     * +2 declared-member WRITEs — the put() helpers of
+     * AdminSettingsControllerAuthLockTest.php and
+     * AdminSettingsAuthLockB2Test.php each stamp `$request->body`
+     * (same S101 shape as the helpers above). S427 license intact.
+     * Measured from the phpunit red (1042), not predicted.
        */
-    private const EXPECTED_DECLARED_WRITES = 1040;
+    private const EXPECTED_DECLARED_WRITES = 1042;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

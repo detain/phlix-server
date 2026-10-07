@@ -195,6 +195,94 @@ class SettingsRepository
     }
 
     /**
+     * Start a transaction on this repository's connection.
+     *
+     * B2 (auth-lockout in-transaction re-validation): the admin settings PUT
+     * wraps its guard-check-and-persist in one transaction so the lock, the
+     * re-read, and the writes all live on the SAME connection the repository
+     * writes through — a lock taken on a second connection would be theater.
+     * Failures propagate (the vendor connection throws on a failed BEGIN);
+     * the vendor's bool return is ignored, matching the house transaction
+     * idiom in {@see \Phlix\Collections\CollectionItemRepository::applyMemberDiff()}.
+     *
+     * @since 1.4.0 (B2)
+     */
+    public function beginTransaction(): void
+    {
+        $this->db->beginTrans();
+    }
+
+    /**
+     * Commit the open transaction on this repository's connection.
+     *
+     * @since 1.4.0 (B2)
+     */
+    public function commitTransaction(): void
+    {
+        $this->db->commitTrans();
+    }
+
+    /**
+     * Roll the open transaction back on this repository's connection.
+     *
+     * @since 1.4.0 (B2)
+     */
+    public function rollbackTransaction(): void
+    {
+        $this->db->rollBackTrans();
+    }
+
+    /**
+     * Take `SELECT ... FOR UPDATE` row locks on the given setting keys.
+     *
+     * B2 serialization protocol for the auth-method lock-out guard. What IS
+     * and ISN'T locked, honestly:
+     *
+     *  - **Present keys** — every row whose `setting_key` already exists gets
+     *    an exclusive (X) row lock on the `uq_server_settings_key` unique
+     *    index, held until COMMIT/ROLLBACK. A concurrent writer running the
+     *    same protocol on an overlapping key set blocks here, then re-reads
+     *    the *locked* (current-read) state, so its guard validates against the
+     *    other writer's committed values, never a pre-write snapshot.
+     *  - **Absent keys** — under the default REPEATABLE READ isolation the
+     *    locking read also takes next-key (gap) locks over the index range of
+     *    each missing key, which blocks a concurrent INSERT of that same key.
+     *    Two writers inserting two *different* absent keys can in theory
+     *    deadlock on each other's gaps; InnoDB resolves this by aborting one
+     *    transaction (error 1213), which surfaces here as a throw, rolls the
+     *    whole guarded write back, and answers 500 — a SAFE abort: the
+     *    all-off state is never reached, only the doomed write is lost.
+     *  - **Not locked** — writers that bypass this protocol (the provider-API
+     *    disable surface, raw SQL, restores). The read-path password fallback
+     *    in {@see \Phlix\Auth\AuthMethodPolicy} remains the last-resort
+     *    backstop for those.
+     *
+     * Must be called inside an open {@see beginTransaction()} window: in
+     * autocommit mode InnoDB releases each lock the instant the statement
+     * finishes, making the call meaningless.
+     *
+     * @param list<string> $keys Dotted setting keys to lock.
+     *
+     * @throws \InvalidArgumentException When `$keys` is empty — an empty
+     *         `IN ()` is illegal SQL and an empty lock set would silently
+     *         skip the serialization the caller believes it acquired.
+     *
+     * @since 1.4.0 (B2)
+     */
+    public function lockSettingRows(array $keys): void
+    {
+        if ($keys === []) {
+            throw new \InvalidArgumentException('lockSettingRows() requires at least one setting key.');
+        }
+
+        $placeholders = implode(',', array_fill(0, count($keys), '?'));
+        $sql = 'SELECT setting_key, setting_value FROM server_settings'
+            . " WHERE setting_key IN ({$placeholders}) FOR UPDATE";
+
+        $this->db->query($sql, array_values($keys));
+    }
+
+    /**
      * Resolve the *default* (config-file) value for a dotted key.
      *
      * @param string $key Dotted setting key.

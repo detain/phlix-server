@@ -692,14 +692,17 @@ final class AdminSettingsController
                 ]);
             }
 
-            // F7 cross-key semantic guard: after per-key validation, BEFORE
-            // anything persists. Active only when this write-set touches one
-            // of the five auth-method toggles; a rejected transition persists
-            // NOTHING (the persist loop below is unreachable from here), so a
-            // batched settings save stays atomic with respect to the guard.
-            $lockout = $this->authMethodLockoutResponse($validated);
-            if ($lockout !== null) {
-                return $lockout;
+            // F7 cross-key semantic guard, B2 hardening: a write-set that
+            // touches any of the five auth-method toggles re-validates the
+            // lock-out policy INSIDE a transaction under FOR UPDATE row
+            // locks, so two concurrent admin PUTs (one disabling password,
+            // one disabling webauthn) can each no longer validate against a
+            // snapshot that still shows the other's method ON and then both
+            // persist to an all-off landing. A write-set without toggles
+            // takes the plain path below — zero new locks, zero transaction
+            // starts, byte-identical behavior to before B2.
+            if ($this->authTouchedMethods($validated) !== []) {
+                return $this->updateAuthGuarded($validated);
             }
 
             foreach ($validated as $key => $entry) {
@@ -726,18 +729,78 @@ final class AdminSettingsController
     }
 
     /**
-     * F7 auth-method lock-out guard for {@see update()}.
+     * Persist an auth-toggle write-set under the B2 serialization protocol.
      *
-     * Inspects the per-key-validated write-set; when it touches any of the
-     * five `auth.<method>.enabled` toggles, overlays the new values on the
-     * live policy state and asks {@see AuthMethodPolicy::assertSafeTransition()}
-     * (R1: never all-off; R2: never strand an active admin without a factor)
-     * BEFORE the first `set()` runs. A non-null return means nothing was
-     * persisted.
+     * Order of operations, all on the repository's own connection:
+     *   1. BEGIN
+     *   2. `SELECT ... FOR UPDATE` over the five toggle keys
+     *      ({@see SettingsRepository::lockSettingRows()} — present rows take
+     *      X locks, absent keys take next-key gap locks under REPEATABLE
+     *      READ; see that docblock for the honest coverage analysis).
+     *   3. RE-RUN the F7 guard ({@see authMethodLockoutResponse()}) — its
+     *      `currentState()` read now happens AFTER the lock, so the policy
+     *      validates against the locked, latest committed view, not the
+     *      pre-transaction snapshot that made the original guard a
+     *      read-probe-write race.
+     *   4. Reject → ROLLBACK, return the byte-identical 422/500 envelope.
+     *   5. Accept → persist every key, COMMIT. The whole write-set is now
+     *      atomic (a mid-loop `set()` failure rolls back all keys, including
+     *      non-auth keys batched into the same PUT — a deliberate improvement
+     *      over the old per-key partial-persistence, confined to auth-
+     *      touching write-sets; non-auth PUTs keep the plain loop).
+     *
+     * A commit/lock failure propagates to update()'s outer catch(Throwable)
+     * as the existing 500 'Failed to update settings' envelope; the rollback
+     * in the catch mirrors the house transaction idiom (a secondary rollback
+     * failure after a dead connection throws past us — accepted, documented,
+     * same as CollectionItemRepository::applyMemberDiff()).
      *
      * @param array<string, array{value: mixed, type: string}> $validated
      */
-    private function authMethodLockoutResponse(array $validated): ?Response
+    private function updateAuthGuarded(array $validated): Response
+    {
+        $this->settings->beginTransaction();
+
+        try {
+            $this->settings->lockSettingRows(self::authMethodSettingKeys());
+
+            $lockout = $this->authMethodLockoutResponse($validated);
+            if ($lockout !== null) {
+                $this->settings->rollbackTransaction();
+
+                return $lockout;
+            }
+
+            foreach ($validated as $key => $entry) {
+                $this->settings->set($key, $entry['value'], $entry['type']);
+            }
+
+            $merged = $this->settings->getEffectiveMany(array_keys(self::allowedKeys()));
+            $this->settings->commitTransaction();
+        } catch (Throwable $e) {
+            $this->settings->rollbackTransaction();
+
+            throw $e;
+        }
+
+        return (new Response())->json([
+            'success' => true,
+            'message' => 'Settings updated.',
+            'data'    => [
+                'settings'   => self::maskSecrets($merged['values']),
+                'overridden' => $merged['overridden'],
+            ],
+        ]);
+    }
+
+    /**
+     * Which auth methods does this write-set toggle? Keyed method => proposed.
+     *
+     * @param array<string, array{value: mixed, type: string}> $validated
+     *
+     * @return array<string, bool>
+     */
+    private static function authTouchedMethods(array $validated): array
     {
         $touched = [];
         foreach ($validated as $key => $entry) {
@@ -746,6 +809,38 @@ final class AdminSettingsController
                 $touched[$method] = $entry['value'] === true;
             }
         }
+
+        return $touched;
+    }
+
+    /**
+     * The five `auth.<method>.enabled` setting keys, in canonical method order.
+     *
+     * @return list<string>
+     */
+    private static function authMethodSettingKeys(): array
+    {
+        return array_map([AuthMethodPolicy::class, 'settingsKey'], AuthMethodPolicy::METHODS);
+    }
+
+    /**
+     * F7 auth-method lock-out guard for {@see update()}.
+     *
+     * Inspects the per-key-validated write-set; when it touches any of the
+     * five `auth.<method>.enabled` toggles, overlays the new values on the
+     * live policy state and asks {@see AuthMethodPolicy::assertSafeTransition()}
+     * (R1: never all-off; R2: never strand an active admin without a factor)
+     * BEFORE the first `set()` runs. A non-null return means nothing was
+     * persisted. On the admin settings PUT this runs INSIDE the B2
+     * transaction, after {@see SettingsRepository::lockSettingRows()} — the
+     * `currentState()` read is therefore the locked view, not a racy
+     * snapshot.
+     *
+     * @param array<string, array{value: mixed, type: string}> $validated
+     */
+    private function authMethodLockoutResponse(array $validated): ?Response
+    {
+        $touched = self::authTouchedMethods($validated);
 
         if ($touched === []) {
             return null;

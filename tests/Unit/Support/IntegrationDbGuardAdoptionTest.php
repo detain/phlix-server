@@ -454,7 +454,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // proof of schema admission, bounds/enum enforcement, F7 R1/R2 write
     // guards, and server_settings persistence through the vendored 84-key
     // v0.51.0 schema). Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 67;
+    // 67→68 by the B2 auth-lock lane (2026-10-07):
+    // +tests/Integration/Admin/AdminSettingsAuthLockB2Test.php (real-MySQL
+    // sequential last-man-standing refusal + two-connection FOR UPDATE
+    // protocol-lock blocking probe for the auth-method lock-out guard).
+    // Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 68;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

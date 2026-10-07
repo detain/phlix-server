@@ -322,4 +322,54 @@ final class SettingsRepositoryTest extends TestCase
         $this->assertIsArray($stringOverride);
         $this->assertSame('en-US', $stringOverride['value']);
     }
+
+    // ---------------------------------------------------------------
+    // B2 (auth-lockout serialization) transaction + row-lock primitives.
+    // ---------------------------------------------------------------
+
+    public function testLockSettingRowsEmitsSelectForUpdateWithPositionalBinds(): void
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, ?array $params = null) use (&$captured): array {
+                $captured[] = ['sql' => $sql, 'params' => $params];
+
+                return [];
+            },
+        );
+        $repo = new SettingsRepository($db, self::FIXTURE_DIR);
+
+        $repo->lockSettingRows(['auth.password.enabled', 'auth.webauthn.enabled']);
+
+        $this->assertCount(1, $captured);
+        $this->assertStringContainsString('SELECT setting_key, setting_value FROM server_settings', $captured[0]['sql']);
+        $this->assertStringContainsString('WHERE setting_key IN (?,?)', $captured[0]['sql']);
+        $this->assertStringEndsWith('FOR UPDATE', $captured[0]['sql']);
+        $this->assertSame(['auth.password.enabled', 'auth.webauthn.enabled'], $captured[0]['params']);
+    }
+
+    public function testLockSettingRowsRejectsEmptyKeySet(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // An empty IN() would be illegal SQL; the guard must throw BEFORE any query is issued.
+        $db->expects($this->never())->method('query');
+        $repo = new SettingsRepository($db, self::FIXTURE_DIR);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $repo->lockSettingRows([]);
+    }
+
+    public function testTransactionPrimitivesDelegateToConnectionOnceEach(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())->method('beginTrans');
+        $db->expects($this->once())->method('commitTrans');
+        $db->expects($this->once())->method('rollBackTrans');
+        $repo = new SettingsRepository($db, self::FIXTURE_DIR);
+
+        $repo->beginTransaction();
+        $repo->commitTransaction();
+        $repo->rollbackTransaction();
+    }
 }

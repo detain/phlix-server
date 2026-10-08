@@ -76,6 +76,44 @@ $say = static function (string $message): void {
 };
 
 /**
+ * Cross-mount fallback for rename(): copies $src recursively into $dest and
+ * removes $src on success. Returns false when anything failed so the caller
+ * keeps the single loud failure path.
+ */
+$moveAcrossMounts = static function (string $src, string $dest): bool {
+    if (!is_dir($dest) && !mkdir($dest, 0o755, true) && !is_dir($dest)) {
+        return false;
+    }
+    /** @var iterable<SplFileInfo> $iterator */
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($src, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST,
+    );
+    // Each entry's absolute path minus the source prefix gives the relative
+    // position to mirror under the destination.
+    foreach ($iterator as $entry) {
+        $relative = trim(substr($entry->getPathname(), strlen($src)), '/');
+        if ($relative === '') {
+            return false;
+        }
+        $target = $dest . DIRECTORY_SEPARATOR . $relative;
+        if ($entry->isDir()) {
+            if (!is_dir($target) && !mkdir($target, 0o755, true) && !is_dir($target)) {
+                return false;
+            }
+
+            continue;
+        }
+        if (!copy($entry->getPathname(), $target)) {
+            return false;
+        }
+    }
+    exec(sprintf('rm -rf %s', escapeshellarg($src)));
+
+    return is_dir($src) === false;
+};
+
+/**
  * @param list<string> $argv
  */
 $option = static function (array $argv, string $name, ?string $default = null): ?string {
@@ -253,7 +291,13 @@ if ($installedVersion === $version && is_file($distFile)) {
     if (is_dir($destDir)) {
         exec(sprintf('rm -rf %s', escapeshellarg($destDir)));
     }
-    if (!rename($payload, $destDir)) {
+    // rename() is a zero-copy move only WITHIN one mount. The ubuntu-26.04
+    // runner image mounts /tmp on a different filesystem than the workspace
+    // (24.04 shared the root mount, so the rename always happened to succeed —
+    // an undeclared environment dependency that EXDEV surfaced on migration),
+    // so fall back to a recursive copy and drop the scratch dir. Loud on
+    // failure, exactly like the rename path before it.
+    if (!@rename($payload, $destDir) && !$moveAcrossMounts($payload, $destDir)) {
         $fail(sprintf('could not move the extracted package into %s.', $destDir));
     }
     exec(sprintf('rm -rf %s', escapeshellarg($work)));

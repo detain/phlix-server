@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload E2E test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: syncplay-e2e-results
           path: tests/E2E/Session/SyncPlay/*.xml

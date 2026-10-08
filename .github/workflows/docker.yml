@@ -24,7 +24,7 @@ jobs:
   # --------------------------------------------------------------------------
   docker-base:
     name: Build and Push phlix-base
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     permissions:
       contents: read
@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -160,7 +160,7 @@ jobs:
 
   docker:
     name: Build and Push phlix-server
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: docker-base
     # NOT a job-level `if:` on base_ref. (S163 round 5, finding 3.) The guard
     # belongs to the leg that consumes the base, and only ONE does:
@@ -200,7 +200,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -333,7 +333,7 @@ jobs:
   # --------------------------------------------------------------------------
   docker-boot-gate:
     name: Boot gate (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     # S210 — an unbounded gate is indistinguishable from a slow one. Without this
     # the GitHub default (360 min) let a 2026-08-04 PR-leg stall burn 34 min of

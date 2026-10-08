@@ -9,14 +9,14 @@ on:
 jobs:
   phpcs:
     name: PHP CodeSniffer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314. THE canonical extension list, derived once from phlix-server's
@@ -113,14 +113,14 @@ jobs:
 
   phpstan:
     name: PHPStan Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical list (see the phpcs job's comment and
@@ -192,7 +192,7 @@ jobs:
 
   smarty-escape-guard:
     name: Smarty Page-Rendering Guard (S1)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
@@ -234,14 +234,14 @@ jobs:
 
   psalm:
     name: Psalm Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S146. This job used to declare `extensions: json` only. Psalm resolves
@@ -332,14 +332,14 @@ jobs:
 
   composer-validate:
     name: Composer Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S304 — deliberately NO `extensions:` list and NO assert-php-extensions step
@@ -355,14 +355,14 @@ jobs:
 
   security-check:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S304 — deliberately NO `extensions:` list and NO assert-php-extensions step
@@ -426,7 +426,7 @@ jobs:
 
   openapi:
     name: OpenAPI Description
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code

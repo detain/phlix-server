@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: PHPUnit Test Suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     services:
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical contract from
@@ -275,7 +275,7 @@ jobs:
         # installed" in coding-standards.yml (S146). It exists because the
         # threshold step below spent the life of this repo reporting success
         # while measuring nothing: it shelled out to `xmllint`, which is NOT
-        # installed on ubuntu-latest, hid the resulting "command not found"
+        # installed on ubuntu-24.04 (then-latest), hid the resulting "command not found"
         # behind `2>/dev/null`, substituted `0` via `|| echo "0"`, and then read
         # that `0` as "empty report — skip" and exited 0.
         #
@@ -356,14 +356,14 @@ jobs:
 
   test-server:
     name: Server Component Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # S314 — the canonical contract from
@@ -445,7 +445,7 @@ jobs:
 
   assertion-escape-probe:
     name: Assertion-Escape Prober (S180)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # ⚠ NOT because the prober is slow. That was the assumption S180 started from and
     # it is FALSE, measured: the full 22-site bulk probe takes **7.2 s** wall clock on
     # the dev box (`/usr/bin/time` → REAL=7.24 s), because every probed site is a fast
@@ -505,7 +505,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # S304 SHA-pin v2.37.2 (tag updated 2026-06-08), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60 # S304 SHA-pin v2.40.0 (published 2026-10-08 — adds ubuntu-26.04 support), was floating @v2; bump via refs/tags/v2 on shivammathur/setup-php
         with:
           php-version: '8.3'
           # Same list as the `test` job. pcov is kept even though every probe run

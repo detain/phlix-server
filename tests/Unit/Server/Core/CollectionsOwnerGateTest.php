@@ -114,6 +114,22 @@ final class CollectionsOwnerGateTest extends TestCase
 
     protected function tearDown(): void
     {
+        // Container graph resolution constructs MediaAssetJobStore /
+        // SimilarityJobStore through MediaServicesProvider factories, which mint
+        // the shared /tmp queue dirs in their constructors. Sweep so the suite
+        // leaves zero residue (S439) — without this the class is the last
+        // minter whenever random order places it after every sweeping sibling,
+        // and the ZeroResidueCensus reddens the run.
+        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
+            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+            if (is_dir($sharedDir)) {
+                foreach (glob($sharedDir . '/*') ?: [] as $queued) {
+                    @unlink($queued);
+                }
+                @rmdir($sharedDir);
+            }
+        }
+
         RequestContext::setUserId(null);
         RequestContext::setProfileId(null);
         LoggerFactory::reset();

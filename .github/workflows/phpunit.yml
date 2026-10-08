@@ -63,8 +63,32 @@ jobs:
       - name: Verify swoole + uv loaded
         run: php -m | grep -iE '^(swoole|uv)$'
 
-      - name: Install ffmpeg
-        run: sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install ffmpeg (pinned 7.0.2-static)
+        # ubuntu-26.04's archive ffmpeg is 7.1+, and the 7.1/8.x mjpeg encoder
+        # hard-aborts a batch whose out-of-range `-ss` output flushes empty
+        # ("Non full-range YUV is non-standard" → exit 234, "Conversion failed!").
+        # The whole thumbnail contract (FfmpegRunner::generateThumbnailBatch +
+        # FfmpegThumbnailBatchTest) is built on the pre-7.1 semantics the image
+        # shipped before this migration: empty outputs are the "Output file is
+        # empty" warning, exit 0, reachable frames still written. 7.0.2-static is
+        # the newest era-clean build (probe 2026-10-08: mixed [1,999] → exit 0 +
+        # frame_00000 written + frame_00001 absent, identical to 6.1.1; 7.1.5 →
+        # exit 234). Fail-loud sha256 pin: if the (floating) download URL's bytes
+        # ever change, this step errors instead of silently drifting the toolchain.
+        # PRODUCT FOLLOW-UP owed (owner lane, NOT this CI lane): FfmpegRunner must
+        # tolerate modern ffmpeg — add `-strict unofficial` to the image2 outputs
+        # or demote per-output-empty failure to partial success — then this pin
+        # can retire back to the distro binary.
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/ffmpeg-pinned.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          echo 'abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  /tmp/ffmpeg-pinned.tar.xz' | sha256sum -c -
+          tar xf /tmp/ffmpeg-pinned.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/bin/ffmpeg
+          sudo install -m 0755 /tmp/ffmpeg-*-amd64-static/ffprobe /usr/bin/ffprobe
+          rm -rf /tmp/ffmpeg-pinned.tar.xz /tmp/ffmpeg-*-amd64-static
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
 
       - name: Setup Node.js
         # S305. `tests/Support/Browser/hls-playback-probe.mjs` drives headless Chrome

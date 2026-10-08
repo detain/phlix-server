@@ -49,7 +49,7 @@ final class PhpExtensionAssertGateTest extends TestCase
 
     private const STEP_NAME = 'Assert required PHP extensions loaded (S304)';
 
-    private const SETUP_PHP_PIN = 'uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240';
+    private const SETUP_PHP_PIN = 'uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60';
 
     /**
      * The gate speaks: on a runtime that satisfies the contract (every CI leg that
@@ -169,7 +169,8 @@ final class PhpExtensionAssertGateTest extends TestCase
 
     /**
      * The supply-chain half of the step: the tool that decides which extensions
-     * exist must itself be pinned. Nine uses, all at the v2.37.2 commit; zero
+     * exist must itself be pinned. Nine uses, all at the v2.40.0 commit (the
+     * release that adds ubuntu-26.04 support); zero
      * floating tags anywhere in .github/workflows/.
      */
     public function testEverySetupPhpUseIsShaPinned(): void

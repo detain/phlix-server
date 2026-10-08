@@ -972,6 +972,59 @@ class FfmpegRunner
     }
 
     /**
+     * Output strictness flag carried by EVERY mjpeg/image2 output this class builds.
+     *
+     * JPEG is inherently full-range YUV. Since ffmpeg 7.1 the mjpeg encoder
+     * refuses limited-range (yuv420p) frames at default strictness —
+     * "Non full-range YUV is non-standard, set strict_std_compliance to at
+     * most unofficial to use it" — and treats the failed encoder-open as FATAL.
+     * The case that made this a production break (not merely a strictness
+     * debate): an output that flushes EMPTY — e.g. a batch entry whose input-side
+     * `-ss` lands past EOF — never delivers a frame, so its encoder is opened at
+     * the EOF flush with the default yuv420p and the WHOLE process aborts with
+     * exit 234, killing sibling outputs that were writing fine. On 6.x/7.0 builds
+     * the same check was a warning, exit 0, and the S-F19 partial-success contract
+     * ("reachable frames written, out-of-range ones simply absent") held.
+     * Measured 2026-10-08 against the exact command shapes: pre-7.1 builds exit 0
+     * with or without this flag; 7.1+/master (N-127252) exit 234 without it and
+     * exit 0 with it — restoring the documented partial-success semantics.
+     *
+     * Scope law: attached ONLY to mjpeg/image2 outputs (single thumbnail,
+     * thumbnail batch, trickplay sprite sheet, BIF frames) — never to HLS/segment/
+     * audio/subtitle commands, so relaxing compliance here cannot mask conformance
+     * problems in streaming encodes. Pinned by the negative assertions in
+     * {@see \Phlix\Tests\Unit\Media\Transcoding\FfmpegRunnerThumbnailBatchTest}.
+     */
+    private const MJPEG_STRICTNESS_ARGS = '-strict unofficial';
+
+    /**
+     * Builds the FFmpeg command line for a single-frame {@see generateThumbnail()}.
+     *
+     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
+     * command SHAPE — including the mjpeg strictness flag — is testable without
+     * invoking a real FFmpeg binary.
+     *
+     * @param string $inputPath  Source video path
+     * @param string $outputPath Destination image path
+     * @param int    $timeSeconds Timestamp to capture
+     *
+     * @return string The fully built, shell-escaped FFmpeg command line.
+     *
+     * @since SV-0.9 Extracted from generateThumbnail(); gains MJPEG_STRICTNESS_ARGS
+     */
+    public function buildThumbnailCommand(string $inputPath, string $outputPath, int $timeSeconds): string
+    {
+        return sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -ss %d -vframes 1 -q:v 2 %s -f image2 %s',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($inputPath),
+            $timeSeconds,
+            self::MJPEG_STRICTNESS_ARGS,
+            escapeshellarg($outputPath)
+        );
+    }
+
+    /**
      * Generates a thumbnail image from a video.
      *
      * @param string $inputPath Source video path
@@ -993,13 +1046,7 @@ class FfmpegRunner
             return $this->generateThumbnailBatch($inputPath, $timeSeconds, $outputPath);
         }
 
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -i %s -ss %d -vframes 1 -q:v 2 -f image2 %s',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($inputPath),
-            $timeSeconds,
-            escapeshellarg($outputPath)
-        );
+        $cmd = $this->buildThumbnailCommand($inputPath, $outputPath, $timeSeconds);
 
         $output = [];
         $exitCode = 0;
@@ -1026,6 +1073,13 @@ class FfmpegRunner
      * same file re-opened at a different offset, an unmapped output could
      * silently grab the wrong (or a duplicate) timestamp's frame.
      *
+     * Every output group carries {@see self::MJPEG_STRICTNESS_ARGS}: an
+     * out-of-range `-ss` leaves that output empty, and on ffmpeg 7.1+ the mjpeg
+     * encoder-open at the EOF flush hard-aborts the WHOLE batch (exit 234) —
+     * without the flag, one unreachable timestamp would poison every reachable
+     * one. The pre-7.1 partial-success semantics the S-F19 contract documents
+     * (reachable frames written, others absent) require the relaxation.
+     *
      * @param string $inputPath Source video path
      * @param array<int> $timestamps Array of timestamps (seconds) to capture
      * @param string $outputDir Directory for output images (named frame_00000.jpg, frame_00001.jpg, etc.)
@@ -1049,8 +1103,16 @@ class FfmpegRunner
             $inputArgs .= sprintf(' -ss %d -i %s', (int) $timestamp, escapeshellarg($inputPath));
 
             // Explicit map ties this output to the input occurrence that
-            // carries its matching seek offset (see docblock above).
-            $outputArgs .= sprintf(' -map %d:v:0 -vframes 1 %s', $index, escapeshellarg($framePath));
+            // carries its matching seek offset (see docblock above). The
+            // strictness flag leads the group (output options bind to the
+            // filename that follows; placing it before -map keeps every
+            // contiguous `-map … -vframes 1 …` shape pin intact).
+            $outputArgs .= sprintf(
+                ' %s -map %d:v:0 -vframes 1 %s',
+                self::MJPEG_STRICTNESS_ARGS,
+                $index,
+                escapeshellarg($framePath)
+            );
         }
 
         return sprintf(
@@ -2816,15 +2878,7 @@ class FfmpegRunner
             $margin,
             $padding
         );
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -ss %s -i %s '
-            . '-vf "%s" -frames:v 1 %s 2>&1',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($offsetArg),
-            escapeshellarg($videoPath),
-            $vfFilter,
-            escapeshellarg($spritePath)
-        );
+        $cmd = $this->buildTrickplaySpriteCommand($videoPath, $spritePath, $vfFilter, $offsetArg);
 
         $outputLines = [];
         $exitCode = 0;
@@ -2863,6 +2917,41 @@ class FfmpegRunner
         file_put_contents($timelinePath, $json);
 
         return [$spritePath, $timelinePath];
+    }
+
+    /**
+     * Builds the FFmpeg command line for one trickplay sprite sheet.
+     *
+     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
+     * command SHAPE is testable without a real binary. The sheet is an mjpeg
+     * output and therefore carries {@see self::MJPEG_STRICTNESS_ARGS} like every
+     * other image2 output this class builds.
+     *
+     * @param string $videoPath Source video path.
+     * @param string $spritePath Absolute destination sheet path.
+     * @param string $vfFilter  Pre-built `fps/…,tile=…` filter string (filterSeconds()-restricted).
+     * @param string $offsetArg Pre-built bare-decimal seek offset (filterSeconds()-restricted).
+     *
+     * @return string The fully built, shell-escaped FFmpeg command line.
+     *
+     * @since SV-0.9 Extracted from generateTrickplaySprites(); gains MJPEG_STRICTNESS_ARGS
+     */
+    public function buildTrickplaySpriteCommand(
+        string $videoPath,
+        string $spritePath,
+        string $vfFilter,
+        string $offsetArg
+    ): string {
+        return sprintf(
+            '%s -y -hide_banner -loglevel error -ss %s -i %s '
+            . '-vf "%s" -frames:v 1 %s %s 2>&1',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($offsetArg),
+            escapeshellarg($videoPath),
+            $vfFilter,
+            self::MJPEG_STRICTNESS_ARGS,
+            escapeshellarg($spritePath)
+        );
     }
 
     /**
@@ -2940,17 +3029,7 @@ class FfmpegRunner
 
         $pattern = $outputDir . '/bifframe_%05d.jpg';
 
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -ss %s -i %s '
-            . '-vf "fps=1/%s,scale=%d:-2" -frames:v %d -qscale:v 4 %s 2>&1',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($offsetArg),
-            escapeshellarg($videoPath),
-            $intervalArg,
-            $width,
-            $count,
-            escapeshellarg($pattern)
-        );
+        $cmd = $this->buildBifFramesCommand($videoPath, $pattern, $offsetArg, $intervalArg, $width, $count);
 
         $outputLines = [];
         $exitCode = 0;
@@ -2990,6 +3069,47 @@ class FfmpegRunner
         }
 
         return [$paths, $intervalMs];
+    }
+
+    /**
+     * Builds the FFmpeg command line for one Roku BIF frame-extraction pass.
+     *
+     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
+     * command SHAPE is testable without a real binary. The frames are mjpeg
+     * outputs and therefore carry {@see self::MJPEG_STRICTNESS_ARGS} like every
+     * other image2 output this class builds.
+     *
+     * @param string $videoPath   Source video path.
+     * @param string $pattern     `printf` frame-pattern (…/bifframe_%05d.jpg).
+     * @param string $offsetArg   Pre-built bare-decimal seek offset (filterSeconds()-restricted).
+     * @param string $intervalArg Pre-built bare-decimal frame interval (filterSeconds()-restricted).
+     * @param int    $width       Frame width in pixels.
+     * @param int    $count       Frame count cap.
+     *
+     * @return string The fully built, shell-escaped FFmpeg command line.
+     *
+     * @since SV-0.9 Extracted from generateBifFrames(); gains MJPEG_STRICTNESS_ARGS
+     */
+    public function buildBifFramesCommand(
+        string $videoPath,
+        string $pattern,
+        string $offsetArg,
+        string $intervalArg,
+        int $width,
+        int $count
+    ): string {
+        return sprintf(
+            '%s -y -hide_banner -loglevel error -ss %s -i %s '
+            . '-vf "fps=1/%s,scale=%d:-2" -frames:v %d -qscale:v 4 %s %s 2>&1',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($offsetArg),
+            escapeshellarg($videoPath),
+            $intervalArg,
+            $width,
+            $count,
+            self::MJPEG_STRICTNESS_ARGS,
+            escapeshellarg($pattern)
+        );
     }
 
     /**

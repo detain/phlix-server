@@ -1285,6 +1285,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Thumbnails, trickplay sprites and BIF frames no longer hard-abort on ffmpeg
+  ≥ 7.1 — every mjpeg/image2 output `FfmpegRunner` builds now carries
+  `-strict unofficial` (the CI BtbN n6.1.3 pin retires with it).**
+  User-visible impact: on any deployment running a modern distro ffmpeg (7.1+;
+  Ubuntu 26.04 ships 8.x), chapter thumbnails, poster extraction, trickplay
+  sprite sheets and Roku BIF frame passes died with exit 234 — "Non full-range
+  YUV is non-standard" — whenever an output flushed EMPTY, i.e. whenever a
+  requested `-ss` timestamp landed past EOF (short/variable-length media, a
+  chapter marker beyond a remux's duration). Worse, in the S-F19 batch path one
+  unreachable timestamp poisoned the whole command: reachable frames that were
+  already being written were discarded and the batch reported failure. Root
+  cause: JPEG is full-range YUV; from 7.1 the mjpeg encoder treats a
+  limited-range (yuv420p) frame as a fatal compliance violation instead of the
+  6.x/7.0-era warning, and an EMPTY output opens its encoder at the EOF flush
+  with exactly that default. `-strict unofficial` restores the pre-7.1 semantics
+  the S-F19 partial-success contract documents (exit 0, reachable frames
+  written, unreachable ones simply absent). Scope law: the flag is attached ONLY
+  to the four mjpeg/image2 output sites — single thumbnail
+  (`buildThumbnailCommand`, extracted for testability), thumbnail batch (per
+  output group), trickplay sprite (`buildTrickplaySpriteCommand`) and BIF frames
+  (`buildBifFramesCommand`) — never to HLS/segment/audio commands, so the
+  compliance relaxation cannot mask conformance problems in streaming encodes;
+  `FfmpegRunnerSegmentFormatTest`'s byte-identical literal pins stay green
+  UNMODIFIED as the structural proof. Tests: +5 argv-shape pins in
+  `FfmpegRunnerThumbnailBatchTest` (flag count/adjacency/placement laws per mjpeg
+  site + the negative half: segment and audio commands never contain `-strict`).
+  Measured 2026-10-08 with real binaries through the actual PHP code path:
+  pre-fix batch returns false with exit 234 on BtbN master (N-127252) and
+  7.1/8.x apt builds; post-fix exit 0 with frame_00000 written and frame_00001
+  absent, identical on 6.1.1/6.1.3 (flag inert there — no regression). CI: the
+  ubuntu-26.04 migration's interim `Install ffmpeg (pinned BtbN n6.1.3 static)`
+  workaround is retired in favour of the distro binary (the thumbnail suite now
+  runs against the ffmpeg real deployments ship). No new wire codes; no
+  migrations.
+
 - **`GET /livetv/recording/{id}/stream` now honours the parental rating cap (wave I close — the audit finding: the serve-time over-cap gate covered HLS/DASH jobs only; LiveTV streams bypassed it).**
   A completed DVR recording is registered as a `media_items` row by `RecordingMediaRegistrar` and linked
   back through `livetv_recordings.media_item_id` (migration 077), so the library rails already gate that

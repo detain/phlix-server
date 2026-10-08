@@ -63,38 +63,36 @@ jobs:
       - name: Verify swoole + uv loaded
         run: php -m | grep -iE '^(swoole|uv)$'
 
-      - name: Install ffmpeg (pinned BtbN n6.1.3 static)
-        # ubuntu-26.04's archive ffmpeg is 7.1+, and the 7.1/8.x mjpeg encoder
-        # hard-aborts a batch whose out-of-range `-ss` output flushes empty
-        # ("Non full-range YUV is non-standard" → exit 234, "Conversion failed!").
-        # The whole thumbnail contract (FfmpegRunner::generateThumbnailBatch +
-        # FfmpegThumbnailBatchTest, S-F19) is built on the pre-7.1 semantics the
-        # ubuntu-24.04 image shipped (apt ffmpeg 6.1.1 — the era every historical
-        # green run used): empty outputs are the "Output file is empty" warning,
-        # exit 0, reachable frames still written. Measured 2026-10-08 against the
-        # exact command shape: 6.1.3 + 7.0.2 → exit 0 + frame_00000 written +
-        # frame_00001 absent (contract holds); 7.1.5 + 8.1.3 → exit 234.
-        # Why a pinned static build instead of apt: 26.04 has no way to install a
-        # 6.x-series ffmpeg, and the S-F19 tests hardcode /usr/bin/{ffmpeg,ffprobe}.
-        # Candidate rejected en route: johnvansickle 7.0.2-static — era-clean for
-        # thumbnails but its bundled ffprobe SIGSEGVs (exit 139, locally
-        # reproducible) on -show_format of a plain MPEG-TS segment, reddening
-        # Fmp4SegmentProductionTest/HlsFmp4OnDemandServeTest, which the 26.04 apt
-        # 7.1+ binary probes fine. BtbN autobuilds are release-pinned under an
-        # immutable tag; fail-loud sha256 below means even a replaced asset
-        # errors this step instead of silently drifting the toolchain.
-        # PRODUCT FOLLOW-UP owed (owner lane, NOT this CI lane): FfmpegRunner must
-        # tolerate modern ffmpeg — add `-strict unofficial` to the image2 outputs
-        # or demote per-output-empty failure to partial success — then this pin
-        # can retire back to the distro binary.
+      - name: Verify ffmpeg (distro binary; BtbN pin retired)
+        # Post-fix reality: FfmpegRunner's mjpeg/image2 outputs (single thumbnail,
+        # thumbnail batch, trickplay sprite, BIF frames) now carry
+        # `-strict unofficial`, so the S-F19 partial-success contract holds on
+        # every ffmpeg era and the distro binary needs no substitution.
+        # History: ubuntu-26.04's apt ffmpeg is 8.x, whose mjpeg encoder hard-
+        # aborts an EMPTY output flush (out-of-range `-ss`) with
+        # "Non full-range YUV is non-standard" → exit 234, killing the whole
+        # batch — where 6.1/7.0 (the ubuntu-24.04 image's era, every historical
+        # green run) treated it as a warning and exited 0. The interim migration
+        # workaround pinned a BtbN n6.1.3 static build over /usr/bin; this lane's
+        # product fix (src/Media/Transcoding/FfmpegRunner.php
+        # MJPEG_STRICTNESS_ARGS, argv-shape pins in
+        # tests/Unit/Media/Transcoding/FfmpegRunnerThumbnailBatchTest.php, and
+        # real-binary before/after measured 2026-10-08 on BtbN master N-127252,
+        # 6.1.3 and apt 6.1.1: pre-fix 8.x exit 234 → post-fix exit 0 with
+        # reachable frames written) makes that pin obsolete. Historical footnote:
+        # johnvansickle 7.0.2-static was rejected en route — its bundled ffprobe
+        # SIGSEGVs on plain MPEG-TS probes.
+        # The step stays fail-loud: presence + version banner before the suite,
+        # so a future image that drops ffmpeg reds here instead of silently
+        # skipping FfmpegThumbnailBatchTest's real-binary legs.
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 -o /tmp/ffmpeg-pinned.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2025-08-31-13-00/ffmpeg-n6.1.3-linux64-gpl-6.1.tar.xz
-          echo '400f9ca9d8ea3f812660cf7a00b9bfed944175cd9d6bd0c9b6257cf99376a75c  /tmp/ffmpeg-pinned.tar.xz' | sha256sum -c -
-          tar xf /tmp/ffmpeg-pinned.tar.xz -C /tmp
-          sudo install -m 0755 /tmp/ffmpeg-n6.1.3-linux64-gpl-6.1/bin/ffmpeg /usr/bin/ffmpeg
-          sudo install -m 0755 /tmp/ffmpeg-n6.1.3-linux64-gpl-6.1/bin/ffprobe /usr/bin/ffprobe
-          rm -rf /tmp/ffmpeg-pinned.tar.xz /tmp/ffmpeg-n6.1.3-linux64-gpl-6.1
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          test -x "$(command -v ffmpeg)"
+          test -x "$(command -v ffprobe)"
           ffmpeg -version | head -1
           ffprobe -version | head -1
 

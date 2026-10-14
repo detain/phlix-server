@@ -330,13 +330,90 @@ class WebSocketServer
 
             if ($wsConnection->getPendingPings() >= $notRespondedLimit) {
                 // Half-open socket: pings went unanswered past the limit. Reap it.
-                $wsConnection->close();
-                $this->connections->remove($wsConnection->getId());
+                $this->reapConnection($wsConnection);
                 continue;
             }
 
             $wsConnection->ping();
         }
+    }
+
+    /**
+     * Close and un-pool a connection that the ping sweep declared dead.
+     *
+     * R16-02: the teardown side effects (SyncPlay vacate + final metrics touch)
+     * are completed SYNCHRONOUSLY BEFORE close/remove, because Workerman's
+     * {@see TcpConnection::close()} DEFERS {@see TcpConnection::destroy()} — and
+     * with it the worker's onClose callback — while its sendBuffer still holds
+     * bytes. A half-open socket is exactly the case whose send buffer cannot
+     * drain (every write is retransmitted into a void that never ACKs), so the
+     * deferred onClose may fire minutes late or never; and once this reap has
+     * removed the pool wrapper, {@see onClose()}'s findConnection() lookup
+     * returns null even when it does fire, so the whole onClose arm — vacate
+     * included — is skipped. Before this fix the member therefore lingered in
+     * its active SyncPlay group as a ghost (and possibly as the group host).
+     *
+     * The synchronous-close case (empty buffer → onClose fires inside close())
+     * stays correct: {@see finalizeConnectionTeardown()} is idempotent, so the
+     * onClose arm that runs during close() finds the vacate already applied
+     * (SyncPlayManager::onConnectionClose is mapping-gated) and the metrics
+     * marker already consumed.
+     *
+     * @param Connection $wsConnection The wrapper to reap.
+     * @return void
+     */
+    private function reapConnection(Connection $wsConnection): void
+    {
+        $this->finalizeConnectionTeardown($wsConnection);
+
+        $wsConnection->close();
+        $this->connections->remove($wsConnection->getId());
+    }
+
+    /**
+     * Run the close-time side effects that must not depend on onClose firing.
+     *
+     * Two effects, both idempotent:
+     * 1. SyncPlay vacate — {@see SyncPlayManager::onConnectionClose()} resolves
+     *    the connection through its live connection→member map, which
+     *    leaveGroup() clears on the first pass, so a second call is a no-op
+     *    (pinned by WebSocketServerReapTeardownTest).
+     * 2. The S2 final metrics touch — record the FINAL cumulative byte counts,
+     *    but ONLY for a connection whose metrics record was actually OPENED at
+     *    the WS handshake ({@see onWebSocketConnect()}). A bare-TCP peer that
+     *    never upgraded (HAProxy :8097 health check, port scanner, aborted
+     *    handshake) was pooled by onConnect() but never opened as a metrics row;
+     *    touching it would make MetricsRegistry::touchConnection()'s !isset
+     *    fallback INVENT a phantom kind=http / remote_ip=null row under this WS
+     *    worker's namespaced worker_id (regression from 882a8f06). The touch is
+     *    guarded by (and consumes) the opened-id marker, so a second pass is a
+     *    no-op. We deliberately do NOT closeConnection() — that unset the
+     *    registry row before the next flush could persist it, so a WebSocket's
+     *    bytes never reached metrics_connections. Leaving the final touch in
+     *    place lets the coming flush write the real totals; the flush service
+     *    then TTL-prunes the now idle row (its last_seen_at ages past
+     *    connection_ttl) from the registry AND the table, so it drops out of the
+     *    live panel ~ttl seconds after close without leaking worker memory.
+     *
+     * @param Connection $wsConnection The closing connection wrapper.
+     * @return void
+     */
+    private function finalizeConnectionTeardown(Connection $wsConnection): void
+    {
+        if ($this->syncPlayManager !== null) {
+            $this->syncPlayManager->onConnectionClose($wsConnection->getId());
+        }
+
+        $connectionId = $wsConnection->getId();
+        if ($this->metrics !== null && isset($this->openedConnectionIds[$connectionId])) {
+            $tcp = $wsConnection->getConnection();
+            $this->metrics->touchConnection(
+                $connectionId,
+                $tcp->bytesRead,
+                $tcp->bytesWritten,
+            );
+        }
+        unset($this->openedConnectionIds[$connectionId]);
     }
 
     /**
@@ -631,10 +708,10 @@ class WebSocketServer
                 'authenticated' => $wsConnection->isAuthenticated(),
             ]);
 
-            // Notify SyncPlay manager to vacate member from group
-            if ($this->syncPlayManager !== null) {
-                $this->syncPlayManager->onConnectionClose($wsConnection->getId());
-            }
+            // SyncPlay vacate + final metrics touch via the shared teardown arm
+            // (single source with the ping-sweep reaper — R16-02). Both effects
+            // are idempotent, so a reaper that already ran them is a no-op here.
+            $this->finalizeConnectionTeardown($wsConnection);
 
             $this->connections->remove($wsConnection->getId());
 
@@ -646,32 +723,8 @@ class WebSocketServer
                 ], [$wsConnection->getId()]);
             }
 
-            // S2 metrics: record the FINAL cumulative byte counts — but ONLY for a
-            // connection whose metrics record was actually OPENED at the WS
-            // handshake ({@see onWebSocketConnect()}). A bare-TCP peer that never
-            // upgraded (HAProxy :8097 health check, port scanner, aborted
-            // handshake) was pooled by onConnect() but never opened as a metrics
-            // row; touching it here would make MetricsRegistry::touchConnection()'s
-            // !isset fallback INVENT a phantom kind=http / remote_ip=null row under
-            // this WS worker's namespaced worker_id (regression from 882a8f06).
-            //
-            // For an OPENED connection we deliberately do NOT closeConnection() —
-            // that unset the registry row before the next flush could persist it, so
-            // a WebSocket's bytes never reached metrics_connections. Leaving the
-            // final touch in place lets the coming flush write the real totals; the
-            // flush service then TTL-prunes the now idle row (its last_seen_at ages
-            // past connection_ttl) from the registry AND the table, so it drops out
-            // of the live panel ~ttl seconds after close without leaking worker
-            // memory.
-            $connectionId = $wsConnection->getId();
-            if ($this->metrics !== null && isset($this->openedConnectionIds[$connectionId])) {
-                $this->metrics->touchConnection(
-                    $connectionId,
-                    $connection->bytesRead,
-                    $connection->bytesWritten,
-                );
-            }
-            unset($this->openedConnectionIds[$connectionId]);
+            // (The final metrics touch moved into finalizeConnectionTeardown above;
+            // its rationale docblock lives there — single source with the reaper.)
         }
     }
 

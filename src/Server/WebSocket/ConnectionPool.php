@@ -303,14 +303,26 @@ class ConnectionPool
     }
 
     /**
-     * Removes all connections from the pool.
+     * Removes all connections from the pool, resetting every derived index.
+     *
+     * The object-id / userId / sessionId maps are keyed by connections that
+     * stop existing the moment the primary map is emptied, so clearing only
+     * `connections` would strand stale entries that outlive their wrappers:
+     * `findByUserId()`/`findBySessionId()`/`getByObjectId()` fast paths would
+     * then resolve connections that were never added (or were removed), and
+     * since the pool is a process-wide singleton this leaks across the
+     * random-ordered suite. Indexes must never outlive the map they index.
      *
      * @return void
      *
-     * @description Clears all connections. Useful for testing or server shutdown.
+     * @description Clears all connections and their index entries. Useful for
+     * testing or server shutdown.
      */
     public function clear(): void
     {
         $this->connections = [];
+        $this->connectionsByObjectId = [];
+        $this->connectionsByUserId = [];
+        $this->connectionsBySessionId = [];
     }
 }

@@ -36,8 +36,13 @@ sudo systemctl enable --now phlix-server
 
 ### phlix-server.service
 
-The main long-running service. Runs the Workerman HTTP + WebSocket worker
-on the port configured in `config/server.php` (default `8096`).
+The main long-running service. `ExecStart` runs `php start.php start`, which
+brings up TWO dedicated listeners: the HTTP worker on **:8096** (REST API +
+`/app` SPA + `/health`) and the SyncPlay WebSocket worker on **:8097** (a
+separate `websocket://` worker — see the WebSocket note under
+Configuration). `config/server.php` `server.port` (default 8096) only drives
+the advertised/DLNA port; the sockets themselves are hard-coded in
+`start.php`.
 
 ## Configuration
 
@@ -45,21 +50,51 @@ Edit `/etc/phlix/env` to configure environment variables. The systemd unit
 loads it via `EnvironmentFile=`:
 
 ```ini
-# Only DB_PASSWORD is read by config/database.php (host/port/db/user are
-# hardcoded to 127.0.0.1:3306 / phlix / phlix).
+# Every DB connection parameter is env-driven (config/database.php):
+# DB_HOST (default 127.0.0.1), DB_PORT (default 3306),
+# DB_DATABASE (or DB_NAME, default phlix), DB_USER (or DB_USERNAME,
+# default phlix), DB_PASSWORD (default empty). Pool knobs:
+# DB_POOL_ENABLED=0 opts out of the coroutine pool (on by default),
+# DB_POOL_SIZE caps per-worker connections (default 8).
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=phlix
+DB_USER=phlix
 DB_PASSWORD=your_strong_password
 
-# 32-byte hex secret (openssl rand -hex 32)
-PHLIX_SECRET_KEY=...
+# REQUIRED. JWT signing secret (openssl rand -hex 32) — the server refuses
+# to boot without a non-default value; it also derives media signed URLs.
+JWT_SECRET=...
 
+# Alias consumed by the Docker entrypoint (mapped to JWT_SECRET there);
+# harmless on a bare-metal systemd install.
+#PHLIX_SECRET_KEY=...
+
+# Informational: install.sh writes these, but log level is fixed in
+# config/logger.php and the env-file values below are not read by the
+# current code.
 PHLIX_LOG_LEVEL=info
 PHLIX_ENV=production
+
+# Reverse-proxy IPs whose X-Forwarded-For is trusted for client-IP
+# derivation (rate limiting). Loopback-only default is correct for the
+# standard same-box proxy; only widen for a non-loopback proxy.
+#TRUSTED_PROXIES=127.0.0.0/8,::1/128
 
 # Optional integrations
 #TMDB_API_KEY=
 #PHLIX_HUB_URL=
 #PHLIX_RELAY_ENABLED=1
 ```
+
+WebSocket note: the SyncPlay WS server is its own listener on **:8097**
+(start.php's `websocket://0.0.0.0:8097` worker; `websocket.host/port` in
+`config/server.php` tune the WS server object, not that listening socket).
+Plain HTTP GETs to :8097 answer **400** — that response IS the alive signal
+for liveness probes; there is no HTTP route tree, and therefore no
+path-based (`/ws`-style) reverse-proxy fronting the WS worker. Expose it as
+its own TCP route — long read/write timeouts, no path routing — see
+`reverse-proxy/README.md` and `deploy/haproxy.cfg`.
 
 Permissions:
 

@@ -1223,9 +1223,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 }
             ),
 
-            // P4-S2: because-you-watched recommendations engine
-            \Phlix\Media\RecommendationService::class => autowire()
-                ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
+            // P4-S2: because-you-watched recommendations engine.
+            // R19-12: the former `constructorParameter('similarityService', …)`
+            // line went away with the dependency itself — RecommendationService
+            // now batch-reads item_similar in one CTE
+            // (fetchSimilarBySeed()) instead of looping
+            // SimilarityService::getSimilar() per seed, so the collaborator was
+            // never read after construction and PHPStan level 9 rejected it.
+            \Phlix\Media\RecommendationService::class => autowire(),
 
             // P7: resolves per-user gapless/crossfade playback preferences
             GaplessPlaybackManager::class => autowire()

@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media;
 
-use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\RecommendationService;
-use Phlix\Media\SimilarityService;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -17,7 +15,8 @@ use Workerman\MySQL\Connection;
  * "tidy" back into one query and silently regress:
  *
  *  - the SEED list is BOUNDED by {@see RecommendationService::MAX_WATCHED_SEEDS}
- *    because each seed costs one `getSimilar()` round trip on the event loop;
+ *    because the seed count sizes the ONE batched `IN(...)` similarity read
+ *    (pre-R19-12 every seed cost its own `getSimilar()` round trip);
  *  - the already-watched EXCLUSION set is UNBOUNDED, because a partial exclusion
  *    set recommends items the user already finished — the worse the longer their
  *    history is.
@@ -36,7 +35,7 @@ final class RecommendationServiceTest extends TestCase
     /** @var list<array{sql: string, params: mixed}> Every query issued on the service DB. */
     private array $calls = [];
 
-    /** @var list<string> Every media item id getSimilar() was asked about, in order. */
+    /** @var list<string> Every seed id the batched similarity read was asked for, in order. */
     private array $similarLookups = [];
 
     protected function setUp(): void
@@ -65,9 +64,10 @@ final class RecommendationServiceTest extends TestCase
     ): RecommendationService {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (mixed ...$args) use ($profileIds, $seedIds, $allWatchedIds): mixed {
+            function (mixed ...$args) use ($profileIds, $seedIds, $allWatchedIds, $similarBySeed): mixed {
                 $sql = is_string($args[0] ?? null) ? $args[0] : '';
-                $this->calls[] = ['sql' => $sql, 'params' => $args[1] ?? null];
+                $params = $args[1] ?? null;
+                $this->calls[] = ['sql' => $sql, 'params' => $params];
 
                 if (str_contains($sql, 'FROM user_profiles')) {
                     return array_map(static fn(string $id): array => ['id' => $id], $profileIds);
@@ -84,49 +84,43 @@ final class RecommendationServiceTest extends TestCase
                 if (str_contains($sql, 'SELECT DISTINCT media_item_id')) {
                     return array_map(static fn(string $id): array => ['media_item_id' => $id], $allWatchedIds);
                 }
+                if (str_contains($sql, 'FROM item_similar')) {
+                    // R19-12 batched read: positional params are the seed list
+                    // followed by the per-seed LIMIT. The mock cannot enforce
+                    // `rn <= ?` — the caller supplies each seed's rows.
+                    $requested = [];
+                    if (is_array($params)) {
+                        foreach (array_slice(array_values($params), 0, -1) as $param) {
+                            if (is_string($param)) {
+                                $requested[] = $param;
+                            }
+                        }
+                    }
+                    foreach ($requested as $seed) {
+                        $this->similarLookups[] = $seed;
+                    }
+
+                    $rows = [];
+                    foreach ($requested as $seed) {
+                        foreach ($similarBySeed[$seed] ?? [] as $similar) {
+                            $rows[] = [
+                                'seed_id' => $seed,
+                                'similar_item_id' => $similar['id'],
+                                'score' => (string) $similar['score'],
+                                'reason' => 'genre',
+                            ];
+                        }
+                    }
+
+                    return $rows;
+                }
 
                 // DELETE / INSERT on user_recommendations.
                 return 1;
             }
         );
 
-        return new RecommendationService($db, $this->makeSimilarityService($similarBySeed));
-    }
-
-    /**
-     * A real (final) SimilarityService over a mocked DB, so getSimilar() returns
-     * exactly the rows the test wants for each seed.
-     *
-     * @param array<string, list<array{id: string, score: float}>> $similarBySeed
-     */
-    private function makeSimilarityService(array $similarBySeed): SimilarityService
-    {
-        $simDb = $this->createMock(Connection::class);
-        $simDb->method('query')->willReturnCallback(
-            function (mixed ...$args) use ($similarBySeed): array {
-                $params = $args[1] ?? null;
-                $source = is_array($params) && isset($params[0]) && is_string($params[0]) ? $params[0] : '';
-                $this->similarLookups[] = $source;
-
-                $rows = [];
-                foreach ($similarBySeed[$source] ?? [] as $similar) {
-                    $rows[] = [
-                        'similar_item_id' => $similar['id'],
-                        'score' => (string) $similar['score'],
-                        'reason' => 'genre',
-                        'title' => 'Title of ' . $similar['id'],
-                        'metadata_json' => null,
-                    ];
-                }
-
-                return $rows;
-            }
-        );
-
-        /** @var ItemRepository&\PHPUnit\Framework\MockObject\MockObject $itemRepo */
-        $itemRepo = $this->createMock(ItemRepository::class);
-
-        return new SimilarityService($simDb, $itemRepo);
+        return new RecommendationService($db);
     }
 
     /**
@@ -286,9 +280,9 @@ final class RecommendationServiceTest extends TestCase
     }
 
     /**
-     * The fan-out is driven by the BOUNDED seed list, not by the complete
-     * exclusion set: one getSimilar() per seed and no more, even when the
-     * account has 300 completions.
+     * The similarity read is sized by the BOUNDED seed list, not by the complete
+     * exclusion set: the batch asks for exactly the seeds and nothing more, even
+     * when the account has 300 completions.
      */
     public function testSeedFanOutIsCappedAtMaxWatchedSeeds(): void
     {
@@ -302,9 +296,14 @@ final class RecommendationServiceTest extends TestCase
         $this->assertCount(
             RecommendationService::MAX_WATCHED_SEEDS,
             $this->similarLookups,
-            'One getSimilar() per SEED — the exclusion set must never drive the fan-out.'
+            'The batched read must carry exactly the seeds — the exclusion set must never size it.'
         );
         $this->assertSame($seeds, $this->similarLookups);
+        $this->assertSame(
+            1,
+            count(array_filter($this->calls, static fn(array $c): bool => str_contains($c['sql'], 'FROM item_similar'))),
+            'R19-12: ONE batched similarity read for the whole seed set, not one per seed.'
+        );
     }
 
     /**
@@ -368,10 +367,11 @@ final class RecommendationServiceTest extends TestCase
 
     /**
      * Sanity: the two history reads return different lists, and the recompute
-     * issues exactly one of each (plus the profile lookup) — the split must not
-     * cost an extra profile round trip per list.
+     * issues exactly one of each (plus the profile lookup, plus the ONE batched
+     * similarity read) — the split must not cost an extra profile round trip
+     * per list, and the fan-out must have collapsed to a single query.
      */
-    public function testHistoryIsReadWithExactlyThreeQueriesBeforeScoring(): void
+    public function testHistoryIsReadWithThreeHistoryQueriesPlusOneBatchedSimilarityRead(): void
     {
         $service = $this->makeService(
             [self::PROFILE_A],
@@ -385,6 +385,7 @@ final class RecommendationServiceTest extends TestCase
         $profileCalls = 0;
         $seedCalls = 0;
         $exclusionCalls = 0;
+        $batchCalls = 0;
         foreach ($this->calls as $call) {
             if (str_contains($call['sql'], 'FROM user_profiles')) {
                 $profileCalls++;
@@ -395,11 +396,28 @@ final class RecommendationServiceTest extends TestCase
             if (str_contains($call['sql'], 'SELECT DISTINCT media_item_id')) {
                 $exclusionCalls++;
             }
+            if (str_contains($call['sql'], 'FROM item_similar')) {
+                $batchCalls++;
+            }
         }
 
         $this->assertSame(1, $profileCalls, 'Profiles are resolved once and shared by both history reads.');
         $this->assertSame(1, $seedCalls);
         $this->assertSame(1, $exclusionCalls);
+        $this->assertSame(1, $batchCalls, 'R19-12: all seeds are served by one batched CTE read.');
+
+        $batch = $this->findCall('FROM item_similar');
+        $this->assertNotNull($batch);
+        $this->assertStringContainsString('ROW_NUMBER() OVER', $batch['sql']);
+        $this->assertStringContainsString('PARTITION BY s.media_item_id', $batch['sql']);
+        $this->assertStringContainsString('WHERE r.rn <= ?', $batch['sql']);
+        $this->assertStringContainsString('INNER JOIN media_items', $batch['sql']);
+        $this->assertSame(
+            [0, 1],
+            array_keys((array) $batch['params']),
+            'Seeds then the per-seed limit — positional binding must stay contiguous.'
+        );
+        $this->assertSame(['watched-001', 20], array_values((array) $batch['params']));
     }
 
     public function testNoProfilesClearsRecommendationsAndReadsNoHistory(): void

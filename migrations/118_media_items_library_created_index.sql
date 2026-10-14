@@ -1,0 +1,22 @@
+-- Migration: 118_media_items_library_created_index.sql
+--
+-- R19-14: composite index for the "recently added" rail.
+--
+-- ItemRepository's recently-added read is
+--   SELECT ... FROM media_items WHERE library_id = ? ORDER BY created_at DESC
+--   LIMIT ?
+-- The table indexes library_id only inside idx_library (single column) and the
+-- two later three-column composites (043 canonical-key, 050 sort-title), none
+-- of which ends in created_at — so MySQL located the library's rows and then
+-- FILESORTED every one of them (a multi-tens-of-thousands sort on a large
+-- movie/series library) just to take the newest N. (library_id, created_at)
+-- makes that read a backward index walk of N rows.
+--
+-- Cost note: ADD INDEX is INPLACE with concurrent DML allowed, but it does
+-- scan-build the key over media_items — on very large libraries budget the
+-- build time; it is a one-off per deploy.
+--
+-- Replay: the ADD INDEX raises duplicate-key (1061) on re-run, which the
+-- migration runner downgrades to a note (MigrationRunner::isAlreadyApplied).
+
+ALTER TABLE `media_items` ADD INDEX `idx_media_items_library_created` (`library_id`, `created_at`);

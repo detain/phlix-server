@@ -9,8 +9,10 @@ use Workerman\MySQL\Connection;
 /**
  * Computes and retrieves "because you watched" recommendations for users.
  *
- * For each item in a user's watch history, gets similar items from SimilarityService,
- * aggregates scores, and stores the top-K recommendations in user_recommendations.
+ * Takes the bounded seed slice of a user's watch history, reads the top
+ * similar items for ALL seeds in one batched query (same item_similar rows
+ * SimilarityService::getSimilar() serves per item), aggregates scores, and
+ * stores the top-K recommendations in user_recommendations.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
@@ -21,14 +23,31 @@ final class RecommendationService
     private const DEFAULT_TOP_K = 100;
 
     /**
+     * Similar items taken per seed in the batched read (was the per-seed
+     * `getSimilar($seed, 20)` argument before R19-12 collapsed the fan-out).
+     */
+    private const SIMILAR_PER_SEED = 20;
+
+    /**
+     * Row fallback when `item_similar.reason` is not a string — byte-identical
+     * to the (private) `SimilarityService::REASON_GENRE` the per-seed
+     * {@see SimilarityService::getSimilar()} path used to supply.
+     */
+    private const FALLBACK_SIMILARITY_REASON = 'genre';
+
+    /**
      * Hard cap on the number of watched items used as similarity SEEDS by
      * {@see self::computeBecauseYouWatched()}.
      *
-     * The seed count IS the query fan-out: {@see self::computeBecauseYouWatched()}
-     * issues one {@see SimilarityService::getSimilar()} query per seed, inline and
-     * synchronously. Unbounded (the query had no LIMIT and spans EVERY profile on
-     * the account) a heavy account could stall the single-threaded Workerman event
-     * loop for the duration of hundreds of round trips.
+     * The seed count SIZES the batched similarity read:
+     * {@see self::fetchSimilarBySeed()} runs one CTE whose IN(...) list is the
+     * seed set (pre-R19-12 this was one {@see SimilarityService::getSimilar()}
+     * round trip per seed — the fan-out the cap was originally built to bound).
+     * The cap is KEPT after batching: it bounds the placeholder list, the
+     * candidate aggregation, and the stale-doc claim in
+     * {@see self::computeBecauseYouWatched()} in one number, and unbounded
+     * seeds (the old query had no LIMIT and spans EVERY profile on the
+     * account) would still size a single mega-query by the whole history.
      *
      * 50 is chosen because it cannot starve the result: each seed contributes up to
      * 20 similar items, so 50 seeds yield up to 1,000 candidates — an order of
@@ -41,37 +60,46 @@ final class RecommendationService
      * back to them, which inverts the whole point of the feature — and gets worse
      * the longer the history is. The exclusion set therefore has its own separate,
      * deliberately UNBOUNDED query, {@see self::fetchAllWatchedItemIds()}. That is
-     * safe because it is one flat indexed read with no per-row fan-out, unlike the
-     * seed list where every row costs a `getSimilar()` round trip.
+     * safe because it is one flat indexed read with no per-row fan-out, unlike
+     * the seed list whose every row sizes the batched IN(...) read and the
+     * candidate aggregation.
      *
-     * ⚠ FOLLOW-UP: this is a BOUND, not a fix. Before any caller is wired to
-     * {@see \Phlix\Auth\WatchHistory::updateProgress()} (which today has none, so
-     * `computeBecauseYouWatched()` is unreachable), the recompute must move off the
-     * request path and behind the existing job queue — {@see SimilarityJobStore} +
-     * {@see SimilarityWorker} — the same way per-item similarity computation
-     * already is. Even 50 synchronous queries do not belong in an HTTP handler.
+     * ⚠ FOLLOW-UP: this is a BOUND, not a fix. The recompute still runs
+     * SYNCHRONOUSLY on the caller's event loop (its live caller is
+     * {@see \Phlix\Auth\WatchHistory::updateProgress()}, which fires it on
+     * first-completion). R19-12 collapsed the per-seed fan-out to ONE batched
+     * query, which removed the hundreds-of-round-trips stall the original note
+     * warned about; moving the recompute behind the existing job queue —
+     * {@see SimilarityJobStore} + {@see SimilarityWorker}, the same way per-item
+     * similarity computation already is — remains the right end state for the
+     * CTE + upsert itself.
      */
     public const MAX_WATCHED_SEEDS = 50;
 
     /** @var Connection */
     private Connection $db;
 
-    /** @var SimilarityService */
-    private SimilarityService $similarityService;
-
-    public function __construct(Connection $db, SimilarityService $similarityService)
+    /**
+     * NOTE (R19-12): this class previously took a SimilarityService and called
+     * getSimilar() once PER seed inline. The batch read in
+     * {@see self::fetchSimilarBySeed()} generalises exactly that query, so the
+     * collaborator became write-only dead weight (PHPStan `property.onlyWritten`
+     * at level 9) and was dropped from the constructor. The DI line that named
+     * the old parameter was removed in the same change
+     * (MediaServicesProvider).
+     */
+    public function __construct(Connection $db)
     {
         $this->db = $db;
-        $this->similarityService = $similarityService;
     }
 
     /**
      * Computes because-you-watched recommendations for a user.
      *
-     * Clears existing undismissed recommendations for the user, then for each
-     * item in their watch history, fetches similar items from SimilarityService,
-     * aggregates scores (summing scores for items suggested by multiple watched
-     * items), and stores the top-K in user_recommendations.
+     * Clears existing undismissed recommendations for the user, then batch-
+     * fetches the top similar items for every seed in their bounded watch-
+     * history slice, aggregates scores (summing scores for items suggested by
+     * multiple watched items), and stores the top-K in user_recommendations.
      *
      * Two DIFFERENT watch-history lists are read here and they are deliberately
      * not the same list — see {@see self::fetchWatchedItems()} (bounded seeds) and
@@ -96,7 +124,7 @@ final class RecommendationService
         }
 
         // Seeds: the items we look for similar items TO. Bounded — see
-        // self::MAX_WATCHED_SEEDS, because each seed costs a getSimilar() query.
+        // self::MAX_WATCHED_SEEDS; the seed count sizes the batched read below.
         $watchedItems = $this->fetchWatchedItems($profileIds);
         if ($watchedItems === []) {
             // No watch history — clear any existing recommendations and return.
@@ -117,8 +145,15 @@ final class RecommendationService
         // would silently recommend items the user finished before the cap window.
         $watchedItemsById = array_flip($this->fetchAllWatchedItemIds($profileIds));
 
+        // R19-12: ONE batched top-20-per-seed read replaces the former
+        // per-seed SimilarityService::getSimilar() loop (up to 50 round trips
+        // inline on the event loop). Rows are grouped by seed here and fed to
+        // the byte-identical aggregation below, so scores, exclusion, ordering
+        // and the stored top-K are unchanged — only the fan-out collapsed.
+        $similarBySeed = $this->fetchSimilarBySeed($watchedItems, self::SIMILAR_PER_SEED);
+
         foreach ($watchedItems as $watchedItemId) {
-            $similarItems = $this->similarityService->getSimilar($watchedItemId, 20);
+            $similarItems = $similarBySeed[$watchedItemId] ?? [];
             foreach ($similarItems as $item) {
                 $id = is_string($item['id'] ?? null) ? $item['id'] : '';
                 if ($id === '' || isset($watchedItemsById[$id])) {
@@ -274,8 +309,10 @@ final class RecommendationService
      * ⚠ This is one of TWO watch-history reads and they are NOT interchangeable:
      *
      *  - THIS method returns SEEDS: the items we search for similar items to. Its
-     *    row count IS a query fan-out ({@see SimilarityService::getSimilar()} runs
-     *    once per row), so it is capped at {@see self::MAX_WATCHED_SEEDS} and
+     *    row count sizes the batched similarity read
+     *    ({@see self::fetchSimilarBySeed()} — pre-R19-12, one
+     *    {@see SimilarityService::getSimilar()} query ran per row), so it is
+     *    capped at {@see self::MAX_WATCHED_SEEDS} and
      *    ordered most-recently-completed first to keep the most relevant slice.
      *  - {@see self::fetchAllWatchedItemIds()} returns the EXCLUSION set: every
      *    item the user has ever completed. It must stay UNBOUNDED, because a
@@ -316,6 +353,95 @@ final class RecommendationService
         );
 
         return $this->mapMediaItemIds($watchedRows);
+    }
+
+    /**
+     * Fetch the top-$perSeed similar items for EVERY seed in ONE query (R19-12).
+     *
+     * The `WITH ... ROW_NUMBER() OVER (PARTITION BY s.media_item_id ORDER BY
+     * s.score DESC)` + `rn <= ?` shape is the batched generalisation of exactly
+     * what {@see SimilarityService::getSimilar()} does per seed — including the
+     * INNER JOIN on media_items (similarity rows pointing at a since-deleted
+     * item are dropped at the query level) and the score-DESC top-N per seed.
+     * Tie order inside one seed's tail is non-deterministic in both shapes
+     * (nothing secondary-orders on score), so the candidate SET is identical
+     * to the loop this replaced.
+     *
+     * Normalisation matches getSimilar() byte-for-byte: non-string ids drop the
+     * row, non-numeric score becomes 0.0 (the caller's `score <= 0` skip then
+     * discards it), non-string reason falls back to
+     * {@see self::FALLBACK_SIMILARITY_REASON}.
+     *
+     * @param list<string> $seedIds Bounded seed list (see MAX_WATCHED_SEEDS).
+     * @param int          $perSeed Top-N per seed.
+     *
+     * @return array<string, list<array{id: string, score: float, reason: string}>>
+     *         Rows grouped by seed id; seeds with no similar items are absent.
+     */
+    private function fetchSimilarBySeed(array $seedIds, int $perSeed): array
+    {
+        if ($seedIds === [] || $perSeed < 1) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($seedIds), '?'));
+        $params = array_values($seedIds);
+        $params[] = $perSeed;
+
+        // The window rows go in a DERIVED TABLE, not a `WITH` CTE, on purpose:
+        // the vendored Workerman driver dispatches its return shape on the
+        // FIRST SQL keyword (vendor/workerman/mysql/src/Connection.php —
+        // select/show return rows, anything else executes but returns null),
+        // so a leading WITH would silently hand back null for a perfectly
+        // valid MySQL 8 query. The INNER JOIN also sits INSIDE the window's
+        // FROM: the per-seed cap must rank the same rows getSimilar() did —
+        // dangling targets are dropped BEFORE the rank, exactly like a
+        // post-JOIN LIMIT — not steal a slot from the seed's 20th live row.
+        $rows = $this->db->query(
+            "SELECT r.seed_id, r.similar_item_id, r.score, r.reason
+             FROM (
+                 SELECT s.media_item_id AS seed_id,
+                        s.similar_item_id,
+                        s.score,
+                        s.reason,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY s.media_item_id
+                            ORDER BY s.score DESC
+                        ) AS rn
+                 FROM item_similar s
+                 INNER JOIN media_items m ON m.id = s.similar_item_id
+                 WHERE s.media_item_id IN ({$placeholders})
+             ) r
+             WHERE r.rn <= ?
+             ORDER BY r.seed_id, r.score DESC",
+            $params
+        );
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        /** @var array<string, list<array{id: string, score: float, reason: string}>> $grouped */
+        $grouped = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $seedId = is_string($row['seed_id'] ?? null) ? $row['seed_id'] : '';
+            $similarItemId = is_string($row['similar_item_id'] ?? null) ? $row['similar_item_id'] : '';
+            if ($seedId === '' || $similarItemId === '') {
+                continue;
+            }
+
+            $grouped[$seedId][] = [
+                'id' => $similarItemId,
+                'score' => is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
+                'reason' => is_string($row['reason'] ?? null) ? $row['reason'] : self::FALLBACK_SIMILARITY_REASON,
+            ];
+        }
+
+        return $grouped;
     }
 
     /**

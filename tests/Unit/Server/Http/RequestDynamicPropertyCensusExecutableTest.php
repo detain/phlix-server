@@ -656,7 +656,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * validates in UserRepository/Router bodies that read no new Request
       * members). Measured from the phpunit red (451), not predicted.
       */
-     private const EXPECTED_DECLARED_READS = 451;
+    private const EXPECTED_DECLARED_READS = 451;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -800,7 +800,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
       * S427 license intact. Measured from the phpunit red (1051), not
       * predicted.
         */
-     private const EXPECTED_DECLARED_WRITES = 1051;
+    private const EXPECTED_DECLARED_WRITES = 1051;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

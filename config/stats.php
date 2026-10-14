@@ -29,4 +29,23 @@ return [
      * the background timer records. Existing rows are left alone.
      */
     'enabled' => true,
+
+    /**
+     * Retention window in days for the bounded stats sweeper (R19-10), run by
+     * the hourly background timer ({@see \Phlix\Server\Core\Application}'s
+     * stats-retention tick → {@see \Phlix\Stats\StatsCollector::sweepRetention()}).
+     *
+     * Applies to `stats_library_changes` and `stats_user_activity`, which had
+     * NO lifecycle before this — they grew one row per event forever.
+     * `stats_playback_events` is deliberately NOT swept (the dashboard's
+     * playback time-series reads it historically); see sweepRetention()'s
+     * docblock for the reasoning.
+     *
+     * File-only knob (no admin setting key, no env): read live per sweep via
+     * EffectiveConfig::file('stats'), fail-safe coerced by
+     * {@see \Phlix\Stats\StatsCollector::retentionDays()} — a missing,
+     * non-numeric or sub-1 value falls back to DEFAULT_RETENTION_DAYS (90),
+     * so a typo can never turn into mass-deletion.
+     */
+    'retention_days' => 90,
 ];

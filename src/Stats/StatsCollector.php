@@ -68,6 +68,27 @@ class StatsCollector
     private const FAILURE_LOG_INTERVAL_SECONDS = 60;
 
     /**
+     * Default retention (days) for the bounded stats retention sweeper
+     * ({@see sweepRetention()}) applied to stats_library_changes and
+     * stats_user_activity, which previously grew unbounded (R19-10).
+     *
+     * Overridable via `config/stats.php` `'retention_days'`; the override is
+     * fail-safe coerced in {@see retentionDays()} — a missing/non-numeric/
+     * sub-1-day value falls back to this default, never to "delete everything"
+     * and never to "never delete".
+     */
+    public const DEFAULT_RETENTION_DAYS = 90;
+
+    /** Rows deleted per DELETE statement in the sweeper (batched, lock-friendly). */
+    private const RETENTION_SWEEP_BATCH_SIZE = 1000;
+
+    /** Upper bound on batches per table per tick, so one tick cannot hog the loop. */
+    private const RETENTION_SWEEP_MAX_BATCHES_PER_TABLE = 20;
+
+    /** Deadlock retry attempts for a sweeper batch (matches the hub ServerReaper idiom). */
+    private const RETENTION_SWEEP_MAX_RETRIES = 3;
+
+    /**
      * Maximum gap between two consecutive storage writes for the second one to still
      * count as part of the same run.
      *
@@ -1128,5 +1149,159 @@ class StatsCollector
                 'total_duration' => $this->toInt($row['total_duration']),
             ];
         }, $rows);
+    }
+
+    /**
+     * Resolved retention window in days for the stats sweeper (R19-10).
+     *
+     * Reads `config/stats.php` `'retention_days'` through the memoised
+     * {@see \Phlix\Config\EffectiveConfig::file()} loader — same live-read
+     * posture as {@see isEnabled()}. Fail-safe coercion table:
+     *   - missing / null / non-numeric      → DEFAULT_RETENTION_DAYS (90)
+     *   - numeric < 1 (0, -5)               → DEFAULT_RETENTION_DAYS (90)
+     *   - numeric > 36500 (100 years)       → clamped to 36500
+     *   - anything else numeric             → int value
+     * A typo in the config can therefore never turn into mass-deletion.
+     */
+    public static function retentionDays(): int
+    {
+        $raw = \Phlix\Config\EffectiveConfig::file('stats')['retention_days'] ?? null;
+
+        if (!is_numeric($raw)) {
+            return self::DEFAULT_RETENTION_DAYS;
+        }
+
+        $days = (int) $raw;
+        if ($days < 1) {
+            return self::DEFAULT_RETENTION_DAYS;
+        }
+
+        return min($days, 36500);
+    }
+
+    /**
+     * Bounded retention sweep for the two unbounded stats tables (R19-10).
+     *
+     * Deletes rows older than {@see retentionDays()} from stats_library_changes
+     * (keyed on `changed_at`) and stats_user_activity (keyed on `occurred_at`),
+     * in batches of RETENTION_SWEEP_BATCH_SIZE with a hard per-table batch cap,
+     * following the hub `ServerReaper::sweepHeartbeats()` two-phase idiom: a
+     * non-locking `SELECT id ... ORDER BY id LIMIT n` harvest followed by one
+     * `DELETE ... WHERE id IN (...)` — never a DELETE with an unbounded range
+     * predicate, which would hold gap locks across the whole expired window.
+     *
+     * stats_playback_events is DELIBERATELY not swept here: it is the one stats
+     * table the dashboard time-series reads historically (getPlaybackStats
+     * windows reach back arbitrarily), so its lifecycle is an owner decision,
+     * not this sweeper's default.
+     *
+     * Cutoffs use the DB clock (`DATE_SUB(NOW(), ...)`) on both the read and
+     * the row's insert-time write (`changed_at`/`occurred_at` are NOW()), so a
+     * host/DB timezone split cannot skew the window (same law as R19-03).
+     *
+     * This is MAINTENANCE, not telemetry — it is not routed through write()'s
+     * failure throttle; a throwing sweep propagates to the caller's timer
+     * catch, which logs and lets the next tick retry.
+     *
+     * @return int Total rows deleted across both tables this tick.
+     */
+    public function sweepRetention(): int
+    {
+        $retentionDays = self::retentionDays();
+
+        $deleted = $this->sweepExpiredRows('stats_library_changes', 'changed_at', $retentionDays);
+        $deleted += $this->sweepExpiredRows('stats_user_activity', 'occurred_at', $retentionDays);
+
+        if ($deleted > 0) {
+            LoggerFactory::get(LogChannels::APPLICATION)->info(
+                'Stats retention sweep deleted expired rows',
+                ['deleted' => $deleted, 'retention_days' => $retentionDays]
+            );
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * Drains up to RETENTION_SWEEP_MAX_BATCHES_PER_TABLE expired batches from
+     * one table, stopping early when a batch comes back short (queue drained).
+     *
+     * @param string $table  Qualified only by this class's two call sites.
+     * @param string $column Time column of that table.
+     */
+    private function sweepExpiredRows(string $table, string $column, int $retentionDays): int
+    {
+        $deleted = 0;
+
+        for ($batch = 0; $batch < self::RETENTION_SWEEP_MAX_BATCHES_PER_TABLE; $batch++) {
+            $batchDeleted = $this->deleteExpiredBatch($table, $column, $retentionDays);
+            $deleted += $batchDeleted;
+
+            if ($batchDeleted < self::RETENTION_SWEEP_BATCH_SIZE) {
+                break;
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * One two-phase batch: harvest ids, delete them. Deadlock-retried x3.
+     *
+     * @return int Rows deleted by this batch (0 when nothing is expired).
+     */
+    private function deleteExpiredBatch(string $table, string $column, int $retentionDays): int
+    {
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                /** @var mixed $idRows */
+                $idRows = $this->db->query(
+                    "SELECT id FROM {$table} WHERE {$column} < DATE_SUB(NOW(), INTERVAL ? DAY)"
+                    . " ORDER BY id LIMIT " . self::RETENTION_SWEEP_BATCH_SIZE,
+                    [$retentionDays]
+                );
+
+                $ids = [];
+                if (is_array($idRows)) {
+                    foreach ($idRows as $row) {
+                        if (!is_array($row)) {
+                            continue;
+                        }
+                        $id = $row['id'] ?? null;
+                        // These tables' real PKs are CHAR(36) UUIDs (both
+                        // record* helpers mint generateUuid() ids); depending
+                        // on driver mode SELECT can also hand back ints or
+                        // numeric strings. Accept any non-empty scalar id and
+                        // bind it through verbatim — the DELETE matches by
+                        // placeholder, so the id never interpolates into SQL.
+                        if ((is_int($id) && $id >= 0) || (is_string($id) && $id !== '')) {
+                            $ids[] = $id;
+                        }
+                    }
+                }
+
+                if ($ids === []) {
+                    return 0;
+                }
+
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $result = $this->db->query(
+                    "DELETE FROM {$table} WHERE id IN ({$placeholders})",
+                    $ids
+                );
+
+                return is_numeric($result) ? (int) $result : 0;
+            } catch (\PDOException $e) {
+                // Same retry law as hub ServerReaper::sweepHeartbeats: retry the
+                // deadlock victim a bounded number of times, propagate anything
+                // else (and a third deadlock) immediately.
+                if ($attempt >= self::RETENTION_SWEEP_MAX_RETRIES
+                    || stripos($e->getMessage(), 'deadlock') === false
+                ) {
+                    throw $e;
+                }
+                usleep(50_000 * $attempt);
+            }
+        }
     }
 }

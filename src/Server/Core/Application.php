@@ -3147,6 +3147,68 @@ class Application
         // worker only ENQUEUES, because these tasks shell out to `du -sb` and
         // scan `media_items` whole.
         $this->startMaintenanceQueueTimer();
+
+        // Sweep expired rows out of the two lifecycle-less stats tables (R19-10).
+        // Hourly, batched, DB-clock cutoffs — registered with the other maintenance
+        // timers so it shares their `count = 1` fork and never an HTTP worker.
+        $this->startStatsRetentionSweepTimer();
+    }
+
+    /**
+     * Seconds between stats retention sweeps (R19-10).
+     *
+     * An hour is deliberately coarser than the sweep's cost demands: the tables
+     * take a few writes per event at most, so hourly batching keeps each DELETE
+     * tiny while capping growth at ~1 sweep-worth of rows.
+     */
+    private const STATS_RETENTION_SWEEP_INTERVAL = 3600;
+
+    /**
+     * Arm the bounded stats retention sweeper (R19-10).
+     *
+     * `stats_library_changes` and `stats_user_activity` had NO lifecycle: every
+     * library change and user activity row was kept forever. This timer calls
+     * {@see \Phlix\Stats\StatsCollector::sweepRetention()} hourly, which drains
+     * rows older than the fail-safe `config/stats.php` `retention_days` in
+     * bounded batches.
+     *
+     * No immediate run at boot (unlike the storage snapshot's): a sweep is pure
+     * maintenance with no reader waiting on it, and the first tick lands within
+     * the hour.
+     *
+     * Fully guarded like every sibling: an uncaught throwable here would take
+     * down the shared `count = 1` background-timers fork.
+     *
+     * @return void
+     */
+    private function startStatsRetentionSweepTimer(): void
+    {
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
+
+        try {
+            $db = $this->connectionPool->getPooledConnection('mysql');
+            $collector = new \Phlix\Stats\StatsCollector($db);
+
+            \Workerman\Timer::add(
+                self::STATS_RETENTION_SWEEP_INTERVAL,
+                static function () use ($collector, $logger): void {
+                    try {
+                        if (!$collector->isEnabled()) {
+                            return; // Stats switched off — nothing to sweep.
+                        }
+                        $collector->sweepRetention();
+                    } catch (\Throwable $e) {
+                        $logger->error('Stats retention sweep failed; next tick resumes', [
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                },
+            );
+        } catch (\Throwable $e) {
+            $logger->error('Failed to start stats retention sweep timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -35,11 +35,14 @@ spec:
           image: '{{ .Values.image.repository }}:{{ required "phlix-hub chart: image.tag is REQUIRED — nothing falls back silently. The published :latest is frozen/stale (unchanged since 2026-08-31) and the old AppVersion fallback was never published to ghcr. Set image.tag to an immutable short-sha tag, form: ghcr.io/detain/phlix-hub:<sha12>" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
+            # Hub listens on HTTP :8800 (serves /health, HUB_PORT) and a
+            # SEPARATE relay WebSocket worker on :8802 (relay_port). Nothing
+            # listens on 80 or 9443. Probes use the named port 'http'.
             - name: http
-              containerPort: 80
+              containerPort: 8800
               protocol: TCP
             - name: relay
-              containerPort: 9443
+              containerPort: 8802
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}

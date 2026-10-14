@@ -16,6 +16,10 @@ To access the application:
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix.fullname" . }} 8080:{{ .Values.service.http.port }}
   Then open http://localhost:8080
 
+  For the SyncPlay WebSocket worker (separate listener, not reachable via
+  HTTP ingress paths):
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix.fullname" . }} 8097:{{ .Values.service.websocket.port }}
+
 {{- end }}
 
 Useful commands:

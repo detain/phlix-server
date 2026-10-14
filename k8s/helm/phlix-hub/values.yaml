@@ -23,28 +23,34 @@ service:
   # ClusterIP works well behind a Kubernetes Ingress
   type: ClusterIP
   http:
-    # HTTP/API port
+    # HTTP/API service port (routes to the hub's HTTP worker on :8800 via
+    # the named targetPort 'http')
     port: 80
   relay:
-    # WebSocket relay port (server-to-hub long-lived connections)
-    port: 9443
+    # Relay WebSocket worker port (container listens on :8802, a separate
+    # listener). phlix-server connects to ws(s)://<hub>:8802 directly — this
+    # needs an L4 route (LoadBalancer/NodePort or TCP mesh route); HTTP
+    # ingress path rules cannot reach a separate WS listener, and the only
+    # /relay-ish path on :8800 is a 501 signpost (POST /api/v1/servers/{id}/relay).
+    port: 8802
 
-# Ingress for hub-specific endpoints (relay WS + server-claims API)
+# Ingress for hub HTTP endpoints (admin UI + REST API)
+# NOTE: the relay WebSocket worker (:8802) is a SEPARATE listener and is
+# intentionally NOT routed here — an HTTP ingress cannot path-route a bare
+# WS listener. Expose service.relay.port via LoadBalancer/NodePort (or a
+# TCP route) and point servers' hub_wss_url at ws(s)://<host>:8802.
 ingress:
   enabled: true
   className: "nginx"
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    # Long timeouts required for relay WebSocket connections from servers
+    # Long timeouts for any WebSocket upgrades served on the HTTP port
     nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
   hosts:
     - host: hub.phlix.local
       paths:
-        # Relay endpoint: phlix-server connects here to register & receive claims
-        - path: /relay
-          pathType: Prefix
-        # Server-claims API: hub UI / API consumers
+        # Server-claims API + all hub HTTP routes live on the :8800 router
         - path: /api
           pathType: Prefix
         - path: /

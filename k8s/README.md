@@ -114,8 +114,8 @@ config:
 | `image.repository` | Docker image repository | `ghcr.io/detain/phlix-server` |
 | `image.tag` | Docker image tag — REQUIRED, set to an immutable tag (`<full-sha>-<latest|intel|nvidia>`); no default | `""` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
-| `service.http.port` | HTTP port | `80` |
-| `service.websocket.port` | WebSocket port | `3473` |
+| `service.http.port` | Service port → container HTTP worker `:8096` | `80` |
+| `service.websocket.port` | Service port → container WS worker `:8097` (separate listener; needs an L4 route, not an HTTP ingress path) | `8097` |
 | `ingress.enabled` | Enable ingress | `true` |
 | `config.database_password` | Database password | Required |
 | `config.secret_key` | Application secret | Required |
@@ -125,6 +125,40 @@ config:
 
 ```bash
 helm uninstall phlix
+```
+
+## Port map (what actually listens)
+
+| Chart | Container listens | Service default | Notes |
+|-------|-------------------|-----------------|-------|
+| `phlix` | `:8096` HTTP API (serves `/health`) | `service.http.port: 80` | Ingress + probes route here |
+| `phlix` | `:8097` WebSocket (SyncPlay) | `service.websocket.port: 8097` | Separate WS listener — needs an L4 route (LoadBalancer/NodePort/TCP mesh), HTTP ingress path rules cannot reach it |
+| `phlix-hub` | `:8800` hub HTTP (serves `/health`, `/api`, admin UI) | `service.http.port: 80` | Ingress + probes route here |
+| `phlix-hub` | `:8802` relay WebSocket worker | `service.relay.port: 8802` | Separate WS listener for server relay connections (`hub_wss_url`) — needs an L4 route, not the HTTP ingress |
+
+## Verifying a render
+
+```bash
+helm template phlix k8s/helm/phlix --set image.tag=test | grep -B1 -A2 containerPort
+# expect: 8096 (http), 8097 (websocket)
+
+helm template hub k8s/helm/phlix-hub --set image.tag=test | grep -B1 -A2 containerPort
+# expect: 8800 (http), 8802 (relay)
+```
+
+## Hub chart
+
+The `phlix-hub` chart (in this repo under `k8s/helm/phlix-hub`) deploys the
+central hub. Same pattern as above, with the port map rows for `phlix-hub`
+and its own required `config.database_password` / `config.secret_key` values.
+
+```bash
+helm install hub k8s/helm/phlix-hub \
+  --set image.tag=<sha12> \
+  --set config.database_password=your_password \
+  --set config.secret_key=your_secret \
+  --set config.database_host=your-mysql \
+  -n phlix-hub --create-namespace
 ```
 
 ## Database Migration

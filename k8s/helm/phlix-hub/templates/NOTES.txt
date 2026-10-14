@@ -11,14 +11,21 @@ Access the hub at:
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
 {{- end }}
 
-Hub endpoints:
+Hub endpoints (HTTP router, container :8800):
   /         — admin UI
   /api      — REST API (server claims, enrollment)
-  /relay    — WebSocket relay (phlix-server connections)
+
+The relay WebSocket worker is a SEPARATE listener (container :8802,
+Service port {{ .Values.service.relay.port }}) — it is NOT reachable through
+the HTTP ingress. Expose it via LoadBalancer/NodePort/TCP route and point
+phlix-server hub_wss_url at ws(s)://<host>:{{ .Values.service.relay.port }}.
 {{- else }}
 
 To access the hub:
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix-hub.fullname" . }} 8080:{{ .Values.service.http.port }}
   Then open http://localhost:8080
+
+  For the relay WS worker (separate listener):
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix-hub.fullname" . }} 8802:{{ .Values.service.relay.port }}
 
 {{- end }}

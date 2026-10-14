@@ -38,11 +38,14 @@ spec:
           image: '{{ .Values.image.repository }}:{{ required "phlix chart: image.tag is REQUIRED — nothing falls back silently. Mutable :latest drifts and the old AppVersion fallback (1.2.3) was never published to ghcr. Set image.tag to a deterministic immutable tag, form: ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
+            # The start.php daemon listens on exactly these two sockets:
+            # HTTP API worker :8096 (serves /health), WebSocket worker :8097.
+            # Probes below use the named port 'http' and resolve to 8096.
             - name: http
-              containerPort: 80
+              containerPort: 8096
               protocol: TCP
             - name: websocket
-              containerPort: 3473
+              containerPort: 8097
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}

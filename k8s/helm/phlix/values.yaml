@@ -30,11 +30,16 @@ service:
   # Service type: ClusterIP | NodePort | LoadBalancer
   type: ClusterIP
   http:
-    # HTTP port exposed by the Service
+    # Service port (routes to the container's HTTP worker on :8096 via the
+    # named targetPort 'http'). 80 is only the in-cluster service port.
     port: 80
   websocket:
-    # WebSocket port (Workerman WS server)
-    port: 3473
+    # Service port for the Workerman WS worker (container listens on :8097;
+    # the Service forwards via the named targetPort 'websocket'). The WS
+    # worker is a separate listener — browsers/clients speaking SyncPlay WS
+    # need an L4 route to this port (LoadBalancer/NodePort/hostBinary or a
+    # TCP-capable mesh route); HTTP Ingress path rules cannot reach it.
+    port: 8097
 
 # Ingress for HTTP + WebSocket traffic with TLS
 ingress:
@@ -50,6 +55,10 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
     # Allow large uploads for backup imports
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  # NOTE: the ingress fronts the HTTP API only (:8096 container worker).
+  # The SyncPlay WebSocket worker is a SEPARATE listener (:8097 container /
+  # service.websocket.port) and cannot be reached through these path rules —
+  # give it its own L4 route (LoadBalancer/NodePort or TCP mesh route).
   hosts:
     - host: phlix.local
       paths:

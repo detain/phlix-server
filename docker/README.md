@@ -25,10 +25,11 @@ production runs.
 
 A container runs exactly one program: `php /var/www/html/start.php start`, under
 supervisord. **There is no nginx and no php-fpm in the image.** That mirrors
-production, where `scripts/install.sh` points HAProxy straight at
-`127.0.0.1:${HTTP_PORT}` ("WebSocket upgrade is detected per-request; both REST
-and WS traffic share the single HTTP port on the Workerman side"), and Workerman
-serves the `/app` SPA shell and all static assets itself
+production, where `scripts/install.sh` fronts `127.0.0.1:${HTTP_PORT}` for
+REST/SPA traffic; the SyncPlay WebSocket is a SEPARATE plaintext listener on
+`:8097` (the HTTP worker has zero upgrade logic — WS does not share the HTTP
+port), and `deploy/haproxy.cfg` shows one way to front that second listener.
+Workerman serves the `/app` SPA shell and all static assets itself
 (`HttpHandler::serveStatic()`). TLS and host routing belong to whatever fronts
 the container.
 
@@ -36,11 +37,23 @@ Ports — exactly what `start.php` binds:
 
 | Port | Worker | Traffic |
 |---|---|---|
-| `8096` | `phlix-server-http` (count 14) | REST, the `/app` SPA, static assets, per-request WS upgrade. **This is the port to front.** |
-| `8097` | `phlix-server-ws` (count 1) | The SyncPlay WebSocket worker. |
+| `8096` | `phlix-server-http` (count 14) | REST, the `/app` SPA, static assets, `/health`. No WebSocket upgrades here. **This is the HTTP port to front.** |
+| `8097` | `phlix-server-ws` (count 1) | The SyncPlay WebSocket worker — its own TCP route, long timeouts, no path routing (plain HTTP GET answers 400, which means ALIVE). |
 
 Nothing listens on 80 or 443. If you are migrating from an older compose file,
 change `"<host>:80"` to `"<host>:8096"`.
+
+### Migration failures: strict by default
+
+Since R14-12 all three runtime images ship `ENV PHLIX_MIGRATIONS_STRICT=1`: if
+`scripts/run-migrations.php` fails — or cannot run at all (no DB configured) —
+the entrypoint prints the `PHLIX-MIGRATION-FAILURE` /
+`PHLIX-MIGRATIONS-NOT-RUN` banner and **exits instead of starting**, so a
+half-migrated schema never serves traffic unnoticed. This inverts only the
+IMAGE default, not the script's: the entrypoint's own fallback when the flag
+is unset remains boot-anyway-with-banner. Dev opt-out: run with
+`-e PHLIX_MIGRATIONS_STRICT=0` (the repo-root development `docker-compose.yml`
+does exactly that). Compose examples and the Kubernetes charts keep strict on.
 
 ### Verifying an image actually runs
 

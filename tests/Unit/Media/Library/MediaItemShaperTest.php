@@ -1883,6 +1883,60 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('files', $shaped);
     }
 
+    // ---- R12-04: `path` redaction law (list rows = basename, admin detail = full)
+
+    public function testShapeReducesPathToBasenameOnListRows(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'path' => '/mnt/media/shows/The Show S01E01 1080p.mkv',
+        ]);
+
+        // Key stays present and string-typed (clients read the extension off it);
+        // the directory layout never leaves the process.
+        $this->assertArrayHasKey('path', $shaped);
+        $this->assertSame('The Show S01E01 1080p.mkv', $shaped['path']);
+    }
+
+    public function testShapeParsesBlankAndMalformedPathsToNull(): void
+    {
+        $this->assertNull(MediaItemShaper::shape(['id' => 'm', 'name' => 'M', 'type' => 'movie'])['path']);
+        $this->assertNull(MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie', 'path' => '',
+        ])['path']);
+        $this->assertNull(MediaItemShaper::shape([
+            'id' => 'm', 'name' => 'M', 'type' => 'movie', 'path' => 42,
+        ])['path']);
+    }
+
+    public function testShapeDetailKeepsBasenamePathForNonAdmin(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'path' => '/mnt/media/private/movie.mkv',
+        ], [], false);
+
+        // shape() wins the merge (merged AFTER the raw row) — the raw absolute
+        // path must NOT survive the detail merge for a non-admin either.
+        $this->assertSame('movie.mkv', $shaped['path']);
+    }
+
+    public function testShapeDetailRestoresFullPathForAdmin(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'path' => '/mnt/media/private/movie.mkv',
+        ], [], true);
+
+        $this->assertSame('/mnt/media/private/movie.mkv', $shaped['path']);
+    }
+
     public function testFilesBlockGracefullyHandlesMissingFilesKey(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

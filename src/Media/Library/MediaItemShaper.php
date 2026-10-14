@@ -241,7 +241,17 @@ final class MediaItemShaper
             // this (see ItemRepository); exposed so any client-side sort agrees.
             'sort_title' => SortTitle::from($name),
             'type' => $type,
-            'path' => $item['path'] ?? null,
+            // R12-04: LIST rows carry only the FILENAME, never the absolute
+            // filesystem path. The full server-side path is an admin-only fact
+            // (same posture as the `files` block below and the L-4 library-`paths`
+            // redaction in LibraryController): it discloses storage layout and
+            // mount points to every authenticated user on up to PageLimit::MAX
+            // rows. The KEY stays present and string-typed — ui's Player
+            // `needsTranscode()` and the native clients read `path` only for its
+            // extension, and `basename()` preserves both the extension and the
+            // display filename, so no consumer's type or purpose breaks.
+            // Admin detail responses restore the full value in shapeDetail().
+            'path' => self::publicPath($item['path'] ?? null),
             // Owning library — normalized with the same idiom as `parent_id`
             // below (scalar → string, empty/absent → null) so the wire type stays
             // `string|null` on every row. The list queries are `SELECT *`, so the
@@ -333,6 +343,14 @@ final class MediaItemShaper
     public static function shapeDetail(array $item, array $streams, bool $isAdmin = false): array
     {
         $merged = array_merge($item, self::shape($item));
+        // R12-04 admin arm: the full filesystem path is restored ONLY for the
+        // admin detail view (mirrors the `files` block gate below). shape() has
+        // already reduced `path` to the basename for everyone; non-string/empty
+        // raw rows degrade to null exactly like the list shape.
+        if ($isAdmin) {
+            $rawPath = $item['path'] ?? null;
+            $merged['path'] = is_string($rawPath) && $rawPath !== '' ? $rawPath : null;
+        }
         $merged['streams'] = $streams;
 
         /** @var array<string, mixed> $metadata */
@@ -584,6 +602,26 @@ final class MediaItemShaper
             }
         }
         return null;
+    }
+
+    /**
+     * Reduce a raw media-item path to its display-safe public segment (R12-04).
+     *
+     * Returns the BASENAME — the filename with its extension — so extension-driven
+     * client logic (`needsTranscode()` et al.) keeps working while the server's
+     * directory layout never leaves the process. Non-strings and blanks parse to
+     * null, matching the scalar→string|null discipline of the sibling keys.
+     *
+     * @param mixed $raw Raw `media_items.path` column value.
+     * @return string|null Basename of a non-empty string path, else null.
+     */
+    private static function publicPath(mixed $raw): ?string
+    {
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        return basename($raw);
     }
 
     private static function stringOrNull(mixed $value): ?string

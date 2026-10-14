@@ -78,6 +78,7 @@ HUB_URL=""              # PHLIX_HUB_URL — paired separately via scripts/pair-w
 
 WANT_TLS="auto"         # auto|yes|no
 SKIP_HAPROXY="no"       # --no-proxy: skip HAProxy install + config entirely
+PLAINTEXT_ACK="no"      # --i-know-plaintext-internet-facing: explicit ack of the --no-proxy plaintext posture
 INTERACTIVE="auto"      # auto|yes|no
 ASSUME_YES="no"
 ACTION="install"        # install|update|uninstall
@@ -125,7 +126,13 @@ Options:
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
   --no-proxy              Skip HAProxy and certbot entirely (use when you
                           run your own reverse proxy or are co-hosting
-                          phlix-hub on the same box — see README)
+                          phlix-hub on the same box — see README). Confirms
+                          first unless the ack flag below is given.
+  --i-know-plaintext-internet-facing
+                          Acknowledge that --no-proxy leaves the HTTP port
+                          serving plaintext to every network ufw allows and
+                          skip the interactive confirmation. REQUIRED for
+                          non-interactive --no-proxy installs.
   --update                Update an existing install (reuses env file, pulls
                           new code, runs composer + migrations, restarts service)
   --uninstall             Remove an existing (possibly partial) install
@@ -182,6 +189,7 @@ while [ $# -gt 0 ]; do
     --tls)          WANT_TLS="yes"; shift;;
     --no-tls)       WANT_TLS="no"; shift;;
     --no-proxy)     SKIP_HAPROXY="yes"; WANT_TLS="no"; shift;;
+    --i-know-plaintext-internet-facing) PLAINTEXT_ACK="yes"; shift;;
     --update)       ACTION="update"; shift;;
     --uninstall)    ACTION="uninstall"; shift;;
     --purge)        PURGE="yes"; ACTION="uninstall"; shift;;
@@ -1974,6 +1982,23 @@ systemctl is-active --quiet "$SERVICE_NAME" && info "$SERVICE_NAME service is ru
 # 8. Reverse proxy (HAProxy) + TLS (certbot)
 # ---------------------------------------------------------------------------
 if [ "$SKIP_HAPROXY" = "yes" ]; then
+  # R7-08: --no-proxy means THIS box answers on $HTTP_PORT in plain HTTP — JWTs
+  # (including SyncPlay ?token= handshakes), credentials and signed media URLs
+  # ride unencrypted, and the ufw block below opens that port to every network
+  # it permits. Still a supported posture (your own TLS proxy in front, or a
+  # trusted LAN) — but it must never happen silently. -y does NOT bypass this;
+  # only the explicit ack flag or a typed "yes" does.
+  if [ "$PLAINTEXT_ACK" != "yes" ]; then
+    if [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+      printf '%sWARNING:%s --no-proxy leaves Phlix serving PLAIN-TEXT HTTP on port %s\n' "$C_YELLOW" "$C_RESET" "$HTTP_PORT" >&2
+      printf '         to every network your firewall allows. TLS termination is\n' >&2
+      printf '         the job of YOUR reverse proxy — the daemon serves plain HTTP.\n' >&2
+      read -r __plaintext_ok -p "Really proceed with --no-proxy in plaintext? Type 'yes' to continue: " </dev/tty || true
+      [ "${__plaintext_ok:-}" = "yes" ] || die "aborted: --no-proxy needs the typed 'yes' above, or --i-know-plaintext-internet-facing if you accept plaintext exposure."
+    else
+      die "--no-proxy refuses to run silently when non-interactive: it serves PLAIN-TEXT HTTP on port ${HTTP_PORT}. If that is intended, re-run with --no-proxy --i-know-plaintext-internet-facing (and put your own TLS proxy in front)."
+    fi
+  fi
   log "Skipping HAProxy / certbot setup (--no-proxy)"
   info "Run your own reverse proxy in front of 127.0.0.1:${HTTP_PORT} (HTTP/WebSocket)."
   info "See README.md → 'Running alongside phlix-hub' for a sample shared HAProxy config."
@@ -2014,10 +2039,15 @@ CRON
     log "Writing phlix-server HAProxy fragment (TLS)"
     phlix_haproxy_write_fragment_server tls "$DOMAIN"
   else
-    warn "certbot failed (is DNS for $DOMAIN pointed here and port 80 reachable?). Falling back to plain HTTP."
-    TLS_ENABLED="no"
-    log "Writing phlix-server HAProxy fragment (plain HTTP)"
-    phlix_haproxy_write_fragment_server http "$DOMAIN"
+    # R7-08: an operator who asked for TLS must not silently land on plain
+    # HTTP. Fail loudly with the exact retry; re-running this installer is
+    # safe, and the plaintext postures stay available deliberately (no --tls
+    # with HAProxy, or --no-proxy with the explicit ack flag).
+    warn "certbot failed for $DOMAIN — NOT falling back to plain HTTP silently."
+    warn "Check that DNS for $DOMAIN points at this host and inbound port 80 is free for the ACME standalone challenge, then retry the certificate directly:"
+    warn "  sudo certbot certonly --standalone --non-interactive --agree-tos -m $ADMIN_EMAIL -d $DOMAIN --keep-until-expiring"
+    warn "or re-run this installer. To deliberately serve without TLS: re-run without --tls (HAProxy plain HTTP), or with --no-proxy --i-know-plaintext-internet-facing (your own proxy)."
+    die "TLS requested but certificate issuance failed for $DOMAIN; no plain-HTTP fallback was configured."
   fi
 else
   log "Writing phlix-server HAProxy fragment (plain HTTP)"
@@ -2044,6 +2074,11 @@ log "Phlix Media Server installation complete"
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "URL          : http://<server-ip>:${HTTP_PORT}/  (configure your own reverse proxy in front)"
   info "Health check : curl http://localhost:${HTTP_PORT}/health"
+  warn "=================================================================="
+  warn "TLS NOT CONFIGURED — this install serves PLAIN-TEXT HTTP on ${HTTP_PORT}."
+  warn "Terminate TLS in your own reverse proxy (see reverse-proxy/ and"
+  warn "deploy/haproxy.cfg) before exposing it beyond a trusted network."
+  warn "=================================================================="
 elif [ "$TLS_ENABLED" = "yes" ]; then
   info "URL          : https://${DOMAIN}/"
   info "Health check : curl https://${DOMAIN}/health"
@@ -2051,10 +2086,16 @@ else
   info "URL          : http://${PUBLIC_DOMAIN}/  (or http://<server-ip>/)"
   info "Health check : curl http://localhost:${HTTP_PORT}/health"
   [ -n "$DOMAIN" ] || info "Re-run with --domain and --admin-email to enable HTTPS."
+  warn "=================================================================="
+  warn "TLS NOT CONFIGURED — HAProxy is fronting PLAIN-TEXT HTTP."
+  warn "Re-run with --tls --domain HOST --admin-email EMAIL to enable HTTPS."
+  warn "=================================================================="
 fi
 info "Service       : systemctl status $SERVICE_NAME"
 info "Env file      : ${ENV_FILE}  (DB_PASSWORD + JWT_SECRET + PHLIX_SECRET_KEY stored here)"
-info "Database pass : ${DB_PASS}"
+# R7-09: never echo secret material into terminal scrollback / CI logs /
+# screenshot captures — point at the 0640 env file instead.
+info "Database pass : stored in ${ENV_FILE} (mode 640) — show with: sudo grep '^DB_PASSWORD=' ${ENV_FILE}"
 echo
 info "Next:"
 info "  - Open the URL and complete the first-run setup wizard."

@@ -5,8 +5,8 @@ metadata:
   labels:
     {{- include "phlix-hub.labels" . | nindent 4 }}
 data:
-  PHLIX_HUB_APP_ENV: "production"
-  PHLIX_HUB_LOG_LEVEL: {{ .Values.config.log_level | quote }}
-  {{- if .Values.config.public_url }}
-  PHLIX_HUB_PUBLIC_URL: {{ .Values.config.public_url | quote }}
-  {{- end }}
+  # APP_ENV (not PHLIX_HUB_APP_ENV): the hub's dev-flag probe reads APP_ENV /
+  # HUB_ENV; "production" here keeps the dev random-secret fallback unreachable.
+  # Log level is NOT wired — the hub image reads no log-level env; it is fixed
+  # in the shipped config (values.config.log_level is kept for future use).
+  APP_ENV: "production"

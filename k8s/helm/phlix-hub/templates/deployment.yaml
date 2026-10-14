@@ -51,27 +51,31 @@ spec:
           startupProbe:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           env:
-            - name: PHLIX_HUB_DATABASE_HOST
+            # Real hub image env names (phlix-hub config/database.php +
+            # docker/docker-entrypoint.sh read HUB_DB_*; the previous
+            # PHLIX_HUB_DATABASE_* names were read by nothing, so the pod
+            # silently fell back to 127.0.0.1/phlix_hub defaults).
+            - name: HUB_DB_HOST
               value: {{ tpl (.Values.config.database_host | toString) . | quote }}
-            - name: PHLIX_HUB_DATABASE_PORT
+            - name: HUB_DB_PORT
               value: {{ .Values.config.database_port | quote }}
-            - name: PHLIX_HUB_DATABASE_NAME
+            - name: HUB_DB_NAME
               value: {{ .Values.config.database_name | quote }}
-            - name: PHLIX_HUB_DATABASE_USER
+            - name: HUB_DB_USER
               value: {{ .Values.config.database_user | quote }}
-            - name: PHLIX_HUB_DATABASE_PASSWORD
+            - name: HUB_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "phlix-hub.fullname" . }}
                   key: database-password
-            - name: PHLIX_HUB_SECRET_KEY
+            # HUB_JWT_SECRET is the hub's only signing secret (config/auth.php).
+            - name: HUB_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "phlix-hub.fullname" . }}
                   key: secret-key
-            - name: PHLIX_HUB_LOG_LEVEL
-              value: {{ .Values.config.log_level | quote }}
-            - name: PHLIX_HUB_PUBLIC_URL
+            # Public URL feeds enrollment/relay link building (config/server.php).
+            - name: HUB_BASE_URL
               value: {{ .Values.config.public_url | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}

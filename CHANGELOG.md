@@ -7,6 +7,111 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SRV-DB remediation (DBA review R19 family): races, clock drift, missing
+  indexes, unbounded stats growth, collation drift and an N+1 similarity read,
+  shipped as migrations 113–120 with static + real-MySQL guards.**
+  **R19-02 (HIGH):** `WatchHistory::updateProgress()` was a check-then-act
+  (pre-read, then UPDATE *or* INSERT keyed on it) — two concurrent progress
+  reports for one (profile, item) could both miss the row and race to INSERT,
+  surfacing MySQL 1062 on the `idx_profile_media` UNIQUE mid-playback. Now ONE
+  `INSERT ... ON DUPLICATE KEY UPDATE` on that key (the
+  `PlaybackController::reportProgress()` estate idiom); `completed_at`
+  semantics preserved verbatim via COALESCE'd constant expressions (the
+  threshold-cross arm writes NOW(), the other NULL keeps the old stamp), and
+  the pre-read survives only as the completion classifier for
+  newly-completed recommendation triggers. **R19-03 (HIGH):**
+  `SessionManager` wrote `last_activity` with the DB clock (`NOW()`) but
+  compared it against PHP-`date()` cutoffs in `cleanupStaleSessions()`/
+  `getOnlineUsers()` — host-vs-MySQL timezone skew (proven live on this venue:
+  PHP EDT vs UTC server) shifted every cutoff, the nightly mass-logout shape.
+  Both cutoffs are now `DATE_SUB(NOW(), INTERVAL ? SECOND)` (DB clock on both
+  sides), backed by NEW migration **113** (`sessions(last_activity)` — the
+  sweeps were unindexed full scans). `DbRemediationRealDbTest` pins it under a
+  UTC+14-shifted PHP clock: an 8h-idle session survives a 24h DB-clock cutoff
+  even while PHP believes it is 14h later. **R19-05 (MEDIUM):**
+  `getContinueWatching()` materialized every qualifying `playback_state` row
+  (wide `ps.*` + three-way media JOIN per row) before ranking; rewritten to
+  rank a narrow per-item projection first, `rn = 1`, LIMIT, then JOIN media
+  metadata only for the ≤limit survivors — same wire output (mapper keys were
+  already the sole consumers; the dropped `ranked.id`/`session_id`/
+  `playback_status` were never read), pinned byte-compatible by the existing
+  unit regexes plus a real-DB dedupe/newest-wins behavior proof. NEW
+  migration **114** adds `playback_state(media_item_id, updated_at)` for the
+  window ordering. **R19-06 (MEDIUM):** NEW migration **115** adds
+  `watch_history(profile_id, last_watched_at)` + `(profile_id, completed_at)`
+  (every list read filters one profile and ORDER BYs a time column — pure
+  filesort before); `getTodayWatchTime()`'s `DATE(last_watched_at) = CURDATE()`
+  became the equivalent half-open range (`>= CURDATE() AND < CURDATE() + 1
+  DAY`) so the column stays index-usable, boundaries proven against the
+  database clock. **R19-07 (MEDIUM):** NEW migration **116** adds
+  `active_streams(session_id)` — the heartbeat UPDATE, teardown DELETE and
+  exists-check all filter session_id alone, which `idx_profile_session`
+  cannot serve (leftmost-prefix rule). **R19-10 (MEDIUM):** the two stats
+  tables shipped (019) with a PRIMARY KEY only and no expiry story at all:
+  NEW migration **117** adds the four indexes the dashboard/newsletter/sweeper
+  reads need (`stats_library_changes(changed_at)`;
+  `stats_user_activity(occurred_at)`, `(activity_type, occurred_at)`,
+  `(user_id)`), and `StatsCollector` gained a bounded retention sweeper —
+  hub-`ServerReaper::sweepHeartbeats` two-phase idiom (harvest ids via the
+  `DATE_SUB(NOW(), INTERVAL ? DAY)` cutoff `ORDER BY id LIMIT 1000`, DELETE by
+  PK `IN (...)`, deadlock retry ×3), batch loop capped at 20 rounds/table,
+  `config/stats.php` `retention_days` knob (default 90; junk clamps
+  fail-safe), wired into the existing `startBackgroundTimers()` fleet as an
+  hourly `Workerman\Timer` tick (no boot-immediate run; `isEnabled()` gates
+  each tick). `stats_playback_events` is deliberately NOT swept (playback
+  analytics retention is a separate decision). The real-DB venue caught two
+  shipping bugs in this feature during development: the harvest ids are
+  CHAR(36) UUIDs (numeric-only acceptance would have swept nothing), and both
+  fixes are pinned unit-side (13 tests) and end-to-end (100-day row deleted
+  under a configured 30-day window, 10-day row survives).
+  **R19-14 (LOW):** NEW migration **118** adds `media_items(library_id,
+  created_at)` for the recently-added rail (was a filesort over every row of
+  the library); the year-sort functional index is NOT shipped — the sort
+  source is JSON `metadata_json` release-year on a huge table, so a functional
+  index there is a full rebuild with uncertain optimizer uptake (recommendation
+  only). **R19-15 (LOW):** NEW migration **119** drops the three provably-dead
+  indexes — `users.idx_username`/`users.idx_email` (inline UNIQUEs on the same
+  columns already cover every lookup, uniqueness-aware) and
+  `item_similar.idx_score` (both readers are per-seed via the PK prefix); a
+  repo-wide grep proves nothing ever `USE`/`FORCE`s them. `relay_user_quotas`
+  is hub-owned and skipped here. **R19-09 (MEDIUM):** ten tables created by
+  migrations 012/057/061/062/063/075/076 said `DEFAULT CHARSET=utf8mb4` but
+  no COLLATE, silently taking MySQL 8's `utf8mb4_0900_ai_ci` against the
+  estate's `utf8mb4_unicode_ci` (illegal-mix / unindexable-coercion risk on
+  cross-table comparisons). NEW migration **120** CONVERTs exactly those ten
+  small FK-free tables (cost stated in-file: a rebuild, seconds at these row
+  counts; media-scale tables were already compliant). The policy holds going
+  forward via a new CI assertion in `DbRemediationMigrationsTest`: every
+  migration numbered ≥113 that CREATEs a table must pin `utf8mb4_unicode_ci`
+  in the statement itself. **R19-12 (LOW-MEDIUM):**
+  `RecommendationService::computeBecauseYouWatched()` fanned out one
+  `SimilarityService::getSimilar()` round trip per seed (up to 50 inline); the
+  `SimilarityService` dependency is now gone entirely (constructor and DI
+  param in `MediaServicesProvider` shed it) and the read is ONE query —
+  per-seed top-20 via `ROW_NUMBER() OVER (PARTITION BY media_item_id ORDER BY
+  score DESC)` in a DERIVED TABLE with the `media_items` INNER JOIN inside the
+  window (dangling targets drop before ranking, exactly like the old
+  post-JOIN LIMIT), so scores, exclusion, ordering and stored top-K are
+  unchanged. The derived-table form is load-bearing, not style: the vendored
+  Workerman driver picks its return shape from the FIRST SQL keyword, so a
+  `WITH`-leading CTE executes but hands back null — caught only because the
+  real-MySQL venue executes the production driver. **R14-07/R19-16 (LOW):**
+  `ConnectionPool`'s three `[DEBUG]` `error_log` lines removed (they spammed
+  stderr per checkout under the SHIPPING pool default — the stale "OFF unless
+  pool_enabled is set / validate before trusting under load" comment contradicted
+  `config/database.php`, which has been pool-ON by default since Track S/S9);
+  pool-math guidance added to both the class and `config/database.php`
+  (14 HTTP workers × pool_size 8 ≈ 112 plus the count=1 WS/background pools ≈
+  140 at defaults — keep under `max_connections`, tune pool_size first);
+  `PooledMySQLConnection`'s header now names PhlixMySQLConnection as the
+  opt-out front, not "the default". **R19-17 (LOW): DEFERRED** — folding
+  `lookupPlaybackStatus()` into the upsert round is not trivially safe: MySQL
+  ODKU cannot return the PRE-update status the event dispatch needs, and the
+  LAST_INSERT_ID trickery would trade one indexed point-read for fragile
+  session state.
+
 ### Added
 
 - **Provider parity CLOSED: the B2 serialization protocol now guards BOTH auth

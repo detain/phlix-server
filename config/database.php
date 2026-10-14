@@ -38,6 +38,18 @@ return [
             // Per-worker pool ceiling. Each worker process keeps its OWN pool,
             // so the server-wide max is roughly (worker count × pool_size) — keep
             // it comfortably under MySQL `max_connections`. Tune via DB_POOL_SIZE.
+            //
+            // POOL MATH (R19-16), with the real worker counts so the arithmetic is
+            // explicit rather than implied: start.php runs the HTTP fleet at
+            // count = 14, and the WebSocket (:8097), hub-heartbeat, background-timer
+            // and relay-tunnel workers at count = 1 each. At the shipped pool_size = 8
+            // that is 14 × 8 = 112 (HTTP) plus ~4 (the count=1 workers, one pool
+            // each) before scripts/migrations and any co-tenant on the same MySQL —
+            // so `max_connections` must sit comfortably ABOVE ~120 just to leave the
+            // default install headroom, and every +1 to DB_POOL_SIZE raises the floor
+            // by another 18 connections. Do NOT size max_connections to the pool
+            // alone; check `SHOW VARIABLES LIKE 'max_connections'` against the sum of
+            // ALL clients of the server before lowering it.
             'pool_size' => (int) (getenv('DB_POOL_SIZE') ?: 8),
             'timeout'   => 5,
         ],

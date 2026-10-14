@@ -16,11 +16,12 @@ use Workerman\MySQL\Connection;
 /**
  * Coroutine-aware MySQL connection POOL front.
  *
- * The default {@see PhlixMySQLConnection} is ONE socket shared by every
- * coroutine, serialised by a per-connection mutex (correct, but DB access is
- * effectively sequential within a worker). This front gives each coroutine its
- * OWN leased connection drawn from a bounded pool, so up to `maxSize` queries
- * run truly in parallel within a single worker — true async DB.
+ * The opt-out-fallback {@see PhlixMySQLConnection} (DB_POOL_ENABLED=0) is ONE
+ * socket shared by every coroutine, serialised by a per-connection mutex
+ * (correct, but DB access is effectively sequential within a worker). This
+ * front — the SHIPPING DEFAULT per config/database.php — gives each coroutine
+ * its OWN leased connection drawn from a bounded pool, so up to `maxSize`
+ * queries run truly in parallel within a single worker — true async DB.
  *
  * Design — per-query borrow, with per-coroutine lease only inside a transaction:
  *  - A coroutine's connection is returned to the idle pool at the START of its

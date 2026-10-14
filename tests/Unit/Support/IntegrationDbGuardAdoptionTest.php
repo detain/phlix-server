@@ -464,7 +464,14 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // (real-MySQL admin∥provider cross-surface FOR UPDATE serialization —
     // blocking probe + revalidation in both the refuse and accept
     // directions). Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 69;
+    // 69→70 by the SRV-DB remediation lane (2026-10-14):
+    // +tests/Integration/Database/DbRemediationRealDbTest.php (real-MySQL
+    // proof of migrations 113–120 — index shapes, collation convergence,
+    // ledger-forced replay — plus the ODKU watch-history upsert, DB-clock
+    // session sweep under a shifted PHP timezone, continue-watching dedupe,
+    // stats retention sweep, and the derived-table similarity read).
+    // Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 70;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

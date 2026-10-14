@@ -593,8 +593,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * AdminSettingsProviderLockParityB2Test.php (real-MySQL cross-surface
      * blocking probes in both directions). Measured from the phpunit red
      * (1980), not predicted.
+     * Re-pinned 1980→1983 by the SRV-DB remediation lane (2026-10-14):
+     * net +3 — tests/Unit/Common/Database/DbRemediationMigrationsTest.php
+     * (static guards + R19-09 CREATE-TABLE-collation policy gate over
+     * migrations 113–120), tests/Unit/Stats/StatsRetentionSweepTest.php
+     * (batched-retention-sweeper harness pins) and
+     * tests/Integration/Database/DbRemediationRealDbTest.php (real-MySQL
+     * proof of the index/collation migrations and the rewritten query
+     * paths). Measured from the phpunit red (1983), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1980;
+    private const EXPECTED_PHP_FILES = 1983;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

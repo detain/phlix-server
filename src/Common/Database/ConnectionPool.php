@@ -68,18 +68,37 @@ class ConnectionPool
             $passStr = is_scalar($password) ? (string)$password : '';
             $dbStr = is_scalar($database) ? (string)$database : '';
 
-            error_log(
-                "[DEBUG] " . date('Y-m-d H:i:s.v')
-                . " ConnectionPool::getConnection Creating NEW connection"
-                . " [name={$name}] [host={$hostStr}]"
-                . " [pool_enabled=" . ($poolEnabled ? 'true' : 'false') . "]"
-            );
+            // R14-07: the three [DEBUG] error_log() lines that used to bracket
+            // construction are gone. They wrote raw to stderr on the cold path
+            // of EVERY worker (bypassing LoggerFactory, channels and rotation),
+            // disclosed config-shaped values (host, pool size) unasked, and no
+            // test or runbook consumed them. This block is once-per-name-per-
+            // process anyway — if construction itself fails, the driver
+            // exception surfaces at the call site regardless.
 
             if ($poolEnabled) {
                 // Coroutine connection pool: each coroutine leases its own
-                // connection for true intra-worker DB parallelism. OFF unless
-                // `pool_enabled` is set — see PooledMySQLConnection. Validate
-                // on a non-prod restart before trusting under load.
+                // connection for true intra-worker DB parallelism. This is the
+                // SHIPPING DEFAULT — config/database.php resolves `pool_enabled`
+                // to ON unless DB_POOL_ENABLED explicitly opts out (the `===
+                // false` env dance documented there), in which case the
+                // single-connection mutex path below is the fallback. See
+                // PooledMySQLConnection for the lease semantics.
+                //
+                // POOL MATH (R19-16), keyed to MySQL's `max_connections`:
+                // every WORKER PROCESS owns its own pool, so the server-wide
+                // ceiling is (workers × pool_size) plus the single-connection
+                // consumers. Out of the box that is the HTTP fleet (start.php:
+                // count = 14) × pool_size (default 8) ≈ 112, plus one pooled
+                // pool each for the WebSocket (:8097), hub-heartbeat, background-
+                // timer and relay-tunnel workers (each count = 1), plus
+                // migrations/scripts/CLI connections — call it ~140 at defaults.
+                // Keep MySQL `max_connections` comfortably ABOVE that sum (and
+                // remember other applications may share the server); raising
+                // DB_POOL_SIZE multiplies by 14 per step, so tune pool_size
+                // before you tune max_connections down, and never treat
+                // (workers × pool_size) as the only tenant of the connection
+                // budget.
                 self::$connections[$name] = new PooledMySQLConnection(
                     $hostStr,
                     $portInt,
@@ -89,13 +108,10 @@ class ConnectionPool
                     $poolSize,
                     $charset
                 );
-                error_log(
-                    "[DEBUG] " . date('Y-m-d H:i:s.v')
-                    . " ConnectionPool::getConnection Created PooledMySQLConnection"
-                    . " [name={$name}] [pool_size={$poolSize}]"
-                );
             } else {
-                // Default: the single PhlixMySQLConnection subclass — re-keys
+                // Opt-out fallback (DB_POOL_ENABLED=0 / pool_enabled false — the
+                // inverse of the shipping default above): the single
+                // PhlixMySQLConnection subclass — re-keys
                 // positional bind arrays (workerman/mysql v1.0.9 bindMore() bug
                 // on PHP 8.x) and serialises cross-coroutine access via its
                 // per-connection mutex. Type-compatible with the parent.
@@ -110,8 +126,6 @@ class ConnectionPool
                     $dbStr,
                     $charset
                 );
-                error_log("[DEBUG] " . date('Y-m-d H:i:s.v') .
-                    " ConnectionPool::getConnection Created PhlixMySQLConnection [name={$name}]");
             }
         }
         return self::$connections[$name];

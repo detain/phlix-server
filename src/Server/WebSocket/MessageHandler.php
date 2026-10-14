@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebSocket;
 
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+
 /**
  * Handles WebSocket message routing and event dispatching.
  *
@@ -204,14 +207,25 @@ class MessageHandler
                 // canonical error frame — the peer reached dispatch, so it is a
                 // protocol participant and gets the registered HANDLER_ERROR code
                 // (a legacy SCREAMING member of the @phlix/contracts registry).
-                // The `Handler error: ` prefix in the free-text message is kept
-                // byte-identical as defense-in-depth, not for a known consumer:
-                // current clients localize via the HANDLER_ERROR error_code and
-                // none text-matches this prefix, but the message still surfaces
-                // verbatim in server logs and in unknown-code fallback rendering.
+                // R17-03: the free-text message is a FIXED generic string. The
+                // previous `'Handler error: ' . $e->getMessage()` echo leaked
+                // internal exception detail (SQL fragments, file paths, other
+                // users' data caught mid-handler) to every authenticated peer.
+                // Clients localize via the HANDLER_ERROR error_code; none
+                // text-matched the old prefix. The real cause is recorded
+                // server-side in the websocket channel instead.
+                LoggerFactory::get(LogChannels::WEBSOCKET)->error(
+                    'SyncPlay handler threw during dispatch',
+                    [
+                        'event' => $event,
+                        'exception' => get_class($e),
+                        'message' => $e->getMessage(),
+                        'file' => $e->getFile() . ':' . $e->getLine(),
+                    ]
+                );
                 $connection->send(\Phlix\Session\SyncPlay\Messages::error(
                     'HANDLER_ERROR',
-                    'Handler error: ' . $e->getMessage()
+                    'An internal error occurred while processing this message.'
                 ));
             }
         } elseif (isset($this->callbacks['*'])) {

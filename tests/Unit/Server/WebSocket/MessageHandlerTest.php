@@ -176,4 +176,49 @@ class MessageHandlerTest extends TestCase
         $this->assertFalse($errorSent, 'Public event must not be gated');
         $this->assertTrue($dispatched, 'Public event must dispatch for an unauthenticated connection');
     }
+
+    /**
+     * R17-03: when a registered handler throws, the error frame sent to the peer
+     * carries a FIXED generic message — never the exception's own message, which
+     * can leak internal detail (SQL fragments, file paths, other users' data) to
+     * every authenticated peer. The HANDLER_ERROR code stays for client
+     * localization.
+     */
+    public function testHandlerThrowSendsGenericMessageWithoutLeakingExceptionDetail(): void
+    {
+        $pool = ConnectionPool::getInstance();
+        $pool->clear();
+        $handler = new MessageHandler($pool);
+
+        $secretDetail = 'SQLSTATE[42S02]: Base table or view not found: /var/phlix/private.db';
+        $frames = [];
+        $connection = $this->createMock(Connection::class);
+        $connection->method('isAuthenticated')->willReturn(true);
+        $connection->method('send')->willReturnCallback(
+            /** @param string|array<array-key, mixed> $frame */
+            function (string|array $frame) use (&$frames): bool {
+                $frames[] = is_array($frame) ? $frame : (array) json_decode($frame, true);
+                return true;
+            }
+        );
+
+        $handler->on(Messages::TYPE_GROUP_CREATE, function () use ($secretDetail): void {
+            throw new \RuntimeException($secretDetail);
+        });
+
+        $handler->handle($connection, (string) json_encode([
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'protocol_version' => 1,
+        ]));
+
+        $this->assertCount(1, $frames, 'Exactly the error frame must be sent');
+        $this->assertSame(Messages::TYPE_ERROR, $frames[0]['type']);
+        $this->assertSame('HANDLER_ERROR', $frames[0]['error_code']);
+        $this->assertStringNotContainsString('SQLSTATE', (string) json_encode($frames[0]));
+        $this->assertStringNotContainsString('/var/phlix', (string) json_encode($frames[0]));
+        $this->assertSame(
+            'An internal error occurred while processing this message.',
+            $frames[0]['message']
+        );
+    }
 }

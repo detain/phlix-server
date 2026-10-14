@@ -378,11 +378,18 @@ class SessionManager
      */
     public function cleanupStaleSessions(int $maxIdleSeconds = 86400): int
     {
-        $cutoff = date('Y-m-d H:i:s', time() - $maxIdleSeconds);
-
+        // R19-03: clock unification. last_activity is WRITTEN with the database
+        // clock (updateActivity() uses NOW(), and the column defaults to
+        // CURRENT_TIMESTAMP), so the idle cutoff must be computed by the
+        // database too — DATE_SUB(NOW(), INTERVAL ? SECOND). The previous
+        // date('Y-m-d H:i:s', time() - $idle) built a PHP-local-time string and
+        // compared it against DB-clock timestamps: whenever the host TZ differed
+        // from MySQL's, every session looked stale (or never stale) by the whole
+        // UTC offset — a nightly mass-logout on any TZ-mismatched host.
+        // Migration 113 adds the sessions(last_activity) index this scan needs.
         $result = $this->db->query(
-            "SELECT id FROM sessions WHERE last_activity < ?",
-            [$cutoff]
+            'SELECT id FROM sessions WHERE last_activity < DATE_SUB(NOW(), INTERVAL ? SECOND)',
+            [$maxIdleSeconds]
         );
 
         $rows = RowMap::listFromMixed($result);
@@ -390,8 +397,8 @@ class SessionManager
 
         if ($count > 0) {
             $this->db->query(
-                "DELETE FROM sessions WHERE last_activity < ?",
-                [$cutoff]
+                'DELETE FROM sessions WHERE last_activity < DATE_SUB(NOW(), INTERVAL ? SECOND)',
+                [$maxIdleSeconds]
             );
 
             $this->logger->info('Cleaned up stale sessions', ['count' => $count]);
@@ -432,10 +439,11 @@ class SessionManager
      */
     public function getOnlineUsers(): array
     {
-        $cutoff = date('Y-m-d H:i:s', time() - 300); // 5 minutes
+        // R19-03: DB-clock cutoff (see cleanupStaleSessions() for the law);
+        // the (last_activity) index from migration 113 serves this range scan.
         $result = $this->db->query(
-            "SELECT DISTINCT user_id FROM sessions WHERE last_activity > ?",
-            [$cutoff]
+            'SELECT DISTINCT user_id FROM sessions WHERE last_activity > DATE_SUB(NOW(), INTERVAL ? SECOND)',
+            [300] // 5 minutes
         );
 
         $rows = RowMap::listFromMixed($result);

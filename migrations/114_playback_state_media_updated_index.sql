@@ -1,0 +1,22 @@
+-- Migration: 114_playback_state_media_updated_index.sql
+--
+-- R19-05: composite index for the continue-watching per-item "latest row"
+-- resolution.
+--
+-- PlaybackController::getContinueWatching() dedupes playback_state to the most
+-- recent row per media item via
+-- ROW_NUMBER() OVER (PARTITION BY ps.media_item_id ORDER BY ps.updated_at DESC,
+-- ps.id DESC). The existing idx_media_item(media_item_id) locates a seed item's
+-- rows but left the ordering to a filesort; (media_item_id, updated_at) lets the
+-- window step read each partition's rows already sorted by the ordering column.
+--
+-- The single-column idx_media_item becomes a redundant prefix of this one; it
+-- is deliberately LEFT in place — dropping it in the same deploy buys little
+-- (write amplification of one extra small index) while a same-window drop adds
+-- regression surface. A future cleanup can retire it once this one is proven on
+-- production volumes.
+--
+-- Replay: the ADD INDEX raises duplicate-key (1061) on re-run, which the
+-- migration runner downgrades to a note (MigrationRunner::isAlreadyApplied).
+
+ALTER TABLE `playback_state` ADD INDEX `idx_playback_state_media_updated` (`media_item_id`, `updated_at`);

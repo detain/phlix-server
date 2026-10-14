@@ -437,34 +437,47 @@ class PlaybackController
         // the finalize path ({@see self::finalizeWatchedForUser()} / markAsWatched)
         // — deliberately NOT a `user_item_data.watched = 0` JOIN here. The rail's
         // watched/in-progress signal is `playback_state`, never `user_item_data`.
+        //
+        // R19-05 shape law: the window layer projects ONLY the narrow playback_state
+        // columns it needs, the rn=1 slice is LIMITED INSIDE the derived `ranked`
+        // stage, and the media_items / parent / series joins happen only for the
+        // <= $limit surviving rows. The old form joined every candidate row against
+        // three media_items copies (ps.* + metadata blobs materialised for the whole
+        // result set) before limiting. Collapsing to one row per media item still
+        // happens BEFORE the limit (unchanged semantics); playback_state.media_item_id
+        // is an FK with ON DELETE CASCADE, so the post-window INNER JOIN can never
+        // drop a surviving row, keeping the result set identical. The narrow
+        // (media_item_id, updated_at) index arrives with migration 114.
         $result = $this->db->query(
-            "SELECT ranked.id, ranked.session_id, ranked.media_item_id,
-                    ranked.position_ticks, ranked.duration_ticks,
-                    ranked.playback_status, ranked.updated_at,
-                    ranked.name, ranked.type, ranked.path, ranked.parent_id, ranked.created_at,
-                    ranked.metadata_json, ranked.parent_metadata_json, ranked.series_metadata_json
+            "SELECT limited.media_item_id,
+                    limited.position_ticks, limited.duration_ticks, limited.updated_at,
+                    mi.name, mi.type, mi.path, mi.parent_id, mi.created_at, mi.metadata_json,
+                    p.metadata_json AS parent_metadata_json,
+                    s.metadata_json AS series_metadata_json
              FROM (
-                 SELECT ps.*,
-                        mi.name, mi.type, mi.path, mi.parent_id, mi.created_at, mi.metadata_json,
-                        p.metadata_json AS parent_metadata_json,
-                        s.metadata_json AS series_metadata_json,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY ps.media_item_id
-                            ORDER BY ps.updated_at DESC, ps.id DESC
-                        ) AS rn
-                 FROM playback_state ps
-                 INNER JOIN sessions s_session ON ps.session_id = s_session.id
-                 INNER JOIN media_items mi ON ps.media_item_id = mi.id
-                 LEFT JOIN media_items p ON mi.parent_id = p.id
-                 LEFT JOIN media_items s ON p.parent_id = s.id
-                 WHERE s_session.user_id = ?
-                   AND ps.playback_status IN ('playing', 'paused')
-                   AND ps.position_ticks > 0
-                   AND ps.position_ticks < (ps.duration_ticks * 0.95)
-             ) ranked
-             WHERE ranked.rn = 1
-             ORDER BY ranked.updated_at DESC
-             LIMIT ?",
+                 SELECT ranked.media_item_id, ranked.position_ticks,
+                        ranked.duration_ticks, ranked.updated_at
+                 FROM (
+                     SELECT ps.media_item_id, ps.position_ticks, ps.duration_ticks, ps.updated_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY ps.media_item_id
+                                ORDER BY ps.updated_at DESC, ps.id DESC
+                            ) AS rn
+                     FROM playback_state ps
+                     INNER JOIN sessions s_session ON ps.session_id = s_session.id
+                     WHERE s_session.user_id = ?
+                       AND ps.playback_status IN ('playing', 'paused')
+                       AND ps.position_ticks > 0
+                       AND ps.position_ticks < (ps.duration_ticks * 0.95)
+                 ) ranked
+                 WHERE ranked.rn = 1
+                 ORDER BY ranked.updated_at DESC
+                 LIMIT ?
+             ) limited
+             INNER JOIN media_items mi ON limited.media_item_id = mi.id
+             LEFT JOIN media_items p ON mi.parent_id = p.id
+             LEFT JOIN media_items s ON p.parent_id = s.id
+             ORDER BY limited.updated_at DESC",
             [$userId, $limit]
         );
 

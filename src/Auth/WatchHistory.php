@@ -668,7 +668,8 @@ class WatchHistory
         ?int $durationTicks = null,
         string $status = self::STATUS_PLAYING
     ): array {
-        // Get existing entry to calculate progress.
+        // Get existing entry to calculate progress (best-effort snapshot used
+        // only to classify completion below — the WRITE itself is atomic).
         $existing = $this->getForMediaItem($profileId, $mediaItemId);
         $wasAlreadyCompleted = $existing !== null
             && ($existing['playback_status'] ?? '') === self::STATUS_COMPLETED;
@@ -678,59 +679,57 @@ class WatchHistory
             $progressPercent = round(($positionTicks / $durationTicks) * 100, 2);
         }
 
-        $completedAt = null;
         $newlyCompleted = false;
         if ($progressPercent >= self::COMPLETED_THRESHOLD) {
             $status = self::STATUS_COMPLETED;
-            $completedAt = date('Y-m-d H:i:s');
             $newlyCompleted = !$wasAlreadyCompleted;
         }
 
-        $now = date('Y-m-d H:i:s');
-
-        if ($existing) {
-            // Update existing entry
-            $this->db->query(
-                "UPDATE watch_history
-                 SET position_ticks = ?,
-                     duration_ticks = COALESCE(?, duration_ticks),
-                     playback_status = ?,
-                     progress_percent = ?,
-                     last_watched_at = ?,
-                     completed_at = COALESCE(?, completed_at)
-                 WHERE profile_id = ? AND media_item_id = ?",
-                [
-                    $positionTicks,
-                    $durationTicks,
-                    $status,
-                    $progressPercent,
-                    $now,
-                    $completedAt,
-                    $profileId,
-                    $mediaItemId,
-                ]
-            );
-        } else {
-            // Create new entry
-            $id = $this->generateUuid();
-            $this->db->query(
-                "INSERT INTO watch_history
-                 (id, profile_id, media_item_id, position_ticks, duration_ticks, playback_status,
-                  progress_percent, last_watched_at, completed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    $id,
-                    $profileId,
-                    $mediaItemId,
-                    $positionTicks,
-                    $durationTicks,
-                    $status,
-                    $progressPercent,
-                    $now,
-                    $completedAt,
-                ]
-            );
-        }
+        // R19-02: ONE atomic upsert. The previous shape was a check-then-act
+        // (pre-read, then UPDATE *or* INSERT keyed on it): two concurrent
+        // progress reports for the same (profile, item) — e.g. a reconnecting
+        // client racing the heartbeat path — could both see no row and race to
+        // INSERT, surfacing MySQL 1062 on the idx_profile_media UNIQUE key
+        // mid-playback. INSERT ... ON DUPLICATE KEY UPDATE on that same key is
+        // atomic, the estate idiom also used by
+        // PlaybackController::reportProgress().
+        //
+        // completed_at semantics are preserved exactly: when the completion
+        // threshold is crossed this call writes NOW(); otherwise it writes
+        // NULL, and COALESCE keeps the pre-existing stamp — the direct analogue
+        // of the old COALESCE(?, completed_at) UPDATE arm. The expression is a
+        // two-valued constant literal ('NOW()' / 'NULL'), never interpolated
+        // user data.
+        //
+        // Clock law: last_watched_at/completed_at are stamped with the DATABASE
+        // clock (NOW()), matching every reader in this class (CURDATE() /
+        // DATE_SUB(CURDATE(), ...)). The old PHP date('Y-m-d H:i:s') writes
+        // drifted against DB-clock reads whenever the host TZ differed from
+        // MySQL's, skewing "today's" and per-day watch-time totals.
+        $completedAtExpr = $progressPercent >= self::COMPLETED_THRESHOLD ? 'NOW()' : 'NULL';
+        $id = $this->generateUuid();
+        $this->db->query(
+            "INSERT INTO watch_history
+             (id, profile_id, media_item_id, position_ticks, duration_ticks, playback_status,
+              progress_percent, last_watched_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), {$completedAtExpr})
+             ON DUPLICATE KEY UPDATE
+                 position_ticks = VALUES(position_ticks),
+                 duration_ticks = COALESCE(VALUES(duration_ticks), duration_ticks),
+                 playback_status = VALUES(playback_status),
+                 progress_percent = VALUES(progress_percent),
+                 last_watched_at = NOW(),
+                 completed_at = COALESCE({$completedAtExpr}, completed_at)",
+            [
+                $id,
+                $profileId,
+                $mediaItemId,
+                $positionTicks,
+                $durationTicks,
+                $status,
+                $progressPercent,
+            ]
+        );
 
         $entry = $this->getForMediaItem($profileId, $mediaItemId);
         if ($entry === null) {
@@ -863,11 +862,16 @@ class WatchHistory
     public function getTodayWatchTime(string $profileId): int
     {
         $row = UserRow::firstFromMixed($this->db->query(
+            // R19-06: half-open range instead of DATE(last_watched_at) = CURDATE()
+            // — wrapping the column in DATE() disables the (profile_id,
+            // last_watched_at) index and forces a filesort-scan of the profile's
+            // whole history on every stats call. Same DB clock on both sides.
             "SELECT SUM(duration_ticks) as total
              FROM watch_history
              WHERE profile_id = ?
                AND playback_status = 'completed'
-               AND DATE(last_watched_at) = CURDATE()",
+               AND last_watched_at >= CURDATE()
+               AND last_watched_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)",
             [$profileId]
         ));
 

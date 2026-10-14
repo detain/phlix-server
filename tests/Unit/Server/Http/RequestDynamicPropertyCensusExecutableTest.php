@@ -644,13 +644,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * declared-member READS — the SyncPlayController read rails now gate on
      * the requester's identity ($request->userId in listGroups + getGroup).
      * Measured from the phpunit red, not predicted.
-     * Re-pinned 446→448 by the LiveTV parental-gate lane (2026-10-02): +2
-     * declared-member READS — LiveTvStreamController::recordingOverCap()
-     * ($request->userId, production) and the new test's anonymous-signature
-     * pin ($anonymous->userId assertNull). Measured from the phpunit red,
-     * not predicted.
-     */
-    private const EXPECTED_DECLARED_READS = 448;
+      * Re-pinned 446→448 by the LiveTV parental-gate lane (2026-10-02): +2
+      * declared-member READS — LiveTvStreamController::recordingOverCap()
+      * ($request->userId, production) and the new test's anonymous-signature
+      * pin ($anonymous->userId assertNull). Measured from the phpunit red,
+      * not predicted.
+      * Re-pinned 448→451 by the theme-live-validation lane (2026-10-14): +3
+      * declared-member READS — the three new WebPortalRouterSettingsTest
+      * fixtures each mirror their stamped body into rawBody via one
+      * `json_encode($request->body)` read. Zero src/ reads added (the fix
+      * validates in UserRepository/Router bodies that read no new Request
+      * members). Measured from the phpunit red (451), not predicted.
+      */
+     private const EXPECTED_DECLARED_READS = 451;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -780,14 +786,21 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
        * helper stamps `$request->body` (the declared Request member, same
      * S101 shape as the F7 lane's helpers above). S427 license intact.
      * Measured from the phpunit red (1040), not predicted.
-     * Re-pinned 1040→1042 by the B2 auth-lock lane (2026-10-07):
-     * +2 declared-member WRITEs — the put() helpers of
-     * AdminSettingsControllerAuthLockTest.php and
-     * AdminSettingsAuthLockB2Test.php each stamp `$request->body`
-     * (same S101 shape as the helpers above). S427 license intact.
-     * Measured from the phpunit red (1042), not predicted.
-       */
-    private const EXPECTED_DECLARED_WRITES = 1042;
+      * Re-pinned 1040→1042 by the B2 auth-lock lane (2026-10-07):
+      * +2 declared-member WRITEs — the put() helpers of
+      * AdminSettingsControllerAuthLockTest.php and
+      * AdminSettingsAuthLockB2Test.php each stamp `$request->body`
+      * (same S101 shape as the helpers above). S427 license intact.
+      * Measured from the phpunit red (1042), not predicted.
+      * Re-pinned 1042→1051 by the theme-live-validation lane (2026-10-14):
+      * +9 declared-member WRITES — the three new WebPortalRouterSettingsTest
+      * fixtures (unknown-theme 400, valid-theme 200, legacy-RMW playback pin)
+      * each stamp `$request->userId`/`->body`/`->rawBody` inline, the same
+      * declared-member shape as the five fixtures already in that file.
+      * S427 license intact. Measured from the phpunit red (1051), not
+      * predicted.
+        */
+     private const EXPECTED_DECLARED_WRITES = 1051;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

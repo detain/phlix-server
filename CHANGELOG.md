@@ -1285,6 +1285,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`PUT /api/v1/users/me/settings` theme writes now validate against LIVE theme
+  truth — the pre-S85 fossil whitelist that silently dropped EVERY theme while
+  answering 200 is retired, and `UserRepository` consults the container
+  `ThemeSourceRegistry` singleton (2026-10-14).** The theme branch inside
+  `updateSettings()` accepted only `'phlix-light'/'phlix-dark'/'phlix-amoled'/
+  'phlix-contrast'` — the id namespace from before S85's registry theming — while
+  live ids are `BuiltInThemes::IDS` (`nocturne`/`daylight`/`midnight`) ∪ the
+  plugin ids enabled into `ThemeSourceRegistry`. The intersection is EMPTY, so no
+  theme PUT ever reached `user_profiles.active_theme_id` yet the endpoint kept
+  returning 200 "Settings updated" (no test covered the branch, so CI never saw
+  it). Now: a submitted `theme` is parsed BEFORE any write (a rejected payload
+  changes zero rows) and must be a string naming a built-in or a registry-
+  registered theme; unknown/non-string values throw `InvalidArgumentException`,
+  which the router maps to the endpoint's existing flat `{error}` 400 envelope —
+  no new error codes (contract law). Wiring: `UserRepository::__construct` gains
+  `?ThemeSourceRegistry $themeSources = null`; because PHP-DI skips optional ctor
+  params during autowiring, `AuthServicesProvider` names it explicitly —
+  `constructorParameter('themeSources', get(ThemeSourceRegistry::class))` —
+  keeping the singleton law (the same instance `PluginLoader` enables into and
+  `ThemesController` lists from). The unwired fallback accepts built-ins only.
+  Read-modify-write guard: `updatePlaybackPreferences()` re-passes the
+  `getSettings()` read-back — which injects the STORED theme, possibly a legacy
+  id — so it now drops `theme` before the re-pass: a legacy stored id can never
+  400 an unrelated crossfade save, and that endpoint never touches user_profiles
+  (pinned). INTENTIONAL behavior changes: fossil ids, unknown ids, and explicit
+  `"theme": null`/non-string values now 400 where they were previously ignored
+  with a 200 — a 200 from this endpoint no longer lies about a theme write.
+  Tests: `UserRepositorySettingsTest` +9 (built-in persists; plugin theme
+  persists through a real registry fixture; upsert→theme statement-order pin;
+  fossil/unknown/non-string throw with zero-write proofs; unwired-registry
+  plugin rejection; error message lists the built-in∪plugin id set) and
+  `WebPortalRouterSettingsTest` +3 (repo rejection → 400 echoing the message;
+  valid theme → 200; legacy-stored-theme crossfade save → 200 with zero
+  `UPDATE user_profiles`). Census rotations: `RequestDynamicPropertyCensus-
+  ExecutableTest` EXPECTED_DECLARED_READS 448→451 and EXPECTED_DECLARED_WRITES
+  1042→1051 — every delta is an inline `$request->userId`/`->body`/`->rawBody`
+  stamp in the three new router fixtures; measured from the phpunit red, not
+  predicted.
 - **Thumbnails, trickplay sprites and BIF frames no longer hard-abort on ffmpeg
   ≥ 7.1 — every mjpeg/image2 output `FfmpegRunner` builds now carries
   `-strict unofficial` (the CI BtbN n6.1.3 pin retires with it).**

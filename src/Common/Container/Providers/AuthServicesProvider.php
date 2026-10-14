@@ -41,6 +41,7 @@ use Phlix\Server\Http\Controllers\ProfilesController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
 use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
+use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -253,7 +254,14 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 }
             ),
 
-            UserRepository::class => autowire(),
+            // `themeSources` is named explicitly: PHP-DI skips optional ctor
+            // params during autowiring (same law as UserProfileManager's
+            // `settings` below), which would leave theme writes blind to
+            // enabled plugin themes. It must be the container singleton — the
+            // same instance PluginLoader enables into and ThemesController
+            // lists from — never a fresh `new ThemeSourceRegistry()`.
+            UserRepository::class => autowire()
+                ->constructorParameter('themeSources', get(ThemeSourceRegistry::class)),
 
             // S46: the `user_identities` join table (migration 092) repository.
             // Autowired — it needs only a Workerman MySQL Connection, resolved

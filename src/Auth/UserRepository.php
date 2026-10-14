@@ -14,6 +14,8 @@ namespace Phlix\Auth;
 use Phlix\Auth\Dto\UserRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Theming\BuiltInThemes;
+use Phlix\Theming\ThemeSourceRegistry;
 use Workerman\MySQL\Connection;
 
 /**
@@ -36,6 +38,14 @@ class UserRepository
 {
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
+
+    /**
+     * Process theme registry (the container singleton PluginLoader enables
+     * plugin themes into and ThemesController lists from), or null when this
+     * instance was built without DI wiring — in that fallback only the
+     * host-owned {@see BuiltInThemes::IDS} are accepted as writable theme ids.
+     */
+    private ?ThemeSourceRegistry $themeSources;
 
     // NOTE: These caches were previously `private static`, which made them
     // process-wide (shared across every UserRepository instance in the same
@@ -66,15 +76,19 @@ class UserRepository
      * Create a new UserRepository instance.
      *
      * @param Connection $db Workerman MySQL connection instance
+     * @param ThemeSourceRegistry|null $themeSources Container singleton holding
+     *        the enabled plugin theme ids; null restricts theme writes to the
+     *        built-in ids ({@see BuiltInThemes::IDS}) only.
      *
      * @example
      * ```php
      * $repo = new UserRepository($dbConnection);
      * ```
      */
-    public function __construct(Connection $db)
+    public function __construct(Connection $db, ?ThemeSourceRegistry $themeSources = null)
     {
         $this->db = $db;
+        $this->themeSources = $themeSources;
     }
 
     /**
@@ -772,8 +786,15 @@ class UserRepository
      *        - subtitle_mode: Subtitle display mode
      *        - default_content_rating: Default content rating filter
      *        - transcoding_preferences: Array of transcoding options
+     *        - theme: A live theme id — {@see BuiltInThemes::IDS} or a plugin
+     *          theme registered in the wired ThemeSourceRegistry. Persisted to
+     *          user_profiles.active_theme_id, not user_settings.
      *
      * @return void
+     *
+     * @throws \InvalidArgumentException If a submitted theme value is not a
+     *         string or names no known theme. Thrown BEFORE any write, so a
+     *         rejected payload changes zero rows.
      *
      * @example
      * ```php
@@ -785,6 +806,17 @@ class UserRepository
      */
     public function updateSettings(string $userId, array $settings): void
     {
+        // Parse first, write never on bad data: a submitted theme must name a
+        // theme that exists RIGHT NOW (built-ins ∪ enabled plugin themes). The
+        // pre-S85-era fossil whitelist this replaces
+        // ('phlix-light'/'phlix-dark'/'phlix-amoled'/'phlix-contrast') had an
+        // EMPTY intersection with the live id namespace, so every theme ever
+        // PUT was silently dropped while the endpoint still answered 200.
+        // Validation runs before any query: a rejected payload changes zero rows.
+        $validatedTheme = array_key_exists('theme', $settings)
+            ? $this->validateThemeId($settings['theme'])
+            : null;
+
         // Build a parallel column list and bound-value list. We keep the column
         // names and the placeholders separate so the INSERT and the UPDATE
         // clause are both well-formed — the previous implementation reused
@@ -834,16 +866,64 @@ class UserRepository
             $this->db->query($sql, array_merge([$userId], $values));
         }
 
-        // Handle theme separately — it goes to user_profiles, not user_settings
-        if (isset($settings['theme']) && is_string($settings['theme'])) {
-            $validThemes = ['phlix-light', 'phlix-dark', 'phlix-amoled', 'phlix-contrast'];
-            if (in_array($settings['theme'], $validThemes, true)) {
-                $this->db->query(
-                    'UPDATE user_profiles SET active_theme_id = ? WHERE user_id = ? AND is_active = TRUE',
-                    [$settings['theme'], $userId]
-                );
-            }
+        // Handle theme separately — it goes to user_profiles, not user_settings.
+        // The value was validated (and thus normalized to a known id string)
+        // above, before any write.
+        if ($validatedTheme !== null) {
+            $this->db->query(
+                'UPDATE user_profiles SET active_theme_id = ? WHERE user_id = ? AND is_active = TRUE',
+                [$validatedTheme, $userId]
+            );
         }
+    }
+
+    /**
+     * Resolve a submitted theme value to a writable theme id.
+     *
+     * "Known" means: one of the host-owned {@see BuiltInThemes::IDS}, or an id
+     * currently registered in the wired process {@see ThemeSourceRegistry} —
+     * the same container singleton {@see \Phlix\Plugins\PluginLoader} enables
+     * plugin themes into and {@see \Phlix\Server\Http\Controllers\ThemesController}
+     * lists from. Anything else throws; a silent drop is not an option.
+     *
+     * @param mixed $theme Candidate value from the settings payload
+     *
+     * @return string The validated theme id
+     *
+     * @throws \InvalidArgumentException If the value is not a non-empty string
+     *         or names no currently known theme
+     */
+    private function validateThemeId(mixed $theme): string
+    {
+        if (!is_string($theme) || $theme === '') {
+            throw new \InvalidArgumentException('theme must be a known theme id string');
+        }
+
+        if (in_array($theme, BuiltInThemes::IDS, true) || $this->themeSources?->has($theme) === true) {
+            return $theme;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            'Unknown theme "%s". Valid themes: %s.',
+            $theme,
+            implode(', ', $this->knownThemeIds())
+        ));
+    }
+
+    /**
+     * The live theme id namespace for error messages: built-in ids first, then
+     * the registered plugin theme ids sorted (empty when no registry is wired).
+     *
+     * @return list<string>
+     */
+    private function knownThemeIds(): array
+    {
+        $pluginIds = $this->themeSources?->ids() ?? [];
+        sort($pluginIds);
+
+        // array_values: sort() widens list<string> to a keyed array in
+        // static analysis; the merge result is structurally re-listed.
+        return array_values(array_merge(BuiltInThemes::IDS, $pluginIds));
     }
 
     /**

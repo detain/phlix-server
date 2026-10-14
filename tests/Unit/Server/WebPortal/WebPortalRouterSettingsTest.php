@@ -15,11 +15,17 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
+use Workerman\MySQL\Connection;
 
 /**
  * Covers updateUserSettings()/extractSettingsPayload(): the payload must be
  * read from the decoded request BODY (not the query string), and only
  * whitelisted keys may reach the repository.
+ *
+ * Also pins the theme 400 mapping (repository InvalidArgumentException → flat
+ * {error} 400 envelope, no new error codes) and the read-modify-write guard on
+ * updatePlaybackPreferences() (a legacy stored theme must not 400 a crossfade
+ * save, and that endpoint must never write user_profiles).
  */
 class WebPortalRouterSettingsTest extends TestCase
 {
@@ -160,5 +166,94 @@ class WebPortalRouterSettingsTest extends TestCase
         $response = $router->updateUserSettings($request, []);
 
         $this->assertEquals(401, $response->statusCode);
+    }
+
+    public function testPutUnknownThemeReturns400WithRepositoryMessage(): void
+    {
+        // The repo validates theme against live truth and throws; the handler
+        // must map that to 400 carrying the SAME flat {error} envelope style
+        // the payload 400 already uses — silent-drop-with-200 is impossible.
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('updateSettings')
+            ->willThrowException(new \InvalidArgumentException(
+                'Unknown theme "phlix-dark". Valid themes: nocturne, daylight, midnight.'
+            ));
+
+        $router = $this->makeRouter($userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-123';
+        $request->body = ['theme' => 'phlix-dark'];
+        $request->rawBody = (string) json_encode($request->body);
+
+        $response = $router->updateUserSettings($request, []);
+
+        $this->assertEquals(400, $response->statusCode);
+        $decoded = json_decode($response->body, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame(
+            'Unknown theme "phlix-dark". Valid themes: nocturne, daylight, midnight.',
+            $decoded['error'] ?? null
+        );
+    }
+
+    public function testPutValidThemeReachesRepositoryAndReturns200(): void
+    {
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('updateSettings')
+            ->with(
+                'user-123',
+                $this->callback(static fn (array $settings): bool => ($settings['theme'] ?? null) === 'nocturne')
+            );
+
+        $router = $this->makeRouter($userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-123';
+        $request->body = ['theme' => 'nocturne'];
+        $request->rawBody = (string) json_encode($request->body);
+
+        $response = $router->updateUserSettings($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
+    }
+
+    public function testPlaybackPreferencesSaveWithLegacyStoredThemeSucceeds(): void
+    {
+        // RMW guard: getSettings() injects the STORED theme, which may be a
+        // legacy id written before validation existed ('phlix-dark'). The
+        // handler strips it before re-passing the payload — an unrelated
+        // crossfade save must not 400 over stored history, and must never
+        // write user_profiles (that would launder the legacy id into a
+        // "validated" write path).
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, array $bindings = []) use (&$captured): array {
+                $captured[] = [$sql, $bindings];
+                if (str_contains($sql, 'SELECT * FROM user_settings')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'SELECT active_theme_id FROM user_profiles')) {
+                    return [['active_theme_id' => 'phlix-dark']];
+                }
+                return [];
+            });
+
+        $router = $this->makeRouter(new UserRepository($db));
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['crossfadeDuration' => 4];
+        $request->rawBody = (string) json_encode($request->body);
+
+        $response = $router->updatePlaybackPreferences($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString('UPDATE user_profiles', $sql);
+        }
     }
 }

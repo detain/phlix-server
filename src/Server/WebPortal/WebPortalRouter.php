@@ -2896,6 +2896,14 @@ class WebPortalRouter
             $rawFadeIn ?? ($currentPrefs['crossfadeFadeIn'] ?? 0.3)
         );
 
+        // Read-modify-write guard: getSettings() injects the STORED theme,
+        // which may be a legacy id written before theme validation existed
+        // (e.g. a pre-S85 'phlix-dark'). This endpoint never changes the
+        // theme, so drop it from the re-passed payload — otherwise re-running
+        // it through updateSettings()'s live validation would turn an
+        // unrelated preferences save into a 400 over stored history.
+        unset($settings['theme']);
+
         // Persist within user_settings.playback_preferences
         $settings['playback_preferences'] = json_encode($newPrefs->toArray());
         $this->userRepository->updateSettings($userId, $settings);
@@ -3005,7 +3013,8 @@ class WebPortalRouter
      * @param Request $request The HTTP request (userId set from auth)
      * @param array<string, string> $params Route parameters (unused)
      *
-     * @return Response JSON response with success message or 401 error
+     * @return Response JSON response with success message, 400 error on a
+     *         rejected value, or 401 error
      *
      * @api_endpoint PUT /api/v1/users/me/settings
      *
@@ -3037,7 +3046,14 @@ class WebPortalRouter
             ]);
         }
 
-        $this->userRepository->updateSettings($userId, $settings);
+        try {
+            $this->userRepository->updateSettings($userId, $settings);
+        } catch (\InvalidArgumentException $e) {
+            // The repository rejected a submitted value (e.g. an unknown theme
+            // id) BEFORE writing anything — same flat {error} envelope the
+            // payload-shape 400 above uses; no new error codes (contract law).
+            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+        }
 
         return (new Response())->json(['message' => 'Settings updated']);
     }

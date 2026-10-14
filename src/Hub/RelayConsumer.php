@@ -809,6 +809,20 @@ final class RelayConsumer
             return;
         }
 
+        // R17-01: fail-closed knob. With PHLIX_RELAY_REQUIRE_TLS=1 a plaintext
+        // (non-wss://) hub dial is REFUSED, not merely warned about — the tunnel
+        // trust model honors X-Phlix-Relay-User verbatim, so ws:// exposes every
+        // relayed request to path-positioned impersonation. require_tls WINS over
+        // allow_plaintext_tunnel: an explicit ACK cannot re-open a refused dial.
+        // Default off = today's warn-only behavior (warnIfPlaintextTunnel below).
+        if ($this->refusePlaintextUnderRequireTls($wsUrl)) {
+            $this->recordConnectError(
+                'plaintext relay dial refused: require_tls is enabled (PHLIX_RELAY_REQUIRE_TLS=1)'
+            );
+            $this->scheduleReconnect();
+            return;
+        }
+
         // 38.1: log-only heads-up (once) when the resolved URL is wss:// but
         // relay TLS is not explicitly enabled — the classic silent-hang risk
         // (TLS handshake to a plaintext hub relay port never completes). This
@@ -1134,6 +1148,45 @@ final class RelayConsumer
             );
             $this->tlsMismatchWarned = true;
         }
+    }
+
+    /**
+     * Refuse (rather than merely warn about) a plaintext hub dial when the
+     * operator mandates TLS (R17-01).
+     *
+     * `PHLIX_RELAY_REQUIRE_TLS=1` / config `require_tls` turns the advisory M5
+     * warning into a hard gate: any resolved dial scheme other than wss:// is
+     * rejected before a socket is ever opened, because the tunnel trust model
+     * honors X-Phlix-Relay-User verbatim (path-positioned impersonation over
+     * ws://). require_tls WINS over allow_plaintext_tunnel — an ACK silences
+     * the warning, it cannot re-open a refused dial. Default off keeps
+     * today's warn-only behavior byte-for-byte.
+     *
+     * @param string $wsUrl Resolved hub relay WS URL.
+     *
+     * @return bool True when the dial must be refused (caller logs reason and
+     *              schedules a reconnect; this method only reports + logs).
+     */
+    private function refusePlaintextUnderRequireTls(string $wsUrl): bool
+    {
+        if (!$this->config->requireTls) {
+            return false;
+        }
+        if (parse_url($wsUrl, PHP_URL_SCHEME) === 'wss') {
+            return false;
+        }
+
+        $this->logger->error(
+            'RelayConsumer: SECURITY — refusing PLAINTEXT hub dial because require_tls is '
+            . 'enabled (PHLIX_RELAY_REQUIRE_TLS=1). The ws:// tunnel exposes every relayed '
+            . 'request to path-positioned impersonation (X-Phlix-Relay-User is honored '
+            . 'verbatim). Enable relay TLS (PHLIX_RELAY_TLS=1 here AND HUB_RELAY_TLS=true '
+            . 'on the hub, or configure a wss:// hub_relay_ws_url) — or unset '
+            . 'PHLIX_RELAY_REQUIRE_TLS to return to warn-only behavior.',
+            ['url' => $wsUrl],
+        );
+
+        return true;
     }
 
     /**

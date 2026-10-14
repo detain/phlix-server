@@ -2251,6 +2251,106 @@ class RelayConsumerTest extends TestCase
         }
     }
 
+    // ---- R17-01: PHLIX_RELAY_REQUIRE_TLS fail-closed plaintext refusal ----
+
+    public function test_require_tls_refuses_plaintext_dial_without_opening_socket(): void
+    {
+        $dir = sys_get_temp_dir() . '/phlix-relay-consumer-requiretls-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+        $dialed = 0;
+
+        try {
+            $store = new RelayStateStore($dir);
+
+            $consumer = new RelayConsumer(
+                new RelayConfig(
+                    enabled: true,
+                    hubRelayWsUrl: 'ws://hub.example.com:8802',
+                    requireTls: true,
+                ),
+                $this->createMockHubClient(),
+                new StructuredLogger('relay', []),
+                'server-uuid-123',
+                hubConnectionFactory: static function (string $url) use (&$dialed): AsyncTcpConnection {
+                    $dialed++;
+                    return new FakeRelayConnection($url);
+                },
+                localConnectionFactory: static fn (string $url): AsyncTcpConnection
+                    => new FakeRelayConnection($url),
+                httpDispatcher: null,
+                stateStore: $store,
+            );
+
+            $consumer->start();
+
+            $this->assertSame(0, $dialed, 'require_tls must refuse BEFORE any hub socket is opened');
+            $state = $store->readRelayState();
+            $this->assertFalse($state['connected']);
+            $this->assertIsString($state['lastConnectError']);
+            $this->assertStringContainsString('require_tls', $state['lastConnectError']);
+
+            $consumer->stop();
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
+    public function test_require_tls_wins_over_plaintext_ack(): void
+    {
+        // An explicit allow_plaintext_tunnel ACK silences the M5 warning — it
+        // must NOT be able to re-open a dial the hard gate refused.
+        $refuse = new \ReflectionMethod(RelayConsumer::class, 'refusePlaintextUnderRequireTls');
+        $refuse->setAccessible(true);
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                allowPlaintextTunnel: true,
+                requireTls: true,
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+        );
+
+        $this->assertTrue(
+            $refuse->invoke($consumer, 'ws://hub.example.com:8802'),
+            'require_tls must win over allow_plaintext_tunnel',
+        );
+    }
+
+    public function test_require_tls_lets_wss_dial_and_stays_silent_when_off(): void
+    {
+        $refuse = new \ReflectionMethod(RelayConsumer::class, 'refusePlaintextUnderRequireTls');
+        $refuse->setAccessible(true);
+
+        $mandated = new RelayConsumer(
+            new RelayConfig(enabled: true, hubRelayWsUrl: 'wss://hub.example.com:8802', requireTls: true),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+        );
+        $this->assertFalse(
+            $refuse->invoke($mandated, 'wss://hub.example.com:8802'),
+            'a wss:// dial must pass the gate untouched',
+        );
+
+        $off = new RelayConsumer(
+            new RelayConfig(enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+        );
+        $this->assertFalse(
+            $refuse->invoke($off, 'ws://hub.example.com:8802'),
+            'knob off = today\'s warn-only behavior preserved byte-for-byte',
+        );
+    }
+
     public function test_relay_fork_persists_connect_throw_reason(): void
     {
         $dir = sys_get_temp_dir() . '/phlix-relay-consumer-connthrow-' . bin2hex(random_bytes(6));

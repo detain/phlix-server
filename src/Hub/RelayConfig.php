@@ -81,6 +81,17 @@ final class RelayConfig
      *                                      Does NOT change connectivity defaults — the
      *                                      derived scheme stays ws:// while relayTls is
      *                                      off either way.
+     * @param bool   $requireTls            Fail-closed TLS mandate (R17-01). When true,
+     *                                      RelayConsumer REFUSES any hub dial whose
+     *                                      resolved scheme is not wss:// — the plaintext
+     *                                      tunnel trust model honors X-Phlix-Relay-User
+     *                                      verbatim, so ws:// exposes every relayed
+     *                                      request to path-positioned impersonation and
+     *                                      the advisory M5 warning is not enough for
+     *                                      hardened deployments (PHLIX_RELAY_REQUIRE_TLS=1).
+     *                                      This flag WINS over $allowPlaintextTunnel:
+     *                                      an ACK cannot re-open a refused dial.
+     *                                      Default false = today's warn-only behavior.
      */
     public function __construct(
         public readonly bool $enabled = false,
@@ -98,6 +109,7 @@ final class RelayConfig
         public readonly bool $relayTlsVerify = true,
         public readonly string $relayTlsCafile = self::DEFAULT_TLS_CAFILE,
         public readonly bool $allowPlaintextTunnel = false,
+        public readonly bool $requireTls = false,
     ) {
     }
 
@@ -133,6 +145,9 @@ final class RelayConfig
         // Opt-in ACK of the plaintext-tunnel impersonation risk (M5). Silence
         // the connect-time warning ONLY when the operator explicitly sets it.
         $allowPlaintextTunnel = self::getEnvBool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
+        // Fail-closed plaintext refusal (R17-01). Off by default = warn-only M5
+        // behavior; when on, RelayConsumer refuses non-wss:// dials outright.
+        $requireTls = self::getEnvBool('PHLIX_RELAY_REQUIRE_TLS', false);
 
         if ($overrides !== null) {
             $enabled = is_bool($overrides['enabled'] ?? null)
@@ -165,6 +180,8 @@ final class RelayConfig
                 ? $overrides['relay_tls_cafile'] : $relayTlsCafile;
             $allowPlaintextTunnel = is_bool($overrides['allow_plaintext_tunnel'] ?? null)
                 ? $overrides['allow_plaintext_tunnel'] : $allowPlaintextTunnel;
+            $requireTls = is_bool($overrides['require_tls'] ?? null)
+                ? $overrides['require_tls'] : $requireTls;
         }
 
         return new self(
@@ -183,6 +200,7 @@ final class RelayConfig
             relayTlsVerify: $relayTlsVerify,
             relayTlsCafile: $relayTlsCafile,
             allowPlaintextTunnel: $allowPlaintextTunnel,
+            requireTls: $requireTls,
         );
     }
 
@@ -242,6 +260,7 @@ final class RelayConfig
             relayTlsVerify: $this->relayTlsVerify,
             relayTlsCafile: $this->relayTlsCafile,
             allowPlaintextTunnel: $this->allowPlaintextTunnel,
+            requireTls: $this->requireTls,
         );
     }
 

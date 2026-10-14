@@ -31,6 +31,7 @@ final class RelayConfigTest extends TestCase
             'PHLIX_RELAY_HUB_URL',
             'PHLIX_RELAY_HUB_WS_URL',
             'PHLIX_RELAY_ALLOW_PLAINTEXT',
+            'PHLIX_RELAY_REQUIRE_TLS',
             ] as $key
         ) {
             $this->savedEnv[$key] = getenv($key);
@@ -201,6 +202,42 @@ final class RelayConfigTest extends TestCase
         $enabled = (new RelayConfig(allowPlaintextTunnel: true))->withAutoEnable('https://hub.example.com');
 
         $this->assertTrue($enabled->allowPlaintextTunnel);
+        $this->assertSame('ws://hub.example.com:8802', $enabled->buildHubRelayWsUrl());
+    }
+
+    // ---- R17-01: fail-closed require-TLS knob ----
+
+    public function test_require_tls_defaults_false(): void
+    {
+        $this->assertFalse(
+            (new RelayConfig())->requireTls,
+            'default must stay today\'s warn-only behavior — require_tls is opt-IN to the hard gate',
+        );
+    }
+
+    public function test_from_env_reads_require_tls(): void
+    {
+        putenv('PHLIX_RELAY_REQUIRE_TLS=1');
+
+        $this->assertTrue(RelayConfig::fromEnv()->requireTls);
+    }
+
+    public function test_from_env_require_tls_override_wins(): void
+    {
+        putenv('PHLIX_RELAY_REQUIRE_TLS=1');
+
+        $config = RelayConfig::fromEnv(['require_tls' => false]);
+
+        $this->assertFalse($config->requireTls, 'array override must win over env');
+    }
+
+    public function test_with_auto_enable_carries_require_tls_forward(): void
+    {
+        $enabled = (new RelayConfig(requireTls: true))->withAutoEnable('https://hub.example.com');
+
+        $this->assertTrue($enabled->requireTls);
+        // Auto-derived plaintext URL must survive the copy untouched — the
+        // refusal happens later at dial time, never by silently rewriting it.
         $this->assertSame('ws://hub.example.com:8802', $enabled->buildHubRelayWsUrl());
     }
 }

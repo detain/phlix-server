@@ -147,9 +147,20 @@ class SyncPlayAuthMiddleware
      * - Missing/empty token: rejected (returns false) when auth is required
      *   ({@see $requireAuth} — i.e. a JWT secret is configured); allowed anonymous
      *   (returns true) when auth is not required (dev, no secret).
-     * - Invalid/expired token, or a token without a string `sub`: rejected.
-     * - Valid token: marks the connection authenticated with the derived user id
-     *   and returns true.
+          * - Invalid/expired token, or a token without a string `sub`: rejected.
+     * - Valid token whose `type` claim is not `access` (e.g. the 7-day refresh
+     *   token, which is otherwise signing-valid): rejected (R17-02).
+     * - Valid access token: marks the connection authenticated with the derived
+     *   user id and returns true.
+     *
+     * Account-liveness (deferred, honest note): this middleware holds only the
+     * HS256 secret — no UserRepository/DB handle is injected at the :8097 fork,
+     * and minting one here would couple the auth gate to pool state it does not
+     * own. A token for a user deactivated AFTER issuance therefore still
+     * authenticates the handshake until the token's own expiry (≤1h access TTL);
+     * per-message authorization rails that DO carry repository access remain
+     * the enforcement point. A cheap liveness probe (e.g. a user-version cache
+     * bumped on deactivate) is the follow-up if the 1h window is ever tightened.
      *
      * Unlike {@see onConnect()} this does NOT read `$_GET` (empty/stale at the
      * TCP-accept stage under Workerman) and does NOT stash the user id in a
@@ -186,6 +197,17 @@ class SyncPlayAuthMiddleware
                 $this->logger?->warning('WS connection rejected: invalid token', [
                     'remote_ip' => $remoteIp,
                     'reason' => 'Token validation failed',
+                ]);
+                return false;
+            }
+
+            // R17-02: only ACCESS tokens may authenticate a WebSocket. The
+            // refresh token is a signing-valid, unexpired credential too —
+            // validateToken() alone would let a stolen long-lived refresh token
+            // (7d TTL vs the access token's 1h) open a live SyncPlay session.
+            if (($payload['type'] ?? null) !== 'access') {
+                $this->logger?->warning('WS connection rejected: token type is not access', [
+                    'remote_ip' => $remoteIp,
                 ]);
                 return false;
             }
@@ -270,6 +292,16 @@ class SyncPlayAuthMiddleware
                 return;
             }
 
+            // R17-02: access-only law — see authenticateConnection() for the
+            // full rationale; this legacy rail carries the same guard.
+            if (($payload['type'] ?? null) !== 'access') {
+                $this->logger?->warning('SyncPlay connection rejected: token type is not access', [
+                    'remote_ip' => $connection->getRemoteIp(),
+                ]);
+                $this->closeConnection($connection, self::CLOSE_CODE_INVALID_TOKEN, 'Invalid token: not an access token');
+                return;
+            }
+
             // Extract userId from token payload
             $sub = $payload['sub'] ?? null;
             if (!is_string($sub) || $sub === '') {
@@ -336,6 +368,13 @@ class SyncPlayAuthMiddleware
         $payload = $handler->validateToken($token);
 
         if ($payload === null) {
+            return null;
+        }
+
+        // R17-02: access-only law, mirrored on this public rail so a caller
+        // cannot get a "valid" verdict for a refresh token here while the
+        // handshake paths reject it.
+        if (($payload['type'] ?? null) !== 'access') {
             return null;
         }
 

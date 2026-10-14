@@ -89,10 +89,18 @@ RUN composer dump-autoload --no-dev --optimize \
 # tests/Unit/Docker/DockerEntrypointTest.php asserts this pair.
 COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 
+# Migrations posture (R14-12): images default to STRICT — the entrypoint
+# refuses to start when a migration fails or cannot run (banners
+# PHLIX-MIGRATION-FAILURE / PHLIX-MIGRATIONS-NOT-RUN, exit = migration code),
+# so a half-migrated schema never serves traffic silently. Dev opt-out:
+# -e PHLIX_MIGRATIONS_STRICT=0 restores boot-anyway-with-banner.
+ENV PHLIX_MIGRATIONS_STRICT=1
+
 # The ports the DAEMON actually binds (start.php): 8096 = HTTP (REST + SPA +
-# static + per-request WS upgrade, the port HAProxy fronts in production),
-# 8097 = the SyncPlay WebSocket worker. The previous `EXPOSE 80 443` described
-# the nginx that is now gone; nothing has ever listened on 443.
+# static + /health; ZERO WebSocket-upgrade logic), 8097 = the SyncPlay
+# WebSocket worker, a SEPARATE plaintext listener — not a path on 8096.
+# The previous `EXPOSE 80 443` described the nginx that is now gone; nothing
+# has ever listened on 443.
 EXPOSE 8096 8097
 
 # Without this, a container in which the application never started reported

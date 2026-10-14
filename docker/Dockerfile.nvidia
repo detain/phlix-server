@@ -103,8 +103,15 @@ RUN composer install --no-dev --optimize-autoloader \
 # finding 4). Asserted by tests/Unit/Docker/DockerEntrypointTest.php.
 COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 
+# Migrations posture (R14-12): images default to STRICT — the entrypoint
+# refuses to start when a migration fails or cannot run (banners
+# PHLIX-MIGRATION-FAILURE / PHLIX-MIGRATIONS-NOT-RUN, exit = migration code).
+# Dev opt-out: -e PHLIX_MIGRATIONS_STRICT=0 restores boot-anyway-with-banner.
+ENV PHLIX_MIGRATIONS_STRICT=1
+
 # The ports start.php actually binds. `EXPOSE 80 443` described the deleted
-# nginx; nothing has ever listened on 443.
+# nginx; nothing has ever listened on 443. 8097 is the SyncPlay WS worker —
+# a SEPARATE plaintext listener, not a path on 8096.
 EXPOSE 8096 8097
 
 # start-period must be long enough that a first boot's migration chain does

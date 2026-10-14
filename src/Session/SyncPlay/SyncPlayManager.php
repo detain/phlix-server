@@ -17,6 +17,7 @@ use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionInterface;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
+use Phlix\Server\WebSocket\SyncPlay\JoinPasswordThrottle;
 
 /**
  * SyncPlayManager - Main manager for SyncPlay group watching functionality
@@ -130,6 +131,14 @@ class SyncPlayManager
      */
     private array $bridgeStamps = [];
 
+    /**
+     * R17-04: sliding-window ceiling on FAILED group-join password attempts
+     * per connection. When a connection trips it, the socket is reject-closed
+     * (same inline-close discipline as the WS_CONNECT handshake limiter).
+     * Process-local by design: the `:8097` worker is count=1.
+     */
+    private JoinPasswordThrottle $joinPasswordThrottle;
+
     public function __construct(
         ?StructuredLogger $logger = null,
         int $positionTolerance = self::DEFAULT_POSITION_TOLERANCE,
@@ -139,6 +148,7 @@ class SyncPlayManager
         $this->positionTolerance = $positionTolerance;
         $this->adminUsers = $adminUsers;
         $this->timeSync = new TimeSync();
+        $this->joinPasswordThrottle = new JoinPasswordThrottle();
     }
 
     /**
@@ -964,6 +974,12 @@ class SyncPlayManager
      */
     public function onConnectionClose(string $connectionId): void
     {
+        // R17-04: drop the join-failure window for this socket. Runs BEFORE
+        // the mapping guard on purpose — a brute-forcer that never joined a
+        // group still has a throttle entry to expire, and clearing it here is
+        // what keeps the map bounded across connection churn.
+        $this->joinPasswordThrottle->reset($connectionId);
+
         $memberId = $this->connectionToMember[$connectionId] ?? null;
         if ($memberId === null) {
             return;
@@ -1831,16 +1847,34 @@ class SyncPlayManager
         );
 
         if ($result['success'] === true) {
+            // R17-04: an admitted join clears the connection's failed-attempt
+            // window — honest re-joins (re-click, reconnect) stay free.
+            $this->joinPasswordThrottle->reset($connection->getId());
             $connection->send(Messages::frame(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
             ]));
         } else {
+            // R17-04: a wrong password on this socket counts against the
+            // per-connection sliding window (~10/min). On a trip the peer is
+            // told why, then reject-closed — the same inline-close discipline
+            // the WS_CONNECT handshake limiter uses; brute-forcing digests
+            // over a held socket is not a supported interaction. onClose (via
+            // close) vacates membership as usual; the throttle entry is
+            // dropped in onConnectionClose().
+            $errorCode = $result['error_code'] ?? 'syncplay.join_failed';
+            if ($errorCode === 'syncplay.invalid_password'
+                && $this->joinPasswordThrottle->recordFailure($connection->getId(), time())
+            ) {
+                $this->sendError($connection, 'syncplay.join_failed', 'Too many incorrect password attempts; closing connection');
+                $connection->close();
+                return;
+            }
             // W2 (error-code doctrine): promote the specific registered twin when the
             // failure carries one; the coarse syncplay.join_failed wrap stays the
             // fallback. Twin flip: the legacy SCREAMING 'JOIN_FAILED' alias is no
             // longer emitted — old clients map both shapes to one key.
-            $this->sendError($connection, $result['error_code'] ?? 'syncplay.join_failed', $result['error']);
+            $this->sendError($connection, $errorCode, $result['error']);
         }
     }
 

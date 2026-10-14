@@ -675,7 +675,17 @@ class Application
                                 $paramsArr['allowUnrated'] = $ratingFilter['allowUnrated'];
                             }
                         } catch (\Throwable) {
-                            // Gate unavailable → leave params uncapped (permissive).
+                            // R18-01: the S235 docblock above promises a deny-all
+                            // cap for unidentified requests — a broken gate must
+                            // not hand back what a missing identity never gets.
+                            // Degrade to RatingGate::denyAll() (the same array
+                            // resolveFilterForUser() answers with), never to
+                            // uncapped: storage layout of the parental filter is
+                            // a safety property, not an optimization. denyAll()
+                            // is static, so it resolves without the container.
+                            $denyAll = \Phlix\Media\Library\RatingGate::denyAll();
+                            $paramsArr['allowedRatings'] = $denyAll['allowedRatings'];
+                            $paramsArr['allowUnrated'] = $denyAll['allowUnrated'];
                         }
 
                         $rawBuckets = $itemRepository->valueBuckets($field, $paramsArr, $libraryId);

@@ -141,13 +141,13 @@ final class ErrorCodesContractTest extends TestCase
         ['file' => 'Server/Http/Response.php', 'expr' => '$code', 'channel' => 'rest', 'reason' => 'Response::error() builder body; literals guarded at call sites'],
         ['file' => 'Session/SyncPlay/Messages.php', 'expr' => '$code', 'channel' => 'ws', 'reason' => 'Messages::error() factory body; literals guarded at call sites'],
         ['file' => 'Session/SyncPlay/SyncPlayManager.php', 'expr' => 'error($code)', 'channel' => 'ws', 'reason' => 'sendError() body forwarding into Messages::error; literals guarded at call sites'],
+        ['file' => 'Session/SyncPlay/SyncPlayManager.php', 'expr' => 'sendError($errorCode)', 'channel' => 'ws', 'reason' => 'R17-04 join-error forward: $errorCode is the join service\'s own error_code (registry ws literals) with a syncplay.join_failed default — guarded at the assignment site'],
         // Hub binary ERROR-frame DECODE (inbound protocol parsing, not an emit).
         ['file' => 'Server/WebSocket/SyncPlay/Protocol.php', 'expr' => '$errorCode', 'channel' => 'ws', 'reason' => 'hub binary ERROR-frame decode, not server-emitted'],
         // Auth dynamic exception code — see DYNAMIC_CODE_CHANNELS.
         ['file' => 'Server/Http/Controllers/AuthController.php', 'expr' => '$e->errorCode', 'channel' => 'rest', 'reason' => 'exception-carried code; bridged via DYNAMIC_CODE_CHANNELS'],
         // Logger contexts on Workerman socket errors (int errno, own vocabulary).
         ['file' => 'Server/WebSocket/WebSocketServer.php', 'expr' => '$code', 'channel' => 'rest', 'reason' => 'Workerman socket-error int into logger context'],
-        ['file' => 'Server/WebSocket/Workers/SyncPlayWorker.php', 'expr' => '$code', 'channel' => 'rest', 'reason' => 'Workerman socket-error int into logger context'],
     ];
 
     /**

@@ -164,7 +164,7 @@ class WebSocketServer
             // only bind the connection-lifecycle callbacks onto the real listener.
             $this->worker = $worker;
         } else {
-            // Standalone path (tests / SyncPlayWorker / run()): own the worker
+            // Standalone path (tests / run()): own the worker
             // fully, including its onWorkerStart lifecycle.
             $host = $config['host'] ?? '0.0.0.0';
             $port = $config['port'] ?? 8097;

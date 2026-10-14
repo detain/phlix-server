@@ -601,8 +601,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Integration/Database/DbRemediationRealDbTest.php (real-MySQL
      * proof of the index/collation migrations and the rewritten query
      * paths). Measured from the phpunit red (1983), not predicted.
+     * Re-pinned 1983→1986 by the SRV-HTTP remediation lane (2026-10-14):
+     * net +3 — +4 (src/Server/WebSocket/SyncPlay/JoinPasswordThrottle.php,
+     * tests/Unit/Server/WebSocket/WebSocketServerReapTeardownTest.php,
+     * tests/Unit/Server/WebSocket/WsAccessTokenTypeTest.php,
+     * tests/Unit/Server/WebSocket/SyncPlay/JoinPasswordThrottleTest.php) and
+     * −1 (src/Server/WebSocket/Workers/SyncPlayWorker.php — the unbound,
+     * handshake-auth-less standalone bootstrap retired by R17-05; zero live
+     * refs: only a stale comment and an ErrorCodesContractTest whitelist row,
+     * both removed in the same commit). Measured from the phpunit red (1986),
+     * not predicted. Later SRV-HTTP commits rotate this again from their own
+     * measured reds.
      */
-    private const EXPECTED_PHP_FILES = 1983;
+    private const EXPECTED_PHP_FILES = 1986;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -1,14 +1,36 @@
+# Traefik static configuration for the Phlix full-stack example.
+#
+# R7-12: the dashboard used to ship `dashboard: true` + `insecure: true`.
+# That combo exposes Traefik's FULL control plane (read + write: routes,
+# middlewares, metrics) unauthenticated on the internal :8080 API endpoint —
+# anything that can reach it can reroute your traffic. It stays OFF here.
+# To browse the dashboard, re-enable BOTH keys and bind the api to an
+# internal entrypoint fronted by auth + TLS, e.g.:
+#   api:
+#     dashboard: true
+#   entryPoints:
+#     traefik:
+#       address: ":8888"
+#   # then attach an auth middleware + TLS router for the dashboard service
+#   # (api.insecure would skip TLS/auth — do not reintroduce it on a host).
 api:
-  dashboard: true
-  insecure: true
+  dashboard: false
 
 entryPoints:
   web:
     address: ":80"
   websecure:
     address: ":443"
+    # Routers below set tls.certresolver=letsencrypt, so ACME certs are the
+    # story. A TLS router WITHOUT a certresolver falls back to Traefik's
+    # auto-generated SELF-SIGNED certificate — browsers and TV apps reject
+    # it; only use that posture for throwaway testing.
   relay:
-    address: ":3473"
+    # Hub relay WebSocket worker (plaintext wss entry for servers dialing
+    # hub.example.com:8802). The hub's relay listener is FIXED on :8802 —
+    # there is no relay-port env; the old ':3473' here matched nothing and
+    # no container published it, so the mapping was dead on both ends.
+    address: ":8802"
 
 providers:
   docker:

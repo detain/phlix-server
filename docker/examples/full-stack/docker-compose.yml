@@ -1,3 +1,29 @@
+# Full-stack example: Traefik TLS edge + phlix-hub + phlix-server + MySQL each.
+#
+# Ports the daemons ACTUALLY bind (disk-verified against both repos):
+#   phlix-server: :8096 HTTP (ZERO WS-upgrade logic), :8097 SyncPlay WS
+#                 (SEPARATE plaintext listener; plain GET -> 400 = alive).
+#   phlix-hub:    :8800 HTTP (HUB_PORT), :8802 relay WS worker (FIXED port —
+#                 there is no HUB_RELAY_PORT/HUB_RELAY_ENABLED env; relay TLS
+#                 is HUB_RELAY_TLS/HUB_RELAY_TLS_CERT/HUB_RELAY_TLS_KEY).
+#
+# Hub env names: the hub reads HUB_DB_* + HUB_JWT_SECRET — the pristine
+# version of this example set HUB_DATABASE_*/HUB_SECRET_KEY/JWT_SECRET, names
+# NO phlix-hub code reads. HUB_SECRET_KEY below is only the .env carrier name.
+#
+# Publish policy (R7-05): 80/443 are the TLS edge BY DESIGN in this example
+# and stay public; the relay entrypoint (host :8802) is public on purpose too
+# — geographically remote phlix-servers must dial the hub relay. MySQL stays
+# unpublished. The server's :8097 SyncPlay WS is deliberately NOT routed
+# here: see the comment in the phlix-server block.
+#
+# Secrets policy (R7-04): every DB password resolves through ${VAR:?…};
+# docker/examples/.env.example self-gates likewise; the server entrypoint
+# also refuses change_me* placeholders at boot.
+#
+# Migrations (R14-12): PHLIX_MIGRATIONS_STRICT=1 / HUB_MIGRATIONS_STRICT=1 —
+# refuse to boot on a failed migration. Dev opt-out: set to `0`.
+
 version: '3.8'
 
 services:
@@ -5,9 +31,14 @@ services:
     image: traefik:v3.0
     container_name: traefik
     ports:
+      # TLS edge by design — public on purpose (ACME http-challenge + HTTPS).
       - "80:80"
       - "443:443"
-      - "3473:3473"
+      # Relay TCP entrypoint (traefik.yml entryPoints.relay). Remote
+      # phlix-servers dial hub.example.com:8802, so this mapping is public on
+      # purpose. The pristine version mapped 3473:3473 — a port nothing in
+      # the stack listens on.
+      - "8802:8802"
     environment:
       - TZ=UTC
     volumes:
@@ -26,19 +57,32 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.phlix-hub.rule=Host(`hub.example.com`)"
       - "traefik.http.routers.phlix-hub.tls=true"
-      - "traefik.http.services.phlix-hub.loadbalancer.server.port=443"
-      - "traefik.tcp.routers.phlix-relay.rule=Host(`hub.example.com`)"
-      - "traefik.tcp.routers.phlix-relay.entrypoints=relay"
-      - "traefik.tcp.services.phlix-relay.loadbalancer.server.port=3473"
+      - "traefik.http.routers.phlix-hub.tls.certresolver=letsencrypt"
+      # Hub HTTP is :8800 (was 443 — the hub terminates no TLS).
+      - "traefik.http.services.phlix-hub.loadbalancer.server.port=8800"
+      # The relay TCP router lives in traefik/dynamic.yml (file provider) as
+      # the single source of truth; the pristine file defined it BOTH here and
+      # there, which yields two same-named routers on the relay entrypoint.
     environment:
-      - HUB_DATABASE_HOST=mysql-hub
-      - HUB_DATABASE_PORT=3306
-      - HUB_DATABASE_NAME=phlix_hub
-      - HUB_DATABASE_USER=phlix_hub
-      - HUB_DATABASE_PASSWORD=${HUB_DB_PASSWORD}
-      - HUB_SECRET_KEY=${HUB_SECRET_KEY}
-      - HUB_RELAY_ENABLED=true
-      - HUB_RELAY_PORT=3473
+      - HUB_DB_HOST=mysql-hub
+      - HUB_DB_PORT=3306
+      - HUB_DB_NAME=phlix_hub
+      - HUB_DB_USER=phlix_hub
+      - HUB_DB_PASSWORD=${HUB_DB_PASSWORD:?HUB_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+      # Hub's ONLY real secret env; HUB_SECRET_KEY is the .env carrier name.
+      # Unset triggers auto-generate persisted under /var/phlix/config — NOT
+      # covered by this example's hub volumes — so set it explicitly.
+      - HUB_JWT_SECRET=${HUB_SECRET_KEY:-}
+      # Must match the router Host() rule so relay/enrollment URLs advertise
+      # the right origin.
+      - HUB_BASE_URL=https://hub.example.com
+      # Relay listener TLS (end-to-end wss through the passthrough router):
+      # mount a cert/key and uncomment. Without these the relay is plaintext
+      # between Traefik's TCP passthrough and hub:8802.
+      # - HUB_RELAY_TLS=true
+      # - HUB_RELAY_TLS_CERT=/var/phlix-hub/config/relay.crt
+      # - HUB_RELAY_TLS_KEY=/var/phlix-hub/config/relay.key
+      - HUB_MIGRATIONS_STRICT=1
     volumes:
       - hub_config:/var/phlix-hub/config
       - hub_logs:/var/phlix-hub/logs
@@ -62,18 +106,29 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.phlix-server.rule=Host(`server.example.com`)"
       - "traefik.http.routers.phlix-server.tls=true"
-      # S163: the container runs the Workerman daemon directly (no nginx, no
-      # php-fpm), so Traefik must target 8096 — the port start.php binds.
+      - "traefik.http.routers.phlix-server.tls.certresolver=letsencrypt"
+      # The container runs the Workerman daemon directly (no nginx, no
+      # php-fpm), so Traefik targets 8096 — the port start.php binds.
       - "traefik.http.services.phlix-server.loadbalancer.server.port=8096"
+      # SyncPlay's :8097 WS worker is NOT routed here on purpose: it is a
+      # separate plaintext listener that HTTP path routing cannot reach
+      # (Traefik targeting 8096 will never answer an Upgrade — the pristine
+      # 'wss via 8096' story was fiction). To serve SyncPlay through this
+      # edge, mirror the relay pattern from traefik/dynamic.yml: a tcp router
+      # on a public entrypoint forwarding to phlix-server:8097, or publish
+      # the port and accept trusted-LAN plaintext. A same-origin wss path is
+      # being designed alongside the @phlix/ui wsUrl seam (sibling lane);
+      # until it lands, do not add an HTTP path router for it against :8096.
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306
       - PHLIX_DATABASE_NAME=phlix
       - PHLIX_DATABASE_USER=phlix
-      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD}
+      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
       - PHLIX_HUB_URL=https://hub.example.com
       - PHLIX_LOG_LEVEL=info
+      - PHLIX_MIGRATIONS_STRICT=1
     volumes:
       - phlix_config:/var/phlix/config
       - phlix_data:/var/phlix/data
@@ -91,10 +146,12 @@ services:
     image: mysql:8.0
     container_name: phlix-hub-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       MYSQL_DATABASE: phlix_hub
       MYSQL_USER: phlix_hub
-      MYSQL_PASSWORD: ${HUB_DB_PASSWORD}
+      MYSQL_PASSWORD: ${HUB_DB_PASSWORD:?HUB_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    # Explicitly unpublished: MySQL is reached only over phlix_network.
+    ports: []
     volumes:
       - mysql_hub_data:/var/lib/mysql
     healthcheck:
@@ -110,10 +167,11 @@ services:
     image: mysql:8.0
     container_name: phlix-server-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       MYSQL_DATABASE: phlix
       MYSQL_USER: phlix
-      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD}
+      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    ports: []
     volumes:
       - mysql_server_data:/var/lib/mysql
     healthcheck:

@@ -1,12 +1,26 @@
+# TCP routing for the hub relay (single source of truth — the compose file
+# deliberately carries NO phlix-relay labels so this router is not defined
+# twice under the same name).
+#
+# The hub relay is a WebSocket worker listening on :8802 inside the docker
+# network; phlix-server dials it as ws(s)://hub.example.com:8802.
 tcp:
   routers:
     phlix-relay:
       rule: "HostSNI(`*`)"
       service: phlix-relay-service
+      # NOTE on `passthrough: true` below: it forwards the raw TLS stream to
+      # the hub WITHOUT terminating it — end-to-end wss works ONLY when the
+      # hub itself speaks TLS via HUB_RELAY_TLS=true + HUB_RELAY_TLS_CERT +
+      # HUB_RELAY_TLS_KEY (mount the cert material into the hub container).
+      # For the plaintext-hub default in this example, either replace
+      # `passthrough: true` with `tls: {}` (Traefik terminates TLS at the
+      # edge, docker-network hop stays plaintext) or accept that wss://
+      # clients fail. See docker/examples/README.md.
       passthrough: true
 
   services:
     phlix-relay-service:
       loadBalancer:
         servers:
-          - address: "phlix-hub:3473"
+          - address: "phlix-hub:8802"

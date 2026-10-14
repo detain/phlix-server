@@ -57,9 +57,9 @@ use function DI\factory;
  * The loader is _registered_ here but NOT auto-enabled — calling
  * {@see PluginLoader::bootstrapEnabled()} is the operator's choice
  * because some bootstrap paths (CLI migrations, unit tests) don't want
- * plugins to come up. The server bootstrap in
- * `src/Server/Core/Application.php` (future commit) is the canonical
- * call site.
+ * plugins to come up. The daemon entry point `start.php` is the
+ * canonical call site: the HTTP worker and the managed workers each
+ * call it during their own startup (non-fatally) before serving.
  *
  * @internal Phlix-internal service provider.
  *

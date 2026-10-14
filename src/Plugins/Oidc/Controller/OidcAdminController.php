@@ -281,7 +281,7 @@ final class OidcAdminController
         if ($redirectUri !== '' && !CallbackUrl::isAbsolute($redirectUri)) {
             return (new Response())->status(400)->json([
                 'error' => 'invalid_redirect_uri',
-                'message' => 'redirect_uri must be an absolute http(s) URL, '
+                'message' => 'The redirect URI must be an absolute http(s) URL, '
                     . 'e.g. https://phlix.example/auth/oidc/callback',
             ]);
         }

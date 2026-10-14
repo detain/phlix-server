@@ -119,7 +119,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'PID file not found',
-                    'message' => 'Server may not be running, or pid_file is misconfigured.',
+                    'message' => 'The server may not be running, or the PID file setting is misconfigured.',
                 ]);
             }
 
@@ -128,7 +128,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Failed to read PID file',
-                    'message' => 'Server may not be running, or pid_file is misconfigured.',
+                    'message' => 'The server may not be running, or the PID file is unreadable.',
                 ]);
             }
 
@@ -137,7 +137,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Invalid PID in file',
-                    'message' => 'The pid_file contains an invalid value.',
+                    'message' => 'The PID file contains an invalid value.',
                 ]);
             }
 

@@ -287,7 +287,7 @@ final class OidcCallbackController
         if (!$provider instanceof OidcProvider) {
             return (new Response())->status(503)->json([
                 'error' => 'invalid_provider_type',
-                'message' => 'OIDC provider is not an OidcProvider instance',
+                'message' => 'The configured provider is not an OIDC provider.',
             ]);
         }
 

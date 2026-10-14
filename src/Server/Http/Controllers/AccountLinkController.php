@@ -293,7 +293,7 @@ final class AccountLinkController
         if ($username === '' || $password === '') {
             return (new Response())->status(400)->json([
                 'error' => 'missing_credentials',
-                'message' => 'username and password are required',
+                'message' => 'Username and password are required.',
             ]);
         }
 

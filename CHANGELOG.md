@@ -9,6 +9,63 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **SRV-HTTP remediation (2026-10-14 review family): WebSocket reaper
+  vacate, WS token-type gate, join-password throttle, list-row path
+  de-leak, fail-closed rating degrade, require-TLS relay knob, and
+  user-facing copy.**
+  **R16-02 (HIGH):** the `WebSocketServer` ping-sweep reaper closed dead
+  connections and removed the pool entry *before* the deferred `onClose`
+  ran (Workerman defers destroy/onClose whenever the sendBuffer is
+  non-empty, and pool-removal makes the later `onClose` resolve a null
+  connection) — so the SyncPlay vacate never ran and ghost members/hosts
+  persisted in active rooms. The reaper arm now calls
+  `finalizeConnectionTeardown()` (SyncPlay `onConnectionClose` vacate +
+  the `openedConnectionIds`-gated final metrics touch) *before*
+  close/remove; the normal `onClose` path uses the same routine, and
+  double-teardown is idempotent by the `connectionToMember` mapping gate
+  (proved by re-entrant tests). **R17-02 (MEDIUM):**
+  `SyncPlayAuthMiddleware` validated WS tokens with the type-blind
+  `JwtHandler::validateToken()`, so 7-day **refresh** tokens
+  authenticated the socket. All three validation sites now require
+  `type === 'access'`; the middleware keeps only the HS256 secret at the
+  :8097 fork, so the account-liveness probe is documented as the honest
+  follow-up (≤1h access-TTL exposure window). **R17-03 (LOW):** the
+  `MessageHandler` catch-all echoed `'Handler error: ' . $e->getMessage()`
+  onto the wire; it now sends a fixed generic string and logs the
+  exception detail server-side (websocket channel). **R17-04 (LOW):**
+  group-join passwords had no wrong-guess throttle; NEW
+  `SyncPlay\JoinPasswordThrottle` keeps a per-connection 60 s sliding
+  window (ceiling 10 failures, ctor-guarded) and on trip sends
+  `syncplay.join_failed` + closes the connection; success resets,
+  disconnect clears. Process-local by design (:8097 runs count=1).
+  **R17-05 (LOW):** the never-bound, handshake-auth-less standalone
+  `Workers/SyncPlayWorker.php` bootstrap (:8098 legacy) is deleted —
+  zero live references; `WebSocketServer` owns the served :8097 path.
+  **R12-04 (MEDIUM):** `MediaItemShaper::shape()` leaked the FULL
+  filesystem path of every media file to every authenticated user on
+  list rows. List rows and non-admin detail rows now carry
+  `basename($path)` under the same always-present `path` key
+  (string|null; type-stable for clients that read it for the extension —
+  nobody needs the directory), while `shapeDetail()` keeps the full
+  column value for admins only. **R18-01 (MEDIUM):** the
+  `GET /api/v1/media/index` rating-gate resolution `catch` degraded
+  FAIL-OPEN (no cap params) while its docblock promised deny-all; a
+  broken gate now degrades to `RatingGate::denyAll()` (unrated-hidden,
+  no rating admits nothing) — the A–Z bucket route can no longer widen
+  access when the gate itself is down. **R17-01 (policy knob):** NEW
+  `PHLIX_RELAY_REQUIRE_TLS=1` / config `relay.require_tls` — with it on,
+  `RelayConsumer::connect()` REFUSES a non-`wss://` hub dial before any
+  socket opens (health-panel reason recorded, normal backoff re-arms)
+  instead of only emitting the M5 warning; `require_tls` wins over
+  `allow_plaintext_tunnel` — an ACK cannot re-open a refused dial.
+  Default off keeps today's warn-only behavior byte-for-byte (docs
+  lanes will surface the knob). **Copy (R17 pass):** OidcCallback's
+  class-name leak (`is not an OidcProvider instance`),
+  AdminRestart's `pid_file` config-key leaks, AccountLink's
+  lowercase/run-on missing-credentials sentence, and OidcAdmin's
+  `redirect_uri` key leak in user-facing copy are reworded; the stable
+  `error` keys are untouched, and no message strings were test-pinned.
+
 - **SRV-DB remediation (DBA review R19 family): races, clock drift, missing
   indexes, unbounded stats growth, collation drift and an N+1 similarity read,
   shipped as migrations 113–120 with static + real-MySQL guards.**

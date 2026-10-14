@@ -601,7 +601,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Integration/Database/DbRemediationRealDbTest.php (real-MySQL
      * proof of the index/collation migrations and the rewritten query
      * paths). Measured from the phpunit red (1983), not predicted.
-     * Re-pinned 1983→1986 by the SRV-HTTP remediation lane (2026-10-14):
+     * Re-pinned 1983→1986→1987 by the SRV-HTTP remediation lane (2026-10-14):
      * net +3 — +4 (src/Server/WebSocket/SyncPlay/JoinPasswordThrottle.php,
      * tests/Unit/Server/WebSocket/WebSocketServerReapTeardownTest.php,
      * tests/Unit/Server/WebSocket/WsAccessTokenTypeTest.php,
@@ -611,9 +611,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * refs: only a stale comment and an ErrorCodesContractTest whitelist row,
      * both removed in the same commit). Measured from the phpunit red (1986),
      * not predicted. Later SRV-HTTP commits rotate this again from their own
-     * measured reds.
+     * measured reds: +1 (tests/Unit/Server/Core/ApplicationIndexBucketsFailClosedTest.php
+     * — the R18-01 fail-closed degrade harness), landing 1987.
      */
-    private const EXPECTED_PHP_FILES = 1986;
+    private const EXPECTED_PHP_FILES = 1987;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -831,8 +832,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * UserProfileManager::setActiveThemeId() deletion removes no Request
      * site (its body was a plain db->query). S427 license intact. Measured
      * from the phpunit red (1054), not predicted.
+     * Re-pinned 1054→1058 by the SRV-HTTP remediation lane (2026-10-14): +4
+     * declared-member WRITES — the R18-01 fail-closed harness
+     * (ApplicationIndexBucketsFailClosedTest) stamps
+     * `$request->method`/`->path`/`->remoteIp`/`->userId` to build the
+     * live-route request, the same declared-member shape as the existing
+     * fixture stamps. S427 license intact. Measured from the phpunit red
+     * (1058), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1054;
+    private const EXPECTED_DECLARED_WRITES = 1058;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -1,3 +1,39 @@
+# Hub + Server stack: phlix-hub, phlix-server, and a MySQL each.
+#
+# Ports the daemons ACTUALLY bind (disk-verified against both repos):
+#   phlix-server (start.php):
+#     :8096  HTTP worker — REST + /app SPA + static + /health. ZERO
+#            WebSocket-upgrade logic; SyncPlay never rides this port.
+#     :8097  SyncPlay WS worker — SEPARATE plaintext listener. A plain
+#            HTTP GET to it answers 400, which means it is ALIVE, not broken.
+#   phlix-hub (start.php):
+#     :8800  hub HTTP — admin UI + REST API + /health (HUB_PORT).
+#     :8802  relay WebSocket worker — SEPARATE, FIXED port. There is NO
+#            HUB_RELAY_PORT / HUB_RELAY_ENABLED env (the pristine version of
+#            this example invented them); relay TLS is configured ONLY via
+#            HUB_RELAY_TLS / HUB_RELAY_TLS_CERT / HUB_RELAY_TLS_KEY, and the
+#            hub speaks plaintext HTTP — TLS termination belongs at a proxy.
+#
+# Hub env names: the hub reads HUB_DB_HOST/PORT/NAME/USER/PASSWORD and
+# HUB_JWT_SECRET. The pristine version of this example set HUB_DATABASE_*
+# and HUB_SECRET_KEY — names NO code in phlix-hub reads. HUB_SECRET_KEY
+# survives below only as the .env carrier variable name.
+#
+# Publish policy (R7-05): every mapping binds 127.0.0.1 ONLY by default —
+# Docker published ports bypass host firewalls like ufw. To publish publicly,
+# front these loopback ports with a TLS reverse proxy (see reverse-proxy/ and
+# deploy/haproxy.cfg in the phlix-server repo); the :8802 relay and :8097 WS
+# need a TCP route with long timeouts, not HTTP path routing.
+#
+# Secrets policy (R7-04): every DB password resolves through ${VAR:?…} —
+# unset and `docker compose` refuses to start. docker/examples/.env.example
+# self-gates the same way; the server entrypoint additionally refuses
+# `change_me*` placeholders at boot.
+#
+# Migrations (R14-12): server runs PHLIX_MIGRATIONS_STRICT=1 and the hub runs
+# HUB_MIGRATIONS_STRICT=1 — both refuse to boot on a failed migration. Dev
+# opt-out: set the same variable to `0`.
+
 version: '3.8'
 
 services:
@@ -5,16 +41,29 @@ services:
     image: "${PHLIX_HUB_IMAGE:?PHLIX_HUB_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-hub:<sha12> — the published hub :latest is frozen/stale}"
     container_name: phlix-hub
     ports:
-      - "3443:443"
+      # Hub HTTP (was "3443:443" — nothing ever listened on 443 inside the
+      # hub image; the hub terminates nothing).
+      - "127.0.0.1:8800:8800"
+      # Relay WS worker (fixed :8802). Plaintext wss comes from the hub's own
+      # HUB_RELAY_TLS_* envs; otherwise TLS must terminate on an L4 route.
+      - "127.0.0.1:8802:8802"
     environment:
-      - HUB_DATABASE_HOST=mysql-hub
-      - HUB_DATABASE_PORT=3306
-      - HUB_DATABASE_NAME=phlix_hub
-      - HUB_DATABASE_USER=phlix_hub
-      - HUB_DATABASE_PASSWORD=${HUB_DB_PASSWORD}
-      - HUB_SECRET_KEY=${HUB_SECRET_KEY}
-      - HUB_RELAY_ENABLED=true
-      - HUB_RELAY_PORT=3473
+      - HUB_DB_HOST=mysql-hub
+      - HUB_DB_PORT=3306
+      - HUB_DB_NAME=phlix_hub
+      - HUB_DB_USER=phlix_hub
+      - HUB_DB_PASSWORD=${HUB_DB_PASSWORD:?HUB_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+      # HUB_JWT_SECRET is the hub's ONLY real secret env. HUB_SECRET_KEY is
+      # the .env carrier name; unset triggers the hub's auto-generate, which
+      # persists under /var/phlix/config — a path NOT covered by this
+      # example's hub volumes — so set it explicitly (see .env.example).
+      - HUB_JWT_SECRET=${HUB_SECRET_KEY:-}
+      # Public URL the hub advertises in enrollment QR codes / relay URLs.
+      - HUB_BASE_URL=https://hub.example.com
+      # Optional: comma-separated CIDRs of reverse proxies whose
+      # X-Forwarded-For may be trusted (real client IP behind a TLS edge).
+      # - TRUSTED_PROXIES=172.16.0.0/12
+      - HUB_MIGRATIONS_STRICT=1
     volumes:
       - hub_config:/var/phlix-hub/config
       - hub_logs:/var/phlix-hub/logs
@@ -28,20 +77,23 @@ services:
   phlix-server:
     image: "${PHLIX_SERVER_IMAGE:?PHLIX_SERVER_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia> — the mutable :latest tag drifts and is never a reproducible example}"
     container_name: phlix-server
-    # S163: 8096 = HTTP (REST + SPA + static + WS upgrade), 8097 = SyncPlay WS.
+    # :8096 HTTP worker (no WS upgrade), :8097 SEPARATE plaintext WS listener
+    # (400 on a plain GET = alive). SyncPlay clients reach :8097 directly or
+    # through a long-timeout TCP route — never through an HTTP path on 8096.
     ports:
-      - "32400:8096"
-      - "8097:8097"
+      - "127.0.0.1:32400:8096"
+      - "127.0.0.1:8097:8097"
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306
       - PHLIX_DATABASE_NAME=phlix
       - PHLIX_DATABASE_USER=phlix
-      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD}
+      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
       - PHLIX_HUB_URL=https://hub.example.com
       - PHLIX_HUB_PAIRING_CODE=${PHLIX_HUB_PAIRING_CODE}
       - PHLIX_LOG_LEVEL=info
+      - PHLIX_MIGRATIONS_STRICT=1
     volumes:
       - phlix_config:/var/phlix/config
       - phlix_data:/var/phlix/data
@@ -65,12 +117,12 @@ services:
     image: mysql:8.0
     container_name: phlix-hub-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       MYSQL_DATABASE: phlix_hub
       MYSQL_USER: phlix_hub
-      MYSQL_PASSWORD: ${HUB_DB_PASSWORD}
-    volumes:
-      - mysql_hub_data:/var/lib/mysql
+      MYSQL_PASSWORD: ${HUB_DB_PASSWORD:?HUB_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    # Explicitly unpublished: MySQL is reached only over phlix_network.
+    ports: []
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -84,12 +136,11 @@ services:
     image: mysql:8.0
     container_name: phlix-server-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       MYSQL_DATABASE: phlix
       MYSQL_USER: phlix
-      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD}
-    volumes:
-      - mysql_server_data:/var/lib/mysql
+      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    ports: []
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s

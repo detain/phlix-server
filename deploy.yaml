@@ -6,38 +6,50 @@
 #
 # Related files:
 #   - deploy/haproxy.cfg  : HAProxy configuration for WS port exposure
-#   - config/server.php  : WS worker port configuration (default: 8097)
-#   - start.php          : WS worker initialization (line ~187)
+#   - config/server.php   : WS worker OBJECT settings (timeouts, JWT auth).
+#     NOTE: the daemon's listening socket is the literal
+#     'websocket://0.0.0.0:8097' hard-coded in start.php (~line 610);
+#     these config keys do not move it on the resident start.php path.
+#   - start.php           : WS worker initialization (~line 610)
 
 ---
 # Deployment metadata
 deployment:
   name: phlix-server
   version: "1.0"
-  last_updated: "2026-06-29"
+  last_updated: "2026-10-14"
 
 # WebSocket worker configuration
 websocket:
-  # Internal port where the WS worker listens (configured in config/server.php)
+  # Port the daemon's WS worker listens on (0.0.0.0:8097 via start.php).
   internal_port: 8097
 
-  # External exposure via HAProxy
-  exposed_port: 8097
+  # External exposure via HAProxy. The shipped haproxy.cfg binds :8443 to
+  # avoid colliding with the daemon's own :8097 listener (EADDRINUSE);
+  # firewall the raw daemon port from untrusted networks:
+  #   sudo ufw deny 8097/tcp && sudo ufw allow 8443/tcp
+  # To keep the client-visible port at 8097 instead, bind the daemon to
+  # 127.0.0.1 (edit the start.php literal) and switch the frontend bind —
+  # see the PORT PREREQUISITE header in deploy/haproxy.cfg.
+  exposed_port: 8443
   exposed_interface: "0.0.0.0"
 
   # Health check
   health_check:
     # Port for external health monitoring (separate from WS traffic)
     port: 8098
-    # Expected response: 426 Upgrade Required indicates WS worker is alive
-    expected_status: 426
+    # The WS worker answers a plain HTTP GET with 400 Bad Request — that IS
+    # the alive signal (it speaks only the WebSocket handshake). 426 appears
+    # only for a Sec-WebSocket-Version mismatch during a real handshake, so
+    # no probe can elicit it; HAProxy therefore uses TCP connect checks.
+    expected_status: 400
     path: /
 
   # Connection settings
   connection:
     # Maximum idle time before WS connection is closed
     idle_timeout: 86400  # 24 hours in seconds
-    # Maximum time for WS handshake
+    # Maximum time for the TCP connect to the backend worker
     handshake_timeout: 5000  # milliseconds
     # Health check interval
     check_interval: 10  # seconds
@@ -46,7 +58,7 @@ websocket:
   backend:
     host: "127.0.0.1"
     port: 8097
-    # Health check settings
+    # Health check settings (TCP connect check — never an HTTP status probe)
     check_fall: 2   # Mark down after 2 consecutive failures
     check_rise: 3  # Mark up after 3 consecutive successes
 
@@ -63,9 +75,10 @@ haproxy:
     port: 8404
     path: "/stats"
 
-  # Frontend configuration
+  # Frontend configuration (see websocket.exposed_port above for the
+  # prerequisite before moving this onto :8097)
   frontend:
-    bind: "*:8097"
+    bind: "*:8443"
     mode: "http"
 
   # Backend configuration
@@ -77,30 +90,39 @@ haproxy:
 ports:
   http:
     internal: 8096
-    description: "HTTP/REST API worker"
+    description: "HTTP/REST API worker (GET /health lives here)"
 
   websocket:
     internal: 8097
-    external: 8097
+    external: 8443
     description: "WebSocket worker for SyncPlay realtime communication"
 
   websocket_health:
     port: 8098
-    description: "Health check endpoint for WS worker (returns 426 when healthy)"
+    description: "Health check frontend for WS worker (400 from a plain GET = alive; TCP checks inside HAProxy)"
 
+  # The hub relay is an OUTBOUND-only client connection (src/Hub/RelayConsumer)
+  # to the hub's relay listener (hub :8802). The server opens NO inbound
+  # relay listener — there is no 9443 (or any) port to expose here.
   relay:
-    internal: 9443
-    description: "Relay tunnel connection to phlix-hub"
+    listener: none
+    direction: "outbound"
+    description: "Relay tunnel to phlix-hub — outbound client connection only, no server-side port"
 
 # Verification commands
 verification:
-  # Check WS worker health (from external network)
+  # Check WS worker liveness through the proxy (400 = worker alive; it only
+  # speaks the WebSocket handshake)
   health_check: |
-    curl -s -H "Upgrade: websocket" http://<deploy-host>:8097/
+    curl -s -o /dev/null -w '%{http_code}\n' http://<deploy-host>:8443/
 
-  # Check WS health endpoint
+  # Check WS health frontend (400 = worker alive)
   health_endpoint: |
-    curl -s http://<deploy-host>:8098/
+    curl -s -o /dev/null -w '%{http_code}\n' http://<deploy-host>:8098/
+
+  # HTTP API health (different worker)
+  http_health: |
+    curl -s http://<deploy-host>:8096/health
 
   # HAProxy stats
   stats: |
@@ -109,5 +131,5 @@ verification:
 # Dependencies
 depends_on:
   - "SP6: WebSocket worker implementation (SyncPlayManager, WebSocketServer)"
-  - "config/server.php: websocket.port configuration"
-  - "start.php: WS worker initialization on port 8097"
+  - "config/server.php: websocket timeouts + JWT handshake auth (SV-4.7)"
+  - "start.php: WS worker listening socket on 0.0.0.0:8097 (~line 610, hard-coded literal)"

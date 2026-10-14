@@ -18,7 +18,6 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
-use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
 

@@ -1,5 +1,16 @@
+# Phlix Media Server — Caddy reverse-proxy template
+#
+# Upstream truth: start.php serves HTTP on 127.0.0.1:8096 (REST + SPA +
+# static) and runs the SyncPlay WebSocket server as a SEPARATE plaintext
+# listener on 0.0.0.0:8097. The :8096 HTTP worker has zero WebSocket-upgrade
+# logic, so nothing on this site block can front the WS server by path —
+# see the "WebSocket worker (:8097)" comment at the bottom for how to
+# expose it. An earlier revision of this file proxied /ws* to the HTTP
+# upstream; that was a fiction (every upgrade attempt got a plain HTTP
+# answer back) and is deliberately not re-added.
+
 phlix.example.com {
-    reverse_proxy localhost:8080 {
+    reverse_proxy localhost:8096 {
         transport http {
             versions h2c h2 1.1
         }
@@ -7,15 +18,20 @@ phlix.example.com {
 
     @hls_playlist path *.m3u8
     handle @hls_playlist {
-        reverse_proxy localhost:8080 {
+        reverse_proxy localhost:8096 {
             header_down Cache-Control "no-cache, no-store, must-revalidate"
+            # Public media segments keep a wildcard CORS: embedded players,
+            # smart-TV apps and cast receivers fetch them cross-origin, they
+            # carry no credentials, and access is gated by the server's
+            # signed-URL layer. Scoped to *.m3u8 / *.ts / *.mpd ONLY — /api
+            # below intentionally has NO CORS.
             header_down Access-Control-Allow-Origin "*"
         }
     }
 
     @hls_segment path *.ts
     handle @hls_segment {
-        reverse_proxy localhost:8080 {
+        reverse_proxy localhost:8096 {
             header_down Cache-Control "public, max-age=31536000"
             header_down Access-Control-Allow-Origin "*"
         }
@@ -23,49 +39,27 @@ phlix.example.com {
 
     @dash_manifest path *.mpd
     handle @dash_manifest {
-        reverse_proxy localhost:8080 {
+        reverse_proxy localhost:8096 {
             header_down Cache-Control "no-cache"
-        }
-    }
-
-    # WebSocket upgrade. Caddy 2.7+ auto-detects WS upgrades and forwards the
-    # Connection/Upgrade headers; the @websocket matcher here documents intent
-    # and applies long timeouts required for long-lived sockets.
-    @websocket {
-        path /ws*
-        header Connection *Upgrade*
-        header Upgrade websocket
-    }
-    handle @websocket {
-        reverse_proxy localhost:8080 {
-            header_up Connection "upgrade"
-            header_up Upgrade "websocket"
-            transport http {
-                read_timeout 24h
-                write_timeout 24h
-            }
-        }
-    }
-
-    handle /ws* {
-        reverse_proxy localhost:8080 {
-            header_up Connection "upgrade"
-            header_up Upgrade "websocket"
+            header_down Access-Control-Allow-Origin "*"
         }
     }
 
     handle /media/* {
-        reverse_proxy localhost:8080 {
+        reverse_proxy localhost:8096 {
             max_buffer_size 1MB
         }
     }
 
     handle /api/* {
-        reverse_proxy localhost:8080 {
-            header_down Access-Control-Allow-Origin "*"
-            header_down Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-            header_down Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
-        }
+        # NO CORS on /api by design. The SPA is served same-origin from this
+        # site (and from :8096 /app); native clients (Roku, Tizen, mobile,
+        # Windows) are not browsers and never enforce CORS. A wildcard here
+        # only lets any third-party website issue cross-origin requests at
+        # your API. If you host a web client on a separate origin, pin it —
+        # e.g. the `cors` directive with an explicit allow_origins list, or:
+        #   header Access-Control-Allow-Origin "https://app.example.com"
+        reverse_proxy localhost:8096
     }
 
     header {
@@ -83,3 +77,32 @@ phlix.example.com {
 
     encode gzip zstd
 }
+
+# ─── WebSocket worker (:8097) — its own TCP route, not a path on the site ───
+#
+# Caddy cannot upgrade-proxy a path on this site to :8096 and reach the WS
+# worker; the worker lives on :8097 and speaks the WS handshake at ANY path.
+# Expose it as a dedicated listener instead. Two honest options:
+#
+# 1. Plaintext LAN publishing (simplest):
+#      :8097 {
+#          reverse_proxy 127.0.0.1:8097
+#      }
+#    (Caddy 2.7+ auto-detects the WS upgrade on reverse_proxy and forwards
+#    Connection/Upgrade; long-lived sockets just need generous timeouts.)
+#
+# 2. TLS-terminated wss: give the WS its own hostname/port, e.g.
+#      wss://ws.phlix.example.com {
+#          reverse_proxy 127.0.0.1:8097 {
+#              transport http {
+#                  read_timeout 24h
+#                  write_timeout 24h
+#              }
+#          }
+#      }
+#    and point WS clients at wss://ws.phlix.example.com/ .
+#
+# FUTURE: a same-origin wss:// path is being designed alongside a
+# client-side wsUrl seam (sibling lane); when it lands this note will be
+# replaced with the real routing. Until then do NOT add a /ws* handler
+# against the :8096 upstream — it cannot work.

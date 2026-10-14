@@ -2906,7 +2906,18 @@ class WebPortalRouter
 
         // Persist within user_settings.playback_preferences
         $settings['playback_preferences'] = json_encode($newPrefs->toArray());
-        $this->userRepository->updateSettings($userId, $settings);
+        try {
+            $this->userRepository->updateSettings($userId, $settings);
+        } catch (\InvalidArgumentException $e) {
+            // Defense-in-depth belt: the unset() guard above keeps the only
+            // field that validates today (theme) out of this payload, so this
+            // arm is unreachable at this tip — but any validation a future
+            // lane adds to updateSettings() must surface here as the same
+            // flat {error} 400 envelope updateUserSettings() uses (contract
+            // law: no new error codes), never an uncaught 500 over stored
+            // history.
+            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+        }
 
         return (new Response())->json(['message' => 'Playback preferences updated']);
     }

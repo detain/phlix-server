@@ -1316,7 +1316,10 @@ class UserProfileManager
      *
      * @since 0.14.0
      *
-     * @see setActiveThemeId() To set a user's active theme
+     * @see UserRepository::updateSettings() The ONLY writer of
+     *      user_profiles.active_theme_id — every write passes the live theme
+     *      validation there (BuiltInThemes::IDS ∪ registered plugin ids). The
+     *      former unvalidated sibling setter was removed as a bypass door.
      */
     public function getActiveThemeId(string $userId): ?string
     {
@@ -1334,28 +1337,6 @@ class UserProfileManager
         $row = $result[0];
 
         return is_string($row['active_theme_id'] ?? null) ? $row['active_theme_id'] : null;
-    }
-
-    /**
-     * Sets the active theme for a user.
-     *
-     * Updates the active_theme_id for all active profiles of the user.
-     *
-     * @param string $userId The unique user identifier (UUID format)
-     * @param string $themeId The theme identifier to set as active
-     *
-     * @return void
-     *
-     * @since 0.14.0
-     *
-     * @see getActiveThemeId() To retrieve a user's active theme
-     */
-    public function setActiveThemeId(string $userId, string $themeId): void
-    {
-        $this->db->query(
-            "UPDATE user_profiles SET active_theme_id = ? WHERE user_id = ? AND is_active = TRUE",
-            [$themeId, $userId]
-        );
     }
 
     /**

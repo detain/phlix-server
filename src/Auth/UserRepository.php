@@ -789,6 +789,13 @@ class UserRepository
      *        - theme: A live theme id — {@see BuiltInThemes::IDS} or a plugin
      *          theme registered in the wired ThemeSourceRegistry. Persisted to
      *          user_profiles.active_theme_id, not user_settings.
+     *          CLEARING IS NOT SUPPORTED (v1 law): there is deliberately no
+     *          API path that resets active_theme_id back to NULL — a null (or
+     *          any other non-string) theme value throws like any unknown id
+     *          rather than being read as "clear". NULL in the column means
+     *          "the user has never chosen a theme" (the migration default);
+     *          every reader degrades on it by design — getSettings() omits the
+     *          theme key entirely, so clients fall back to their own default.
      *
      * @return void
      *

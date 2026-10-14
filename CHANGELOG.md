@@ -1247,6 +1247,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- **`UserProfileManager::setActiveThemeId()` deleted — the unvalidated bypass
+  door around the live theme law (2026-10-14).** The method wrote
+  `user_profiles.active_theme_id` with ZERO validation — the exact defect
+  class the same-day `UserRepository::updateSettings()` fix retired — and an
+  estate-wide grep (this repo's `src/`, `tests/`, `bin/`, `scripts/`,
+  `start.php`, `docs/`, plus every `phlix-*` sibling repo's tracked tree)
+  found zero callers. Its only surviving mention was the historical S85-era
+  CHANGELOG release note, which is a record, not an adoption promise — so
+  deletion beats deprecation. `UserRepository::updateSettings()` is now the
+  estate's SINGLE writer of the column; `getActiveThemeId()`'s stale
+  `@see setActiveThemeId()` line re-points there. No routes, no runtime
+  behavior change (dead code), no census movement from the deletion itself.
+
 - **Untracked the repo-root `PROGRESS.md` lane journal; sandbox journals stay out of git (`S487`).**
   The file was a lane's scratch progress log that entered the tracked tree with the two W71 merges and
   belongs only under `.sandboxes/<lane>/`, outside every git working tree. Both authored versions remain
@@ -1284,6 +1297,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
 
 ### Fixed
+
+- **`updatePlaybackPreferences()` now maps a rejected `updateSettings()` to the
+  same flat `{error}` 400 envelope as `PUT /api/v1/users/me/settings`
+  (defense-in-depth, 2026-10-14).** The read-modify-write handler had no
+  `InvalidArgumentException` catch: it is safe today only because its
+  `unset($settings['theme'])` guard strips the only field that validates, but
+  any validation a future lane adds to `UserRepository::updateSettings()`
+  would otherwise turn stored garbage into an uncaught 500 on every unrelated
+  crossfade save. The catch is folded in at the call site (the repo idiom the
+  settings route already uses; no new error codes). Pinned by a new
+  `WebPortalRouterSettingsTest` case injecting the throw at the repository
+  seam; the pre-existing legacy-RMW test keeps pinning the guard itself.
 
 - **`PUT /api/v1/users/me/settings` theme writes now validate against LIVE theme
   truth — the pre-S85 fossil whitelist that silently dropped EVERY theme while

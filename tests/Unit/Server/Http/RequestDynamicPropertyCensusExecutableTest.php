@@ -644,19 +644,25 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * declared-member READS — the SyncPlayController read rails now gate on
      * the requester's identity ($request->userId in listGroups + getGroup).
      * Measured from the phpunit red, not predicted.
-      * Re-pinned 446→448 by the LiveTV parental-gate lane (2026-10-02): +2
-      * declared-member READS — LiveTvStreamController::recordingOverCap()
-      * ($request->userId, production) and the new test's anonymous-signature
-      * pin ($anonymous->userId assertNull). Measured from the phpunit red,
-      * not predicted.
-      * Re-pinned 448→451 by the theme-live-validation lane (2026-10-14): +3
-      * declared-member READS — the three new WebPortalRouterSettingsTest
-      * fixtures each mirror their stamped body into rawBody via one
-      * `json_encode($request->body)` read. Zero src/ reads added (the fix
-      * validates in UserRepository/Router bodies that read no new Request
-      * members). Measured from the phpunit red (451), not predicted.
-      */
-    private const EXPECTED_DECLARED_READS = 451;
+     * Re-pinned 446→448 by the LiveTV parental-gate lane (2026-10-02): +2
+     * declared-member READS — LiveTvStreamController::recordingOverCap()
+     * ($request->userId, production) and the new test's anonymous-signature
+     * pin ($anonymous->userId assertNull). Measured from the phpunit red,
+     * not predicted.
+     * Re-pinned 448→451 by the theme-live-validation lane (2026-10-14): +3
+     * declared-member READS — the three new WebPortalRouterSettingsTest
+     * fixtures each mirror their stamped body into rawBody via one
+     * `json_encode($request->body)` read. Zero src/ reads added (the fix
+     * validates in UserRepository/Router bodies that read no new Request
+     * members). Measured from the phpunit red (451), not predicted.
+     * Re-pinned 451→452 by the theme micro-fix lane (2026-10-14): +1
+     * declared-member READ — the new WebPortalRouterSettingsTest belt test
+     * (playback-handler InvalidArgumentException → 400 catch) mirrors its
+     * stamped body into rawBody via one `json_encode($request->body)` read,
+     * the same fixture shape as its siblings above. Zero src/ reads added.
+     * Measured from the phpunit red (452), not predicted.
+     */
+    private const EXPECTED_DECLARED_READS = 452;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -749,58 +755,65 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * SyncPlayVisibilityRestTest and SyncPlaySnapshotMembershipsRealDbTest
      * each stamp `method`/`path`/`userId`/`body` (4×2). Measured from the
      * phpunit red, not predicted.
-      * Re-pinned 1032→1033 by the LiveTV parental-gate lane (2026-10-02):
-      * +1 declared-member WRITE — the new test's cappedRequest() fixture
-      * stamps `$req->userId`. Measured from the phpunit red, not predicted.
-      * Re-pinned 1033→1030 by the collections-ownership lane (2026-10-02):
-      * net −3 declared-member WRITES — CollectionsOwnerGateTest replaces
-      * CollectionsAdminGateTest at +3 (the dispatch() quintet survives
-      * verbatim; a new structural GET probe adds method/path/body), while
-      * CollectionControllerTest collapses its eight per-test inline body
-      * stamps into one shared request() helper at 2 write sites
-      * (`$request->userId` + conditional `$request->body`, the S435
-      * entry-point shape, S427 license intact). The src/ change reads only
-      * (one new `$request->userId` read inside actorUserId()); the READS
-      * denominator was re-verified green at its existing pin in the same
-       * run — the last-parameter root-registration blind spot documented
-       * under census number 2 keeps `actorUserId(Request $request)`'s single
-       * parameter out of the counted roots. Measured from the phpunit red,
-       * not predicted.
-       * Re-pinned 1030→1033 by the shaper `library_id` lane (2026-10-02):
-       * +3 declared-member WRITES — the new dispatch()-seam wire pin in
-       * WebPortalRouterMediaTest stamps `$request->method`/`->path`/`->userId`
-       * on its own `new Request()` root, the same S101 dispatch-test shape it
-       * sits beside. All three name declared members; S427 license intact.
-       * Measured from the phpunit red (1033), not predicted.
-       * Re-pinned 1033→1039 by the F7 auth-method-policy lane (2026-10-03):
-       * +6 declared-member WRITES, all request-stamp helpers in the new/
-       * extended tests — WebAuthnControllerAuthMethodGateTest's request()
-       * helper (`->body` + `->userId`, 2), AdminSettingsControllerAuthGuard-
-       * Test's makeRequest (`->body`, 1), and the F7 site pins' inline stamps
-       * (AccountLinkControllerTest `->userId` + `->body`, 2;
-       * AuthControllerLdapLoginTest `->body`, 1). All name declared members;
-       * S427 license intact. Measured from the phpunit red (1039), not
-       * predicted.
-       * Re-pinned 1039→1040 by the v0.51.0 re-vendor lane (2026-10-05):
-       * +1 declared-member WRITE — AdminSettingsRealSchemaPutTest's put()
-       * helper stamps `$request->body` (the declared Request member, same
+     * Re-pinned 1032→1033 by the LiveTV parental-gate lane (2026-10-02):
+     * +1 declared-member WRITE — the new test's cappedRequest() fixture
+     * stamps `$req->userId`. Measured from the phpunit red, not predicted.
+     * Re-pinned 1033→1030 by the collections-ownership lane (2026-10-02):
+     * net −3 declared-member WRITES — CollectionsOwnerGateTest replaces
+     * CollectionsAdminGateTest at +3 (the dispatch() quintet survives
+     * verbatim; a new structural GET probe adds method/path/body), while
+     * CollectionControllerTest collapses its eight per-test inline body
+     * stamps into one shared request() helper at 2 write sites
+     * (`$request->userId` + conditional `$request->body`, the S435
+     * entry-point shape, S427 license intact). The src/ change reads only
+     * (one new `$request->userId` read inside actorUserId()); the READS
+     * denominator was re-verified green at its existing pin in the same
+     * run — the last-parameter root-registration blind spot documented
+     * under census number 2 keeps `actorUserId(Request $request)`'s single
+     * parameter out of the counted roots. Measured from the phpunit red,
+     * not predicted.
+     * Re-pinned 1030→1033 by the shaper `library_id` lane (2026-10-02):
+     * +3 declared-member WRITES — the new dispatch()-seam wire pin in
+     * WebPortalRouterMediaTest stamps `$request->method`/`->path`/`->userId`
+     * on its own `new Request()` root, the same S101 dispatch-test shape it
+     * sits beside. All three name declared members; S427 license intact.
+     * Measured from the phpunit red (1033), not predicted.
+     * Re-pinned 1033→1039 by the F7 auth-method-policy lane (2026-10-03):
+     * +6 declared-member WRITES, all request-stamp helpers in the new/
+     * extended tests — WebAuthnControllerAuthMethodGateTest's request()
+     * helper (`->body` + `->userId`, 2), AdminSettingsControllerAuthGuard-
+     * Test's makeRequest (`->body`, 1), and the F7 site pins' inline stamps
+     * (AccountLinkControllerTest `->userId` + `->body`, 2;
+     * AuthControllerLdapLoginTest `->body`, 1). All name declared members;
+     * S427 license intact. Measured from the phpunit red (1039), not
+     * predicted.
+     * Re-pinned 1039→1040 by the v0.51.0 re-vendor lane (2026-10-05):
+     * +1 declared-member WRITE — AdminSettingsRealSchemaPutTest's put()
+     * helper stamps `$request->body` (the declared Request member, same
      * S101 shape as the F7 lane's helpers above). S427 license intact.
      * Measured from the phpunit red (1040), not predicted.
-      * Re-pinned 1040→1042 by the B2 auth-lock lane (2026-10-07):
-      * +2 declared-member WRITEs — the put() helpers of
-      * AdminSettingsControllerAuthLockTest.php and
-      * AdminSettingsAuthLockB2Test.php each stamp `$request->body`
-      * (same S101 shape as the helpers above). S427 license intact.
-      * Measured from the phpunit red (1042), not predicted.
-      * Re-pinned 1042→1051 by the theme-live-validation lane (2026-10-14):
-      * +9 declared-member WRITES — the three new WebPortalRouterSettingsTest
-      * fixtures (unknown-theme 400, valid-theme 200, legacy-RMW playback pin)
-      * each stamp `$request->userId`/`->body`/`->rawBody` inline, the same
-      * declared-member shape as the five fixtures already in that file.
-      * S427 license intact. Measured from the phpunit red (1051), not
-      * predicted.
-        */
-    private const EXPECTED_DECLARED_WRITES = 1051;
+     * Re-pinned 1040→1042 by the B2 auth-lock lane (2026-10-07):
+     * +2 declared-member WRITEs — the put() helpers of
+     * AdminSettingsControllerAuthLockTest.php and
+     * AdminSettingsAuthLockB2Test.php each stamp `$request->body`
+     * (same S101 shape as the helpers above). S427 license intact.
+     * Measured from the phpunit red (1042), not predicted.
+     * Re-pinned 1042→1051 by the theme-live-validation lane (2026-10-14):
+     * +9 declared-member WRITES — the three new WebPortalRouterSettingsTest
+     * fixtures (unknown-theme 400, valid-theme 200, legacy-RMW playback pin)
+     * each stamp `$request->userId`/`->body`/`->rawBody` inline, the same
+     * declared-member shape as the five fixtures already in that file.
+     * S427 license intact. Measured from the phpunit red (1051), not
+     * predicted.
+     * Re-pinned 1051→1054 by the theme micro-fix lane (2026-10-14): +3
+     * declared-member WRITES — the new WebPortalRouterSettingsTest belt test
+     * stamps `$request->userId`/`->body`/`->rawBody` inline, the same
+     * declared-member shape as the four fixtures already in that file. The
+     * UserProfileManager::setActiveThemeId() deletion removes no Request
+     * site (its body was a plain db->query). S427 license intact. Measured
+     * from the phpunit red (1054), not predicted.
+     */
+    private const EXPECTED_DECLARED_WRITES = 1054;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

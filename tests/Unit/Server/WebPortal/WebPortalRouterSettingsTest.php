@@ -23,9 +23,10 @@ use Workerman\MySQL\Connection;
  * whitelisted keys may reach the repository.
  *
  * Also pins the theme 400 mapping (repository InvalidArgumentException → flat
- * {error} 400 envelope, no new error codes) and the read-modify-write guard on
+ * {error} 400 envelope, no new error codes), the read-modify-write guard on
  * updatePlaybackPreferences() (a legacy stored theme must not 400 a crossfade
- * save, and that endpoint must never write user_profiles).
+ * save, and that endpoint must never write user_profiles), and that handler's
+ * defense-in-depth InvalidArgumentException → 400 catch.
  */
 class WebPortalRouterSettingsTest extends TestCase
 {
@@ -255,5 +256,36 @@ class WebPortalRouterSettingsTest extends TestCase
         foreach ($captured as [$sql]) {
             $this->assertStringNotContainsString('UPDATE user_profiles', $sql);
         }
+    }
+
+    public function testPlaybackPreferencesRejectedUpdateMapsTo400Envelope(): void
+    {
+        // Belt pin for updatePlaybackPreferences()'s InvalidArgumentException
+        // → 400 catch. Today the unset($settings['theme']) guard upstream
+        // removes the only field that validates, so no REAL rejection can
+        // arise through this handler — the throw is injected at the
+        // repository seam to pin the catch arm itself: whatever validation a
+        // future lane adds to updateSettings(), this endpoint must answer
+        // with the same flat {error} 400 envelope updateUserSettings() uses
+        // (contract law: no new error codes), never an uncaught 500.
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('updateSettings')
+            ->willThrowException(new \InvalidArgumentException('future-field must be a known value'));
+
+        $router = $this->makeRouter($userRepo);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['crossfadeDuration' => 4];
+        $request->rawBody = (string) json_encode($request->body);
+
+        $response = $router->updatePlaybackPreferences($request, []);
+
+        $this->assertEquals(400, $response->statusCode);
+        $decoded = json_decode($response->body, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame('future-field must be a known value', $decoded['error'] ?? null);
+        $this->assertArrayNotHasKey('code', $decoded, 'flat {error} envelope — no new error codes');
     }
 }

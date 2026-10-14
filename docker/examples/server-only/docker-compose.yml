@@ -1,21 +1,50 @@
 version: '3.8'
 
+# Single-server stack: phlix-server + its MySQL.
+#
+# Ports the daemon ACTUALLY binds (start.php):
+#   :8096  HTTP worker — REST API + /app SPA + static + /health. It has ZERO
+#          WebSocket-upgrade logic; SyncPlay never rides this port.
+#   :8097  SyncPlay WebSocket worker — a SEPARATE plaintext listener (its own
+#          Workerman websocket:// socket). A plain HTTP GET to it answers 400;
+#          that is the worker being ALIVE, not broken.
+#
+# Publish policy (R7-05): both mappings bind 127.0.0.1 ONLY by default,
+# because Docker's published ports bypass host firewalls like ufw — an
+# unprefixed mapping would sit on 0.0.0.0 whether you meant it or not.
+# To publish publicly, terminate TLS at a reverse proxy and let IT reach
+# loopback (see reverse-proxy/ + deploy/haproxy.cfg), or override at the
+# shell level without editing this file:
+#
+#   !override keys accept env overrides; or simply change the mapping to
+#   "0.0.0.0:8097:8097" knowing every byte on it is plaintext WS + JWT-in-
+#   query (?token=), appropriate only on a trusted LAN.
+#
+# Secrets policy (R7-04): the DB password variables below resolve through
+# ${VAR:?…}; docker/examples/.env.example self-gates the same way, so copying
+# it unchanged refuses to boot with the committed placeholder passwords.
+#
+# Migrations (R14-12): PHLIX_MIGRATIONS_STRICT=1 makes the container refuse to
+# start when a migration fails (or cannot run at all), instead of the image
+# default of booting degraded with a loud banner. To go back to boot-anyway
+# for development: PHLIX_MIGRATIONS_STRICT= (empty) or =0.
+
 services:
   phlix:
     image: "${PHLIX_SERVER_IMAGE:?PHLIX_SERVER_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia> — the mutable :latest tag drifts and is never a reproducible example}"
     container_name: phlix-server
-    # S163: 8096 = HTTP (REST + SPA + static + WS upgrade), 8097 = SyncPlay WS.
     ports:
-      - "32400:8096"
-      - "8097:8097"
+      - "127.0.0.1:32400:8096"
+      - "127.0.0.1:8097:8097"
     environment:
       - PHLIX_DATABASE_HOST=mysql
       - PHLIX_DATABASE_PORT=3306
       - PHLIX_DATABASE_NAME=phlix
       - PHLIX_DATABASE_USER=phlix
-      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD}
+      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
       - PHLIX_LOG_LEVEL=info
+      - PHLIX_MIGRATIONS_STRICT=1
     volumes:
       - phlix_config:/var/phlix/config
       - phlix_data:/var/phlix/data
@@ -44,10 +73,11 @@ services:
     image: mysql:8.0
     container_name: phlix-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       MYSQL_DATABASE: phlix
       MYSQL_USER: phlix
-      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD}
+      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    ports: []
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

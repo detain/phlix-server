@@ -23,19 +23,28 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: phlix-server
-    # S163: the container runs the Workerman daemon directly (no nginx, no
-    # php-fpm), so the ports to publish are the ones start.php binds — 8096
-    # (HTTP: REST + SPA + static + per-request WS upgrade) and 8097 (SyncPlay
-    # WebSocket). Nothing has ever listened on 80 or 443 inside the image.
+    # The container runs the Workerman daemon directly (no nginx, no php-fpm),
+    # so the ports to publish are the ones start.php binds — 8096 (HTTP:
+    # REST + SPA + static; it has ZERO WebSocket-upgrade logic) and 8097
+    # (SyncPlay WebSocket — a SEPARATE plaintext listener, not a path on
+    # 8096). Nothing has ever listened on 80 or 443 inside the image.
+    # This file is the DEVELOPMENT stack: both mappings bind 127.0.0.1 only,
+    # and the DB credentials below are fixed dev values that must never be
+    # reused in a real deployment (see docker/examples/ for the hardened,
+    # ${VAR:?}-gated production examples).
     ports:
-      - "8080:8096"
-      - "8097:8097"
+      - "127.0.0.1:8096:8096"
+      - "127.0.0.1:8097:8097"
     environment:
       - PHLIX_DATABASE_HOST=mysql
       - PHLIX_DATABASE_PORT=3306
       - PHLIX_DATABASE_NAME=phlix
       - PHLIX_DATABASE_USER=phlix
       - PHLIX_DATABASE_PASSWORD=phlix_secret
+      # Dev stack: strict migrations OFF so a schema hiccup still boots the
+      # app with the loud PHLIX-MIGRATION-FAILURE banner (images default to
+      # strict; the hardened examples set =1 explicitly).
+      - PHLIX_MIGRATIONS_STRICT=0
     volumes:
       - phlix_config:/var/phlix/config
       - phlix_data:/var/phlix/data

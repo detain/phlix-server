@@ -94,10 +94,10 @@ JWT_SECRET_FILE="${PHLIX_JWT_SECRET_FILE:-/var/phlix/config/jwt_secret}"
 # anything served through php-fpm does NOT — that is a pre-existing property of
 # docker/supervisord.conf and is out of scope here.
 # ---------------------------------------------------------------------------
-[ -n "${DB_HOST:-}" ]     || DB_HOST="${PHLIX_DATABASE_HOST:-}"
-[ -n "${DB_PORT:-}" ]     || DB_PORT="${PHLIX_DATABASE_PORT:-}"
+[ -n "${DB_HOST:-}" ] || DB_HOST="${PHLIX_DATABASE_HOST:-}"
+[ -n "${DB_PORT:-}" ] || DB_PORT="${PHLIX_DATABASE_PORT:-}"
 [ -n "${DB_DATABASE:-}" ] || DB_DATABASE="${PHLIX_DATABASE_NAME:-}"
-[ -n "${DB_USER:-}" ]     || DB_USER="${PHLIX_DATABASE_USER:-}"
+[ -n "${DB_USER:-}" ] || DB_USER="${PHLIX_DATABASE_USER:-}"
 [ -n "${DB_PASSWORD:-}" ] || DB_PASSWORD="${PHLIX_DATABASE_PASSWORD:-}"
 export DB_HOST DB_PORT DB_DATABASE DB_USER DB_PASSWORD
 
@@ -136,15 +136,15 @@ export DB_HOST DB_PORT DB_DATABASE DB_USER DB_PASSWORD
 # warning — because an unreachable config volume must not mean no media server.
 # ---------------------------------------------------------------------------
 phlix_generate_secret() {
-    if od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | grep -qE '^[0-9a-f]{64}$'; then
-        od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
-        return 0
-    fi
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32
-        return 0
-    fi
-    return 1
+	if od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | grep -qE '^[0-9a-f]{64}$'; then
+		od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+		return 0
+	fi
+	if command -v openssl >/dev/null 2>&1; then
+		openssl rand -hex 32
+		return 0
+	fi
+	return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -169,62 +169,98 @@ phlix_generate_secret() {
 # example recommends — the block further down generates and persists a key.
 # ---------------------------------------------------------------------------
 phlix_is_placeholder_secret() {
-    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
-        change_me* | changeme* | change-me* | \
-        default-secret-change-me | \
-        your-secret-here | your_secret_here | \
-        secret | password | placeholder | example | test)
-            return 0
-            ;;
-        *) return 1 ;;
-    esac
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+	change_me* | changeme* | change-me* | \
+		default-secret-change-me | \
+		your-secret-here | your_secret_here | \
+		secret | password | placeholder | example | test)
+		return 0
+		;;
+	*) return 1 ;;
+	esac
 }
 
 for _candidate_var in JWT_SECRET PHLIX_SECRET_KEY; do
-    eval "_candidate_val=\${${_candidate_var}:-}"
-    if [ -n "$_candidate_val" ] && phlix_is_placeholder_secret "$_candidate_val"; then
-        echo "==========================================================" >&2
-        echo "PHLIX-PLACEHOLDER-SECRET: ${_candidate_var} is set to the" >&2
-        echo "documented placeholder value \"${_candidate_val}\"." >&2
-        echo "" >&2
-        echo "That string is committed to this repository, so it is public." >&2
-        echo "Using it would make every JWT and every signed media URL on this" >&2
-        echo "server forgeable by anyone. Refusing to start." >&2
-        echo "" >&2
-        echo "Either generate a real key:    openssl rand -hex 32" >&2
-        echo "or UNSET ${_candidate_var} entirely and let this entrypoint" >&2
-        echo "generate one and persist it to \${PHLIX_JWT_SECRET_FILE}." >&2
-        echo "==========================================================" >&2
-        exit 1
-    fi
+	eval "_candidate_val=\${${_candidate_var}:-}"
+	if [ -n "$_candidate_val" ] && phlix_is_placeholder_secret "$_candidate_val"; then
+		echo "==========================================================" >&2
+		echo "PHLIX-PLACEHOLDER-SECRET: ${_candidate_var} is set to the" >&2
+		echo "documented placeholder value \"${_candidate_val}\"." >&2
+		echo "" >&2
+		echo "That string is committed to this repository, so it is public." >&2
+		echo "Using it would make every JWT and every signed media URL on this" >&2
+		echo "server forgeable by anyone. Refusing to start." >&2
+		echo "" >&2
+		echo "Either generate a real key:    openssl rand -hex 32" >&2
+		echo "or UNSET ${_candidate_var} entirely and let this entrypoint" >&2
+		echo "generate one and persist it to \${PHLIX_JWT_SECRET_FILE}." >&2
+		echo "==========================================================" >&2
+		exit 1
+	fi
+done
+unset _candidate_var _candidate_val
+
+# ---------------------------------------------------------------------------
+# FAIL CLOSED on a documented placeholder DB password (R7-04 belt).
+#
+# Same defect class as the signing key above: docker/examples/.env.example
+# ships change_me_* values for the database passwords, and the compose files
+# interpolate them straight into both the app (DB_PASSWORD, consumed by
+# config/database.php) and the MySQL servers (MYSQL_PASSWORD /
+# MYSQL_ROOT_PASSWORD). The compose files now hard-fail on unset/placeholder
+# values via ${VAR:?…}, but a container started with a hand-written
+# environment (docker run, systemd, k8s secret typo) would still sail past
+# that gate — so the entrypoint refuses here too.
+#
+# Unlike JWT_SECRET there is nothing to generate: a DB password must match
+# whatever the MySQL server was initialized with, so the ONLY fix is for the
+# operator to set a real one on both sides. Checked AFTER the
+# PHLIX_DATABASE_* -> DB_* mapping so both spellings are covered.
+# ---------------------------------------------------------------------------
+for _candidate_var in DB_PASSWORD PHLIX_DATABASE_PASSWORD; do
+	eval "_candidate_val=\${${_candidate_var}:-}"
+	if [ -n "$_candidate_val" ] && phlix_is_placeholder_secret "$_candidate_val"; then
+		echo "==========================================================" >&2
+		echo "PHLIX-PLACEHOLDER-DB-PASSWORD: ${_candidate_var} is set to the" >&2
+		echo "documented placeholder value \"${_candidate_val}\"." >&2
+		echo "" >&2
+		echo "That string is committed to this repository, so it is public." >&2
+		echo "Refusing to start against a guessable database password." >&2
+		echo "" >&2
+		echo "Set ${_candidate_var} to the REAL password your MySQL server was" >&2
+		echo "initialized with (MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD in the" >&2
+		echo "compose .env). The entrypoint cannot generate this one for you." >&2
+		echo "==========================================================" >&2
+		exit 1
+	fi
 done
 unset _candidate_var _candidate_val
 
 [ -n "${JWT_SECRET:-}" ] || JWT_SECRET="${PHLIX_SECRET_KEY:-}"
 
 if [ -z "${JWT_SECRET:-}" ] && [ -r "$JWT_SECRET_FILE" ]; then
-    JWT_SECRET="$(cat "$JWT_SECRET_FILE" 2>/dev/null || true)"
-    [ -n "$JWT_SECRET" ] && echo "Using the JWT signing key persisted at ${JWT_SECRET_FILE}."
+	JWT_SECRET="$(cat "$JWT_SECRET_FILE" 2>/dev/null || true)"
+	[ -n "$JWT_SECRET" ] && echo "Using the JWT signing key persisted at ${JWT_SECRET_FILE}."
 fi
 
 if [ -z "${JWT_SECRET:-}" ]; then
-    JWT_SECRET="$(phlix_generate_secret 2>/dev/null || true)"
-    if [ -z "$JWT_SECRET" ]; then
-        echo "==========================================================" >&2
-        echo "PHLIX-JWT-SECRET-UNAVAILABLE: could not generate a signing key" >&2
-        echo "(no usable od(1)/openssl). Set JWT_SECRET explicitly — the" >&2
-        echo "server refuses to start without one." >&2
-        echo "==========================================================" >&2
-    elif ( umask 077 && printf '%s' "$JWT_SECRET" > "$JWT_SECRET_FILE" ) 2>/dev/null; then
-        echo "Generated a JWT signing key and persisted it to ${JWT_SECRET_FILE}."
-    else
-        echo "==========================================================" >&2
-        echo "PHLIX-JWT-SECRET-EPHEMERAL: generated a JWT signing key but" >&2
-        echo "could not write ${JWT_SECRET_FILE}." >&2
-        echo "It will CHANGE on every restart, invalidating all sessions and" >&2
-        echo "signed media URLs. Mount /var/phlix/config, or set JWT_SECRET." >&2
-        echo "==========================================================" >&2
-    fi
+	JWT_SECRET="$(phlix_generate_secret 2>/dev/null || true)"
+	if [ -z "$JWT_SECRET" ]; then
+		echo "==========================================================" >&2
+		echo "PHLIX-JWT-SECRET-UNAVAILABLE: could not generate a signing key" >&2
+		echo "(no usable od(1)/openssl). Set JWT_SECRET explicitly — the" >&2
+		echo "server refuses to start without one." >&2
+		echo "==========================================================" >&2
+	elif (umask 077 && printf '%s' "$JWT_SECRET" >"$JWT_SECRET_FILE") 2>/dev/null; then
+		echo "Generated a JWT signing key and persisted it to ${JWT_SECRET_FILE}."
+	else
+		echo "==========================================================" >&2
+		echo "PHLIX-JWT-SECRET-EPHEMERAL: generated a JWT signing key but" >&2
+		echo "could not write ${JWT_SECRET_FILE}." >&2
+		echo "It will CHANGE on every restart, invalidating all sessions and" >&2
+		echo "signed media URLs. Mount /var/phlix/config, or set JWT_SECRET." >&2
+		echo "==========================================================" >&2
+	fi
 fi
 
 export JWT_SECRET
@@ -234,64 +270,64 @@ export JWT_SECRET
 # `PHLIX_MIGRATIONS_STRICT="1 "` silently falling through to boot-anyway is
 # exactly the kind of opt-in that looks applied and is not (finding 6).
 migrations_strict() {
-    case "$(printf '%s' "${PHLIX_MIGRATIONS_STRICT:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
-        1 | true | yes | on) return 0 ;;
-        *) return 1 ;;
-    esac
+	case "$(printf '%s' "${PHLIX_MIGRATIONS_STRICT:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	1 | true | yes | on) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 echo "Starting Phlix Media Server..."
 
 migrations_skipped_reason=''
 if [ -z "${DB_HOST:-}" ]; then
-    migrations_skipped_reason="no database host configured (set PHLIX_DATABASE_HOST or DB_HOST)"
+	migrations_skipped_reason="no database host configured (set PHLIX_DATABASE_HOST or DB_HOST)"
 elif [ ! -f "${APP_ROOT}/scripts/run-migrations.php" ]; then
-    migrations_skipped_reason="${APP_ROOT}/scripts/run-migrations.php not found"
+	migrations_skipped_reason="${APP_ROOT}/scripts/run-migrations.php not found"
 fi
 
 if [ -n "$migrations_skipped_reason" ]; then
-    # Migrations did not run AT ALL. That is not a migration FAILURE, so no
-    # PHLIX-MIGRATION-FAILURE banner — but it is also not the guarantee an
-    # operator asked for with STRICT, which is "do not start unless the schema
-    # is current". Before finding 6 this path booted silently even under
-    # STRICT=1, i.e. the one setting whose entire purpose is to refuse.
-    echo "Skipping database migrations: ${migrations_skipped_reason}."
-    if migrations_strict; then
-        echo "==========================================================" >&2
-        echo "PHLIX-MIGRATIONS-NOT-RUN: ${migrations_skipped_reason}." >&2
-        echo "PHLIX_MIGRATIONS_STRICT is set and the schema could not be" >&2
-        echo "verified: refusing to start." >&2
-        echo "==========================================================" >&2
-        exit 1
-    fi
+	# Migrations did not run AT ALL. That is not a migration FAILURE, so no
+	# PHLIX-MIGRATION-FAILURE banner — but it is also not the guarantee an
+	# operator asked for with STRICT, which is "do not start unless the schema
+	# is current". Before finding 6 this path booted silently even under
+	# STRICT=1, i.e. the one setting whose entire purpose is to refuse.
+	echo "Skipping database migrations: ${migrations_skipped_reason}."
+	if migrations_strict; then
+		echo "==========================================================" >&2
+		echo "PHLIX-MIGRATIONS-NOT-RUN: ${migrations_skipped_reason}." >&2
+		echo "PHLIX_MIGRATIONS_STRICT is set and the schema could not be" >&2
+		echo "verified: refusing to start." >&2
+		echo "==========================================================" >&2
+		exit 1
+	fi
 else
-    echo "Running database migrations..."
-    # `set -e` must not abort here: the exit code is inspected below.
-    # `cmd || var=$?` is the POSIX-portable way to suppress `set -e` while
-    # KEEPING the status. (`if ! cmd; then …; fi` also suppresses `set -e`, but
-    # discards `$?` — the exit code the banner and strict mode both need — so
-    # do not "simplify" this into an `if !`.)
-    migration_status=0
-    php "${APP_ROOT}/scripts/run-migrations.php" || migration_status=$?
+	echo "Running database migrations..."
+	# `set -e` must not abort here: the exit code is inspected below.
+	# `cmd || var=$?` is the POSIX-portable way to suppress `set -e` while
+	# KEEPING the status. (`if ! cmd; then …; fi` also suppresses `set -e`, but
+	# discards `$?` — the exit code the banner and strict mode both need — so
+	# do not "simplify" this into an `if !`.)
+	migration_status=0
+	php "${APP_ROOT}/scripts/run-migrations.php" || migration_status=$?
 
-    if [ "$migration_status" -ne 0 ]; then
-        echo "==========================================================" >&2
-        echo "PHLIX-MIGRATION-FAILURE: scripts/run-migrations.php exited ${migration_status}." >&2
-        echo "The database schema may be HALF-MIGRATED. Failing migrations are" >&2
-        echo "not recorded in schema_migrations and are retried on next boot." >&2
-        echo "Run 'php scripts/run-migrations.php' (or 'bin/phlix migrate')" >&2
-        echo "for the full error list." >&2
+	if [ "$migration_status" -ne 0 ]; then
+		echo "==========================================================" >&2
+		echo "PHLIX-MIGRATION-FAILURE: scripts/run-migrations.php exited ${migration_status}." >&2
+		echo "The database schema may be HALF-MIGRATED. Failing migrations are" >&2
+		echo "not recorded in schema_migrations and are retried on next boot." >&2
+		echo "Run 'php scripts/run-migrations.php' (or 'bin/phlix migrate')" >&2
+		echo "for the full error list." >&2
 
-        if migrations_strict; then
-            echo "PHLIX_MIGRATIONS_STRICT is set: refusing to start." >&2
-            echo "==========================================================" >&2
-            exit "$migration_status"
-        fi
+		if migrations_strict; then
+			echo "PHLIX_MIGRATIONS_STRICT is set: refusing to start." >&2
+			echo "==========================================================" >&2
+			exit "$migration_status"
+		fi
 
-        echo "Starting anyway (default). Set PHLIX_MIGRATIONS_STRICT=1 to" >&2
-        echo "refuse to start on a migration failure instead." >&2
-        echo "==========================================================" >&2
-    fi
+		echo "Starting anyway (default). Set PHLIX_MIGRATIONS_STRICT=1 to" >&2
+		echo "refuse to start on a migration failure instead." >&2
+		echo "==========================================================" >&2
+	fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -338,7 +374,7 @@ rm -f "$FATAL_MARKER" 2>/dev/null || true
 SUPERVISORD_PID=$!
 
 phlix_forward_signal() {
-    kill -"$1" "$SUPERVISORD_PID" 2>/dev/null || true
+	kill -"$1" "$SUPERVISORD_PID" 2>/dev/null || true
 }
 trap 'phlix_forward_signal TERM' TERM
 trap 'phlix_forward_signal INT' INT
@@ -348,18 +384,18 @@ trap 'phlix_forward_signal QUIT' QUIT
 # child is still running, so loop until the child is really gone.
 supervisord_status=0
 while true; do
-    supervisord_status=0
-    wait "$SUPERVISORD_PID" || supervisord_status=$?
-    kill -0 "$SUPERVISORD_PID" 2>/dev/null || break
+	supervisord_status=0
+	wait "$SUPERVISORD_PID" || supervisord_status=$?
+	kill -0 "$SUPERVISORD_PID" 2>/dev/null || break
 done
 
 if [ -f "$FATAL_MARKER" ]; then
-    echo "==========================================================" >&2
-    echo "PHLIX-SUPERVISOR-FATAL-EXIT: supervisord shut down because a" >&2
-    echo "supervised program entered FATAL. Exiting 70 so the failure is" >&2
-    echo "distinguishable from a clean 'docker stop' (which exits 0)." >&2
-    echo "==========================================================" >&2
-    exit 70
+	echo "==========================================================" >&2
+	echo "PHLIX-SUPERVISOR-FATAL-EXIT: supervisord shut down because a" >&2
+	echo "supervised program entered FATAL. Exiting 70 so the failure is" >&2
+	echo "distinguishable from a clean 'docker stop' (which exits 0)." >&2
+	echo "==========================================================" >&2
+	exit 70
 fi
 
 exit "$supervisord_status"

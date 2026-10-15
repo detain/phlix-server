@@ -9,6 +9,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **SRV-OPS remediation (2026-10-14 review family) — R14-06 listen wiring:**
+  `start.php` hardcoded `http://0.0.0.0:8096` (count 14) and
+  `websocket://0.0.0.0:8097` while `config/server.php` shipped
+  `server.host/port`, `websocket.host/port`, `worker.count`,
+  `process.reloadable` and `process.reuse_port` that nothing binding a
+  socket ever read — a config illusion, worsened by the DLNA advertisement
+  reading `server.port` while the real bind ignored it. NEW
+  `src/Server/Runtime/ListenEndpoints.php` resolves both endpoints with
+  precedence **env > config > shipped default** (env seams
+  `PHLIX_HTTP_HOST` / `PHLIX_HTTP_PORT` / `PHLIX_HTTP_WORKER_COUNT` /
+  `PHLIX_WS_HOST` / `PHLIX_WS_PORT`; empty string = unset), and `start.php`
+  writes the resolved host/port back into `$config` before the fork so the
+  DLNA advertised port and the `WebSocketServer` status metadata describe
+  the socket that actually accepts. Defaults are byte-identical to the old
+  hardcodes (`0.0.0.0:8096`/14, `0.0.0.0:8097`); the WS worker's count stays
+  1 by the single-authoritative-`SyncPlayManager` law. Hostile values
+  (non-numeric or out-of-range port, bare IPv6, non-positive count) throw
+  at boot naming the key instead of binding somewhere surprising.
+  `process.reloadable`/`reuse_port` now reach `Worker::$reloadable`/`$reusePort`
+  on both listening workers; `reuse_port` ships `false` — its old
+  inert `true` must not silently flip deploys onto `SO_REUSEPORT`
+  (opt-in now, law pinned by test). `worker.count => 'auto'` resolves to
+  the shipped pool of 14 (documented); `worker.stdout_file` stays
+  deliberately unwired (journald/container stdout capture — annotated at
+  the key). Pins: 13-test `ListenEndpointsTest` (defaults byte-identity,
+  ladder, fail-loud roster, opt-in law) and the S431 census re-pinned
+  1987→1989 from its measured red.
+
 - **SRV-HTTP remediation (2026-10-14 review family): WebSocket reaper
   vacate, WS token-type gate, join-password throttle, list-row path
   de-leak, fail-closed rating degrade, require-TLS relay knob, and

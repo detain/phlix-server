@@ -613,8 +613,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * not predicted. Later SRV-HTTP commits rotate this again from their own
      * measured reds: +1 (tests/Unit/Server/Core/ApplicationIndexBucketsFailClosedTest.php
      * — the R18-01 fail-closed degrade harness), landing 1987.
+     * Re-pinned 1987→1989 by the SRV-OPS remediation lane (2026-10-14):
+     * net +2 — src/Server/Runtime/ListenEndpoints.php +
+     * tests/Unit/Server/Runtime/ListenEndpointsTest.php (R14-06: the
+     * listening workers now honor config/env instead of hardcoded binds).
+     * Measured from the phpunit red (1989), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1987;
+    private const EXPECTED_PHP_FILES = 1989;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

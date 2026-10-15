@@ -31,6 +31,7 @@ use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
+use Phlix\Server\Runtime\ListenEndpoints;
 use Phlix\Server\Runtime\PidFile;
 use Phlix\Server\Workerman\HttpHandler;
 use Phlix\Stats\Metrics\MetricsCollector;
@@ -200,8 +201,27 @@ $publicRoot = realpath(__DIR__ . '/public') ?: __DIR__ . '/public';
 // child has its own copy of long-lived state.
 // -----------------------------------------------------------------------------
 
-$httpWorker = new Worker('http://0.0.0.0:8096');
-$httpWorker->count = 14;
+// R14-06: the bind used to be a hardcoded `http://0.0.0.0:8096` with
+// count 14 while config/server.php shipped server.host/port, worker.count
+// and process.* that nothing binding a socket read. Resolution is now
+// env > config > shipped default, byte-identical when neither is set, and
+// the resolved host/port are written BACK into $config before the fork so
+// every later reader (the DLNA advertised port at §dlna, the relay's
+// local-address derivation, container healthchecks' expectations) sees the
+// socket that actually accepts. {@see \Phlix\Server\Runtime\ListenEndpoints}
+$httpListen = ListenEndpoints::http(
+    $config,
+    ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_HOST),
+    ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_PORT),
+    ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_WORKER_COUNT)
+);
+$config['server'] = is_array($config['server'] ?? null) ? $config['server'] : [];
+$config['server']['host'] = $httpListen['host'];
+$config['server']['port'] = $httpListen['port'];
+$httpWorker = new Worker($httpListen['socketName']);
+$httpWorker->count = $httpListen['workerCount'];
+$httpWorker->reloadable = ListenEndpoints::reloadable($config);
+$httpWorker->reusePort = ListenEndpoints::reusePort($config);
 $httpWorker->name = 'phlix-server-http';
 $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRoot, $applyCuratedCoroutineHooks): void {
     $applyCuratedCoroutineHooks();
@@ -607,8 +627,24 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
 // -----------------------------------------------------------------------------
 
 try {
-    $wsWorker = new Worker('websocket://0.0.0.0:8097');
+    // R14-06: was hardcoded `websocket://0.0.0.0:8097`; now env > config >
+    // default with the resolved pair written back into $config['websocket']
+    // BEFORE the closure below captures $config — so the WebSocketServer
+    // metadata it builds in the child (status host/port) always describes
+    // the socket that actually listens. The count stays 1 by law: exactly
+    // one authoritative SyncPlayManager may own room state (§4a).
+    $wsListen = ListenEndpoints::webSocket(
+        $config,
+        ListenEndpoints::envValue(ListenEndpoints::ENV_WS_HOST),
+        ListenEndpoints::envValue(ListenEndpoints::ENV_WS_PORT)
+    );
+    $config['websocket'] = is_array($config['websocket'] ?? null) ? $config['websocket'] : [];
+    $config['websocket']['host'] = $wsListen['host'];
+    $config['websocket']['port'] = $wsListen['port'];
+    $wsWorker = new Worker($wsListen['socketName']);
     $wsWorker->count = 1;
+    $wsWorker->reloadable = ListenEndpoints::reloadable($config);
+    $wsWorker->reusePort = ListenEndpoints::reusePort($config);
     $wsWorker->name = 'phlix-server-ws';
     $wsWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();

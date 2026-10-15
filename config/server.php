@@ -1,20 +1,56 @@
 <?php
 
+// R14-06 (SRV-OPS, 2026-10-14): server.host/port, websocket.host/port,
+// worker.count and process.reloadable/reuse_port are now HONORED by
+// start.php through \Phlix\Server\Runtime\ListenEndpoints (env > config >
+// default). Env seams: PHLIX_HTTP_HOST / PHLIX_HTTP_PORT /
+// PHLIX_HTTP_WORKER_COUNT / PHLIX_WS_HOST / PHLIX_WS_PORT — the env wins
+// over the values below, empty string counts as unset. The resolved
+// host/port are written back into this array before the fork, so the DLNA
+// advertisement and the WebSocketServer status metadata describe the
+// socket that actually binds.
 return [
     'server' => [
         'name' => 'Phlix Media Server',
+        // HTTP listener bind host (start.php §3). Use '[::]' (bracketed)
+        // for IPv6 any, '127.0.0.1' to serve loopback only.
         'host' => '0.0.0.0',
+        // HTTP listener bind port (start.php §3). The DLNA/CDS advertised
+        // port reads this same value, so changing it moves both.
         'port' => 8096,
         'context' => [],
     ],
     'worker' => [
+        // HTTP worker pool size (start.php §3). 'auto' resolves to the
+        // shipped pool of 14 — Workerman has no auto-scaling pool, and 14
+        // was the number every real deploy has run since before this key
+        // existed. A positive int sets it explicitly; the env seam
+        // PHLIX_HTTP_WORKER_COUNT wins over this key. The WebSocket
+        // worker's count is NOT configurable (count=1 law: one
+        // authoritative SyncPlayManager).
         'count' => 'auto',
+        // NOTE (honest, R14-06): NOT wired. Workerman's stdout capture
+        // (Worker::$stdoutFile) is deliberately left unset — the systemd
+        // unit routes raw process stdout to the journal
+        // (`StandardOutput=journal`) and the container captures it
+        // likewise; redirecting it into a repo file here would mute both.
+        // Application-level logs go through Monolog — see
+        // PHLIX_LOG_STDOUT / PHLIX_LOG_LEVEL in the README env table.
         'stdout_file' => __DIR__ . '/../.logs/stdout.log',
         'pid_file' => '/var/run/phlix/pid',
     ],
     'process' => [
+        // → Worker::$reloadable on both listening workers (start.php §3/§4a).
+        // SIGUSR2 graceful reload re-forks children from the running master.
         'reloadable' => true,
-        'reuse_port' => true,
+        // → Worker::$reusePort on both listening workers (start.php §3/§4a).
+        // Ships FALSE on purpose: the key used to be inert while Workerman's
+        // own default (false) ran, and wiring it at `true` would have
+        // silently switched every deploy to SO_REUSEPORT (per-worker
+        // sockets; Workerman documents reload degrading to restart under
+        // it). Opt in knowingly: set true only when a kernel-level listen
+        // distribution across the pool is what you want.
+        'reuse_port' => false,
     ],
 
     // Swoole coroutine runtime (consumed by start.php via
@@ -142,6 +178,10 @@ return [
     // The WS worker runs as count=1 (one authoritative SyncPlayManager for all
     // connections) on a dedicated port separate from the HTTP workers.
     'websocket' => [
+        // SyncPlay WS bind host/port (start.php §4a) — honored since
+        // R14-06; env seams PHLIX_WS_HOST / PHLIX_WS_PORT win. start.php
+        // overwrites these two keys with the RESOLVED values before forking,
+        // so what WebSocketServer reports in status always matches the bind.
         'host' => '0.0.0.0',
         'port' => 8097,
         // Interval for cleaning up stale connections (seconds).

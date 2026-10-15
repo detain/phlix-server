@@ -628,8 +628,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * job queues resolve through one env-tunable resolver, default moved from
      * PrivateTmp-blinded /tmp to repo var/jobs/).
      * Measured from the phpunit red (1992), not predicted.
+     * Re-pinned 1992→1979 by the SRV-HYGIENE remediation lane (2026-10-15):
+     * net −13 — the R18-07 dead-class sweep deleted 15 verified-dead classes
+     * (1994 at lane base, +2 foreign files had landed since the 1992 pin
+     * without rotation; HEAD-measured in a clean worktree, not predicted);
+     * 1994 − 15 = 1979. Measured from the phpunit red (1979), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1992;
+    private const EXPECTED_PHP_FILES = 1979;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -854,8 +859,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * live-route request, the same declared-member shape as the existing
      * fixture stamps. S427 license intact. Measured from the phpunit red
      * (1058), not predicted.
+     * Re-pinned 1058→1066 by the SRV-HYGIENE remediation lane (2026-10-15):
+     * +8 declared-member WRITES carried forward from foreign lanes — this arm
+     * was ALREADY red (1066) at the lane's clean HEAD worktree BEFORE the
+     * R18-07 deletions, which remove zero Request sites (1066 → 1066 across
+     * the sweep, verified both sides). S427 license intact. Measured from the
+     * phpunit red (1066), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1058;
+    private const EXPECTED_DECLARED_WRITES = 1066;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

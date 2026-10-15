@@ -156,6 +156,43 @@ final class UserAvatarControllerTest extends TestCase
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
+        // R20-05: exception messages are server-log material, not wire content.
+        $this->assertSame('Storage error, please try again later.', $body['error']);
+        $this->assertStringNotContainsString('Disk full', $body['error']);
+    }
+
+    /**
+     * R20-05 — the mkdir-failure path previously echoed the absolute storage
+     * directory into the client response ('Storage error: Failed to create
+     * avatar storage directory: /…'). This drives the REAL AvatarStorage (no
+     * mock) at an un-creatable directory — a path under a regular file, so
+     * mkdir fails with ENOTDIR on any POSIX host — and pins that the response
+     * carries only the generic copy with no trace of the filesystem layout.
+     */
+    public function testStorageDirectoryFailureNeverLeaksAbsolutePath(): void
+    {
+        $blockedRoot = sys_get_temp_dir() . '/avatar-leak-' . bin2hex(random_bytes(6));
+        mkdir($blockedRoot, 0755, true);
+        // A regular file where a directory must be: any mkdir beneath fails.
+        file_put_contents($blockedRoot . '.locked', '');
+
+        $storage = new AvatarStorage($blockedRoot . '.locked/avatars');
+        $controller = new UserAvatarController($storage, $this->userRepository);
+
+        try {
+            $response = $controller->uploadAvatar($this->authedRequestWithFile($blockedRoot), []);
+
+            $this->assertSame(500, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
+            $body = json_decode($response->body, true);
+            $this->assertSame('Storage error, please try again later.', $body['error']);
+            $this->assertStringNotContainsString('avatars', $body['error'], 'no storage-dir name on the wire');
+            $this->assertStringNotContainsString('.locked', $body['error'], 'no filesystem layout on the wire');
+            $this->assertStringNotContainsString(sys_get_temp_dir(), $body['error'], 'no absolute path on the wire');
+        } finally {
+            @rmdir($blockedRoot);
+            @unlink($blockedRoot . '.locked');
+        }
     }
 
     public function testUploadAvatarSuccessStoresAndReturnsSignedUrl(): void

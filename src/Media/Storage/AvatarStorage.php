@@ -327,10 +327,19 @@ class AvatarStorage
             return;
         }
 
-        if (!mkdir($this->storageDir, 0755, true)) {
-            throw new \RuntimeException(
-                sprintf('Failed to create avatar storage directory: %s', $this->storageDir),
-            );
+        // R20-05: @-suppressed — the failure is fully reported by the typed
+        // RuntimeException below; the raw mkdir() warning would otherwise
+        // carry the attempted absolute path into any error capture / stderr
+        // sink that bypasses this class (phpunit's warning handler, docker
+        // stderr, Monolog's fuzzer). Same posture as @file_get_contents in
+        // the installer.
+        if (!@mkdir($this->storageDir, 0755, true)) {
+            // R20-05: this message reaches clients through the controllers'
+            // RuntimeException catch ('Storage error' envelope) — never embed
+            // the absolute filesystem path here. The failing operation names
+            // itself, and the throw site (class + line) is logged server-side
+            // by the catching controllers via context.exception.
+            throw new \RuntimeException('Failed to create the avatar storage directory.');
         }
     }
 }

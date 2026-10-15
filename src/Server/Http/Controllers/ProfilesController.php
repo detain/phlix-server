@@ -15,6 +15,8 @@ use Phlix\Access\ProfileAccessPolicy;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\UserProfileManager;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Request;
@@ -507,7 +509,10 @@ final class ProfilesController
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
-            return (new Response())->status(500)->json(['error' => 'Storage error: ' . $e->getMessage()]);
+            // R20-05: generic client copy; exception detail goes to the HTTP
+            // channel log only (mirror of UserAvatarController's upload arm).
+            LoggerFactory::get(LogChannels::HTTP)->error('profile avatar storage error', ['exception' => $e]);
+            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later.']);
         }
 
         $this->profiles->update($profileId, ['avatar_url' => $avatarPath]);

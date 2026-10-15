@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -94,7 +96,11 @@ class UserAvatarController
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
-            return (new Response())->status(500)->json(['error' => 'Storage error: ' . $e->getMessage()]);
+            // R20-05: generic client copy (house voice, cf. AuthController's
+            // "temporarily unavailable" lines); the exception itself — message
+            // plus throw site — goes to the HTTP channel log, never to the wire.
+            LoggerFactory::get(LogChannels::HTTP)->error('avatar storage error', ['exception' => $e]);
+            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later.']);
         }
 
         $this->userRepository->updateAvatar($userId, $avatarPath);

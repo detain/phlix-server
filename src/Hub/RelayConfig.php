@@ -125,23 +125,30 @@ final class RelayConfig
     public static function fromEnv(?array $overrides = null): self
     {
         $enabled = self::getEnvBool('PHLIX_RELAY_ENABLED', false);
-        $hubUrl = getenv('PHLIX_RELAY_HUB_URL') ?: '';
-        $tunnelHostname = getenv('PHLIX_RELAY_TUNNEL_HOSTNAME') ?: '';
-        $reconnectDelay = (int)(getenv('PHLIX_RELAY_RECONNECT_DELAY') ?: '5');
-        $reconnectMaxDelay = (int)(getenv('PHLIX_RELAY_RECONNECT_MAX_DELAY') ?: '300');
-        $reconnectJitterFactor = (float)(getenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR') ?: '0.3');
-        $pingInterval = (int)(getenv('PHLIX_RELAY_PING_INTERVAL') ?: '30');
-        $pingTimeout = (int)(getenv('PHLIX_RELAY_PING_TIMEOUT') ?: '10');
+        // R18-17: explicit typed env helpers replace the bare `getenv(...) ?:
+        // default` idiom. Unset AND empty-string both mean "not provided" (the
+        // `?:` chain behaved identically for those two shapes); the literal '0'
+        // keeps falling back exactly as the old string-truthiness `?:` did; and
+        // every other raw string keeps the old cast semantics ('abc' still
+        // casts to 0 for ints), so behavior is identical for ALL inputs while
+        // the falsiness now lives in one readable place instead of `?:`.
+        $hubUrl = self::envString('PHLIX_RELAY_HUB_URL', '');
+        $tunnelHostname = self::envString('PHLIX_RELAY_TUNNEL_HOSTNAME', '');
+        $reconnectDelay = self::envInt('PHLIX_RELAY_RECONNECT_DELAY', 5);
+        $reconnectMaxDelay = self::envInt('PHLIX_RELAY_RECONNECT_MAX_DELAY', 300);
+        $reconnectJitterFactor = self::envFloat('PHLIX_RELAY_RECONNECT_JITTER_FACTOR', 0.3);
+        $pingInterval = self::envInt('PHLIX_RELAY_PING_INTERVAL', 30);
+        $pingTimeout = self::envInt('PHLIX_RELAY_PING_TIMEOUT', 10);
         $localAddress = '127.0.0.1:0';
-        $hubRelayWsUrl = getenv('PHLIX_RELAY_HUB_WS_URL') ?: '';
-        $localHttpAddress = getenv('PHLIX_RELAY_LOCAL_HTTP_ADDRESS') ?: '127.0.0.1:8096';
+        $hubRelayWsUrl = self::envString('PHLIX_RELAY_HUB_WS_URL', '');
+        $localHttpAddress = self::envString('PHLIX_RELAY_LOCAL_HTTP_ADDRESS', '127.0.0.1:8096');
         // Relay TLS is INDEPENDENT of HTTP TLS and OFF by default, mirroring the
         // hub's HUB_RELAY_TLS default (its relay listener is plaintext by
         // default). Verification stays ON by default (secure); disable it only
         // to trust a self-signed hub relay cert.
         $relayTls = self::getEnvBool('PHLIX_RELAY_TLS', false);
         $relayTlsVerify = self::getEnvBool('PHLIX_RELAY_TLS_VERIFY', true);
-        $relayTlsCafile = getenv('PHLIX_RELAY_TLS_CAFILE') ?: self::DEFAULT_TLS_CAFILE;
+        $relayTlsCafile = self::envString('PHLIX_RELAY_TLS_CAFILE', self::DEFAULT_TLS_CAFILE);
         // Opt-in ACK of the plaintext-tunnel impersonation risk (M5). Silence
         // the connect-time warning ONLY when the operator explicitly sets it.
         $allowPlaintextTunnel = self::getEnvBool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
@@ -279,6 +286,34 @@ final class RelayConfig
             return $default;
         }
         return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
+    }
+
+    /**
+     * String env read for the `getenv(...) ?: default` family (R18-17): unset
+     * and empty-string are both "not provided".
+     */
+    private static function envString(string $key, string $default): string
+    {
+        $raw = getenv($key);
+        return $raw === false || $raw === '' ? $default : $raw;
+    }
+
+    /**
+     * Int env read with default fallback (R18-17): unset, '' and the literal '0'
+     * fall back (the old `?:` treated '0' as falsy); any other string keeps the
+     * PHP cast semantics, so 'abc' still yields 0 exactly as before.
+     */
+    private static function envInt(string $key, int $default): int
+    {
+        $raw = getenv($key);
+        return $raw === false || $raw === '' || $raw === '0' ? $default : (int)$raw;
+    }
+
+    /** Float counterpart of {@see envInt()} — see its docblock for the law. */
+    private static function envFloat(string $key, float $default): float
+    {
+        $raw = getenv($key);
+        return $raw === false || $raw === '' || $raw === '0' ? $default : (float)$raw;
     }
 
     /**

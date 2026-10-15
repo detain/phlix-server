@@ -32,6 +32,13 @@ final class RelayConfigTest extends TestCase
             'PHLIX_RELAY_HUB_WS_URL',
             'PHLIX_RELAY_ALLOW_PLAINTEXT',
             'PHLIX_RELAY_REQUIRE_TLS',
+            'PHLIX_RELAY_RECONNECT_DELAY',
+            'PHLIX_RELAY_RECONNECT_MAX_DELAY',
+            'PHLIX_RELAY_RECONNECT_JITTER_FACTOR',
+            'PHLIX_RELAY_PING_INTERVAL',
+            'PHLIX_RELAY_PING_TIMEOUT',
+            'PHLIX_RELAY_TUNNEL_HOSTNAME',
+            'PHLIX_RELAY_LOCAL_HTTP_ADDRESS',
             ] as $key
         ) {
             $this->savedEnv[$key] = getenv($key);
@@ -239,5 +246,96 @@ final class RelayConfigTest extends TestCase
         // Auto-derived plaintext URL must survive the copy untouched — the
         // refusal happens later at dial time, never by silently rewriting it.
         $this->assertSame('ws://hub.example.com:8802', $enabled->buildHubRelayWsUrl());
+    }
+
+    // ---- R18-17: typed env parsing (empty = unset; old `?:` falsiness preserved) ----
+
+    public function test_from_env_empty_string_means_unset_for_strings(): void
+    {
+        putenv('PHLIX_RELAY_HUB_URL=');
+        putenv('PHLIX_RELAY_HUB_WS_URL=');
+        putenv('PHLIX_RELAY_TUNNEL_HOSTNAME=');
+        putenv('PHLIX_RELAY_LOCAL_HTTP_ADDRESS=');
+        putenv('PHLIX_RELAY_TLS_CAFILE=');
+
+        $config = RelayConfig::fromEnv();
+
+        $this->assertSame('', $config->hubWssUrl);
+        $this->assertSame('', $config->hubRelayWsUrl);
+        $this->assertSame('', $config->tunnelHostname);
+        $this->assertSame('127.0.0.1:8096', $config->localHttpAddress);
+        $this->assertSame(RelayConfig::DEFAULT_TLS_CAFILE, $config->relayTlsCafile);
+    }
+
+    public function test_from_env_empty_string_means_unset_for_numerics(): void
+    {
+        putenv('PHLIX_RELAY_RECONNECT_DELAY=');
+        putenv('PHLIX_RELAY_RECONNECT_MAX_DELAY=');
+        putenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR=');
+        putenv('PHLIX_RELAY_PING_INTERVAL=');
+        putenv('PHLIX_RELAY_PING_TIMEOUT=');
+
+        $config = RelayConfig::fromEnv();
+
+        $this->assertSame(5, $config->reconnectDelay);
+        $this->assertSame(300, $config->reconnectMaxDelay);
+        $this->assertSame(0.3, $config->reconnectJitterFactor);
+        $this->assertSame(30, $config->pingInterval);
+        $this->assertSame(10, $config->pingTimeout);
+    }
+
+    public function test_from_env_zero_string_still_falls_back_like_the_old_falsy_chain(): void
+    {
+        // The retired idiom was (int)(getenv(X) ?: '5') — the STRING '0' is
+        // falsy in PHP, so '0' never meant "delay 0"; pin that it still means
+        // "default". Callers wanting a literal zero must not set the env at all.
+        putenv('PHLIX_RELAY_RECONNECT_DELAY=0');
+        putenv('PHLIX_RELAY_RECONNECT_MAX_DELAY=0');
+        putenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR=0');
+        putenv('PHLIX_RELAY_PING_INTERVAL=0');
+        putenv('PHLIX_RELAY_PING_TIMEOUT=0');
+
+        $config = RelayConfig::fromEnv();
+
+        $this->assertSame(5, $config->reconnectDelay);
+        $this->assertSame(300, $config->reconnectMaxDelay);
+        $this->assertSame(0.3, $config->reconnectJitterFactor);
+        $this->assertSame(30, $config->pingInterval);
+        $this->assertSame(10, $config->pingTimeout);
+    }
+
+    public function test_from_env_reads_nonzero_numerics_verbatim(): void
+    {
+        putenv('PHLIX_RELAY_RECONNECT_DELAY=7');
+        putenv('PHLIX_RELAY_RECONNECT_MAX_DELAY=45');
+        putenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR=0.5');
+        putenv('PHLIX_RELAY_PING_INTERVAL=15');
+        putenv('PHLIX_RELAY_PING_TIMEOUT=4');
+
+        $config = RelayConfig::fromEnv();
+
+        $this->assertSame(7, $config->reconnectDelay);
+        $this->assertSame(45, $config->reconnectMaxDelay);
+        $this->assertSame(0.5, $config->reconnectJitterFactor);
+        $this->assertSame(15, $config->pingInterval);
+        $this->assertSame(4, $config->pingTimeout);
+    }
+
+    public function test_from_env_garbage_numerics_keep_the_cast_semantics(): void
+    {
+        // 'abc' was truthy for the old `?:`, then (int)'abc' === 0 — the typed
+        // helpers must reproduce exactly that (fail-loud validation of these
+        // knobs, if ever wanted, is a separate behavior change).
+        putenv('PHLIX_RELAY_RECONNECT_DELAY=abc');
+        putenv('PHLIX_RELAY_PING_INTERVAL=abc');
+        putenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR=0.0');
+
+        $config = RelayConfig::fromEnv();
+
+        $this->assertSame(0, $config->reconnectDelay);
+        $this->assertSame(0, $config->pingInterval);
+        // '0.0' is a non-empty, non-'0' string → parses to float 0.0, same as
+        // the old chain ((float)('0.0' ?: '0.3') would take the truthy '0.0').
+        $this->assertSame(0.0, $config->reconnectJitterFactor);
     }
 }

@@ -21,8 +21,13 @@ return [
      * metadata write-back is represented by one JSON job file. Must match the
      * directory the MetadataWriteJobStore is constructed with so the scanner
      * (producer) and the MetadataWriteWorker (consumer) share the same queue.
+     *
+     * R14-14: resolved by \Phlix\Config\JobQueuePaths (was hardcoded
+     * /tmp/phlix_metadata_write_jobs — lost across restarts under systemd's
+     * PrivateTmp=true). Default lands in <repo>/var/jobs/metadata_write.
+     * Override with PHLIX_METADATA_WRITE_JOBS_DIR or PHLIX_JOB_QUEUE_ROOT.
      */
-    'job_queue_dir' => '/tmp/phlix_metadata_write_jobs',
+    'job_queue_dir' => \Phlix\Config\JobQueuePaths::dir('metadata_write'),
 
     /*
      * Sleep interval in seconds when the queue is empty.

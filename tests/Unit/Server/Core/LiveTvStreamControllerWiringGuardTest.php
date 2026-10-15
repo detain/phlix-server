@@ -90,9 +90,9 @@ final class LiveTvStreamControllerWiringGuardTest extends TestCase
     {
         // Same residue the Dash wiring test sweeps: resolving the production
         // graph constructs MediaAssetJobStore/SimilarityJobStore at their shared
-        // /tmp queue paths. Leave zero residue behind.
-        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        // queue paths (repo var/jobs/ since R14-14). Leave zero residue behind.
+        foreach (['media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

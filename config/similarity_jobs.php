@@ -18,8 +18,13 @@ return [
      * similarity computation is represented by a JSON job file. Must match the
      * directory the SimilarityJobStore is constructed with so the scanner
      * (producer) and the SimilarityWorker (consumer) share the same queue.
+     *
+     * R14-14: resolved by \Phlix\Config\JobQueuePaths (was hardcoded
+     * /tmp/phlix_similarity_jobs — lost across restarts under systemd's
+     * PrivateTmp=true). Default lands in <repo>/var/jobs/similarity.
+     * Override with PHLIX_SIMILARITY_JOBS_DIR or PHLIX_JOB_QUEUE_ROOT.
      */
-    'job_queue_dir' => '/tmp/phlix_similarity_jobs',
+    'job_queue_dir' => \Phlix\Config\JobQueuePaths::dir('similarity'),
 
     /*
      * Sleep interval in seconds when the queue is empty.

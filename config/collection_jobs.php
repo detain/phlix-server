@@ -21,8 +21,13 @@ return [
      * collection sync is represented by a JSON job file. Must match the
      * directory the CollectionJobStore is constructed with so the scanner
      * (producer) and the CollectionWorker (consumer) share the same queue.
+     *
+     * R14-14: resolved by \Phlix\Config\JobQueuePaths (was hardcoded
+     * /tmp/phlix_collection_jobs — lost across restarts under systemd's
+     * PrivateTmp=true). Default lands in <repo>/var/jobs/collection.
+     * Override with PHLIX_COLLECTION_JOBS_DIR or PHLIX_JOB_QUEUE_ROOT.
      */
-    'job_queue_dir' => '/tmp/phlix_collection_jobs',
+    'job_queue_dir' => \Phlix\Config\JobQueuePaths::dir('collection'),
 
     /*
      * Sleep interval in seconds when the queue is empty.

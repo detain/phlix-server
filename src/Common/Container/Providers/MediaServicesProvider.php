@@ -939,9 +939,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $inc = @include __DIR__ . '/../../../../config/marker_detection.php';
                     $markerCfg = is_array($inc) ? $inc : [];
                 }
+                // R14-14: the non-config fallback funnels through the same
+                // JobQueuePaths resolver the config uses — a failed include
+                // must not resurrect the old PrivateTmp-blinded /tmp path.
                 $queueDir = is_string(($markerCfg['job_queue_dir'] ?? null))
                     ? $markerCfg['job_queue_dir']
-                    : '/tmp/phlix_marker_jobs';
+                    : \Phlix\Config\JobQueuePaths::dir('marker');
                 return new MarkerCandidateStore($queueDir);
             }),
 
@@ -1005,9 +1008,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $inc = @include __DIR__ . '/../../../../config/media_asset_jobs.php';
                     $assetCfg = is_array($inc) ? $inc : [];
                 }
+                // R14-14: same resolver as config — see marker note above.
                 $queueDir = is_string(($assetCfg['job_queue_dir'] ?? null))
                     ? $assetCfg['job_queue_dir']
-                    : '/tmp/phlix_media_asset_jobs';
+                    : \Phlix\Config\JobQueuePaths::dir('media_asset');
                 return new \Phlix\Media\MediaAsset\MediaAssetJobStore($queueDir);
             }),
 
@@ -1078,9 +1082,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $inc = @include __DIR__ . '/../../../../config/similarity_jobs.php';
                     $simCfg = is_array($inc) ? $inc : [];
                 }
+                // R14-14: same resolver as config — see marker note above.
                 $queueDir = is_string(($simCfg['job_queue_dir'] ?? null))
                     ? $simCfg['job_queue_dir']
-                    : '/tmp/phlix_similarity_jobs';
+                    : \Phlix\Config\JobQueuePaths::dir('similarity');
                 return new \Phlix\Media\SimilarityJobStore($queueDir);
             }),
 
@@ -1128,9 +1133,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $inc = @include __DIR__ . '/../../../../config/collection_jobs.php';
                     $colCfg = is_array($inc) ? $inc : [];
                 }
+                // R14-14: same resolver as config — see marker note above.
                 $queueDir = is_string(($colCfg['job_queue_dir'] ?? null))
                     ? $colCfg['job_queue_dir']
-                    : '/tmp/phlix_collection_jobs';
+                    : \Phlix\Config\JobQueuePaths::dir('collection');
                 return new \Phlix\Media\CollectionJobStore($queueDir);
             }),
 
@@ -1179,9 +1185,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                         $inc = @include __DIR__ . '/../../../../config/metadata_write_jobs.php';
                         $mwCfg = is_array($inc) ? $inc : [];
                     }
+                    // R14-14: same resolver as config — see marker note above.
                     $queueDir = is_string(($mwCfg['job_queue_dir'] ?? null))
                         ? $mwCfg['job_queue_dir']
-                        : '/tmp/phlix_metadata_write_jobs';
+                        : \Phlix\Config\JobQueuePaths::dir('metadata_write');
                     return new \Phlix\Media\Metadata\Writer\MetadataWriteJobStore($queueDir);
                 }
             ),

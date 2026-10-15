@@ -16,10 +16,10 @@ class ApplicationTest extends TestCase
         // S439: bootApplication() constructs the real Application, whose eager
         // controller graph builds MediaAssetJobStore and SimilarityJobStore through
         // MediaServicesProvider's factories at the production default queue paths —
-        // their constructors mint the shared /tmp directories. The minter owns the
+        // their constructors mint the shared queue directories (repo var/jobs/ since R14-14). The minter owns the
         // sweep; on MySQL-less runners the boot path is skipped and this is a no-op.
-        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        foreach (['media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

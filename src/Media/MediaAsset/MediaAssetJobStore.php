@@ -21,9 +21,6 @@ namespace Phlix\Media\MediaAsset;
  */
 final class MediaAssetJobStore
 {
-    /** Queue directory path */
-    private const QUEUE_DIR = '/tmp/phlix_media_asset_jobs';
-
     /** Job file extension */
     private const JOB_EXT = '.job.json';
 
@@ -31,11 +28,16 @@ final class MediaAssetJobStore
     private string $queueDir;
 
     /**
-     * @param string|null $queueDir Optional custom queue directory
+     * @param string|null $queueDir Optional custom queue directory (null =
+     *                              {@see \Phlix\Config\JobQueuePaths::dir()}
+     *                              'media_asset' — R14-14: env-tunable,
+     *                              defaults under repo var/jobs/, no longer
+     *                              /tmp, so the backlog survives systemd
+     *                              PrivateTmp).
      */
     public function __construct(?string $queueDir = null)
     {
-        $this->queueDir = $queueDir ?? self::QUEUE_DIR;
+        $this->queueDir = $queueDir ?? \Phlix\Config\JobQueuePaths::dir('media_asset');
         $this->ensureQueueDir();
     }
 

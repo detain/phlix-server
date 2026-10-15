@@ -20,20 +20,18 @@ namespace Phlix\Media;
  * queue size to prevent unbounded disk usage.
  *
  * Mirrors {@see SimilarityJobStore}, with one deliberate deviation: the queue
- * directory is created LAZILY on first enqueue, never in the constructor.
- * S439's zero-residue census fails the suite on any `/tmp/phlix_*` directory a
- * test run mints and does not sweep — and container-boot tests resolve this
- * store through the DI factories without ever enqueuing. A constructor-side
- * `mkdir()` would therefore leak `/tmp/phlix_collection_jobs` on clean CI
- * runners; a read-only store must remain side-effect-free.
+ * directory is created LAZILY on first enqueue, never in the constructor — a
+ * read-only store must remain side-effect-free, and container-boot tests
+ * resolve this store through the DI factories without ever enqueuing.
+ * (Historic note: while the R14-14 default lived under /tmp this also kept
+ * S439's zero-residue census quiet; the default now resolves via
+ * {@see \Phlix\Config\JobQueuePaths::dir()} under repo var/jobs/, so the
+ * minting concern moved, not the law.)
  *
  * @since 0.38.0
  */
 final class CollectionJobStore
 {
-    /** Default queue directory path */
-    private const QUEUE_DIR = '/tmp/phlix_collection_jobs';
-
     /** Job file extension */
     private const JOB_EXT = '.job.json';
 
@@ -45,11 +43,14 @@ final class CollectionJobStore
 
     /**
      * @param string|null $queueDir Optional custom queue directory
-     *                              (null = {@see self::QUEUE_DIR})
+     *                              (null = {@see \Phlix\Config\JobQueuePaths::dir()}
+     *                              'collection' — R14-14: env-tunable,
+     *                              defaults under repo var/jobs/, survives
+     *                              systemd PrivateTmp)
      */
     public function __construct(?string $queueDir = null)
     {
-        $this->queueDir = $queueDir ?? self::QUEUE_DIR;
+        $this->queueDir = $queueDir ?? \Phlix\Config\JobQueuePaths::dir('collection');
     }
 
     /**

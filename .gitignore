@@ -54,6 +54,9 @@ var/plugins/
 # Runtime theme files (extracted from ui-theme plugins)
 var/themes/
 
+# File-backed job queues (R14-14: repo var/jobs/ replaced /tmp/phlix_*_jobs)
+var/jobs/
+
 # Smarty compile cache (created when templates render)
 templates_c/
 

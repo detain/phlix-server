@@ -41,8 +41,14 @@ return [
     /*
      * Directory for the file-based job queue.
      * Each show being processed is represented by a lock file.
+     *
+     * R14-14: resolved by \Phlix\Config\JobQueuePaths (was hardcoded
+     * /tmp/phlix_marker_jobs). Under systemd's PrivateTmp=true a /tmp queue
+     * was discarded on every restart and invisible to out-of-unit producers;
+     * the default now lands in <repo>/var/jobs/marker. Override with
+     * PHLIX_MARKER_JOBS_DIR, or move all queues with PHLIX_JOB_QUEUE_ROOT.
      */
-    'job_queue_dir' => '/tmp/phlix_marker_jobs',
+    'job_queue_dir' => \Phlix\Config\JobQueuePaths::dir('marker'),
 
     /*
      * Sleep interval in seconds when the queue is empty.

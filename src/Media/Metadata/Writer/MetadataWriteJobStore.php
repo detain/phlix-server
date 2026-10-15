@@ -22,12 +22,12 @@ namespace Phlix\Media\Metadata\Writer;
  *
  * Mirrors {@see \Phlix\Media\CollectionJobStore}, including its deliberate
  * deviation from {@see \Phlix\Media\SimilarityJobStore}: the queue directory is
- * created LAZILY on first enqueue, never in the constructor. S439's
- * zero-residue census fails the suite on any `/tmp/phlix_*` directory a test
- * run mints and does not sweep, and container-boot tests resolve this store
- * through the DI factory without ever enqueuing — a constructor-side `mkdir()`
- * would leak `/tmp/phlix_metadata_write_jobs` on clean CI runners, and a
- * read-only store must remain side-effect-free.
+ * created LAZILY on first enqueue, never in the constructor — a read-only
+ * store must remain side-effect-free, and container-boot tests resolve this
+ * store through the DI factory without ever enqueuing. (Historic note: while
+ * the R14-14 default lived under /tmp this also kept S439's zero-residue census
+ * quiet; the default now resolves via {@see \Phlix\Config\JobQueuePaths::dir()}
+ * under repo var/jobs/, so the minting concern moved, not the law.)
  *
  * Idempotency: enqueue() keys the file by item id, so a re-scan of the same
  * item while a job is still pending is a no-op — the freshest persisted row is
@@ -37,9 +37,6 @@ namespace Phlix\Media\Metadata\Writer;
  */
 final class MetadataWriteJobStore
 {
-    /** Default queue directory path */
-    private const QUEUE_DIR = '/tmp/phlix_metadata_write_jobs';
-
     /** Job file extension */
     private const JOB_EXT = '.job.json';
 
@@ -51,11 +48,14 @@ final class MetadataWriteJobStore
 
     /**
      * @param string|null $queueDir Optional custom queue directory
-     *                              (null = {@see self::QUEUE_DIR})
+     *                              (null = {@see \Phlix\Config\JobQueuePaths::dir()}
+     *                              'metadata_write' — R14-14: env-tunable,
+     *                              defaults under repo var/jobs/, survives
+     *                              systemd PrivateTmp)
      */
     public function __construct(?string $queueDir = null)
     {
-        $this->queueDir = $queueDir ?? self::QUEUE_DIR;
+        $this->queueDir = $queueDir ?? \Phlix\Config\JobQueuePaths::dir('metadata_write');
     }
 
     /**

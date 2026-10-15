@@ -88,9 +88,9 @@ final class SystemInfoPayloadHygieneTest extends TestCase
     {
         // Container graph resolution constructs MediaAssetJobStore /
         // SimilarityJobStore through MediaServicesProvider factories, which mint
-        // the shared /tmp queue dirs. Sweep so the suite leaves zero residue.
-        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        // the shared queue dirs (repo var/jobs/ since R14-14). Sweep so the suite leaves zero residue.
+        foreach (['media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

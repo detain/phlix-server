@@ -104,10 +104,11 @@ final class ComposedRouteInventoryTest extends TestCase
     protected function tearDown(): void
     {
         // The container graph resolves MediaAssetJobStore/SimilarityJobStore through
-        // MediaServicesProvider factories that mint these shared /tmp dirs at construction.
+        // MediaServicesProvider factories that mint these shared queue dirs
+        // (repo var/jobs/ since R14-14) at construction.
         // Sweep them so the suite leaves zero residue (same obligation as HealthRoutesAuthGuardTest).
-        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        foreach (['media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

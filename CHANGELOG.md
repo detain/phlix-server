@@ -32,6 +32,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **SRV-OPS remediation (2026-10-14 review family) — R14-14 job queues off
+  /tmp:** the five file-backed job queues (marker, media-asset, collection,
+  metadata-write, similarity) defaulted to `/tmp/phlix_<name>_jobs` in three
+  duplicated places per queue (config literal, `MediaServicesProvider`
+  factory fallback, store constructor default) — and `systemd/phlix-server.service`
+  runs `PrivateTmp=true`, so every restart silently discarded the queued
+  backlog while out-of-unit producers (cron'd backfills, manual
+  `scripts/run-*-worker.php`) wrote to the REAL `/tmp` and the daemon never
+  saw a job. New `Phlix\Config\JobQueuePaths` is the single resolver all
+  fifteen sites now funnel through, with precedence
+  `PHLIX_<NAME>_JOBS_DIR` > `PHLIX_JOB_QUEUE_ROOT` > `<repo>/var/jobs/<name>`
+  (empty env = unset; path-unsafe queue names fail fast). The new default
+  sits inside the unit's existing `ReadWritePaths=/var/www/phlix/var` grant
+  and the Docker image's already-writable `var/`, so backlogs survive
+  restarts and every producer/consumer shares one path. The five stores'
+  `QUEUE_DIR` constants are gone (constructor default now resolves through
+  the helper; explicit paths still win); `var/jobs/` is gitignored; the
+  ~27 `S439` suite residue sweeps now follow the resolver instead of
+  hardcoded `/tmp` names, and `ZeroResidueCensusTest`/`TempDirMintGuardTest`
+  stay green because construction mints nothing under `/tmp` any more. New
+  `JobQueuePathsTest` (11 tests: default placement, precedence ladder,
+  empty-as-unset, slash normalization, fail-fast names, and a three-way
+  config↔resolver↔store-default agreement pin per queue).
 - **SRV-OPS remediation (2026-10-14 review family) — R14-06 listen wiring:**
   `start.php` hardcoded `http://0.0.0.0:8096` (count 14) and
   `websocket://0.0.0.0:8097` while `config/server.php` shipped

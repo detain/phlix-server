@@ -147,10 +147,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
     {
         // The container graph this test resolves constructs MediaAssetJobStore and
         // SimilarityJobStore through MediaServicesProvider's factories at the production
-        // default queue paths; their constructors mint the shared /tmp directories. Sweep
-        // so the suite leaves zero residue (identical to ApplicationRouterWirePathGuardTest).
-        foreach (['phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        // default queue paths; their constructors mint the shared queue dirs
+        // (repo var/jobs/ since R14-14). Sweep so the suite leaves zero residue
+        // (identical to ApplicationRouterWirePathGuardTest).
+        foreach (['media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

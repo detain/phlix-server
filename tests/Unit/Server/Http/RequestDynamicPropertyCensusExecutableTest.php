@@ -622,8 +622,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * net +1 — tests/Unit/Common/Logger/LogEnvironmentKnobsTest.php
      * (R14-09 stdout sink + R3-08 PHLIX_LOG_LEVEL pins).
      * Measured from the phpunit red (1990), not predicted.
+     * Re-pinned 1990→1992 by the SRV-OPS remediation lane (2026-10-14):
+     * net +2 — src/Config/JobQueuePaths.php +
+     * tests/Unit/Config/JobQueuePathsTest.php (R14-14: the five file-backed
+     * job queues resolve through one env-tunable resolver, default moved from
+     * PrivateTmp-blinded /tmp to repo var/jobs/).
+     * Measured from the phpunit red (1992), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1990;
+    private const EXPECTED_PHP_FILES = 1992;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -22,9 +22,6 @@ namespace Phlix\Media;
  */
 final class SimilarityJobStore
 {
-    /** Queue directory path */
-    private const QUEUE_DIR = '/tmp/phlix_similarity_jobs';
-
     /** Job file extension */
     private const JOB_EXT = '.job.json';
 
@@ -35,11 +32,16 @@ final class SimilarityJobStore
     private string $queueDir;
 
     /**
-     * @param string|null $queueDir Optional custom queue directory
+     * @param string|null $queueDir Optional custom queue directory (null =
+     *                              {@see \Phlix\Config\JobQueuePaths::dir()}
+     *                              'similarity' — R14-14: env-tunable,
+     *                              defaults under repo var/jobs/, no longer
+     *                              /tmp, so the backlog survives systemd
+     *                              PrivateTmp).
      */
     public function __construct(?string $queueDir = null)
     {
-        $this->queueDir = $queueDir ?? self::QUEUE_DIR;
+        $this->queueDir = $queueDir ?? \Phlix\Config\JobQueuePaths::dir('similarity');
         $this->ensureQueueDir();
     }
 

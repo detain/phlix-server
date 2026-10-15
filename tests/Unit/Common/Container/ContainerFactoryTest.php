@@ -96,9 +96,10 @@ final class ContainerFactoryTest extends TestCase
         // S439: the container graph this test resolves constructs MediaAssetJobStore,
         // SimilarityJobStore and MarkerCandidateStore through MediaServicesProvider's
         // factories at the production default queue paths, and their constructors mint
-        // the shared /tmp directories. Sweep them so the suite leaves zero residue.
-        foreach (['phlix_marker_jobs', 'phlix_media_asset_jobs', 'phlix_similarity_jobs'] as $sharedQueue) {
-            $sharedDir = sys_get_temp_dir() . '/' . $sharedQueue;
+        // the shared queue directories (repo var/jobs/ since R14-14). Sweep them so
+        // the suite leaves zero residue.
+        foreach (['marker', 'media_asset', 'similarity'] as $sharedQueueName) {
+            $sharedDir = \Phlix\Config\JobQueuePaths::dir($sharedQueueName);
             if (is_dir($sharedDir)) {
                 foreach (glob($sharedDir . '/*') ?: [] as $queued) {
                     @unlink($queued);

@@ -21,9 +21,6 @@ namespace Phlix\Media\Markers\Detection;
  */
 final class MarkerCandidateStore
 {
-    /** Queue directory path */
-    private const QUEUE_DIR = '/tmp/phlix_marker_jobs';
-
     /** Lock file extension */
     private const LOCK_EXT = '.lock';
 
@@ -33,13 +30,17 @@ final class MarkerCandidateStore
     /**
      * Creates a new MarkerCandidateStore.
      *
-     * @param string|null $queueDir Optional custom queue directory
+     * @param string|null $queueDir Optional custom queue directory (null =
+     *                              {@see \Phlix\Config\JobQueuePaths::dir()}
+     *                              'marker' — R14-14: env-tunable, defaults
+     *                              under repo var/jobs/, no longer /tmp, so
+     *                              the backlog survives systemd PrivateTmp).
      *
      * @since 0.12.0
      */
     public function __construct(?string $queueDir = null)
     {
-        $this->queueDir = $queueDir ?? self::QUEUE_DIR;
+        $this->queueDir = $queueDir ?? \Phlix\Config\JobQueuePaths::dir('marker');
         $this->ensureQueueDir();
     }
 

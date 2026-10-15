@@ -23,13 +23,9 @@ class TimeSyncTest extends TestCase
         $this->assertEquals(1, $timeSync->getProtocolVersion());
     }
 
-    public function testGetPort(): void
-    {
-        $timeSync = new TimeSync('localhost', 8099);
-
-        $this->assertEquals(8099, $timeSync->getPort());
-        $this->assertEquals('localhost', $timeSync->getHost());
-    }
+    // R18 (task 7): testGetPort removed with the vestigial TimeSync $host/$port
+    // ctor params + getHost()/getPort() accessors — leftovers of the deleted
+    // standalone :8098 time-sync worker (22ce232c), zero production readers.
 
     public function testProcessPingReturnsPongData(): void
     {

@@ -47,9 +47,6 @@ namespace Phlix\Session\SyncPlay;
  */
 class TimeSync
 {
-    /** Default port for time sync (used if host is specified) */
-    private const DEFAULT_PORT = 8098;
-
     /** Protocol version for time sync messages */
     private const PROTOCOL_VERSION = 1;
 
@@ -74,13 +71,15 @@ class TimeSync
     /**
      * Create a new TimeSync instance.
      *
-     * @param string|null $host Optional time sync server host (currently unused but reserved)
-     * @param int $port Optional port (default: 8098)
+     * Time sync travels the existing SyncPlay WebSocket (:8097) as
+     * ping/pong messages — there is no dedicated time-sync socket. The
+     * former $host/$port ctor params and getHost()/getPort() accessors
+     * were vestigial of the deleted standalone :8098 time-sync worker
+     * (removed in 22ce232c) and carried zero production readers; they
+     * were retired with this note as the tombstone.
      */
-    public function __construct(
-        private readonly ?string $host = null,
-        private readonly int $port = self::DEFAULT_PORT
-    ) {
+    public function __construct()
+    {
     }
 
     /**
@@ -91,26 +90,6 @@ class TimeSync
     public function getProtocolVersion(): int
     {
         return self::PROTOCOL_VERSION;
-    }
-
-    /**
-     * Get the default port for time sync.
-     *
-     * @return int Port number
-     */
-    public function getPort(): int
-    {
-        return $this->port;
-    }
-
-    /**
-     * Get the host for time sync server.
-     *
-     * @return string|null The host address or null if not configured
-     */
-    public function getHost(): ?string
-    {
-        return $this->host;
     }
 
     /**

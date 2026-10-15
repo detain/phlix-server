@@ -139,7 +139,13 @@ final class RatingGate
         // Account owner / admin: never gated, regardless of the active profile.
         if ($this->users !== null) {
             $user = $this->users->findById($userId);
-            if ($user !== null && ($user['is_admin'] ?? 0) == 1) {
+            // R18-16: the users.is_admin TINYINT arrives as int 1 OR string "1"
+            // depending on driver prepare-emulation, so the old loose `== 1` against
+            // `?? 0` mixed the two shapes. `!empty()` is the estate-wide idiom for
+            // this exact row (UserRepository::isLastAdminGuard, AdminUserController
+            // ×3) and is type-proof for both representations — 0/"0"/null/missing
+            // all read as non-admin, 1/"1" as admin.
+            if ($user !== null && !empty($user['is_admin'])) {
                 return null;
             }
         }

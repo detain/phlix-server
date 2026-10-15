@@ -2185,8 +2185,12 @@ class MediaScanner
             $recordedSource = isset($metadata['source']) && is_array($metadata['source'])
                 ? $metadata['source']
                 : null;
-            // Loose compare: the recorded copy has been through a JSON
-            // round-trip, so key ORDER is not a meaningful difference.
+            // Loose compare — INTENTIONAL (R18-16 reviewed, left as `!=`): the
+            // recorded copy has been through a JSON round-trip, so key ORDER is
+            // not a meaningful difference. PHP's `==` on arrays compares
+            // key/value pairs order-insensitively; `!==` here would flag every
+            // reordered-but-identical source blob as changed and force needless
+            // re-probes.
             if ($recordedSource === null || $recordedSource != $probe['source']) {
                 return true;
             }

@@ -354,7 +354,13 @@ class PhotoScanner extends MediaScanner
 
         if (is_string($value) && str_contains($value, '/')) {
             [$num, $denom] = explode('/', $value);
-            return $denom != 0 ? (float)$num / (float)$denom : 0.0;
+            // Parse both halves to float FIRST, then compare strictly (R18-16): a
+            // loose `$denom != 0` against the raw string tolerated "0"/"0.0", but
+            // a strict !== against the string would let "0" through to a float
+            // division by zero (INF). Casting makes zero-detection type-proof and
+            // turns a garbage denominator into 0.0 instead of INF.
+            $denominator = (float)$denom;
+            return $denominator !== 0.0 ? (float)$num / $denominator : 0.0;
         }
 
         return 0.0;

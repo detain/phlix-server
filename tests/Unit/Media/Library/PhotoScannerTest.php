@@ -250,4 +250,35 @@ class PhotoScannerTest extends TestCase
             . 'AAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAB//2Q=='
         );
     }
+
+    /**
+     * R18-16 pin: rationalToFloat parses both halves of an EXIF rational string
+     * to float BEFORE a strict zero-check on the denominator. String "0" and
+     * "0.0" denominators must yield 0.0 (never INF from float division), valid
+     * rationals divide exactly, and a garbage denominator degrades to 0.0.
+     *
+     * @dataProvider provideRationalStrings
+     */
+    public function testRationalToFloatHandlesStringDenominatorsStrictly(string $value, float $expected): void
+    {
+        $method = new \ReflectionMethod(PhotoScanner::class, 'rationalToFloat');
+
+        $this->assertSame($expected, $method->invoke($this->scanner, $value));
+    }
+
+    /**
+     * @return array<string, array{string, float}>
+     */
+    public static function provideRationalStrings(): array
+    {
+        return [
+            'plain fraction' => ['3/4', 0.75],
+            'whole over one' => ['100/1', 100.0],
+            'string zero denominator' => ['100/0', 0.0],
+            'decimal zero denominator' => ['100/0.0', 0.0],
+            'zero numerator' => ['0/5', 0.0],
+            'fractional denominator' => ['1/3', 1 / 3],
+            'garbage denominator degrades to zero' => ['1/abc', 0.0],
+        ];
+    }
 }

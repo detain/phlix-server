@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Webhooks;
 
 use Phlix\Common\Net\SsrfGuard;
-use Phlix\Media\Storage\AvatarStorage;
-use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Request;
 use Phlix\Shared\Events\Auth\UserLoggedIn;

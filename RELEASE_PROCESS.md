@@ -13,20 +13,40 @@ Example: `v1.2.3` where:
 - `2` = minor version
 - `3` = patch version
 
-## Server-Hub Compatibility Matrix
+## Server-Hub Compatibility
 
-| Server Version | Hub Version | Compatible |
-|----------------|-------------|-------------|
-| 1.x.x | 1.x.x | Yes |
-| 1.x.x | 2.x.x | No |
-| 2.x.x | 1.x.x | No |
-| 2.x.x | 2.x.x | Yes |
+> ⚠ **The matrix previously printed here ("server and hub must have
+> matching major versions") was never real and is falsified by the live
+> estate:** the shipping pair is server `1.2.3`
+> (`src/Common/Version.php::STRING`) × hub `0.5.0` (hub `VERSION` marker),
+> and they interoperate. The two products do not share a version space and
+> are not released in lockstep, so matching majors is neither required nor
+> meaningful until a coordinated 1.0 (pending the owner's S274
+> release-authority decision, same caveat class as the tag table below).
 
-### Compatibility Rules
+What actually governs interop today:
 
-1. **Server and Hub must have matching major versions** to be compatible.
-2. **Minor and patch versions can differ** — server 1.2.0 works with hub 1.3.0.
-3. **Check compatibility** using the `/api/v1/compatibility` endpoint.
+1. **The shared wire contract.** Both repos vendor the generated contract
+   artifacts of the pinned `@phlix/contracts` release — the error-code
+   registry (`tests/Fixtures/Contracts/error-codes.json`, asserted by
+   `tests/Unit/Contracts/ErrorCodesContractTest.php` on the server; the
+   hub carries its own mirror) — and each repo machine-checks its
+   `openapi.yaml` against its live router. A contract-breaking change
+   requires coordinated releases on both sides, each proven green against
+   the pinned contract version in its own CI.
+2. **Per-release-pair acceptance.** Until both products reach a coordinated
+   1.0, compatibility is asserted by the pair that was CI-tested together at
+   release time — not by a version formula.
+3. **Version advertisement, not version enforcement.** The server reports
+   `Version::STRING` on `/health` and `/system/info` (and via the published
+   `VERSION` marker to the update check). There is **no** compatibility
+   endpoint — the formerly advertised `/api/v1/compatibility` never existed
+   in this repo's router or `openapi.yaml`, and the hub enforces no
+   version gate on relay registration. The only runtime version floor that
+   *is* enforced is plugin → server: `PluginLoader` validates each
+   manifest's `phlix_min_server_version` against `Version::STRING`.
+   `composer.json`'s `extra.phlix.minHubVersion` is a declared floor with
+   no read sites — a statement of intent, not an enforcement point.
 
 ## Release Channels
 
@@ -190,12 +210,13 @@ pick the commit you want.
 
 ### Feature Compatibility
 
-| Feature | Server Version | Hub Version |
-|----------|---------------|-------------|
-| Basic pairing | 1.0.0+ | 1.0.0+ |
-| Relay tunnel | 1.1.0+ | 1.1.0+ |
-| Delegated auth | 1.2.0+ | 1.2.0+ |
-| Shared libraries | 1.3.0+ | 1.3.0+ |
+> ⚠ **The per-feature "1.x.0+ / 1.x.0+" floor table that used to sit here
+> never matched shipped versions:** pairing, relay tunnels, delegated auth
+> and shared libraries all went live while the hub was still on its 0.x
+> line (hub `0.5.0` today) against a 1.x server. There is no per-feature
+> version floor recorded in either repo. What these features actually
+> negotiate is the pinned `@phlix/contracts` wire contract and the
+> documented relay envelope — see "Server-Hub Compatibility" above.
 
 ### API Versioning
 

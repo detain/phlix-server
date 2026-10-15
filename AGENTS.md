@@ -105,7 +105,7 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 - WebSocket payload shape: `['type' => $event, 'data' => $payload, 'timestamp' => time()]`
 - Tests mock `Workerman\MySQL\Connection` with `$this->createMock(Connection::class)` + `willReturn([['col' => 'val']])`
 - Smarty is used **only** for the newsletter email (`public/templates/emails/newsletter.tpl`); page templates were removed in favor of the `/app` Vue SPA (`web-ui/`).
-- Each step in `docs/archive/plans/phase-N/step-N.M-*.md` ends with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`
+- The historical per-phase step plans (`docs/archive/plans/phase-N/step-N.M-*.md`) that used to end each step with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull` were retired into [phlix-docs](https://github.com/detain/phlix-docs) when the in-tree `docs/archive/` directory was removed (commit `77e681fd`); no such plan files remain in this repo.
 
 ## Async Patterns
 
@@ -185,7 +185,9 @@ foreach ($items as $item) {
 
 ## Reference docs
 
-`README.md` · `docs/dev/DEVELOPER.md` · `docs/dev/BLOCKING_IO_EXCEPTIONS.md` (the closed register of accepted blocking calls) · `RELEASE_PROCESS.md` · `docker/README.md` (the three image variants + the serving model) · `docs/archive/SUPERVISOR_PLAN.md` (phase orchestration) · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/dev/PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
+In-tree (verified present): `README.md` · `RELEASE_PROCESS.md` · `docker/README.md` (the three image variants + the serving model) · `docs/dev/BLOCKING_IO_EXCEPTIONS.md` (the closed register of accepted blocking calls) · `docs/dev/settings-restart-gap.md` · `docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md` · `docs/dev/SYNCPLAY_MEMBER_SYNC_NUDGE.md` · `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`.
+
+The larger narrative docs — `DEVELOPER.md`, the technical spec, the per-platform guides (`PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md`), and the `docs/archive/` phase plans and orchestration docs that used to be listed here — were merged into the external [phlix-docs](https://github.com/detain/phlix-docs) site ([detain.github.io/phlix-docs](https://detain.github.io/phlix-docs)) and no longer exist in this tree (removal commit `77e681fd`). Do not link them as if in-tree.
 
 <!-- caliber:managed:pre-commit -->
 ## Before Committing

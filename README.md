@@ -10,7 +10,7 @@
 
 A comprehensive media server platform built with PHP 8.3+, featuring real-time WebSocket communication, HTTP REST APIs, and support for multiple client platforms including Roku, Samsung Tizen, and Windows.
 
-> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlix` to [`github.com/detain/phlix-server`](https://github.com/detain/phlix-server) as part of the Phase B repo split (see `PHLIX_EXPANSION_PLAN.md`). Update existing local clones with `git remote set-url origin git@github.com:detain/phlix-server.git`. The old repo is being archived in step B.4b.
+> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlix` to [`github.com/detain/phlix-server`](https://github.com/detain/phlix-server) as part of the Phase B repo split. Update existing local clones with `git remote set-url origin git@github.com:detain/phlix-server.git`. The old repo is being archived in step B.4b.
 
 ## Overview
 
@@ -59,10 +59,9 @@ src/
 ├── Auth/               # Authentication services
 └── Common/             # Shared utilities
 
-public/
-├── index.php           # Web portal entry point (redirects legacy pages to /app)
+public/                 # no front controller — start.php serves everything (see below)
 ├── templates/emails/   # Smarty newsletter email template (only remaining .tpl)
-└── assets/             # Static assets (css, js) + assets/app/ (built Vue SPA bundle)
+└── assets/             # Static assets (css, js, images) + assets/app/ (built Vue SPA bundle)
 ```
 
 ## Requirements
@@ -71,6 +70,9 @@ public/
 - **MySQL**: 8.0+ or MariaDB 10.6+
 - **Workerman**: 5.0+ (bundled via Composer)
 - **FFmpeg**: For transcoding (optional)
+
+Every environment variable the server process reads is inventoried in the definitive census —
+[Environment variables](#environment-variables) — with defaults, secrets, and restart semantics.
 
 ## Features
 
@@ -129,9 +131,7 @@ public/
 
 ### Authentication & Security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
-- **External SSO — OIDC, LDAP & GitHub**: Optional OpenID Connect, LDAP and GitHub OAuth2 login backends, toggled per-provider from the admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enabled` / `auth.ldap.enabled` / `auth.github.enabled` server settings). OIDC uses the authorization-code flow with PKCE + `state` + `nonce` and id-token validation (`GET /auth/oidc/authorize` → `GET /auth/oidc/callback`). **GitHub** is plain OAuth2 + PKCE with no OIDC discovery and no `id_token` (`GET /auth/github/authorize` → `GET /auth/github/callback`), identifying the user from `GET https://api.github.com/user` (default scopes `read:user user:email`) and keying the identity on GitHub's stable numeric id (`github.<id>`), never the renameable login or the e-mail. LDAP rides `POST /auth/login` with an `ldap:`-prefixed username (e.g. `ldap:jdoe`). Sessions are delivered as httpOnly + Secure + SameSite=Lax cookies; the OIDC/GitHub post-login redirect is allowlisted to same-origin paths only, and the OAuth `state` is additionally bound to the browser that started the flow by a short-lived HttpOnly correlation cookie (`phlix_oauth_oidc` / `phlix_oauth_github`). **Account linking** lets an already-signed-in user attach an external identity to their account — `GET /auth/identities` lists linked identities, `GET /auth/identities/link/oidc` and `GET /auth/identities/link/github` start a verified OAuth round-trip link, `POST /auth/identities/link/ldap` links via a live LDAP bind, and `DELETE /auth/identities/{id}` unlinks one (own-identity-only, and refused with `409` if it would remove your last sign-in method); linking always proves control of the identity, never mints a new session, and rejects an identity already linked to another account with `409`. A linked identity is usable for login (it resolves your existing account instead of creating a duplicate), and the auth provider registry supports multiple instances of the same family (e.g. two OIDC issuers; configuring named instances from the admin console is a later step).
-  - **Provider configuration is DB-backed** (migration `093_plugin_settings.sql`, table `plugin_settings`) rather than a per-plugin `settings.json`; an existing file is imported once, automatically, on first read — no operator action on upgrade. The OIDC and GitHub settings saves **preserve any optional key absent from the request body** (only an explicitly empty value clears one), so a partial payload cannot wipe a field it does not know about. (The LDAP save still rebuilds its document from the body alone apart from `bind_pw` — send it the complete map.)
-  - **The provider `redirect_uri` is always absolute and is pinned to `PHLIX_DOMAIN`.** Register `https://<your PHLIX_DOMAIN>/auth/oidc/callback` (or `/auth/github/callback`) at the IdP / OAuth App. If neither `PHLIX_DOMAIN` nor an absolute per-provider `redirect_uri` setting is configured, `/auth/{provider}/authorize` **fails closed** with `503 callback_url_not_configured`. See [Environment variables](#environment-variables) and the SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider (which has admin **API** endpoints but no admin-SPA card yet).
+- **External SSO — OIDC, LDAP & GitHub**: Optional external login backends, toggled per-provider from the admin **Integrations → Auth providers** page. Flows, endpoints and config pointers: [External SSO](#external-sso).
 - **Secure Password Hashing**: Argon2ID for password storage
 - **Multi-Device Sessions**: Track and manage sessions across devices
 - **User Profiles**: Multiple profiles per account with parental controls
@@ -152,6 +152,53 @@ public/
   rather than being blocked. This is a **stopgap** until the generic image caching/loader work
   (updates.md #47 / S71-S73) proxies all remote artwork through our own origin, at which point the
   explicit TMDB hosts are removed.
+
+### External SSO
+
+Optional OpenID Connect, LDAP and GitHub OAuth2 login backends, toggled per-provider from the
+admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enabled` /
+`auth.ldap.enabled` / `auth.github.enabled` server settings). An external identity always
+resolves to an existing account — it never silently creates a duplicate — and the auth provider
+registry supports multiple instances of the same family (e.g. two OIDC issuers; configuring
+named instances from the admin console is a later step).
+
+- **OIDC** — authorization-code flow with PKCE + `state` + `nonce` and id-token validation:
+  `GET /auth/oidc/authorize` → `GET /auth/oidc/callback`.
+- **GitHub** — plain OAuth2 + PKCE, with no OIDC discovery and no `id_token`:
+  `GET /auth/github/authorize` → `GET /auth/github/callback`. The user is identified from
+  `GET https://api.github.com/user` (default scopes `read:user user:email`) and keyed on
+  GitHub's stable numeric id (`github.<id>`) — never the renameable login, never the e-mail.
+- **LDAP** — no separate endpoints. It rides `POST /auth/login` with an `ldap:`-prefixed
+  username (e.g. `ldap:jdoe`).
+- **Session hardening** — sessions are delivered as httpOnly + Secure + SameSite=Lax cookies.
+  The OIDC/GitHub post-login redirect is allowlisted to same-origin paths only. The OAuth
+  `state` is additionally bound to the browser that started the flow by a short-lived HttpOnly
+  correlation cookie (`phlix_oauth_oidc` / `phlix_oauth_github`).
+- **Account linking** — an already-signed-in user can attach an external identity to their
+  account. `GET /auth/identities` lists linked identities; `GET /auth/identities/link/oidc` and
+  `GET /auth/identities/link/github` start a verified OAuth round-trip link;
+  `POST /auth/identities/link/ldap` links via a live LDAP bind; `DELETE /auth/identities/{id}`
+  unlinks one (own identity only, refused with `409` if it would remove your last sign-in
+  method). Linking always proves control of the identity and never mints a new session; an
+  identity already linked to another account is rejected with `409`. A linked identity is then
+  usable for login.
+
+Config pointers:
+
+- **Provider configuration is DB-backed** (migration `093_plugin_settings.sql`, table
+  `plugin_settings`) rather than a per-plugin `settings.json`; an existing file is imported
+  once, automatically, on first read — no operator action on upgrade. The OIDC and GitHub
+  settings saves **preserve any optional key absent from the request body** (only an
+  explicitly empty value clears one), so a partial payload cannot wipe a field it does not
+  know about. (The LDAP save still rebuilds its document from the body alone apart from
+  `bind_pw` — send it the complete map.)
+- **The provider `redirect_uri` is always absolute and is pinned to `PHLIX_DOMAIN`.** Register
+  `https://<your PHLIX_DOMAIN>/auth/oidc/callback` (or `/auth/github/callback`) at the IdP /
+  OAuth App. If neither `PHLIX_DOMAIN` nor an absolute per-provider `redirect_uri` setting is
+  configured, `/auth/{provider}/authorize` **fails closed** with `503
+  callback_url_not_configured`. See [Environment variables](#environment-variables) and the
+  SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider
+  (which has admin **API** endpoints but no admin-SPA card yet).
 
 ### SyncPlay - Group Watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy
@@ -221,7 +268,7 @@ HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 |---|---|
 | `--domain HOST` | Public hostname for the server (enables TLS when paired with `--admin-email`) |
 | `--admin-email EMAIL` | Email registered with Let's Encrypt |
-| `--db-name`, `--db-user`, `--db-pass`, `--db-host`, `--db-port` | MySQL identity (random password if `--db-pass` omitted). Note: `config/database.php` hardcodes host/port/db/user; only the password is env-driven. |
+| `--db-name`, `--db-user`, `--db-pass`, `--db-host`, `--db-port` | MySQL identity (random password if `--db-pass` omitted). The installer writes these to `/etc/phlix/env`; at runtime `config/database.php` reads all of `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER` / `DB_PASSWORD` from the environment — see [Environment variables](#environment-variables). |
 | `--http-port PORT` | HTTP listen port (default `8096`) |
 | `--tmdb-api-key KEY` | TMDB API key for metadata (optional, recorded in `/etc/phlix/env`) |
 | `--hub-url URL` | `PHLIX_HUB_URL` for hub relay (optional) |
@@ -712,7 +759,8 @@ the next worker boot rather than the next request.
 | POST | `/api/v1/auth/login` | User login |
 | POST | `/api/v1/auth/refresh` | Token refresh |
 | GET | `/api/v1/auth/me` | Current user profile |
-| GET | `/api/v1/sessions` | List user sessions |
+| POST | `/api/v1/sessions` | Create a device session — body `{device_id: string (required), device_name?, device_type?}` → `201 {session_id}`; `400` missing `device_id`, `401` unauthenticated |
+| GET | `/api/v1/me/sessions` | List the authenticated user's sessions |
 | DELETE | `/api/v1/sessions/{id}` | End a session |
 | POST | `/api/v1/sessions/{id}/progress` | Report playback progress |
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
@@ -840,7 +888,7 @@ names, not the number:
 ./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh > /tmp/before.txt
 # ...make your change...
 ./vendor/bin/phpunit 2>&1 | scripts/skipped-test-names.sh > /tmp/after.txt
-comm -3 /tmp/before.txt /tmp/after.txt   # left column: left the skip set. right: joined it.
+comm -3 /tmp/before.txt /tmp/after.txt   # Left column: tests that dropped out of the skip set. Right column: tests that joined it.
 ```
 
 Against a CI run (the script strips `gh`'s `job<TAB>step<TAB>timestamp ` prefix for you):
@@ -1038,15 +1086,22 @@ php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-
 php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe: applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches, and a file that is re-applied tolerates the replay (statements use `IF NOT EXISTS`, and duplicate-column/duplicate-key errors are downgraded to notes because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`). More commands are added in later steps.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. More commands are added in later steps.
 
-**Exit codes (S159).** Both commands exit `0` when every statement applied *or* failed only with an idempotent "already applied" error, and `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted — but the failing file is deliberately left out of the ledger so the next run retries it. Consequences worth knowing:
+**Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 
 - `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
 - `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead. It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
 - `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honoured by **both** commands.
 
-⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text — the driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` used to grep the migration's own SQL and reclassify hard failures as successes. The set is exactly four: `1050` table exists, `1060` duplicate column, `1061` duplicate key name, `1091` can't drop / check that column-key exists. Each names an object that can only be the one the failing statement was creating — a table in this schema, or a column/index, which are *table*-local.
+⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text. The driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` would grep the migration's own SQL — an earlier version did, and it reclassified hard failures as successes. The idempotent set is exactly four errors:
+
+1. `1050` — table already exists.
+2. `1060` — duplicate column.
+3. `1061` — duplicate key name.
+4. `1091` — can't drop; check that the column/key exists.
+
+Each names an object that can only be the one the failing statement was creating: a table in this schema, or a column/index, which are *table*-local.
 
 Everything else fails the run, **including several shapes a re-run can legitimately produce** — write the migration so they never fire:
 
@@ -1068,74 +1123,33 @@ without `--rescan`) returns one of:
 | --- | --- |
 | **0** | scan (or rescan) completed; every file was indexed |
 | **1** | scan did not run — unknown library id, the manager threw, or an already-queued/running job refused the scan |
-| **3** | scan completed but N file(s) could not be indexed (the lossy warning is on stderr; each file is named in `.logs/error.log`) |
 | **2** | Symfony's `INVALID` (invalid input/usage) — deliberately **NOT** used, so "you typed the arguments wrong" and "your library lost files" never share a number |
+| **3** | scan completed but N file(s) could not be indexed (the lossy warning is on stderr; each file is named in `.logs/error.log`) |
 
 The same table is printed by `php bin/phlix library:scan --help`. `3` (not `2`) is the
 "completed but lost files" code because `2` is Symfony's reserved invalid-input code — a
 wrapper must be able to tell a scan that never ran from one that lost files.
 
-### Admin SPA (admin-ui)
+### Admin UI (part of the `/app` SPA)
 
-The admin console is a **React + TypeScript + Vite** single-page app. Its source lives in
-`admin-ui/`; the production build is emitted into `public/assets/admin/` and **committed to the
-repo**, so the running Workerman server has **no Node build dependency at runtime** (it just serves
-the static shell + bundle). `admin-ui/node_modules/` is gitignored.
+There is **no separate admin app**. An earlier React + Vite admin console (`admin-ui/`, served at
+`/admin` by `AdminAppController`, built into `public/assets/admin/`, gated by an `admin-ui.yml`
+workflow) was **decommissioned in this repo**: the app was removed in `6d1f43fe` (2026-06-01,
+"feat(C8.1): decommission React admin") and its workflow replaced on 2026-06-26 by the **Web UI**
+workflow (`7caad461`, now `.github/workflows/web-ui.yml`, building `web-ui/`). Nothing named
+`admin-ui/` ships in this repository today.
 
-The SPA mounts at `/admin` and `/admin/*`, served by `AdminAppController` (returns the built
-`index.html` shell; 503 if the bundle is missing) and gated by the existing `AdminMiddleware` — a
-non-admin (401/403) is redirected (302) to `/login`. Its typed `ApiClient` reuses the same JWT
-mechanism as `public/assets/js/api-client.js` (`access_token`/`refresh_token` in `localStorage`,
-Bearer header, single retry on 401 via `POST /auth/refresh`).
+The admin console is the `/app/admin/*` section of the same `@phlix/ui` Vue SPA described under
+[Web Portal](#web-portal) — source in `web-ui/`, bundle served from `public/assets/app/`, routes
+registered in `web-ui/src/main.ts` (the shell's **Admin** entry renders only for
+`useAuthStore().isAdmin`; the admin API itself is gated server-side regardless). The surviving
+legacy page paths `/admin/plugins*` and `/admin/dashboard` 302-redirect to their `/app/admin/*`
+equivalents in `src/Server/Workerman/HttpHandler.php`.
 
-```bash
-cd admin-ui
-npm install          # one-time / on dependency changes
-npm run build        # tsc + vite build → ../public/assets/admin/ (commit the result)
-npm run test         # Vitest unit/component tests
-npm run dev          # Vite dev server (HMR) for local development
-```
-
-When you change anything under `admin-ui/src/`, re-run `npm run build` and commit the refreshed
-`public/assets/admin/` bundle along with your source changes.
-
-CI runs the SPA build + Vitest suite on any change under `admin-ui/` via the **Admin UI** GitHub
-Actions workflow (`.github/workflows/admin-ui.yml`): `npm ci → npm run build → npm run test` on
-push/PR to `master`/`main`/`develop` (path-filtered, so PHP-only changes don't trigger it).
-
-The first feature page on top of the scaffold is the **Libraries** page at `/admin/libraries`
-(step 1.1c): list / add / edit / delete libraries, a `PathPicker` driving the 0.6
-`GET /api/v1/admin/fs/browse` endpoint, per-row Scan / Rescan buttons that hit the **async** 1.1b
-scan API (`POST /api/v1/libraries/{id}/scan|rescan` → 202 `{job_id, status: "queued"}`), live
-**coarse** lifecycle status by polling `GET .../scan-status` every 2 s (polling stops on
-`completed` / `failed`), and a per-library scan-history modal. No backend changes — the page
-consumes only contracts already shipped by 0.6 and 1.1b.
-
-The **Settings** page at `/admin/settings` (step 1.3) renders all 15 server-setting
-keys across 8 tabbed groups (Transcoding, Metadata, Markers, Subtitles, Discovery,
-Trickplay, Newsletter, Port Forward). It consumes the 0.5 GET/PUT `/api/v1/admin/settings`
-contract — **no new endpoints were added**. Bool keys render as toggle switches;
-numeric keys render as number inputs with `min`/`max` constraints; `tmdb.api_key` renders
-as a password field with Show/Hide toggle. Overridden keys (DB-persisted vs. config-file
-default) display a "custom" badge. A sticky Save button fires `PUT /api/v1/admin/settings`;
-dirty-state gating keeps the button disabled when no fields have changed.
-
-The **Webhooks** page at `/admin/webhooks` (step 1.4a) provides full CRUD for webhook
-subscriptions plus a per-webhook test trigger. It consumes the five endpoint contract in
-`WebhookAdminController` (GET list, POST create, PUT update, DELETE remove, POST test).
-The `PUT /api/v1/admin/webhooks/{id}` route, plus the backing `WebhookDispatcher::update()`
-and `WebhookAdminController::update()` PHP methods, were added in this step to support
-edit-in-place (the controller already had index/create/delete/test before 1.4a).
-The event multi-select shows 7 subscribable events grouped into 5 categories
-(Playback, Library, Downloads, Recordings, Alerts); `webhook.test` is internal-only.
-Secret is write-only — GET never returns it; the edit form shows an empty field with
-"(unchanged)" placeholder and omits `secret` from the PUT payload when blank, so the
-server retains the stored value. Coverage: 97.29% on `webhooks.ts`, 89.74% on
-`WebhooksPage.tsx`.
-
-Full operator + contributor docs live in the
-[phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/integrations.md`,
-`docs/admin/server-settings.md`, and `docs/dev/admin-spa.md`).
+Full operator + contributor docs live on the
+[phlix-docs](https://detain.github.io/phlix-docs) site — see in particular
+[admin/server-settings](https://detain.github.io/phlix-docs/admin/server-settings) and
+[admin/library-management](https://detain.github.io/phlix-docs/admin/library-management).
 
 ### Git Workflow
 
@@ -1183,4 +1197,7 @@ For issues and feature requests, please use the GitHub issue tracker.
 
 ---
 
-For detailed development documentation, see [DEVELOPER.md](DEVELOPER.md).
+For detailed development documentation, see the
+[phlix-docs](https://detain.github.io/phlix-docs) site — the in-tree `DEVELOPER.md` and the
+`docs/archive/` plan set were retired into it (`77e681fd`, "Remove docs directory after
+phlix-docs merge").

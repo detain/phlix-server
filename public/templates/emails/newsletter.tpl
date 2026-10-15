@@ -17,7 +17,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{$subject|default:'Your Weekly Watch Report'}</title>
+    <title>{$subject|default:'Your Phlix Weekly Watch Report'}</title>
     <style type="text/css">
         /* Reset styles */
         body, html {
@@ -268,7 +268,7 @@
         <div class="email-content">
             <!-- Header -->
             <div class="email-header">
-                <h1>{$subject|default:'Your Weekly Watch Report'}</h1>
+                <h1>{$subject|default:'Your Phlix Weekly Watch Report'}</h1>
                 <p>{$week_start|default:''} - {$week_end|default:''}</p>
             </div>
 

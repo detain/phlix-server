@@ -400,7 +400,7 @@ return [
     'server' => [
         'name' => 'Phlix Media Server',
         'host' => '0.0.0.0',
-        'port' => 8080,
+        'port' => 8096,
     ],
     'websocket' => [
         'host' => '0.0.0.0',
@@ -419,17 +419,224 @@ return [
 
 ### Environment variables
 
-Most operators only set `DB_PASSWORD` and `JWT_SECRET`; the following knobs cover
-the streaming and auth-hardening features and all have safe defaults.
+This is the **definitive census** (R14-05): every environment variable the
+server process reads, grouped by subsystem. The list was built by grepping
+every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
+`start.php`, `bin/` and `scripts/` — if a knob is not here, the PHP runtime
+does not read it. Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
+everything else has a safe default. "Secret?" marks values that must never be
+logged or committed. The "Restart" column (R14-20) uses four values: **yes** =
+read once at boot (bind, container/config construction) — a new value applies
+only after restart; **per-proc** = read on first use inside each worker
+process then memoized — effectively restart-scoped; **live** = `getenv()` on
+every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
+[What requires a restart](#what-requires-a-restart) below.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HLS_MIN_DISK_SPACE_BYTES` | `524288000` (500 MiB) | Free-space floor for the HLS segment-cache directory (`config/server.php` → `hls.min_disk_space_bytes`). When free space drops below this, the server sweeps the cache and returns `503` with `Retry-After: 3` instead of failing an encode with `ENOSPC`. |
-| `RATE_LIMIT_<SURFACE>_MAX` | per-surface default | Max attempts per window for an auth surface before it rate-limits. `<SURFACE>` is one of `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` (defaults: register 5, refresh 30, webauthn_start/finish 10, jwks 120, ws_connect 30). See `config/server.php` → `rate_limit`. |
-| `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface default | Window length in seconds for the matching surface (defaults: register 600, refresh 60, webauthn_start/finish 60, jwks 60, ws_connect 60). |
-| `TRUSTED_PROXIES` | loopback only (`127.0.0.1`, `::1`) | Comma-separated IP/CIDR list of reverse-proxy hops. Used to derive the **real** client IP from `X-Forwarded-For`/`X-Real-IP` for rate-limit keys. **This must reflect your nginx/HAProxy hops** — if a non-loopback proxy fronts the server and is not listed here, IP-keyed limits will bucket every request under the proxy address (or trust a client-forged header). The stock install fronts Phlix over loopback, so the default is correct there. |
-| `PHLIX_DOMAIN` | _unset_ | This server's **public authority** — `host` or `host:port`, no scheme and no path (e.g. `media.example.com`, `media.example.com:8443`). `scripts/install.sh --domain <domain>` writes it to the env file the systemd unit reads. Two uses: it is the base domain `config/hub.php` composes into `hub.domain`/`hub.public_url`, and it is the **allowlist for deriving the OAuth2/OIDC `redirect_uri`** — `/auth/{oidc,github}/authorize` builds `<scheme>://<Host><callback path>` only when the request's `Host` (port included, with the scheme's default `:443`/`:80` normalised away) equals this value. **Unset or malformed ⇒ nothing is derived and the flow fails closed** with `503 callback_url_not_configured`; a garbage value (a full URL, a trailing path or `.`, an out-of-range or non-numeric port, whitespace) is treated as *unconfigured*, never as an allowlist that cannot match. The escape hatch is a per-provider absolute `redirect_uri` setting, which keeps first priority and works with `PHLIX_DOMAIN` unset. |
-| `PHLIX_DEBUG_EVENTS` | `0` (off) | Diagnostic toggle. When truthy (`1`/`true`/`yes`/`on`) it (1) wraps the PSR-14 dispatcher in a debug decorator that logs every dispatched event class, and (2) enables the `events` log handler so those records are written to `.logs/events.log`. When off, `events.log` stays empty and no per-event debug logging happens. Leave off in production. `events.log` only ever receives `EVENTS`-channel records; `plugins.log` only `PLUGINS`-channel records; `app.log`/`error.log` still capture everything / all errors. See `config/logger.php`. |
+#### Listening sockets & processes
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_HTTP_HOST` | `0.0.0.0` (`server.host`) | no | yes | `start.php` via `ListenEndpoints` (R14-06) |
+| `PHLIX_HTTP_PORT` | `8096` (`server.port`) | no | yes | same; also feeds the DLNA-advertised port |
+| `PHLIX_HTTP_WORKER_COUNT` | `14` (`worker.count`; `auto` → 14) | no | yes | same |
+| `PHLIX_WS_HOST` | `0.0.0.0` (`websocket.host`) | no | yes | same (WebSocket worker bind) |
+| `PHLIX_WS_PORT` | `8097` (`websocket.port`) | no | yes | same |
+
+#### Logging
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_LOG_STDOUT` | off (`0`) | no | yes | `config/logger.php` — truthy (`1`/`true`/`yes`/`on`) ADDS a `php://stdout` sink for `docker logs`/`journalctl`; file handlers keep working (R14-09) |
+| `PHLIX_LOG_LEVEL` | per-handler (`file` info / `error` error / `events`+`plugins` debug) | no | yes | `StructuredLogger::createHandler()` lowers/raises every handler's floor; PSR-3 names, case-insensitive, `warn` accepted; unknown value fails SOFT to shipped defaults (R3-08) |
+| `PHLIX_DEBUG_EVENTS` | `0` (off) | no | yes | truthy wraps the PSR-14 dispatcher in a debug decorator AND enables the `events` log handler (`.logs/events.log`). Leave off in production; see `config/logger.php` |
+
+#### File-backed job queues
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_JOB_QUEUE_ROOT` | `<repo>/var/jobs` | no | yes | `JobQueuePaths` — one root for all five queues (R14-14); deliberately NOT `/tmp`, which `PrivateTmp=true` sandboxes per-service |
+| `PHLIX_MARKER_JOBS_DIR` | `<root>/marker` | no | yes | marker-detection queue dir (beats `PHLIX_JOB_QUEUE_ROOT`) |
+| `PHLIX_MEDIA_ASSET_JOBS_DIR` | `<root>/media_asset` | no | yes | chapter-thumbnail/trickplay queue dir |
+| `PHLIX_COLLECTION_JOBS_DIR` | `<root>/collection` | no | yes | TMDB box-set sync queue dir |
+| `PHLIX_METADATA_WRITE_JOBS_DIR` | `<root>/metadata_write` | no | yes | metadata write-back queue dir |
+| `PHLIX_SIMILARITY_JOBS_DIR` | `<root>/similarity` | no | yes | similarity-computation queue dir |
+
+#### Database & migrations
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `DB_HOST` | `127.0.0.1` | no | yes | `config/database.php` |
+| `DB_PORT` | `3306` | no | yes | `config/database.php` |
+| `DB_DATABASE` (alias `DB_NAME`) | `phlix` | no | yes | `config/database.php` (`DB_DATABASE` wins) |
+| `DB_USER` (alias `DB_USERNAME`) | `phlix` | no | yes | `config/database.php` (`DB_USER` wins) |
+| `DB_PASSWORD` | `` (empty) | **yes** | yes | `config/database.php` |
+| `DB_POOL_ENABLED` | `1` (on) | no | yes | `config/database.php` → `PooledMySQLConnection` fleet |
+| `DB_POOL_SIZE` | `8` | no | yes | `config/database.php` |
+| `PHLIX_MIGRATIONS_DIR` | `migrations/` | no | n/a (CLI) | `bin/phlix`, `scripts/run-migrations.php` |
+| `PHLIX_MIGRATIONS_STRICT` | off | no | n/a (boot) | **docker-entrypoint shell only** — truthy inverts the migration-failure boot-continue into refuse-to-start; the PHP runtime never reads it |
+
+#### Auth & secrets
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `JWT_SECRET` | dev placeholder — **refuses to boot** unconfigured in production shape | **yes** | yes | `AuthServicesProvider` (pre-fork assert), `SignedUrl` fallback |
+| `PHLIX_SECRET_KEY` | — | **yes** | n/a (shell) | **docker-entrypoint alias** → exported as `JWT_SECRET` before the daemon starts; the PHP runtime never reads this name |
+| `PHLIX_SIGNED_URL_SECRET` | derives from `JWT_SECRET` (domain-separated) | **yes** | live | `src/Auth/SignedUrl.php` |
+| `PHLIX_SIGNED_URL_TTL` | `21600` s (6 h) | no | live | `src/Auth/SignedUrl.php` |
+| `PHLIX_COOKIE_INSECURE` | off | no | live | `AuthController` + OIDC/GitHub callback controllers — drops `Secure` on session cookies for plain-HTTP dev (never in production) |
+| `PHLIX_TLS_ENABLED` | off | no | yes | `config/hub.php` — https vs wss scheme composition |
+
+#### Hub relay (server → hub tunnels)
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_RELAY_ENABLED` | off | no | yes | `src/Hub/RelayConfig.php` |
+| `PHLIX_RELAY_DISABLED` | off | no | yes | kill-switch honored by `RelayTunnelBoot`/`RelayStateStore`/admin hub controller even when config says enabled |
+| `PHLIX_RELAY_HUB_URL` / `PHLIX_RELAY_HUB_WS_URL` | _unset_ | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_LOCAL_HTTP_ADDRESS` | _unset_ | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_PING_INTERVAL` / `PHLIX_RELAY_PING_TIMEOUT` | `30` / `10` s | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_RECONNECT_DELAY` / `PHLIX_RELAY_RECONNECT_MAX_DELAY` / `PHLIX_RELAY_RECONNECT_JITTER_FACTOR` | `5` / `300` s / `0.3` | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_REQUIRE_TLS` | off (`false`) | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_TLS` | off | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_TLS_CAFILE` / `PHLIX_RELAY_TLS_VERIFY` | system CA / on (verify) | CA path | yes | `RelayConfig.php`, `src/Hub/HttpClient.php` |
+| `PHLIX_RELAY_TUNNEL_HOSTNAME` | _unset_ | no | yes | `RelayConfig.php` |
+| `PHLIX_HUB_URL` | _unset_ | no | yes | `config/hub.php` |
+| `PHLIX_HUB_JWKS_URL` | derived from `PHLIX_HUB_URL` | no | yes | `config/hub.php` |
+| `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
+| `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
+| `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` |
+| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | `1` (on) | no | yes | `config/hub.php` |
+
+#### SyncPlay write-through bridge
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `SYNCPLAY_BRIDGE` | on (only literal `0` disables) | no | yes | `config/server.php` |
+| `SYNCPLAY_BRIDGE_SOCKET` | `<repo>/var/syncplay-bridge.sock` | no | yes | `config/server.php` |
+| `SYNCPLAY_BRIDGE_TIMEOUT_MS` | `250` | no | yes | `config/server.php` |
+| `PHLIX_SYNCPLAY_BRIDGE_TOKEN` | _unset_ | **yes** | yes | `config/server.php` + `src/Session/SyncPlay/SyncPlayBridge.php` |
+
+#### HLS & transcoding
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `HLS_MAX_CONCURRENT_SEGMENTS` | `8` | no | yes | `config/server.php` → `hls.` |
+| `HLS_CACHE_MAX_BYTES` | `8 GiB` | no | yes | `config/server.php` → `hls.` |
+| `HLS_CACHE_MAX_AGE` | `10800` s | no | yes | `config/server.php` → `hls.` |
+| `HLS_MIN_DISK_SPACE_BYTES` | `524288000` (500 MiB) | no | yes | `config/server.php` → `hls.` — free-space floor; below it the segment cache is swept and encodes answer `503` + `Retry-After: 3` instead of `ENOSPC` |
+| `PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS` / `PHLIX_HLS_RELAY_MAX_SEGMENTS` | see `config/hls_relay.php` | no | yes | `config/hls_relay.php` |
+| `PREFERRED_ACCELERATOR` | `` (auto) | no | yes | `config/transcoding.php` |
+| `TONE_MAPPING_MODE` | `none` | no | yes | `config/transcoding.php` |
+| `PREFER_HDR_OUTPUT` | `false` | no | yes | `config/transcoding.php` |
+
+#### Storage paths
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_LIBRARY_ROOTS` | see `src/Common/Fs/LibraryRootGuard.php` | no | per-proc | library path jail — read on first use per worker process, then memoized (restart to change mid-flight) |
+| `PHLIX_BROWSE_ROOTS` | see `config/filesystem.php` | no | yes | filesystem-browser allowlist (config load at boot) |
+| `ARTWORK_STORAGE_PATH` | `/var/artwork` | no | yes | `config/artwork.php` (config load at boot) |
+| `SUBTITLE_STORAGE_PATH` | `/var/subtitles` | no | yes | `config/subtitles.php` (config load at boot) |
+| `IMDB_CACHE_DIR` | see `config/imdb.php` | no | yes | `config/imdb.php` |
+| `PHLIX_THEME_MUSIC_CACHE_DIR` | see `config/theme_music.php` | no | yes | `config/theme_music.php` |
+
+#### Metadata providers & scrobblers
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `TMDB_API_KEY` | _unset_ | **yes** | live | `MediaServicesProvider`, `TmdbApiKeyResolver` (DB admin-setting wins) |
+| `IMDB_ENABLED` | off | no | yes | `config/imdb.php` (config load at boot) |
+| `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` | `` | **yes** (secret) | yes (master switch) | `config/scrobblers/trakt.php` — empty client id = Trakt subsystem off at boot |
+| `TRAKT_REDIRECT_URI` | derived from `PHLIX_DOMAIN` | no | yes | `config/scrobblers/trakt.php` |
+| `TRAKT_SYNC_INTERVAL` | `30` min (min 5, max 1440) | no | yes | `config/scrobblers/trakt.php` (config load at boot) |
+| `TRAKT_TOKEN_ENCRYPTION_KEY` | `` | **yes** | yes | `config/scrobblers/trakt.php` + `Application` — required to persist user OAuth tokens |
+| `LASTFM_ENABLED` | `0` (off) | no | yes | `config/lastfm.php` |
+| `LASTFM_API_KEY` / `LASTFM_SHARED_SECRET` | `` | **yes** | yes | `config/lastfm.php` (`LASTFM_SHARED_SECRET` feeds both `shared_secret` and `api_secret`) |
+| `LASTFM_CALLBACK_URL` / `LASTFM_SESSION_KEY` / `LASTFM_USERNAME` | `` | secret-capable | yes | `config/lastfm.php` |
+| `LASTFM_SUBMIT_NOW_PLAYING` | `1` (on) | no | yes | `config/lastfm.php` (config load at boot) |
+
+#### Plugins
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `COMPOSER_BIN` | `composer` on PATH | no | live | `PluginsProvider`, `ComposerRunner`, audit scripts |
+| `PHLIX_PLUGINS_COMPOSER_TIMEOUT` | see `PluginsProvider` | no | live | plugin install/update composer runs |
+| `PHLIX_PLUGINS_REQUIRE_SIGNATURE` | see `PluginsProvider` | no | live | plugin install signature gate |
+| `PHLIX_PLUGINS_ALLOW_UNVERIFIED` | off | no | live | `PluginLoader` — allow loading unsigned plugins (dev only) |
+| `PHLIX_PLUGINS_TRUSTED_SIGNATURES` / `PHLIX_PLUGINS_TRUSTED_SIGNATURES_FILE` | _unset_ | no | live | `TrustedSignaturesConfig` — inline list / PEM file of trusted keys |
+| `PHLIX_PLUGINS_CATALOG_REF` | branch/tag per `CatalogSourceResolver` | no | live | catalog pin override |
+| `PHLIX_PLUGINS_ALLOW_HTTP` | off | no | live | `HttpInstaller` — allow http:// plugin download URLs (dev only) |
+| `PHLIX_GITHUB_TOKEN` (fallback `GITHUB_TOKEN`, `GH_TOKEN`) | _unset_ | **yes** | live | `ComposerRunner` — private-repo plugin fetches |
+
+#### HTTP surface, limits & misc
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_CORS_ALLOWED_ORIGINS` | _unset_ | no | live | `CorsManager` — comma-separated origin allowlist |
+| `PHLIX_DOMAIN` | _unset_ | no | live | `config/hub.php` composition + the OAuth2/OIDC `redirect_uri` Host allowlist: `/auth/{oidc,github}/authorize` derives `<scheme>://<Host><path>` only when `Host` equals this value; unset/malformed ⇒ fail-closed `503 callback_url_not_configured` (absolute per-provider `redirect_uri` is the escape hatch) |
+| `TRUSTED_PROXIES` | loopback (`127.0.0.1`, `::1`) | no | live | `TrustedProxyResolver` — CIDR list of proxy hops allowed to assert `X-Forwarded-For`; unlisted non-loopback proxies bucket every request under the proxy address |
+| `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface | no | yes | `config/server.php` → `rate_limit`; `<SURFACE>` ∈ `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` |
+| `PHLIX_SSRF_ALLOW_CIDRS` | _unset_ (deny-all private) | no | per-proc | `src/Common/Net/SsrfGuard.php` — extra trusted CIDRs for outbound fetches (e.g. LAN metadata hosts); read on first guard use per worker process, then memoized |
+| `PHLIX_METRICS_ENABLED` | `1` | no | yes | `config/metrics.php` (per-worker boot gate) |
+| `PHLIX_METRICS_FLUSH_INTERVAL` / `PHLIX_METRICS_BUCKET_SECONDS` / `PHLIX_METRICS_RETENTION_DAYS` / `PHLIX_METRICS_CONNECTION_TTL` / `PHLIX_METRICS_ROUTE_CAP` | `5` / `10` s / `7` d / `15` s / `200` | no | yes | `config/metrics.php` |
+| `PHLIX_UPDATES_CHECK_ENABLED` / `PHLIX_UPDATES_MARKER_URL` / `PHLIX_UPDATES_COMMAND` / `PHLIX_UPDATES_POLL_SECONDS` / `PHLIX_UPDATES_TIMEOUT_SECONDS` | see `config/updates.php` | no | yes | `config/updates.php` (update-check timer) |
+| `PHLIX_CONTAINER_COMPILE` | off | no | yes | `ContainerFactory` (pre-fork compile) + `EventServicesProvider` (per-worker warm) — compile the PHP-DI container to `var/cache/` |
+| `PHLIX_ENV` | `production` | no | yes | `AuthServicesProvider` dev-shape acceptance, `scripts/bootstrap_env.php` |
+| `PHLIX_ENV_FILE` | `/etc/phlix/env` | no | n/a (CLI) | `scripts/bootstrap_env.php` |
+
+#### Read via `$_ENV` only — caveat
+
+`config/playback.php` and `config/port-forward.php` read their knobs through
+`$_ENV[...]`, **not** `getenv()`. With PHP's common `variables_order = "GPCS"`
+(CLI, systemd, most images) `$_ENV` is never populated from the process
+environment, so these take their config-file defaults regardless of what you
+export. They are effective only where `variables_order` includes `E` (or the
+SAPI pre-populates `$_ENV`).
+
+| Variable | Config default | Purpose |
+|----------|----------------|---------|
+| `PHLIX_CROSSFADE_DURATION` / `PHLIX_CROSSFADE_FADE_OUT` / `PHLIX_CROSSFADE_FADE_IN` | `0` / `0.3` / `0.3` | audio crossfade (disabled by default) |
+| `PHLIX_UPNP_ENABLED` | `true` | UPnP IGD discovery |
+| `PHLIX_PORT_FORWARD_AUTO` | `true` | automatic NAT-PMP/UPnP pinholing |
+| `PHLIX_EXTERNAL_PORT` / `PHLIX_EXTERNAL_HTTP_PORT` / `PHLIX_EXTERNAL_HTTPS_PORT` | `32400` / `8080` / `8443` | advertised external ports |
+| `PHLIX_STUN_SERVER` / `PHLIX_STUN_PORT` | `stun.l.google.com` / `19302` | STUN reachability probe |
+
+#### Documented elsewhere, NOT implemented here
+
+These names appear in historical CHANGELOG entries and/or external docs but
+have **zero read sites** anywhere in this repository — do not expect setting
+them to do anything: `PHLIX_HUB_ENROLLMENT_TOKEN`, `PHLIX_PUBLIC_URL`,
+`PHLIX_HWACCEL`.
+
+### What requires a restart
+
+R14-20. Every knob above marked "Restart" is read **once** and changing it in
+the process environment has no effect until the unit/container restarts. The
+short list of why, grouped by the mechanism that reads it early:
+
+- **Bound before the first fork (`start.php` master):** `PHLIX_HTTP_*`,
+  `PHLIX_WS_*` (listen URIs + counts), `PHLIX_CONTAINER_COMPILE` (the compiled
+  container is shared through fork inheritance).
+- **Per-worker construction at boot:** `PHLIX_LOG_LEVEL` / `PHLIX_LOG_STDOUT` /
+  `PHLIX_DEBUG_EVENTS` (handler graph), `DB_POOL_*` and all `DB_*`
+  (`ConnectionPool::init()`), `PHLIX_METRICS_*` (collector per worker),
+  the SyncPlay bridge sockets, Trakt/Last.fm **master switches**
+  (`TRAKT_CLIENT_ID` empty and `LASTFM_ENABLED` decide whether the subsystem
+  exists at all), `PHLIX_ENV`, relay/hub wiring (`PHLIX_RELAY_*`,
+  `PHLIX_HUB_*`, `PHLIX_TLS_ENABLED`), DLNA `enabled`/`cds_enabled` (the
+  `:1900` listener and SSDP advertisement are built at boot).
+- **Config-load paths:** the job-queue dirs (`PHLIX_JOB_QUEUE_ROOT`,
+  `PHLIX_*_JOBS_DIR`) — a daemon and a standalone worker started at different
+  times with different values will not share a queue until both restart.
+- **Rate-limit profiles:** `RATE_LIMIT_*` and `TRUSTED_PROXIES` semantics are
+  frozen by `RateLimitProfiles` pre-flight in `start.php`.
+
+Everything else (metadata keys like `metadata.*`, `PHLIX_SIGNED_URL_*`,
+`PHLIX_CORS_ALLOWED_ORIGINS`, `TRUSTED_PROXIES` — rebuilt per request — and
+the plugin gates read at each composer/install invocation) is resolved at
+runtime and applies to the next request/job without a restart. The two
+per-process memos (`PHLIX_SSRF_ALLOW_CIDRS`, `PHLIX_LIBRARY_ROOTS`) apply on
+the next worker boot rather than the next request.
 
 > **Rate limiting.** The auth surfaces above (`register` / `refresh` / WebAuthn
 > `start`+`finish` / public JWKS / WS-connect on `:8097`) are rate-limited.

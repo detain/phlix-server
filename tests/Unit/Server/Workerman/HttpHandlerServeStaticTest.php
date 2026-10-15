@@ -157,4 +157,67 @@ final class HttpHandlerServeStaticTest extends TestCase
             self::assertTrue($cacheControl === null || $cacheControl === []);
         }
     }
+
+    /**
+     * R20-03 — serveStatic() must deny source maps and Smarty template sources
+     * (fall-through to the dispatcher = null), not just php. .js.map under the
+     * Vite bundle carries the SPA's full TypeScript via sourcesContent and
+     * public/templates/emails/*.tpl is the email template source — neither is
+     * client-facing. The pre-existing php deny must keep holding through the
+     * extension-list refactor.
+     */
+    public function testSourceMapsTemplateAndPhpSourcesAreNeverServed(): void
+    {
+        file_put_contents($this->publicRoot . '/assets/app/index-DaB12cd3.js.map', '{"sourcesContent":["leaked"]}');
+        mkdir($this->publicRoot . '/templates/emails', 0o777, true);
+        file_put_contents($this->publicRoot . '/templates/emails/newsletter.tpl', 'Dear {\$name},');
+        file_put_contents($this->publicRoot . '/config-backup.php', "<?php echo 'secret';");
+
+        try {
+            self::assertNull(
+                $this->invokeServeStatic('/assets/app/index-DaB12cd3.js.map'),
+                'R20-03: source maps must never be served over HTTP',
+            );
+            self::assertNull(
+                $this->invokeServeStatic('/templates/emails/newsletter.tpl'),
+                'R20-03: Smarty template sources must never be served over HTTP',
+            );
+            self::assertNull(
+                $this->invokeServeStatic('/config-backup.php'),
+                'pre-existing law: php source must never be served raw',
+            );
+            // Case-insensitivity of the deny (the guard lowercases the extension).
+            file_put_contents($this->publicRoot . '/assets/app/upper.MAP', '{"sourcesContent":["leaked"]}');
+            self::assertNull(
+                $this->invokeServeStatic('/assets/app/upper.MAP'),
+                'R20-03: the deny is case-insensitive — .MAP must not slip through',
+            );
+        } finally {
+            @unlink($this->publicRoot . '/assets/app/upper.MAP');
+            @unlink($this->publicRoot . '/assets/app/index-DaB12cd3.js.map');
+            @unlink($this->publicRoot . '/templates/emails/newsletter.tpl');
+            @unlink($this->publicRoot . '/config-backup.php');
+            @rmdir($this->publicRoot . '/templates/emails');
+            @rmdir($this->publicRoot . '/templates');
+        }
+    }
+
+    /**
+     * R20-03 companion — the deny is extension-based on the RESOLVED path, so
+     * a legitimately-named neighbour (js, not map) keeps serving.
+     */
+    public function testJsNeighbourOfDeniedMapStillServes(): void
+    {
+        file_put_contents($this->publicRoot . '/assets/app/index-DaB12cd3.js.map', '{}');
+        try {
+            self::assertNull($this->invokeServeStatic('/assets/app/index-DaB12cd3.js.map'));
+            self::assertInstanceOf(
+                WorkermanResponse::class,
+                $this->invokeServeStatic('/assets/app/index-DaB12cd3.js'),
+                'the .js sibling must remain served — the deny is exact-extension, not substring',
+            );
+        } finally {
+            @unlink($this->publicRoot . '/assets/app/index-DaB12cd3.js.map');
+        }
+    }
 }

@@ -80,6 +80,15 @@ final class HttpHandler
     private const DIRECT_CANCEL_PREFIX = 'dl-';
 
     /**
+     * Lowercase file extensions {@see serveStatic()} must never hand out
+     * (R20-03): php = raw source; map = Vite source maps carrying the SPA's
+     * full sourcesContent (build artifacts for tooling, not client-facing);
+     * tpl = Smarty email template sources under public/templates/emails/
+     * (server-side reads use the filesystem path, never this HTTP route).
+     */
+    private const DENIED_STATIC_EXTENSIONS = ['php', 'map', 'tpl'];
+
+    /**
      * Per-worker monotonic sequence backing {@see mintDirectCancelId()}.
      *
      * Deliberately a resident-process `static` (NOT request state in
@@ -600,8 +609,16 @@ final class HttpHandler
         if (!is_file($real)) {
             return null;
         }
-        // Never serve PHP source files raw.
-        if (strtolower((string) pathinfo($real, PATHINFO_EXTENSION)) === 'php') {
+        // Never serve PHP source files raw, and (R20-03) never serve source
+        // maps or Smarty template sources: the Vite build emits
+        // public/assets/app/**/*.js.map carrying the SPA's full TypeScript via
+        // sourcesContent (build artifacts for tooling, not client-facing), and
+        // public/templates/emails/newsletter.tpl is the email template read
+        // SERVER-side by path via Smarty (NewsletterGenerator), never over
+        // HTTP. Denied on the jailed realpath so a case trick or symlink can't
+        // smuggle one back in; the request falls through to the dispatcher
+        // exactly like the pre-existing php deny above.
+        if (in_array(strtolower((string) pathinfo($real, PATHINFO_EXTENSION)), self::DENIED_STATIC_EXTENSIONS, true)) {
             return null;
         }
         $headers = ['Content-Type' => self::mimeFor($real)];

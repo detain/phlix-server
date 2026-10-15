@@ -128,4 +128,96 @@ final class WebhookHttpClientCoroutineForkTest extends TestCase
         $this->assertIsString($result['error']);
         $this->assertNotSame('', $result['error']);
     }
+
+    /**
+     * R20-01 (SSRF) — the async arm must hand workerman/http-client an
+     * explicit zero-redirect policy. The vendor default in
+     * Workerman\Http\Request::$options is ['allow_redirects' => ['max' => 5]],
+     * and every redirect hop is fetched WITHOUT any re-check of the SsrfGuard
+     * that gated the original URL — a public endpoint answering
+     * 302 -> http://169.254.169.254/ would have its FINAL body persisted into
+     * the admin-readable delivery log (exfiltration), and 301/302/303 re-issues
+     * downgrade the POST to an internal GET scanner. Pinning the option here
+     * means any regression that drops it from $options reddens this test.
+     */
+    public function testAsyncArmDisablesRedirects(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('ext-swoole is required to execute the coroutine branch.');
+        }
+
+        $capturedOptions = null;
+
+        $fake = $this->createMock(Client::class);
+        $fake->expects($this->once())
+            ->method('request')
+            ->willReturnCallback(
+                static function (string $url, array $options) use (&$capturedOptions): void {
+                    $capturedOptions = $options;
+                    $options['success'](new \Workerman\Psr7\Response(200, [], 'ok'));
+                }
+            );
+
+        $client = new WebhookHttpClient();
+        $this->injectAsyncClient($client, $fake);
+
+        $this->runWithWorkerEventLoop(
+            fn (): mixed => $this->runInCoroutine(
+                fn () => $client->postWithHeaders('http://hooks.test/r', [], '{}')
+            )
+        );
+
+        $this->assertIsArray($capturedOptions);
+        $this->assertArrayHasKey(
+            'allow_redirects',
+            $capturedOptions,
+            'R20-01: the async options must carry an explicit allow_redirects policy'
+        );
+        $this->assertSame(
+            ['max' => 0],
+            $capturedOptions['allow_redirects'],
+            'R20-01: redirects must be denied outright (vendor default max=5 is the SSRF hole)'
+        );
+    }
+
+    /**
+     * R20-01 companion — with redirects denied at the transport level, a 302
+     * from the guarded target arrives as the FINAL response and must be
+     * reported as a FAILED delivery (success requires 2xx), never as success,
+     * and the fake client must be consulted exactly once (no second hop).
+     */
+    public function testRedirectResponseIsFailedDeliveryNotSecondRequest(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('ext-swoole is required to execute the coroutine branch.');
+        }
+
+        $fake = $this->createMock(Client::class);
+        $fake->expects($this->once())
+            ->method('request')
+            ->willReturnCallback(
+                static function (string $url, array $options): void {
+                    // allow_redirects max=0 => the vendor re-queues nothing;
+                    // the 3xx itself is delivered to the success callback.
+                    $options['success'](new \Workerman\Psr7\Response(
+                        302,
+                        ['Location' => 'http://169.254.169.254/latest/meta-data/'],
+                        'moved'
+                    ));
+                }
+            );
+
+        $client = new WebhookHttpClient();
+        $this->injectAsyncClient($client, $fake);
+
+        $result = $this->runWithWorkerEventLoop(
+            fn (): mixed => $this->runInCoroutine(
+                fn () => $client->postWithHeaders('http://hooks.test/redirect', [], '{}')
+            )
+        );
+
+        $this->assertFalse($result['success'], 'a 3xx must be a failed webhook delivery');
+        $this->assertSame(302, $result['response_code']);
+        $this->assertWorkerEventLoopRestored();
+    }
 }

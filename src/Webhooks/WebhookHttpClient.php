@@ -143,10 +143,25 @@ class WebhookHttpClient
     {
         $client = $this->getAsyncClient();
 
+        // R20-01 (SSRF): workerman/http-client defaults to following up to 5
+        // redirects (Request::$options['allow_redirects']['max'] = 5) with NO
+        // per-hop re-check against the SsrfGuard that gated the original URL.
+        // A public endpoint answering 302 → http://169.254.169.254/ (or any
+        // internal host) would be fetched by the worker, and the FINAL body is
+        // persisted to the admin-readable webhook delivery log response_body —
+        // an exfiltration primitive. The 301/302/303 re-issue also downgrades
+        // POST to a GET, turning the webhook sender into an internal GET
+        // scanner. Denying redirects outright makes a 3xx land as a failed
+        // delivery (success requires 2xx) with the 3xx body only ever read
+        // from the originally-guarded host. Shallow array_merge in
+        // Request::setOptions() means this top-level key cleanly replaces the
+        // vendor default. The cURL fallback path is already safe (no
+        // CURLOPT_FOLLOWLOCATION is ever set).
         $options = [
             'method' => 'POST',
             'headers' => $headers,
             'body' => $body,
+            'allow_redirects' => ['max' => 0],
         ];
 
         // Channel-based wait: push is called by success/error callbacks,

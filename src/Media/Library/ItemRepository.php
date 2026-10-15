@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
-use Phlix\Collection\SmartRuleVocabulary;
+use Phlix\Collections\SmartRuleVocabulary;
 use Phlix\Common\Http\PageLimit;
 use Phlix\Common\Uuid;
 use Phlix\Server\Http\RequestContext;

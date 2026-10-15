@@ -633,8 +633,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (1994 at lane base, +2 foreign files had landed since the 1992 pin
      * without rotation; HEAD-measured in a clean worktree, not predicted);
      * 1994 − 15 = 1979. Measured from the phpunit red (1979), not predicted.
+     * Re-pinned 1979→1978 by the same lane (R18-10): −1 — the
+     * src/Server/WebSocket/Events.php compatibility shim, whose sole stated
+     * keep-reason (a phpstan excludePaths entry) died with S343. Measured
+     * from the phpunit red (1978), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1979;
+    private const EXPECTED_PHP_FILES = 1978;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

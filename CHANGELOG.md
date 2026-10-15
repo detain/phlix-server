@@ -32,6 +32,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **SRV-HYGIENE micro-lane (2026-10-14 review family) — R18-03/07/09/10/16/17,
+  R15-23/29, and three dead-code retirements:**
+  - R18-03: `declare(strict_types=1)` added to the last seven files missing it
+    (`AuditLogger` + the six `src/Dlna/` classes); `src/` is now 100% strict.
+    No coercion fallout — Dlna/Common/Integration filters all green.
+  - R18-07: fifteen verified-dead classes deleted (RemoteAirPlayClient,
+    DebugLogger, RecordingHooksRunner + RecordingHooks, HlsRelaySessionFactory,
+    Dvbt/HdHomeRun tuner driver factories, Audiobook/Book/Photo LibraryType,
+    the two Hwaccel exceptions, TranscodeProfile, SessionOidcStateStore,
+    Webhooks PluginRegistry). `MusicLibraryManager` was KEPT — it gained a live
+    `new` at `MusicLibraryType` (plugin LibraryType contract) after the review.
+    Census `EXPECTED_PHP_FILES` re-pinned from the measured red.
+  - R18-09: `SmartRuleVocabulary` moved `Phlix\Collection\` → `Phlix\Collections\`
+    (PSR-4 dir/namespace agreement); sole consumer import updated; twin dir gone.
+  - R18-10: `src/Server/WebSocket/Events.php` no-op compat shim deleted (its
+    phpstan keep-reason was retired at S343; `excludePaths` stays `[]`).
+  - R18-16: loose compares tightened — RatingGate admin flag now uses the
+    estate `!empty()` idiom (with a 5-case pin), PhotoScanner EXIF rationals
+    parse both halves then compare strictly (string '0' denominators no longer
+    produce INF), and MediaScanner's JSON-round-trip array `!=` is annotated
+    as intentionally order-insensitive rather than blindly tightened.
+  - R18-17: `RelayConfig::fromEnv()`'s ten `getenv(...) ?: default` sites
+    replaced by typed `envString`/`envInt`/`envFloat` helpers — unset and
+    empty-string are both explicitly "not provided", '0' keeps its old falsy
+    fallback, garbage strings keep the old cast semantics; 5 new pin tests.
+  - TimeSync vestiges retired: the standalone :8098 worker died in 22ce232c;
+    `DEFAULT_PORT`, the `$host`/`$port` ctor params and `getHost()`/`getPort()`
+    (zero production readers) removed with a tombstone docblock.
+  - Helm phlix chart: `PHLIX_HUB_ENROLLMENT_JWT` env + `hub-enrollment-jwt`
+    secret key + `hub.enrollmentJwt`/`hub_pairing_code` values dropped — zero
+    PHP readers; enrollment is file-based (`hub-enrollment.json`).
+  - R15-23: success-message taxonomy — one canonical string per operation
+    ('Settings updated.', 'PIN cleared successfully', 'Profile deleted
+    successfully'); one admin test pin re-pinned with attribution.
+    R15-29: newsletter tpl subject defaults aligned to the generator's
+    'Your Phlix Weekly Watch Report'.
+  - Foreign-gate repair: `WebPortalRouterParentalEnforcementTest` updated to
+    RecommendationService's post-R19-12 single-arg ctor — `phpstan
+    -c phpstan-tests.neon` fully green again.
+
 - **SRV-OPS remediation (2026-10-14 review family) — R14-05 README env
   census + R14-20 restart semantics:** the README's "Environment variables"
   section claimed six knobs; the runtime actually reads ~100. Replaced it

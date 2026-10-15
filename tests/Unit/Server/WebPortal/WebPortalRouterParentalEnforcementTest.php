@@ -14,7 +14,6 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\RecommendationService;
-use Phlix\Media\SimilarityService;
 use Phlix\Server\Http\Request;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Session\PlaybackController;
@@ -178,7 +177,7 @@ class WebPortalRouterParentalEnforcementTest extends TestCase
      *
      * @param array<int, array<string, mixed>> $rows user_recommendations rows.
      */
-    private function recommendationService(array $rows, ItemRepository $itemRepo): RecommendationService
+    private function recommendationService(array $rows): RecommendationService
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
@@ -186,7 +185,9 @@ class WebPortalRouterParentalEnforcementTest extends TestCase
                 return str_contains($sql, 'user_recommendations') ? $rows : [];
             }
         );
-        return new RecommendationService($db, new SimilarityService($db, $itemRepo));
+        // R19-12 (sibling aab51060) dropped the SimilarityService ctor param —
+        // the batched CTE read in computeBecauseYouWatched() replaced it.
+        return new RecommendationService($db);
     }
 
     /**
@@ -219,7 +220,7 @@ class WebPortalRouterParentalEnforcementTest extends TestCase
         $recs = $this->recommendationService([
             ['media_item_id' => 'a', 'reason' => 'x', 'score' => 1.0, 'title' => 'A', 'metadata_json' => '{}'],
             ['media_item_id' => 'b', 'reason' => 'x', 'score' => 0.9, 'title' => 'B', 'metadata_json' => '{}'],
-        ], $repo);
+        ]);
 
         $router = $this->makeRouter($repo, false, $this->pg13Filter(), null, $recs);
         $resp = $router->getRecommendations($this->cappedRequest(), []);

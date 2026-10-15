@@ -33,7 +33,10 @@ use Stringable;
  *         '<name>' => [
  *             'type' => 'rotating_file'|'size_rotating'|'stream'|'error'|'audit',
  *             'path' => string,
- *             'level' => string, // optional, defaults to 'debug'
+ *             'level' => string, // optional, defaults to 'debug'; the env
+ *                                 // knob PHLIX_LOG_LEVEL (LogChannels::LOG_LEVEL_ENV)
+ *                                 // overrides it for EVERY level-driven
+ *                                 // handler when set to a valid name (R3-08).
  *             'max_files' => int, // optional
  *             'max_file_size_mb' => int, // optional; size_rotating only — the
  *                                        // per-file byte ceiling. Total on-disk
@@ -63,6 +66,19 @@ use Stringable;
  */
 class StructuredLogger implements LoggerInterface
 {
+    /**
+     * Level names {@see envLevelOverride()} accepts from
+     * LogChannels::LOG_LEVEL_ENV — exactly the vocabulary {@see mapLevel()}
+     * understands, so the knob can never resolve to mapLevel()'s silent
+     * `info` fallback: an unknown name is rejected as "unset" instead.
+     *
+     * @var list<string>
+     */
+    private const LEVEL_NAMES = [
+        'debug', 'info', 'notice', 'warning', 'warn',
+        'error', 'critical', 'alert', 'emergency',
+    ];
+
     private Logger $logger;
     private string $channel;
     /** @var array<string, mixed> */
@@ -185,7 +201,12 @@ class StructuredLogger implements LoggerInterface
     {
         $type = self::stringOption($config, 'type', 'rotating_file');
         $path = self::stringOption($config, 'path', 'php://stdout');
-        $level = $this->mapLevel(self::stringOption($config, 'level', 'debug'));
+        // R3-08: PHLIX_LOG_LEVEL overrides the per-handler floor for EVERY
+        // level-driven handler (the `error`/`audit` legacy branches below
+        // hardcode their level by purpose and stay untouched). Unknown or
+        // empty env value fails SOFT: the config level stands, the boot
+        // never dies on a typo in a deploy file.
+        $level = $this->mapLevel(self::envLevelOverride() ?? self::stringOption($config, 'level', 'debug'));
 
         switch ($type) {
             case 'rotating_file':
@@ -298,6 +319,21 @@ class StructuredLogger implements LoggerInterface
             'emergency' => Level::Emergency,
             default => Level::Info,
         };
+    }
+
+    /**
+     * The validated `PHLIX_LOG_LEVEL` override, or null when the knob is
+     * unset/empty/unrecognized (fail-soft — R3-08; see LogChannels).
+     */
+    private static function envLevelOverride(): ?string
+    {
+        $raw = getenv(LogChannels::LOG_LEVEL_ENV);
+        if (!is_string($raw) || trim($raw) === '') {
+            return null;
+        }
+        $name = strtolower(trim($raw));
+
+        return in_array($name, self::LEVEL_NAMES, true) ? $name : null;
     }
 
     public function emergency(string|Stringable $message, array $context = []): void

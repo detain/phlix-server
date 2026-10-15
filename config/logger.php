@@ -80,6 +80,18 @@ use Phlix\Common\Logger\LogChannels;
  *                   PHLIX_DEBUG_EVENTS is truthy; otherwise stays empty.
  *                   Size-bounded even when enabled.
  *   - plugins.log — ONLY the PLUGINS channel (plugin lifecycle), size-bounded.
+ *   - stdout      — ALL channels when PHLIX_LOG_STDOUT is truthy (R14-09):
+ *                   the same records app.log gets, pushed to php://stdout so
+ *                   journald and Docker log drivers can see them. The file
+ *                   handlers above keep working; this handler ADDS a sink,
+ *                   it never replaces one. Unset ⇒ zero behavior change.
+ *
+ * LEVEL OVERRIDE (R3-08): PHLIX_LOG_LEVEL (debug/info/notice/warning|warn/
+ * error/critical/alert/emergency, case-insensitive) overrides the `level`
+ * below for every handler when set — `debug` to see everything the code
+ * emits, `error` to shrink noise during an incident. An unknown value fails
+ * soft: the shipped levels below stay in force. Read at logger construction
+ * ⇒ changing it is a process-restart operation.
  *
  * NOTE: there is deliberately no top-level `default` handler key. app.log's
  * catch-all behavior comes purely from the `file` handler carrying no
@@ -132,6 +144,18 @@ return [
             'max_file_size_mb' => 4,
             'level' => 'debug',
             'channels' => [LogChannels::PLUGINS],
+        ],
+        // R14-09 — container/journal visibility sink. Gated OFF by default
+        // (env), attaches to ALL channels when PHLIX_LOG_STDOUT is truthy,
+        // and mirrors the app.log floor so `docker logs` / `journalctl -u
+        // phlix-server` show exactly what app.log shows. No size policy
+        // applies — stdout is not an on-disk file; the log driver owns
+        // retention. The file handlers above remain attached.
+        'stdout' => [
+            'type' => 'stream',
+            'path' => 'php://stdout',
+            'level' => 'info',
+            'env' => LogChannels::LOG_STDOUT_ENV,
         ],
     ],
 ];

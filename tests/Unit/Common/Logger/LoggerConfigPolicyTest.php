@@ -49,9 +49,22 @@ class LoggerConfigPolicyTest extends TestCase
     public function test_everyFileHandlerIsSizeBounded(): void
     {
         foreach ($this->loadConfig()['handlers'] as $name => $handler) {
+            $type = $handler['type'] ?? null;
+            // R14-09 amended the S130 law precisely: what reaches the DISK
+            // must be size_rotating; a stream sink to php://stdout owns no
+            // disk and is exempt — but it must be a stdout stream, never a
+            // hand-rolled file path dodging the size bound.
+            if ($type === 'stream') {
+                $this->assertSame(
+                    'php://stdout',
+                    $handler['path'] ?? null,
+                    "stream handler '{$name}' must write to php://stdout, not to disk",
+                );
+                continue;
+            }
             $this->assertSame(
                 'size_rotating',
-                $handler['type'] ?? null,
+                $type,
                 "handler '{$name}' must be size_rotating so its on-disk size is capped",
             );
             $this->assertArrayHasKey('max_file_size_mb', $handler, "handler '{$name}' must declare a size ceiling");

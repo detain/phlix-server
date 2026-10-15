@@ -7,6 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **SRV-OPS remediation (2026-10-14 review family) — R14-09 stdout log
+  sink + R3-08 `PHLIX_LOG_LEVEL` wired:** application logs previously
+  reached only the repo's `.logs/*.log`, invisible to `docker logs` and
+  `journalctl` unless someone tailed files. `config/logger.php` now ships a
+  `stdout` handler (Monolog stream → `php://stdout`, all channels, INFO
+  floor) gated OFF by default behind truthy `PHLIX_LOG_STDOUT`
+  (`LogChannels::LOG_STDOUT_ENV`) — enabling it ADDS the sink, the file
+  handlers keep working unchanged, unset means byte-identical routing
+  (`LoggerConfigPolicyTest`'s S130 size-bound law amended to exempt only a
+  `php://stdout` stream). And the long-documented-but-never-read
+  `PHLIX_LOG_LEVEL` (`LogChannels::LOG_LEVEL_ENV`) is now real:
+  `StructuredLogger::createHandler()` resolves every level-driven handler's
+  floor from the env name when set — PSR-3 vocabulary case-insensitive,
+  `warn` accepted — and fails SOFT on an unknown or empty value, leaving the
+  shipped per-handler levels (`file` info / `error` error / `events`+
+  `plugins` debug) in force. Read at logger construction ⇒ a
+  process-restart knob (README restart-semantics table). New
+  `LogEnvironmentKnobsTest` (8 tests: shipped shape, env-gated attach,
+  additive-sink proof, debug-loosens/error-quiets, case-insensitivity,
+  fail-soft typo, empty-is-unset).
+
 ### Fixed
 
 - **SRV-OPS remediation (2026-10-14 review family) — R14-06 listen wiring:**

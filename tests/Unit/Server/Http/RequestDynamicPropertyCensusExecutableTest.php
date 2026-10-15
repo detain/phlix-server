@@ -618,8 +618,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Unit/Server/Runtime/ListenEndpointsTest.php (R14-06: the
      * listening workers now honor config/env instead of hardcoded binds).
      * Measured from the phpunit red (1989), not predicted.
+     * Re-pinned 1989→1990 by the SRV-OPS remediation lane (2026-10-14):
+     * net +1 — tests/Unit/Common/Logger/LogEnvironmentKnobsTest.php
+     * (R14-09 stdout sink + R3-08 PHLIX_LOG_LEVEL pins).
+     * Measured from the phpunit red (1990), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1989;
+    private const EXPECTED_PHP_FILES = 1990;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

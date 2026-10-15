@@ -14,6 +14,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Webhooks\WebhookEventCatalog;
 use Phlix\Webhooks\WebhookService;
 use InvalidArgumentException;
 use Throwable;
@@ -29,19 +30,6 @@ use Throwable;
  */
 final class AdminWebhooksController
 {
-    /** Valid webhook event types. */
-    private const VALID_EVENT_TYPES = [
-        'media.scanned',
-        'media.updated',
-        'media.deleted',
-        'transcode.started',
-        'transcode.completed',
-        'transcode.failed',
-        'user.watched',
-        'syncplay.room_created',
-        'syncplay.user_joined',
-    ];
-
     /**
      * @param WebhookService $webhookService Webhook service for operations
      */
@@ -230,6 +218,21 @@ final class AdminWebhooksController
      *
      * @return array<string>|null Array of valid event types or null if invalid
      */
+    /**
+     * Gate the requested event list against the canonical
+     * {@see WebhookEventCatalog} — exactly what the live emitter
+     * ({@see \Phlix\Webhooks\WebhookEventSubscriber}) produces and the admin
+     * SPA picker offers. The pre-R5-03 list here (media-dot scanned/transcode
+     * dots/user-dot watched/syncplay dots) named events nothing ever emitted,
+     * so subscriptions created through this API could never match a delivery.
+     * Legacy emitter names (media-dot started, played, stopped and added) are
+     * still accepted at this boundary and stored normalized to their
+     * canonical successors.
+     *
+     * @param mixed $events Requested event type list
+     *
+     * @return list<string>|null Canonical event names, or null on rejection
+     */
     private function validateEvents(mixed $events): ?array
     {
         if (!is_array($events) || $events === []) {
@@ -241,10 +244,13 @@ final class AdminWebhooksController
             if (!is_string($event)) {
                 return null;
             }
-            if (!in_array($event, self::VALID_EVENT_TYPES, true)) {
+            // Parse, don't validate: legacy aliases are accepted here and
+            // stored in canonical form, so webhook_subscriptions rows only
+            // ever contain catalogue names.
+            if (!WebhookEventCatalog::isAccepted($event)) {
                 return null;
             }
-            $validEvents[] = $event;
+            $validEvents[] = WebhookEventCatalog::normalize($event);
         }
 
         return $validEvents;

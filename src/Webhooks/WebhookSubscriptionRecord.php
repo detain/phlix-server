@@ -85,10 +85,26 @@ final class WebhookSubscriptionRecord implements JsonSerializable
 
     /**
      * Check if this subscription is interested in the given event type.
+     *
+     * Comparison is catalogue-canonical on both sides (R5-03): rows written
+     * before the media-to-playback/library rename keep matching their
+     * canonical successors via {@see WebhookEventCatalog::normalize()},
+     * migration-free.
      */
     public function handlesEvent(string $eventType): bool
     {
-        return $this->isActive && in_array($eventType, $this->events, true);
+        if (!$this->isActive) {
+            return false;
+        }
+
+        $canonical = WebhookEventCatalog::normalize($eventType);
+        foreach ($this->events as $subscribed) {
+            if (WebhookEventCatalog::normalize($subscribed) === $canonical) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

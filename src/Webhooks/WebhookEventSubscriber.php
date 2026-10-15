@@ -28,14 +28,18 @@ use Phlix\Shared\Events\Playback\PlaybackStopped;
  * this subscriber translates them into webhook event types and calls
  * {@see WebhookService::emit()} to queue deliveries.
  *
- * Event type mapping:
- * - PlaybackStarted          → media.started
- * - PlaybackStopped (end)    → media.played
- * - PlaybackStopped (stopped)→ media.stopped
- * - MediaItemAdded           → media.added
- * - UserLoggedIn            → user.login
- * - UserLoggedOut           → user.logout
- * - UserCreated             → user.created
+ * Event type mapping (names are the {@see WebhookEventCatalog} canonical
+ * vocabulary — the same list the admin SPA picker and the subscription API
+ * validate against; R5-03 replaced the old media.* emitter names which no
+ * subscription could ever be created for):
+ * - PlaybackStarted           → playback.started
+ * - PlaybackStopped (either)  → playback.ended  (payload keeps reached_end,
+ *                                 so finish-vs-stop stays distinguishable —
+ *                                 the schema collapses both into one event)
+ * - MediaItemAdded            → library.updated
+ * - UserLoggedIn              → user.login
+ * - UserLoggedOut             → user.logout
+ * - UserCreated               → user.created
  *
  * @since P9
  */
@@ -69,7 +73,7 @@ final class WebhookEventSubscriber
      */
     public function onPlaybackStarted(PlaybackStarted $event): void
     {
-        $this->webhookService->emit('media.started', [
+        $this->webhookService->emit('playback.started', [
             'session_id' => $event->sessionId,
             'user_id' => $event->userId,
             'media_item_id' => $event->mediaItemId,
@@ -81,14 +85,14 @@ final class WebhookEventSubscriber
     /**
      * Handle playback stopped event.
      *
-     * Emits "media.played" when the user reached the end (full watch),
-     * and "media.stopped" when the user stopped mid-stream.
+     * Emits "playback.ended" for both endings — the canonical catalogue
+     * collapses finish and stop into one event (wire truth: "a playback
+     * session finished or was stopped"); the reached_end payload flag keeps
+     * the distinction for consumers.
      */
     public function onPlaybackStopped(PlaybackStopped $event): void
     {
-        $eventType = $event->reachedEnd ? 'media.played' : 'media.stopped';
-
-        $this->webhookService->emit($eventType, [
+        $this->webhookService->emit('playback.ended', [
             'session_id' => $event->sessionId,
             'user_id' => $event->userId,
             'media_item_id' => $event->mediaItemId,
@@ -103,7 +107,7 @@ final class WebhookEventSubscriber
      */
     public function onMediaItemAdded(MediaItemAdded $event): void
     {
-        $this->webhookService->emit('media.added', [
+        $this->webhookService->emit('library.updated', [
             'media_item_id' => $event->mediaItemId,
             'library_id' => $event->libraryId,
             'path' => $event->path,

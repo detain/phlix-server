@@ -136,15 +136,16 @@ config:
   log_level: info
   # Phlix Hub URL (e.g. https://hub.phlix.tv) — leave empty to disable
   hub_url: ""
-  # One-time pairing code from the hub UI
-  hub_pairing_code: ""
+  # (hub_pairing_code removed with R18 task 8: never rendered by any template
+  # and no PHP env reader — pairing runs through scripts/pair-with-hub.php or
+  # the admin UI, which persist hub-enrollment.json on the config volume.)
 
-# Hub enrollment / pairing — populated into the Secret
+# Hub integration. Enrollment itself is file-based: run
+# scripts/pair-with-hub.php (or mount hub-enrollment.json on the config PVC);
+# the server never reads an enrollment JWT from the environment.
 hub:
   # Enable hub integration
   enabled: false
-  # JWT bearer issued by phlix-hub during enrollment
-  enrollmentJwt: ""
   # Override the hub URL set in `config.hub_url` (optional)
   url: ""
 

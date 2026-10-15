@@ -96,7 +96,6 @@ config:
 # Connect to phlix-hub
 hub:
   enabled: true
-  enrollmentJwt: "eyJ...replace.with.jwt.from.hub.ui..."
   url: "https://hub.example.com"
 
 # NVIDIA HW transcoding (requires NVIDIA Container Runtime installed cluster-wide)

@@ -76,13 +76,10 @@ spec:
               value: {{ .Values.config.log_level | quote }}
             - name: PHLIX_HUB_URL
               value: {{ default .Values.config.hub_url .Values.hub.url | quote }}
-            {{- if .Values.hub.enabled }}
-            - name: PHLIX_HUB_ENROLLMENT_JWT
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "phlix.fullname" . }}
-                  key: hub-enrollment-jwt
-            {{- end }}
+            {{- /* R18 (task 8): PHLIX_HUB_ENROLLMENT_JWT removed — zero readers
+              in PHP. The relay/heartbeat code loads the enrollment JWT from the
+              file-written hub-enrollment.json (scripts/pair-with-hub.php ->
+              HubClient::ENROLLMENT_FILE), never from the environment. */ -}}
             {{- with .Values.hwAccel.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

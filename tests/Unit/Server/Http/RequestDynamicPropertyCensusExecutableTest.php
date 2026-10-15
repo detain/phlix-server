@@ -637,8 +637,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * src/Server/WebSocket/Events.php compatibility shim, whose sole stated
      * keep-reason (a phpstan excludePaths entry) died with S343. Measured
      * from the phpunit red (1978), not predicted.
+     * Re-pinned 1978→1979 by the same lane (R18-16): +1 —
+     * tests/Unit/Media/Library/RatingGateIsAdminCompareTest.php, the new
+     * loose-compare pin suite. Measured from the phpunit red (1979), not
+     * predicted; disk vs git-ls-files reconciled at 1979 = 1979.
      */
-    private const EXPECTED_PHP_FILES = 1978;
+    private const EXPECTED_PHP_FILES = 1979;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

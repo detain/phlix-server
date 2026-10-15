@@ -49,6 +49,69 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **SRV-SEC remediation (2026-10-14 review family) — R20-01/R20-02/R20-03/R20-05
+  outbound-HTTP and exposure fixes + R5-03 webhook vocabulary unification:**
+  five findings from the review family, all re-verified on disk before the
+  fix. **R20-01 (MEDIUM, SSRF):** `WebhookHttpClient::postAsync()` handed
+  `workerman/http-client` options without an `allow_redirects` policy, so the
+  vendor default (max 5) followed redirects with NO per-hop re-check of the
+  `SsrfGuard` that gated the original URL — the FINAL redirected body was
+  persisted to the admin-readable delivery log (exfiltration primitive) and
+  the 301/302/303 re-issue downgrades POST to GET (internal scanner). The
+  async options now carry the explicit deny `['max' => 0]`, so a 3xx lands as
+  a failed delivery; the cURL fallback never set `FOLLOWLOCATION` and was
+  already safe. Pinned through the real coroutine fork (`max=0` shape +
+  `Location: 169.254.169.254` proves one request, no second hop).
+  **R20-02 (LOW-MED, same root class):** `HttpInstaller::downloadToTemp()`
+  used bare `file_get_contents()`, whose HTTP wrapper follows up to 20
+  redirects past the entry-time guard — a blind internal port-probe. The
+  fetch now runs with `max_redirects=1` + `ignore_errors=true`, and ANY 3xx
+  status line anywhere in `$http_response_header` is a hard install failure
+  ("HTTP redirects are not allowed"); surfaced 4xx/5xx keep the pre-existing
+  "Failed to fetch" arm. Local `file://` installs are byte-identical
+  (pinned). **R20-03 (LOW):** `HttpHandler::serveStatic()` allowed
+  all-except-`.php`, serving Vite source maps (full SPA TypeScript via
+  `sourcesContent`) and `public/templates/emails/newsletter.tpl` sources.
+  The single php deny became `DENIED_STATIC_EXTENSIONS = ['php','map','tpl']`
+  (case-insensitive on the jailed realpath; fall-through semantics unchanged;
+  `sourcemap: true` deliberately stays on for tooling). The hub's static
+  twin is deliberately NOT touched here — the hub lane owns it.
+  **R20-05 (LOW):** `AvatarStorage::ensureStorageDirExists()` embedded the
+  absolute filesystem path in its RuntimeException and BOTH controllers
+  (`UserAvatarController`, `ProfilesController`) echoed it verbatim as a 500
+  body. The throw is now path-free, the clients get the house generic copy
+  ("Storage error, please try again later."), the exception is routed to the
+  HTTP channel log (`context.exception`), and the raw `mkdir()` warning is
+  suppressed at the chokepoint so the attempted path cannot reach any
+  stderr/error-capture sink. **R5-03 (MAJOR, feature-dead):** webhook event
+  vocabulary had drifted into three disjoint lists — `WebhookEventSubscriber`
+  emitted `media.*`/`user.*`, the admin SPA picker and the `phlix-shared`
+  webhook-events schema offered the playback/library vocabulary, and the
+  `webhook_subscriptions` REST gate validated a disconnected fiction
+  (`media.scanned`/`transcode.*`/`user.watched`/`syncplay.*`) that nothing
+  ever emitted — so `handlesEvent()`'s strict match never landed a real
+  domain event on a UI-created subscription, and the /test button's
+  `webhook.test` success was a decoy. New
+  `Phlix\Webhooks\WebhookEventCatalog` is the single vocabulary SSOT (10
+  events: the schema's 7 wire-truth entries plus `user.login`,
+  `user.logout`, `user.created`, which the vendored schema does not yet
+  carry — widening the schema is the upstream `phlix-shared` lane's
+  decision); the emitter now speaks it (`media.started` →
+  `playback.started`, `media.played`/`media.stopped` → `playback.ended`
+  with the `reached_end` payload bool preserved, `media.added` →
+  `library.updated`, the `user.*` trio kept verbatim), `handlesEvent()`
+  compares both sides through `normalize()`, and `AdminWebhooksController`
+  validates + stores canonical (legacy stored rows keep delivering —
+  migration-free aliasing). The picker gains the matching "User" group in
+  `@phlix/ui`. **Structural observation (explicit non-fix):**
+  `WebhookDispatcher::dispatch()` — the table behind the public
+  `/api/v1/admin/webhooks` API — has no production caller at all; wiring
+  that store into the live delivery path (or retiring it) is an
+  architecture decision above this lane. New `WebhookEventVocabularyTest`
+  drives the real subscriber → service → record chain end-to-end with a
+  recording DB connection (no mocks that re-encode the bug): 8 tests /
+  36 assertions green; webhook family 139 tests / 1325 assertions.
+
 - **SRV-OPS remediation (2026-10-14 review family) — R14-14 job queues off
   /tmp:** the five file-backed job queues (marker, media-asset, collection,
   metadata-write, similarity) defaulted to `/tmp/phlix_<name>_jobs` in three

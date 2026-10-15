@@ -148,15 +148,34 @@ final class ApplicationIndexBucketsFailClosedTest extends TestCase
 
         $this->assertSame(200, $response->statusCode, 'the route still answers; only its cap changes');
         $this->assertIsArray($this->capturedParams);
-        $denyAll = RatingGate::denyAll();
-        $this->assertSame($denyAll['allowedRatings'], $this->capturedParams['allowedRatings']);
-        $this->assertSame($denyAll['allowUnrated'], $this->capturedParams['allowUnrated']);
+
+        // REVIEW-FIX: LITERAL expectations. The original arm compared against
+        // RatingGate::denyAll() output on both sides — an allowUnrated flip
+        // (or sentinel rename) INSIDE denyAll() moved the oracle with the
+        // capture and stayed green. These literals give the arm real teeth:
+        // any widening of the deny-all shape reddens HERE, independent of the
+        // gate's own source.
         $this->assertSame(
-            [RatingGate::NO_USER_RATING],
+            ['__phlix_no_user__'],
             $this->capturedParams['allowedRatings'],
             'R18-01: a resolution failure must equal the strictest cap — the sentinel that '
-            . 'matches no real row — never the pre-fix uncapped read.'
+            . 'matches no real row — never the pre-fix uncapped read. Literal, so a flip of '
+            . 'denyAll() itself cannot move the oracle.'
         );
+        $this->assertFalse(
+            $this->capturedParams['allowUnrated'],
+            'deny-all must keep allowUnrated=false literally — pinning the exact shipped '
+            . 'shape so flipping it true inside RatingGate::denyAll() reddens this arm too.'
+        );
+
+        // SSOT linkage (second half): the degraded route must keep tracking
+        // denyAll() byte-for-byte — if EITHER side drifts alone, one of the
+        // two assertions above or this one fires.
+        $denyAll = RatingGate::denyAll();
+        $this->assertSame($denyAll, array_intersect_key(
+            $this->capturedParams,
+            array_flip(['allowedRatings', 'allowUnrated']),
+        ), 'the degraded cap must equal the full denyAll() pair, key set included.');
     }
 
     // -----------------------------------------------------------------

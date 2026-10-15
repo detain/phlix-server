@@ -429,7 +429,17 @@ class HttpInstaller
         // precedent: Media/Metadata/ThemeMusic/StreamThemeMusicFetcher).
         $http_response_header = [];
         $bytes = @file_get_contents($sourceUrl, false, $context);
-        $this->assertNoRedirectResponses($http_response_header, $sourceUrl);
+        try {
+            $this->assertNoRedirectResponses($http_response_header, $sourceUrl);
+        } catch (PluginInstallException $e) {
+            // REVIEW-FIX: the redirect rejection threw WITHOUT releasing the
+            // tempnam above — every refused install left a 0-byte
+            // /tmp/phlix_plugin_* file (the S439 zero-residue census caught it
+            // the moment the e2e suite started taking this path). Release the
+            // handle, keep the exception byte-identical.
+            @unlink($localFile);
+            throw $e;
+        }
 
         if ($bytes === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
             @unlink($localFile);

@@ -7,6 +7,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Review-fix lane (2026-10-15) — installer redirect defense gets real e2e
+  teeth + temp-file leak on the reject path:** `HttpInstaller::downloadToTemp`
+  carried two layered defenses against being redirected into a different
+  payload — the HTTP stream context pins `max_redirects => 1`, and
+  `assertNoRedirectResponses` rejects any 3xx status line in the response
+  chain — but the only test exercised the checker by reflection, so deleting
+  EITHER layer survived the suite (adversarial review MINOR). New
+  `HttpInstallerRedirectE2eTest` (4 tests) drives the genuine code path
+  against a real loopback `php -S` fixture server: a 302 hop must raise
+  `PluginInstallException` and the hits log proves the `/target` was never
+  fetched (kills checker removal AND context-option removal independently —
+  mutation-proven 2 failures each); a three-hop chain stops at the first hop;
+  plain 200 downloads land byte-correct; a 404 still fails with the original
+  fetch error, not the redirect message. The e2e run also surfaced a real
+  leak the reflection test could never see: when the redirect checker threw,
+  `downloadToTemp` returned past its `tempnam` without unlinking it, which
+  reddened the S439 zero-residue census via the new tests — the throw path
+  now unlinks before propagating, exception byte-identical.
+- **Review-fix lane (2026-10-15) — deny-all cap pin de-self-referenced:**
+  `ApplicationIndexBucketsFailClosedTest` verified the broken-gate fallback
+  by comparing captured params against `RatingGate::denyAll()`'s own output,
+  so a future flip of `allowUnrated` INSIDE `denyAll()` would have kept the
+  test green while the index silently became allow-all. The pin now asserts
+  the literal fail-closed shape (`['__phlix_no_user__']`, `allowUnrated =>
+  false`) and keeps a separate SSOT-linkage assertion against `denyAll()`
+  (mutation-proven: flipping `denyAll` internally reddens exactly this test).
+
 ### Added
 
 - **SRV-OPS remediation (2026-10-14 review family) — R14-09 stdout log

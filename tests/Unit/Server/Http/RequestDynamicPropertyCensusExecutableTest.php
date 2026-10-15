@@ -641,8 +641,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Unit/Media/Library/RatingGateIsAdminCompareTest.php, the new
      * loose-compare pin suite. Measured from the phpunit red (1979), not
      * predicted; disk vs git-ls-files reconciled at 1979 = 1979.
+     * Re-pinned 1979→1980 by the review-fix lane (2026-10-15): +1 —
+     * tests/Unit/Plugins/Installer/HttpInstallerRedirectE2eTest.php, the
+     * loopback php -S e2e giving the installer's two-layer redirect defense
+     * mutation teeth. Measured from the phpunit red (1980), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1979;
+    private const EXPECTED_PHP_FILES = 1980;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

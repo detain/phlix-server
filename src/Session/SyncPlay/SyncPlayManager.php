@@ -1863,10 +1863,15 @@ class SyncPlayManager
             // close) vacates membership as usual; the throttle entry is
             // dropped in onConnectionClose().
             $errorCode = $result['error_code'] ?? 'syncplay.join_failed';
-            if ($errorCode === 'syncplay.invalid_password'
+            if (
+                $errorCode === 'syncplay.invalid_password'
                 && $this->joinPasswordThrottle->recordFailure($connection->getId(), time())
             ) {
-                $this->sendError($connection, 'syncplay.join_failed', 'Too many incorrect password attempts; closing connection');
+                $this->sendError(
+                    $connection,
+                    'syncplay.join_failed',
+                    'Too many incorrect password attempts; closing connection'
+                );
                 $connection->close();
                 return;
             }

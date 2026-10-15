@@ -298,7 +298,11 @@ class SyncPlayAuthMiddleware
                 $this->logger?->warning('SyncPlay connection rejected: token type is not access', [
                     'remote_ip' => $connection->getRemoteIp(),
                 ]);
-                $this->closeConnection($connection, self::CLOSE_CODE_INVALID_TOKEN, 'Invalid token: not an access token');
+                $this->closeConnection(
+                    $connection,
+                    self::CLOSE_CODE_INVALID_TOKEN,
+                    'Invalid token: not an access token'
+                );
                 return;
             }
 

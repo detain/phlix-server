@@ -1252,7 +1252,7 @@ class StatsCollector
      */
     private function deleteExpiredBatch(string $table, string $column, int $retentionDays): int
     {
-        for ($attempt = 1; ; $attempt++) {
+        for ($attempt = 1;; $attempt++) {
             try {
                 /** @var mixed $idRows */
                 $idRows = $this->db->query(
@@ -1295,7 +1295,8 @@ class StatsCollector
                 // Same retry law as hub ServerReaper::sweepHeartbeats: retry the
                 // deadlock victim a bounded number of times, propagate anything
                 // else (and a third deadlock) immediately.
-                if ($attempt >= self::RETENTION_SWEEP_MAX_RETRIES
+                if (
+                    $attempt >= self::RETENTION_SWEEP_MAX_RETRIES
                     || stripos($e->getMessage(), 'deadlock') === false
                 ) {
                     throw $e;

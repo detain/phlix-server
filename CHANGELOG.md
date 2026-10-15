@@ -30,6 +30,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   additive-sink proof, debug-loosens/error-quiets, case-insensitivity,
   fail-soft typo, empty-is-unset).
 
+### Changed
+
+- **SRV-OPS remediation (2026-10-14 review family) — R14-05 README env
+  census + R14-20 restart semantics:** the README's "Environment variables"
+  section claimed six knobs; the runtime actually reads ~100. Replaced it
+  with the definitive grep-censused inventory (every `getenv()`/`$_ENV` read
+  in `src/`, `config/`, `start.php`, `bin/`, `scripts/`), grouped by
+  subsystem, each row carrying Default / Secret? / Restart class / consuming
+  file. Honest truth markings included: `PHLIX_MIGRATIONS_STRICT` and
+  `PHLIX_SECRET_KEY` are docker-entrypoint shell-side names, `PHLIX_HUB_ENROLLMENT_TOKEN`
+  / `PHLIX_PUBLIC_URL` / `PHLIX_HWACCEL` have zero read sites in this repo,
+  and the `config/playback.php`/`config/port-forward.php` knobs are
+  `$_ENV`-only (inert under the common `variables_order = "GPCS"`). New
+  "What requires a restart" subsection classifies every knob as boot-read,
+  per-process-memoized, or live. Config example port corrected 8080 → 8096
+  (truth again post-R14-06).
+
 ### Fixed
 
 - **SRV-OPS remediation (2026-10-14 review family) — R14-14 job queues off

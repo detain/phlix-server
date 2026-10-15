@@ -704,6 +704,10 @@ Dual-entrypoint: `public/index.php` has NO WS worker (verified — `grep` for
 needed; the WS worker is resident-only (`start.php`). `SyncPlayWorker` (the
 self-listening reference pattern) is unused in both entrypoints (only referenced
 in its own docblock example), so it was left untouched.
+*[Erratum 2026-10-15: superseded twice over — `public/index.php` was since
+removed (`start.php` is the only entry point), and `SyncPlayWorker` itself was
+deleted outright by `22ce232c` (retire the unbound standalone bootstrap,
+R17-05).]*
 
 ### Finding 2 (LOW) — `releaseStream()` teardown wording overstated
 
@@ -787,6 +791,7 @@ Finding-by-finding confirmation:
      `pingConnections()` iterates — pool and timers coincide; (d) null-worker
      path preserved: else-branch creates its own worker + `onWorkerStart`, and
      `run()`→`Worker::runAll()` still listens (tests / SyncPlayWorker / `run()`);
+     *[Erratum 2026-10-15: SyncPlayWorker since deleted @`22ce232c`.]*
      (e) MessageHandler wiring intact (onMessage → handler, unchanged); (f) no
      double-listen — the resident path creates NO second Worker, so it cannot
      fight start.php's listener.
@@ -1315,6 +1320,9 @@ Verified:
   is `@deprecated` and wired NOWHERE (grep confirms). `SyncPlayWorker` (port 8098) is not
   instantiated in any prod boot path (start.php/index.php/bin) — and even if run it fails CLOSED
   (never authenticates → gate blocks privileged events), no bypass.
+  *[Erratum 2026-10-15: the class was subsequently deleted entirely —
+  `22ce232c` retired the unbound `SyncPlayWorker` standalone bootstrap (R17-05);
+  there is no :8098 server path anymore.]*
 - **Defense-in-depth intact.** `SyncPlayManager::handle*` still gate on `$connection->getUserId()===null`
   → NOT_AUTHENTICATED. `authenticateConnection` hands the validated `sub` to
   `Connection::setAuthenticated(true,$sub)`; `getUserId()` returns it. No `$_GET['syncplay_user_id']`

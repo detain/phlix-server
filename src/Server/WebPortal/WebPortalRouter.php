@@ -3034,7 +3034,7 @@ class WebPortalRouter
      * @example Response structure:
      * ```json
      * {
-     *   "message": "Settings updated"
+     *   "message": "Settings updated."
      * }
      * ```
      */
@@ -3066,7 +3066,7 @@ class WebPortalRouter
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
 
-        return (new Response())->json(['message' => 'Settings updated']);
+        return (new Response())->json(['message' => 'Settings updated.']);
     }
 
     /**

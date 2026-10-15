@@ -280,7 +280,7 @@ final class ProfilesController
 
         $this->profiles->delete($profileId);
 
-        return (new Response())->json(['message' => 'Profile deleted']);
+        return (new Response())->json(['message' => 'Profile deleted successfully']);
     }
 
     /**
@@ -359,7 +359,7 @@ final class ProfilesController
         }
 
         $this->profiles->removePin($profileId);
-        return (new Response())->json(['message' => 'PIN removed']);
+        return (new Response())->json(['message' => 'PIN cleared successfully']);
     }
 
     /**

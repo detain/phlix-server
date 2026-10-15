@@ -328,6 +328,6 @@ final class AdminProfileController
         }
 
         $this->profileManager->removePin($profileId);
-        return (new Response())->json(['message' => 'PIN deleted successfully']);
+        return (new Response())->json(['message' => 'PIN cleared successfully']);
     }
 }

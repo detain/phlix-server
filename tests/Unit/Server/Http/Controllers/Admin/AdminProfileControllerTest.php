@@ -778,7 +778,9 @@ final class AdminProfileControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('PIN deleted successfully', $body['message']);
+        // R15-23: was 'PIN deleted successfully' — re-pinned to the canonical
+        // 'PIN cleared successfully' shared by every removePin success site.
+        $this->assertSame('PIN cleared successfully', $body['message']);
     }
 
     public function testDeletePinNotFound(): void

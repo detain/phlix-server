@@ -405,14 +405,92 @@ class HttpInstaller
             $localFile = $renamed;
         }
 
-        $bytes = @file_get_contents($sourceUrl);
-        if ($bytes === false) {
+        // R20-02 (SSRF): PHP's HTTP stream wrapper follows up to 20 redirects
+        // by default, and every hop is fetched WITHOUT any re-check of the
+        // SsrfGuard that gated the entry URL — a public host answering
+        // 3xx -> http://169.254.169.254/... turns the installer into a blind
+        // internal port-probe (the digest gate still guards artifact CONTENT,
+        // but the request itself leaves the public-host jail). max_redirects=1
+        // stops the wrapper at the first 3xx; ignore_errors=true lets the 3xx/
+        // 4xx/5xx response surface for inspection instead of a bare false.
+        // Belt-and-suspenders, assertNoRedirectResponses() rejects ANY 3xx seen
+        // anywhere in the chain, so the wrapper's exact follow-count cannot
+        // weaken the guarantee. The 'http' section is inert for file:// and the
+        // other schemes guardScheme() admits, so local installs are untouched.
+        $context = stream_context_create([
+            'http' => [
+                'max_redirects' => 1,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        // Pre-initialised so the magic variable is defined on non-HTTP
+        // transports too; the HTTP wrapper overwrites it on fetch (house
+        // precedent: Media/Metadata/ThemeMusic/StreamThemeMusicFetcher).
+        $http_response_header = [];
+        $bytes = @file_get_contents($sourceUrl, false, $context);
+        $this->assertNoRedirectResponses($http_response_header, $sourceUrl);
+
+        if ($bytes === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
             @unlink($localFile);
             throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $sourceUrl));
         }
         file_put_contents($localFile, $bytes);
 
         return $localFile;
+    }
+
+    /**
+     * R20-02 — reject a fetch whose response chain contains ANY 3xx status.
+     *
+     * $http_response_header carries every status line seen, in order, so even
+     * a wrapper that followed one hop before surfacing the chain cannot smuggle
+     * a redirect past this gate. Non-HTTP fetches (file://) surface the empty
+     * pre-initialised array (no status lines) and pass through untouched.
+     *
+     * @param array<int, string> $responseHeaders
+     *
+     * @throws PluginInstallException
+     */
+    private function assertNoRedirectResponses(array $responseHeaders, string $sourceUrl): void
+    {
+        foreach ($responseHeaders as $headerLine) {
+            if (preg_match('#^HTTP/\S+\s+(3\d\d)\b#', $headerLine) === 1) {
+                throw new PluginInstallException(sprintf(
+                    'Failed to fetch plugin source from %s: HTTP redirects are not allowed (received %s).',
+                    $sourceUrl,
+                    $headerLine,
+                ));
+            }
+        }
+    }
+
+    /**
+     * The status of the LAST response line in a fetch chain, or null when the
+     * transport was not HTTP (the pre-initialised empty array — no status
+     * lines to read).
+     *
+     * @param array<int, string> $responseHeaders
+     */
+    private function terminalResponseStatus(array $responseHeaders): ?int
+    {
+        $terminal = null;
+        foreach ($responseHeaders as $headerLine) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})\b#', $headerLine, $matches) === 1) {
+                $terminal = (int) $matches[1];
+            }
+        }
+
+        return $terminal;
+    }
+
+    /**
+     * True only for a parsed status of 400+; a null (non-HTTP transport)
+     * status is not an error here — download failures surface as false bytes.
+     */
+    private function isHttpErrorStatus(?int $status): bool
+    {
+        return $status !== null && $status >= 400;
     }
 
     /**

@@ -783,4 +783,97 @@ final class HttpInstallerTest extends TestCase
         RecursiveDelete::remove($dir);
         return $tarPath . '.gz';
     }
+
+    /**
+     * R20-02 (SSRF) — downloadToTemp must reject ANY 3xx in the response
+     * chain instead of letting the default HTTP wrapper follow up to 20
+     * redirects past the SsrfGuard that gated the entry URL.
+     */
+    public function test_redirect_header_chain_is_rejected(): void
+    {
+        $method = new \ReflectionMethod(HttpInstaller::class, 'assertNoRedirectResponses');
+        $method->setAccessible(true);
+
+        try {
+            $method->invoke($this->installer(), ['HTTP/1.1 302 Found', 'Location: http://169.254.169.254/'], 'https://plugin.test/pkg.zip');
+            $this->fail('a bare 302 must throw PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('redirects are not allowed', $e->getMessage());
+        }
+
+        // Even a chain where a hop WAS followed (302 then 200) is rejected —
+        // the presence of the 3xx line anywhere in $http_response_header kills
+        // the fetch, so wrapper follow-count semantics cannot smuggle one.
+        try {
+            $method->invoke($this->installer(), ['HTTP/1.1 301 Moved Permanently', 'HTTP/1.1 200 OK'], 'https://plugin.test/pkg.zip');
+            $this->fail('a followed-then-200 chain must still throw');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('redirects are not allowed', $e->getMessage());
+        }
+    }
+
+    public function test_non_redirect_header_chains_pass_the_gate(): void
+    {
+        $method = new \ReflectionMethod(HttpInstaller::class, 'assertNoRedirectResponses');
+        $method->setAccessible(true);
+        $installer = $this->installer();
+
+        $passed = 0;
+
+        // Non-HTTP transports (file:// installs) carry no status headers —
+        // downloadToTemp pre-initialises the magic variable to [].
+        $method->invoke($installer, [], 'file:///tmp/x.zip');
+        $passed++;
+        $method->invoke($installer, ['HTTP/1.1 200 OK', 'Content-Type: application/zip'], 'https://plugin.test/pkg.zip');
+        $passed++;
+        // A 4xx is NOT a redirect — it fails later via the fetch-error arm.
+        $method->invoke($installer, ['HTTP/1.1 404 Not Found'], 'https://plugin.test/pkg.zip');
+        $passed++;
+        // A 1xx informational is not a redirect either.
+        $method->invoke($installer, ['HTTP/1.1 100 Continue', 'HTTP/1.1 200 OK'], 'https://plugin.test/pkg.zip');
+        $passed++;
+
+        $this->assertSame(4, $passed, 'all four non-3xx chains reached the gate without throwing');
+    }
+
+    public function test_terminal_status_reads_the_last_http_status_line(): void
+    {
+        $method = new \ReflectionMethod(HttpInstaller::class, 'terminalResponseStatus');
+        $method->setAccessible(true);
+
+        $this->assertNull($method->invoke($this->installer(), []));
+        $this->assertSame(200, $method->invoke($this->installer(), ['HTTP/1.1 200 OK']));
+        $this->assertSame(404, $method->invoke($this->installer(), ['HTTP/1.1 302 Found', 'HTTP/1.1 404 Not Found']));
+        // Interim 1xx informational lines must not mask the terminal status.
+        $this->assertSame(200, $method->invoke($this->installer(), ['HTTP/1.1 100 Continue', 'HTTP/1.1 200 OK']));
+    }
+
+    public function test_http_error_status_arm(): void
+    {
+        $method = new \ReflectionMethod(HttpInstaller::class, 'isHttpErrorStatus');
+        $method->setAccessible(true);
+
+        $this->assertFalse($method->invoke($this->installer(), null), 'non-HTTP transport is judged by the false-bytes arm');
+        $this->assertFalse($method->invoke($this->installer(), 200));
+        $this->assertFalse($method->invoke($this->installer(), 302), '3xx is handled by the redirect gate, not the error arm');
+        $this->assertTrue($method->invoke($this->installer(), 400));
+        $this->assertTrue($method->invoke($this->installer(), 503));
+    }
+
+    /**
+     * R20-02 — the redirect denial must NOT break local file:// installs:
+     * downloadToTemp runs with the http-section context attached and a
+     * non-HTTP transport has no status headers, so the gate is inert here.
+     * (The 30+ file:// tests above cover extraction; this pins the specific
+     * new code path end-to-end through install().)
+     */
+    public function test_file_scheme_install_still_succeeds_with_redirect_context(): void
+    {
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+
+        [$manifest, $destination] = $this->installer()->install('file://' . $zipPath);
+
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
+        $this->assertFileExists($destination . '/plugin.json');
+    }
 }

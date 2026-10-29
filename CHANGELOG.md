@@ -9,6 +9,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **MariaDB support claim and the dialect-gated migrations (M-SERVER-06,
+  review server__dba):** the README advertised "MySQL 8.0+ or MariaDB 10.6+"
+  while the chain carried four MySQL-only index statements — three functional
+  key parts in `011_music_library.sql` (`CREATE INDEX ... ((CAST(metadata_json->>'$.x'
+  AS CHAR(255))))`, MySQL 8.0.13+) and the multi-valued index in
+  `050_media_items_sort_indexes.sql` (`CAST(... AS CHAR(255) ARRAY)`, MySQL
+  8.0.17+). MariaDB rejects both shapes with a hard 1064 that is not in the
+  runner's idempotent-squelch list, so a fresh MariaDB install could never
+  record 011/050 in `schema_migrations` and `run-migrations.php` exited 1 on
+  every boot (measured against mariadb:10.6.28: 4 errors, EXIT=1). The shipped
+  statements could not be edited in place — a checksum flip would re-apply the
+  whole file and resurrect the 050 multi-valued index that migration 051
+  exists to purge — so the gate landed as comment-only directives:
+  `-- @phlix-require-mysql <version> [reason]` lines, invisible to
+  `MigrationRunner::checksum()` and evaluated by the runner when each guarded
+  statement is about to run. A guarded statement is skipped (with an
+  operator-visible note) on MariaDB-branded servers and on genuine MySQL below
+  the stated minimum; an unparseable version or a failed probe still RUNS the
+  statement with a logger warning — the historical behavior wins. All four
+  statements are performance-only: 050's skip is lossless because 051
+  supersedes it with the `media_item_genres` join table MariaDB builds
+  natively, and 011's three indexes only leave artist/album/genre metadata
+  scans slower on MariaDB — no query or feature is lost. The README support
+  block now says all of this, so the two sides agree. Proofs: fresh full-chain
+  applies green on both servers (MariaDB 10.6.28: EXIT=0, exactly the 4 skip
+  notes, 122/122 files recorded; MySQL 8.0.43: EXIT=0, zero skips, 011 indexes
+  present, 051 purge intact), plus a 15-case `MigrationRunnerTest` dialect
+  matrix and the real-MySQL `MysqlOnlyIndexDialectGateTest` (fresh-apply,
+  end-state index inspection, zero-execution steady-state re-run).
+
 - **README LiveTV section C29 rework (round 2) — three over-claims corrected
   against the code and the served bundle (review C29):** round 1 stated "the
   web SPA has no LiveTV page", but the vendored `/app` bundle registers an

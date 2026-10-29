@@ -645,8 +645,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Unit/Plugins/Installer/HttpInstallerRedirectE2eTest.php, the
      * loopback php -S e2e giving the installer's two-layer redirect defense
      * mutation teeth. Measured from the phpunit red (1980), not predicted.
+     * Re-pinned 1980→1981 by the M-SERVER-06 dialect-gate lane (2026-10-29):
+     * +1 — tests/Integration/Common/Database/MysqlOnlyIndexDialectGateTest.php,
+     * the real-MySQL full-chain fresh-apply / steady-state proof behind the
+     * `@phlix-require-mysql` runner gate (README's MariaDB 10.6+ claim vs the
+     * MySQL-only 011/050 index statements). Measured from the phpunit red
+     * (1981), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1980;
+    private const EXPECTED_PHP_FILES = 1981;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

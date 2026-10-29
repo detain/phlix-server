@@ -119,6 +119,17 @@ ALTER TABLE media_items
 ALTER TABLE media_items
     ADD INDEX idx_media_items_content_rating (content_rating);
 
+-- Dialect gate (M-SERVER-06): the index below is a MySQL 8.0.17+ MULTI-VALUED
+-- index (`CAST(... AS ... ARRAY)`). MariaDB 10.x cannot parse it (1064, not a
+-- squelchable idempotent class), and unguarded it left THIS file permanently
+-- un-recorded — the migration run went red on every MariaDB boot while README
+-- advertised MariaDB 10.6+. The full-line directive that follows is comment
+-- text (checksum-invisible: installed machines re-apply nothing) evaluated by
+-- MigrationRunner at run time; on MariaDB / MySQL < 8.0.17 the statement is
+-- skipped with an operator-visible note. This skip loses nothing: migration
+-- 051 replaced this index with the media_item_genres join table and DROPS it
+-- on MySQL — so MariaDB simply starts where the MySQL end state already is.
+-- @phlix-require-mysql 8.0.17 multi-valued genres index, superseded by the 051 join table (skip on MariaDB is lossless)
 ALTER TABLE media_items
     ADD INDEX idx_media_items_genres ((CAST(metadata_json->'$.genres' AS CHAR(255) ARRAY)));
 

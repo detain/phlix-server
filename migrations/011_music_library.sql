@@ -30,12 +30,26 @@ ON media_items (library_id, type);
 
 -- Add index on metadata_json for artist/album queries
 -- Uses JSON functions for partial matching
+--
+-- Dialect gate (M-SERVER-06): the three metadata_json indexes below are
+-- MySQL functional key parts (MySQL 8.0.13+). MariaDB 10.x has no
+-- functional-index syntax and rejects them with a 1064 PARSE error, which the
+-- runner cannot classify as idempotent — unguarded they left THIS file
+-- permanently un-recorded and the migration run red on every MariaDB boot.
+-- The `@phlix-require-mysql` line is a full-line comment (invisible to the
+-- ledger checksum, so installed machines re-apply nothing) that the runner
+-- evaluates: on MariaDB / MySQL < 8.0.13 the index is SKIPPED with an
+-- operator-visible note. Harmless-but-slower: they are performance-only —
+-- music browse queries stay correct without them and fall back to scanning.
+-- @phlix-require-mysql 8.0.13 MySQL functional index on metadata_json '$.artist' (performance-only; MariaDB has no equivalent syntax)
 CREATE INDEX idx_media_items_metadata_artist
 ON media_items ((CAST(metadata_json->>'$.artist' AS CHAR(255))));
 
+-- @phlix-require-mysql 8.0.13 MySQL functional index on metadata_json '$.album' (performance-only; MariaDB has no equivalent syntax)
 CREATE INDEX idx_media_items_metadata_album
 ON media_items ((CAST(metadata_json->>'$.album' AS CHAR(255))));
 
 -- Add index for genre queries
+-- @phlix-require-mysql 8.0.13 MySQL functional index on metadata_json '$.genre' (performance-only; MariaDB has no equivalent syntax)
 CREATE INDEX idx_media_items_metadata_genre
 ON media_items ((CAST(metadata_json->>'$.genre' AS CHAR(255))));

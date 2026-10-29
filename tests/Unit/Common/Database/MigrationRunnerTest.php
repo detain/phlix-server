@@ -7,7 +7,9 @@ namespace Phlix\Tests\Unit\Common\Database;
 use Phlix\Common\Database\MigrationRunner;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
+use ReflectionMethod;
 use RuntimeException;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 class MigrationRunnerTest extends TestCase
@@ -1361,6 +1363,425 @@ class MigrationRunnerTest extends TestCase
             'errors' => ['Unknown column "y" in "field list"'],
             'skipped_count' => 0,
         ]));
+    }
+
+    // ------------------------------------------------------------------
+    // M-SERVER-06 — the `@phlix-require-mysql` dialect gate (review server__dba).
+    //
+    // README advertises "MySQL 8.0+ or MariaDB 10.6+", but the chain shipped
+    // four MySQL-only index statements (three functional-key-part indexes in
+    // 011, one multi-valued ARRAY cast in 050). On a fresh MariaDB install the
+    // whole chain exited 1 and left 011/050 permanently un-recorded in
+    // `schema_migrations` — retried forever. Measured live on MariaDB 10.6.28.
+    //
+    // The gate is a runner-evaluated line directive: a full-line comment
+    // `-- @phlix-require-mysql <min.version> [reason]` guarding the NEXT
+    // flushed statement. Full-line comments are checksum-invisible to
+    // `checksum()`, so already-installed machines re-apply NOTHING (editing
+    // the shipped statements in place would flip the checksum and — on 050 —
+    // re-create the multi-valued index that 051 deliberately purges). On a
+    // server that does not satisfy the directive (anything MariaDB-branded,
+    // or an actual version below the stated minimum) the statement is skipped,
+    // an explicit note is emitted so the operator can see what was lost, and
+    // the file records cleanly. Unparseable version strings and probe failures
+    // RUN the statement with a warning — the gate must never silently change
+    // behaviour for servers it cannot classify (historical behavior wins).
+    // ------------------------------------------------------------------
+
+    /** One guarded statement + one ordinary statement, to pin attachment scope. */
+    private const GUARDED_FIXTURE = "-- leading prose\n"
+        . "-- @phlix-require-mysql 8.0.17 multi-valued genres index; MariaDB has no equivalent\n"
+        . "ALTER TABLE media_items ADD INDEX idx_vi ((CAST(metadata_json->'\$.genres' AS CHAR(255) ARRAY)));\n"
+        . "CREATE TABLE after_it (id INT);\n";
+
+    /**
+     * Mock connection for the dialect gate: `SELECT VERSION()` answers with
+     * `$versionRows` (or throws `$probeFailure`), migration statements are
+     * captured in `$executed` (the probe itself is NOT counted as executed),
+     * ledger bookkeeping stays inert as in connectionWithLedger().
+     *
+     * @param array<int, array<string|int, string>>|null $versionRows
+     */
+    private function dialectConnection(?array $versionRows, array &$executed, ?Throwable $probeFailure = null): Connection
+    {
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use ($versionRows, &$executed, $probeFailure) {
+                if (str_contains($sql, 'schema_migrations')) {
+                    if (stripos(ltrim($sql), 'SELECT') === 0) {
+                        return [];
+                    }
+
+                    return [];
+                }
+
+                if (stripos(trim($sql), 'SELECT VERSION()') === 0) {
+                    if ($probeFailure !== null) {
+                        throw $probeFailure;
+                    }
+
+                    return $versionRows ?? [];
+                }
+
+                $executed[] = $sql;
+
+                return [];
+            }
+        );
+
+        return $conn;
+    }
+
+    public function testMariaServerSkipsGuardedStatementRecordsFileAndNotesTheLoss(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection(
+            [['VERSION()' => '10.6.28-MariaDB-ubu2204']],
+            $executed
+        );
+
+        $result = (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        // The guarded statement never ran; the ordinary one after it did.
+        $this->assertSame(['CREATE TABLE after_it (id INT)'], $executed);
+        // The file completed cleanly and is recorded (applied with zero errors
+        // => the ledger INSERT ran; empty-ledger mock means no file can be
+        // skipped by checksum, so applied lists it).
+        $this->assertSame(['001_guarded.sql'], $result['applied']);
+        $this->assertSame([], $result['errors']);
+        // Exactly one explicit, operator-visible note about what was skipped.
+        $this->assertCount(1, $result['notes']);
+        $this->assertStringContainsString('001_guarded.sql', $result['notes'][0]);
+        $this->assertStringContainsString('@phlix-require-mysql 8.0.17', $result['notes'][0]);
+        $this->assertStringContainsString('multi-valued genres index; MariaDB has no equivalent', $result['notes'][0]);
+        $this->assertStringContainsString('10.6.28-MariaDB-ubu2204', $result['notes'][0]);
+        $this->assertStringContainsString('idx_vi', $result['notes'][0]);
+        // The skip is NOT the ledger class — it must not feed the
+        // "already applied" summary the callers print instead of full notes.
+        $this->assertSame(0, $result['skipped_count']);
+        $this->assertFalse(MigrationRunner::isAlreadyAppliedNote($result['notes'][0]));
+    }
+
+    public function testModernMysqlRunsGuardedStatementWithoutSkipping(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        // Numeric-key row shape (PDO::FETCH_NUM) — the probe must parse it too.
+        $conn = $this->dialectConnection([[0 => '8.0.43']], $executed);
+
+        $result = (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame([
+            "ALTER TABLE media_items ADD INDEX idx_vi ((CAST(metadata_json->'\$.genres' AS CHAR(255) ARRAY)))",
+            'CREATE TABLE after_it (id INT)',
+        ], $executed);
+        $this->assertSame([], $result['notes']);
+        $this->assertSame([], $result['errors']);
+    }
+
+    public function testMysqlBelowRequiredVersionSkipsGuardedStatement(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '8.0.16']], $executed);
+
+        $result = (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame(['CREATE TABLE after_it (id INT)'], $executed);
+        $this->assertCount(1, $result['notes']);
+        $this->assertSame([], $result['errors']);
+    }
+
+    public function testMysqlExactlyAtRequiredVersionRunsGuardedStatement(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '8.0.17']], $executed);
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertCount(2, $executed, 'the boundary version must RUN the statement — >= is inclusive');
+    }
+
+    public function testMariaDbBrandingWinsOverLeadingVersionDigits(): void
+    {
+        // MariaDB's historical "5.5.5-10.6.x-MariaDB" spoof prefix: the
+        // MariaDB marker must win (5.5.5 < 8.0.17 would skip anyway, so this
+        // also pins that the CLASSIFIER, not arithmetic alone, decides).
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '5.5.5-10.6.18-MariaDB-1:10.6.18+maria~ubu2004']], $executed);
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame(['CREATE TABLE after_it (id INT)'], $executed);
+    }
+
+    public function testUnparseableVersionStringRunsStatementAndWarns(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => 'FrobnicatorSQL build 42']], $executed);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('warning');
+
+        $result = (new MigrationRunner(fn () => $conn, $this->tmpDir, $logger))->run();
+
+        $this->assertCount(2, $executed, 'an unclassifiable server must preserve historical behaviour: run');
+        $this->assertSame([], $result['errors']);
+        $this->assertSame([], $result['notes']);
+    }
+
+    public function testVersionProbeFailureRunsStatementAndWarns(): void
+    {
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection(null, $executed, new RuntimeException('probe exploded'));
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('warning');
+
+        $result = (new MigrationRunner(fn () => $conn, $this->tmpDir, $logger))->run();
+
+        $this->assertCount(2, $executed, 'a failed probe must never silently skip work');
+        $this->assertSame([], $result['errors']);
+    }
+
+    public function testServerVersionIsProbedAtMostOncePerRun(): void
+    {
+        $this->writeMigration('001_two.sql', "-- @phlix-require-mysql 8.0.17 first\nCREATE TABLE one ((CAST(x AS CHAR(255))));\n-- @phlix-require-mysql 8.0.17 second\nCREATE TABLE two ((CAST(x AS CHAR(255))));");
+
+        $executed = [];
+        $probes = 0;
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$executed, &$probes) {
+                if (str_contains($sql, 'schema_migrations')) {
+                    return [];
+                }
+
+                if (stripos(trim($sql), 'SELECT VERSION()') === 0) {
+                    $probes++;
+
+                    return [['VERSION()' => '8.0.43']];
+                }
+
+                $executed[] = $sql;
+
+                return [];
+            }
+        );
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame(1, $probes, 'the probe result is cached for the whole run');
+        $this->assertCount(2, $executed);
+    }
+
+    public function testGuardedStatementsAttachOnlyToTheStatementImmediatelyFollowing(): void
+    {
+        // Directive sits above stmt #1; stmt #2 has no directive of its own.
+        $this->writeMigration('001_scope.sql', "-- @phlix-require-mysql 9.9.9 only-this-one\nCREATE TABLE guarded ((CAST(x AS CHAR(255))));\nCREATE TABLE unguarded (id INT);");
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '8.0.43']], $executed);
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame(['CREATE TABLE unguarded (id INT)'], $executed, 'the directive guards exactly one statement — the next one flushed');
+    }
+
+    public function testDirectiveLookingLineInsideAStringLiteralIsNotADirective(): void
+    {
+        $body = "INSERT INTO cfg (k, v) VALUES ('x', '-- @phlix-require-mysql 99.0.0 not a directive\n');\n"
+            . "CREATE TABLE real_after (id INT);";
+        $this->writeMigration('001_fake.sql', $body);
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '8.0.43']], $executed);
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+
+        $this->assertSame([
+            "INSERT INTO cfg (k, v) VALUES ('x', '-- @phlix-require-mysql 99.0.0 not a directive\n')",
+            'CREATE TABLE real_after (id INT)',
+        ], $executed, 'a directive text inside a string literal must not gate anything (quote-aware scanner)');
+    }
+
+    public function testEmptyVersionResultRunsStatementAndWarns(): void
+    {
+        // The probe "succeeded" but yielded no parseable scalar — classify as
+        // unknown => historical behaviour (run) + warning, never a silent skip.
+        $this->writeMigration('001_guarded.sql', self::GUARDED_FIXTURE);
+
+        $executed = [];
+        $conn = $this->dialectConnection([], $executed);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('warning');
+
+        (new MigrationRunner(fn () => $conn, $this->tmpDir, $logger))->run();
+
+        $this->assertCount(2, $executed);
+    }
+
+    public function testDirectiveCommentsLeaveRealMigrationChecksumsUnchanged(): void
+    {
+        // The estate law this whole design hinges on: adding the dialect
+        // directives to 011/050 changed ONLY full-line comments, so the
+        // checksum the runner records for the CURRENT on-disk bytes still
+        // equals the pre-directive normalisation mirror — already-installed
+        // machines skip the files and re-apply nothing (a 050 re-apply would
+        // resurrect the purged multi-valued index).
+        $reflected = new ReflectionMethod(MigrationRunner::class, 'checksum');
+
+        foreach (['011_music_library.sql', '050_media_items_sort_indexes.sql'] as $name) {
+            $path = dirname(__DIR__, 4) . '/migrations/' . $name;
+            $this->assertFileExists($path);
+            $onDisk = (string) file_get_contents($path);
+
+            // Remove exactly the dialect-directive LINES (line-filter, never a
+            // /m regex whose \s can bleed across the preceding blank line).
+            // What remains is byte-identical to the pre-M-SERVER-06 file — the
+            // guard prose lines are full-line comments that the normalisation
+            // drops anyway. Equal checksums => installed machines recorded
+            // against the old bytes still match and re-apply NOTHING.
+            $lines = preg_split('/\r\n|\r|\n/', $onDisk);
+            $this->assertIsArray($lines);
+            $withoutDirectives = implode("\n", array_values(array_filter(
+                $lines,
+                static fn (string $line): bool => preg_match('/^\s*--\s*\@phlix-require-mysql\b/', $line) !== 1
+            )));
+
+            $this->assertSame(
+                $reflected->invoke(null, $withoutDirectives),
+                $reflected->invoke(null, $onDisk),
+                $name . ': directive lines must be checksum-invisible (full-line comments)'
+            );
+
+            // And the direct parent-byte proof: normalisation of the file as
+            // shipped pre-gate must equal the file as it is now.
+            $parent = (string) shell_exec('git show HEAD:migrations/' . escapeshellarg($name));
+            $this->assertNotSame('', $parent, 'git must serve the parent bytes of ' . $name);
+            $this->assertSame(
+                $reflected->invoke(null, $parent),
+                $reflected->invoke(null, $onDisk),
+                $name . ': the recorded checksum of an installed machine must survive the directive insertion'
+            );
+        }
+    }
+
+    public function testAlreadyLedgeredInstallExecutesNothingAfterTheDirectivesLanded(): void
+    {
+        // Steady-state law on the REAL migrations directory: with the ledger
+        // already recording every current file (checksums computed through
+        // the runner's own mirror), a run touches NOTHING — no migration
+        // statement executes and no version probe is issued, even though
+        // guarded statements exist in 011/050.
+        $migrationsDir = dirname(__DIR__, 4) . '/migrations';
+        $files = glob($migrationsDir . '/*.sql');
+        $this->assertIsArray($files);
+        sort($files);
+
+        $ledgerRows = [];
+        foreach ($files as $file) {
+            $ledgerRows[] = [
+                'name' => basename($file),
+                'checksum' => self::normalisedMd5((string) file_get_contents($file)),
+            ];
+        }
+
+        $executed = [];
+        $conn = $this->connectionWithLedger($ledgerRows, function (string $sql) use (&$executed) {
+            $executed[] = $sql;
+
+            return [];
+        });
+
+        $result = (new MigrationRunner(fn () => $conn, $migrationsDir))->run();
+
+        $this->assertSame([], $executed, 'a fully-recorded tree must execute zero migration SQL and zero dialect probes');
+        $this->assertSame([], $result['applied']);
+        $this->assertSame($ledgerRows !== [] ? count($ledgerRows) : 0, $result['skipped_count']);
+        $this->assertSame([], $result['notes']);
+        $this->assertSame([], $result['errors']);
+    }
+
+    public function testEveryFunctionalIndexStatementInTheRealChainIsDialectGuarded(): void
+    {
+        // Claim detector (the review's core mismatch): README.md advertises
+        // MariaDB, so EVERY MySQL-only functional/multi-valued index
+        // statement in migrations/*.sql must carry a `@phlix-require-mysql`
+        // directive line immediately above it. Regex over raw text is enough
+        // here (a detector of OUR authored files), and it stays RED at the
+        // parent commit where 011 x3 + 050 x1 are unguarded.
+        $files = glob(dirname(__DIR__, 4) . '/migrations/*.sql');
+        $this->assertIsArray($files);
+
+        $guarded = 0;
+        foreach ($files as $file) {
+            $lines = preg_split('/\r\n|\r|\n/', (string) file_get_contents($file)) ?: [];
+            for ($i = 0, $n = count($lines); $i < $n; $i++) {
+                if (preg_match('/^\s*(?:CREATE|ALTER)\s/i', $lines[$i]) !== 1) {
+                    continue;
+                }
+                // Collect the statement text: this line plus following lines
+                // until a ';' (the functional-index statements in 011/050 are
+                // 1-2 lines; a scan over the full statement is what matters).
+                $stmt = $lines[$i];
+                for ($j = $i + 1; $j < $n && strpos($stmt, ';') === false; $j++) {
+                    $stmt .= "\n" . $lines[$j];
+                }
+                if (preg_match('/\(\s*\(CAST\(/i', $stmt) !== 1) {
+                    continue;
+                }
+                $guarded++;
+                $directive = $i > 0 ? $lines[$i - 1] : '';
+                $this->assertMatchesRegularExpression(
+                    '/^\s*--\s*\@phlix-require-mysql\s+\d+(\.\d+){1,2}\b/',
+                    $directive,
+                    basename($file) . ':' . ($i + 1) . ' — MySQL-only index statement without a dialect directive above it (README claims MariaDB support)'
+                );
+            }
+        }
+
+        // Exact inventory (M-SERVER-06): three 8.0.13 functional indexes in
+        // 011 + one 8.0.17 multi-valued index in 050.
+        $this->assertSame(4, $guarded, 'the chain holds exactly four MySQL-only index statements — re-count, then re-pin');
+
+        $minVersions = [];
+        foreach ($files as $file) {
+            if (preg_match_all('/^\s*--\s*\@phlix-require-mysql\s+(\d+(?:\.\d+){1,2})/m', (string) file_get_contents($file), $m) > 0) {
+                $minVersions[basename($file)] = $m[1];
+            }
+        }
+        $this->assertSame(['8.0.13', '8.0.13', '8.0.13'], $minVersions['011_music_library.sql'] ?? [], '011: functional key parts need MySQL 8.0.13');
+        $this->assertSame(['8.0.17'], $minVersions['050_media_items_sort_indexes.sql'] ?? [], '050: multi-valued index needs MySQL 8.0.17');
+    }
+
+    public function testReadmeSupportClaimIsAnnotatedForTheDialectGate(): void
+    {
+        // Both sides must AGREE: the README keeps the MariaDB claim (the gate
+        // makes it true) but must state, immediately at the claim, that the
+        // MySQL-only index statements are skipped there.
+        $readme = (string) file_get_contents(dirname(__DIR__, 4) . '/README.md');
+        $this->assertStringContainsString('MariaDB 10.6', $readme, 'the support claim itself stays (post-gate it is true)');
+
+        $at = strpos($readme, 'MariaDB 10.6');
+        $this->assertIsInt($at);
+        $around = substr($readme, $at, 600);
+        $this->assertMatchesRegularExpression('/skip/i', $around, 'the MariaDB claim must be annotated with the dialect-gate skip');
+        $this->assertStringContainsString('@phlix-require-mysql', $around, 'the annotation must name the gate mechanism');
+        $this->assertMatchesRegularExpression('/performance[- ]only/i', $around, 'the annotation must disclose that the skipped indexes are performance-only');
     }
 
     /**

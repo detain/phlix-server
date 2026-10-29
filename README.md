@@ -68,6 +68,12 @@ public/                 # no front controller — start.php serves everything (s
 
 - **PHP**: 8.3 or higher
 - **MySQL**: 8.0+ or MariaDB 10.6+
+  (On MariaDB — and on MySQL below 8.0.13/8.0.17 — the MySQL-only functional /
+  multi-valued index statements in migrations 011 and 050 are skipped with an
+  operator-visible note via the `@phlix-require-mysql` dialect gate in
+  `src/Common/Database/MigrationRunner.php`. They are performance-only, and 051
+  supersedes the multi-valued one with a join table MariaDB builds natively, so
+  no query or feature is lost — only those specific index scans stay slower.)
 - **Workerman**: 5.0+ (bundled via Composer)
 - **FFmpeg**: For transcoding (optional)
 

@@ -105,6 +105,40 @@ use Workerman\MySQL\Connection;
  *     a migration failure (a crash-looping media server is a worse outcome than
  *     a degraded one), but prints a loud `PHLIX-MIGRATION-FAILURE` banner and
  *     honours `PHLIX_MIGRATIONS_STRICT=1` to abort instead. See that file.
+ *
+ * ## The `@phlix-require-mysql` dialect gate (M-SERVER-06)
+ *
+ * README advertises "MySQL 8.0+ or MariaDB 10.6+", and the chain contains a
+ * handful of MySQL-only index statements — functional key parts
+ * (`CREATE INDEX ... ((CAST(...)))`, MySQL 8.0.13+) and one multi-valued
+ * `CAST(... AS ARRAY)` index (MySQL 8.0.17+). MariaDB rejects them with a 1064
+ * PARSE error (measured on 10.6.28), which is NOT one of the squelchable
+ * idempotent codes above: a fresh MariaDB install left those files
+ * permanently un-recorded and the runner exited 1 on every boot — the support
+ * claim was simply false. Measured live before this gate existed: 4 errors
+ * (three in `011_music_library.sql`, one in `050_media_items_sort_indexes.sql`).
+ *
+ * The fix must not edit the shipped statements: rewriting them in place flips
+ * the file's ledger checksum, which re-applies the whole file on every already
+ * installed MySQL machine — and 050 re-applying would RE-CREATE the
+ * multi-valued index that 051 deliberately purged (the InnoDB-purge defect
+ * 051 exists to squash). So the gate is metadata the statements themselves
+ * never see: a full-line comment
+ *
+ *     `-- @phlix-require-mysql <minimum.version> [human reason]`
+ *
+ * placed immediately above the statement it guards. Full-line comments are
+ * invisible to {@see checksum()} (they are dropped before hashing), so the
+ * directives land checksum-neutral: installed machines skip the files exactly
+ * as before and re-apply nothing. At run time the scanner attaches each
+ * directive to the next flushed statement; before executing a guarded
+ * statement the runner probes `SELECT VERSION()` ONCE per run and skips the
+ * statement — with an explicit operator-visible note naming what was lost —
+ * when the server is MariaDB-branded (no functional-index syntax at all; the
+ * indexes are performance-only and correctness does not depend on them) or is
+ * genuine MySQL below the stated minimum. A version string that cannot be
+ * classified, or a failed probe, RUNS the statement with a warning: the gate
+ * must never silently skip work on a server it cannot identify.
  */
 final class MigrationRunner
 {
@@ -211,6 +245,15 @@ final class MigrationRunner
     private ?LoggerInterface $logger;
 
     /**
+     * Dialect gate probe cache (M-SERVER-06): `SELECT VERSION()` is issued at
+     * most once per {@see run()}, and only when a file actually carries a
+     * guarded statement. Reset at the top of every run.
+     */
+    private bool $dialectProbeAttempted = false;
+
+    private ?string $dialectServerVersion = null;
+
+    /**
      * @param callable(): Connection $connectionProvider Lazily resolves the
      *        MySQL connection. NOT invoked at construction — only inside
      *        {@see run()} — so no socket is opened until a migration runs.
@@ -274,6 +317,10 @@ final class MigrationRunner
         $files = $this->discoverMigrationFiles();
 
         $connection = ($this->connectionProvider)();
+
+        // Fresh dialect-gate probe state for this run (see properties).
+        $this->dialectProbeAttempted = false;
+        $this->dialectServerVersion = null;
 
         // No files → no ledger work and no queries at all (mirrors the empty /
         // absent migrations directory yielding no work). The connection is
@@ -347,7 +394,31 @@ final class MigrationRunner
 
             $fileHadGenuineError = false;
 
-            foreach (self::splitStatements($sql) as $statement) {
+            $fileRequirements = [];
+
+            foreach (self::splitStatements($sql, $fileRequirements) as $index => $statement) {
+                $requirement = $fileRequirements[$index] ?? null;
+
+                if ($requirement !== null && !$this->serverSatisfiesMysqlRequirement($connection, $requirement)) {
+                    // MariaDB (or old MySQL) cannot PARSE the statement — the
+                    // driver would raise a class-(b) 1064 and leave the file
+                    // un-recorded forever. Skip it with a visible note instead
+                    // (M-SERVER-06; see the class docblock).
+                    $notes[] = self::dialectSkipNote(
+                        $name,
+                        $statement,
+                        $requirement,
+                        (string) $this->dialectServerVersion
+                    );
+                    $this->logger?->info('Migration statement skipped (dialect gate)', [
+                        'file' => $name,
+                        'min_version' => $requirement['min_version'],
+                        'server_version' => $this->dialectServerVersion,
+                    ]);
+
+                    continue;
+                }
+
                 try {
                     $connection->query($statement);
                 } catch (Throwable $e) {
@@ -809,9 +880,31 @@ final class MigrationRunner
      * line `--`/`#` comment, or a C-style block comment. Comment text and
      * blank fragments are dropped; quoted contents survive verbatim.
      *
+     * The optional `$requirements` OUT param carries the M-SERVER-06 dialect
+     * gate view: a list keyed IDENTICALLY to the returned statements, holding
+     * each flushed statement's `@phlix-require-mysql` requirement (a full-line
+     * directive comment guards the NEXT flushed statement; the LAST directive
+     * before a flush wins), or null where there is none. Directive text inside
+     * a string literal or block comment is not a directive, and a directive is
+     * only recognised when nothing but whitespace precedes it on its own line.
+     * Callers that only need executable SQL (and the reflection-based
+     * migration tests) omit it.
+     *
+     * Single-pass, quote/comment-aware scanner. Splitting on `;` with a
+     * plain regex (even after stripping `--`/block comments) still shreds a
+     * statement whose string literal contains a semicolon — e.g. a column
+     * `COMMENT 'Hard expiry; the token is invalid once this passes'`, which
+     * leaves the DDL truncated mid-string and failing with a 1064 syntax
+     * error. This scanner only splits on a `;` outside any string literal
+     * (single/double quoted), backtick-quoted identifier, line comment
+     * (`-- ...` or `# ...`) or C-style block comment. Comment text is
+     * dropped; quoted contents (including embedded `;`) survive verbatim.
+     *
+     * @param list<array{min_version: string, reason: string}|null> $requirements
+     *
      * @return list<string>
      */
-    private static function splitStatements(string $sql): array
+    private static function splitStatements(string $sql, array &$requirements = []): array
     {
         // Single-pass, quote/comment-aware scanner. Splitting on `;` with a
         // plain regex (even after stripping `--`/block comments) still shreds a
@@ -823,7 +916,9 @@ final class MigrationRunner
         // (`-- ...` or `# ...`) or C-style block comment. Comment text is
         // dropped; quoted contents (including embedded `;`) survive verbatim.
         $statements = [];
+        $requirementsOut = [];
         $buffer = '';
+        $pendingRequirement = null;
         $len = strlen($sql);
         // Lexical context: '' (top level), "'"/'"'/'`' (quote), '--' (line
         // comment) or '/*' (block comment).
@@ -867,10 +962,12 @@ final class MigrationRunner
 
                 default:
                     if ($ch === '-' && $next === '-') {
+                        $pendingRequirement = self::attachLineDirective($sql, $i, $pendingRequirement);
                         $context = '--';
                         $i++;
                     } elseif ($ch === '#') {
                         // MySQL '#' line comment.
+                        $pendingRequirement = self::attachLineDirective($sql, $i, $pendingRequirement);
                         $context = '--';
                     } elseif ($ch === '/' && $next === '*') {
                         $context = '/*';
@@ -882,6 +979,8 @@ final class MigrationRunner
                         $part = trim($buffer);
                         if ($part !== '') {
                             $statements[] = $part;
+                            $requirementsOut[] = $pendingRequirement;
+                            $pendingRequirement = null;
                         }
                         $buffer = '';
                     } else {
@@ -894,9 +993,155 @@ final class MigrationRunner
         $part = trim($buffer);
         if ($part !== '') {
             $statements[] = $part;
+            $requirementsOut[] = $pendingRequirement;
         }
 
+        $requirements = $requirementsOut;
+
         return $statements;
+    }
+
+    /**
+     * If a line comment that STARTS the given byte offset is a full-line
+     * `@phlix-require-mysql` directive (M-SERVER-06 dialect gate — see the
+     * class docblock), return its parsed requirement; otherwise return the
+     * currently pending requirement unchanged. A directive is only recognised
+     * when nothing but whitespace precedes it on its own line (a trailing
+     * comment after code, or any occurrence inside a string literal — the
+     * scanner only calls this at top level — cannot carry one). When several
+     * directives precede one statement, the LAST wins.
+     *
+     * @param array{min_version: string, reason: string}|null $pending
+     * @return array{min_version: string, reason: string}|null
+     */
+    private static function attachLineDirective(string $sql, int $start, ?array $pending): ?array
+    {
+        // Only whitespace may precede the comment on its line.
+        for ($j = $start - 1; $j >= 0 && ($sql[$j] === ' ' || $sql[$j] === "\t"); $j--) {
+        }
+        if ($j >= 0 && $sql[$j] !== "\n") {
+            return $pending;
+        }
+
+        $end = strpos($sql, "\n", $start);
+        $line = $end === false ? substr($sql, $start) : substr($sql, $start, $end - $start);
+
+        if (
+            preg_match(
+                '/^(?:--|#)\s*\@phlix-require-mysql\s+(\d+(?:\.\d+){1,2})(?![.\d])(?:[ \t]+(.*))?$/',
+                rtrim($line),
+                $m
+            ) !== 1
+        ) {
+            return $pending;
+        }
+
+        return [
+            'min_version' => $m[1],
+            'reason' => trim($m[2] ?? ''),
+        ];
+    }
+
+    /**
+     * Decide whether the current server satisfies a dialect requirement,
+     * probing `SELECT VERSION()` lazily on first use and caching the answer
+     * for the rest of the run (guarded statements are rare; files without any
+     * never trigger a probe, so steady-state and existing mocked tests see
+     * byte-identical query streams).
+     *
+     * Classification order:
+     *  - MariaDB-branded (`10.6.28-MariaDB-...`, or the historical
+     *    `5.5.5-10.6.x-MariaDB` spoof prefix) => NEVER supports functional /
+     *    multi-valued index syntax (measured on 10.6.28; the marker wins over
+     *    arithmetic), so the statement is skipped.
+     *  - genuine MySQL with a parseable `major.minor[.patch]` prefix => run
+     *    iff `version_compare($actual, $min, '>=')`.
+     *  - probe failed / empty result / unparseable version => RUN the
+     *    statement and log a warning. An unidentifiable server keeps
+     *    historical behaviour; the gate must never silently skip work.
+     *
+     * @param array{min_version: string, reason: string} $requirement
+     */
+    private function serverSatisfiesMysqlRequirement(Connection $connection, array $requirement): bool
+    {
+        if (!$this->dialectProbeAttempted) {
+            $this->dialectProbeAttempted = true;
+            try {
+                $result = $connection->query('SELECT VERSION()');
+                if (is_array($result)) {
+                    $firstRow = reset($result);
+                    if (is_array($firstRow)) {
+                        $firstCell = reset($firstRow);
+                        if (is_string($firstCell) && $firstCell !== '') {
+                            $this->dialectServerVersion = $firstCell;
+                        }
+                    }
+                }
+            } catch (Throwable) {
+                // Handled by the null-version branch below.
+            }
+        }
+
+        if ($this->dialectServerVersion === null) {
+            $this->logger?->warning(
+                'Dialect gate could not classify the server via SELECT VERSION(); '
+                . 'running the MySQL-only statement unguarded.',
+                ['min_version' => $requirement['min_version']]
+            );
+
+            return true;
+        }
+
+        if (stripos($this->dialectServerVersion, 'mariadb') !== false) {
+            return false;
+        }
+
+        if (preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', $this->dialectServerVersion, $m) !== 1) {
+            $this->logger?->warning(
+                'Dialect gate could not parse the server version; running the MySQL-only statement unguarded.',
+                ['server_version' => $this->dialectServerVersion, 'min_version' => $requirement['min_version']]
+            );
+
+            return true;
+        }
+
+        $actual = $m[1] . '.' . $m[2] . '.' . ($m[3] ?? '0');
+        $parts = explode('.', $requirement['min_version']);
+        $required = $parts[0] . '.' . $parts[1] . '.' . ($parts[2] ?? '0');
+
+        return version_compare($actual, $required, '>=');
+    }
+
+    /**
+     * The operator-visible note for a statement the dialect gate skipped. It
+     * is NOT an `isAlreadyAppliedNote()` idempotent-class message, so both
+     * callers print it IN FULL on the run that skipped — the record of what
+     * that server did not get.
+     *
+     * @param array{min_version: string, reason: string} $requirement
+     */
+    private static function dialectSkipNote(
+        string $file,
+        string $statement,
+        array $requirement,
+        string $serverVersion
+    ): string {
+        $compact = preg_replace('/\s+/', ' ', $statement) ?? $statement;
+        if (strlen($compact) > 160) {
+            $compact = substr($compact, 0, 157) . '...';
+        }
+
+        $reason = $requirement['reason'] !== '' ? $requirement['reason'] : 'no reason recorded';
+
+        return sprintf(
+            'Skipped (dialect gate) %s: statement needs @phlix-require-mysql %s but the server reports %s — %s. '
+            . 'Skipped statement: %s',
+            $file,
+            $requirement['min_version'],
+            $serverVersion,
+            $reason,
+            $compact
+        );
     }
 
     /**

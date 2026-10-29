@@ -9,6 +9,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The shipped nginx template 404ed every SPA asset; behind `install-nginx.sh` the web
+  client never booted (review server__fedev M25).** `reverse-proxy/nginx/phlix.conf` carried
+  a `location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$` block with
+  `expires 1y` / `add_header Cache-Control "public, immutable"` and NEITHER `proxy_pass` NOR
+  `root`/`try_files` — and the server block defined no root anywhere, so nginx resolved every
+  match against its compiled-in default html root, where the files never exist on the proxy
+  host (the Vite bundle lives in the server's `public/assets/app/**` and only the :8096
+  Workerman worker knows it, `start.php:194` + `HttpHandler::serveStatic()`). The SPA shell
+  (`/app`, no matching extension) loaded, then every hashed chunk — `.js`, `.css`, `.woff2` —
+  died at the proxy; the legacy `public/assets/{css,images,js}/**` statics 404ed the same way.
+  `nginx -t` (install-nginx.sh's only gate) stayed green because a dead location is still
+  valid syntax; the Caddy sibling never carried the fiction. Cure: DELETE the regex location —
+  assets now proxy through `location /` and the caching intent is satisfied UPSTREAM, scoped
+  correctly: `serveStatic()` tags ONLY realpath-jailed `/assets/app/**` with
+  `Cache-Control: public, max-age=31536000, immutable`, which the proxy forwards untouched
+  (re-adding it at the edge on the broad extension set would pin hashless server-generated
+  images to a year of `immutable`, and a regex location outranks the `/media/` and `/api/`
+  prefixes forever after). New `tests/Unit/Deploy/NginxAssetLocationTest.php` pins the shape
+  against the REAL shipped artifact (every location body must be actionable; the M25 extension
+  set may not return; the upstream immutable tag — the deletion's justification — stays
+  coupled), red-on-parent measured for the three defect arms before the edit. `nginx -t`
+  verified via docker nginx:1.27-alpine on a copy with only the letsencrypt cert paths
+  rewritten (the shipped file cannot `-t` without real certs — install-nginx.sh's own `-t`
+  runs post-operator-edit). Docs truth: the `reverse-proxy/README.md` feature bullet "Static
+  file caching" claimed edge caching the nginx config never performed — rewritten to the
+  cache pass-through truth with the authority citation. Census: `EXPECTED_PHP_FILES`
+  1989→1990 (the one new test file, re-pinned from measured red).
+
+
 - **`bin/phlix migrate` now bootstraps the managed env file exactly like its
   documented twin (review server__ipd M2, M27):** the README promises the two
   migration commands are "the supported equivalent" of each other, but only

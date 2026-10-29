@@ -690,7 +690,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * `scripts/run-migrations.php` bootstrap `/etc/phlix/env` identically.
      * Measured from the phpunit red (1989), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1989;
+    private const EXPECTED_PHP_FILES = 1990;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

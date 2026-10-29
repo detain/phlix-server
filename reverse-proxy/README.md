@@ -9,7 +9,12 @@ This directory contains reverse-proxy configurations for nginx and Caddy to fron
 - HTTP/2 for multiplexed connections
 - Gzip compression
 - Rate limiting
-- Static file caching
+- Static asset cache pass-through (the upstream worker already tags hashed
+  `/assets/app/**` bundles with `Cache-Control: public, max-age=31536000,
+  immutable`; the proxies forward it — neither template serves files itself,
+  the bundle only exists inside the server's `public/`. An earlier nginx
+  template shipped a static-asset location with neither `proxy_pass` nor
+  `root` and 404ed every SPA chunk; see `tests/Unit/Deploy/NginxAssetLocationTest.php`)
 - Load balancing (future)
 
 ## nginx

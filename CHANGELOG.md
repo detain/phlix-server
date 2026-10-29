@@ -9,6 +9,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`--text-faint` raised from decoration-grade to AA ink, vendored sample
+  re-propagated, golden re-pinned (review theme-sample__webux M04):** the
+  standalone sample shipped `--text-faint: #465061`, which phlix-ui's
+  `AuthField.vue` renders as `::placeholder` on the composited input
+  background — measured 2.39:1 (2.49:1 raw on `--bg`), invisible-grade for a
+  form affordance. Upstream raised it to `#6e7d94` (≥4.51:1 on all three
+  composited input grounds, 4.85:1 raw) and gave the high-contrast variant its
+  own `#93a1b8` (≥7.2:1), re-vendored byte-identical here. The `GET
+  /api/v1/themes` golden regenerated (dusk still 28; high-contrast 8→9 — the
+  second md5 rotation this week, which is precisely what the pin is for);
+  `GOLDEN_MD5` rotated to `5fd7fad5…` in lockstep with phlix-ui's twin, and
+  the token-count pin moved 36→37 ("28 + 9"). Built-in maps untouched (53
+  each). Upstream added a payload-computed WCAG law test so the floor cannot
+  rot back without a red suite; its ground set is the roles the host actually
+  renders (raw `--bg`/`--surface` + the 80%-surface input composite over all
+  three page bases) — raw `--surface-2` is deliberately not asserted, as the
+  value that would clear it would outrun `--text-subtle` and collapse the
+  ramp.
+
 - **The vendored sample theme plugin was a stale fork of itself — re-vendored
   byte-identical to upstream and the cross-repo wire golden re-pinned (review
   theme-sample__webux M01, with M02's alias defect cured by the same

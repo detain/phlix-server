@@ -46,7 +46,7 @@ use Psr\Container\ContainerInterface;
  *  - **`sample-dusk-high-contrast` extends a PLUGIN theme (`sample-dusk`).**
  *    No stylesheet knows that base, so the client resolves it from data — and
  *    only the LIST response carries every registered theme.
- *    `GET /api/v1/themes/{id}` alone would hand a client eight text/border
+ *    `GET /api/v1/themes/{id}` alone would hand a client nine text/border
  *    tokens and no background.
  *
  * ## Every value here is inside the host's grammar
@@ -166,7 +166,11 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     '--text' => '#e6ecf5',
                     '--text-muted' => '#a3b0c2',
                     '--text-subtle' => '#75839a',
-                    '--text-faint' => '#465061',
+                    // Faintest tier — NOT decoration: phlix-ui AuthField.vue
+                    // renders ::placeholder in this token, so it must clear
+                    // AA body contrast (4.5:1) on the composited input
+                    // background; a law test computes it from these hexes.
+                    '--text-faint' => '#6e7d94',
                     '--text-on-accent' => '#05060a',
 
                     // Borders.
@@ -206,6 +210,11 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     '--text' => '#ffffff',
                     '--text-muted' => '#d7deea',
                     '--text-subtle' => '#b3bfd1',
+                    // The faintest tier comes along too: a raised-contrast
+                    // form that still renders its placeholder at dusk's ink
+                    // is a failed high-contrast variant. Kept below
+                    // --text-subtle's luminance so the ramp survives.
+                    '--text-faint' => '#93a1b8',
                     '--border' => '#55637a',
                     '--border-strong' => '#7d8ba3',
                     // Keep the live aliases in step with the modern tokens

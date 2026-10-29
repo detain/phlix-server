@@ -58,7 +58,7 @@ final class SampleThemePluginTest extends TestCase
     private const UI_TWIN = 'phlix-ui/src/test/fixtures/themes-with-sample-plugin.golden.json';
 
     /** md5 of both copies. Update BOTH files together, then this constant. */
-    private const GOLDEN_MD5 = 'f8a33eac15f111797cc9f01da27d447d';
+    private const GOLDEN_MD5 = '5fd7fad51225d66345e564c6d25e63b4';
 
     /** The two theme ids the sample plugin contributes. */
     private const SAMPLE_IDS = ['sample-dusk', 'sample-dusk-high-contrast'];
@@ -177,7 +177,7 @@ final class SampleThemePluginTest extends TestCase
             }
         }
 
-        self::assertSame(36, $checked, '28 tokens on sample-dusk + 8 on the high-contrast variant.');
+        self::assertSame(37, $checked, '28 tokens on sample-dusk + 9 on the high-contrast variant.');
     }
 
     public function testTheSampleDeliberatelyExercisesBothKindsOfExtendsChain(): void

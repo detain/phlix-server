@@ -1207,6 +1207,54 @@ class DockerEntrypointTest extends TestCase
     }
 
     /**
+     * [server__devops2 M3] The shipped production examples must raise the MySQL
+     * connection ceiling. The server fleet's documented pool math (R19-16:
+     * config/database.php, src/Common/Database/ConnectionPool.php) demands
+     * ~140 connections at defaults against MySQL 8's stock `max_connections`
+     * of 151 — zero headroom, and the wall is met as a "Too many connections"
+     * 500-storm exactly when the server is busiest. The invariant: every
+     * `image: mysql:` service in every `docker/examples/` compose file also
+     * carries a `--max-connections=` command at or above the shipped value.
+     * The root `docker-compose.yml` is deliberately NOT in the denominator —
+     * it self-labels as dev, and the examples are the production contract.
+     */
+    public function testEveryProductionExampleMySqlRaisesTheConnectionCeiling(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $files = glob($root . '/docker/examples/*/docker-compose.yml') ?: [];
+
+        self::assertNotEmpty($files, 'the production-example denominator vanished');
+
+        foreach ($files as $file) {
+            $rel = str_replace($root . '/', '', $file);
+            $contents = (string) file_get_contents($file);
+
+            $images = preg_match_all('/^\s*image:\s*mysql:/m', $contents) ?: 0;
+            self::assertGreaterThan(0, $images, $rel . ' should ship a MySQL service');
+
+            preg_match_all('/--max-connections=(\d+)/', $contents, $raises);
+            $values = array_map('intval', $raises[1]);
+
+            self::assertCount(
+                $images,
+                $values,
+                $rel . ': every mysql: service must carry its own --max-connections= '
+                . '(counted ' . count($values) . ' raises for ' . $images . ' mysql images) — '
+                . 'leaving a production fleet on the stock 151 turns documented ~140-demand '
+                . 'into a Too-many-connections 500-storm (R19-16)'
+            );
+            foreach ($values as $value) {
+                self::assertGreaterThanOrEqual(
+                    300,
+                    $value,
+                    $rel . ': ~140 documented demand plus headroom — a value under 300 '
+                    . 're-introduces the wall this pin exists to keep raised'
+                );
+            }
+        }
+    }
+
+    /**
      * The other half of finding 3's fix: a CLEAN shutdown must still exit 0, or
      * `docker stop` starts looking like a crash and `restart: on-failure` loops
      * a container the operator deliberately stopped.

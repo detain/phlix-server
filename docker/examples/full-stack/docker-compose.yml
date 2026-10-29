@@ -150,6 +150,10 @@ services:
       MYSQL_DATABASE: phlix_hub
       MYSQL_USER: phlix_hub
       MYSQL_PASSWORD: ${HUB_DB_PASSWORD:?HUB_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    # Same connection-budget posture as the server DB: stock 151 leaves no
+    # headroom for a fleet of pooled workers plus CLI and co-tenants. See
+    # docker/examples/README.md "MySQL connection budget".
+    command: --max-connections=300
     # Explicitly unpublished: MySQL is reached only over phlix_network.
     ports: []
     volumes:
@@ -171,6 +175,13 @@ services:
       MYSQL_DATABASE: phlix
       MYSQL_USER: phlix
       MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
+    # MySQL's stock max_connections is 151; the server fleet's documented pool
+    # math demands ~140 at defaults (14 HTTP workers × DB_POOL_SIZE 8, plus the
+    # count=1 workers, CLI and co-tenants — config/database.php R19-16 and
+    # docker/examples/README.md "MySQL connection budget"). Raise the ceiling
+    # here rather than letting a busy install meet the wall as a
+    # "Too many connections" 500-storm.
+    command: --max-connections=300
     ports: []
     volumes:
       - mysql_server_data:/var/lib/mysql

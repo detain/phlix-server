@@ -1820,6 +1820,26 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON \`${DB
 FLUSH PRIVILEGES;
 SQL
 
+# Connection budget (R19-16): the fleet's documented pool math demands ~140
+# connections at shipped defaults (14 HTTP workers × DB_POOL_SIZE 8, plus the
+# count=1 pool workers, CLI and co-tenants) against MySQL 8's stock max_
+# connections of 151 — zero headroom, surfacing as a "Too many connections"
+# 500-storm exactly when the server is busiest. Where this script owns the
+# server (same root-local-socket assumption as the grant block above), raise
+# the ceiling now. SET PERSIST is MySQL 8: online, survives restart, and
+# idempotent. Best-effort deliberately — an external DB host or a non-MySQL-8
+# server (MariaDB has no PERSIST) must not fail the install; it gets a loud
+# warning instead. See docker/examples/README.md "MySQL Connection Budget".
+log "Raising MySQL max_connections for the documented pool budget"
+if mysql -N -e "SET PERSIST max_connections = 300;" >/dev/null 2>&1; then
+  info "max_connections raised to 300 (persisted, survives restart)"
+else
+  warn "Could not raise MySQL max_connections (external DB or non-MySQL-8 server?)."
+  warn "  Verify the ceiling covers the pool budget (~140 at defaults, R19-16):"
+  warn "  mysql -e \"SHOW VARIABLES LIKE 'max_connections'\""
+fi
+SQL
+
 # ---------------------------------------------------------------------------
 # 5. Environment file
 # ---------------------------------------------------------------------------

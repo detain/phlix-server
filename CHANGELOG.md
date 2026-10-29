@@ -9,6 +9,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Production examples and the installer raise MySQL `max_connections`
+  against the documented pool demand (review server__devops2 M3):** the pool
+  math is honest in code (`config/database.php` + `ConnectionPool.php`,
+  R19-16: 14 HTTP workers × `DB_POOL_SIZE` 8 = 112, plus the four count=1
+  pool workers, CLI and co-tenants — ≈140 at defaults) but NOTHING shipped
+  raised MySQL 8's stock ceiling of 151 to meet it: every production-example
+  MySQL service ran bare `mysql:8.0`, and `max_connections` had zero hits
+  across `docker/examples/`, `docs/` and `k8s/`. The wall is met as a
+  `Too many connections` 500-storm exactly when the server is busiest.
+  Cure, at the three surfaces where production MySQL is actually configured:
+  (1) all five example MySQL services (server-only ×1, server-hub ×2,
+  full-stack ×2) now carry `command: --max-connections=300` (~2× documented
+  demand) with the math in a comment; the root `docker-compose.yml` stays
+  untouched — it self-labels as dev, and the examples are the prod contract
+  (the review's own law). (2) `docker/examples/README.md` gains a "MySQL
+  Connection Budget" section carrying the worker×pool formula and the
+  bring-your-own-MySQL `SHOW VARIABLES` instruction. (3) `scripts/install.sh`
+  attempts `SET PERSIST max_connections = 300` right after its existing
+  root-socket grant block (MySQL 8: online, survives restart, idempotent);
+  best-effort with a loud warn so an external DB or a MariaDB box never fails
+  the install. Pinned by a new tripwire beside the restart-policy pin in
+  `DockerEntrypointTest`: in each example compose the count of
+  `--max-connections=` raises must equal the count of `image: mysql:`
+  services and each value must be ≥ 300 — measured red (count mismatch) on a
+  stripped raise and red (floor) on a 200 probe, green after restore.
+
 - **`GET /api/v1/users/me/favorites` hydrates the page in ONE batched query
   (review server__devops2 M16):** `MediaUserDataController::listFavorites()`
   looped `ItemRepository::findById()` per favorite row — the repo's own

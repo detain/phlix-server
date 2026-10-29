@@ -111,6 +111,41 @@ client-side `wsUrl` seam is a separate effort). The `full-stack/` example is
 the exception by design: Traefik is the TLS edge, so its 80/443 and the hub
 relay 8802 are published publicly and the MySQLs stay unpublished.
 
+## MySQL Connection Budget
+
+The database is the first shared resource a busy install exhausts, so every
+production example raises its MySQL services with
+`command: --max-connections=300` instead of accepting MySQL 8's stock `151`.
+
+The math (R19-16; the canonical docblocks live in `config/database.php` and
+`src/Common/Database/ConnectionPool.php` — this is the operator summary):
+
+| Consumer | Connections at shipped defaults |
+|----------|----------------------------------|
+| HTTP worker fleet | 14 workers × `DB_POOL_SIZE` 8 = **112** |
+| count=1 pool workers (WebSocket :8097, hub-heartbeat, background-timer, relay-tunnel) | **≈4** |
+| migrations, `bin/phlix`, CLI scripts, any co-tenant on the same MySQL | a few more |
+| **Documented demand** | **≈140** |
+
+≈140 against a stock 151 is zero headroom — the ceiling is met exactly when
+the server is busiest, and MySQL answers `Too many connections` as a
+500-storm. The (workers × pool_size) figure is a CEILING the fleet may hold
+concurrently, so size the budget to the peak, not the idle average, and
+remember every `+1` to `DB_POOL_SIZE` raises the ceiling by 15 more HTTP/WS
+worker connections. Rules of thumb:
+
+- **Bare-metal install**: `scripts/install.sh` attempts
+  `SET PERSIST max_connections = 300` right after creating the database and
+  user (MySQL 8: online, survives restart). Best-effort by design — an
+  external or non-MySQL-8 server prints a loud warning instead; verify with
+  `SHOW VARIABLES LIKE 'max_connections'` and raise manually.
+- **Bring your own MySQL**: check `SHOW VARIABLES LIKE 'max_connections'`
+  against the sum of ALL clients of that server, not just this fleet's pool
+  math, before lowering any default.
+- **Hub DB**: the hub-side MySQL in `server-hub/` and `full-stack/` carries
+  the same raised posture for its own worker fleet; tune it against the hub's
+  pool config the same way.
+
 ## Migrations Posture
 
 Since R14-12 the runtime images ship `ENV PHLIX_MIGRATIONS_STRICT=1` and the

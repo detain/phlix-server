@@ -221,15 +221,31 @@ Config pointers:
   progress reporting — the server applies no automatic progress-threshold completion detection and
   keeps no per-profile watch-time statistics
 
-### Live TV & DVR
+### Live TV & DVR (admin-managed)
+LiveTV ships as operator tooling. The entire control plane — tuners, channels, guide,
+recordings, and series rules — is served under `/api/v1/admin/livetv` behind admin auth;
+there is no member-facing channel browse, recording-schedule, or settings surface, and the
+web SPA has no LiveTV page. The only non-admin LiveTV routes are stream legs, served under
+the same signed-URL/stream middleware as HLS/DASH:
+`GET /livetv/recording/{id}/stream` (DVR recording playback, re-checked against the
+requester's profile rating cap via the recording's linked library item) and
+`GET /livetv/timeshift/{sessionId}/...` (the live tuner's rolling window — session rows
+carry only a channel id with no library linkage, so these are rating-gated by nothing, by
+design).
+
+Shipped capabilities (all driven through the admin API):
 - **Multi-Tuner Support**: DVB-T, DVB-S, DVB-C, and ATSC tuner types
 - **Channel Scanning**: Automatic discovery of broadcast services
 - **Electronic Program Guide**: Full EPG with program info, categories, and search
 - **DVR Scheduling**: Schedule recordings with priority management
-- **Time-Shifting**: Pause and rewind live TV with buffer
-- **Channel Lineups**: Custom channel lineups per user
-- **Favorites**: Personal favorite channels per user
+- **Time-Shifting**: Rolling-HLS buffer of the over-air window; seeking within it is
+  inherent to HLS and handled by the player — the server serves the buffer and implements
+  no cursor seeking of its own
 - **Storage Management**: Recording storage tracking and limits
+
+Not yet exposed: per-user channel lineups and personal channel favorites exist only in the
+service layer (`ChannelManager` over the `livetv_lineups`/`livetv_favorites` tables); no
+HTTP routes or UI back them yet, so members cannot favorite channels or build lineups.
 
 ## Installation
 

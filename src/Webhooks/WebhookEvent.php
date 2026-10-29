@@ -16,12 +16,37 @@ use DateTimeImmutable;
 /**
  * An immutable webhook event plus its delivery signing helpers.
  *
- * ## Signature wire format (dual-scheme)
+ * ## Which deliveries sign (two subsystems, one of them unsigned)
  *
- * Every delivery carries TWO signature headers over the exact raw
- * request-body bytes (the JSON encoding of {@see self::toArray()},
- * produced by {@see self::serializedPayload()} so body and signature
- * provably cover the same bytes):
+ * The server runs TWO webhook delivery subsystems, and only ONE of them
+ * signs. This class specifies the wire format of the signing one — it is
+ * NOT a promise about every webhook POST the server can emit:
+ *
+ *  - {@see WebhookDispatcher} (the `webhooks` table, per-row `secret`,
+ *    managed via `/api/v1/admin/webhooks`) IS the signing path: every
+ *    delivery it makes carries the dual-scheme headers below, computed
+ *    over the raw body with that row's secret. As of the current code its
+ *    only live production delivery is the admin
+ *    `POST /api/v1/admin/webhooks/{id}/test` button —
+ *    {@see WebhookDispatcher::dispatch()} has no domain-event producer;
+ *    wiring one (or merging the subsystems) is an open owner decision.
+ *  - {@see WebhookService} (the `webhook_subscriptions` table, managed
+ *    via `/api/v1/admin/webhooks/subscriptions` and fed by EVERY domain
+ *    event through {@see WebhookEventSubscriber}) delivers UNSIGNED:
+ *    that table has no `secret` column and the delivery HTTP client
+ *    emits only `Content-Type`, `X-Phlix-Event` and `X-Phlix-Delivery`.
+ *    Receivers of subscription-path deliveries CANNOT authenticate
+ *    origin — the subscription URL is the whole (weak) capability; build
+ *    no trust decisions on those POSTs. The matching disclosure lives on
+ *    {@see WebhookService} and the admin create surface
+ *    (`AdminWebhooksController::createSubscription`).
+ *
+ * ## Signature wire format (dual-scheme; dispatcher path only)
+ *
+ * Every dispatcher-path delivery carries TWO signature headers over the
+ * exact raw request-body bytes (the JSON encoding of
+ * {@see self::toArray()}, produced by {@see self::serializedPayload()}
+ * so body and signature provably cover the same bytes):
  *
  *  - `X-Phlix-Signature: sha256=<hex>` — LEGACY. The HMAC covers the
  *    payload ONLY. Retained verbatim so already-deployed receivers keep

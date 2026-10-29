@@ -26,6 +26,23 @@ use Workerman\Timer;
  * - Subscription matching for events
  * - Async delivery with exponential backoff retry (30s, 300s, 1800s)
  *
+ * ## Deliveries on this path are UNSIGNED (docs-truth, review M34)
+ *
+ * This is the SECOND webhook subsystem (table `webhook_subscriptions`,
+ * admin surface `/api/v1/admin/webhooks/subscriptions`) and it is the one
+ * every production domain event flows through —
+ * {@see WebhookEventSubscriber} bridges playback.*, library.updated and
+ * user.* events to {@see self::emit()}. `webhook_subscriptions` has no
+ * `secret` column, and {@see WebhookHttpClient::post()} — the only
+ * transport this class uses — sets exactly `Content-Type`,
+ * `X-Phlix-Event` and `X-Phlix-Delivery`. Nothing here signs, nothing
+ * here can be verified by the receiver, and a leaked subscription URL
+ * lets an attacker POST forged events that are indistinguishable from
+ * real ones. The signed dual-scheme format in {@see WebhookEvent}
+ * applies to {@see WebhookDispatcher} deliveries only. Signing this path
+ * is an open owner decision — until it ships, do not advertise these
+ * deliveries as authenticated.
+ *
  * @autowire
  */
 class WebhookService
@@ -51,7 +68,9 @@ class WebhookService
      * Saves the event to the database and queues deliveries to all matching
      * subscriptions. Delivery is attempted asynchronously via Workerman Timer.
      *
-     * @param string $eventType Event type (e.g., media.scanned, transcode.completed)
+     * @param string $eventType Event type — a {@see WebhookEventCatalog}
+     *        canonical name (e.g., playback.started, user.login); legacy
+     *        names normalize on the subscription-matching path
      * @param array<string, mixed> $payload Event payload data
      */
     public function emit(string $eventType, array $payload): void

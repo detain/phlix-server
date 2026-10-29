@@ -243,7 +243,10 @@ class WebhookDispatcher
 
     /**
      * Load a single webhook row by id, including its `secret` so
-     * {@see sendToWebhook()} can sign identically to the subscription path.
+     * {@see sendToWebhook()} can sign identically to the event-matched
+     * {@see dispatch()} path. (Not to be confused with the
+     * `webhook_subscriptions` subsystem in {@see WebhookService}, which
+     * has no secret and delivers unsigned — see its class docblock.)
      *
      * {@see listWebhooks()} deliberately omits `secret`, so callers holding a
      * listing row cannot be used for delivery.

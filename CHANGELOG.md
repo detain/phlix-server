@@ -71,6 +71,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The webhook signing law is reconciled to shipped truth — the production subscription
+  path is now honestly documented as unsigned (docs-only; review server__seceng M34):**
+  `WebhookEvent`'s canonical docblock declared "Every delivery carries TWO signature
+  headers", but the server runs two delivery subsystems and only one of them signs. The
+  `webhook_subscriptions` path — `WebhookService`, fed by EVERY production domain event
+  through the PSR-14 bridge `WebhookEventSubscriber` (playback.*, library.updated,
+  user.login/logout/created), created via `/api/v1/admin/webhooks/subscriptions` — has no
+  `secret` column and sends only `Content-Type`, `X-Phlix-Event` and `X-Phlix-Delivery`:
+  every live delivery is unsigned and cannot be authenticated by its receiver. The signed
+  dual-scheme path is the separate `webhooks`-table registry (`WebhookDispatcher`,
+  `/api/v1/admin/webhooks`), whose `dispatch()` has no production event caller in current
+  code — the only live signed delivery today is the admin Test button. Five docblocks
+  (WebhookEvent class + wire-format heading scoped to "dispatcher path", WebhookService
+  class + its `emit()` example names that cited the retired `media.scanned`-era
+  vocabulary, WebhookDispatcher::findWebhookById()'s ambiguous "signs identically to the
+  subscription path", AdminWebhooksController's create surface, WebhookAdminController's
+  registry) now state exactly what each path ships, including the receiver-side truth that
+  a leaked subscription URL permits forged events. ZERO behavior change: no header,
+  route, schema, status line or wire code moved; the open owner decisions (sign the
+  subscription path; wire or merge the two subsystems) are recorded in the M34 fixlog.
+
 - **M32 residual truth pass atop the M5 reframe: the last "evaluated on request"
   fiction and two rotted README coordinates cured (review server__pm M-SERVER-32):**
   the sibling docs-cure landed while this lane's full dead-doc-strip alternative
@@ -83,6 +104,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   reworded to durable, test-named anchors. The strip-vs-keep choice for the
   reframed helper itself is left to the review loop; the full-strip variant is
   preserved unpushed (fixlog `M-SERVER-32__fix.md`).
+
 - **`/api/v1/smart-playlists` was advertised by src/ docblocks yet registered
   nowhere — cured to the shipped collections truth and pinned (review server__pm
   M5):** `Router::smartPlaylists()` (a registration helper no boot path calls) and
@@ -150,6 +172,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   phpstan both corpora 0 errors, psalm zero new (90 pre-existing local
   swoole-absence errors, none in touched files), phpcs PSR12 src +
   phpcs-tests.xml + raw PSR12 on the new test all 0/0.
+
 - **The fabricated "no backup UI" claims are corrected to bundle truth, and the
   Backups-section rider of M22 is disclosed (review server__enduser M22 r2):** the r1
   REWORK found the README Backups section — which rode `b865aa94` unannounced in that

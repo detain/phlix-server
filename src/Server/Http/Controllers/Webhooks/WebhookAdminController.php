@@ -20,6 +20,20 @@ use Phlix\Webhooks\WebhookEvent;
 use DateTimeImmutable;
 use InvalidArgumentException;
 
+/**
+ * Admin API controller for the SIGNED webhook registry (`webhooks` table).
+ *
+ * Rows created here carry a per-webhook `secret` and every delivery made
+ * through {@see \Phlix\Webhooks\WebhookDispatcher} — including the
+ * synchronous retry attempts — ships the dual-scheme headers specified by
+ * {@see \Phlix\Webhooks\WebhookEvent}. Docs-truth (review M34): as of the
+ * current code `WebhookDispatcher::dispatch()` has NO domain-event
+ * producer, so the only live signed delivery is the operator Test button
+ * (`webhook.test` via {@see self::test()}). Production domain events flow
+ * through the SEPARATE, UNSIGNED `webhook_subscriptions` subsystem
+ * ({@see \Phlix\Server\Http\Controllers\Admin\AdminWebhooksController});
+ * creating a webhook here is not yet a subscription to live events.
+ */
 class WebhookAdminController
 {
     /**

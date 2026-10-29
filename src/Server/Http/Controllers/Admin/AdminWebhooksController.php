@@ -14,6 +14,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Webhooks\WebhookDispatcher;
 use Phlix\Webhooks\WebhookEventCatalog;
 use Phlix\Webhooks\WebhookService;
 use InvalidArgumentException;
@@ -27,6 +28,19 @@ use Throwable;
  * - POST   /api/v1/admin/webhooks/subscriptions       — create subscription
  * - DELETE /api/v1/admin/webhooks/subscriptions/{id}  — delete subscription
  * - GET    /api/v1/admin/webhooks/deliveries           — get deliveries (filter by event_id)
+ *
+ * ## Deliveries created here are UNSIGNED (docs-truth, review M34)
+ *
+ * This subsystem stores rows in `webhook_subscriptions`, which has no
+ * secret column, and delivers through {@see WebhookService} /
+ * {@see WebhookHttpClient::post()}, which sets only `Content-Type`,
+ * `X-Phlix-Event` and `X-Phlix-Delivery`. A receiver therefore cannot
+ * authenticate origin: the URL is the only (weak) capability, and anyone
+ * who learns it can forge events to the receiver. This is the ONLY
+ * webhook surface that receives production domain events
+ * (`user.login`, `playback.*`, `library.updated`, … via
+ * {@see WebhookEventSubscriber}). The signed dual-scheme registry is the
+ * separate `/api/v1/admin/webhooks` surface ({@see WebhookDispatcher}).
  */
 final class AdminWebhooksController
 {

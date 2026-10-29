@@ -9,6 +9,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Release runbook: the documented database rollback was fictitious — replaced
+  with the real recovery path (review C05):** `RELEASE_PROCESS.md` "Database
+  Migration Rollback" told operators to run
+  `php scripts/run-migrations.php rollback` and `… migrate:down <version>`.
+  Neither exists — the script parses no arguments at all, so an incident-time
+  "rollback" silently ran the FORWARD migration, the opposite of what was
+  asked. The section now states that no automated rollback exists and documents
+  the verified mechanisms instead: ledger-skipped image rollback, restore via
+  `bin/phlix backup:create`/`backup:list` + the admin-API restore endpoint
+  (checksum-verified, with its honest semantics — post-backup migrations replay
+  forward, the `backups` table itself rolls back), forward-remediation as the
+  supported heal, and the per-migration `## Reversibility` recipes as manual,
+  human-audited escape hatches. Every command named in the replacement was
+  re-verified against the registered `bin/phlix` commands and the router.
+  Docs only; no behavior change.
+
 - **Review-fix lane (2026-10-15) — installer redirect defense gets real e2e
   teeth + temp-file leak on the reject path:** `HttpInstaller::downloadToTemp`
   carried two layered defenses against being redirected into a different

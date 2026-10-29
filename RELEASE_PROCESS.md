@@ -251,13 +251,50 @@ rollback, so don't.)
 
 ### Database Migration Rollback
 
-```bash
-# Rollback last migration
-php scripts/run-migrations.php rollback
+**There is no automated migration rollback.** The commands this section used
+to list — `php scripts/run-migrations.php rollback` and
+`php scripts/run-migrations.php migrate:down <version>` — exist nowhere in the
+codebase: `scripts/run-migrations.php` parses no arguments at all, so typing
+them during an incident ran the **forward** migration anyway — the opposite of
+what was asked. `bin/phlix migrate` has no `down`/rollback command either, and
+`MigrationRunner` has no reverse path. Stray words passed to either entry
+point are silently ignored, not guarded against.
 
-# Rollback to specific version
-php scripts/run-migrations.php migrate:down <version>
-```
+Real recovery, in the order an incident should reach for it:
+
+1. **Roll back the image and leave the schema alone.** The
+   `schema_migrations` ledger and all applied DDL live in the database, not in
+   the image, so a rolled-back image re-runs only its own (older) migration
+   files — every one of them is already in the ledger and is skipped. Recent
+   migrations are additive or drop *dead* indexes (e.g.
+   `migrations/119_drop_redundant_dead_indexes.sql`), which old code tolerates;
+   read the release's migration SQL to confirm before relying on this.
+2. **Restore from a backup.** Take one before the release with
+   `php bin/phlix backup:create --label=pre-v1.2.3` and find its id with
+   `php bin/phlix backup:list`. Restore is admin HTTP API only —
+   `POST /api/v1/admin/backup/{id}/restore`, behind `AdminMiddleware` (valid
+   admin JWT); there is no CLI restore command. Each archive carries a
+   `mysqldump --single-transaction` of all tables, every `*.php` under
+   `config/` (recursive), the `data/` tree, and SSL certs when present; the
+   stored SHA-256 checksum is verified before the import runs. Honest
+   semantics: the dump replaces the tables that existed at backup time
+   (mysqldump's per-table `DROP TABLE IF EXISTS` + `CREATE TABLE`) but does not
+   drop tables created afterwards, the `schema_migrations` ledger travels
+   inside the dump — so once newer code boots, post-backup migrations replay
+   FORWARD against the restored schema — and the `backups` history table
+   itself is rolled back too (later archives survive on disk/S3 but vanish
+   from the list). Pair the restore with the image rollback so the replay
+   matches the code.
+3. **Remediate forward.** The supported fix for a migration that left the
+   schema in a bad shape is a NEW numbered migration that repairs it — the
+   ledger records filenames and applies each once, so history is never
+   rewritten, only followed up.
+4. **Manual reversal, where a migration documents one.** Some migrations ship
+   a `## Reversibility` header with hand-written `ALTER` recipes and a
+   data-shape safety analysis — `migrations/100_user_item_data_profile_id.sql`
+   states in those words that its reverse is *"deliberately NOT automated"*.
+   These are best-effort, human-audited escape hatches to run only against a
+   verified backup, not a command surface.
 
 ## Security Releases
 

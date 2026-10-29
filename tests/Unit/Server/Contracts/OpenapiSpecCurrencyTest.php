@@ -766,6 +766,15 @@ final class OpenapiSpecCurrencyTest extends TestCase
             /** @var array<string, mixed> $responses */
             $responses = is_array($op['responses'] ?? null) ? $op['responses'] : [];
 
+            // Read the adjudicated node here, while $code is still its loop-wide
+            // string type: inside the literal guards below, Psalm narrows $code
+            // to int-ified numeric offsets the yaml shape cannot carry
+            // (InvalidArrayOffset), and $responses[$code] would fail the gate
+            // despite fetching the identical runtime value. is_array() also
+            // fail-safes a scalar node the old bare-??-[] offset would have
+            // crashed on with a TypeError.
+            $adjudicated = is_array($responses[$code] ?? null) ? $responses[$code] : [];
+
             if (!array_key_exists($code, $responses)) {
                 $problems[] = sprintf(
                     '%s does not declare adjudicated success code %s (declared [%s]).',
@@ -781,11 +790,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
                 $problems[] = sprintf('%s declares a ghost "200" on top of the adjudicated %s.', $key, $code);
             }
 
-            if ($code === '204' && array_key_exists('content', $responses[$code] ?? [])) {
+            if ($code === '204' && array_key_exists('content', $adjudicated)) {
                 $problems[] = sprintf('%s declares a body for 204; No Content is empty on the wire.', $key);
             }
 
-            if ($code === '302' && !isset($responses[$code]['headers']['Location']['schema'])) {
+            if ($code === '302' && !isset($adjudicated['headers']['Location']['schema'])) {
                 $problems[] = sprintf('%s declares 302 without a Location header contract.', $key);
             }
 

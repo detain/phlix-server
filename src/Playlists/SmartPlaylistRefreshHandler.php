@@ -24,11 +24,14 @@ use Phlix\Common\Events\ListenerRegistry;
  *
  * ⚠ A smart PLAYLIST itself has nothing to refresh, so this class does not
  * touch one. `smart_playlists` (`migrations/004_smart_playlists.sql`) stores
- * rules only — there is no materialised-results table — and the rules are
- * evaluated ON REQUEST by
- * {@see SmartPlaylistController::preview()} (`POST
- * /api/v1/smart-playlists/{id}/preview`), the only place a smart playlist's
- * items are ever produced. A smart COLLECTION is different: its membership IS
+ * rules only — there is no materialised-results table. The live places a
+ * smart playlist's rules are ever evaluated are this scan-time path and the
+ * on-demand `POST /api/v1/collections/{id}/refresh` (via
+ * {@see \Phlix\Collections\CollectionManager::refreshSmartCollection()});
+ * there is NO HTTP preview surface —
+ * {@see \Phlix\Playlists\SmartPlaylistController::preview()} is an unrouted
+ * handler whose {@see \Phlix\Server\Http\Router::smartPlaylists()} registration
+ * helper is never called. A smart COLLECTION is different: its membership IS
  * persisted, in `collection_items`, so it goes stale after a scan until
  * something re-evaluates it. That is the whole job of this class.
  *

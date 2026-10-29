@@ -899,6 +899,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
             SmartPlaylistRefreshSubscriber::class => autowire()
                 ->constructorParameter('handler', get(SmartPlaylistRefreshHandler::class)),
 
+            // UNROUTED controller (see its class docblock): the container
+            // binding keeps the DI graph complete, but no boot path calls
+            // Router::smartPlaylists(), so nothing serves these handlers.
             SmartPlaylistController::class => factory(static function ($container): SmartPlaylistController {
                 return new SmartPlaylistController(
                     $container->get(Connection::class),

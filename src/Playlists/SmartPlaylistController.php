@@ -18,15 +18,22 @@ use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;
 
 /**
- * REST API controller for smart playlist CRUD operations.
+ * CRUD/preview handlers for smart playlists — currently UNROUTED.
  *
- * Endpoints:
- * - GET    /api/v1/smart-playlists           list all
- * - POST   /api/v1/smart-playlists           create
- * - GET    /api/v1/smart-playlists/{id}      get one
- * - PUT    /api/v1/smart-playlists/{id}      update
- * - DELETE /api/v1/smart-playlists/{id}      delete
- * - POST   /api/v1/smart-playlists/{id}/preview   evaluate without saving
+ * No HTTP surface serves this class: {@see \Phlix\Server\Http\Router::smartPlaylists()}
+ * is the registration helper for it and no shipped boot path ever calls it
+ * (pinned by SmartPlaylistRegistrationGuardTest). Treat the method bodies
+ * below as an unrouted shape, not as live endpoints.
+ *
+ * The shipped smart story lives under collections: a collection carrying a
+ * smart_playlist_id is refreshed by `POST /api/v1/collections/{id}/refresh`
+ * (\Phlix\Server\Http\Controllers\CollectionController::refresh(),
+ * owner-or-admin scoped per the collections ownership law) and by
+ * {@see SmartPlaylistRefreshSubscriber} after a library scan. The
+ * smart_playlists table (migrations/004) has no created_by column, so
+ * registering these handlers as-is would expose unscoped server-wide CRUD;
+ * doing it for real needs a migration, per-actor scoping, and the
+ * openapi/WireGuard cascade first.
  *
  * @since 0.14.0
  */
@@ -44,9 +51,7 @@ final class SmartPlaylistController
     }
 
     /**
-     * List all smart playlists.
-     *
-     * GET /api/v1/smart-playlists
+     * List all smart playlists (UNROUTED — see class docblock).
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters
@@ -64,10 +69,9 @@ final class SmartPlaylistController
     }
 
     /**
-     * Create a new smart playlist.
+     * Create a new smart playlist (UNROUTED — see class docblock).
      *
-     * POST /api/v1/smart-playlists
-     * Body: { name, library_id, rules_json, limit?, sort_by?, sort_desc? }
+     * Handler body shape: { name, library_id, rules_json, limit?, sort_by?, sort_desc? }
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters
@@ -122,9 +126,7 @@ final class SmartPlaylistController
     }
 
     /**
-     * Get a single smart playlist.
-     *
-     * GET /api/v1/smart-playlists/{id}
+     * Get a single smart playlist (UNROUTED — see class docblock).
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters with 'id'
@@ -150,10 +152,9 @@ final class SmartPlaylistController
     }
 
     /**
-     * Update a smart playlist.
+     * Update a smart playlist (UNROUTED — see class docblock).
      *
-     * PUT /api/v1/smart-playlists/{id}
-     * Body: { name?, library_id?, rules_json?, limit?, sort_by?, sort_desc? }
+     * Handler body shape: { name?, library_id?, rules_json?, limit?, sort_by?, sort_desc? }
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters with 'id'
@@ -217,9 +218,7 @@ final class SmartPlaylistController
     }
 
     /**
-     * Delete a smart playlist.
-     *
-     * DELETE /api/v1/smart-playlists/{id}
+     * Delete a smart playlist (UNROUTED — see class docblock).
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters with 'id'
@@ -247,10 +246,9 @@ final class SmartPlaylistController
     }
 
     /**
-     * Preview/evaluate rules without saving.
+     * Preview/evaluate rules without saving (UNROUTED — see class docblock).
      *
-     * POST /api/v1/smart-playlists/{id}/preview
-     * Body: { rules_json?, limit?, sort_by?, sort_desc? }
+     * Handler body shape: { rules_json?, limit?, sort_by?, sort_desc? }
      *
      * @param Request $request HTTP request
      * @param array<string, string> $params Path parameters with 'id'

@@ -71,6 +71,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`/api/v1/smart-playlists` was advertised by src/ docblocks yet registered
+  nowhere — cured to the shipped collections truth and pinned (review server__pm
+  M5):** `Router::smartPlaylists()` (a registration helper no boot path calls) and
+  `SmartPlaylistController`'s class/method docblocks enumerated six REST routes as
+  if served, and the scan-time handler/subscriber docblocks asserted
+  `preview()` was "evaluated ON REQUEST … the only place a smart playlist's items
+  are ever produced" — false on both counts. openapi.yaml carries zero
+  smart-playlists paths (the bijection gate told the honest side) and README had
+  already documented the helper as never-called; the lie lived only in code
+  docs. Docs-only cure follows shipped truth: the live smart story is
+  `POST /api/v1/collections/{id}/refresh` (owner-or-admin scoped) plus the
+  scan-time `SmartPlaylistRefreshSubscriber`; the collections refresh path is
+  re-anchored as the on-demand evaluator in both handlers and in the two test
+  comments that had repeated the claim. The helper stays registered-nowhere (the
+  README text cites it as existing-and-never-called) with its endpoint list
+  reframed to "if called, the helper registers" — registering it for real needs
+  a `created_by` migration and per-actor scoping first, since the controller has
+  no ownership scoping at all and would serve an unscoped server-wide CRUD
+  violating the collections ownership law; the new
+  `tests/Unit/Playlists/SmartPlaylistRegistrationGuardTest` pins exactly that
+  gated-decision posture: zero `->smartPlaylists(` call sites across src/ +
+  start.php, no phantom route claims in the controller/handlers/provider, the
+  unrouted markers present, and no smart-playlists path in the spec. Measured:
+  4 of 6 pins red at the parent (the two state-pins green by design); mutation
+  probes — re-adding an endpoint table line reddens the controller pin, planting
+  a call site reddens the helper pin; both restored green. Zero behavioral
+  change; every touched test is mock-based, so no database was needed.
 - **The WS :8097 handshake now applies the same user-liveness law every HTTP
   request passes (review server__seceng2 M1, lane M-SERVER-35):** the handshake
   gate in `SyncPlayAuthMiddleware::authenticateConnection()` was crypto +
@@ -111,7 +138,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   phpstan both corpora 0 errors, psalm zero new (90 pre-existing local
   swoole-absence errors, none in touched files), phpcs PSR12 src +
   phpcs-tests.xml + raw PSR12 on the new test all 0/0.
-
 - **The fabricated "no backup UI" claims are corrected to bundle truth, and the
   Backups-section rider of M22 is disclosed (review server__enduser M22 r2):** the r1
   REWORK found the README Backups section — which rode `b865aa94` unannounced in that
@@ -135,7 +161,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   parent truth (three distinct commands in four invocations; `list` is a Symfony
   built-in, not one of the twenty). Docs + test-pin only: no runtime code, no behavior,
   no wire change; `EXPECTED_PHP_FILES` census untouched (zero PHP files added).
-
 - **`install.sh` aborted every run at the connection-budget step on a stray heredoc
   terminator — the measured cure of the M24b installer rider (review server__dba2 M24c):**
   the shipped text carried a bare `SQL` line directly after the SET-PERSIST block's

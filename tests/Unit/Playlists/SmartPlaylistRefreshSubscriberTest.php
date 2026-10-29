@@ -276,9 +276,9 @@ final class SmartPlaylistRefreshSubscriberTest extends TestCase
      * once per smart playlist and DISCARD the result. That was pure cost: the
      * engine persists nothing (no `query()`, no property mutation), there is no
      * materialised-results table in `migrations/004_smart_playlists.sql`, the
-     * rules are evaluated on request by `SmartPlaylistController::preview()`,
-     * and `CollectionManager::refreshSmartCollection()` re-evaluates them itself
-     * anyway. Each discarded call was a full-library walk
+     * rules are evaluated on demand by the collections refresh path
+     * (`CollectionManager::refreshSmartCollection()` — `SmartPlaylistController::preview()`
+     * itself is unrouted) anyway. Each discarded call was a full-library walk
      * (`SELECT * FROM media_items … LIMIT 500 OFFSET ?` per batch, rule-eval per
      * row) on the single-threaded library-scan worker's event loop.
      *

@@ -698,8 +698,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * README-claim detector pinning the 422 guard's reason tokens, fallback
      * event and governed keys to the enforcing constants. Measured from the
      * phpunit red (1991), not predicted.
+     * Re-pinned 1991→1993 by the M-SERVER-32b smart-playlist phantom-advertise
+     * cure (2026-10-29): +2 — tests/Unit/Playlists/SmartPlaylistRegistrationGuardTest.php
+     * (this lane: the source-scan pin that /api/v1/smart-playlists stays unrouted
+     * and undocumented-as-served) and tests/Unit/Server/WebSocket/WsHandshakeLivenessParityTest.php
+     * (the M35 ws-liveness rider, which rode 8b34959b without its own rung —
+     * recorded, not reconstructed, per the 8b849b0b precedent). Measured from the
+     * phpunit red (1993), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1991;
+    private const EXPECTED_PHP_FILES = 1993;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -74,8 +74,9 @@ class SmartPlaylistRefreshTest extends TestCase
      * This used to assert that the handler called
      * `SmartPlaylistEngine::evaluateOnScan()` once per playlist. It did, and
      * threw the result away: the engine persists nothing, `smart_playlists` has
-     * no materialised-results table, the rules are evaluated on request by
-     * `SmartPlaylistController::preview()`, and
+     * no materialised-results table, the rules are evaluated on demand by the
+     * collections refresh path (`CollectionManager::refreshSmartCollection()` —
+     * `SmartPlaylistController::preview()` itself is unrouted), and
      * `CollectionManager::refreshSmartCollection()` re-evaluates them itself.
      * The call was a discarded full-library walk per playlist, so it was removed
      * and this test now pins the behaviour that survives it.

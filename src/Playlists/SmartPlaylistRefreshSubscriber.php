@@ -33,8 +33,10 @@ use Workerman\Timer;
  * hookup, and that refresh is the ONLY production behaviour it changes.
  *
  * ⚠ It does NOT make smart PLAYLISTS auto-refresh — a smart playlist has no
- * stored membership to refresh. It holds rules only, and they are evaluated on
- * request by {@see SmartPlaylistController::preview()}. A library whose smart
+ * stored membership to refresh. It holds rules only, evaluated at scan time
+ * (this path) and on demand by `POST /api/v1/collections/{id}/refresh`; the
+ * unrouted {@see SmartPlaylistController::preview()} handler has no HTTP
+ * surface behind it. A library whose smart
  * playlists have no linked collection is unaffected by this wiring.
  *
  * ## Flow (enqueue on the event, drain on a timer)

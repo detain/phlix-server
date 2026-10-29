@@ -855,7 +855,22 @@ class Router
     }
 
     /**
-     * Registers the smart playlist API routes.
+     * Registration helper for a standalone smart-playlist API — NOT CALLED by
+     * any shipped boot path (pinned by SmartPlaylistRegistrationGuardTest).
+     *
+     * There is NO live /api/v1/smart-playlists surface. The shipped smart
+     * story lives under collections: a collection carrying a
+     * smart_playlist_id is re-evaluated by POST /api/v1/collections/{id}/refresh
+     * (\Phlix\Server\Http\Controllers\CollectionController::refresh(),
+     * owner-or-admin scoped) and on scan completion by
+     * {@see \Phlix\Playlists\SmartPlaylistRefreshSubscriber}. smart_playlist_id
+     * rows are created out-of-band; the smart_playlists table carries no
+     * created_by column, so calling this helper as-is would serve an
+     * unscoped server-wide CRUD surface that violates the collections
+     * ownership law — registering it for real requires a migration, per-actor
+     * scoping, and the openapi/WireGuard cascade, not just a call here.
+     *
+     * If called, the helper registers:
      *
      * GET    /api/v1/smart-playlists           — list all smart playlists
      * POST   /api/v1/smart-playlists           — create smart playlist

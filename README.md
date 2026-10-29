@@ -136,6 +136,8 @@ Every environment variable the server process reads is inventoried in the defini
 - **JavaScript Client**: ApiClient helper with auth, library, and player helpers
 - **Continue Watching**: Track and display in-progress media
 - **Library Browser**: Browse media by library with item counts
+- **Collections & Playlists**: Member-owned media lists with a `created_by` visibility model — see
+  [Collections and Playlists](#collections-and-playlists-member-owned-lists)
 
 ### Authentication & Security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
@@ -311,6 +313,54 @@ slips into a fresh server just because it is reachable.
   it yet. Continue Watching and Next Up are derived from the `playback_state` rows written by
   progress reporting — the server applies no automatic progress-threshold completion detection and
   keeps no per-profile watch-time statistics
+
+### Collections and Playlists (member-owned lists)
+
+Collections are user-curated media lists — the feature clients call **Playlists**. The HTTP surface,
+the `created_by` ownership model and the OpenAPI paths all shipped before this paragraph existed;
+everything below is read from the code at this tip. Routes are registered in
+`Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2190-2218`) under
+`[AuthMiddleware]`, served by `src/Server/Http/Controllers/CollectionController.php`; each registration's
+exact line is cited in the [HTTP Endpoints](#http-endpoints) table rows below.
+
+- **CRUD loop**: `POST /api/v1/collections` creates — body `{name, library_id}` are both required
+  non-empty strings (`400` otherwise), with optional `smart_playlist_id`/`parent_id`/`sort_order` —
+  and returns `201 {collection}` (`create()`, `CollectionController.php:116-163`). **`POST /api/v1/playlists`
+  is an alias of that same registration** (`Application.php:2210`) — there is no separate playlist table.
+  Reads: `GET /api/v1/collections` (visible-to-actor list), `GET /api/v1/collections/{id}`
+  (`{collection, items, total}`), `GET /api/v1/libraries/{libraryId}/collections` (list scoped to one
+  library). Mutation: `PUT /api/v1/collections/{id}` partial-merges the metadata, `DELETE` removes the
+  collection, `POST`/`DELETE /api/v1/collections/{id}/items/{mediaItemId}` add/remove one item, and
+  `POST .../bulk-add` takes `{media_item_ids: [...]}` (required non-empty, else `400`) reporting
+  `{message, added_count}`.
+- **Ownership / visibility (`created_by`)**: migration `112_collections_created_by.sql` added the
+  nullable column + `idx_col_owner` and backfilled pre-owner legacy rows — COALESCE(earliest active
+  admin, earliest user of any status) — so nothing was orphaned; with no users at all rows stay `NULL`.
+  Members **see** their own rows plus legacy `created_by = NULL` rows; **active** admins
+  (`is_admin = 1 AND status = 'active'` — never the soft flag alone, and an unwired repository fails
+  closed to non-admin) see everything (`actorSees()`, `CollectionController.php:558`). **Writes are
+  stricter**: only the row's owner may update/delete/add-items/refresh; foreign and legacy-NULL rows
+  are admin-only (`actorManages()`, `:573`). `PUT` never reads `created_by` from the body — ownership
+  is immutable, a rename never re-stamps the anchor (`:264-266`).
+- **404-not-403 rationale**: every ownership miss answers the byte-identical
+  `404 {error: "Collection not found"}` that a genuinely absent id produces (`collectionNotFound()`,
+  `:585`; class law `:52-54`). A distinct `403` would make the endpoint an existence oracle — probes
+  could enumerate which collection ids exist by the 403-vs-404 delta — so refusal is made
+  indistinguishable from absence, mirroring the syncplay room-visibility precedent the docblock cites.
+- **Smart collections**: a collection carrying a `smart_playlist_id` is *smart* — its membership is
+  materialized in `collection_items` and re-evaluated against the playlist's rules after library scans
+  (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:899`, subscribed at
+  `start.php:1276`), or on demand via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
+  a smart collection" on a plain row, `200 {message}` on a smart one). Honest gap: **the backing
+  rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper exists in
+  `Router.php:872` but is never called, so a `smart_playlist_id` must reference a pre-existing
+  `smart_playlists` row created out-of-band.
+- **UI truth at this tip**: the served web SPA bundle (pinned `@phlix/ui` v0.99.10 in
+  `web-ui/package.json:15`) exposes the **admin** Collections page (`/app/admin/collections`); the
+  member-facing `/app/playlists` page lives in `@phlix/ui` master and lands in this server's bundle
+  only at the next web-ui re-pin. Either way clients code against the REST contract above —
+  `openapi.yaml` carries all paths (`/api/v1/collections*` from `:5738`) and
+  `OpenapiSpecCurrencyTest` machine-checks the route↔spec bijection.
 
 ### Live TV & DVR (admin-managed)
 LiveTV ships as operator tooling. The entire control plane — tuners, channels, guide,
@@ -1059,6 +1109,16 @@ the next worker boot rather than the next request.
 | GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |
 | GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
 | PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
+| GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application.php:2196`) — see [Collections and Playlists](#collections-and-playlists-member-owned-lists) |
+| GET | `/api/v1/collections/{id}` | One collection with its items → `{collection, items, total}`; unknown **or** not visible to the actor → byte-identical `404 {error:"Collection not found"}` (`:2197`) |
+| GET | `/api/v1/libraries/{libraryId}/collections` | Collections scoped to one library, same visibility law → `{collections:[...]}` (`:2200`) |
+| POST | `/api/v1/collections` | Create a collection — body `{name: string (required non-empty), library_id: string (required non-empty), smart_playlist_id?, parent_id?, sort_order?}` → `201 {collection}` with `created_by` stamped to the actor server-side; `400` on a missing/invalid `name`/`library_id` (`:2203`). **`POST /api/v1/playlists` (`:2210`) is an alias to this same handler** — no separate playlist table |
+| PUT | `/api/v1/collections/{id}` | Partial-merge update of name/description/sort fields — owner or (for foreign/legacy-NULL rows) active admin; `created_by` is never read from the body (ownership immutable); miss → `404` as absence (`:2204`) |
+| DELETE | `/api/v1/collections/{id}` | Delete a collection — owner or active admin → `200 {message:"Collection deleted successfully"}`; miss → `404` (`:2205`) |
+| POST | `/api/v1/collections/{id}/items/{mediaItemId}` | Add one item to the collection — owner-or-admin gate; `404` identical to absence on any visibility miss (`:2213`) |
+| DELETE | `/api/v1/collections/{id}/items/{mediaItemId}` | Remove one item — same gate (`:2214`) |
+| POST | `/api/v1/collections/{id}/bulk-add` | Add many items — body `{media_item_ids: string[] (required, non-empty)}` → `{message, added_count}`; `400` missing/empty; owner-or-admin gate (`:2217`) |
+| POST | `/api/v1/collections/{id}/refresh` | Re-evaluate a **smart** collection (one carrying `smart_playlist_id`) against its playlist rules → `200 {message:"Smart collection refreshed"}`; `400` "Collection is not a smart collection" on a plain row; owner-or-admin (`:2218`) |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only. A write-set touching the five `auth.<method>.enabled` toggles is guard-checked first: refused transitions answer `422` + machine `reason` and persist **nothing** (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |

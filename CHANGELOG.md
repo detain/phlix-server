@@ -45,6 +45,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The shipped Collections/Playlists feature gains its README documentation (review
+  server__pm M28):** the whole CRUD surface — 11 registrations in
+  `Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2194-2218`,
+  incl. the `POST /api/v1/playlists` alias at `:2210`), the `created_by` ownership
+  docblock at `:2162-2189`, the `112_collections_created_by.sql` migration and every
+  OpenAPI path — shipped, yet README.md mentioned the feature nowhere: a member could
+  not discover that lists are owner-scoped (`actorSees()` own+legacy-NULL,
+  `actorManages()` owner-only with foreign/legacy rows admin-only), that every ownership
+  miss is the byte-identical `404 {error:"Collection not found"}` of genuine absence by
+  design (a distinct 403 would be an existence oracle), or that `POST /api/v1/playlists`
+  aliases the same create handler. README gains a feature bullet, a
+  "Collections and Playlists (member-owned lists)" section (CRUD loop, ownership law,
+  404-not-403 rationale, smart-collection refresh wiring, and the honest gaps: the
+  unrouted `/api/v1/smart-playlists` helper in `Router.php:872` and the v0.99.10-pinned
+  bundle serving only the admin Collections page), and 11-row coverage in the HTTP
+  Endpoints table with per-registration line cites. Docs only — no code, no behavior,
+  no wire change; the spec↔route bijection stays machine-checked by the existing
+  currency tests. The phlix-docs operator page the review also asks for lives in that
+  repo and is handed to closeout.
+
 - **The shipped nginx template 404ed every SPA asset; behind `install-nginx.sh` the web
   client never booted (review server__fedev M25).** `reverse-proxy/nginx/phlix.conf` carried
   a `location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$` block with

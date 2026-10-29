@@ -129,18 +129,40 @@ final class WsHandshakeLivenessParityTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: array{status: ?string, tokensNotValidAfter: int}|null, 1: bool}>
-     *         auth-state script => expected verdict (live on HTTP ⇒ live on WS).
+     * @return array<string, array{0: callable(): ?array, 1: bool}>
+     *         runtime auth-state script => expected verdict (live on HTTP ⇒ live on WS).
+     *         (State shape: array{status: ?string, tokensNotValidAfter: int}|null.)
+     *
+     * The state is built by a CLOSURE evaluated at test-run time, never a
+     * frozen dataset array: a provider carrying an absolute `time() + 10`
+     * watermark goes stale under paraunit whenever the gap between dataset
+     * collection and the body's token mint exceeds the cushion — the token's
+     * `iat` then post-dates the frozen watermark, M-1 correctly stops
+     * revoking, and the row flips (measured red on CI run 40969698844,
+     * attempt 1 of this very lane — the cure keeps watermark-vs-iat inside
+     * one second deterministically, at any queue delay).
      */
     public static function livenessMatrix(): array
     {
         return [
-            'active, no watermark' => [['status' => 'active', 'tokensNotValidAfter' => 0], true],
-            'disabled' => [['status' => 'disabled', 'tokensNotValidAfter' => 0], false],
+            'active, no watermark' => [
+                static fn(): array => ['status' => 'active', 'tokensNotValidAfter' => 0],
+                true,
+            ],
+            'disabled' => [
+                static fn(): array => ['status' => 'disabled', 'tokensNotValidAfter' => 0],
+                false,
+            ],
             // H-1: row gone => getAuthState null => status null => reject.
-            'deleted (no row)' => [null, false],
-            // M-1: watermark set ahead of the token's iat (fresh `time()`).
-            'revoked watermark' => [['status' => 'active', 'tokensNotValidAfter' => time() + 10], false],
+            'deleted (no row)' => [
+                static fn(): null => null,
+                false,
+            ],
+            // M-1: watermark evaluated the same instant as the token mint.
+            'revoked watermark' => [
+                static fn(): array => ['status' => 'active', 'tokensNotValidAfter' => time() + 10],
+                false,
+            ],
         ];
     }
 
@@ -154,9 +176,11 @@ final class WsHandshakeLivenessParityTest extends TestCase
      *
      * @dataProvider livenessMatrix
      */
-    public function testHttpAndWsHandshakeVerdictsMatchOverTheLivenessMatrix(?array $authState, bool $expectLive): void
-    {
-        $manager = $this->manager($authState);
+    public function testHttpAndWsHandshakeVerdictsMatchOverTheLivenessMatrix(
+        callable $stateScript,
+        bool $expectLive
+    ): void {
+        $manager = $this->manager($stateScript());
         $token = $this->jwt()->createAccessToken('user-m35');
 
         // HTTP side of the parity: the law itself.

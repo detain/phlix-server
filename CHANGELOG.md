@@ -9,6 +9,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Vendored sample re-propagated after the inverse-role gloss (review
+  theme-sample__writer M06 propagation):** upstream's payload gained
+  a `--accent-text` / `--text-on-accent` teaching gloss (the pair the green
+  sibling cohort misread) in its comment blocks only — re-vendored
+  byte-identical here. Deliberately NO pin rotations this time: the golden
+  regenerated to the same md5 (`5fd7fad5…`) because comments never reach the
+  wire, which is the cross-repo pin discipline demonstrating it only bites on
+  real payload movement.
+
 - **`--text-faint` raised from decoration-grade to AA ink, vendored sample
   re-propagated, golden re-pinned (review theme-sample__webux M04):** the
   standalone sample shipped `--text-faint: #465061`, which phlix-ui's

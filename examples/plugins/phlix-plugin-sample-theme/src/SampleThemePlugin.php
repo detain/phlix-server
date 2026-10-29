@@ -147,6 +147,11 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     // Accent ramp — the six semantic tokens are how a plugin
                     // re-hues the UI. The `--amber-*` ramp they are derived
                     // from in the built-ins is theme-invariant and NOT settable.
+                    // `--accent-text` is the accent hue used AS FOREGROUND —
+                    // text and icons painted on `--bg`/`--surface`, so it has
+                    // to clear AA body contrast (4.5:1) there. The built-ins
+                    // reach for amber-500 by the same rule; #8fbcff is this
+                    // theme's blue doing that job on the near-black base.
                     '--accent' => '#6ea8fe',
                     '--accent-hover' => '#8fbcff',
                     '--accent-active' => '#4d8ce0',
@@ -171,6 +176,13 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     // AA body contrast (4.5:1) on the composited input
                     // background; a law test computes it from these hexes.
                     '--text-faint' => '#6e7d94',
+                    // The INVERSE of `--accent-text`, and a different token:
+                    // this is the ink placed ON accent fills (button labels,
+                    // selected chips) — not accent-coloured text. Set the two
+                    // equal and every filled button renders accent-on-accent
+                    // at ≈1:1; several sibling themes in this estate shipped
+                    // exactly that misread. Near-black here mirrors the
+                    // built-ins' ink-on-amber.
                     '--text-on-accent' => '#05060a',
 
                     // Borders.

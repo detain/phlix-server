@@ -71,6 +71,47 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The WS :8097 handshake now applies the same user-liveness law every HTTP
+  request passes (review server__seceng2 M1, lane M-SERVER-35):** the handshake
+  gate in `SyncPlayAuthMiddleware::authenticateConnection()` was crypto +
+  `type === 'access'` + string-`sub` only, and its own docblock disclosed the
+  gap as *deferred* on the premise that "no UserRepository/DB handle is injected
+  at the :8097 fork" — disproved on disk: `start.php` §4a builds the full
+  container inside that fork and already resolves `UserRepository` there. A
+  disabled or deleted account's access token, or one at/before the user's
+  token-revocation watermark (logout-everywhere, password change, admin bump),
+  therefore authenticated `:8097` for the token's whole TTL while the identical
+  token was refused by every HTTP request through
+  `AuthManager::validateAccessToken()` (`src/Auth/AuthManager.php`, consumed at
+  `RequestAuthenticator.php:77-78` — S1 active-only, H-1 deleted-null, M-1
+  watermark-vs-iat, 5s cached-state cadence). The cure is identity-of-code-path,
+  not a re-implementation: the middleware gains an optional `AuthManager` seam
+  (third constructor parameter; null keeps the prior crypto-only law for direct
+  test/dev construction), the wired handshake additionally requires
+  `validateAccessToken($token) !== null` for the very same credential, and
+  `start.php` supplies the container's `AuthManager` — resolved unwrapped so a
+  container failure fails the WS boot loudly rather than silently downgrading
+  the gate. Refusals take the existing uniform false→pre-101-close path
+  (`WebSocketServer::onWebSocketConnect`): zero new wire codes, registry md5
+  40c1da48 untouched. Honest bound documented in the gate's docblock: liveness
+  is checked at the HANDSHAKE — a connection accepted while live and deactivated
+  afterwards stays open until disconnect (HTTP re-checks per request; an open
+  socket has no next request to gate); a revocation reaper was deliberately NOT
+  gold-plated, and the cheap per-message probe through the same cached seam is
+  recorded as a rider proposal in the fixlog. Legacy `onConnect()` (deprecated,
+  unwired) and `validateTokenStatic()` (instanceless public rail) stay
+  crypto + access-type verdicts, now explicitly labeled as such. New
+  `WsHandshakeLivenessParityTest` (7 tests/26 assertions) pins the four-state
+  matrix with HTTP/WS verdicts asserted equal per row, uniform-refusal against
+  the invalid-token path, and the active control; red-on-parent measured at
+  cc2e9556 (5 failures — the parent silently ignored the seam and accepted
+  disabled/deleted/revoked); a guard-branch mutation (liveness condition
+  short-circuited) reddens exactly the parity rows and leaves the pre-existing
+  R17-02 suites green. Gates: targeted WebSocket directory 107/410 exact,
+  phpstan both corpora 0 errors, psalm zero new (90 pre-existing local
+  swoole-absence errors, none in touched files), phpcs PSR12 src +
+  phpcs-tests.xml + raw PSR12 on the new test all 0/0.
+
 - **The fabricated "no backup UI" claims are corrected to bundle truth, and the
   Backups-section rider of M22 is disclosed (review server__enduser M22 r2):** the r1
   REWORK found the README Backups section — which rode `b865aa94` unannounced in that

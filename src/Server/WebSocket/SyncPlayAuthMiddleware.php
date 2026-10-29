@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\WebSocket;
 
 use Workerman\Connection\TcpConnection;
+use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
@@ -94,6 +95,24 @@ class SyncPlayAuthMiddleware
     private JwtHandler $jwtHandler;
 
     /**
+     * HTTP-parity liveness seam: the SAME {@see AuthManager} the HTTP rail
+     * authenticates through ({@see \Phlix\Server\Http\RequestAuthenticator}), or
+     * null when unwired.
+     *
+     * When wired, every handshake credential must additionally survive
+     * {@see AuthManager::validateAccessToken()} — user status active (S1),
+     * deleted-account null (H-1), token-revocation watermark vs `iat` (M-1),
+     * all through the same 5s LRU cache HTTP uses. When null (direct
+     * construction in tests, or a dev boot without the container), the gate
+     * keeps its crypto + `type === 'access'` law and NOTHING more — which is
+     * exactly why the resident `start.php` wiring supplies it: without the
+     * seam, a revoked identity would stay live on :8097 for the token's TTL.
+     *
+     * @var AuthManager|null
+     */
+    private ?AuthManager $authManager;
+
+    /**
      * Whether authentication is required.
      *
      * If true, connections without valid tokens will be closed.
@@ -115,6 +134,11 @@ class SyncPlayAuthMiddleware
      *
      * @param string $jwtSecret The JWT secret key for validation
      * @param bool $requireAuth Whether to require authentication (default: true)
+     * @param AuthManager|null $authManager Optional HTTP-parity liveness seam —
+     *   the resident `start.php` path supplies the container's AuthManager so
+     *   the handshake enforces the same active/deleted/revocation law every
+     *   HTTP request passes; without it only crypto + access-type are checked
+     *   (tests/dev direct construction).
      *
      * @example
      * ```php
@@ -125,10 +149,11 @@ class SyncPlayAuthMiddleware
      * $middleware = new SyncPlayAuthMiddleware('your-secret-key', false);
      * ```
      */
-    public function __construct(string $jwtSecret, bool $requireAuth = true)
+    public function __construct(string $jwtSecret, bool $requireAuth = true, ?AuthManager $authManager = null)
     {
         $this->jwtHandler = new JwtHandler($jwtSecret);
         $this->requireAuth = $requireAuth;
+        $this->authManager = $authManager;
         $this->logger = LoggerFactory::get(LogChannels::WEBSOCKET);
     }
 
@@ -150,17 +175,26 @@ class SyncPlayAuthMiddleware
           * - Invalid/expired token, or a token without a string `sub`: rejected.
      * - Valid token whose `type` claim is not `access` (e.g. the 7-day refresh
      *   token, which is otherwise signing-valid): rejected (R17-02).
-     * - Valid access token: marks the connection authenticated with the derived
-     *   user id and returns true.
+     * - Valid access token for an account that is not `active`, whose row no
+     *   longer exists (deleted), or whose `iat` falls at/before the user's
+     *   token-revocation watermark: rejected when the {@see $authManager}
+     *   liveness seam is wired (the resident `:8097` path) — the EXACT
+     *   {@see AuthManager::validateAccessToken()} every HTTP request passes
+     *   through `RequestAuthenticator`, including its 5s cached-state cadence.
+     * - Valid, live access token: marks the connection authenticated with the
+     *   derived user id and returns true.
      *
-     * Account-liveness (deferred, honest note): this middleware holds only the
-     * HS256 secret — no UserRepository/DB handle is injected at the :8097 fork,
-     * and minting one here would couple the auth gate to pool state it does not
-     * own. A token for a user deactivated AFTER issuance therefore still
-     * authenticates the handshake until the token's own expiry (≤1h access TTL);
-     * per-message authorization rails that DO carry repository access remain
-     * the enforcement point. A cheap liveness probe (e.g. a user-version cache
-     * bumped on deactivate) is the follow-up if the 1h window is ever tightened.
+     * Account-liveness bound (honest, resident-worker law): the check runs at
+     * the HANDSHAKE, mirroring HTTP's per-request re-check as closely as a
+     * long-lived socket allows. A connection accepted while its identity was
+     * live and deactivated afterwards stays open until it disconnects — HTTP
+     * revokes such a token on the very next request; the WS rail has no next
+     * request to gate. Deliberately NOT shipped here: a revocation reaper
+     * sweeping open sockets (out of scope; the per-message probe through the
+     * same cached seam is the cheap follow-up if the window is ever tightened —
+     * see the fixlog rider note). On the unwired direct-construction path
+     * (tests/dev, no container) the seam is absent and the gate keeps only the
+     * crypto + access-type law.
      *
      * Unlike {@see onConnect()} this does NOT read `$_GET` (empty/stale at the
      * TCP-accept stage under Workerman) and does NOT stash the user id in a
@@ -220,6 +254,26 @@ class SyncPlayAuthMiddleware
                 return false;
             }
 
+            // HTTP-parity liveness law: when the AuthManager seam is wired (the
+            // resident :8097 path), the same token must additionally survive the
+            // EXACT call every HTTP request passes — active status (S1),
+            // deleted-account null (H-1), revocation watermark vs iat (M-1),
+            // through the same 5s cached-state cadence. Re-verification of the
+            // signature inside is negligible (HS256 + cache hit) and buys
+            // identity-of-code-path: this gate cannot drift from the HTTP gate
+            // because it IS the HTTP gate. Failure rejections take the SAME
+            // false→pre-101-close path as an invalid token — no new wire codes.
+            if ($this->authManager !== null && $this->authManager->validateAccessToken($token) === null) {
+                $this->logger?->warning(
+                    'WS connection rejected: account not live (disabled, deleted, or token revoked)',
+                    [
+                        'remote_ip' => $remoteIp,
+                        'user_id' => $sub,
+                    ]
+                );
+                return false;
+            }
+
             $connection->setAuthenticated(true, $sub);
 
             $this->logger?->info('WS connection authenticated', [
@@ -243,7 +297,9 @@ class SyncPlayAuthMiddleware
      *   handshake, where the query string is not yet populated under Workerman, and
      *   stashes the user id in `$_GET`. Use {@see authenticateConnection()} from the
      *   handshake-stage {@see WebSocketServer::onWebSocketConnect} hook instead —
-     *   that is the wired, correct-lifecycle auth path.
+     *   that is the wired, correct-lifecycle auth path. This rail carries the
+     *   crypto + access-type law only; the user-liveness seam lives on
+     *   {@see authenticateConnection()} (it is the wired handshake).
      *
      * Validates the token from `?token=...` query parameter and either:
      * - Closes the connection with code 4001 if token is invalid/expired
@@ -354,6 +410,12 @@ class SyncPlayAuthMiddleware
      * Check if a token is valid without throwing.
      *
      * Convenience method for checking token validity.
+     *
+     * Scope: this is a CRYPTO + access-type verdict only. It holds no secret
+     * beyond `$jwtSecret` and no AuthManager, so it CANNOT apply the
+     * user-liveness law (active/deleted/revocation watermark) that the wired
+     * handshake gate enforces — do not treat a non-null result as
+     * "this token authenticates a WS handshake today".
      *
      * @param string $token The JWT token to validate
      * @return array{sub: string}|null User ID array on success, null on failure

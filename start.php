@@ -737,6 +737,20 @@ try {
         // Empty (JWT_SECRET unset — dev) → anonymous connections allowed.
         $wsConfig['jwt_secret'] = $wsConfig['jwt_secret'] ?? (getenv('JWT_SECRET') ?: '');
 
+        // M35 (seceng2 M1): the handshake gate applies the SAME user-liveness
+        // law every HTTP request passes through RequestAuthenticator —
+        // active status (S1), deleted-account null (H-1), revocation watermark
+        // vs iat (M-1) — by routing the credential through this very
+        // AuthManager. The container is already authoritative in THIS fork
+        // (SyncPlayManager + snapshot wiring above resolve from it), and
+        // AuthManager's status probe is the 5s cached single-PK lookup HTTP
+        // uses — no new cache layer, no cadence invented here. Resolved
+        // UNWRAPPED on purpose: like the UserRepository get above, a
+        // container failure must fail the WS boot loudly rather than
+        // silently downgrading the auth gate to crypto-only.
+        /** @var \Phlix\Auth\AuthManager $wsAuthManager */
+        $wsAuthManager = $container->get(\Phlix\Auth\AuthManager::class);
+
         /** @var array<string, mixed> $wsConfig */
         // Inject THIS worker ($wsWorker) — the one that actually listens on :8097
         // — so WebSocketServer binds its connection-lifecycle callbacks
@@ -746,7 +760,7 @@ try {
         // so the pool would stay empty and pongs would never reach recordPong() —
         // breaking S-F28 half-open detection and SyncPlay routing in the resident
         // path.
-        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler, $w);
+        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler, $w, $wsAuthManager);
         $wsServer->setSyncPlayManager($syncPlayManager);
 
         // SV-4.15(h): inject the per-IP WS-connect limiter so onWebSocketConnect

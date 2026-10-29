@@ -14,6 +14,7 @@ namespace Phlix\Server\WebSocket;
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request;
+use Phlix\Auth\AuthManager;
 use Phlix\Common\Http\TrustedProxyResolver;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
@@ -132,6 +133,13 @@ class WebSocketServer
      *        that never listens, so the pool is never populated and half-open
      *        detection (S-F28) cannot function. When null, the server owns a
      *        freshly created worker (standalone / test / {@see run()} path).
+     * @param AuthManager|null $authManager Optional HTTP-parity liveness seam
+     *        forwarded to the handshake authenticator (M35): the resident
+     *        `start.php` path passes the container's AuthManager so a disabled,
+     *        deleted, or revocation-watermarked account's otherwise-valid access
+     *        token is refused at the handshake — the same law every HTTP request
+     *        passes. Null (direct construction, tests, dev) keeps the
+     *        crypto + access-type law only.
      *
      * @example
      * ```php
@@ -142,8 +150,12 @@ class WebSocketServer
      * $server->run();
      * ```
      */
-    public function __construct(array $config, ?MessageHandler $handler = null, ?Worker $worker = null)
-    {
+    public function __construct(
+        array $config,
+        ?MessageHandler $handler = null,
+        ?Worker $worker = null,
+        ?AuthManager $authManager = null
+    ) {
         $this->config = $config;
         $this->connections = ConnectionPool::getInstance();
         $this->handler = $handler ?? new MessageHandler($this->connections);
@@ -154,7 +166,7 @@ class WebSocketServer
         // connections are allowed anonymously (dev).
         $jwtSecret = $this->config['jwt_secret'] ?? null;
         if (is_string($jwtSecret) && $jwtSecret !== '') {
-            $this->authMiddleware = new SyncPlayAuthMiddleware($jwtSecret, true);
+            $this->authMiddleware = new SyncPlayAuthMiddleware($jwtSecret, true, $authManager);
         }
 
         if ($worker !== null) {

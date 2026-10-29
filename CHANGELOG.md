@@ -9,6 +9,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **io_uring doctrine cured to the repo's own measurements — four prose sites
+  and the flag table (review server__devops M12):** `docker/Dockerfile.base`'s
+  S200 note is the canonical measurement record (io_uring is default OFF in
+  the container via `ARG SWOOLE_IOURING=0`; where enabled, TWO stacked
+  blockers are FATAL with exit 1 — Docker's default seccomp profile blocks
+  `io_uring_setup/enter/register`, and Swoole 6.2.1's io_uring path rejects
+  any kernel below 6.9 — with no silent epoll fallback once the flags are
+  compiled in), yet four sites still repeated the refuted pre-S200 doctrine
+  and one section pointed at the wrong file. Cured, prose-only:
+  (1) `docker/README.md` "Swoole build flags" now attributes the swoole
+  compile to `docker/Dockerfile.base`, not `docker/Dockerfile` (whose own
+  header says editing it does NOT recompile extensions);
+  (2) the two io_uring flag-table rows point at the RIGHT knob — the
+  build-arg `SWOOLE_IOURING` (there is no runtime ini or env switch), not a
+  "kernel 5.6+ at runtime" requirement;
+  (3) the "io_uring caveat" paragraph replaced "silently fall back to
+  epoll … dead code — they don't hurt" with the measured failure semantics
+  and an honest recommendation (leave the default OFF; enabling requires
+  BOTH seccomp permission AND kernel >= 6.9, and unconfined seccomp alone
+  just swaps one fatal for the other);
+  (4) both installers' comments (`install/systemd.sh` header + configure
+  block, `scripts/install.sh` phlix_build_swoole note) supersede their
+  "kernel >= 5.6 / fall back to epoll" sentences with the 6.9 floor, state
+  the host divergence honestly (the seccomp blocker is container-only; the
+  kernel floor is NOT), and `install/systemd.sh`'s false "Flags copied
+  verbatim … source of truth" claim is re-worded to name the deliberate
+  unconditional-io_uring divergence (matching the accurate S163 note its
+  full-installer sibling already carried). No behavior changed anywhere:
+  Dockerfiles and the configure blocks are untouched; the open code question
+  whether the HOST installers should kernel-gate the flags below 6.9 is
+  reported to the orchestrator as a rider, not silently decided.
+  Historic CHANGELOG entries kept verbatim (house precedent — this entry is
+  the fold-in). Docs + shell comments only; `bash -n` both installers,
+  `composer validate --strict` OK, and the three file-parsing guards
+  (`DockerEntrypointTest`, `ThirdPartyClonePinGuardTest`,
+  `PublicFrontControllerRemovalGuardTest`) hold at 117 tests / 967
+  assertions.
+
 - **The minimal systemd installer now produces a BOOTING service, and the
   placeholder-signing-key guard is lifted from docker-only to every carrier
   (review server__devops M11):** the pre-M11 `/etc/phlix/env` template in

@@ -244,9 +244,11 @@ inside the built image is now an assertion in `scripts/docker-boot-smoke.sh`.
 
 ## Swoole build flags
 
-`docker/Dockerfile` compiles swoole from source against the Alpine
-runtime. The compile-time `./configure` flags are intentional — do not
-change them without reading this section first.
+`docker/Dockerfile.base` compiles swoole from source against the Alpine
+runtime — NOT `docker/Dockerfile`, which only layers the application on
+top of the finished base and says so itself ("editing this file does NOT
+recompile the PHP extensions"). The compile-time `./configure` flags are
+intentional — do not change them without reading this section first.
 
 | Flag | Enables | Runtime requirement |
 |---|---|---|
@@ -262,17 +264,43 @@ change them without reading this section first.
 | `--enable-zstd` | zstd compression for the HTTP server | `apk add zstd-dev` |
 | `--enable-brotli` | brotli compression for the HTTP server | `apk add brotli-dev` |
 | `--enable-swoole-coro-time` | Per-coroutine CPU-time accounting | — |
-| `--enable-iouring` | io_uring-backed event loop (faster I/O on modern kernels) | **Linux kernel 5.6+ at runtime**; `apk add liburing-dev` at build time |
-| `--enable-uring-socket` | Use io_uring for socket I/O too | Same kernel requirement as `--enable-iouring` |
+| `--enable-iouring` | io_uring-backed event loop | **NOT in the shipped image** — passed only under `--build-arg SWOOLE_IOURING=1`; when passed, needs `apk add liburing-dev` at build AND the two runtime gates in the caveat below |
+| `--enable-uring-socket` | Use io_uring for socket I/O too | Same gate as `--enable-iouring`: behind `SWOOLE_IOURING`, default OFF |
 | `--with-swoole-ssh2` | Coroutine SSH/SFTP client | `apk add libssh2-dev` |
 | `--enable-swoole-ftp` | Coroutine FTP client (over SSL) | OpenSSL (already pulled in) |
 
-**io_uring caveat.** The image will still *build* on any kernel, but
-swoole's io_uring code paths only activate when running on kernel
-**5.6 or newer**. Older kernels silently fall back to epoll. If you
-deploy on a host running RHEL 7 / Ubuntu 18.04 / similar EOL kernels,
-the io_uring flags are dead code — they don't hurt, but expect no
-perf benefit there.
+**io_uring caveat (S163; measured in S200 — the note in
+`docker/Dockerfile.base` is the canonical record).** The shipped image is
+built with io_uring **OFF**: `ARG SWOOLE_IOURING=0` omits both flags, and
+`php --ri swoole` on a published image prints no io_uring line at all.
+The ONLY switch is that build-arg — there is no runtime ini directive and
+no env variable, so flipping it means rebuilding the base, not
+reconfiguring a container.
+
+Building with `--build-arg SWOOLE_IOURING=1` is NOT a perf win on a stock
+`docker run`. Two *stacked* blockers then hit the process, both **fatal
+(exit 1)** — Swoole does NOT silently fall back to epoll once the flags
+are compiled in:
+
+1. **seccomp.** Docker's default profile blocks `io_uring_setup`,
+   `io_uring_enter` and `io_uring_register`, so the ring never opens:
+   `Iouring::Iouring(): Failed to initialize io_uring instance, Error:
+   Operation not permitted`.
+2. **kernel.** Lift seccomp and the ring DOES open — and Swoole 6.2.1's
+   io_uring path rejects anything older than kernel **6.9** (it uses ops
+   added there): `The Iouring::ftruncate() requires 6.9 or higher Linux
+   kernel`. The old "5.6+ at runtime, older kernels fall back to epoll"
+   claim in this file and in both installer scripts was **refuted by
+   measurement**; 5.6 is where io_uring appeared, not where Swoole's path
+   works.
+
+So `--security-opt seccomp=unconfined` alone just swaps blocker 1 for
+blocker 2 (and disables syscall filtering for the whole container, which
+was never an option). Enable `SWOOLE_IOURING=1` only if BOTH gates are
+cleared: a container runtime that permits the io_uring syscalls AND a host
+kernel >= 6.9. Otherwise — the supported default — leave it off; the epoll
+event loop is what every published image runs on, and nothing on the
+Docker path is measurably worse for it.
 
 **Flags we intentionally do NOT pass:**
 

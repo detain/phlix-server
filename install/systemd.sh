@@ -47,13 +47,21 @@ chown -R phlix:phlix /var/cache/phlix
 #
 # Even in the minimal systemd-only path the server still needs the Workerman
 # process-control functions (preflight below) and benefits from Swoole +
-# php-uv. The extensions are compiled from source with the EXACT flag set in
+# php-uv. The extensions are compiled from source with the flag set in
 # docker/Dockerfile.base (the source of truth — see docker/README.md "Swoole
-# build flags"). Both steps are idempotent: an already-loaded extension is
-# skipped, so re-running this script is a no-op for them.
+# build flags"), with ONE deliberate divergence at the configure block below:
+# a host carries no container seccomp profile, so the io_uring flags stay ON
+# here while the base gates them OFF behind `ARG SWOOLE_IOURING=0`. Both steps
+# are idempotent: an already-loaded extension is skipped, so re-running this
+# script is a no-op for them.
 #
-# --enable-iouring / --enable-uring-socket build on any kernel but only
-# activate at RUNTIME on Linux kernel >= 5.6; older kernels fall back to epoll.
+# MEASURED FLOOR (S200 note in docker/Dockerfile.base — this supersedes the
+# refuted ">= 5.6, older kernels fall back to epoll" claim once recorded
+# here): Swoole 6.2.1's io_uring path needs kernel >= 6.9 and its ctor
+# REJECTS older kernels FATAL (exit 1 at ring init, "The Iouring::ftruncate()
+# requires 6.9 or higher Linux kernel") — there is no silent epoll fallback
+# once the flags are compiled in. The seccomp blocker is container-only; the
+# 6.9 floor is not, so a pre-6.9 host hits the same fatal with these flags ON.
 # ---------------------------------------------------------------------------
 echo "Checking PHP disable_functions for Workerman compatibility..."
 phlix_disabled="$(php -r 'echo (string) ini_get("disable_functions");' 2>/dev/null)"
@@ -122,7 +130,11 @@ if [ "$phlix_need_swoole" = "yes" ] || [ "$phlix_need_uv" = "yes" ]; then
 		(
 			cd "$phlix_tmp/swoole"
 			phpize
-			# Flags copied verbatim from docker/Dockerfile.base — the source of truth.
+			# Flags from docker/Dockerfile.base's configure line — the source of
+			# truth — with the one divergence named in the header above: the
+			# two io_uring flags below are UNCONDITIONAL here (no seccomp on a
+			# host), while the base emits them only under `SWOOLE_IOURING=1`.
+			# See also scripts/install.sh's S163 note for the full story.
 			./configure \
 				--enable-swoole \
 				--enable-sockets \

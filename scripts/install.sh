@@ -342,17 +342,28 @@ phlix_build_swoole() {
     cd "$tmp/swoole"
     phpize
     # Flags copied verbatim from docker/Dockerfile.base — do not change here;
-    # change them there (the source of truth) and re-sync, refs included.
-    # --enable-iouring /
-    # --enable-uring-socket build on any kernel but only activate at RUNTIME on
-    # Linux kernel >= 5.6; older kernels silently fall back to epoll.
+    # change them there (the source of truth) and re-sync, refs included,
+    # except the divergence named below.
     #
-    # ONE DELIBERATE DIVERGENCE (S163): the base image gates those two flags
-    # behind `ARG SWOOLE_IOURING`, default OFF, because Docker's default seccomp
-    # profile blocks the io_uring syscalls and every Workerman worker died with
-    # "Iouring::Iouring(): ... Operation not permitted" in a refork loop. A HOST
-    # install has no such sandbox — systemd/phlix-server.service even sets
-    # LimitMEMLOCK=infinity so io_uring initialises — so they stay ON here.
+    # ONE DELIBERATE DIVERGENCE (S163): the base image gates --enable-iouring /
+    # --enable-uring-socket behind `ARG SWOOLE_IOURING`, default OFF, because
+    # Docker's default seccomp profile blocks the io_uring syscalls and every
+    # Workerman worker died with "Iouring::Iouring(): ... Operation not
+    # permitted" in a refork loop. A HOST install has no such sandbox —
+    # systemd/phlix-server.service even sets LimitMEMLOCK=infinity — so they
+    # stay ON here.
+    #
+    # MEASURED FLOOR (S200 note in docker/Dockerfile.base — this supersedes
+    # the refuted "kernel >= 5.6; older kernels silently fall back to epoll"
+    # claim once recorded here): Swoole 6.2.1's io_uring path uses ops added
+    # in kernel 6.9 and its ctor REJECTS anything older, FATAL at ring init
+    # ("The Iouring::ftruncate() requires `6.9` or higher Linux kernel",
+    # exit 1) — no silent epoll fallback exists once the flags are compiled
+    # in. The seccomp blocker is container-only; the 6.9 floor is NOT, so a
+    # pre-6.9 host carries the same fatal risk with these flags left ON
+    # here. Kernel-gating the host build is a behavior change deliberately
+    # not made in this docs cure (flagged as a code question in the
+    # server__devops review).
     ./configure \
       --enable-swoole \
       --enable-sockets \

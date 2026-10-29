@@ -28,7 +28,7 @@ use Phlix\Server\Http\Response;
  * - PUT    /api/v1/admin/users/{id}     — update an existing user
  * - DELETE /api/v1/admin/users/{id}    — delete a user
  * - POST   /api/v1/admin/users/{id}/set-admin — promote or demote admin status
- * - POST   /api/v1/admin/users/{id}/reset-password — generate a new password
+ * - POST   /api/v1/admin/users/{id}/reset-password — force a password change (no password is returned)
  * - POST   /api/v1/admin/users/{id}/approve — approve a pending signup (S1)
  * - POST   /api/v1/admin/users/{id}/disable — disable a user (S1)
  * - POST   /api/v1/admin/users/{id}/reject  — reject (delete) a pending signup (S1)
@@ -479,11 +479,14 @@ final class AdminUserController
      * S7+F1: Instead of returning a plaintext password (which is a security
      * risk), this method generates a cryptographically secure random token,
      * stores it as a hash in the database with a 15-minute expiry, and sets
-     * the `must_change_password` flag so the user is forced to set a new
-     * password before accessing content.
+     * the `must_change_password` flag, which blocks the account's login and
+     * token refresh until an operator intervenes.
      *
-     * The token itself should be sent to the user via an out-of-band channel
-     * (e.g. email) — this endpoint only stores the hashed token.
+     * M-SERVER-33 (docs truth): no shipped surface delivers or consumes this
+     * token — there is no mailer leg and no reset-completion endpoint. The
+     * endpoint is therefore a force-change-and-revoke action, NOT a user-
+     * completable reset; recovery is the CLI plus a direct write clearing the
+     * flag (README, "Bad days: recovery from the CLI").
      *
      * @param Request               $request The HTTP request (unused body).
      * @param array<string, string> $params  Path parameters ({id} — a UUID string).
@@ -514,10 +517,11 @@ final class AdminUserController
         // would otherwise ride out their hour.
         $this->authManager?->revokeUserTokens($id, 'password_reset_issued');
 
-        // NOTE: In a full implementation, the plaintext $token would be sent
-        // to the user via email here. The out-of-band delivery is handled by
-        // external notification infrastructure; this endpoint only records the
-        // hashed token so the user can submit it via the reset-password form.
+        // NOTE (M-SERVER-33 truth pass): the plaintext $token is never sent
+        // anywhere — no email/notification leg ships, and no endpoint consumes
+        // the hashed token. It is recorded, and nothing more: the account
+        // stays force-changed until an operator resets the password and clears
+        // the flag (README, "Bad days: recovery from the CLI").
 
         return (new Response())->json([
             'message' => 'Password reset token issued. The user must change their password before accessing content.',

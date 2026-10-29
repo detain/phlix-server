@@ -9,6 +9,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The admin reset-password recovery story is told as shipped truth (review
+  server__seceng M-SERVER-33):** the README documented
+  `POST /api/v1/admin/users/{id}/reset-password` as "(returns new password)"
+  while the shipped handler stores a hashed reset token, sets
+  `must_change_password`, revokes the account's sessions and answers `{message}`
+  only — no new password, and no shipped surface delivers or consumes the
+  token. The cure is docs-only: the endpoint table row, the CLI-table caveat
+  (`user:reset-password` writes the password hash but never lifts the latch)
+  and a new "Bad days" recovery entry (two steps: `php bin/phlix
+  user:reset-password` + the direct `UPDATE users SET must_change_password = 0`
+  write — the only shipped clear path) now tell the truth, and the
+  `AdminUserController`/`AuthManager` docblock fictions ("generate a new
+  password", "reset-password form", "via the reset-token flow") are cured
+  comment-only — zero behavior change, zero new wire codes (registry md5
+  40c1da48 held). The r1 draft recovery sentence claimed the refusal answers a
+  `403` with a stable code; the r2 runtime trace corrected that too:
+  `PasswordChangeRequiredException` (a RuntimeException) has no catch arm
+  anywhere in src/, so the served Workerman path answers a bare `500 Internal
+  Server Error` while the HTTP error log names the exception class — exactly
+  what the README now says, with the code kept out of the docs until a real
+  emitter ships (estate riders R1-R3). New
+  `tests/Unit/Admin/PasswordResetRecoveryReadmeTest.php` (4 tests/13
+  assertions, measured) pins every load-bearing string runtime-derived from
+  the enforcing code — including the anti-fiction pin that reddens if the
+  unshipped wire code ever re-enters the README. Census
+  `EXPECTED_PHP_FILES` 1993→1994, measured from the phpunit red.
+
 - **The 34 wire success codes openapi.yaml never told the truth about are corrected to
   shipped code, and the spec-currency gate gains a response-code leg (review
   server__fedev M24):** `OpenapiSpecCurrencyTest` pinned path/method/middleware bijection

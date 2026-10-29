@@ -705,8 +705,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (the M35 ws-liveness rider, which rode 8b34959b without its own rung —
      * recorded, not reconstructed, per the 8b849b0b precedent). Measured from the
      * phpunit red (1993), not predicted.
+     * Re-pinned 1993→1994 by the M-SERVER-33 reset-password recovery docs lane
+     * (2026-10-29): +1 — tests/Unit/Admin/PasswordResetRecoveryReadmeTest.php, the
+     * README-claim detector pinning the force-change-and-revoke endpoint row, the
+     * CLI latch caveat and the two-step recovery story to the enforcing code
+     * (exception class + latch column derived at runtime). Measured from the
+     * phpunit red (1994), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1993;
+    private const EXPECTED_PHP_FILES = 1994;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

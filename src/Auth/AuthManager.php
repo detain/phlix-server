@@ -1074,7 +1074,8 @@ class AuthManager
         }
 
         // S7+F1: if the account has must_change_password set, block normal login
-        // and require the user to set a new password via the reset-token flow.
+        // until an operator clears the flag — no reset-token completion flow is
+        // shipped, so the user cannot lift this themselves (README, "Bad days").
         if ($this->userRepository->mustChangePassword($userId)) {
             $this->auditLogger->logFailedAuth('password_change_required', [
                 'username' => $username,
@@ -1365,7 +1366,8 @@ class AuthManager
         }
 
         // S7+F1: if the account has must_change_password set, block token
-        // refresh and require the user to set a new password via the reset-token flow.
+        // refresh until an operator clears the flag — no reset-token completion
+        // flow is shipped, so the user cannot lift this themselves (README).
         if ($this->userRepository->mustChangePassword($userId)) {
             $this->auditLogger->logFailedAuth('password_change_required', [
                 'user_id' => $userId,

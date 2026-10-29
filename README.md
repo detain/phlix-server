@@ -1131,7 +1131,7 @@ the next worker boot rather than the next request.
 | PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
-| POST | `/api/v1/admin/users/{id}/reset-password` | Reset a user's password (returns new password) — admin-only |
+| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, so until an operator intervenes the account cannot sign in ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
 | POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
 | POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
 | POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
@@ -1521,7 +1521,7 @@ User commands accept a username or an email wherever `<user>` appears.
 | `user:list` | `--status=pending\|active\|disabled`, `--json` | List accounts, optionally one status cohort |
 | `user:create` | `<username>`; `--email=`, `--password=` (required), `--display-name=`, `--json` | Create an account (username 3–50 chars; password Argon2ID-hashed at rest). There is no admin flag — promote afterwards |
 | `user:promote` | `<user>`; `--revoke`, `--json` | Toggle the admin flag (`--revoke` demotes; the last admin cannot be demoted) |
-| `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted |
+| `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted. Writes the password **hash** only — it does not clear `must_change_password` (see *Locked by the admin `reset-password` endpoint* below) |
 | `user:approve` | `<user>`; `--json` | Move a pending account to `active` |
 | `user:reject` | `<user>`; `--json` | Reject a still-pending signup (hard delete) |
 | `user:disable` | `<user>`; `--json` | Disable an account (last admin is protected) |
@@ -1556,6 +1556,25 @@ Auth providers page; see "External SSO" above). If the password login method its
 disabled, a fresh hash alone will not open the door, and the CLI exposes no settings
 toggle — reach the setting via the admin UI whenever any admin can still sign in, or a
 direct database write when none can.
+
+**Locked by the admin `reset-password` endpoint.** `POST /api/v1/admin/users/{id}/reset-password`
+is a force-change-and-revoke button, not a reset the affected user can complete: it stores the
+hashed reset token, sets `must_change_password`, and kills the account's sessions — and **no
+shipped endpoint delivers or consumes that token**. While the flag is set, that account's login
+and refresh are refused by `PasswordChangeRequiredException` — and no HTTP boundary maps that
+exception yet, so the served path answers a bare `500 Internal Server Error` (the HTTP error log
+names the exception class); the distinct `403`-with-code envelope the exception was written for
+is NOT shipped. Full recovery is two steps: set a new password, then clear the latch — which has
+no CLI or API clear path (the completion flow never shipped), so it is a direct database write,
+the same last resort as the auth-toggle recovery below:
+
+```bash
+php bin/phlix user:reset-password alice --password='pick-one'   # new password hash
+```
+
+```sql
+UPDATE users SET must_change_password = 0 WHERE id = '<uuid>';  -- re-open sign-in
+```
 
 **Auth-method lock-out (`422`) — nothing to undo, and the true last resort.** A write the
 guard refused persists NOTHING: your settings are exactly what they were before the

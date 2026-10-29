@@ -9,6 +9,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The signup-approval household workflow is documented to shipped truth (review
+  server__enduser M23):** the shipped default is an approval queue —
+  `config/auth.php:31` declares `'signup_mode' => 'approval'` and
+  `AuthManager::resolveSignupMode()` fails safe to it — yet the README never said so:
+  the register endpoint was one bare "User registration" row and the admin approval
+  surface (`POST /api/v1/admin/users/{id}/approve|disable|reject`,
+  `src/Server/Http/Routes/AdminRoutes.php:276-278`) was absent from the API table
+  entirely, while the sibling rows for set-admin/reset-password were listed. A
+  household admin following the README could not discover that a new member lands
+  `status='pending'` with `202 {"status":"pending","user":null}` and no tokens, cannot
+  log in until approved (`403` `auth.account_pending`), that the first registered user
+  always bootstraps as active admin regardless of mode, that `auth.signup_mode` is a
+  live-re-read admin setting (`open`/`approval`/`disabled`; `disabled` → `403`
+  `auth.signups_disabled`), or — honestly — that first logins via OIDC/GitHub/LDAP
+  auto-create **active** accounts outside the gate (`UserRepository::findOrCreateByExternalId`
+  INSERTs without `status`, column default `'active'` per
+  `migrations/037_users_status.sql:38`). README gains a "Signup approval gate (adding
+  household users)" subsection (with a one-line pointer from Authentication & Security
+  and a cross-reference — not a re-tabulation — into M22's existing CLI triage
+  section), the register row now carries the 201/202/403 gate semantics, and the three
+  approval endpoints join the admin user-management rows with their measured response
+  law (`approve`/`reject` 404-unknown, `reject` 400-not-pending, `disable` 400
+  self/last-admin; disable/reject revoke tokens, approve does not). Every claim cites
+  file:line read at this tip; nothing claiming open signup existed, so nothing was
+  corrected — the defect was invisibility. Docs only: no code, no behavior change; no
+  README-claims pin test exists at this tip and none was added (M22/M19 docs-rider
+  precedent).
+
 - **README documents the backup subsystem to shipped-code truth (review
   server__enduser M-SERVER-21):** the subsystem had no Features section and
   its seven admin endpoints were absent from the API table. The README now

@@ -138,6 +138,7 @@ Every environment variable the server process reads is inventoried in the defini
 
 ### Authentication & Security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
+- **Signup Approval Queue**: new self-service registrations wait for an admin by default — see [Signup approval gate (adding household users)](#signup-approval-gate-adding-household-users)
 - **External SSO — OIDC, LDAP & GitHub**: Optional external login backends, toggled per-provider from the admin **Integrations → Auth providers** page. Flows, endpoints and config pointers: [External SSO](#external-sso).
 - **Secure Password Hashing**: Argon2ID for password storage
 - **Multi-Device Sessions**: Track and manage sessions across devices
@@ -209,6 +210,40 @@ Config pointers:
   callback_url_not_configured`. See [Environment variables](#environment-variables) and the
   SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider
   (which has admin **API** endpoints but no admin-SPA card yet).
+
+### Signup approval gate (adding household users)
+
+The shipped out-of-the-box behavior **is an approval queue**: `config/auth.php` declares
+`'signup_mode' => 'approval'`, and the resolver fails safe to `approval` when the setting
+is unreadable or holds an unexpected value (`AuthManager::resolveSignupMode()`). Nobody
+slips into a fresh server just because it is reachable.
+
+- **First user** — registering on an empty server ALWAYS creates an **active admin**,
+  whatever the mode, so a fresh install bootstraps without an out-of-band step.
+- **Everyone else (approval mode — the default)** — the account lands with
+  `status='pending'` and **no tokens are issued**: the API replies `202`
+  `{"status":"pending","message":"Your account is awaiting administrator approval.","user":null}`
+  and the browser flow is redirected back to `/login` carrying that notice. A pending member
+  **cannot log in**: correct credentials still answer `403` with
+  `code: "auth.account_pending"` (and the OPDS HTTP-Basic path refuses them silently).
+- **The admin acts** — approve, disable or reject from the **Users** page of the `/app`
+  admin SPA, over REST (`POST /api/v1/admin/users/{id}/approve|disable|reject`;
+  `GET /api/v1/admin/users?status=pending` is the queue — see the table under
+  [HTTP Endpoints](#http-endpoints)), or — with no web session at all — from the CLI
+  (`user:list --status=pending`, `user:approve`, `user:reject`; see
+  [Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)). Approving flips
+  the account to `active` so the member can sign in; disabling or rejecting revokes any
+  issued tokens as the row is updated or removed.
+- **Changing the mode** — `auth.signup_mode` is a server setting like the rest
+  (`PUT /api/v1/admin/settings`, allow-list-backed) and is re-read per registration, so
+  `open` / `approval` / `disabled` takes effect live, no restart. `open` creates the
+  account active and hands back tokens immediately (`201`); `disabled` refuses every
+  non-first registration with `403` `auth.signups_disabled` and creates nothing.
+- **One honest asymmetry** — a **first login through an external provider**
+  (OIDC/GitHub/LDAP) auto-creates the account `active`: it arrives on the provider login
+  path, not the registration gate. Keeping provider sign-in enabled is therefore its own
+  form of open signup — set that toggle with the household policy in mind, not as a
+  substitute for `signup_mode`.
 
 ### SyncPlay - Group Watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy
@@ -853,7 +888,7 @@ the next worker boot rather than the next request.
 |--------|------|-------------|
 | GET | `/health` | Health check |
 | GET | `/system/info` | Server information |
-| POST | `/api/v1/auth/register` | User registration |
+| POST | `/api/v1/auth/register` | User registration — subject to the signup gate: `201` + tokens when the account is created active (`open` mode, or the always-admin first user), `202` + `{"status":"pending","user":null}` with no tokens in the shipped default `approval` mode, `403` `auth.signups_disabled` in `disabled` mode — see [Signup approval gate](#signup-approval-gate-adding-household-users) |
 | POST | `/api/v1/auth/login` | User login |
 | POST | `/api/v1/auth/refresh` | Token refresh |
 | GET | `/api/v1/auth/me` | Current user profile |
@@ -877,13 +912,16 @@ the next worker boot rather than the next request.
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |
-| GET | `/api/v1/admin/users` | List all users — admin-only |
+| GET | `/api/v1/admin/users` | List all users — optional `?status=pending\|active\|disabled` cohort filter (`pending` is the signup queue) — admin-only |
 | GET | `/api/v1/admin/users/{id}` | Get a specific user — admin-only |
 | POST | `/api/v1/admin/users` | Create a new user — admin-only |
 | PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/reset-password` | Reset a user's password (returns new password) — admin-only |
+| POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
+| POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
+| POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
 | GET | `/auth/oidc/authorize` · `/auth/github/authorize` | Start an external login (**unauthenticated**). Redirects to the IdP / GitHub with PKCE + `state`, sets the browser-binding correlation cookie, and stores the resolved absolute `redirect_uri` in the server-side state. `503 provider_not_configured` when the provider is not enabled+configured; `503 callback_url_not_configured` when no absolute callback URL can be resolved (see `PHLIX_DOMAIN`) |
 | GET | `/auth/oidc/callback` · `/auth/github/callback` | Provider redirect target (**unauthenticated**). One-shot `state` consume, correlation-cookie check (`403` on mismatch), token exchange with the *same* `redirect_uri` replayed from state, then session cookies + a `302` to the same-origin `redirect_uri`. Also handles the account-link branch |
 | GET | `/auth/identities` | List the current user's linked external identities — auth required |

@@ -9,6 +9,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Release runbook C05 rework (round 2) — three rollback-section claims
+  corrected against the evidence (review C05):** the replacement section's
+  "stray words passed to either entry point are silently ignored" held only
+  for `scripts/run-migrations.php` — `bin/phlix` runs on symfony/console
+  (pinned v7.4.21), where a stray extra word after `migrate` exits non-zero
+  with "No arguments expected" and an unknown `migrate:down` is refused as an
+  undefined command; the runbook now says exactly that instead of implying a
+  silent forward run. The blanket "recent migrations are additive or drop dead
+  indexes" was falsified by the newest member of its own chain —
+  `migrations/120_collation_unicode_ci_conversion.sql` is a ten-table collation
+  `CONVERT TO CHARACTER SET` rebuild — so the sentence now enumerates rebuilds
+  and points at their in-file header analyses. And the restore step listed the
+  archive's `data/` tree and SSL certs as if they came back with a restore;
+  `BackupManager::restore()` imports the database dump and config files only,
+  which the runbook now states explicitly (archived `data/` and SSL content
+  needs manual extraction). Docs only; no behavior change.
+
 - **Release runbook: the documented database rollback was fictitious — replaced
   with the real recovery path (review C05):** `RELEASE_PROCESS.md` "Database
   Migration Rollback" told operators to run

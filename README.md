@@ -556,12 +556,53 @@ cd phlix-server
 # Install dependencies
 composer install
 
+# Provision the database the shipped defaults expect: database `phlix`
+# and MySQL user `phlix` (config/database.php defaults). This mirrors the
+# create-half of scripts/install.sh's own SQL — run as MySQL root over the
+# local socket; the grant list is exactly what migrations + runtime need.
+# Both host rows matter: a TCP connect to 127.0.0.1 is matched as
+# 'localhost' when reverse DNS resolves it (default Ubuntu behaviour).
+# Replace your_strong_password here and below — the two must match.
+sudo mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS `phlix` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'phlix'@'127.0.0.1' IDENTIFIED BY 'your_strong_password';
+CREATE USER IF NOT EXISTS 'phlix'@'localhost' IDENTIFIED BY 'your_strong_password';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON `phlix`.* TO 'phlix'@'127.0.0.1';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON `phlix`.* TO 'phlix'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+
+# Export the credentials — do NOT one-line-prefix them. `FOO=bar php ...`
+# sets the variable for that one command only, and config/database.php
+# falls back to an EMPTY password (`getenv('DB_PASSWORD') ?: ''`) for
+# every later process. start.php additionally refuses to boot at all
+# without JWT_SECRET: it signs the JWTs and derives the media signed-URL
+# key, so an empty, shipped-default (`default-secret-change-me`), or
+# publicly-known placeholder value is fatal on every path, and under 32
+# bytes is fatal outside development. `openssl rand -hex 32` (64 chars)
+# passes every check; setting PHLIX_ENV=dev relaxes ONLY the length
+# floor, never the non-empty rule.
+export DB_PASSWORD=your_strong_password
+export JWT_SECRET=$(openssl rand -hex 32)
+
 # Run database migrations (reads config/database.php; password from DB_PASSWORD env var)
-DB_PASSWORD=your_strong_password php bin/phlix migrate    # or: php scripts/run-migrations.php
+php bin/phlix migrate    # or: php scripts/run-migrations.php
 
 # Start the server (HTTP :8096 + WebSocket :8097 workers; ports from config/server.php)
 php start.php start
 ```
+
+The `export` lines cover this shell only. For a durable service the values must
+reach the process environment the same way the managed path does it:
+`scripts/install.sh` writes them (plus `PHLIX_ENV=production`) to
+`/etc/phlix/env`, which the systemd unit loads as `EnvironmentFile=`. The PHP
+runtime never reads that file by itself — `scripts/bootstrap_env.php` loads it for
+the maintenance scripts under `scripts/` (never overriding already-set variables) —
+so a hand-run `php start.php start` outside a login shell that exports the variables
+connects with no password and refuses to boot.
+Every key, default, secret flag and restart semantics lives in the [environment
+variable census](#environment-variables) below; `DB_PASSWORD` + `JWT_SECRET` are
+its "most operators only set" minimum.
 
 ## Configuration
 

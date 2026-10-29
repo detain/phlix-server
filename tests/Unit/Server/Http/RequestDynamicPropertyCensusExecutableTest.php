@@ -675,8 +675,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * ExecReload pins (SIGUSR2 = Workerman's graceful reload) + the bash-run
      * phlix_repair_exec_reload legacy-unit proof. Measured from the phpunit
      * red (1987), not predicted.
+     * Re-pinned 1987→1988 by the M-SERVER-26 manual-install walkthrough lane
+     * (2026-10-29): the +1 file itself landed at 82d9f029 (M-SERVER-21's
+     * tests/Unit/Admin/BackupSubsystemReadmeTest.php) WITHOUT a rotation, so
+     * origin CI measured this arm red at 82d9f029 AND 8b849b0b (runs
+     * 40925852979/40927010576 — sole CI failure each, Tests: 2695/1F); the
+     * denominator is re-read from the phpunit red on this exact tree (1988),
+     * not predicted. Forward-fix of a foreign lane's missed step, same
+     * 7990e7cc precedent rung above.
      */
-    private const EXPECTED_PHP_FILES = 1987;
+    private const EXPECTED_PHP_FILES = 1988;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

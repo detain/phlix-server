@@ -9,6 +9,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The "Manual install (from source)" walkthrough is documented to completable
+  truth (review server__ipd M26):** the block could not survive contact with its
+  own server — three independent stops, each verified at this tip. (1) Nothing
+  provisioned the database the shipped defaults expect (`config/database.php:16-17`
+  default database/user `phlix`/`phlix`), and a failed connect propagates out of
+  `MigrationRunner::run()` as an uncaught driver error (`src/Common/Database/
+  MigrationRunner.php:304-305`) with no remediation prose anywhere on the path.
+  (2) `DB_PASSWORD=… php bin/phlix migrate` scoped the password to that one
+  command; the very next line's `php start.php start` then read
+  `getenv('DB_PASSWORD') ?: ''` (`config/database.php:18`) and connected with an
+  empty password. (3) `JWT_SECRET` was never mentioned although `start.php:57-63`
+  hard-refuses to boot without it (`AuthServicesProvider::assertSecretConfigured()`
+  → `exit(1)`; empty / shipped sentinel `default-secret-change-me` / publicly-known
+  placeholders fatal on every path, the 32-byte floor fatal only outside
+  `PHLIX_ENV=dev`). The block now carries a MySQL provisioning step mirroring the
+  create-half of `scripts/install.sh:1927-1934` verbatim (utf8mb4_unicode_ci, both
+  `'phlix'@'127.0.0.1'` and `'phlix'@'localhost'` users — the reverse-DNS host-match
+  story the installer's own comment documents — and the exact grant list), replaces
+  the per-command prefix with `export DB_PASSWORD=… JWT_SECRET=$(openssl rand -hex 32)`
+  and states why, and closes with a durable-service paragraph: `install.sh` persists
+  the values in `/etc/phlix/env` (`EnvironmentFile=`), the PHP runtime never reads
+  that file by itself (`scripts/bootstrap_env.php` covers the `scripts/` maintenance
+  tools only), and the environment-variable census remains the SSOT — its own
+  "Most operators only set `DB_PASSWORD` and `JWT_SECRET`" line is now actually
+  true of the walkthrough that sits above it. Docs only: no code, no behavior
+  change; no README-claims pin test exists for this block at this tip and none was
+  added (M22/M23 docs-rider precedent). The `bin/phlix` vs `run-migrations.php`
+  env-bootstrap asymmetry (ipd M2) is a separate queue item, untouched here.
+
 - **The signup-approval household workflow is documented to shipped truth (review
   server__enduser M23):** the shipped default is an approval queue —
   `config/auth.php:31` declares `'signup_mode' => 'approval'` and

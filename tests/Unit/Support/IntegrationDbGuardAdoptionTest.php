@@ -471,7 +471,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // session sweep under a shifted PHP timezone, continue-watching dedupe,
     // stats retention sweep, and the derived-table similarity read).
     // Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 70;
+    // 70→71 by the M-SERVER-06 dialect-gate lane (2026-10-29):
+    // +tests/Integration/Common/Database/MysqlOnlyIndexDialectGateTest.php
+    // (real-MySQL fresh-apply of the full migration chain with the
+    // @phlix-require-mysql directives in place, the MySQL-8 end-state index
+    // proof, and the ledgered steady-state no-op replay).
+    // Measured from the phpunit red (CI run 40853287874).
+    private const EXPECTED_ADOPTERS = 71;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -664,7 +664,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * contract for the two arms the shared venue cannot exercise behaviourally).
      * Measured from the phpunit red (1984), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1984;
+    private const EXPECTED_PHP_FILES = 1985;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

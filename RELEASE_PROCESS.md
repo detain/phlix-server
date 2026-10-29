@@ -160,10 +160,35 @@ git push origin v1.2.0
 ```
 
 GitHub Actions will:
-1. `Release` workflow (trigger `v*.*.*`): assert both Helm charts'
-   `appVersion` and `composer.json`'s `version` match the tag, lint and
-   package the charts, and create the GitHub release with the chart
-   `.tgz` files attached as **release assets**
+1. `Release` workflow (trigger `v*.*.*`), job "Verify version sources match
+   tag": strip any prerelease suffix from the tag, then assert the
+   **authoritative trio that `scripts/release.sh` writes** all match the
+   resulting MAJOR.MINOR.PATCH base — `src/Common/Version.php::STRING`, the
+   `VERSION` marker, and `k8s/helm/phlix/Chart.yaml`'s `version:` and
+   `appVersion:` — and that `composer.json` carries **no** `version` field
+   (the `f5375f7a` law above; the assert is law-enforcing, not
+   law-contradicting). It then lints and packages **both** charts and
+   creates the GitHub release ("Phlix Server <tag>"; `alpha`/`beta` in the
+   tag name marks it a prerelease) with the chart `.tgz` files attached as
+   **release assets**.
+   * The **hub** chart (`k8s/helm/phlix-hub/Chart.yaml`) is packaged but
+     deliberately **not** asserted against the server tag: per "Server-Hub
+     Compatibility" the two products share no version space, and nothing in
+     `scripts/release.sh` bumps it. The previous wording here claimed the
+     workflow "asserts both Helm charts' `appVersion`"; that claim — plus
+     the matching assert — is exactly why **every** tagged `Release` run in
+     this repo's history (v1.2.0 … v1.2.3, attempts included) failed at
+     "Assert Chart.yaml appVersion matches tag": the hub chart sat, and
+     still sits, at `appVersion: "1.0.0"` under a stale comment that no
+     tooling ever honored. A green end-to-end `Release` run requires a real
+     tag push, which is owner release authority (S274) — the step logic is
+     verified by dry-run replay, not by a published run (same disclosure
+     precedent as the windows WIN-05 upload leg).
+   * It likewise no longer asserts `composer.json`'s `version` equals the
+     tag. That assert and this document's own no-`version`-field law were
+     mutually exclusive: the check could only "pass" on a tagged tree that
+     violated `composer validate --strict` — which is what the v1.2.3 tag
+     tree did.
 2. `Docker Build & Push` workflow (trigger `v*`): rebuild and publish the
    three runtime image legs with mutable `latest`/`intel`/`nvidia` tags
    plus the immutable `<full-sha>-<variant>` tags for that commit

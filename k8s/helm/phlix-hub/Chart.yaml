@@ -4,7 +4,13 @@ description: A Helm chart for Phlix Hub (relay + auth aggregator for Phlix Media
 type: application
 # Chart version (Helm artifact version)
 version: 0.1.0
-# appVersion follows phlix-server's release cadence — keep majors in sync
+# appVersion lives in the HUB's version space, not the server's — the two
+# products share no version space (see the server RELEASE_PROCESS.md
+# "Server-Hub Compatibility" section). The old comment here claimed this
+# follows the phlix-server release cadence and "keep majors in sync"; that
+# was never true of any tooling (scripts/release.sh does not touch this
+# file) and the server's Release workflow no longer asserts it against the
+# tag. The value below is a legacy figure maintained out-of-band, if at all.
 appVersion: "1.0.0"
 keywords:
   - phlix

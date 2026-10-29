@@ -11,11 +11,21 @@ on:
 # Removed; the real publishers are in docker.yml.
 
 jobs:
-  verify-chart-version:
-    name: Verify Helm Chart appVersion matches tag
+  # M-SERVER-09: this job asserted (a) BOTH Helm charts' appVersion equal the
+  # tag and (b) composer.json's `version` equal the tag. Both were
+  # unsatisfiable against this repo's own documented version law
+  # (RELEASE_PROCESS.md "Update Version"), and (a) is why every tagged
+  # Release run since the trigger existed has been red: scripts/release.sh
+  # only ever bumps src/Common/Version.php::STRING, VERSION and
+  # k8s/helm/phlix/Chart.yaml — k8s/helm/phlix-hub/Chart.yaml sits in the
+  # hub's version space (the runbook itself states the two products "share
+  # no version space") — while (b) demanded composer.json carry the very
+  # field `composer validate --strict` (the composer-validate CI job,
+  # decision f5375f7a) refuses. What remains asserts exactly the trio the
+  # release tooling writes, which is the documented law.
+  verify-version-sources:
+    name: Verify version sources match tag
     runs-on: ubuntu-26.04
-    outputs:
-      version: ${{ steps.version.outputs.VERSION }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -24,38 +34,55 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Assert Chart.yaml appVersion matches tag
+      - name: Assert version sources match tag
         run: |
           set -e
+          # Mirrors carry only MAJOR.MINOR.PATCH, so a prerelease tag
+          # (v1.3.0-beta.1 — the runbook's Beta channel, and the shape the
+          # `prerelease:` expression below already expects) is compared on
+          # its base version.
           TAG_VERSION="${{ steps.version.outputs.VERSION }}"
-          for chart in k8s/helm/phlix/Chart.yaml k8s/helm/phlix-hub/Chart.yaml; do
-            APP_VERSION=$(awk '/^appVersion:/ {gsub(/"/,"",$2); print $2; exit}' "$chart")
-            if [ -z "$APP_VERSION" ]; then
-              echo "::error file=$chart::appVersion not found"
-              exit 1
-            fi
-            if [ "$APP_VERSION" != "$TAG_VERSION" ]; then
-              echo "::error file=$chart::appVersion ($APP_VERSION) does not match release tag ($TAG_VERSION)"
-              exit 1
-            fi
-            echo "OK: $chart appVersion=$APP_VERSION matches tag $TAG_VERSION"
-          done
-
-      - name: Assert composer.json version matches tag
-        run: |
-          set -e
-          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
-          COMPOSER_VERSION=$(python3 -c "import json; print(json.load(open('composer.json')).get('version',''))")
-          if [ "$COMPOSER_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error file=composer.json::version ($COMPOSER_VERSION) does not match release tag ($TAG_VERSION)"
+          BASE_VERSION="${TAG_VERSION%%-*}"
+          if ! [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag version '$TAG_VERSION' has no MAJOR.MINOR.PATCH base"
             exit 1
           fi
-          echo "OK: composer.json version=$COMPOSER_VERSION matches tag $TAG_VERSION"
+
+          STRING_VERSION=$(sed -n "s/^[[:space:]]*public const STRING = '\([^']*\)';.*/\1/p" src/Common/Version.php)
+          if [ "$STRING_VERSION" != "$BASE_VERSION" ]; then
+            echo "::error file=src/Common/Version.php::STRING ($STRING_VERSION) does not match release tag base ($BASE_VERSION)"
+            exit 1
+          fi
+          echo "OK: src/Common/Version.php::STRING=$STRING_VERSION matches tag base $BASE_VERSION"
+
+          MARKER_VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ "$MARKER_VERSION" != "$BASE_VERSION" ]; then
+            echo "::error file=VERSION::update marker ($MARKER_VERSION) does not match release tag base ($BASE_VERSION)"
+            exit 1
+          fi
+          echo "OK: VERSION marker=$MARKER_VERSION matches tag base $BASE_VERSION"
+
+          CHART_VERSION=$(sed -n 's/^version:[[:space:]]*"\?\([^"[:space:]]*\)"\?[[:space:]]*$/\1/p' k8s/helm/phlix/Chart.yaml)
+          APP_VERSION=$(sed -n 's/^appVersion:[[:space:]]*"\?\([^"[:space:]]*\)"\?[[:space:]]*$/\1/p' k8s/helm/phlix/Chart.yaml)
+          if [ "$CHART_VERSION" != "$BASE_VERSION" ] || [ "$APP_VERSION" != "$BASE_VERSION" ]; then
+            echo "::error file=k8s/helm/phlix/Chart.yaml::version ($CHART_VERSION) / appVersion ($APP_VERSION) do not match release tag base ($BASE_VERSION)"
+            exit 1
+          fi
+          echo "OK: k8s/helm/phlix/Chart.yaml version=$CHART_VERSION appVersion=$APP_VERSION matches tag base $BASE_VERSION"
+
+          # The law pins composer.json ABSENT of a version field; enforce the
+          # law instead of contradicting it.
+          if python3 -c "import json,sys; sys.exit(0 if 'version' in json.load(open('composer.json')) else 1)"; then
+            echo "::error file=composer.json::carries a 'version' field, which composer validate --strict rejects (f5375f7a) — scripts/release.sh never writes one"
+            exit 1
+          fi
+          echo "OK: composer.json carries no version field (f5375f7a law)"
+          echo "NOTE: k8s/helm/phlix-hub/Chart.yaml is intentionally NOT asserted — it lives in the hub version space (RELEASE_PROCESS.md)"
 
   package-charts:
     name: Package Helm charts
     runs-on: ubuntu-26.04
-    needs: verify-chart-version
+    needs: verify-version-sources
     permissions:
       contents: write
     steps:
@@ -89,7 +116,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-26.04
-    needs: [verify-chart-version, package-charts]
+    needs: [verify-version-sources, package-charts]
 
     permissions:
       contents: write
@@ -130,6 +157,11 @@ jobs:
           body: ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          # M-SERVER-09: the files list also carried the coverage tarball's
+          # name — a path no step of this workflow (nor the repo) ever
+          # produces. The only historical green Release runs pinned
+          # softprops/action-gh-release@v1, which tolerated it; at the
+          # current @v3 pin it is a dead reference removed, leaving the chart
+          # packages the job builds. ReleaseWorkflowTest keeps it out.
           files: |
-            coverage-report.tar.gz
             dist/charts/*.tgz

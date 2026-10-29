@@ -9,6 +9,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The `Release` workflow now asserts the repo's own version law instead
+  of contradicting it, curing the seven consecutive red tagged runs
+  (M-SERVER-09, review server__devops M1):** every `Release` workflow run
+  since the `v*.*.*` trigger existed had failed — v1.2.0, v1.2.1, v1.2.2
+  and v1.2.3 across both July attempt rounds (seven failure runs on
+  origin) — at the step `Assert Chart.yaml appVersion matches tag`, which
+  looped over BOTH Helm charts and demanded `appVersion == tag`. But
+  `scripts/release.sh` only ever writes the server-side mirror trio
+  (`src/Common/Version.php::STRING`, the `VERSION` marker,
+  `k8s/helm/phlix/Chart.yaml`), and `k8s/helm/phlix-hub/Chart.yaml` lives
+  in the hub's version space — this runbook's own "Server-Hub
+  Compatibility" section states the products "share no version space" —
+  so the hub chart sitting at `appVersion: "1.0.0"` made the assert
+  unsatisfiable by construction; its stale `# keep majors in sync`
+  comment was fiction no tooling honored. The sibling assert (`composer
+  .json`'s `version` == tag) contradicted the documented `f5375f7a` law
+  that `composer.json` carries NO version field at all — it could only
+  "pass" on a tree that failed `composer validate --strict`, which is
+  what the v1.2.3 tag tree was, while the drift it never checked
+  (`Version.php::STRING == 1.2.2` at the v1.2.3 tag) sailed through.
+  Cure, both directions: the verify job (renamed `verify-version-sources`
+  / "Verify version sources match tag") now strips any prerelease suffix,
+  validates the MAJOR.MINOR.PATCH base, asserts exactly the mirror trio
+  plus the composer no-version absence, and packages — without
+  version-asserting — the hub chart; dead references (`coverage-report
+  .tar.gz` asset glob no producer exists for, and the unread job-level
+  `outputs.version`) were removed. `RELEASE_PROCESS.md`'s "GitHub Actions
+  will:" item now states what the workflow actually does, including the
+  falsified-claim narrative and the disclosure that a green end-to-end
+  `Release` run still requires a real tag push (owner S274 release
+  authority — the step logic was verified by dry-run replay against the
+  v1.2.x trees, not by a published run). New
+  `tests/Unit/Scripts/ReleaseWorkflowTest.php` (6 tests, 25 assertions;
+  red 6/6 on the pre-fix files, green after) pins the shape and the
+  doc↔workflow agreement; S431 census denominator re-pinned from the
+  measured red, 1984 to 1985.
 - **`getByLibrary` and its paging siblings obey the class's own two paging
   laws again (M-SERVER-08, review server__dba2):** `ItemRepository` had
   already learned both laws — the trailing-`id` TOTAL-order tail stated in

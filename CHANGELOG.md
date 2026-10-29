@@ -49,7 +49,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `php start.php` itself refuses the committed placeholder with the
   CRITICAL envelope before any worker or port exists. Extended
   `AuthServicesProviderSecretGuardTest` with the placeholder tier, a padded
-  end-to-end child, and the docker twin pin (+4 methods). Measured
+  end-to-end child, and the docker twin pin (+3 methods; the false-positive
+  re-asserts joined the existing tiers test). Origin CI at this pair of
+  commits: merge-junit tests=12708 assertions=118937 errors=0 failures=0
+  skipped=4 — exactly the parent's 12697/118815 plus this lane's +11 new
+  tests / +122 assertions. Measured
   red-on-parent: 1 error + 9 failures across the 18 tests of the two
   files; green at head. `DockerEntrypointTest`'s S163 note forward-corrected
   to past tense; docker paths otherwise untouched.

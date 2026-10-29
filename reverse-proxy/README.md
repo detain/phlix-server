@@ -76,8 +76,10 @@ sudo systemctl reload caddy
 ## Features
 
 ### WebSocket Support — separate TCP route, NOT a proxied path
-The SyncPlay WebSocket server is its own plaintext listener on **:8097**
-(`start.php` binds `websocket://0.0.0.0:8097`); the HTTP worker on **:8096**
+The SyncPlay WebSocket server is its own plaintext listener, default
+**:8097** (since R14-06 the bind resolves env > config > default via
+`src/Server/Runtime/ListenEndpoints.php` — `PHLIX_WS_HOST`/`PHLIX_WS_PORT`
+or `websocket.host`/`websocket.port`); the HTTP worker (default **:8096**)
 has zero WebSocket-upgrade logic. Both templates therefore deliberately
 omit any `/ws` location/handler pointing at the HTTP upstream — such a rule
 accepts the TCP connection, answers the Upgrade handshake with plain HTTP,
@@ -135,8 +137,10 @@ Phlix streams media in HLS (`.m3u8` + `.ts`) and DASH (`.mpd`) formats. The reve
 
 ## Backend Configuration
 
-The templates proxy to the HTTP worker's real port, **8096** (`start.php:203`).
-Update the upstream backend address if Phlix is not running on localhost:8096:
+The templates proxy to the HTTP worker's real port, **8096** by default
+(the bind resolves env `PHLIX_HTTP_HOST`/`PHLIX_HTTP_PORT` > config
+`server.host`/`server.port` > default via `src/Server/Runtime/ListenEndpoints.php`,
+R14-06). Update the upstream backend address if Phlix is not running on localhost:8096:
 
 ```
 upstream phlix_backend {

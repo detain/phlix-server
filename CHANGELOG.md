@@ -9,6 +9,39 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Socket-bind documentation cured to the R14-06 config-driven truth; the
+  haproxy runbook's code-edit recipe retired (review server__devops M13):**
+  `systemd/README.md`, `deploy/haproxy.cfg` and `reverse-proxy/README.md`
+  still carried the pre-R14-06 law — that `config/server.php` `server.port`
+  "only drives the advertised/DLNA port", that "the sockets themselves are
+  hard-coded in `start.php`", that `websocket.host/port` tune "the WS server
+  object, not that listening socket", and (worst) that moving the WS bind
+  means "change the start.php bind literal". All four claims are false at
+  HEAD: `src/Server/Runtime/ListenEndpoints.php` resolves every service
+  bind env > config > shipped default (`PHLIX_HTTP_HOST`/`PHLIX_HTTP_PORT`/
+  `PHLIX_HTTP_WORKER_COUNT` > `server.host`/`server.port`/`worker.count`;
+  `PHLIX_WS_HOST`/`PHLIX_WS_PORT` > `websocket.host`/`websocket.port`;
+  garbage throws `RuntimeException` naming the key), and `start.php` writes
+  the resolved pair back into `$config` pre-fork (`start.php:212-224` HTTP,
+  `start.php:636-647` WS) so advertised values always match the accepting
+  socket. The literal `websocket://0.0.0.0:8097` no longer exists outside
+  historical comments. Docs-only rewrite: the three stale passages now state
+  the ListenEndpoints law, the systemd env sample gained the commented
+  `PHLIX_HTTP_*`/`PHLIX_WS_*` seams, and haproxy Posture B is achievable
+  with `PHLIX_WS_HOST=127.0.0.1` — never a code edit. Honest residuals kept:
+  the shipped defaults (0.0.0.0:8096/8097, pool 14; `worker.count 'auto'`
+  = 14) are stated as defaults not promises of environment, and the WS
+  worker's `count = 1` stays fixed by law (single authoritative
+  SyncPlayManager) with no env seam — `PHLIX_HTTP_WORKER_COUNT` is
+  HTTP-pool-only. Class sweep dispositions: `README.md`'s env table and
+  `config/server.php` docblocks already held the live law (untouched);
+  `docs/dev/settings-restart-gap.md` "hardcoded constants" (hwaccel
+  `ShellTimeout`) and `README.md:963` (PHPUnit vendor printer) verified
+  accurate — different claims, out of scope. No pin-test covers these
+  doc files (grep-verified: zero test/script references to
+  `systemd/README`, `deploy/haproxy`, `reverse-proxy/README`); no PHP
+  changed.
+
 - **io_uring doctrine cured to the repo's own measurements — four prose sites
   and the flag table (review server__devops M12):** `docker/Dockerfile.base`'s
   S200 note is the canonical measurement record (io_uring is default OFF in

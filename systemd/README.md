@@ -37,12 +37,19 @@ sudo systemctl enable --now phlix-server
 ### phlix-server.service
 
 The main long-running service. `ExecStart` runs `php start.php start`, which
-brings up TWO dedicated listeners: the HTTP worker on **:8096** (REST API +
-`/app` SPA + `/health`) and the SyncPlay WebSocket worker on **:8097** (a
-separate `websocket://` worker — see the WebSocket note under
-Configuration). `config/server.php` `server.port` (default 8096) only drives
-the advertised/DLNA port; the sockets themselves are hard-coded in
-`start.php`.
+brings up TWO dedicated listeners: the HTTP worker (default **:8096**; REST
+API + `/app` SPA + `/health`) and the SyncPlay WebSocket worker (default
+**:8097**; a separate `websocket://` worker — see the WebSocket note under
+Configuration). Neither bind is hard-coded anymore (R14-06): both resolve
+through `src/Server/Runtime/ListenEndpoints.php` with precedence
+**env > `config/server.php` > shipped default** — `PHLIX_HTTP_HOST`/
+`PHLIX_HTTP_PORT`/`PHLIX_HTTP_WORKER_COUNT` fall back to `server.host`/
+`server.port`/`worker.count`, and `PHLIX_WS_HOST`/`PHLIX_WS_PORT` to
+`websocket.host`/`websocket.port`. The resolved values are written back
+into the config before the fork, so advertised values (the DLNA port, the
+WS status metadata) always describe the socket that actually accepts. To
+move a listener, set the env seam in `/etc/phlix/env` (or edit the config)
+and restart — never edit `start.php`.
 
 ## Configuration
 
@@ -70,6 +77,19 @@ JWT_SECRET=...
 # harmless on a bare-metal systemd install.
 #PHLIX_SECRET_KEY=...
 
+# Listening sockets (honored since R14-06): the values below win over
+# config/server.php, which wins over the shipped defaults (HTTP
+# 0.0.0.0:8096 with a 14-worker pool, WebSocket 0.0.0.0:8097). Garbage
+# (non-numeric/out-of-range port, unparseable host) fails the boot loudly.
+# `worker.count`/pool 'auto' means the shipped 14. The WS worker's process
+# count is fixed at 1 by law (single authoritative SyncPlayManager) and has
+# no env seam. Move a listener here or in the config — never in start.php.
+#PHLIX_HTTP_HOST=0.0.0.0
+#PHLIX_HTTP_PORT=8096
+#PHLIX_HTTP_WORKER_COUNT=14
+#PHLIX_WS_HOST=0.0.0.0
+#PHLIX_WS_PORT=8097
+
 # Informational: install.sh writes these, but log level is fixed in
 # config/logger.php and the env-file values below are not read by the
 # current code.
@@ -87,10 +107,14 @@ PHLIX_ENV=production
 #PHLIX_RELAY_ENABLED=1
 ```
 
-WebSocket note: the SyncPlay WS server is its own listener on **:8097**
-(start.php's `websocket://0.0.0.0:8097` worker; `websocket.host/port` in
-`config/server.php` tune the WS server object, not that listening socket).
-Plain HTTP GETs to :8097 answer **400** — that response IS the alive signal
+WebSocket note: the SyncPlay WS server is its own listener, default
+**:8097**. The bind is not hard-coded (R14-06): `PHLIX_WS_HOST`/
+`PHLIX_WS_PORT` env win over `websocket.host`/`websocket.port` in
+`config/server.php`, which win over the shipped default. Those same
+`websocket.*` keys also tune the WS server object (timeouts, JWT auth),
+and because `start.php` writes the resolved pair back into the config
+before forking, object and listening socket always agree. Plain HTTP GETs
+to the WS port answer **400** — that response IS the alive signal
 for liveness probes; there is no HTTP route tree, and therefore no
 path-based (`/ws`-style) reverse-proxy fronting the WS worker. Expose it as
 its own TCP route — long read/write timeouts, no path routing — see

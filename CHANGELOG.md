@@ -9,6 +9,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`GET /api/v1/users/me/favorites` hydrates the page in ONE batched query
+  (review server__devops2 M16):** `MediaUserDataController::listFavorites()`
+  looped `ItemRepository::findById()` per favorite row — the repo's own
+  Batch Queries law (AGENTS.md "Prevent N+1") broken in its most literal
+  shape. With `limit` clamped 1-100 that was up to 100 sequential pool
+  borrows + `media_items` queries per page inside a resident Workerman HTTP
+  worker, and each `findById` additionally ran the P5-S2 profile tag filter
+  (two more `profile_tags` queries per row whenever a profile is bound in
+  `RequestContext`), so the true worst case was ~300 queries per page. The
+  cure copies the sibling `MostWatchedController` shape exactly: collect the
+  page's ordered ids → one `findByIds()` (`WHERE id IN (...)`, order-
+  preserving, tag filter applied once for the batch) → re-walk the favorite
+  rows against the id→item map. Output is byte-identical — both hydration
+  paths funnel through `normalizeRow()` + `hydrateItem()`, and blocked/gone
+  rows miss the map exactly where `findById` used to return null. Pinned two
+  ways, each measured red at the parent commit: a controller-shape pin
+  (`findByIds` once with the row order, `findById` never) and a query-COUNT
+  probe running the REAL `ItemRepository` over a fake `Connection` — a
+  12-favorite page must touch `media_items` exactly once (it counted 12
+  before the fix); stripping the fix reddens precisely those four hydration
+  tests. No SQL changed, so no new real-DB class and no IntegrationDbGuard
+  delta; `findById` stays for the legitimate single-item write-validation
+  paths. The AGENTS.md favorites sentence follows the new mechanism.
+
 - **`systemctl reload` now uses Workerman's GRACEFUL reload signal (review
   server__devops2 M15):** the committed systemd unit and the unit heredoc in
   `scripts/install.sh` still wired `ExecReload` to SIGUSR1 — the signal

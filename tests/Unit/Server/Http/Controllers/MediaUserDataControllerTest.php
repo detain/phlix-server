@@ -386,8 +386,15 @@ class MediaUserDataControllerTest extends TestCase
         ]);
 
         $itemRepo = $this->createMock(ItemRepository::class);
-        $itemRepo->method('findById')->willReturnCallback(
-            fn (string $id): array => ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie']
+        // M-SERVER-16: the page hydrates through one batched findByIds().
+        $itemRepo->method('findByIds')->willReturnCallback(
+            function (array $ids): array {
+                $out = [];
+                foreach ($ids as $id) {
+                    $out[] = ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie'];
+                }
+                return $out;
+            }
         );
 
         $controller = new MediaUserDataController($itemRepo, $userData);
@@ -469,8 +476,18 @@ class MediaUserDataControllerTest extends TestCase
         ]);
 
         $itemRepo = $this->createMock(ItemRepository::class);
-        $itemRepo->method('findById')->willReturnCallback(
-            fn (string $id): ?array => $id === 'item-2' ? ['id' => 'item-2', 'name' => 'Kept'] : null
+        // M-SERVER-16: batched hydration — an id missing from the batch result
+        // is the new shape of "item gone" (findById returned null before).
+        $itemRepo->method('findByIds')->willReturnCallback(
+            function (array $ids): array {
+                $out = [];
+                foreach ($ids as $id) {
+                    if ($id === 'item-2') {
+                        $out[] = ['id' => 'item-2', 'name' => 'Kept'];
+                    }
+                }
+                return $out;
+            }
         );
 
         $controller = new MediaUserDataController($itemRepo, $userData);
@@ -481,6 +498,67 @@ class MediaUserDataControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertCount(1, $body['items']);
         $this->assertSame('item-2', $body['items'][0]['id']);
+    }
+
+    /**
+     * M-SERVER-16 — perf-shape pin for the N+1 cure: the favorites page must
+     * hydrate through ONE batched {@see ItemRepository::findByIds()} call
+     * (the repo's own Batch Queries law, AGENTS.md "Prevent N+1"; its single
+     * `WHERE id IN (...)` SQL shape is pinned in ItemRepositoryTest). What is
+     * pinned HERE is the controller honouring it: exactly one hydration call
+     * carrying the favorite rows' order, and the per-row `findById` path
+     * never used. Red before the fix: the loop issued one findById per row
+     * (up to 100 pool borrows + queries per page inside the resident worker).
+     */
+    public function testListFavoritesHydratesWholePageInOneBatchCall(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->method('getFavorites')->willReturn([
+            ['item_id' => 'item-1', 'rating' => 9, 'updated_at' => '2026-06-27 00:00:00'],
+            ['item_id' => 'item-2', 'rating' => null, 'updated_at' => '2026-06-26 00:00:00'],
+            ['item_id' => 'item-3', 'rating' => 5, 'updated_at' => '2026-06-25 00:00:00'],
+        ]);
+
+        /** @var list<string>|null $batchedIds */
+        $batchedIds = null;
+
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->never())->method('findById');
+        $itemRepo->expects($this->once())
+            ->method('findByIds')
+            ->willReturnCallback(
+                function (array $ids) use (&$batchedIds): array {
+                    $batchedIds = $ids;
+                    $out = [];
+                    foreach ($ids as $id) {
+                        $out[] = ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie'];
+                    }
+                    return $out;
+                }
+            );
+
+        $controller = new MediaUserDataController($itemRepo, $userData);
+        $response = $controller->listFavorites($this->authedRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(['item-1', 'item-2', 'item-3'], $batchedIds);
+
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertCount(3, $body['items']);
+        /** @var array<int, array<string, mixed>> $items */
+        $items = $body['items'];
+        $this->assertSame(['item-1', 'item-2', 'item-3'], array_column($items, 'id'));
+        // The per-row user_data still attaches from each favorite row.
+        $this->assertSame(
+            ['favorite' => true, 'rating' => 9, 'like_level' => 0, 'watched' => false],
+            $items[0]['user_data']
+        );
+        $this->assertSame(
+            ['favorite' => true, 'rating' => 5, 'like_level' => 0, 'watched' => false],
+            $items[2]['user_data']
+        );
     }
 
     public function testMarkWatchedReturns401WhenUnauthenticated(): void

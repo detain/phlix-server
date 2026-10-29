@@ -290,12 +290,15 @@ class MediaUserDataController
      * List the authenticated user's favorited media items, most-recently
      * favorited first, as fully shaped media items.
      *
-     * Each returned item is hydrated by id and shaped with the SAME
+     * Each returned item is hydrated through ONE batched
+     * {@see ItemRepository::findByIds()} for the page (M-SERVER-16; the repo's
+     * Batch Queries law) and shaped with the SAME
      * {@see MediaItemShaper::shape()} used by the media-list endpoint, then
      * carries an add-only `user_data:{favorite:true, rating:int|null,
      * like_level:int, watched:bool}` block.
-     * Rows whose underlying media item no longer exists are skipped defensively
-     * (the FK cascade normally prevents this, but a sparse join is possible
+     * Rows whose underlying media item no longer exists (or is blocked by the
+     * profile's tag restrictions) are skipped defensively (the FK cascade
+     * normally prevents this, but a sparse join is possible
      * mid-delete). Pagination mirrors `GET /api/v1/media`: `limit` defaults to
      * 50 and is clamped to 1-100, `offset` defaults to 0 and floors at 0.
      *
@@ -322,6 +325,37 @@ class MediaUserDataController
         // un-capped profile (null filter).
         $ratingFilter = $this->ratingGate?->resolveFilterForUser($userId);
 
+        // M-SERVER-16: hydrate the whole page through ONE batched findByIds()
+        // — the repo's own Batch Queries law (AGENTS.md "Prevent N+1"), the same
+        // shape MostWatchedController uses. The old loop called findById() once
+        // per favorite row: up to 100 sequential pool borrows + media_items
+        // queries per page (limit clamped 1-100) inside a resident worker, and
+        // each findById additionally ran the P5-S2 profile tag filter (2 more
+        // profile_tags queries per row when a profile is bound). findByIds()
+        // issues a single `WHERE id IN (...)` and runs the tag filter ONCE for
+        // the batch; it preserves input order and drops blocked rows, so
+        // re-walking $rows against the id→item map below yields byte-identical
+        // output to the per-row path — including the missing-item and
+        // blocked-item skips (a skipped row's id is simply absent from the map).
+        $ids = [];
+        foreach ($rows as $row) {
+            $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
+            if ($itemId !== '') {
+                $ids[] = $itemId;
+            }
+        }
+
+        /** @var array<string, array<string, mixed>> $itemsById */
+        $itemsById = [];
+        if ($ids !== []) {
+            foreach ($this->itemRepository->findByIds($ids) as $item) {
+                $hydratedId = is_string($item['id'] ?? null) ? $item['id'] : '';
+                if ($hydratedId !== '') {
+                    $itemsById[$hydratedId] = $item;
+                }
+            }
+        }
+
         $items = [];
         foreach ($rows as $row) {
             $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
@@ -329,9 +363,11 @@ class MediaUserDataController
                 continue;
             }
 
-            $item = $this->itemRepository->findById($itemId);
+            $item = $itemsById[$itemId] ?? null;
             if ($item === null) {
-                // Defensive: media item gone since the favorite row was written.
+                // Defensive: media item gone since the favorite row was written
+                // (or excluded by the profile's tag restrictions, which the
+                // batched filter applied to the whole page at once).
                 continue;
             }
 

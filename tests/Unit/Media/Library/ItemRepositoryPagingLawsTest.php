@@ -119,7 +119,11 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $this->repo()->getByType('lib-1', 'movie', PHP_INT_MAX, 0, ['G', 'PG']);
         $q = $this->lastQuery();
         $n = count($q['bindings']);
-        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
+        // assertGreaterThan does not narrow $n for psalm (CI attested); the fail()
+        // guard form (JoinPasswordThrottleTest) does, and keeps the offset typed.
+        if ($n < 2) {
+            $this->fail('expected at least 2 bindings (limit+offset), got ' . $n);
+        }
         // bindings: [library, type, cap-bindings…, limit, offset]
         $this->assertSame($ceiling, $q['bindings'][$n - 2]);
         $this->assertStringContainsString(', id ASC LIMIT ? OFFSET ?', $q['sql']);
@@ -131,7 +135,11 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $this->repo()->getByAllowedRatings('lib-1', ['G', 'PG'], PHP_INT_MAX, -4);
         $q = $this->lastQuery();
         $n = count($q['bindings']);
-        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
+        // assertGreaterThan does not narrow $n for psalm (CI attested); the fail()
+        // guard form (JoinPasswordThrottleTest) does, and keeps the offset typed.
+        if ($n < 2) {
+            $this->fail('expected at least 2 bindings (limit+offset), got ' . $n);
+        }
         $this->assertSame($ceiling, $q['bindings'][$n - 2]);
         $this->assertSame(0, $q['bindings'][$n - 1]);
         $this->assertStringContainsString(', id ASC', $q['sql']);
@@ -143,7 +151,11 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $this->repo()->getByAllowedGenres('lib-1', ['Action'], PHP_INT_MAX, -4);
         $q = $this->lastQuery();
         $n = count($q['bindings']);
-        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
+        // assertGreaterThan does not narrow $n for psalm (CI attested); the fail()
+        // guard form (JoinPasswordThrottleTest) does, and keeps the offset typed.
+        if ($n < 2) {
+            $this->fail('expected at least 2 bindings (limit+offset), got ' . $n);
+        }
         $this->assertSame($ceiling, $q['bindings'][$n - 2]);
         $this->assertSame(0, $q['bindings'][$n - 1]);
         $this->assertStringContainsString(', id ASC', $q['sql']);

@@ -49,7 +49,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   closures, `ItemRepositoryPagingLawsTest` by-ref property alias + 5
   count()-derived negative offsets, `JoinPasswordThrottleTest` tail offset,
   `ApplicationIndexBucketsFailClosedTest` over-promoted mock docblock), all
-  cured at source. Evidence table: `.reviews/fixlog/M-SERVER-CSFIX__fix.md`.
+  cured at source. The first CI attestation run isolated two residuals with
+  precision the swoole-less docker venue could not: the `assertGreaterThan`
+  narrowing in `ItemRepositoryPagingLawsTest` does not propagate to psalm
+  (replaced by the `fail()`-guard form that stayed green in the same run),
+  and `mockery/mockery` 1.6.12→1.6.15 (same lock churn) lost the template
+  return psalm read off `Mockery::mock()`, surfacing
+  `PluginAutoUpdateBootCatchupTest:111` — pinned with a truthful
+  `PluginLoader&MockInterface` var type. Evidence table:
+  `.reviews/fixlog/M-SERVER-CSFIX__fix.md`.
 
 - **The `Release` workflow now asserts the repo's own version law instead
   of contradicting it, curing the seven consecutive red tagged runs

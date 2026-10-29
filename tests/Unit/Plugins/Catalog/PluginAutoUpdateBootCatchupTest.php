@@ -103,6 +103,7 @@ final class PluginAutoUpdateBootCatchupTest extends TestCase
 
     private function updateService(PluginCatalogService $catalog): PluginUpdateService
     {
+        /** @var PluginLoader&Mockery\MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
         // updateAll() is never reached while auto-update is off.
         $loader->shouldNotReceive('listInstalled');

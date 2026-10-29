@@ -651,8 +651,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * `@phlix-require-mysql` runner gate (README's MariaDB 10.6+ claim vs the
      * MySQL-only 011/050 index statements). Measured from the phpunit red
      * (1981), not predicted.
+     * Re-pinned 1981→1982 by the M-SERVER-07 forward-fix (2026-10-29): +1 —
+     * tests/Integration/Collections/CollectionItemReAddRealDbTest.php, the
+     * real-MySQL sealed-law proof behind the collection-item re-add ODKU
+     * (7990e7cc). That file landed without a rotation, so origin CI measured this
+     * arm red at its headSha; the denominator is re-read from the phpunit red on
+     * this exact tree (1982), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1981;
+    private const EXPECTED_PHP_FILES = 1982;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

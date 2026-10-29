@@ -9,6 +9,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`PHLIX_LOG_LEVEL` deployment-doc lie cured to the R3-08 code truth; the
+  "Informational" env-sample comment retired (review server__devops M14):**
+  `systemd/README.md`'s env sample told operators "log level is fixed in
+  `config/logger.php` and the env-file values below are **not read by the
+  current code**" over the live `PHLIX_LOG_LEVEL=info` / `PHLIX_ENV=
+  production` rows. Both claims are false at HEAD: `config/logger.php:89-94`
+  documents the override in its own header, and
+  `StructuredLogger::envLevelOverride()` (`src/Common/Logger/
+  StructuredLogger.php:328-338`, `getenv` at :330 on
+  `LogChannels::LOG_LEVEL_ENV` = `PHLIX_LOG_LEVEL`, LogChannels.php:107)
+  replaces every level-driven handler's floor at :209 — vocabulary
+  `LEVEL_NAMES` (:77-80, debug/info/notice/warning/warn/error/critical/
+  alert/emergency, case-insensitive), unknown value fails soft to the
+  shipped floors, read at logger construction so a change is a restart
+  operation. `PHLIX_ENV` is likewise read (`AuthServicesProvider.php:273`
+  dev-shape tier, `:284` test tier; the main README env census rows 529-
+  530/664 already documented both as live). The stale sentence existed
+  because the same comment once shipped inside `install/systemd.sh`'s
+  generated-env template; that artifact was cured to truth in the M11 lane
+  ("PHLIX_LOG_LEVEL is a live knob (StructuredLogger); PHLIX_ENV selects the
+  dev/prod tier of the boot policy"), and the review's "two other deployment
+  artifacts" (`scripts/install.sh:1849-1850`, `k8s/helm/phlix/
+  templates/{configmap,deployment}.yaml`) SET the knob precisely because it
+  is functional — no stale prose in either. Docs-only rewrite: the comment
+  now states the live-knob law, the PSR-3 vocabulary and fail-soft, the
+  restart-not-reload semantics, the sibling `PHLIX_LOG_STDOUT` visibility
+  knob (R14-09, config/logger.php:83-87/154-159), and that EnvironmentFile
+  rows override the unit's `Environment="PHLIX_ENV=production"` default —
+  removing the operator incentive to edit the deploy-tree `config/logger.php`
+  and diverge the box from its package. Class sweep (grep "not read by" +
+  "Informational" across docs/, systemd/, install/, scripts/, deploy/, k8s/,
+  docker/): sole remaining hit was this block; `scripts/parallel/merge-junit.
+  php:34` matched "Informational" as an unrelated test-name citation, and
+  zero docker-compose/helm prose carries the false family — one site, one
+  cure. No PHP touched; no pin-test covers the comment.
+
 - **Socket-bind documentation cured to the R14-06 config-driven truth; the
   haproxy runbook's code-edit recipe retired (review server__devops M13):**
   `systemd/README.md`, `deploy/haproxy.cfg` and `reverse-proxy/README.md`

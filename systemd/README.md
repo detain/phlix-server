@@ -90,9 +90,20 @@ JWT_SECRET=...
 #PHLIX_WS_HOST=0.0.0.0
 #PHLIX_WS_PORT=8097
 
-# Informational: install.sh writes these, but log level is fixed in
-# config/logger.php and the env-file values below are not read by the
-# current code.
+# Live knobs — both rows are read at boot (the main README.md env census
+# is the SSOT), and both installers write them for that reason.
+# PHLIX_LOG_LEVEL overrides the per-handler floors declared in
+# config/logger.php for every level-driven handler
+# (StructuredLogger::envLevelOverride; PSR-3 names case-insensitive —
+# debug/info/notice/warning/warn/error/critical/alert/emergency — an
+# unknown value fails soft to the shipped floors; read at logger
+# construction, so a change is a restart operation). For journal/`docker
+# logs` visibility pair it with PHLIX_LOG_STDOUT=1 (adds a stdout sink;
+# config/logger.php).
+# PHLIX_ENV selects the dev/prod tier of the boot policy
+# (AuthServicesProvider). This file's rows override the unit's
+# Environment="PHLIX_ENV=production" default, so the knob is tunable
+# without touching the unit file.
 PHLIX_LOG_LEVEL=info
 PHLIX_ENV=production
 

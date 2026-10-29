@@ -71,6 +71,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`scripts/install.sh` is reformatted to shfmt canonical shape — semantics zero
+  (review server__dba2 M24b):** the installer normalization that rode the M24 shared-tree
+  cure (prior fixlog classified it 22r2-rider lineage; the M24b dispatch attributed it to
+  that landing, whose openapi/gate payload shipped separately byte-verified) is carried
+  here: statement splits, per-line case arms, tab indent, aligned trailing comments.
+  Semantic-null proven three ways at the rebase onto the M24 tip: `git diff --word-diff`
+  shows only whitespace/statement-boundary churn, `bash -n` parses clean, and
+  `install.sh --help` output is byte-identical to the pre-format file. The three test
+  classes that READ the installer text (VersionMarkerFile, PublicFrontControllerRemovalGuard,
+  AdminUpdatesRoutes — 25 tests / 220 assertions) pass unmodified on the new bytes.
+  No behavior, no arguments, no defaults changed.
+
 - **The shipped Collections/Playlists feature gains its README documentation (review
   server__pm M28):** the whole CRUD surface — 11 registrations in
   `Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2194-2218`,

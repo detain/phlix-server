@@ -898,11 +898,14 @@ final class PhlixMySQLConnectionTest extends TestCase
      * `vendor/workerman/workerman/src/Events/Swoole.php:231-233` — the only
      * `Coroutine::cancel` in the whole of `vendor/`), `start.php:127` selects
      * that driver whenever the swoole extension is loaded, and both shipped
-     * signals reach it: `ExecStop=SIGTERM` and `ExecReload=SIGUSR1`. Note
-     * SIGUSR1 is Workerman's **non-graceful** reload
-     * (`gracefulStop = ($signal === SIGUSR2)`), so the cancel fires without
-     * waiting for in-flight work — it is not the "graceful reload" path an
-     * earlier version of this comment named.
+     * signals reach it: `ExecStop=SIGTERM` and `ExecReload=SIGUSR2` — M15
+     * flipped the unit to Workerman's GRACEFUL reload; SIGUSR1 (its
+     * **non-graceful** variant, `gracefulStop = ($signal === SIGUSR2)`)
+     * reaches it via a bare `php start.php reload` or a pre-repair legacy
+     * unit. The cancel runs at the child's loop stop either way; the two
+     * signals differ only in whether in-flight connections drain first. An
+     * earlier version of this comment named the shipped reload SIGUSR1 —
+     * stale since M15; the defect below is reachable on both paths.
      *
      * WHICH CONFIGURATION the defect needs, because the trigger being live does
      * not make it live everywhere: a coroutine can only be PARKED in

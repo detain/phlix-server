@@ -689,8 +689,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * YES|NO)" handshake probe pinning that `bin/phlix migrate` and
      * `scripts/run-migrations.php` bootstrap `/etc/phlix/env` identically.
      * Measured from the phpunit red (1989), not predicted.
+     * Re-pinned 1989→1990 by the M-SERVER-25 nginx-asset-location lane at
+     * c9ce6184 WITHOUT its own staircase rung (same missed-step pattern as the
+     * two rungs above — recorded, not reconstructed, per the 8b849b0b
+     * precedent line).
+     * Re-pinned 1990→1991 by the M-SERVER-30 auth-method lock-out docs lane
+     * (2026-10-29): +1 — tests/Unit/Admin/AuthMethodLockoutReadmeTest.php, the
+     * README-claim detector pinning the 422 guard's reason tokens, fallback
+     * event and governed keys to the enforcing constants. Measured from the
+     * phpunit red (1991), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1990;
+    private const EXPECTED_PHP_FILES = 1991;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

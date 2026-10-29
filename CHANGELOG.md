@@ -7,6 +7,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **Auth-method lock-out guards get their documentation surface (review
+  server__pm M-SERVER-30):** the `422` refusals on `PUT /api/v1/admin/settings`
+  (auth-toggled write-sets) and `POST /api/v1/admin/auth-providers/{name}/disable`
+  have always carried a machine-readable `reason` token
+  (`all_methods_disabled` / `admin_lockout`, `AuthMethodLockoutException::REASON_*`)
+  — but nothing anywhere explained the rules, the tokens, or the recovery, so an
+  admin hitting the guard mid-workflow met an intentional safety behavior shipped
+  as a mystery (grep of `admin_lockout|methods_all_disabled` across README.md and
+  `docs/` was zero at the parent). Ships: a README `### Auth-method lock-out
+  guards` section (five toggles, R1/R2, reason → what-to-do table, the
+  sign-in-factor-vs-account-creation residual, the WebAuthn list/delete escape
+  hatch, the `auth.methods_all_disabled_fallback` posture); an API-Reference
+  `**Auth-method lock-out guard (422).**` error-meaning paragraph in the
+  Rate-limiting idiom, with both guarded endpoint rows amended to anchor it; a
+  recovery leg in "Bad days: recovery from the CLI" (a refusal persists nothing —
+  the only reachable locked state is a bypass write, re-opened with the concrete
+  `UPDATE server_settings SET setting_value = '1' WHERE setting_key =
+  'auth.password.enabled';` and taken live on the next decision, no restart); and
+  `docs/dev/AUTH_METHOD_LOCKOUT.md` for integrators (envelope shapes, the B2
+  `FOR UPDATE` serialization law, absent-key semantics, fail-closed 500 siblings,
+  accepted boundaries). New pin
+  `tests/Unit/Admin/AuthMethodLockoutReadmeTest.php` (5 tests/19 assertions,
+  red-on-parent measured 5F, token-drift mutation reddens exactly 1): every
+  documented token/key/event string is derived at runtime from
+  `AuthMethodLockoutException`, `AuthMethodPolicy::FALLBACK_EVENT`,
+  `METHODS`/`settingsKey()` and the REASON_* constant set is asserted total.
+  Census `EXPECTED_PHP_FILES` re-pinned 1990→1991 from the measured red (+1 — the
+  new test file; staircase line carries attribution). Docs only: no new wire
+  codes, no behavior or envelope change — the guard family (`AuthMethodPolicyTest`,
+  `AdminSettingsControllerAuth*`, `AuthProviderControllerDisableGuardTest`,
+  `AuthManagerAuthMethodGateTest`) stayed green UNMODIFIED (61 tests/164
+  assertions targeted). phpcs PSR12 + phpcs-tests.xml exit 0 on both touched test
+  files; phpstan (tests config) clean.
+
 ### Fixed
 
 - **The shipped nginx template 404ed every SPA asset; behind `install-nginx.sh` the web

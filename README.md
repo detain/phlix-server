@@ -141,6 +141,7 @@ Every environment variable the server process reads is inventoried in the defini
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
 - **Signup Approval Queue**: new self-service registrations wait for an admin by default — see [Signup approval gate (adding household users)](#signup-approval-gate-adding-household-users)
 - **External SSO — OIDC, LDAP & GitHub**: Optional external login backends, toggled per-provider from the admin **Integrations → Auth providers** page. Flows, endpoints and config pointers: [External SSO](#external-sso).
+- **Auth-method lock-out guards**: a settings write or provider disable that would leave every sign-in method off — or an active administrator with no usable factor — is refused with `422` and a machine-readable reason, and nothing is persisted. Rules, reason tokens and recovery: [Auth-method lock-out guards](#auth-method-lock-out-guards).
 - **Secure Password Hashing**: Argon2ID for password storage
 - **Multi-Device Sessions**: Track and manage sessions across devices
 - **User Profiles**: Multiple profiles per account with parental controls
@@ -211,6 +212,50 @@ Config pointers:
   callback_url_not_configured`. See [Environment variables](#environment-variables) and the
   SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider
   (which has admin **API** endpoints but no admin-SPA card yet).
+
+### Auth-method lock-out guards
+
+Sign-in enablement lives in five `server_settings` toggles — `auth.password.enabled`,
+`auth.webauthn.enabled`, `auth.oidc.enabled`, `auth.ldap.enabled`, `auth.github.enabled` —
+written from the admin settings API (`PUT /api/v1/admin/settings`) and the integrations
+page (`POST /api/v1/admin/auth-providers/{name}/disable`). Both surfaces run the same
+guard **before persisting anything**: a write-set that would lock the install out is
+refused with `422` and **zero persistence** (the toggle rows, the batched non-auth keys
+in the same request, everything rolls back together — the settings you had are exactly
+the settings you keep; there is nothing to undo after a refusal).
+
+- **Rule R1 — never all-off.** The proposed state must keep at least one of the five
+  methods enabled. Refusal reason: `all_methods_disabled`.
+- **Rule R2 — never lock an admin out.** The proposed state must leave every **active
+  administrator** at least one usable sign-in factor: a password while password sign-in
+  stays on, a registered passkey while WebAuthn stays on, or a linked identity for an
+  external provider that stays on *and* remains configured. Refusal reason:
+  `admin_lockout`. Because any toggle change re-runs this probe, disabling the one
+  method that was somebody's only factor is caught from either direction.
+
+The 422 body carries the machine-readable token in `reason` plus a human `message`, so an
+integrating UI can react precisely instead of parsing prose:
+
+| `reason` | What it means | What to do |
+|---|---|---|
+| `all_methods_disabled` | Your write would switch all five sign-in methods off | Keep at least one method on. If you are mid-migration (e.g. moving users to SSO), enable the replacement provider **and** verify admins have linked identities *before* disabling the old method. |
+| `admin_lockout` | At least one active admin would be left with no usable factor (message carries the count) | That admin must gain a factor first — sign in as them (or ask them) and register a passkey, set a password, or link the provider — or keep the method you were about to disable switched on for them. |
+
+Two honest edges, both deliberate:
+
+- **The toggles are sign-in-factor switches, not account-creation switches.** With
+  `password` off but `auth.signup_mode` still open, fresh accounts keep being minted and
+  can sign in — closing signup (`auth.signup_mode = disabled`) is the control for that.
+- **Credential management stays available as an escape hatch.** Turning `webauthn` off
+  refuses passkey *sign-ins and enrolment*, but listing and deleting your own registered
+  passkeys keeps working, so a user can always clean up stale credentials.
+
+If the table is ever forced all-off **outside** the API (direct SQL, a restored backup),
+the read path falls back to password-only sign-in so the install stays reachable, and
+logs the loud event `auth.methods_all_disabled_fallback` (once per worker). That fallback
+is **never persisted** — your data keeps showing the emergency instead of the server
+quietly rewriting it. Full envelope shapes and the serialization law:
+`docs/dev/AUTH_METHOD_LOCKOUT.md`.
 
 ### Signup approval gate (adding household users)
 
@@ -1015,7 +1060,7 @@ the next worker boot rather than the next request.
 | GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
 | PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
-| PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
+| PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only. A write-set touching the five `auth.<method>.enabled` toggles is guard-checked first: refused transitions answer `422` + machine `reason` and persist **nothing** (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |
 | GET | `/api/v1/admin/users` | List all users — optional `?status=pending\|active\|disabled` cohort filter (`pending` is the signup queue) — admin-only |
 | GET | `/api/v1/admin/users/{id}` | Get a specific user — admin-only |
@@ -1034,7 +1079,7 @@ the next worker boot rather than the next request.
 | POST | `/auth/identities/link/ldap` | Link an LDAP identity via a live bind (body `{username, password}`) — auth required |
 | DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours, `409 last_sign_in_method` if it is your last) — auth required |
 | GET | `/api/v1/admin/auth-providers` | List registered auth providers — admin-only |
-| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409 not_configured` if it has no saved config) — admin-only |
+| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409 not_configured` if it has no saved config). `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/oidc/config` | Read / save OIDC config (`provider_url`, `client_id`, `client_secret` write-only, `scopes`, `redirect_uri`). An absent optional key is **preserved**, not cleared — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/ldap/config` | Read / save LDAP config; `POST .../ldap/test` dry-runs a bind — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
@@ -1052,6 +1097,24 @@ login `start`/`finish` endpoints, and the public JWKS endpoint reply
 `429 Too Many Requests` + `Retry-After` (body
 `{"error":"Too Many Requests","code":"rate_limited"}`) when a caller exceeds the
 per-surface limit. Tune via `RATE_LIMIT_*` (see [Environment variables](#environment-variables)).
+
+**Auth-method lock-out guard (`422`).** `PUT /api/v1/admin/settings` (when the write-set
+touches any of the five `auth.<method>.enabled` toggles) and
+`POST /api/v1/admin/auth-providers/{name}/disable` answer
+`422 {"success":false,"error":"Validation failed","errors":{"auth.<method>.enabled":"<message>"},"reason":"<token>","message":"<message>"}`
+when the proposed state would lock the install out, and persist nothing. The `reason`
+token is the stable machine-readable field (the per-key `errors` map covers form
+rendering; `message` is operator prose):
+
+| `reason` value | Enforced rule | What the caller should do |
+|---|---|---|
+| `all_methods_disabled` | R1 — at least one sign-in method must stay enabled | Keep one method on; enable/verify the replacement before disabling the old one. |
+| `admin_lockout` | R2/R2-bis — an active admin would lose their last usable factor | Have that admin gain a factor first (password, passkey, or a linked+configured provider identity), or leave the method on. |
+
+Neither token is a new wire *error code* — no `code` channel is involved; `reason` is a
+response-body field the guard has always shipped. Semantics, envelopes and recovery in
+[Auth-method lock-out guards](#auth-method-lock-out-guards) and
+`docs/dev/AUTH_METHOD_LOCKOUT.md`.
 
 **JWKS key format.** `GET /.well-known/jwks.json` serves this server's Ed25519
 public key from `config/hub-server-key.pem`. The reader accepts **both** the
@@ -1430,6 +1493,30 @@ Auth providers page; see "External SSO" above). If the password login method its
 disabled, a fresh hash alone will not open the door, and the CLI exposes no settings
 toggle — reach the setting via the admin UI whenever any admin can still sign in, or a
 direct database write when none can.
+
+**Auth-method lock-out (`422`) — nothing to undo, and the true last resort.** A write the
+guard refused persists NOTHING: your settings are exactly what they were before the
+attempt, so recovery from a refusal is just not repeating it — the `reason` in the body
+(`all_methods_disabled` / `admin_lockout`) says which rule bit and
+[Auth-method lock-out guards](#auth-method-lock-out-guards) says what to do instead. The
+guarded APIs cannot reach a locked install, so the only way into that state is a write
+that bypassed them (direct SQL, a restored backup). Then:
+
+```sql
+-- Re-open password sign-in from the database (the API is behind the locked door):
+UPDATE server_settings SET setting_value = '1'
+ WHERE setting_key = 'auth.password.enabled';
+```
+
+(or `DELETE FROM server_settings WHERE setting_key IN (...)` for toggles you want back at
+their config-file defaults — note the externals `oidc`/`ldap`/`github` default to *off*
+when their row is absent, while `password`/`webauthn` default to *on*). Sign-in then works
+again as soon as the running workers' next settings read lands — the toggles are LIVE per
+decision, no restart needed. And if the forced state ever reads as all-five-off, the
+server self-helps to password-only sign-in and logs the loud event
+`auth.methods_all_disabled_fallback` (once per worker) without rewriting your data — grep
+the audit log for it to confirm how the state arrived. Once inside, fix the toggles from
+the admin UI; the guards will keep the corrected state safe from then on.
 
 **No admin exists yet (from-source install).** There is no bootstrap flag; create, then
 promote:

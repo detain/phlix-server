@@ -71,6 +71,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **M32 residual truth pass atop the M5 reframe: the last "evaluated on request"
+  fiction and two rotted README coordinates cured (review server__pm M-SERVER-32):**
+  the sibling docs-cure landed while this lane's full dead-doc-strip alternative
+  was mid-flight; two residuals survived it —
+  `SmartPlaylistRefreshWiringTest`'s header still claimed a smart playlist "is
+  evaluated on request" (nothing evaluates one on request; the only live
+  evaluation is `CollectionManager::refreshSmartCollection()`), and README's
+  smart-collections bullet cited `Router.php:872` (rotted to :887 by the reframe
+  itself) and `start.php:1276` (rotted to :1290 by the M35 landing) — both
+  reworded to durable, test-named anchors. The strip-vs-keep choice for the
+  reframed helper itself is left to the review loop; the full-strip variant is
+  preserved unpushed (fixlog `M-SERVER-32__fix.md`).
 - **`/api/v1/smart-playlists` was advertised by src/ docblocks yet registered
   nowhere — cured to the shipped collections truth and pinned (review server__pm
   M5):** `Router::smartPlaylists()` (a registration helper no boot path calls) and

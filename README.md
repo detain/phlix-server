@@ -349,12 +349,13 @@ exact line is cited in the [HTTP Endpoints](#http-endpoints) table rows below.
   indistinguishable from absence, mirroring the syncplay room-visibility precedent the docblock cites.
 - **Smart collections**: a collection carrying a `smart_playlist_id` is *smart* — its membership is
   materialized in `collection_items` and re-evaluated against the playlist's rules after library scans
-  (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:899`, subscribed at
-  `start.php:1276`), or on demand via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
+  (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:899`, subscribed by the
+  call pinned in `start.php`'s library-scan worker by `SmartPlaylistRefreshWiringTest`), or on demand
+  via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
   a smart collection" on a plain row, `200 {message}` on a smart one). Honest gap: **the backing
-  rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper exists in
-  `Router.php:872` but is never called, so a `smart_playlist_id` must reference a pre-existing
-  `smart_playlists` row created out-of-band.
+  rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper sits
+  uncalled in `Router.php` (never invoked; pinned by `SmartPlaylistRegistrationGuardTest`), so a
+  `smart_playlist_id` must reference a pre-existing `smart_playlists` row created out-of-band.
 - **UI truth at this tip**: the served web SPA bundle (pinned `@phlix/ui` v0.99.10 in
   `web-ui/package.json:15`) exposes the **admin** Collections page (`/app/admin/collections`); the
   member-facing `/app/playlists` page lives in `@phlix/ui` master and lands in this server's bundle

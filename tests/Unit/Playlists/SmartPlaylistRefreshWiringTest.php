@@ -27,7 +27,8 @@ use function DI\factory;
  * {@see SmartPlaylistRefreshHandler} was complete, tested, and container-bound,
  * but `register()` had no caller anywhere in the repo, so a smart COLLECTION
  * never refreshed its stored membership after a scan. (A smart PLAYLIST has no
- * stored membership; it is evaluated on request. The collection refresh is the
+ * stored membership; its rules are evaluated when a linked collection refreshes.
+ * The collection refresh is the
  * only production behaviour this wiring changes.) `start.php` cannot be
  * exercised without booting Workerman, so this asserts against its source,
  * deliberately: the failure being guarded is "the call site was never added",

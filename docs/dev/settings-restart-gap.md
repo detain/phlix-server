@@ -355,8 +355,16 @@ generation guard turns 6 red; removing the boot fail-safe turns the unreachable-
 - The SyncPlay WebSocket worker and the DLNA SSDP worker are `reloadable` (Workerman's default), so a
   reload drops live WS/SyncPlay sessions and in-flight HLS segment requests. There is no confirm
   dialog warning about that.
-- `config/server.php`'s `worker.count` and `process.reloadable` are read by nothing — `start.php`
-  hardcodes `$httpWorker->count = 14`.
+- **RESOLVED by R14-06** (this bullet previously read "are read by nothing —
+  `start.php` hardcodes `$httpWorker->count = 14`", the pre-R14-06 state):
+  `src/Server/Runtime/ListenEndpoints.php` now reads both — the HTTP pool
+  size resolves env `PHLIX_HTTP_WORKER_COUNT` > `worker.count` > default 14
+  (`'auto'` = 14), and `process.reloadable` is applied via
+  `ListenEndpoints::reloadable()`; `start.php:212-222` assigns
+  `$httpWorker->count = $httpListen['workerCount']`. The WS worker's
+  `count = 1` stays a fixed literal by law (one authoritative SyncPlayManager
+  owns room state) and the WS **bind** is likewise config-driven
+  (`PHLIX_WS_HOST`/`PHLIX_WS_PORT` > `websocket.host`/`port`).
 - `phlix-hub` has the same class of gap; `EffectiveConfig` has no hub counterpart.
 - Other direct `include`s of config files remain (`Application::loadFfmpegConfig()`,
   `StreamProbeBackfill::resolveFfmpeg()`, the webhook notification plugins, `MetadataManager`,

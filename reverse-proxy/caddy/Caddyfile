@@ -1,8 +1,12 @@
 # Phlix Media Server — Caddy reverse-proxy template
 #
-# Upstream truth: start.php serves HTTP on 127.0.0.1:8096 (REST + SPA +
-# static) and runs the SyncPlay WebSocket server as a SEPARATE plaintext
-# listener on 0.0.0.0:8097. The :8096 HTTP worker has zero WebSocket-upgrade
+# Upstream truth: the HTTP worker (REST + SPA + static) listens on the
+# RESOLVED bind, default 0.0.0.0:8096 — since R14-06 env
+# PHLIX_HTTP_HOST/PHLIX_HTTP_PORT > server.host/server.port > shipped
+# default, via src/Server/Runtime/ListenEndpoints.php; the reverse_proxy
+# targets below use the loopback reach of that bind. The SyncPlay WebSocket
+# server is a SEPARATE plaintext listener on its own resolved default,
+# 0.0.0.0:8097. The :8096 HTTP worker has zero WebSocket-upgrade
 # logic, so nothing on this site block can front the WS server by path —
 # see the "WebSocket worker (:8097)" comment at the bottom for how to
 # expose it. An earlier revision of this file proxied /ws* to the HTTP

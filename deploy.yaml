@@ -6,11 +6,16 @@
 #
 # Related files:
 #   - deploy/haproxy.cfg  : HAProxy configuration for WS port exposure
-#   - config/server.php   : WS worker OBJECT settings (timeouts, JWT auth).
-#     NOTE: the daemon's listening socket is the literal
-#     'websocket://0.0.0.0:8097' hard-coded in start.php (~line 610);
-#     these config keys do not move it on the resident start.php path.
-#   - start.php           : WS worker initialization (~line 610)
+#   - config/server.php   : WS worker settings — timeouts, JWT auth AND the
+#     'websocket.host'/'websocket.port' bind keys. Since R14-06 these keys
+#     DO move the listening socket: src/Server/Runtime/ListenEndpoints.php
+#     resolves the bind env (PHLIX_WS_HOST/PHLIX_WS_PORT) > config > shipped
+#     default (websocket://0.0.0.0:8097), and start.php writes the resolved
+#     pair back into the config pre-fork so the object always describes the
+#     socket that accepts.
+#   - start.php           : WS worker initialization (~line 636,
+#     ListenEndpoints::webSocket() — nothing hard-coded; move the bind by
+#     env/config + restart, never by code edit)
 
 ---
 # Deployment metadata
@@ -21,16 +26,21 @@ deployment:
 
 # WebSocket worker configuration
 websocket:
-  # Port the daemon's WS worker listens on (0.0.0.0:8097 via start.php).
+  # Port the daemon's WS worker listens on: the RESOLVED bind, default
+  # 8097 (env PHLIX_WS_HOST/PHLIX_WS_PORT > websocket.host/websocket.port
+  # in config/server.php > shipped default; resolved by ListenEndpoints,
+  # R14-06 — the value below mirrors the shipped default).
   internal_port: 8097
 
   # External exposure via HAProxy. The shipped haproxy.cfg binds :8443 to
   # avoid colliding with the daemon's own :8097 listener (EADDRINUSE);
   # firewall the raw daemon port from untrusted networks:
   #   sudo ufw deny 8097/tcp && sudo ufw allow 8443/tcp
-  # To keep the client-visible port at 8097 instead, bind the daemon to
-  # 127.0.0.1 (edit the start.php literal) and switch the frontend bind —
-  # see the PORT PREREQUISITE header in deploy/haproxy.cfg.
+  # To keep the client-visible port at 8097 instead, move the daemon's WS
+  # bind to loopback via env or config — PHLIX_WS_HOST=127.0.0.1 in
+  # /etc/phlix/env (or websocket.host in config/server.php) — restart the
+  # daemon, then switch the frontend bind: since R14-06 this needs NO code
+  # edit. See the PORT PREREQUISITE header in deploy/haproxy.cfg.
   exposed_port: 8443
   exposed_interface: "0.0.0.0"
 
@@ -132,4 +142,4 @@ verification:
 depends_on:
   - "SP6: WebSocket worker implementation (SyncPlayManager, WebSocketServer)"
   - "config/server.php: websocket timeouts + JWT handshake auth (SV-4.7)"
-  - "start.php: WS worker listening socket on 0.0.0.0:8097 (~line 610, hard-coded literal)"
+  - "start.php: WS worker bind resolved by src/Server/Runtime/ListenEndpoints.php (R14-06), default websocket://0.0.0.0:8097 — move via PHLIX_WS_HOST/PHLIX_WS_PORT or websocket.host/port + restart"

@@ -9,6 +9,57 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **M13 class-sweep survivors cured; the deploy.yaml code-edit recipe
+  retired; bind-law docs re-sweep reaches zero survivors (review
+  server__devops M13 r2):** the M13 cure (`bda69a35`) rewrote
+  `deploy/haproxy.cfg`, `systemd/README.md` and `reverse-proxy/README.md` to
+  the R14-06 truth, but its class sweep missed same-class survivors — its own
+  "the literal `websocket://0.0.0.0:8097` no longer exists outside historical
+  comments" claim was falsified by `deploy.yaml`, which still called the
+  listening socket "hard-coded in start.php (~line 610)", asserted "these
+  config keys do not move it", and told operators to "edit the start.php
+  literal" — the exact code-edit recipe the cured haproxy.cfg header
+  contradicts ("editing start.php is the pre-R14-06 recipe and is wrong
+  now"). Cured here by mirroring that shipped law: `deploy.yaml`'s header,
+  `internal_port` comment, exposure-posture note and `depends_on` manifest
+  now state the `ListenEndpoints` resolution (env `PHLIX_WS_HOST`/
+  `PHLIX_WS_PORT` > `websocket.host`/`port` > shipped default
+  0.0.0.0:8097, resolved pair written back pre-fork; move the bind by
+  env/config + restart, never a code edit) and the stale `~line 610` bind
+  anchor is corrected to the real site (`start.php:636`,
+  `ListenEndpoints::webSocket()`). Also cured, the two reverse-proxy
+  passages r1 named: `reverse-proxy/nginx/phlix.conf` (header + WS note —
+  "start.php binds (0.0.0.0:8096)"/"binds on 0.0.0.0:8097" → resolved
+  defaults + env/config seams; the `count = 1` law stays) and
+  `reverse-proxy/caddy/Caddyfile` (header "serves HTTP on 127.0.0.1:8096" —
+  which additionally misstated the default HTTP bind host;
+  `DEFAULT_HTTP_HOST` is 0.0.0.0, `ListenEndpoints.php:80` — now the
+  resolved default with the loopback target stated as reach, not bind).
+  Independent re-sweep found one more false live claim of the family:
+  `docs/dev/settings-restart-gap.md`'s open-item "worker.count and
+  process.reloadable are read by nothing — start.php hardcodes
+  `$httpWorker->count = 14`" was CLOSED by R14-06 itself (pool size resolves
+  env > `worker.count` > 14, `'auto'` = 14; `process.reloadable` applies via
+  `ListenEndpoints::reloadable()`; `start.php:212-222` assigns the resolved
+  `workerCount`) — the bullet now says so. Class re-sweep over every tracked
+  deployment artifact (119 files: `deploy.yaml*`, `deploy/`, `docker/**`,
+  `systemd/`, `k8s/`, `scripts/**`, `install/`, `docs/**`,
+  `reverse-proxy/**`, `README.md`, `AGENTS.md`): zero stale-bind-law
+  survivors. Remaining raw hits are the cured law's negations
+  (haproxy.cfg:12), TRUE historical rationale (the helm hub chart's
+  retired-`PHLIX_HUB_DATABASE_*`-names note — different subsystem), and the
+  docker family's TRUE-AS-DEFAULTS port-only statements kept by the r1
+  precedent (`Dockerfile*` EXPOSE comments, `docker/README.md` and
+  examples' "ports start.php binds" tables — port numbers correct, no
+  bind-law claim); the `unix:` family is supervisord/docker control sockets
+  and the SyncPlayBridgePublisher register only — zero daemon-bind claims.
+  r1's cure entry above is kept verbatim per house precedent; this entry is
+  its forward correction. Docs/comments-only — no runtime directive or PHP
+  line changed; `deploy.yaml` re-validated with `yaml.safe_load`. No
+  pin-test covers these docs (grep-verified: zero tests/.github/scripts
+  content references to the four files; `settings-restart-gap.md` appears
+  only in prose "See docs/..." test comments).
+
 - **`PHLIX_LOG_LEVEL` deployment-doc lie cured to the R3-08 code truth; the
   "Informational" env-sample comment retired (review server__devops M14):**
   `systemd/README.md`'s env sample told operators "log level is fixed in

@@ -781,11 +781,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
                 $problems[] = sprintf('%s declares a ghost "200" on top of the adjudicated %s.', $key, $code);
             }
 
-            if ($code === '204' && array_key_exists('content', $responses['204'] ?? [])) {
+            if ($code === '204' && array_key_exists('content', $responses[$code] ?? [])) {
                 $problems[] = sprintf('%s declares a body for 204; No Content is empty on the wire.', $key);
             }
 
-            if ($code === '302' && !isset($responses['302']['headers']['Location']['schema'])) {
+            if ($code === '302' && !isset($responses[$code]['headers']['Location']['schema'])) {
                 $problems[] = sprintf('%s declares 302 without a Location header contract.', $key);
             }
 

@@ -9,6 +9,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The shipped theme selection surface and its user-visible laws are documented
+  to code truth (review server__pm M29):** the catalogue endpoints
+  (`GET /api/v1/themes`, `GET /api/v1/themes/{id}` — registered
+  `src/Server/WebPortal/WebPortalRouter.php:416-417` inside the
+  `AuthMiddleware` group closing :448, served by
+  `src/Server/Http/Controllers/ThemesController.php`) and the three laws riding
+  on them — write validation against `BuiltInThemes::IDS ∪ ThemeSourceRegistry`
+  with fail-loud pre-write 400 (`src/Auth/UserRepository.php`
+  `validateThemeId()` :903, wired at :824; IDS literally
+  `['nocturne','daylight','midnight']`, `src/Theming/BuiltInThemes.php`), the
+  hard no-clearing v1 law (`UserRepository.php:792` "CLEARING IS NOT SUPPORTED
+  (v1 law)" — no API resets `active_theme_id` to NULL; `null` 400s like any
+  unknown id; `GET users/me/settings` omits the key until first choice
+  :767-771), and the install→**enable**→select flow whose enable-step drives
+  registration (`PluginLoader.php:527` register into the container-singleton
+  `ThemeSourceRegistry`; all-or-nothing fail-closed) — existed in zero
+  human-readable place: at 894ede3e `grep -rn "api/v1/themes|nocturne|CLEARING"
+  README.md docs/` returned nothing, and the estate's "installed a theme plugin
+  and nothing changed" symptom (theme-plugin-fix campaign) was exactly this doc
+  hole. README gains a "Themes (choosing an appearance)" Features section
+  (auth posture incl. the fingerprinting rationale, wire shape and the
+  load-bearing `builtIn` flag, deterministic order and no-shadow guarantee,
+  the selection contract with the fossil pre-S85 `phlix-*` names now 400, the
+  write-once NULL semantics with the playback-preferences non-touch note, the
+  three-step plugin flow, and the stored-then-disabled id edge, said honestly),
+  an Overview bullet, and four HTTP-endpoint table rows (the two theme GETs
+  plus the previously unlisted `GET`/`PUT /api/v1/users/me/settings` with
+  their theme semantics). `openapi.yaml` is the spec's own surface and was
+  NOT touched here (live-lane turf); this is the prose home for the laws. Docs
+  only: no code, no behavior change; no README-claims pin test exists for this
+  family at this tip and none was added (M22/M23/M26 docs-rider precedent; the
+  lone `BackupSubsystemReadmeTest` pins the backup family only). Provenance:
+  the prior M29 lane was a phantom-closeout (no commit, no report —
+  `M-SERVER-29__r1.md`); this is the real first cure.
+
 - **The "Manual install (from source)" walkthrough is documented to completable
   truth (review server__ipd M26):** the block could not survive contact with its
   own server — three independent stops, each verified at this tip. (1) Nothing

@@ -28,6 +28,7 @@ Phlix Media Server provides a complete media management and streaming solution:
   widths (`force_divisible_by=2`)
 - **WebSocket Events**: Real-time progress and notification delivery
 - **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API + `bin/phlix` only (no SPA page); see [Backups (admin-managed)](#backups-admin-managed)
+- **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with 24-hour cache and provider fallback
 - **Content Filtering**: Parental controls with rating and genre-based filtering
 
@@ -354,6 +355,63 @@ the legacy `Application::loadBackupRoutes()` first, then the typed `AdminRoutes:
 the identical paths and handler pairs. The Router stores routes in a method+path-keyed map, so
 the second registration overwrites the first, and both resolve the same container-singleton
 controller — behavior is identical either way; the `AdminRoutes` entries are what actually serve.
+
+### Themes (choosing an appearance)
+
+The server ships three built-in token-map themes — `nocturne`, `daylight`, `midnight` — and takes
+plugin-contributed themes on top. Appearance is **per-user**, and the whole moving parts surface is
+a read-only catalogue plus one field on the user-settings endpoint.
+
+**The catalogue (read-only).** `GET /api/v1/themes` answers `{"themes": [ … ]}` — the whole list;
+`GET /api/v1/themes/{id}` answers `{"theme": { … }}`, or `404` `{"error":"Theme not found"}`. Both
+are registered in `src/Server/WebPortal/WebPortalRouter.php` inside the `AuthMiddleware` group —
+sign-in is required because the list names the theme plugins installed on *this* server, which is
+plugin-fingerprinting material for an anonymous visitor — and served by
+`src/Server/Http/Controllers/ThemesController.php`. Every entry has passed the host token sanitiser
+(`ThemeTokenValidator`) whether the host or a plugin supplied it, and carries the wire shape
+`{"id", "name", "dark", "extends", "tokens", "source", "builtIn"}`. `builtIn` is load-bearing, not
+decorative: the SPA applies a built-in by setting `data-theme` on `<html>` (its real values live in
+the shipped stylesheet), while a plugin theme is applied token-by-token — and `tokens` is a theme's
+*own* declared map, not a flattened one, so a theme with a non-null `extends` is layered over its
+base by the client (every base this server knows about is in the list). Order is deterministic —
+built-ins first in `BuiltInThemes::IDS` (colors.css declaration) order, then plugin ids sorted —
+and a built-in can never be shadowed by a plugin (the validator refuses reserved ids outright, and
+the merge keeps the left operand on a clash). If the theming controller is not wired the endpoints
+answer `503` loudly — an empty list would masquerade as "no plugin themes installed" and hide a
+broken container wiring indefinitely.
+
+**Selecting a theme.** `PUT /api/v1/users/me/settings` with `{"theme": "<id>"}`. The value is
+validated against `BuiltInThemes::IDS` ∪ `ThemeSourceRegistry` — the three built-ins plus exactly
+the plugin themes *currently registered* on this server (`src/Auth/UserRepository.php`,
+`validateThemeId()`). It fails loud and fails **before** any write: an unknown id, an empty string,
+or any non-string (including `null`) throws ahead of the query, so a rejected payload changes zero
+rows, and the endpoint answers `400` with the flat `{"error": …}` envelope naming the valid themes.
+The pre-S85 names (`phlix-light` / `phlix-dark` / `phlix-amoled` / `phlix-contrast`) are fossils of
+the deleted stylesheet-URL theme system: they are not themes any more, and submitting one 400s like
+any unknown id.
+
+**Clearing is not supported (v1 law).** There is deliberately **no API path that resets a user's
+theme back to unset.** A `NULL` in the column means "this user has never chosen" — a write-once
+state, read by design: `GET /api/v1/users/me/settings` *omits* the `theme` key entirely until the
+first selection, and clients fall back to their own default (the SPA carries the three built-ins in
+its own bundle, so a signed-out page themes itself with zero fetches). Sending `"theme": null` is
+therefore not a clear — it 400s like any unknown value. Switching to another theme is the only
+change that exists. The playback-preferences save (`PUT /api/v1/me/playback/preferences`) never
+touches the theme either: it drops the stored value from its re-pass before writing, so an unrelated
+preferences save cannot turn stored history into a 400.
+
+**Install → enable → select (plugin themes).** Installing a theme plugin changes nothing for
+anyone. Registration is driven by **enable**: `PluginLoader::enable()` calls
+`ThemeSourceRegistry::register()` on the container singleton the catalogue lists from (and disable
+removes it again); registration is all-or-nothing fail-closed — one invalid token rejects the whole
+enable rather than half-registering it. So three independent steps are required, and the estate's
+classic "installed a theme plugin and nothing changed" symptom is skipping the second or the third:
+install, then **enable** (this is what puts the plugin's ids into the catalogue and into the
+writable set above), then each user **selects** one — enabling does not switch anybody over.
+Selection is per-user. Honest edge, by design: ids are validated at *write* time, not continuously,
+so a stored selection whose plugin was later disabled remains what `GET` reports (it reads as a
+plain string from the column) until the user selects something that currently exists; re-selecting
+the disabled theme's id 400s in the meantime.
 
 ## Installation
 
@@ -950,6 +1008,10 @@ the next worker boot rather than the next request.
 | DELETE | `/api/v1/media/{id}/rating` | Clear the user's personal rating — auth required |
 | PUT | `/api/v1/media/{id}/like` | Set the user's thumbs value (body `{level: int -2..2}`, required; `-2`=strongly dislike, `-1`=dislike, `0`=not set, `1`=like, `2`=love) — auth required |
 | GET | `/api/v1/users/me/favorites` | List the user's favorited items (shaped media items + `user_data` incl. `like_level`; `?limit=1-100&offset`) — auth required |
+| GET | `/api/v1/themes` | Theme catalogue — built-ins (`nocturne`/`daylight`/`midnight`) + enabled plugin themes, every entry sanitiser-passed, deterministic order, `{"themes":[...]}`; `503` when theming is unwired — auth required; see [Themes (choosing an appearance)](#themes-choosing-an-appearance) |
+| GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |
+| GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
+| PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |

@@ -262,6 +262,62 @@ Not yet exposed: per-user channel lineups and personal channel favorites exist o
 service layer (`ChannelManager` over the `livetv_lineups`/`livetv_favorites` tables); no
 HTTP routes or UI back them yet, so members cannot favorite channels or build lineups.
 
+### Backups (admin-managed)
+The backup subsystem (`src/Admin/BackupManager.php`) ships as operator tooling: each backup is
+one `tar.gz` archive combining a full MySQL dump with the server's files, stored under a local
+directory and optionally replicated to S3-compatible object storage. The entire surface is the
+admin API (`/api/v1/admin/backup/*`, all gated by `AdminMiddleware`) and two `bin/phlix` console
+commands — **there is no backup page in the `/app` SPA**.
+
+All behavior is driven by one standalone config file, `config/backup.php` — it is *not* required
+into the `config/server.php` array; each consumer (`BackupManager`, the schedule endpoints, the
+timer boot) includes it directly:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `true` | Master switch; also gates the automatic-backup timer |
+| `local_path` | `/var/phlix/backups` | Where archives are stored (created on demand) |
+| `retention_count` | `5` | How many of the most recent backups to keep — pruning is by count only |
+| `auto_backup_interval_days` | `7` | Days between automatic backups; `0` disables scheduling |
+| `s3.enabled` / `s3.bucket` / `s3.region` / `s3.access_key` / `s3.secret_key` / `s3.endpoint` / `s3.prefix` | off; region `us-east-1`; prefix `backups/` | Optional S3-compatible destination; empty `endpoint` means AWS, set it for MinIO/Backblaze-style hosts |
+
+**What an archive holds** (`{label_}backup_<UTC-timestamp>.tar.gz`): a full database dump
+(`mysqldump --single-transaction --quick --lock-tables=false`, run shell-less with the password
+supplied only via `MYSQL_PWD` so it never enters a world-readable process argv, and success
+requires both exit 0 *and* mysqldump's `-- Dump completed` trailer — a truncated dump fails loudly
+instead of becoming a silently useless "successful" backup), every `*.php` file under `config/`
+(recursively, so nested files like `config/scrobblers/trakt.php` are captured), the `data/`
+directory, and SSL certificates from the standard locations if present.
+
+**Retention** runs after every create: backups beyond the newest `retention_count` are deleted —
+local file or S3 object plus the `backups` table row. The `expires_at` column is listed by the
+API but nothing ever writes it: time-based expiry does not exist.
+
+**Automatic backups** run in the dedicated `count=1` background-timer worker (see `start.php`
+section 4c-bis): one catch-up check 5 minutes after boot plus a daily 24-hour check thereafter.
+The decision is idempotent — an archive is only created once `most recent backup row +
+auto_backup_interval_days` lies in the past (an empty `backups` table schedules immediately), so
+restart churn cannot double-back-up. Auto archives carry the label `auto`.
+
+**Restore** (`POST /api/v1/admin/backup/{id}/restore`) is synchronous and checksum-gated: the
+archive's SHA-256 is recomputed and must match the stored value before anything is touched (S3
+rows are downloaded to a temp file first). It imports `database.sql` via the `mysql` client and
+copies the archive's config files back into `config/` (entries that resolve outside `config/` are
+skipped with a warning). Two honest boundaries: the `data/` and SSL files inside the archive have
+**no restore path** — recover those from the tarball manually — and restore rewrites files only,
+so running workers keep their boot-loaded config until you restart.
+
+**S3 upload** (`POST /api/v1/admin/backup/{id}/upload-s3`) pushes a local archive to the bucket
+and then rewrites the `backups` row to point at `s3://bucket/key` with `is_s3` set — the local
+file is *not* deleted, and from that moment it is no longer tracked by retention (clean it up
+yourself). There is no endpoint to pull an S3 row back to local storage (the internal
+`downloadFromS3()` has no caller; only restore reaches into the bucket).
+
+Not documented but real: every one of these paths exists twice on the router — the legacy
+`Application::loadBackupRoutes()` and the typed `AdminRoutes::register()` both register the same
+seven routes with the same handlers; deleting either would break a different dispatch path, so
+both are kept deliberately.
+
 ## Installation
 
 ### One-line install (Ubuntu/Debian)
@@ -1126,7 +1182,7 @@ php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-
 php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. More commands are added in later steps.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
 
 **Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 
@@ -1169,6 +1225,85 @@ without `--rescan`) returns one of:
 The same table is printed by `php bin/phlix library:scan --help`. `3` (not `2`) is the
 "completed but lost files" code because `2` is Symfony's reserved invalid-input code — a
 wrapper must be able to tell a scan that never ran from one that lost files.
+
+**Command reference — the 20 commands `bin/phlix` ships.** `php bin/phlix list` prints this
+live from the binary. Every command runs as a one-shot PHP process that reads the configured
+database directly — no admin session, no HTTP surface, and no running server is required
+(the DI container and DB connection are built lazily; `list` works with no database at all).
+User commands accept a username or an email wherever `<user>` appears.
+
+| Command | Arguments / options | What it does |
+|---|---|---|
+| `migrate` | — | Apply `migrations/*.sql` (idempotent; exit codes above) |
+| `library:list` | — | List all configured media libraries |
+| `library:scan` | `<libraryId>`; `--rescan`, `--force` | Scan (or, with `--rescan`, re-read every file of) a library; `--force` starts even when a scan job is already queued/running |
+| `media:dedupe-paths` | `--dry-run` (default), `--apply`, `--batch-size=N` | Find/merge duplicate media items sharing a filesystem path (default 500 per batch) |
+| `user:list` | `--status=pending\|active\|disabled`, `--json` | List accounts, optionally one status cohort |
+| `user:create` | `<username>`; `--email=`, `--password=` (required), `--display-name=`, `--json` | Create an account (username 3–50 chars; password Argon2ID-hashed at rest). There is no admin flag — promote afterwards |
+| `user:promote` | `<user>`; `--revoke`, `--json` | Toggle the admin flag (`--revoke` demotes; the last admin cannot be demoted) |
+| `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted |
+| `user:approve` | `<user>`; `--json` | Move a pending account to `active` |
+| `user:reject` | `<user>`; `--json` | Reject a still-pending signup (hard delete) |
+| `user:disable` | `<user>`; `--json` | Disable an account (last admin is protected) |
+| `user:delete` | `<user>`; `--force`, `--json` | Delete an account; `--force` skips only the confirmation prompt — the last-admin guard is absolute and is **not** bypassed by it |
+| `plugin:list` | — | List installed plugins and their enabled state |
+| `plugin:install` | `<source>` | Install a plugin from a source URL (HTTPS, or `file://` for local sources) |
+| `plugin:enable` / `plugin:disable` | `<name>` | Enable an installed plugin / disable an enabled one, by manifest name |
+| `plugin:uninstall` | `<name>` | Uninstall a plugin by manifest name |
+| `backup:create` | `--label=` | Create a server backup archive (configured in `config/backup.php`) |
+| `backup:list` | — | List stored server backups |
+| `hwaccel:probe` | — | Probe for available hardware-acceleration encoders |
+
+The `user:*` commands all take `--json` except `user:reset-password`, which is the one
+command without a machine-readable mode.
+
+#### Bad days: recovery from the CLI
+
+These are the scenarios where the admin UI itself is the thing you cannot reach. The CLI
+talks to the database directly, so it works when web login does not.
+
+**Forgotten admin password / locked out of the web UI.**
+
+```bash
+php bin/phlix user:reset-password admin            # generates and prints a new password
+php bin/phlix user:reset-password admin --password='pick-one'
+```
+
+The reset re-hashes through the same `UserRepository` write path the HTTP admin surface
+uses. One honest caveat: it resets the stored password **hash** only — auth-method
+enablement is separate server settings (the `auth.*.enabled` toggles behind the admin
+Auth providers page; see "External SSO" above). If the password login method itself was
+disabled, a fresh hash alone will not open the door, and the CLI exposes no settings
+toggle — reach the setting via the admin UI whenever any admin can still sign in, or a
+direct database write when none can.
+
+**No admin exists yet (from-source install).** There is no bootstrap flag; create, then
+promote:
+
+```bash
+php bin/phlix user:create admin --email=admin@example.com --password='pick-one'
+php bin/phlix user:promote admin
+```
+
+Promotion has no guard to pass — it only ever adds an administrator. The last-admin
+invariant protects the other direction: no CLI path (including `user:delete --force`) can
+remove, disable or demote the final administrator, which is deliberate — zero admins is
+exactly the lockout those guards exist to prevent.
+
+**A plugin is misbehaving.** See what is installed and take one out without the UI:
+
+```bash
+php bin/phlix plugin:list
+php bin/phlix plugin:disable <manifest-name>
+```
+
+**Account triage.** `php bin/phlix user:list --status=pending` to see the signup queue,
+then `user:approve <user>` or `user:reject <user>`. For a rogue member, `user:disable`
+is the usual answer (reversible); reserve `user:delete` for hard removal.
+
+**Before risky surgery.** `php bin/phlix backup:create --label='pre-migration'`;
+`backup:list` shows what is on disk. Configured schedules and retention live in
+`config/backup.php`.
 
 ### Admin UI (part of the `/app` SPA)
 

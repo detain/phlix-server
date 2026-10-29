@@ -9,6 +9,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The operator admin-CLI story is documented to shipped-surface truth (review
+  server__enduser M22):** `php bin/phlix` ships twenty commands
+  (`UserResetPasswordCommand`, `UserPromoteCommand`, `UserCreateCommand`,
+  `User{List,Approve,Reject,Disable,Delete}`, `Plugin{List,Install,Enable,Disable,Uninstall}`,
+  `Backup{Create,List}Command`, `Library{List,Scan}`, `MediaDedupePaths`, `Migrate`,
+  `HwaccelProbe`), and the README CLI section showed exactly three of them while closing
+  with "More commands are added in later steps." — prose the later steps had long since
+  left stale. An operator locked out of the web UI (forgotten admin password, auth-method
+  settings) had zero in-tree pointer to `user:reset-password`, which needs no admin
+  session — it is a one-shot process reading the configured database directly. README's CLI
+  section now carries the full command table with real arguments/options (verified by
+  reading every command class and by running `php bin/phlix list` at this tip) plus a
+  "Bad days: recovery from the CLI" subsection: forgotten admin password (with the honest
+  caveat that resetting the hash does not re-enable a disabled auth *method* — the CLI
+  exposes no settings toggle), first-admin bootstrap (`user:create` then `user:promote`;
+  there is no admin flag), plugin rescue, signup-queue triage, and backup-before-surgery —
+  every claim citing a command that exists; non-existent flags (`user:reset-password
+  --json`, a settings toggle, a last-admin bypass) are named as absent rather than
+  invented. Docs only: no code, no behavior change, no pin test for README CLI prose
+  existed or was added.
+
+### Fixed
+
 - **Production examples and the installer raise MySQL `max_connections`
   against the documented pool demand (review server__devops2 M3):** the pool
   math is honest in code (`config/database.php` + `ConnectionPool.php`,

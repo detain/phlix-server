@@ -9,6 +9,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Release runbook: the "GPG Signing" section was fiction on every axis —
+  replaced with shipped reality (review server__devops M10):** the section
+  claimed "All release tags and Docker images are GPG signed" and told
+  operators to run `git tag -s` and `cosign sign/verify
+  ghcr.io/detain/phlix-server:v1.2.0`. Disk and registry evidence at
+  `dd9e54a8`: `git verify-tag` returns `error: no signature found` for all
+  five published tags (`v1.0.0`…`v1.2.3`); `grep -rni
+  'gpg|cosign|sigstore|attestation' .github/workflows/` finds zero signing
+  steps and no job requests `id-token: write` (keyless signing is
+  structurally impossible from these workflows); the GHCR referrers API for
+  a live image digest returns `MANIFEST_UNKNOWN` — zero signature or
+  attestation manifests exist; and the example's `v1.2.0` image tag has
+  never been published at all (the registry serves zero semver tags, per
+  the runbook's own tag table). The rewritten "Release Integrity (Signing:
+  NOT SHIPPED)" section states the falsity plainly, inventories what IS true
+  today (TLS + digest pinning, the per-run base-digest equality gate,
+  immutable `<full-sha>-<variant>` tags, GitHub release assets — with what
+  each is and is not worth), ships the three verification commands that
+  actually work (each re-executed live before this commit), and lists the
+  forward-only prerequisites for real signing (signed tags via operator GPG
+  identity; keyless cosign via `id-token: write`; BYOK cosign) as the
+  owner-gated decision they are. Docs only; no workflow or behavior
+  changed. `RELEASE_PROCESS.md` +66/−19 lines.
+
 - **The Coding-Standards job is green again after 15 consecutive red runs
   (M-SERVER-CSFIX, executing the M-SERVER-09 r2 handoff):** the break-in was
   commit `74825f1e`'s lock churn, which moved phpstan 2.2.5→2.3.1 and

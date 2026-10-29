@@ -365,26 +365,73 @@ For critical bugs in production:
    git push origin --delete hotfix/v1.2.1
    ```
 
-## GPG Signing
+## Release Integrity (Signing: NOT SHIPPED)
 
-All release tags and Docker images are GPG signed for security.
+> **Correction first.** This section used to open with "All release tags and
+> Docker images are GPG signed for security" and offered operator commands
+> (`git tag -s`, `cosign sign/verify ghcr.io/detain/phlix-server:v1.2.0`).
+> None of it was true on any axis, checked at `dd9e54a8`:
+> * *Tags* — `git verify-tag` answers `error: no signature found` for every
+>   release tag this repo has ever published (`v1.0.0`, `v1.2.0`, `v1.2.1`,
+>   `v1.2.2`, `v1.2.3`); they are all annotated, all unsigned.
+> * *Workflows* — no file under `.github/workflows/` contains a GPG, cosign,
+>   sigstore or attestation step, and no job requests `id-token: write`, the
+>   OIDC permission keyless (sigstore) signing would require. The signing
+>   pipeline does not merely not run — it cannot run from these workflows.
+> * *Registry* — the OCI referrers API for a published image's digest
+>   (probe recipe below) returns `MANIFEST_UNKNOWN`: zero signature or
+>   attestation manifests exist beside any pushed image.
+> * *The example itself* — `ghcr.io/detain/phlix-server:v1.2.0` is a tag the
+>   registry has never served ("Docker Image Tagging" above); `cosign
+>   verify` as written could not have resolved anything to verify.
+> Publishing signed artifacts is a deliberate owner-gated gap (S274 line),
+> not an oversight the docs may pretend away.
 
-### Tag Signing
+What IS true today, and what it is actually worth:
+
+| Mechanism | Where | Trust you get | Trust you do NOT get |
+|-----------|-------|---------------|----------------------|
+| TLS transport + registry digest verification when pinning by `@sha256:…` | GHCR, every pull | content integrity of the pulled bytes | publisher identity |
+| Per-run base-digest equality gate | `docker.yml` "Verify the base image is the one built from this commit" (hard error, empty/mismatched digest) | runtime image was built against the base image published in the same run | anything about who ran the build |
+| Immutable `<full-sha>-<variant>` image tags, derived from the commit | `docker.yml` tag table below | the image bytes trace to a specific commit on this repo's master | the commit was never signed; the GHCR write token does not carry `id-token` |
+| GitHub release with the packaged Helm `.tgz` files attached | `release.yml` "Create Release" | assets are served by GitHub over TLS, at the release URL | no published checksum file, no detached signature — hash each download yourself if this matters |
+
+Integrity checks that work right now:
 
 ```bash
-# Sign a tag
-git tag -s v1.2.0 -m "Release v1.2.0"
-git push origin v1.2.0
+# 1. Pin by digest. Resolve a tag to its digest (or use the tags/list
+#    recipe above), then pull the digest form. The pull fails loud on any
+#    byte mismatch; this is the only cryptographic verification that
+#    exists today — of CONTENT, not of AUTHORSHIP.
+TOK=$(curl -s "https://ghcr.io/token?scope=repository:detain/phlix-server:pull" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+DIG=$(curl -s -D - -o /dev/null -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  "https://ghcr.io/v2/detain/phlix-server/manifests/<full-sha>-latest" \
+  | tr -d '\r' | awk -F': ' '/^docker-content-digest/{print $2}')
+docker pull "ghcr.io/detain/phlix-server@$DIG"
+
+# 2. Re-derive a manifest digest locally: GHCR returns the uncompressed
+#    manifest (docker-content-digest == sha256 of the body), so
+#    GET the manifest and sha256sum the bytes; the two must agree.
+# 3. Query whether ANY signature/attestation now exists (a future
+#    cosign/sigstore implementation would make this answer):
+#    expect "manifest unknown" until it does.
+curl -s -H "Authorization: Bearer $TOK" \
+  "https://ghcr.io/v2/detain/phlix-server/referrers/$DIG"
 ```
 
-### Docker Image Signing
+Do not advertise tags or images as "signed" until the workflows themselves
+change. The prerequisites, whichever route the owner picks:
 
-Docker images are signed using Cosign:
-
-```bash
-# Sign the image
-cosign sign --yes ghcr.io/detain/phlix-server:v1.2.0
-
-# Verify the image
-cosign verify ghcr.io/detain/phlix-server:v1.2.0
-```
+* **Signed tags** — the tagging operator (owner, S274) needs a configured
+  GPG identity, `git tag -s` at release time, and consumers need the public
+  key out of band. Retagging published versions is history rewriting; the
+  cure is forward-only (new tags signed, old ones stay as they are).
+* **Keyless cosign (recommended shape)** — add `id-token: write` to the
+  docker.yml push jobs' permissions and a `cosign sign` (or buildx
+  provenance + attestation) step after each push; no secret to manage,
+  signatures recorded in the registry's referrers API, verified with
+  `cosign verify --certificate-identity-regexp …`.
+* **BYOK cosign** — a stored keypair as a repo secret plus the signing
+  step; more key-management surface, works outside GitHub Actions too.

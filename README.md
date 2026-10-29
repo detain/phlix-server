@@ -214,10 +214,12 @@ Config pointers:
 - **Device Sessions**: Track authenticated devices with activity timestamps
 - **Playback Progress**: Resume where you left off across sessions
 - **Continue Watching**: Track items in progress per profile
-- **Watch History**: Complete viewing history per profile with:
-  - Automatic completion detection at 90% progress threshold
-  - Watch time statistics (total, daily, by period)
-  - Resume position tracking for seamless playback continuation
+- **Completion**: Client-reported via `POST /api/v1/sessions/{id}/complete` — `reached_end: true`
+  (the default) marks the item watched and removes it from Continue Watching; `false` clears the
+  resume point. The web SPA player fires it on the media `ended` event; native clients do not call
+  it yet. Continue Watching and Next Up are derived from the `playback_state` rows written by
+  progress reporting — the server applies no automatic progress-threshold completion detection and
+  keeps no per-profile watch-time statistics
 
 ### Live TV & DVR
 - **Multi-Tuner Support**: DVB-T, DVB-S, DVB-C, and ATSC tuner types

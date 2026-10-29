@@ -859,9 +859,12 @@ class DockerEntrypointTest extends TestCase
      * `docker/examples/.env.example`'s COMMITTED placeholder into a live
      * signing key: /proc/1/environ showed
      * `JWT_SECRET=change_me_generate_with_openssl` and the daemon served 200s
-     * with it. `AuthServicesProvider::assertSecretConfigured()` rejects only
-     * '' and 'default-secret-change-me', so it could not catch this. The
-     * mapping introduced the defect, so the guard lives beside the mapping.
+     * with it. `AuthServicesProvider::assertSecretConfigured()` rejected only
+     * '' and 'default-secret-change-me' at the time, so it could not catch
+     * this. The mapping introduced the defect, so the guard lives beside the
+     * mapping. (Review server__devops M11 has since lifted the placeholder
+     * family into the PHP boot guard itself — every carrier is now covered and
+     * this entrypoint check stands as carrier-side defense-in-depth.)
      *
      * @return array<string, array{string}>
      */

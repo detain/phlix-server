@@ -75,8 +75,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
     public const DEFAULT_JWT_SECRET = 'default-secret-change-me';
 
     /**
-     * Boot-time guard: refuse to serve when the JWT signing key is missing or
-     * still the shipped {@see self::DEFAULT_JWT_SECRET} sentinel.
+     * Boot-time guard: refuse to serve when the JWT signing key is missing,
+     * still the shipped {@see self::DEFAULT_JWT_SECRET} sentinel, or a member
+     * of the publicly-known placeholder family that the docker entrypoint has
+     * refused since S163 (review server__devops M11 lifted that guard from the
+     * docker carrier to EVERY carrier — systemd units and bare `php start.php`
+     * previously booted happily on `JWT_SECRET=change_me_generate_with_openssl`).
      *
      * The secret protects far more than JWTs: {@see \Phlix\Auth\SignedUrl::fromEnv()}
      * HMAC-derives the media signed-URL key from `JWT_SECRET` whenever
@@ -93,8 +97,9 @@ final class AuthServicesProvider implements ServiceProviderInterface
      *                                  to `getenv('JWT_SECRET')`. A test seam — the
      *                                  string `false`/`null` model an unset env var.
      *
-     * @throws \RuntimeException When the secret is empty or equals the sentinel in
-     *                           a non-test environment.
+     * @throws \RuntimeException When the secret is empty, equals the sentinel,
+     *                           or matches the placeholder family in a non-test
+     *                           environment.
      *
      * @return void
      *
@@ -122,17 +127,24 @@ final class AuthServicesProvider implements ServiceProviderInterface
      * Pure JWT_SECRET policy (L-4, security audit 2026-09-29): returns the
      * fatal boot message for a weak secret, or null when it is acceptable.
      *
-     * Three tiers, in order:
+     * Four tiers, in order:
      *   1. empty                    → fatal everywhere (unsigned/forgeable JWTs
      *                                 AND forgeable media signed URLs, since
      *                                 SignedUrl::fromEnv() HMAC-derives from
      *                                 JWT_SECRET when PHLIX_SIGNED_URL_SECRET
      *                                 is unset);
      *   2. the shipped sentinel     → fatal everywhere (publicly guessable);
-     *   3. shorter than
+     *   3. a publicly-known         → fatal everywhere, dev included — a
+     *      placeholder value         committed example is a PUBLIC key the
+     *      ({@see self::PLACEHOLDER_SECRET_PREFIXES} /
+     *       {@see self::PLACEHOLDER_SECRETS})
+     *                                 moment it ships; the docker entrypoint
+     *                                 has refused these since S163, the other
+     *                                 carriers refused nothing (M11);
+     *   4. shorter than
      *      {@see self::MIN_SECRET_BYTES} → fatal outside development. Dev mode
      *      keeps a friction-free path for local quick-starts with a throwaway
-     *      key — the relaxation covers ONLY the length floor; tiers 1 and 2
+     *      key — the relaxation covers ONLY the length floor; tiers 1 through 3
      *      still refuse to boot a dev box with no key at all.
      *
      * @param string $value   The configured secret value.
@@ -156,6 +168,23 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 . 'before starting the server.';
         }
 
+        // Review server__devops M11: the publicly-known placeholder family
+        // (change_me*, secret, password, ...). The docker entrypoint has
+        // refused these since S163 (phlix_is_placeholder_secret()); on the
+        // systemd/bare-metal carrier they sailed through the tiers above —
+        // `change_me_generate_with_openssl` is 31 bytes, so even the length
+        // floor only caught it outside dev, and a padded example caught
+        // nothing. A committed example is a PUBLIC key: fatal on every
+        // carrier, dev included.
+        $placeholder = self::placeholderMatch($value);
+        if ($placeholder !== null) {
+            return 'CRITICAL: JWT_SECRET is a publicly-known placeholder value (matched "' . $placeholder . '"). '
+                . 'Refusing to start with a committed example as the signing key — JWTs and media '
+                . 'signed URLs would be forgeable by anyone. '
+                . 'Generate a real one (e.g. `openssl rand -hex 32`) and set JWT_SECRET '
+                . '(systemd: /etc/phlix/env; docker: leave it unset and the entrypoint generates and persists one).';
+        }
+
         // L-4 (security audit 2026-09-29): length/entropy floor. Empty and the
         // shipped sentinel were refused, but so was everything else — a
         // 6-character "secret" passes those two checks and is offline-bruteforce
@@ -174,6 +203,63 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
     /** Minimum accepted JWT_SECRET length in bytes (L-4 boot guard). */
     public const MIN_SECRET_BYTES = 32;
+
+    /**
+     * Lower-cased prefixes that mark a value as a committed example secret.
+     *
+     * Mirror of the docker-entrypoint `phlix_is_placeholder_secret()` star
+     * patterns (`change_me*|changeme*|change-me*`); review server__devops M11
+     * lifted that fail-closed posture from the docker carrier to every carrier.
+     * The entrypoint guard stays in place as defense-in-depth (it refuses
+     * before the app process even starts).
+     *
+     * @var list<string>
+     */
+    public const PLACEHOLDER_SECRET_PREFIXES = ['change_me', 'changeme', 'change-me'];
+
+    /**
+     * Exact lower-cased values that are publicly-known example secrets.
+     *
+     * Mirror of the docker-entrypoint exact patterns minus
+     * `default-secret-change-me`, which the shipped-sentinel tier refuses
+     * first with its own dedicated message.
+     *
+     * @var list<string>
+     */
+    public const PLACEHOLDER_SECRETS = [
+        'your-secret-here',
+        'your_secret_here',
+        'secret',
+        'password',
+        'placeholder',
+        'example',
+        'test',
+    ];
+
+    /**
+     * Match a configured secret against the publicly-known placeholder family.
+     *
+     * Returns the matched pattern rather than the caller's full value, so the
+     * boot message never echoes back a secret that merely starts with a
+     * placeholder prefix.
+     *
+     * @param string $value The configured secret value.
+     *
+     * @return string|null The matched (lower-cased) pattern, or null when the
+     *                     value is not a known placeholder.
+     */
+    private static function placeholderMatch(string $value): ?string
+    {
+        $lower = strtolower($value);
+
+        foreach (self::PLACEHOLDER_SECRET_PREFIXES as $prefix) {
+            if (str_starts_with($lower, $prefix)) {
+                return $prefix;
+            }
+        }
+
+        return in_array($lower, self::PLACEHOLDER_SECRETS, true) ? $lower : null;
+    }
 
     /**
      * Whether the process runs in an explicit development mode, where the

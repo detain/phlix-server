@@ -9,6 +9,51 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The minimal systemd installer now produces a BOOTING service, and the
+  placeholder-signing-key guard is lifted from docker-only to every carrier
+  (review server__devops M11):** the pre-M11 `/etc/phlix/env` template in
+  `install/systemd.sh` (a) was written through a QUOTED heredoc
+  (`<<'EOF'`) that could never expand a generated value and omitted
+  `JWT_SECRET` entirely — the key `start.php`'s boot guard hard-requires —
+  so a fresh install crash-looped forever against the unit's
+  `Restart=on-failure`/`RestartSec=5s`; (b) wrote DB settings only as the
+  `PHLIX_DATABASE_*` aliases, which `config/database.php` never reads;
+  (c) shipped `PHLIX_SECRET_KEY` and `PHLIX_DATABASE_PORT`, which nothing
+  on this carrier reads (`PHLIX_SECRET_KEY` is a docker-entrypoint input);
+  and (d) its header claimed the live keys were "placeholders for the
+  uninstaller and forward-compat". The template now writes the real
+  `DB_*` keys, the uninstaller-read aliases (`PHLIX_DATABASE_HOST/NAME/USER`
+  + `PHLIX_DOMAIN`, exactly the four keys `do_uninstall()` greps), and a
+  generated 64-hex `JWT_SECRET` (`openssl rand -hex 32`, mirroring
+  `scripts/install.sh`'s `rand_hex`), with honest comments; a
+  `phlix_backfill_jwt_secret()` helper heals legacy files — a missing OR
+  present-but-blank `JWT_SECRET` is backfilled once, idempotently, keeping
+  the 640 `root:phlix` mode. Second half: the publicly-known placeholder
+  family that `docker/docker-entrypoint.sh` has refused since S163 is now
+  refused by the carrier-agnostic PHP boot guard too — a new tier in
+  `AuthServicesProvider::secretViolation()` (fatal everywhere, dev
+  included) rejects `change_me*`/`changeme*`/`change-me*` prefixes and the
+  exact words `your-secret-here`/`your_secret_here`/`secret`/`password`/
+  `placeholder`/`example`/`test`, so a bare-metal host can no longer boot
+  and sign real tokens with `change_me_generate_with_openssl` (31 bytes —
+  invisible to the dev tier, and padded examples were invisible everywhere).
+  The entrypoint guard stays as carrier-side defense-in-depth; a twin test
+  pins the two pattern lists byte-for-byte equal (modulo the sentinel,
+  which keeps its own dedicated tier message).
+  Tests: new `tests/Unit/Deploy/SystemdInstallerEnvTest.php` (8 tests)
+  parses the REAL heredoc and helper functions out of `install/systemd.sh`
+  (CON-53-style pins): boot-required key set, uninstaller-reader
+  preservation, no inert template keys, lie-phrases banned, the generator's
+  output is 64-hex AND passes `secretViolation()`, legacy backfill is
+  lossless and idempotent, `bash -n`, and one end-to-end child asserting
+  `php start.php` itself refuses the committed placeholder with the
+  CRITICAL envelope before any worker or port exists. Extended
+  `AuthServicesProviderSecretGuardTest` with the placeholder tier, a padded
+  end-to-end child, and the docker twin pin (+4 methods). Measured
+  red-on-parent: 1 error + 9 failures across the 18 tests of the two
+  files; green at head. `DockerEntrypointTest`'s S163 note forward-corrected
+  to past tense; docker paths otherwise untouched.
+
 - **Release runbook: the "GPG Signing" section was fiction on every axis —
   replaced with shipped reality (review server__devops M10):** the section
   claimed "All release tags and Docker images are GPG signed" and told

@@ -11,8 +11,9 @@ use PHPUnit\Framework\TestCase;
  * Tests the S5 boot-time JWT-secret guard
  * {@see AuthServicesProvider::assertSecretConfigured()}.
  *
- * The guard refuses to boot when `JWT_SECRET` is empty or still the shipped
- * default sentinel — because the same secret also derives the media signed-URL
+ * The guard refuses to boot when `JWT_SECRET` is empty, the shipped default
+ * sentinel, or a publicly-known placeholder (M11) — because the same secret
+ * also derives the media signed-URL
  * key, an unconfigured value would make both JWTs and stream URLs forgeable.
  *
  * Inside PHPUnit the production guard short-circuits (PHPUnit constants are
@@ -147,6 +148,127 @@ final class AuthServicesProviderSecretGuardTest extends TestCase
         );
         // A realistic 64-hex (openssl rand -hex 32) key passes.
         self::assertNull(AuthServicesProvider::secretViolation(str_repeat('0123456789abcdef', 4)));
+
+        // M11 corollary: real keys that merely CONTAIN a placeholder word keep
+        // passing — the tier is prefix/exact, never substring.
+        self::assertNull(AuthServicesProvider::secretViolation('a-real-high-entropy-secret-value'));
+        self::assertNull(AuthServicesProvider::secretViolation(str_repeat('9f8e7d6c', 8)));
+    }
+
+    /**
+     * Review server__devops M11: the placeholder tier is fatal EVERYWHERE, dev
+     * included — unlike the length floor, a committed example has no entropy to
+     * relax about. Covers the 31-byte `.env.example` value, padded 40+ variants
+     * that the length floor would wave through, uppercase forms, and the bare
+     * exact words (which the dev relaxation used to accept outright).
+     */
+    public function testPlaceholderSecretsAreFatalOnEveryTierIncludingDev(): void
+    {
+        $values = [
+            'change_me_generate_with_openssl',
+            'change_me_' . str_repeat('9', 40),
+            'CHANGEME',
+            'change-me-in-production',
+            'secret',
+            'password',
+            'your-secret-here',
+            'your_secret_here',
+            'placeholder',
+            'example',
+            'test',
+        ];
+
+        foreach ($values as $value) {
+            self::assertStringContainsString(
+                'placeholder',
+                (string) AuthServicesProvider::secretViolation($value),
+                'placeholder value must be fatal in production: ' . $value
+            );
+            self::assertStringContainsString(
+                'placeholder',
+                (string) AuthServicesProvider::secretViolation($value, true),
+                'placeholder value must be fatal even in dev: ' . $value
+            );
+        }
+    }
+
+    /**
+     * M11 end to end: a padded placeholder (so long the pre-M11 tiers could not
+     * see it) aborts the boot in a forced non-test child.
+     */
+    public function testThrowsOnPlaceholderSecretInNonTestEnvironment(): void
+    {
+        $this->assertGuardThrows('change_me_' . str_repeat('9', 40), 'placeholder');
+    }
+
+    /**
+     * The M11 lift leaves TWO guards enforcing one policy (docker entrypoint
+     * + PHP boot). Pin the PHP pattern families against the entrypoint's case
+     * arm so they cannot drift apart: star patterns ↔
+     * PLACEHOLDER_SECRET_PREFIXES, exact patterns ↔ PLACEHOLDER_SECRETS plus
+     * the sentinel (which the PHP side refuses as its own tier 2 message).
+     */
+    public function testPlaceholderFamilyMatchesTheDockerEntrypointTwin(): void
+    {
+        $entrypointPath = dirname(__DIR__, 5) . '/docker/docker-entrypoint.sh';
+        self::assertFileExists($entrypointPath);
+        $entrypoint = (string) file_get_contents($entrypointPath);
+
+        $start = strpos($entrypoint, 'phlix_is_placeholder_secret()');
+        self::assertIsInt(
+            $start,
+            'the entrypoint guard must stay in place as carrier-side defense-in-depth'
+        );
+        $fn = substr($entrypoint, $start, 2000);
+
+        self::assertTrue(
+            (bool) preg_match('/\bin\s+(.*?)\)\s*\n\s*return\s+0/s', $fn, $m),
+            'could not locate the placeholder case arm in phlix_is_placeholder_secret()'
+        );
+        $arm = str_replace(["\\\n", '\\', "\n"], ' ', $m[1]);
+        $patterns = array_values(array_filter(
+            array_map('trim', preg_split('/\|/', $arm) ?: []),
+            static fn (string $p): bool => $p !== ''
+        ));
+        self::assertNotEmpty($patterns, 'the case arm must list patterns');
+
+        $stars = [];
+        $exacts = [];
+        foreach ($patterns as $pattern) {
+            if (str_ends_with($pattern, '*')) {
+                $stars[] = strtolower(substr($pattern, 0, -1));
+            } else {
+                $exacts[] = strtolower($pattern);
+            }
+        }
+        sort($stars);
+        sort($exacts);
+
+        $phpPrefixes = AuthServicesProvider::PLACEHOLDER_SECRET_PREFIXES;
+        sort($phpPrefixes);
+        self::assertSame(
+            $stars,
+            $phpPrefixes,
+            'PHP PLACEHOLDER_SECRET_PREFIXES must equal the entrypoint star patterns'
+        );
+
+        self::assertContains(
+            AuthServicesProvider::DEFAULT_JWT_SECRET,
+            $exacts,
+            'the entrypoint keeps the sentinel in its arm list (carrier independence)'
+        );
+        $exactsWithoutSentinel = array_values(array_filter(
+            $exacts,
+            static fn (string $p): bool => $p !== AuthServicesProvider::DEFAULT_JWT_SECRET
+        ));
+        $phpExacts = AuthServicesProvider::PLACEHOLDER_SECRETS;
+        sort($exactsWithoutSentinel);
+        sort($phpExacts);
+        self::assertSame(
+            $exactsWithoutSentinel,
+            $phpExacts,
+            'PHP PLACEHOLDER_SECRETS must equal the entrypoint exact patterns minus the sentinel'
+        );
     }
 
     /**

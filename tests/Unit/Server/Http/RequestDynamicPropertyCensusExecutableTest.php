@@ -663,8 +663,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * tests/Unit/Media/Library/ItemRepositoryPagingLawsTest.php (the SQL/bind
      * contract for the two arms the shared venue cannot exercise behaviourally).
      * Measured from the phpunit red (1984), not predicted.
+     * Re-pinned 1985→1986 by the M-SERVER-11 installer-env lane (2026-10-29):
+     * +1 — tests/Unit/Deploy/SystemdInstallerEnvTest.php, the CON-53-style
+     * heredoc/helper pins proving the minimal installer's /etc/phlix/env
+     * generates a bootable service (generated JWT_SECRET + real DB_* keys +
+     * uninstaller aliases). (The 1984→1985 step arrived with 84e55800 without
+     * its own staircase line; left as-is, not reconstructed.) Measured from the
+     * phpunit red (1986), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1985;
+    private const EXPECTED_PHP_FILES = 1986;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

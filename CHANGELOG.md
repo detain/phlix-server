@@ -9,6 +9,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`getByLibrary` and its paging siblings obey the class's own two paging
+  laws again (M-SERVER-08, review server__dba2):** `ItemRepository` had
+  already learned both laws — the trailing-`id` TOTAL-order tail stated in
+  `getAllByType()`'s docblock (with ties on `sort_title, name` — the
+  remake/original "Dune" case — MySQL arranges tied rows differently per
+  `LIMIT + OFFSET`, so untailied page boundaries drop rows and repeat others)
+  and the S99 `ABSOLUTE_ROW_CEILING` backstop (`min(max(1, $limit),
+  ABSOLUTE_ROW_CEILING)`) — but most of the class never applied them.
+  Measured from red on real MySQL 8.0 (400 identically-keyed rows, walked at
+  50): `getByLibrary()` repeated 40 rows per walk, `getByType()` 40,
+  `getByAllowedRatings()` 41, `getByAllowedGenres()` 41 — and
+  `SmartPlaylistEngine::iterateItemsForLibrary()`, which walks
+  `getByLibrary()` at 500 per batch, was the silent victim (its evaluation
+  skipped and double-counted members). Every caller-fed `LIMIT ?` also
+  hydrated unclamped: a 10,001-row library came back 10,001 rows deep from
+  `getByLibrary()`/`getTopLevelByLibrary()` in one resident Workerman worker.
+  The cure copies the existing idiom exactly (no new abstraction): `, id ASC`
+  tails on `getByLibrary`/`getByType`/`getByAllowedRatings`/
+  `getByAllowedGenres` and on both `query()` / `queryWithSmartRules()` select
+  arms (the rating-join arm takes the QUALIFIED `media_items.id` — a bare
+  `id` is ambiguous against `metadata_ratings.id`, MySQL 1052); the ceiling +
+  offset normalisation on every method that lacked them (`getByLibrary`,
+  `getTopLevelByLibrary`, the two allow-list siblings, `search`/`searchFuzzy`/
+  `searchMusicContainers`, `getRecentlyAdded` — the search trio and
+  recently-added are top-N without OFFSET, so only the ceiling law engages).
+  The clamp is inert for every legitimate caller: the estate's largest
+  requested page is the 10,000-row slideshow, exactly at the ceiling
+  (lowering to `PageLimit::MAX` would silently truncate it — the docblock
+  law says so and still does). No route, wire code, or response shape moved.
+  Proofs: `ItemRepositoryPagingLawsRealDbTest` (5 real-MySQL cases — four
+  400-tie walks + the 10,001-row ceiling — all 5 measured red at the parent,
+  40/40/41/41 repeats and a 10,001-deep fetch, green after) and
+  `ItemRepositoryPagingLawsTest` (12 bind/SQL-text pins — 11 red at the
+  parent, the 12th is the deliberate ceiling-is-10000 tripwire, which must
+  stay green on both legs); the JOIN-arm tail and the `query()` arms are
+  text-pinned because `query()`'s own `normalizeLimit` clamps to ≤100 and the
+  shared venue cannot exercise them behaviourally. Census: `EXPECTED_ADOPTERS`
+  72→73 and `EXPECTED_PHP_FILES` 1982→1984, both re-read from the phpunit red
+  on this tree, not predicted.
+
 - **Re-adding a collection item no longer raises MySQL 1062 → HTTP 500
   (M-SERVER-07, review server__dba2):** `collection_items` is keyed by
   `PRIMARY KEY (collection_id, media_item_id)`, yet

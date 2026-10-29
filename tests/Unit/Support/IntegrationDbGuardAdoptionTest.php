@@ -486,7 +486,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // PK-shape precondition — on a throwaway phlix_s7_* scratch DB built
     // from the real 005 file).
     // Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 72;
+    // 72→73 by the M-SERVER-08 paging-laws lane (2026-10-29):
+    // +tests/Integration/Media/ItemRepositoryPagingLawsRealDbTest.php
+    // (real-MySQL proof of the class's two paging laws on the getByLibrary
+    // siblings — tie-walks at 400 rows measuring 40-41 repeats pre-cure, and a
+    // 10,001-row library proving the ABSOLUTE_ROW_CEILING backstop).
+    // Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 73;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

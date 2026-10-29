@@ -691,19 +691,25 @@ class ItemRepository
      * primary key, so it is the cheapest non-skewing cursor.
      *
      * @param string $libraryId Owning library UUID.
-     * @param int    $limit     Maximum rows in this batch.
-     * @param int    $offset    Rows to skip (page * limit).
+     * @param int    $limit     Maximum rows in this batch, clamped to
+     *                          `[1, self::ABSOLUTE_ROW_CEILING]` (S99 backstop,
+     *                          same idiom as {@see getAllByType()}).
+     * @param int    $offset    Rows to skip (page * limit; negative offsets
+     *                          normalize to 0).
      * @return array<int, array<string, mixed>> Hydrated top-level rows (may be
      *         fewer than $limit on the final page; empty past the end).
      */
     public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
     {
+        // ORDER BY id ASC is already TOTAL (the primary key is the sort key —
+        // see the docblock law above), so only the S99 ceiling + offset
+        // normalisation were missing for this paging method.
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ? AND parent_id IS NULL
              ORDER BY id ASC
              LIMIT ? OFFSET ?",
-            [$libraryId, $limit, $offset]
+            [$libraryId, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]
         );
 
         return $this->hydrateRows($results);
@@ -918,9 +924,11 @@ class ItemRepository
         $bindings[] = min(max(1, $limit), self::ABSOLUTE_ROW_CEILING);
         $bindings[] = $this->normalizeOffset($offset);
 
+        // Trailing `id` makes the OFFSET walk TOTAL — see the law in
+        // {@see getAllByType()}; the ceiling above already carried the S99 half.
         $results = $this->db->query(
             "SELECT * FROM media_items WHERE {$where} ORDER BY " . self::titleOrder() .
-                " LIMIT ? OFFSET ?",
+                ", id ASC LIMIT ? OFFSET ?",
             $bindings
         );
 
@@ -985,15 +993,24 @@ class ItemRepository
      * Gets all media items within a library with pagination.
      *
      * @param string $libraryId The library's unique identifier
-     * @param int $limit Maximum number of items to return
-     * @param int $offset Number of items to skip for pagination
+     * @param int    $limit     Page size, clamped to `[1, self::ABSOLUTE_ROW_CEILING]`.
+     * @param int    $offset    Rows to skip (negative offsets normalize to 0).
      * @return array<int, array<string, mixed>> Array of hydrated media items
      */
     public function getByLibrary(string $libraryId, int $limit = 100, int $offset = 0): array
     {
+        // Paging laws restored here (M-SERVER-08), copying {@see getAllByType()}:
+        // the trailing `id` makes the OFFSET walk TOTAL (titleOrder()'s
+        // `sort_title, name` still ties on identical titles — the remake/original
+        // "Dune" case its docblock narrates — and page boundaries otherwise drop
+        // and repeat rows), and the S99 ceiling backstops an unclamped caller
+        // `LIMIT` against OOMing the resident Workerman worker. This is THE most
+        // paged query in the estate (browsers, SmartPlaylistEngine's batch walk,
+        // backfill), so both laws matter most here.
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
-            [$libraryId, $limit, $offset]
+            "SELECT * FROM media_items WHERE library_id = ? ORDER BY " . self::titleOrder() .
+                ", id ASC LIMIT ? OFFSET ?",
+            [$libraryId, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]
         );
 
         return $this->hydrateRows($results);
@@ -1088,7 +1105,11 @@ class ItemRepository
                   WHERE type NOT IN ('artist', 'album')
                     AND MATCH(name) AGAINST(? IN BOOLEAN MODE)
                   LIMIT ?",
-                [$sanitizedQuery, $limit]
+                // S99 row ceiling (M-SERVER-08): `LIMIT ?` here is fed straight
+                // from caller-supplied `?limit=` surfaces; an unclamped value
+                // hydrates unbounded rows in the resident worker. Top-N without
+                // OFFSET, so the id-tiebreak law is not engaged — only the ceiling.
+                [$sanitizedQuery, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING)]
             );
 
             return $this->mergeSearchResults(
@@ -1118,7 +1139,8 @@ class ItemRepository
             "SELECT * FROM media_items
               WHERE type NOT IN ('artist', 'album') AND name LIKE ?
               LIMIT ?",
-            [$escapedQuery, $limit]
+            // S99 row ceiling, as in {@see search()} (M-SERVER-08).
+            [$escapedQuery, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING)]
         );
 
         return $this->mergeSearchResults(
@@ -1179,7 +1201,8 @@ class ItemRepository
                    JOIN music_artists ar ON ar.media_item_id = mi.id
                   WHERE ar.name LIKE ?
                   LIMIT ?",
-                [$escapedQuery, $limit]
+                // S99 row ceiling on every caller-LIMIT `LIMIT ?` (M-SERVER-08).
+                [$escapedQuery, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING)]
             );
             $artists = $this->hydrateRows($results);
 
@@ -1188,7 +1211,7 @@ class ItemRepository
                    JOIN music_albums al ON al.media_item_id = mi.id
                   WHERE al.title LIKE ?
                   LIMIT ?",
-                [$escapedQuery, $limit]
+                [$escapedQuery, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING)]
             );
 
             return $this->mergeSearchResults($artists, $this->hydrateRows($results), $limit);
@@ -1838,7 +1861,9 @@ class ItemRepository
     {
         $results = $this->db->query(
             "SELECT * FROM media_items WHERE library_id = ? ORDER BY created_at DESC LIMIT ?",
-            [$libraryId, $limit]
+            // S99 row ceiling (M-SERVER-08): top-N without OFFSET, so the
+            // id-tiebreak law is not engaged; the LIMIT is caller-fed.
+            [$libraryId, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING)]
         );
 
         return $this->hydrateRows($results);
@@ -2439,8 +2464,11 @@ class ItemRepository
         // Build rating filter
         $ratingPlaceholders = implode(',', array_fill(0, count($allowedRatings), '?'));
 
-        // Rating restriction first, then an article-insensitive alphabetical tiebreak.
-        $orderBy = $ratingOrderSql . ', ' . self::titleOrder();
+        // Rating restriction first, then an article-insensitive alphabetical
+        // tiebreak, then the PRIMARY-KEY tail that makes the OFFSET walk TOTAL
+        // (identically-titled items still tie on CASE rank + sort_title + name —
+        // the law in {@see getAllByType()}, M-SERVER-08).
+        $orderBy = $ratingOrderSql . ', ' . self::titleOrder() . ', id ASC';
 
         // Filter on the indexed `content_rating` column. A NULL column means the
         // item carries NO rating (truly unrated); only include those when the
@@ -2456,7 +2484,12 @@ class ItemRepository
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
-            array_merge([$libraryId], $allowedRatings, [$limit, $offset])
+            // S99 ceiling + offset normalisation, the {@see getAllByType()} idiom.
+            array_merge(
+                [$libraryId],
+                array_values($allowedRatings),
+                [min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]
+            )
         );
 
         return $this->hydrateRows($results);
@@ -2782,7 +2815,9 @@ class ItemRepository
         // an ungenred item is never filtered out by a genre allow-list).
         $genrePlaceholders = implode(',', array_fill(0, count($allowedGenres), '?'));
 
-        $orderBy = self::titleOrder();
+        // Primary genre-allow-listed order, then the TOTAL-walk id tail
+        // ({@see getAllByType()} law, M-SERVER-08).
+        $orderBy = self::titleOrder() . ', id ASC';
 
         $results = $this->db->query(
             "SELECT * FROM media_items
@@ -2800,7 +2835,12 @@ class ItemRepository
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
-            array_merge([$libraryId], array_values($allowedGenres), [$limit, $offset])
+            // S99 ceiling + offset normalisation, the {@see getAllByType()} idiom.
+            array_merge(
+                [$libraryId],
+                array_values($allowedGenres),
+                [min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]
+            )
         );
 
         return $this->hydrateRows($results);
@@ -2995,7 +3035,13 @@ class ItemRepository
         $countResult = $this->db->query($countSql, $bindings);
         $total = $this->extractCount($countResult);
 
-        $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+        // The `id ASC` tail makes the OFFSET walk TOTAL for every
+        // buildOrderClause() arm AND the rating-score override above —
+        // sort_title/name/rating_score all tie on real data and page boundaries
+        // otherwise drop/repeat rows ({@see getAllByType()} law, M-SERVER-08).
+        // FROM is single-table, so the bare column is unambiguous.
+        $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere
+            . " ORDER BY {$orderClause}, id ASC LIMIT ? OFFSET ?";
         $fetchBindings = array_merge($bindings, [$limit, $offset]);
         $results = $this->db->query($selectSql, $fetchBindings);
 
@@ -3859,10 +3905,16 @@ class ItemRepository
                 $orderClause = 'avg_rating DESC, ' . self::titleOrder('desc');
             }
 
+            // `media_items.id ASC` — QUALIFIED, not the bare `id` of the
+            // single-table exemplar: this arm joins metadata_ratings r, whose own
+            // `id` PK would make a bare reference ambiguous (MySQL 1052). The
+            // GROUP BY already collapses to one row per media_items.id, so the
+            // tail is a legal TOTAL-order key ({@see getAllByType()} law,
+            // M-SERVER-08).
             $selectSql = "SELECT media_items.*, AVG(r.score) AS avg_rating"
                 . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
                 . " GROUP BY media_items.id"
-                . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+                . " ORDER BY {$orderClause}, media_items.id ASC LIMIT ? OFFSET ?";
             $fetchBindings = array_merge($bindings, [$limit, $offset]);
             $results = $this->db->query($selectSql, $fetchBindings);
         } else {
@@ -3870,7 +3922,9 @@ class ItemRepository
             $countResult = $this->db->query($countSql, $bindings);
             $total = $this->extractCount($countResult);
 
-            $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+            // Same TOTAL-walk tail as {@see query()}; single-table FROM here.
+            $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere
+                . " ORDER BY {$orderClause}, id ASC LIMIT ? OFFSET ?";
             $fetchBindings = array_merge($bindings, [$limit, $offset]);
             $results = $this->db->query($selectSql, $fetchBindings);
         }

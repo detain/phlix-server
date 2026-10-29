@@ -657,8 +657,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (7990e7cc). That file landed without a rotation, so origin CI measured this
      * arm red at its headSha; the denominator is re-read from the phpunit red on
      * this exact tree (1982), not predicted.
+     * Re-pinned 1982→1984 by the M-SERVER-08 paging-laws lane (2026-10-29): +2 —
+     * tests/Integration/Media/ItemRepositoryPagingLawsRealDbTest.php (real-MySQL
+     * tie-walk + 10,001-row ceiling proofs for the getByLibrary siblings) and
+     * tests/Unit/Media/Library/ItemRepositoryPagingLawsTest.php (the SQL/bind
+     * contract for the two arms the shared venue cannot exercise behaviourally).
+     * Measured from the phpunit red (1984), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1982;
+    private const EXPECTED_PHP_FILES = 1984;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

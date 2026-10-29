@@ -223,9 +223,10 @@ Config pointers:
 
 ### Live TV & DVR (admin-managed)
 LiveTV ships as operator tooling. The entire control plane — tuners, channels, guide,
-recordings, and series rules — is served under `/api/v1/admin/livetv` behind admin auth;
-there is no member-facing channel browse, recording-schedule, or settings surface, and the
-web SPA has no LiveTV page. The only non-admin LiveTV routes are stream legs, served under
+recordings, and series rules — is served under `/api/v1/admin/livetv` behind admin auth,
+and the web SPA exposes it on an admin-only page (`/app/admin/livetv`); there is no
+member-facing LiveTV page, channel browse, recording-schedule, or settings surface.
+The only non-admin LiveTV routes are stream legs, served under
 the same signed-URL/stream middleware as HLS/DASH:
 `GET /livetv/recording/{id}/stream` (DVR recording playback, re-checked against the
 requester's profile rating cap via the recording's linked library item) and
@@ -233,15 +234,20 @@ requester's profile rating cap via the recording's linked library item) and
 carry only a channel id with no library linkage, so these are rating-gated by nothing, by
 design).
 
-Shipped capabilities (all driven through the admin API):
-- **Multi-Tuner Support**: DVB-T, DVB-S, DVB-C, and ATSC tuner types
+Shipped capabilities (driven through the admin API — except recording storage, which is
+config-file driven and has no HTTP surface):
+- **Multi-Tuner Support**: DVB-T, HDHomeRun, and IPTV tuner drivers; DVB-S, DVB-C, and
+  ATSC are reserved type constants only — no drivers exist for them
 - **Channel Scanning**: Automatic discovery of broadcast services
-- **Electronic Program Guide**: Full EPG with program info, categories, and search
+- **Electronic Program Guide**: Program info with categories, filtered by channel and
+  time range
 - **DVR Scheduling**: Schedule recordings with priority management
 - **Time-Shifting**: Rolling-HLS buffer of the over-air window; seeking within it is
   inherent to HLS and handled by the player — the server serves the buffer and implements
   no cursor seeking of its own
-- **Storage Management**: Recording storage tracking and limits
+- **Storage Management**: Used-space tracking and the total recording-size limit are
+  enforced internally by the scheduler; configured in `config/livetv.php`
+  (`storage_path`, `max_storage_bytes`)
 
 Not yet exposed: per-user channel lineups and personal channel favorites exist only in the
 service layer (`ChannelManager` over the `livetv_lineups`/`livetv_favorites` tables); no

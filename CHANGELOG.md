@@ -9,6 +9,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **README LiveTV section C29 rework (round 2) — three over-claims corrected
+  against the code and the served bundle (review C29):** round 1 stated "the
+  web SPA has no LiveTV page", but the vendored `/app` bundle registers an
+  admin-only LiveTV page (route `admin-livetv` inside the `requiresAdmin`
+  admin shell, `LiveTvPage` chunk driving the full `/api/v1/admin/livetv`
+  API — tuners, scan, channels, guide + refresh/programs, recordings +
+  upcoming/series, series-rules); the README now says that — admin-only page,
+  no member-facing page. The "all driven through the admin API" framing
+  over-attributed two bullets: recording storage tracking/limits have zero
+  admin routes (`AdminLiveTvController` carries no storage handler,
+  `Recorder::getStorageStats()` and siblings have no callers outside
+  `Recorder.php`, enforcement is internal to scheduling via `hasStorageSpace()`
+  and configuration is `config/livetv.php` `storage_path`/`max_storage_bytes`),
+  and EPG "search" is not an HTTP parameter (`searchPrograms()` is invoked only
+  internally with an empty query; `/guide` accepts `channel_id`/`from`/`to`) —
+  both bullets reworded and the framing sentence qualified. The multi-tuner
+  bullet certified DVB-S/DVB-C/ATSC as shipped types while only DVB-T,
+  HDHomeRun, and IPTV drivers exist (the other three are dead `LiveTvManager`
+  constants, referenced nowhere outside their declarations, and `updateTuner`
+  only edits name/enabled); it now names the real drivers and marks the rest
+  reserved. Docs only; no behavior change.
+
 - **Release runbook C05 rework (round 2) — three rollback-section claims
   corrected against the evidence (review C05):** the replacement section's
   "stray words passed to either entry point are silently ignored" held only

@@ -78,7 +78,16 @@ class CollectionManager
     }
 
     /**
-     * Add a media item to a collection.
+     * Add a media item to a collection — IDEMPOTENT.
+     *
+     * A duplicate add (double-click / retry / concurrent tab) is a no-op:
+     * {@see CollectionItemRepository::insert()} rides the estate's
+     * ON DUPLICATE KEY UPDATE idiom, so the existing row keeps its position
+     * and added_at and nothing is re-ordered. The max+1 candidate computed
+     * here therefore applies to fresh adds only. No existence pre-check: the
+     * check-then-act shape is the TOCTOU race WatchHistory::record() narrates;
+     * the atomic write is the guard. (M-SERVER-07 — the plain INSERT used to
+     * make the second add throw MySQL 1062, surfacing as an HTTP 500.)
      *
      * @param string $collectionId Collection UUID
      * @param string $mediaItemId Media item UUID
@@ -140,7 +149,9 @@ class CollectionManager
             }
         }
 
-        // Batch insert remaining items (single query)
+        // Batch insert remaining items (single query). The pre-check above is
+        // an optimization, not the guard: batchInsert's ODKU no-op arm absorbs
+        // any row a concurrent add raced in between (former M-SERVER-07 1062).
         if ($toInsert !== []) {
             $this->itemRepo->batchInsert($collectionId, $toInsert);
         }

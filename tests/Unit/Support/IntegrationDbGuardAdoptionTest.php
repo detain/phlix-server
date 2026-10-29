@@ -477,7 +477,16 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // @phlix-require-mysql directives in place, the MySQL-8 end-state index
     // proof, and the ledgered steady-state no-op replay).
     // Measured from the phpunit red (CI run 40853287874).
-    private const EXPECTED_ADOPTERS = 71;
+    // 71→72 by the M-SERVER-07 collection-re-add lane (2026-10-29):
+    // +tests/Integration/Collections/CollectionItemReAddRealDbTest.php
+    // (real-MySQL proof that re-adding a collection member is an idempotent
+    // no-op instead of an uncaught 1062 → HTTP 500 — double-add throw path,
+    // sealed sort_order/added_at survivor law, batchInsert mixed set,
+    // applyMemberDiff lost race, the 1406 fail-loud probe, and the composite
+    // PK-shape precondition — on a throwaway phlix_s7_* scratch DB built
+    // from the real 005 file).
+    // Measured from the phpunit red.
+    private const EXPECTED_ADOPTERS = 72;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

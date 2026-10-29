@@ -29,11 +29,33 @@ class CollectionItemRepository
     }
 
     /**
-     * Insert a media item into a collection.
+     * Insert a media item into a collection — IDEMPOTENT.
+     *
+     * `collection_items` is keyed by `PRIMARY KEY (collection_id,
+     * media_item_id)` (migrations/005). The plain INSERT this method used to
+     * issue made a re-add — double-click, retry after a network blip, two
+     * tabs — deterministically raise MySQL 1062, surfacing as an HTTP 500 on
+     * POST /api/v1/collections/{id}/items/{mediaItemId} (M-SERVER-07).
+     *
+     * The cure is the estate's house duplicate-key idiom, the one
+     * {@see \Phlix\Auth\WatchHistory::record()} narrates and
+     * {@see \Phlix\Session\PlaybackController::reportProgress()} ships:
+     * `INSERT ... ON DUPLICATE KEY UPDATE` against the same key. The survivor
+     * clause here is deliberately the SELF-ASSIGNMENT NO-OP
+     * `media_item_id = VALUES(media_item_id)` — a duplicate add leaves the
+     * existing row completely untouched (neither sort_order nor added_at is
+     * re-touched), so membership age and curated position never move (law
+     * pinned by CollectionItemReAddRealDbTest). No read-probe pre-check is
+     * used because the check-then-act shape is exactly the TOCTOU race
+     * WatchHistory's docblock records; the write itself is atomic.
+     *
+     * Nothing is swallowed: the ODKU arm answers only the duplicate case —
+     * every other SQL failure (FK/strict-mode/connection) still propagates
+     * unchanged, so the route's 500 stays reserved for genuine breakage.
      *
      * @param string $collectionId Collection UUID
      * @param string $mediaItemId Media item UUID
-     * @param int $sortOrder Display order within collection
+     * @param int $sortOrder Display order within collection (applied only on a fresh add)
      * @return void
      *
      * @since 0.14.0
@@ -42,7 +64,8 @@ class CollectionItemRepository
     {
         $this->db->query(
             "INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
-             VALUES (?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE media_item_id = VALUES(media_item_id)",
             [
                 $collectionId,
                 $mediaItemId,
@@ -197,7 +220,13 @@ class CollectionItemRepository
     }
 
     /**
-     * Batch insert multiple media items into a collection.
+     * Batch insert multiple media items into a collection — IDEMPOTENT.
+     *
+     * Same M-SERVER-07 cure as {@see insert()}: without the ODKU no-op arm a
+     * SINGLE duplicate tuple failed the entire multi-row statement with 1062,
+     * so a bulk add racing a concurrent single add lost even its brand-new
+     * items. Fresh rows land; duplicates keep their sealed position/stamp
+     * (self-assignment no-op); non-duplicate failures still propagate.
      *
      * @param string $collectionId Collection UUID
      * @param array<int, array{mediaItemId: string, sortOrder: int}> $items Items to insert
@@ -228,7 +257,8 @@ class CollectionItemRepository
 
         $this->db->query(
             "INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
-             VALUES " . implode(', ', $placeholders),
+             VALUES " . implode(', ', $placeholders) . "
+             ON DUPLICATE KEY UPDATE media_item_id = VALUES(media_item_id)",
             $bindings
         );
     }
@@ -272,7 +302,10 @@ class CollectionItemRepository
      * {@see \Phlix\Server\Integrations\Trakt\DbTraktOAuthStateStore::fetchAndDelete()}
      * (begin → work → commit, rollback on every early exit or Throwable). The
      * failure path RETHROWS: a refresh caller must hear about a rolled-back
-     * diff rather than receive a silent no-op.
+     * diff rather than receive a silent no-op. The per-row {@see insert()} is
+     * itself duplicate-idempotent (M-SERVER-07 ODKU no-op), so a member the
+     * diff-compute raced against lands as a position-preserving no-op instead
+     * of a 1062 that would have rolled the whole diff back.
      *
      * @param string $collectionId   Collection UUID
      * @param list<string> $toAdd     Media item UUIDs to append, in order

@@ -226,4 +226,95 @@ class CollectionItemRepositoryTest extends TestCase
         $repo = new CollectionItemRepository($db);
         $repo->applyMemberDiff('col-1', [], [], 1);
     }
+
+    /**
+     * M-SERVER-07 shape pin: insert() must carry the ON DUPLICATE KEY UPDATE
+     * no-op arm. On the parent commit the plain INSERT made a re-add raise
+     * MySQL 1062 → HTTP 500; the self-assignment survivor clause (estate
+     * idiom per WatchHistory::record()) makes the duplicate structurally
+     * impossible. Red on the parent because the statement has no ODKU arm.
+     */
+    public function testInsertStatementCarriesTheOnDuplicateKeyNoOpArm(): void
+    {
+        $statements = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$statements): array {
+                $statements[] = $sql;
+                return [];
+            }
+        );
+
+        $repo = new CollectionItemRepository($db);
+        $repo->insert('col-1', 'media-1', 7);
+
+        $this->assertCount(1, $statements);
+        $this->assertStringContainsString('INSERT INTO collection_items', $statements[0]);
+        $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $statements[0]);
+        $this->assertStringContainsString(
+            'media_item_id = VALUES(media_item_id)',
+            $statements[0],
+            'the survivor clause must be the self-assignment no-op — re-adding must not re-order or re-stamp the row'
+        );
+    }
+
+    /**
+     * M-SERVER-07 shape pin: batchInsert() carries the same no-op arm, so one
+     * duplicate tuple can never fail the whole multi-row statement (on the
+     * parent the entire bulk add died on 1062 and even fresh items were lost).
+     */
+    public function testBatchInsertStatementCarriesTheOnDuplicateKeyNoOpArm(): void
+    {
+        $statements = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$statements): array {
+                $statements[] = $sql;
+                return [];
+            }
+        );
+
+        $repo = new CollectionItemRepository($db);
+        $repo->batchInsert('col-1', [
+            ['mediaItemId' => 'media-1', 'sortOrder' => 1],
+            ['mediaItemId' => 'media-2', 'sortOrder' => 2],
+        ]);
+
+        $this->assertCount(1, $statements, 'batch insert must stay a single multi-row statement');
+        $this->assertStringContainsString('INSERT INTO collection_items', $statements[0]);
+        $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $statements[0]);
+        $this->assertStringContainsString(
+            'media_item_id = VALUES(media_item_id)',
+            $statements[0],
+            'the survivor clause must be the self-assignment no-op — duplicates must not re-order or re-stamp rows'
+        );
+    }
+
+    /**
+     * M-SERVER-07 bind-shape pin: the ODKU arm adds NO extra placeholder —
+     * still exactly 4 params per row (collection_id, media_item_id,
+     * sort_order, added_at). Guards against "fixing" the no-op with a bound
+     * literal that would change the binding contract every caller relies on.
+     */
+    public function testDuplicateSafeInsertAddsNoExtraBoundParams(): void
+    {
+        $params = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $bound) use (&$params): array {
+                $params[] = $bound;
+                return [];
+            }
+        );
+
+        $repo = new CollectionItemRepository($db);
+        $repo->insert('col-1', 'media-1', 7);
+
+        $this->assertCount(1, $params);
+        $this->assertCount(
+            4,
+            $params[0],
+            'self-assignment survivor must reuse the already-bound value, no new placeholder'
+        );
+    }
 }

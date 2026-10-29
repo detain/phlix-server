@@ -9,6 +9,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Re-adding a collection item no longer raises MySQL 1062 → HTTP 500
+  (M-SERVER-07, review server__dba2):** `collection_items` is keyed by
+  `PRIMARY KEY (collection_id, media_item_id)`, yet
+  `CollectionItemRepository::insert()` issued a plain INSERT and
+  `CollectionManager::addItem()` pre-checked nothing — adding the same item
+  twice (double-click, retry after a network blip, two tabs) deterministically
+  raised `PDOException ... Duplicate entry ... for key
+  'collection_items.PRIMARY'`, 500-ing POST
+  /api/v1/collections/{id}/items/{mediaItemId}. `batchInsert()` was worse:
+  one duplicate tuple failed the ENTIRE multi-row statement, losing even the
+  fresh items of a bulk add. The cure is the estate's house duplicate-key
+  idiom — the one `WatchHistory::record()` narrates and
+  `PlaybackController::reportProgress()` ships — `INSERT ... ON DUPLICATE KEY
+  UPDATE` with a self-assignment no-op survivor clause
+  (`media_item_id = VALUES(media_item_id)`): a duplicate add is now an
+  idempotent no-op that leaves the existing row's `sort_order` and `added_at`
+  completely untouched (re-adding never re-orders a curated collection and
+  never refreshes membership age). The HTTP surface is unchanged — a
+  duplicate returns the byte-identical 200 `{message}` success envelope, no
+  new wire codes — because the controller simply stops ever seeing a throw.
+  Nothing is swallowed: the ODKU arm answers only the duplicate case, so
+  non-duplicate SQL failures still fail loud (1406 probe pinned), the
+  `bulkAddFromSearch()` pre-check is demoted to an optimization over the now
+  atomic guard, and `applyMemberDiff()`'s lost-race case became a no-op
+  instead of a rolled-back refresh. Proofs: 7-case
+  `CollectionItemReAddRealDbTest` on a throwaway `phlix_s7_*` scratch DB
+  built from the real 005 file (measured from red at the parent: 5 uncaught
+  1062s; green at tip, incl. the fail-loud and PK-shape precondition pins)
+  and 3 unit SQL-shape/bind pins in `CollectionItemRepositoryTest`.
+
 - **MariaDB support claim and the dialect-gated migrations (M-SERVER-06,
   review server__dba):** the README advertised "MySQL 8.0+ or MariaDB 10.6+"
   while the chain carried four MySQL-only index statements — three functional

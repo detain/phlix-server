@@ -26,6 +26,15 @@ use PHPUnit\Framework\TestCase;
  * `AdminRoutes.php`, and the documented schedule defaults must equal the
  * shipped `config/backup.php` values. Docs drift, code drifts, and a
  * silent divergence between the two is exactly how the item was born.
+ *
+ * M-SERVER-22 r2 forward note: the first revision of this pin asserted the
+ * README's claim that there is NO backup page in the `/app` SPA — a claim
+ * the r1 review refuted against this repo's own vendored bundle (the
+ * `BackupPage` chunk is routed as `/app/admin/backup` and its api module
+ * drives all seven endpoints). Fabricated surface-absence is exactly the
+ * defect class this campaign hunts, so the pin is inverted: the truthful
+ * disclosure is required, the fabricated wordings are banned. Every
+ * route/default pin from M-SERVER-21 stands unmodified.
  */
 final class BackupSubsystemReadmeTest extends TestCase
 {
@@ -74,10 +83,23 @@ final class BackupSubsystemReadmeTest extends TestCase
             'the README must keep a dedicated backup section (M-SERVER-21)'
         );
         // The section's honest-surface claims must survive edits too.
+        // M-SERVER-22 r2: the SPA Backup page is real (vendored bundle:
+        // BackupPage-*.js routed as /app/admin/backup in index-*.js) — the
+        // truth is pinned and the two historical fabrications are banned.
         $this->assertStringContainsString(
+            'admin-only **Backup page** in the `/app` SPA',
+            $readme,
+            'the truthful SPA backup-surface disclosure must stay documented (r2)'
+        );
+        $this->assertStringNotContainsString(
             'no backup page in the `/app` SPA',
             $readme,
-            'the no-SPA-page disclosure must stay documented'
+            'the fabricated surface-absence claim (b865aa94) must never return'
+        );
+        $this->assertStringNotContainsString(
+            'admin API + `bin/phlix` only (no SPA page)',
+            $readme,
+            'the fabricated surface-absence claim (82d9f029 Overview bullet) must never return'
         );
         $this->assertStringContainsString(
             'no restore path',

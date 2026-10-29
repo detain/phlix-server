@@ -27,7 +27,7 @@ Phlix Media Server provides a complete media management and streaming solution:
   AC-3 5.1(side) are downmixed — a `channel_configuration=0` PCE otherwise breaks hls.js), and even scale
   widths (`force_divisible_by=2`)
 - **WebSocket Events**: Real-time progress and notification delivery
-- **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API + `bin/phlix` only (no SPA page); see [Backups (admin-managed)](#backups-admin-managed)
+- **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API, `bin/phlix` and an admin-only `/app` Backup page; see [Backups (admin-managed)](#backups-admin-managed)
 - **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with 24-hour cache and provider fallback
 - **Content Filtering**: Parental controls with rating and genre-based filtering
@@ -397,9 +397,11 @@ HTTP routes or UI back them yet, so members cannot favorite channels or build li
 ### Backups (admin-managed)
 The backup subsystem (`src/Admin/BackupManager.php`) ships as operator tooling: each backup is
 one `tar.gz` archive combining a full MySQL dump with the server's files, stored under a local
-directory and optionally replicated to S3-compatible object storage. The entire surface is the
-admin API (`/api/v1/admin/backup/*`, all gated by `AdminMiddleware`) and two `bin/phlix` console
-commands — **there is no backup page in the `/app` SPA**.
+directory and optionally replicated to S3-compatible object storage. The surface is threefold:
+the admin API (`/api/v1/admin/backup/*`, all gated by `AdminMiddleware`), two `bin/phlix` console
+commands, and an admin-only **Backup page** in the `/app` SPA (`/app/admin/backup`, shipped in
+the vendored `@phlix/ui` bundle — it lists and creates archives and drives restore, S3 upload
+and schedule editing over the same seven endpoints below).
 
 All behavior is driven by one standalone config file, `config/backup.php` — it is *not* required
 into the `config/server.php` array; each consumer (`BackupManager`, the schedule endpoints, the

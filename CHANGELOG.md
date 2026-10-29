@@ -71,6 +71,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The fabricated "no backup UI" claims are corrected to bundle truth, and the
+  Backups-section rider of M22 is disclosed (review server__enduser M22 r2):** the r1
+  REWORK found the README Backups section — which rode `b865aa94` unannounced in that
+  lane's plan and CHANGELOG entry, disclosed here — claiming "**there is no backup page
+  in the `/app` SPA**", refuted by this repo's own vendored bundle: `BackupPage-*.js` is
+  routed `{name:admin-backup, path:backup}` in the index chunk and its api module drives
+  the full seven-endpoint surface (create, list, delete, restore, upload-s3, schedule
+  GET/PUT). r2 re-verification caught a second instance of the same fabrication — the
+  Overview bullet's "admin API + `bin/phlix` only (no SPA page)", introduced by the
+  backup-docs cure `82d9f029` itself, in wording r1's survivor grep (searching the
+  `b865aa94` phrasing) could not see. Both lines now state the truth (admin API +
+  `bin/phlix` + an admin-only `/app` Backup page); every other claim in the section was
+  re-verified and stands, and `82d9f029`'s substance (config table, endpoint rows,
+  registration truth) is untouched — no duplication of that cure. The pin that had
+  institutionalized the false claim (`BackupSubsystemReadmeTest`, added by `82d9f029`) is
+  inverted: it positive-pins the truthful disclosure and NEGATIVE-pins both fabricated
+  wordings so they can never return; the still-true `no restore path` pin and all seven
+  route/default pins hold unmodified. Same review's CHANGELOG hygiene: the duplicate
+  `### Fixed` header `b865aa94` added above the devops2 M3 entry is collapsed into one
+  block, and the M22 entry's "showed exactly three of them" is corrected to the measured
+  parent truth (three distinct commands in four invocations; `list` is a Symfony
+  built-in, not one of the twenty). Docs + test-pin only: no runtime code, no behavior,
+  no wire change; `EXPECTED_PHP_FILES` census untouched (zero PHP files added).
+
 - **`install.sh` aborted every run at the connection-budget step on a stray heredoc
   terminator — the measured cure of the M24b installer rider (review server__dba2 M24c):**
   the shipped text carried a bare `SQL` line directly after the SET-PERSIST block's
@@ -305,7 +329,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   (`UserResetPasswordCommand`, `UserPromoteCommand`, `UserCreateCommand`,
   `User{List,Approve,Reject,Disable,Delete}`, `Plugin{List,Install,Enable,Disable,Uninstall}`,
   `Backup{Create,List}Command`, `Library{List,Scan}`, `MediaDedupePaths`, `Migrate`,
-  `HwaccelProbe`), and the README CLI section showed exactly three of them while closing
+  `HwaccelProbe`), and the README CLI section showed three distinct commands in four
+  invocations (`migrate`, and `media:dedupe-paths` with and without `--apply`, plus the
+  built-in `list` — which is not one of the twenty) while closing
   with "More commands are added in later steps." — prose the later steps had long since
   left stale. An operator locked out of the web UI (forgotten admin password, auth-method
   settings) had zero in-tree pointer to `user:reset-password`, which needs no admin
@@ -320,8 +346,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   --json`, a settings toggle, a last-admin bypass) are named as absent rather than
   invented. Docs only: no code, no behavior change, no pin test for README CLI prose
   existed or was added.
-
-### Fixed
 
 - **Production examples and the installer raise MySQL `max_connections`
   against the documented pool demand (review server__devops2 M3):** the pool

@@ -9,6 +9,38 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`bin/phlix migrate` now bootstraps the managed env file exactly like its
+  documented twin (review server__ipd M2, M27):** the README promises the two
+  migration commands are "the supported equivalent" of each other, but only
+  `scripts/run-migrations.php` required `scripts/bootstrap_env.php`, so on an
+  install.sh-managed box — where the only copy of `DB_PASSWORD` lives in
+  `/etc/phlix/env` — the primary documented command failed with
+  "Access denied … (using password: NO)" while the script succeeded (the
+  failure mode `bootstrap_env.php`'s own header names verbatim; the CHANGELOG
+  M26 entry deferred this asymmetry to its own item). Cure is the S159
+  finding-11 precedent: fix the CODE, not the promise — `bin/phlix` gains
+  `require_once BASE_PATH . '/scripts/bootstrap_env.php';` directly after the
+  autoloader require, before every `getenv()` site in the file, which also
+  lifts the same trap off every other DB-touching CLI command. The require is
+  a strict no-op when `DB_PASSWORD` is already set or no env file exists, and
+  opens no socket, so the "`php bin/phlix list` works with no database" story
+  is untouched. NEW `tests/Integration/Common/Database/
+  CliEnvBootstrapParityTest.php` proves the parity behaviourally: two real
+  subprocesses, env scrubbed of `DB_PASSWORD`, a deliberately WRONG password
+  fed only via `PHLIX_ENV_FILE`, an empty-handshake probe migration forcing
+  the pool's lazy lease to dial — the server's `(using password: YES/NO)` bit
+  is the observable; both children must say YES and exit 1 (S159 parity).
+  Red-on-parent measured: `bin/phlix` leg FAILS with "(using password: NO)"
+  verbatim while the script control passes; at cure OK (2 tests, 12
+  assertions). README carried two scope-truth amendments (the M26-era
+  durable-service paragraph scoped `bootstrap_env.php` to "scripts under
+  `scripts/`"; the equivalence sentence now states the shared env-file
+  bootstrap explicitly). Census re-pin measured from the phpunit red:
+  `EXPECTED_PHP_FILES` 1988→1989; `EXPECTED_ADOPTERS` stays 73 honestly (the
+  count pins in-class `RequiresRealDatabase` trait use; the new test uses the
+  guard directly, the `MigrationFailureVisibilityTest` precedent). No new
+  wire codes, no migrations.
+
 - **The shipped theme selection surface and its user-visible laws are documented
   to code truth (review server__pm M29):** the catalogue endpoints
   (`GET /api/v1/themes`, `GET /api/v1/themes/{id}` — registered

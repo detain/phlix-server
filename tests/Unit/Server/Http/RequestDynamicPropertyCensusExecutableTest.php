@@ -683,8 +683,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * denominator is re-read from the phpunit red on this exact tree (1988),
      * not predicted. Forward-fix of a foreign lane's missed step, same
      * 7990e7cc precedent rung above.
+     * Re-pinned 1988→1989 by the M-SERVER-27 env-bootstrap-parity lane
+     * (2026-10-29): +1 — tests/Integration/Common/Database/
+     * CliEnvBootstrapParityTest.php, the two-child "(using password:
+     * YES|NO)" handshake probe pinning that `bin/phlix migrate` and
+     * `scripts/run-migrations.php` bootstrap `/etc/phlix/env` identically.
+     * Measured from the phpunit red (1989), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1988;
+    private const EXPECTED_PHP_FILES = 1989;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

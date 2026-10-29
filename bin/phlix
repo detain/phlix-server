@@ -62,6 +62,24 @@ define('BASE_PATH', dirname(__DIR__));
 
 require BASE_PATH . '/vendor/autoload.php';
 
+// M27 (review server__ipd M2) — the same env-file bootstrap
+// `scripts/run-migrations.php:58` performs. On an install.sh-managed box the
+// only copy of DB_PASSWORD lives in `/etc/phlix/env`, loaded solely by the
+// systemd unit; a hand-run CLI process does not inherit it. Without this
+// require, `php bin/phlix migrate` failed with "Access denied … (using
+// password: NO)" on exactly the box where the README's "supported equivalent"
+// script succeeded — and every other DB-touching command here (`user:*`,
+// `backup:*`, `library:*`, `plugin:*`) shared the trap. `bootstrap_env.php`
+// is a STRICT NO-OP when DB_PASSWORD is already set or no env file exists
+// (path overridable via PHLIX_ENV_FILE) and never clobbers a set variable,
+// so `php bin/phlix list` on an unmanaged box is unaffected — including the
+// "no database needed" story above: this line opens no socket. It sits
+// before every getenv site in this file, exactly as run-migrations.php's
+// require sits after its autoloader. The S159 precedent (finding 11: both
+// operator paths must honour PHLIX_MIGRATIONS_DIR) is the symmetry law this
+// completes.
+require_once BASE_PATH . '/scripts/bootstrap_env.php';
+
 // Register the database config path. ConnectionPool::init() only stores the
 // path — it does NOT open a socket — so this is safe even with no DB. The
 // actual connection is opened lazily, the first time getConnection() is

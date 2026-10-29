@@ -655,7 +655,9 @@ reach the process environment the same way the managed path does it:
 `scripts/install.sh` writes them (plus `PHLIX_ENV=production`) to
 `/etc/phlix/env`, which the systemd unit loads as `EnvironmentFile=`. The PHP
 runtime never reads that file by itself — `scripts/bootstrap_env.php` loads it for
-the maintenance scripts under `scripts/` (never overriding already-set variables) —
+the maintenance scripts under `scripts/` and for the hand-run `bin/phlix` CLI,
+never overriding already-set variables (M27 — so both documented migration
+paths see `/etc/phlix/env` alike) —
 so a hand-run `php start.php start` outside a login shell that exports the variables
 connects with no password and refuses to boot.
 Every key, default, secret flag and restart semantics lives in the [environment
@@ -1334,7 +1336,7 @@ php bin/phlix backup:create --label=pre-upgrade   # create a backup archive now 
 php bin/phlix backup:list                          # table of stored backups, newest first
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service, and both bootstrap the managed env file the same way — each requires `scripts/bootstrap_env.php` right after the Composer autoloader (default `/etc/phlix/env`, override with `PHLIX_ENV_FILE`; already-set variables are never clobbered), so on an install.sh-managed box neither command needs `DB_PASSWORD` exported by hand (M27). Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
 
 **Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 

@@ -2221,8 +2221,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -2764,8 +2764,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -3010,8 +3010,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -3903,8 +3903,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -3998,8 +3998,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -4329,8 +4329,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -4395,8 +4395,8 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -4461,8 +4461,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -4493,13 +4493,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+        "204":
+          description: "No Content - resource deleted; response body is empty."
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -4554,13 +4549,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+        "204":
+          description: "No Content - resource deleted; response body is empty."
         "404":
           $ref: "#/components/responses/NotFound"
         "400":
@@ -5767,8 +5757,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -6290,8 +6280,8 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -6400,8 +6390,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6429,8 +6419,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6458,8 +6448,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6519,8 +6509,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6548,8 +6538,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6577,8 +6567,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6606,8 +6596,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6635,8 +6625,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -6664,8 +6654,8 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "202":
+          description: "Accepted - asynchronous job queued (body: job_id, status)."
           content:
             application/json:
               schema:
@@ -8770,13 +8760,13 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the provider authorization URL. No JSON body."
+          headers:
+            Location:
+              description: "Provider authorization URL."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -8793,13 +8783,13 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the application continuation route. No JSON body."
+          headers:
+            Location:
+              description: "Application route carrying the handshake outcome."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -8815,13 +8805,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the provider authorization URL. No JSON body."
+          headers:
+            Location:
+              description: "Provider authorization URL."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/oauth/trakt/callback":
@@ -8833,13 +8823,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the application continuation route. No JSON body."
+          headers:
+            Location:
+              description: "Application route carrying the handshake outcome."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/photo/albums":
@@ -9076,8 +9066,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -9123,8 +9113,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -9449,8 +9439,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -9729,8 +9719,8 @@ paths:
       security:
         - bearerAuth: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -9987,8 +9977,8 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Created."
           content:
             application/json:
               schema:
@@ -10674,13 +10664,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the provider authorization URL. No JSON body."
+          headers:
+            Location:
+              description: "Provider authorization URL."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/github/callback":
@@ -10692,13 +10682,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the application continuation route. No JSON body."
+          headers:
+            Location:
+              description: "Application route carrying the handshake outcome."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/identities":
@@ -10937,13 +10927,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the provider authorization URL. No JSON body."
+          headers:
+            Location:
+              description: "Provider authorization URL."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/oidc/callback":
@@ -10955,13 +10945,13 @@ paths:
       x-phlix-middleware: []
       security: []
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
+        "302":
+          description: "Found - browser redirect to the application continuation route. No JSON body."
+          headers:
+            Location:
+              description: "Application route carrying the handshake outcome."
               schema:
-                type: object
-                additionalProperties: true
+                type: string
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/auth/refresh":

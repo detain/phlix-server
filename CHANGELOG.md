@@ -9,6 +9,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The 34 wire success codes openapi.yaml never told the truth about are corrected to
+  shipped code, and the spec-currency gate gains a response-code leg (review
+  server__fedev M24):** `OpenapiSpecCurrencyTest` pinned path/method/middleware bijection
+  only, so response-status drift was structurally invisible — and 34 operations had it:
+  14 creates emit `->status(201)` (sessions, libraries, collections/playlists, profiles,
+  profile schedules+tags incl. their admin-alias registrations, users, webhooks, plugin
+  install) while the spec declared 200; 10 async-job enqueues (the nine
+  `LibraryController` job endpoints + `POST /api/v1/admin/updates/check`) emit
+  `->status(202)` with the `{job_id,status}` body their docblocks promise, declared 200;
+  the two webhook deletes emit bare `->status(204)`, declared 200-WITH-a-body; and all
+  eight OAuth endpoints (lastfm/trakt/github/oidc authorize + callback) 302-redirect with
+  a `Location` header, declared as JSON 200 that was never returned. The cure is
+  docs-only — the spec follows shipped truth (contract law: no runtime status line moved,
+  no new wire codes, registry untouched). Adjudicated NOT-drift: the `/auth/register` and
+  `/auth/login` browser aliases keep their `[302, 429]` declarations —
+  `AuthController::isBrowserRequest()` (src/Server/Http/Controllers/AuthController.php:497)
+  hard-routes every `/auth/*` request to the redirect contract, so the API-path
+  201/202/200 JSON emitters are unreachable there and the aliases' existing prose is
+  truthful. `OpenapiSpecCurrencyTest` grows from 4 tests/10261 assertions to 6/10267
+  (measured): the 34-row adjudicated table asserts declared code, ghost-200 ban,
+  204-bodyless, 302-Location-shape, and that the emitter still carries the literal
+  `->status(<code>)` (token presence, not a line pin — controller churn must not false-red
+  the spec gate), plus a planted-reversion red-proof following the file's existing
+  mutation pattern; both legs FAIL LOUD on the pre-fix spec (68 named problems = 34 ops ×
+  two laws). openapi.yaml +100/−110 lines.
+
 - **Auth-method lock-out guards get their documentation surface (review
   server__pm M-SERVER-30):** the `422` refusals on `PUT /api/v1/admin/settings`
   (auth-toggled write-sets) and `POST /api/v1/admin/auth-providers/{name}/disable`

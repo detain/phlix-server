@@ -69,6 +69,17 @@ use function DI\factory;
  * mirrored into the YAML header, so a stray duplicate copy of this work is detectable by
  * grep alone and a spec that loses its sentinel is caught here. It deliberately lives in
  * no prose file (S457 house pattern).
+ *
+ * ## M-SERVER-24 — the response-code leg
+ *
+ * The bijection above guards path/method/middleware only, so success STATUS codes could
+ * (and did: 34 operations) drift unseen. {@see self::adjudicatedSuccessCodes()} is the
+ * per-operation adjudicated table — every pair verified at 8b849b0b with the evidence in
+ * `/home/sites/phlix/.reviews/fixlog/M-SERVER-24__fix.md` — and the leg asserts the spec
+ * declares exactly that truth (plus 204-empty / 302-Location shape laws and the emitter
+ * token still standing). It is deliberately a pinned adjudication table, not a wholesale
+ * whole-spec emitter/code differ: route→emitter inference at scale was the review's
+ * unbounded-scope trap, and a table that fails LOUD per row is the bounded cure.
  */
 final class OpenapiSpecCurrencyTest extends TestCase
 {
@@ -610,6 +621,225 @@ final class OpenapiSpecCurrencyTest extends TestCase
 
         // Control: the unmutated spec is clean under the exact same report helper.
         $this->assertSame([], $this->driftReport($registry, $this->specOperations()));
+    }
+
+    // -----------------------------------------------------------------
+    // M-SERVER-24 — response-code currency leg (the bijection above is
+    // path/method/middleware only; success STATUS codes were its blind spot)
+    // -----------------------------------------------------------------
+
+    /**
+     * The adjudicated success-code truth: 34 operations whose shipped wire status
+     * differs from (or was fictional in) the pre-M-24 spec, corrected TO THE EMITTED
+     * side. Every pair was adjudicated per-operation — status codes are contract law
+     * and the spec follows shipped truth (docs-only change, zero runtime edits);
+     * the full evidence table lives in
+     * `/home/sites/phlix/.reviews/fixlog/M-SERVER-24__fix.md`.
+     *
+     * Rows: [verb, spec path, adjudicated success code, emitter file]. The emitter
+     * side is checked for the literal `->status(<code>)` token WITHOUT pinning a line
+     * number — line churn in controllers must not red this gate while the emitted
+     * truth stands; exact coords are pinned in the fixlog for human review.
+     *
+     * @return list<array{0: string, 1: string, 2: string, 3: string}>
+     */
+    private static function adjudicatedSuccessCodes(): array
+    {
+        // Shared emitters (several spec ops route to one handler method).
+        $library = 'src/Server/Http/Controllers/LibraryController.php';
+        $collections = 'src/Server/Http/Controllers/CollectionController.php';
+        $schedules = 'src/Server/Http/Controllers/AccessScheduleController.php';
+        $tags = 'src/Server/Http/Controllers/ProfileTagController.php';
+        $webhooks = 'src/Server/Http/Controllers/Webhooks/WebhookAdminController.php';
+        $adminWebhooks = 'src/Server/Http/Controllers/Admin/AdminWebhooksController.php';
+        $lastfm = 'src/Server/Http/Controllers/Admin/LastfmController.php';
+        $trakt = 'src/Server/Http/Controllers/TraktOAuthController.php';
+        $github = 'src/Plugins/Github/Controller/GithubCallbackController.php';
+        $oidc = 'src/Plugins/Oidc/Controller/OidcCallbackController.php';
+
+        return [
+            // 201 Created — genuine resource creation (REST idiom; controllers return status(201)).
+            ['post', '/api/v1/sessions', '201', 'src/Server/Http/Controllers/SessionController.php'],
+            ['post', '/api/v1/libraries', '201', $library],
+            ['post', '/api/v1/collections', '201', $collections],
+            ['post', '/api/v1/playlists', '201', $collections],
+            ['post', '/api/v1/profiles', '201', 'src/Server/Http/Controllers/ProfilesController.php'],
+            ['post', '/api/v1/profiles/{profileId}/schedules', '201', $schedules],
+            ['post', '/api/v1/profiles/{profileId}/tags', '201', $tags],
+            ['post', '/api/v1/admin/profiles/{profileId}/schedules', '201', $schedules],
+            ['post', '/api/v1/admin/profiles/{profileId}/tags', '201', $tags],
+            ['post', '/api/v1/admin/users', '201', 'src/Server/Http/Controllers/Admin/AdminUserController.php'],
+            ['post', '/api/v1/admin/users/{userId}/profiles', '201',
+                'src/Server/Http/Controllers/Admin/AdminProfileController.php'],
+            ['post', '/api/v1/admin/webhooks', '201', $webhooks],
+            ['post', '/api/v1/admin/webhooks/subscriptions', '201', $adminWebhooks],
+            ['post', '/api/v1/admin/plugins/install', '201', 'src/Server/Http/Controllers/PluginAdminController.php'],
+            // 202 Accepted — asynchronous job enqueue; body carries {job_id, status}.
+            ['post', '/api/v1/libraries/{id}/scan', '202', $library],
+            ['post', '/api/v1/libraries/{id}/rescan', '202', $library],
+            ['post', '/api/v1/libraries/{id}/match-metadata', '202', $library],
+            ['post', '/api/v1/libraries/{id}/refresh-metadata', '202', $library],
+            ['post', '/api/v1/libraries/{id}/prune', '202', $library],
+            ['post', '/api/v1/libraries/{id}/clear-metadata', '202', $library],
+            ['post', '/api/v1/libraries/{id}/clear-artwork', '202', $library],
+            ['post', '/api/v1/libraries/{id}/delete-all', '202', $library],
+            ['post', '/api/v1/libraries/{id}/regenerate-assets', '202', $library],
+            ['post', '/api/v1/admin/updates/check', '202',
+                'src/Server/Http/Controllers/Admin/AdminUpdatesController.php'],
+            // 204 No Content — deletes answer empty; a 200-with-body declaration was fiction.
+            ['delete', '/api/v1/admin/webhooks/{id}', '204', $webhooks],
+            ['delete', '/api/v1/admin/webhooks/subscriptions/{id}', '204', $adminWebhooks],
+            // 302 Found — OAuth handshakes are browser redirects; the declared JSON-200 never happened.
+            ['get', '/api/v1/oauth/lastfm', '302', $lastfm],
+            ['get', '/api/v1/oauth/lastfm/callback', '302', $lastfm],
+            ['get', '/api/v1/oauth/trakt', '302', $trakt],
+            ['get', '/api/v1/oauth/trakt/callback', '302', $trakt],
+            ['get', '/auth/github/authorize', '302', $github],
+            ['get', '/auth/github/callback', '302', $github],
+            ['get', '/auth/oidc/authorize', '302', $oidc],
+            ['get', '/auth/oidc/callback', '302', $oidc],
+        ];
+    }
+
+    public function testTheSpecDeclaresTheAdjudicatedSuccessCodes(): void
+    {
+        /** @var array<string, mixed> $doc */
+        $doc = Yaml::parseFile(self::SPEC);
+
+        $problems = $this->successCodeReport($doc);
+
+        $this->assertSame(
+            [],
+            $problems,
+            "openapi.yaml success codes have drifted from the adjudicated shipped truth:\n"
+            . implode("\n", $problems)
+        );
+    }
+
+    /**
+     * The planted-regression RED proof for the response-code leg: reverting one
+     * adjudicated operation's success key back to the old fictional "200" must be
+     * caught BY NAME (house pattern: a guard nobody has seen fail guards nothing).
+     * The probe operation is POST /api/v1/sessions (adjudicated 201).
+     */
+    public function testAPlantedSuccessCodeReversionTurnsTheLegRed(): void
+    {
+        $mutated = $this->tempFile($this->revertSessionsProbeToGhostTwoZeroZero());
+
+        /** @var array<string, mixed> $doc */
+        $doc = Yaml::parseFile($mutated);
+        $report = $this->successCodeReport($doc);
+
+        $this->assertTrue(
+            $this->reportMentions($report, 'POST /api/v1/sessions does not declare adjudicated success code 201'),
+            'reverting a served success code to a fictional 200 must be caught and named'
+        );
+        $this->assertTrue(
+            $this->reportMentions($report, 'POST /api/v1/sessions declares a ghost "200"'),
+            'the ghost 200 must ALSO be named by the second law (both laws fire together)'
+        );
+
+        // Control: the committed spec is clean under the same report helper.
+        /** @var array<string, mixed> $committed */
+        $committed = Yaml::parseFile(self::SPEC);
+        $this->assertSame([], $this->successCodeReport($committed));
+    }
+
+    /**
+     * @param array<string, mixed> $doc
+     *
+     * @return list<string>
+     */
+    private function successCodeReport(array $doc): array
+    {
+        $problems = [];
+
+        foreach (self::adjudicatedSuccessCodes() as [$verb, $path, $code, $emitter]) {
+            $key = strtoupper($verb) . ' ' . $path;
+
+            $op = $doc['paths'][$path][$verb] ?? null;
+            if (!is_array($op)) {
+                $problems[] = sprintf('%s vanished from the spec (adjudicated success code %s).', $key, $code);
+                continue;
+            }
+
+            /** @var array<string, mixed> $responses */
+            $responses = is_array($op['responses'] ?? null) ? $op['responses'] : [];
+
+            if (!array_key_exists($code, $responses)) {
+                $problems[] = sprintf(
+                    '%s does not declare adjudicated success code %s (declared [%s]).',
+                    $key,
+                    $code,
+                    implode(', ', array_map('strval', array_keys($responses)))
+                );
+            }
+
+            // None of the 34 adjudicated operations may carry a "200" success key:
+            // each either never had one or the one it had was the fiction M-24 removed.
+            if (array_key_exists('200', $responses)) {
+                $problems[] = sprintf('%s declares a ghost "200" on top of the adjudicated %s.', $key, $code);
+            }
+
+            if ($code === '204' && array_key_exists('content', $responses['204'] ?? [])) {
+                $problems[] = sprintf('%s declares a body for 204; No Content is empty on the wire.', $key);
+            }
+
+            if ($code === '302' && !isset($responses['302']['headers']['Location']['schema'])) {
+                $problems[] = sprintf('%s declares 302 without a Location header contract.', $key);
+            }
+
+            $emitterFile = self::REPO . '/' . $emitter;
+            if (!is_file($emitterFile)) {
+                $problems[] = sprintf('%s emitter %s no longer exists — re-adjudicate the pair.', $key, $emitter);
+            } elseif (!str_contains((string) file_get_contents($emitterFile), '->status(' . $code . ')')) {
+                $problems[] = sprintf(
+                    '%s emitter %s no longer carries the literal ->status(%s) the spec now declares.',
+                    $key,
+                    $emitter,
+                    $code
+                );
+            }
+        }
+
+        sort($problems);
+
+        return $problems;
+    }
+
+    /**
+     * Rewrite the probe operation's adjudicated "201" key back to a "200" — the exact
+     * reversion class this leg exists to catch.
+     */
+    private function revertSessionsProbeToGhostTwoZeroZero(): string
+    {
+        $lines = explode("\n", $this->specContents());
+        $anchor = '      operationId: "post_api_v1_sessions"';
+        $start = array_search($anchor, $lines, true);
+        $this->assertIsInt(
+            $start,
+            'mutation anchor vanished: POST /api/v1/sessions lost its operationId — the leg fixture shape changed.'
+        );
+
+        $mutated = false;
+        for ($i = $start + 1; $i < count($lines); $i++) {
+            if (str_starts_with($lines[$i], '      operationId: "') || preg_match('/^  "/', $lines[$i]) === 1) {
+                break;
+            }
+            if ($lines[$i] === '        "201":') {
+                $lines[$i] = '        "200":';
+                $mutated = true;
+                break;
+            }
+        }
+
+        $this->assertTrue(
+            $mutated,
+            'planted regression did not apply: no "201" key found within POST /api/v1/sessions'
+            . ' — the adjudicated spec shape this mutation guard assumes has changed.'
+        );
+
+        return implode("\n", $lines);
     }
 
     // -----------------------------------------------------------------

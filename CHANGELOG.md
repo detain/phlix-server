@@ -9,6 +9,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`systemctl reload` now uses Workerman's GRACEFUL reload signal (review
+  server__devops2 M15):** the committed systemd unit and the unit heredoc in
+  `scripts/install.sh` still wired `ExecReload` to SIGUSR1 — the signal
+  `AdminRestartController`'s own authority block calls "backwards": the
+  Workerman master treats SIGUSR1 as the NON-graceful reload (children stop
+  immediately, SIGKILL armed after stopTimeout) and only SIGUSR2 drains
+  in-flight work. The admin Restart button had long since moved to SIGUSR2,
+  so the documented operator path hard-cut the :8097 SyncPlay WS workers,
+  in-flight HLS/transcode segment delivery and the hub relay tunnel on every
+  bare-metal reload — including the live prod `update_server.sh` path. Both
+  unit templates now emit `ExecReload=/bin/kill -SIGUSR2 $MAINPID` with an
+  in-file rationale comment, and install.sh carries an idempotent
+  `phlix_repair_exec_reload` migration (4i-B) that flips only the exact
+  generated legacy value on already-deployed units, preserving operator
+  customisations. The minimal installer was already covered — it installs the
+  committed unit verbatim. Pinned by the new
+  `tests/Unit/Deploy/SystemdReloadSignalTest.php`, whose repair proof runs the
+  extracted function in real bash (CON-53-style), plus an authority-coupling
+  pin so the deploy artifacts and the controller's docblock cannot diverge
+  silently again.
+
 - **Vendored sample re-propagated after the inverse-role gloss (review
   theme-sample__writer M06 propagation):** upstream's payload gained
   a `--accent-text` / `--text-on-accent` teaching gloss (the pair the green

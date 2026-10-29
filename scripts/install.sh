@@ -635,6 +635,26 @@ phlix_user_is_dedicated() {
   esac
 }
 
+# One-off repair (M15): retrofit ExecReload from SIGUSR1 to SIGUSR2.
+# Workerman's master treats SIGUSR2 as the GRACEFUL reload (children drain
+# in-flight requests) and SIGUSR1 as the NON-graceful one (children stop
+# immediately, SIGKILL armed after stopTimeout). The admin restart endpoint
+# has sent SIGUSR2 since the AdminRestartController fix, but units generated
+# by installer revisions predating this one still hard-cut the :8097 WS
+# workers, in-flight HLS segment delivery and the hub relay tunnel on every
+# `systemctl reload` — including the live prod deploy path. Only the exact
+# known-generated value is rewritten, so an operator customisation survives;
+# idempotent (after the flip the pattern no longer matches).
+phlix_repair_exec_reload() {
+  local unit="$1"
+  [ -f "$unit" ] || return 0
+  if grep -q '^ExecReload=/bin/kill -SIGUSR1 \$MAINPID$' "$unit" 2>/dev/null; then
+    log "Retrofitting ExecReload in $unit from SIGUSR1 to SIGUSR2 (graceful reload)"
+    sed -i 's|^ExecReload=/bin/kill -SIGUSR1 \$MAINPID$|ExecReload=/bin/kill -SIGUSR2 $MAINPID|' "$unit"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Shared HAProxy management
 #
@@ -1470,6 +1490,13 @@ LimitNOFILE=1048576\\
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
+  # 4i-B. Retrofit ExecReload in an existing unit from SIGUSR1 to SIGUSR2
+  # (M15). SIGUSR1 is Workerman's NON-graceful reload; every installer-
+  # generated unit predating this repair hard-cuts WS/HLS/relay work on
+  # `systemctl reload`. Only the exact known-generated value is rewritten.
+  # Idempotent. See phlix_repair_exec_reload().
+  phlix_repair_exec_reload "$SERVICE_FILE"
+
   # 4f. Backfill env keys that newer code requires but an older install never
   # wrote. JWT_SECRET became a hard boot requirement in 0.55.0
   # (AuthServicesProvider::assertSecretConfigured) — an install that predates it
@@ -1931,7 +1958,13 @@ Environment="HOME=${INSTALL_PATH}/var"
 # webman's pattern: thin entry → boot HTTP/WebSocket workers from
 # config). public/ remains the document root for static assets.
 ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
-ExecReload=/bin/kill -SIGUSR1 \$MAINPID
+# SIGUSR2 is Workerman's GRACEFUL reload: children drain in-flight requests
+# before exiting. SIGUSR1 is the NON-graceful one (children stop immediately
+# and a SIGKILL arms after stopTimeout) — a reload on it hard-cuts the :8097
+# SyncPlay WS workers, in-flight HLS/transcode segment delivery and the hub
+# relay tunnel. The admin restart endpoint (AdminRestartController) sends
+# SIGUSR2; systemctl reload must not be the worse path of the two.
+ExecReload=/bin/kill -SIGUSR2 \$MAINPID
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 Restart=on-failure
 RestartSec=5s

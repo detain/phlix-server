@@ -670,8 +670,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * uninstaller aliases). (The 1984→1985 step arrived with 84e55800 without
      * its own staircase line; left as-is, not reconstructed.) Measured from the
      * phpunit red (1986), not predicted.
+     * Re-pinned 1986→1987 by the M-SERVER-15 reload-signal lane (2026-10-29):
+     * +1 — tests/Unit/Deploy/SystemdReloadSignalTest.php, the deploy-artifact
+     * ExecReload pins (SIGUSR2 = Workerman's graceful reload) + the bash-run
+     * phlix_repair_exec_reload legacy-unit proof. Measured from the phpunit
+     * red (1987), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1986;
+    private const EXPECTED_PHP_FILES = 1987;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -12,7 +12,13 @@ User=phlix
 Group=phlix
 WorkingDirectory=/var/www/phlix
 ExecStart=/usr/bin/php /var/www/phlix/start.php start
-ExecReload=/bin/kill -SIGUSR1 $MAINPID
+# SIGUSR2 is Workerman's GRACEFUL reload: children drain in-flight requests
+# before exiting. SIGUSR1 is the NON-graceful one (children stop immediately
+# and a SIGKILL arms after stopTimeout) — a reload on it hard-cuts the :8097
+# SyncPlay WS workers, in-flight HLS/transcode segment delivery and the hub
+# relay tunnel. The admin restart endpoint (AdminRestartController) sends
+# SIGUSR2; `systemctl reload` must not be the worse path of the two.
+ExecReload=/bin/kill -SIGUSR2 $MAINPID
 ExecStop=/bin/kill -SIGTERM $MAINPID
 Restart=on-failure
 RestartSec=5s

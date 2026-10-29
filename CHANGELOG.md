@@ -71,6 +71,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **`install.sh` aborted every run at the connection-budget step on a stray heredoc
+  terminator — the measured cure of the M24b installer rider (review server__dba2 M24c):**
+  the shipped text carried a bare `SQL` line directly after the SET-PERSIST block's
+  `fi` (blame 8695fcda; three `^SQL$` lines but only two `<<SQL` openers pre-cure). It
+  executes as a command — under the script's `set -euo pipefail` (:18) that is exit 127
+  "SQL: command not found" (reproduced minimally on the parent's block shape), aborting
+  every install before the environment-file step; the grep-style content pins cannot
+  catch a stray executable line. The cured bytes delete the stray line and carry the
+  shfmt normalization rider: the shipped file is byte-identical to `shfmt` output of the
+  de-strayed parent text, `bash -n` OK, and the `--help` contract byte-identical;
+  `VersionMarkerFileTest|PublicFrontControllerRemovalGuardTest|AdminUpdatesRoutesTest`
+  OK 25/220 on the new bytes. The entry below self-describes as "semantics zero" — this
+  is its forward correction: the same bytes also remove the defect above, and this entry
+  is the complete story. The response-code leg rides d70fcaae's psalm-safe
+  dynamic-offset shape (`OpenapiSpecCurrencyTest` OK 6 tests / 10267 assertions).
+
 - **`scripts/install.sh` is reformatted to shfmt canonical shape — semantics zero
   (review server__dba2 M24b):** the installer normalization that rode the M24 shared-tree
   cure (prior fixlog classified it 22r2-rider lineage; the M24b dispatch attributed it to

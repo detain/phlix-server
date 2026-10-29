@@ -9,6 +9,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **README documents the backup subsystem to shipped-code truth (review
+  server__enduser M-SERVER-21):** the subsystem had no Features section and
+  its seven admin endpoints were absent from the API table. The README now
+  carries a dedicated "Backups (admin-managed)" section (every knob of the
+  standalone `config/backup.php` with its shipped default; archive contents
+  incl. the recursive-`config/` capture and the `MYSQL_PWD`-only /
+  `-- Dump completed` dump-integrity contract; count-based retention after
+  every create; the background-timer worker's 5-min boot catch-up plus
+  idempotent daily check; checksum-gated synchronous restore; S3 upload
+  row-rewrite), seven HTTP-endpoint table rows, CLI usage lines, and an
+  Overview bullet. Honest limits disclosed as such: no `/app` SPA page,
+  `data/`/SSL files are archived but have NO restore path, `expires_at` is
+  listed but never written (no time-based expiry), no public endpoint pulls
+  an S3 row back, a schedule PUT takes effect for the running timer only at
+  the next restart, an uploaded archive's local copy stays on disk
+  untracked-by-retention, and the seven routes are registered twice with the
+  later `AdminRoutes` entries winning the Router's method+path map. Pinned
+  by a new `tests/Unit/Admin/BackupSubsystemReadmeTest.php` (9 cases): each
+  documented route path must appear in the README AND as a real
+  `AdminRoutes.php` registration, documented defaults must equal the shipped
+  config values, and the two restore/surface disclosures must survive edits.
+  Measured red on `b865aa94` (4 failures — the endpoint rows and the
+  schedule paths it cross-checks), green at this tip. Landing provenance:
+  the section's prose itself landed inside `b865aa94` (the M22 lane staged
+  the shared `README.md` mid-edit); the endpoint-table rows, the Overview
+  bullet, the corrected router-registration paragraph, and the pin land in
+  this commit — the double-landing counts the work once, not twice.
+
 - **The operator admin-CLI story is documented to shipped-surface truth (review
   server__enduser M22):** `php bin/phlix` ships twenty commands
   (`UserResetPasswordCommand`, `UserPromoteCommand`, `UserCreateCommand`,

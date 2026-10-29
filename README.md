@@ -27,6 +27,7 @@ Phlix Media Server provides a complete media management and streaming solution:
   AC-3 5.1(side) are downmixed — a `channel_configuration=0` PCE otherwise breaks hls.js), and even scale
   widths (`force_divisible_by=2`)
 - **WebSocket Events**: Real-time progress and notification delivery
+- **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API + `bin/phlix` only (no SPA page); see [Backups (admin-managed)](#backups-admin-managed)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with 24-hour cache and provider fallback
 - **Content Filtering**: Parental controls with rating and genre-based filtering
 
@@ -313,10 +314,11 @@ file is *not* deleted, and from that moment it is no longer tracked by retention
 yourself). There is no endpoint to pull an S3 row back to local storage (the internal
 `downloadFromS3()` has no caller; only restore reaches into the bucket).
 
-Not documented but real: every one of these paths exists twice on the router — the legacy
-`Application::loadBackupRoutes()` and the typed `AdminRoutes::register()` both register the same
-seven routes with the same handlers; deleting either would break a different dispatch path, so
-both are kept deliberately.
+Registration detail worth knowing: the seven routes are registered twice on the same router —
+the legacy `Application::loadBackupRoutes()` first, then the typed `AdminRoutes::register()` with
+the identical paths and handler pairs. The Router stores routes in a method+path-keyed map, so
+the second registration overwrites the first, and both resolve the same container-singleton
+controller — behavior is identical either way; the `AdminRoutes` entries are what actually serve.
 
 ## Installation
 
@@ -894,6 +896,13 @@ the next worker boot rather than the next request.
 | GET/POST | `/api/v1/admin/auth-providers/ldap/config` | Read / save LDAP config; `POST .../ldap/test` dry-runs a bind — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
 | GET | `/api/v1/admin/auth-providers/{oidc,ldap,github}/schema` | JSON schema for the provider's config form — admin-only |
+| POST | `/api/v1/admin/backup/create` | Create a backup archive now — optional body `{label: string}` (non-string `label` → `400`); `data` carries `backup_id`, `file_path`, `size_bytes`; failure → `500` — admin-only |
+| GET | `/api/v1/admin/backup/list` | All backups newest-first — rows carry `id`, `label`, `file_path`, `size_bytes`, `checksum_sha256`, `is_s3`, `created_at`, `expires_at` (the latter is never written; always `null`) — admin-only |
+| DELETE | `/api/v1/admin/backup/{id}` | Delete one backup (local file or S3 object plus its row); `404` unknown id — admin-only |
+| POST | `/api/v1/admin/backup/{id}/restore` | Synchronous restore — SHA-256 verified before anything is touched; re-imports the DB dump and the config files (not `data/`/SSL); failure incl. unknown id → `500` with the reason — admin-only |
+| POST | `/api/v1/admin/backup/{id}/upload-s3` | Push a still-local archive to S3 and mark the row `is_s3` (local file is left on disk, untracked); `500` when S3 is not configured or the upload fails — admin-only |
+| GET | `/api/v1/admin/backup/schedule` | Effective schedule — `auto_backup_interval_days` + `retention_count` re-read from `config/backup.php` per request, plus `next_scheduled_backup` (unix, `null` when scheduling is off) and its ISO form — admin-only |
+| PUT | `/api/v1/admin/backup/schedule` | Update schedule — body `{auto_backup_interval_days?: int ≥ 0, retention_count?: int ≥ 1}` (non-numeric/negative/`<1` → `400`); rewrites `config/backup.php` (comments are lost); the running auto-backup timer adopts the new values at its next restart — admin-only |
 
 **Rate limiting.** `POST /auth/register`, `POST /auth/refresh`, the WebAuthn
 login `start`/`finish` endpoints, and the public JWKS endpoint reply
@@ -1180,6 +1189,8 @@ php bin/phlix list       # list every available command
 php bin/phlix migrate    # apply migrations/*.sql against config/database.php
 php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-run)
 php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
+php bin/phlix backup:create --label=pre-upgrade   # create a backup archive now (--label optional)
+php bin/phlix backup:list                          # table of stored backups, newest first
 ```
 
 `php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.

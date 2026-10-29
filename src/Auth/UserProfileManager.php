@@ -27,7 +27,8 @@ use Workerman\MySQL\Connection;
  * - Parental controls via content rating restrictions
  * - Profile PIN protection for admin actions
  * - Genre-based content filtering (allowed/blocked genres)
- * - Daily watch time limits
+ * - Daily watch time limit STORAGE (max_daily_watch_time is persisted; no
+ *   playback path enforces the cap — see README "User Profiles")
  *
  * Profile Types:
  * - Standard Profile: Regular user profile with customizable settings

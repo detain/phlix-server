@@ -139,7 +139,10 @@ Every environment variable the server process reads is inventoried in the defini
   - Profile-specific content rating restrictions (G, PG, PG-13, R, NC-17, X, UNRATED)
   - PIN protection (4 or 6 digits) for profile settings
   - Genre-based filtering (allowed/blocked genre lists)
-  - Daily watch time limits per profile
+  - Daily watch time limits per profile — **stored, not enforced**: the
+    `max_daily_watch_time` setting persists through the profile settings API,
+    but no playback path reads it (and there is no live per-profile watch-time
+    ledger to measure against), so a configured cap never restricts anything
 - **Content Rating Filters**: Age-based access restrictions
 - **Audit Logging**: Complete security event logging
 - **Security Headers / CSP**: Every response carries `X-Content-Type-Options`, `X-Frame-Options`, HSTS,

@@ -472,7 +472,13 @@ php start.php start
 
 ## Configuration
 
-Configuration is managed via PHP files in `config/`:
+Configuration is managed via PHP files in `config/`. The main file is
+`config/server.php` — listener binds, the HTTP worker pool, the coroutine
+runtime, HLS, the SyncPlay bridge, rate limits, trusted proxies — and it
+`require`s the subsystem files (`ffmpeg`, `hub`, `relay`, `livetv`,
+`theme_music`, `newsletter`, `artwork`, `metrics`, `folder_watch`) into the
+same array. Shape only; every key and its env seam is
+documented in the file itself:
 
 ```php
 // config/server.php
@@ -486,16 +492,17 @@ return [
         'host' => '0.0.0.0',
         'port' => 8097,
     ],
-    'database' => [
-        'host' => '127.0.0.1',
-        'port' => 3306,
-        'database' => 'phlix',
-        'username' => 'phlix',
-        'password' => 'secure-password',
-    ],
-    'debug' => false,
+    // 'worker', 'process', 'coroutine', 'hls', 'syncplay_bridge',
+    // 'rate_limit', 'trusted_proxies', ... and the required subsystem files.
 ];
 ```
+
+**Database credentials are not a `config/server.php` key.** The connection is
+loaded from `config/database.php` (wired as `db_config_path` by `start.php`),
+which reads every parameter — `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER`
+/ `DB_PASSWORD` — from the environment, with the defaults shown in the file.
+`install.sh` writes them to `/etc/phlix/env`; see the
+[Database & migrations](#database--migrations) census below.
 
 ### Environment variables
 

@@ -58,7 +58,7 @@ final class SampleThemePluginTest extends TestCase
     private const UI_TWIN = 'phlix-ui/src/test/fixtures/themes-with-sample-plugin.golden.json';
 
     /** md5 of both copies. Update BOTH files together, then this constant. */
-    private const GOLDEN_MD5 = '84656d05d42b6d11a92ac88e2b2a8791';
+    private const GOLDEN_MD5 = 'f8a33eac15f111797cc9f01da27d447d';
 
     /** The two theme ids the sample plugin contributes. */
     private const SAMPLE_IDS = ['sample-dusk', 'sample-dusk-high-contrast'];
@@ -177,7 +177,7 @@ final class SampleThemePluginTest extends TestCase
             }
         }
 
-        self::assertSame(45, $checked, '37 tokens on sample-dusk + 8 on the high-contrast variant.');
+        self::assertSame(36, $checked, '28 tokens on sample-dusk + 8 on the high-contrast variant.');
     }
 
     public function testTheSampleDeliberatelyExercisesBothKindsOfExtendsChain(): void
@@ -186,14 +186,16 @@ final class SampleThemePluginTest extends TestCase
 
         $dusk = $registry->get('sample-dusk');
         self::assertNotNull($dusk);
-        // A BUILT-IN base: unresolvable server-side by construction, because the
-        // server holds no stylesheet. The SPA layers it via `data-theme`.
+        // A BUILT-IN base: the server knows its full 53-token map and
+        // publishes it in the list — but the wire never flattens, so the SPA
+        // layers it via `data-theme` plus `setProperty` overrides.
         self::assertSame('midnight', $dusk->extends);
         self::assertContains($dusk->extends, BuiltInThemes::IDS);
 
         $contrast = $registry->get('sample-dusk-high-contrast');
         self::assertNotNull($contrast);
-        // A PLUGIN base: resolvable, but only from the LIST response.
+        // A PLUGIN base: no stylesheet carries it, so the client merges the
+        // chain from the LIST response — the only endpoint with every link.
         self::assertSame('sample-dusk', $contrast->extends);
         self::assertNotContains($contrast->extends, BuiltInThemes::IDS);
     }

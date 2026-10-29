@@ -15,9 +15,12 @@ examples/plugins/phlix-plugin-sample-theme/
 It is exercised by two tests
 (`tests/Unit/Plugins/SampleThemePluginTest.php` and
 `tests/Integration/Plugins/SampleThemeLifecycleTest.php`) but it is **not a
-fixture**: it is a shippable plugin an operator can install verbatim with
-`php bin/phlix plugin:install examples/plugins/phlix-plugin-sample-theme`, and
-it is the thing a plugin author is pointed at. Putting it under `tests/` would
+fixture**: it is a shippable plugin, installable from this exact directory
+through the production `PluginLoader` — `PluginLoader::installFromDirectory()`,
+which is what the lifecycle test drives — and it is the thing a plugin author
+is pointed at. Note the `plugin:install` CLI takes an archive URL or a catalog
+repo URL, never a bare directory path: pack it first. Putting it under `tests/`
+would
 say the opposite. The tests reach into `examples/` rather than the other way
 round, so the sample can never be a test double that drifts from a real plugin:
 the integration test installs and enables *this exact directory* through the
@@ -69,8 +72,8 @@ all-or-nothing and never silent.
 
 | Theme | `extends` | Point |
 | --- | --- | --- |
-| `sample-dusk` | `midnight` (built-in) | The base's real values live in the SPA's stylesheet, not on the server. The SPA sets `data-theme="midnight"` and layers these tokens over it with `el.style.setProperty()`. Status colours are intentionally not overridden, so they fall through from the base. |
-| `sample-dusk-high-contrast` | `sample-dusk` (plugin) | A plugin→plugin chain. Only the LIST endpoint (`GET /api/v1/themes`) carries every link, which is why the SPA reads the list and never `/themes/{id}`. |
+| `sample-dusk` | `midnight` (built-in) | The base is applied by mechanism: the SPA sets `data-theme="midnight"` — whose real values then come from its bundled stylesheet — and layers these tokens over it with `el.style.setProperty()`. The server does know `midnight`'s map and publishes it in the list; the wire just never flattens chains — `tokens` is always the theme's own map. Status colours are intentionally not overridden, so they fall through from the base. |
+| `sample-dusk-high-contrast` | `sample-dusk` (plugin) | A plugin→plugin chain: no stylesheet knows the base, so the SPA merges it from data. Only the LIST endpoint (`GET /api/v1/themes`) carries every link, which is why the SPA reads the list and never `/themes/{id}`. |
 
 ## Seeing it in the SPA
 

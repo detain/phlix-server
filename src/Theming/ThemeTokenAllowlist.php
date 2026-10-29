@@ -160,13 +160,20 @@ final class ThemeTokenAllowlist
      *         stylesheet's declared set IS this allowlist at the vendored pin,
      *         so dropping an entry here reddens that guard until tokens
      *         catches up.
-     *      2. The published `detain/phlix-plugin-sample-theme` sets all 13
-     *         today, and {@see ThemeSourceRegistry::register()} validates
-     *         every plugin payload against exactly this list — removal would
-     *         reject shipped themes. It would also change the built-in token
-     *         maps in `GET /api/v1/themes`, whose wire body is md5-pinned
-     *         byte-for-byte against a copy in phlix-ui
-     *         (`tests/Unit/Plugins/SampleThemePluginTest::GOLDEN_MD5`).
+     *      2. The three built-in token maps in `Phlix\Theming\BuiltInThemes`
+     *         declare all 53 keys — these 13 included (measured: 53 keys and
+     *         the aliases present in each) — so every `GET /api/v1/themes`
+     *         body carries them, and that body is md5-pinned byte-for-byte
+     *         across repos: `GOLDEN_MD5` in this repo's
+     *         `tests/Unit/Plugins/SampleThemePluginTest.php` mirrors
+     *         `GOLDEN_MD5` in phlix-ui's `src/api/themes.test.ts`. Removal
+     *         means rewriting the built-ins and re-pinning both golden copies
+     *         in lockstep. The standalone `detain/phlix-plugin-sample-theme`
+     *         deliberately ships none of the 13; the vendored `examples/`
+     *         copy carried them until the 2026-10-29 re-vendor restored
+     *         byte-identity. {@see ThemeSourceRegistry::register()} validates
+     *         every plugin payload against exactly this list, so removal
+     *         would also narrow the grammar new themes may use.
      *      3. phlix-ui mirrors the full set in its own `THEME_TOKEN_ALLOWLIST`
      *         (`src/composables/themeTokens.ts`); the two advertised surfaces
      *         move together or not at all.

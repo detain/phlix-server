@@ -22,8 +22,8 @@ use Psr\Container\ContainerInterface;
  * class that implements {@see LifecycleInterface} (so the host can enable it)
  * and {@see ThemeSourceInterface} (so the host registers its themes). There is
  * no `onEnable()` body, no container sniffing and no manifest `theme` key —
- * {@see \Phlix\Plugins\PluginLoader::enable()} sees the `instanceof` and calls
- * {@see \Phlix\Theming\ThemeSourceRegistry::register()} itself, which validates
+ * `Phlix\Plugins\PluginLoader::enable()` sees the `instanceof` and calls
+ * `Phlix\Theming\ThemeSourceRegistry::register()` itself, which validates
  * every payload before anything is committed.
  *
  * ## What this sample is here to PROVE
@@ -32,30 +32,48 @@ use Psr\Container\ContainerInterface;
  * exercises both halves of the `extends` contract that S86 resolved
  * client-side:
  *
- *  - **`sample-dusk` extends a BUILT-IN (`midnight`).** The server does not
- *    know what `midnight`'s 53 token values are — they live in the SPA's
- *    bundled `@phlix/tokens` stylesheet — so no amount of server-side
- *    flattening could resolve this chain. The SPA layers it by pointing
- *    `data-theme` at `midnight` and `setProperty`-ing the overrides on top.
+ *  - **`sample-dusk` extends a BUILT-IN (`midnight`).** The server does know
+ *    `midnight`'s values — `Phlix\Theming\BuiltInThemes` carries a full
+ *    53-token map for every built-in, and the LIST response publishes them —
+ *    but the wire never flattens a chain: `tokens` is always the theme's OWN
+ *    declared map, so layering is the client's job. Here the layering is
+ *    mechanical: the SPA points `data-theme` at `midnight`, whose real values
+ *    then come from its bundled `@phlix/tokens` stylesheet, and `setProperty`s
+ *    the overrides on top.
  *    Note what is deliberately NOT overridden: the status colours
  *    (`--error*`, `--success*`, `--warning*`, `--info*`) come straight from the
  *    base through the cascade.
  *  - **`sample-dusk-high-contrast` extends a PLUGIN theme (`sample-dusk`).**
- *    That chain IS resolvable from server data — but only from the LIST
- *    response, which carries every registered theme.
+ *    No stylesheet knows that base, so the client resolves it from data — and
+ *    only the LIST response carries every registered theme.
  *    `GET /api/v1/themes/{id}` alone would hand a client eight text/border
  *    tokens and no background.
  *
  * ## Every value here is inside the host's grammar
  *
- * {@see \Phlix\Theming\ThemeTokenValidator} accepts a token value only if the
+ * `Phlix\Theming\ThemeTokenValidator` accepts a token value only if the
  * whole string is a hex colour, an `rgb()/rgba()/hsl()/hsla()` over numeric
  * arguments, a bare number, `transparent` or `currentColor`. That is why there
  * is not a single `var(--…)` reference below even though the built-in themes
- * are written that way in CSS: a plugin ships literals. Keys are checked
- * against {@see \Phlix\Theming\ThemeTokenAllowlist} — the 53 semantic colour
+ * are written that way in CSS: **a plugin ships literals**. Keys are checked
+ * against `Phlix\Theming\ThemeTokenAllowlist` — the 53 semantic colour
  * tokens, and nothing layout-related, so a theme can recolour the UI but never
  * move it.
+ *
+ * ## Why only 28 of the 53 allowlisted tokens are set
+ *
+ * Allowlisted is not the same as *read*. 13 of the 53 tokens
+ * (`--color-primary`, `--color-primary-hover`, `--color-primary-active`,
+ * `--color-surface-hover`, `--color-surface-elevated`, `--color-surface-active`,
+ * `--color-text-secondary`, `--color-text-subtle`, `--color-border-subtle`,
+ * `--color-error-bg`, `--color-success-bg`, `--color-warning-bg`,
+ * `--color-info-bg`) have **zero `var()` consumers in the shipped SPA** — the
+ * `--color-*` alias migration finished, and setting a property nothing reads is
+ * a no-op that only inflates the payload. They are omitted on purpose so this
+ * sample models what a real theme should ship. The nine `--color-*` aliases that
+ * ARE still read (`--color-bg`, `--color-surface`, `--color-text`,
+ * `--color-text-muted`, `--color-border`, plus the four status aliases) are kept
+ * where the corresponding modern token is overridden.
  *
  * ## Resident-memory contract
  *
@@ -162,30 +180,27 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     '--vignette' => 'rgba(0, 0, 0, 0.6)',
                     '--ambient' => 'rgba(110, 168, 254, 0.22)',
 
-                    // Legacy `--color-*` aliases. Omitting these would leave
-                    // un-migrated components on the BASE theme's colours, which
-                    // is exactly why they are on the allowlist.
+                    // Legacy `--color-*` aliases — ONLY the ones the shipped SPA
+                    // still reads. colors.css declares each of these as
+                    // `var(--modern-token)` inside every theme block, so they
+                    // would in principle follow the overrides above through the
+                    // cascade; they are set explicitly anyway because that is
+                    // one fewer cascade assumption between a plugin author and a
+                    // correct render. The nine dead `--color-*` aliases are
+                    // omitted — see the class docblock.
                     '--color-bg' => '#05060a',
                     '--color-surface' => '#0b0f18',
-                    '--color-surface-hover' => '#131a26',
-                    '--color-surface-elevated' => '#131a26',
-                    '--color-surface-active' => '#1c2534',
                     '--color-text' => '#e6ecf5',
-                    '--color-text-secondary' => '#a3b0c2',
                     '--color-text-muted' => '#a3b0c2',
-                    '--color-text-subtle' => '#75839a',
-                    '--color-primary' => '#6ea8fe',
-                    '--color-primary-hover' => '#8fbcff',
-                    '--color-primary-active' => '#4d8ce0',
                     '--color-border' => '#1e2735',
-                    '--color-border-subtle' => '#141b26',
                 ],
             ],
             [
                 'id' => 'sample-dusk-high-contrast',
                 'name' => 'Sample Dusk (High Contrast)',
                 'dark' => true,
-                // A PLUGIN base: resolvable only from the LIST response.
+                // A PLUGIN base: no stylesheet carries it, so the client
+                // merges the chain from the LIST response.
                 'extends' => 'sample-dusk',
                 'tokens' => [
                     '--text' => '#ffffff',
@@ -193,8 +208,12 @@ final class SampleThemePlugin implements LifecycleInterface, ThemeSourceInterfac
                     '--text-subtle' => '#b3bfd1',
                     '--border' => '#55637a',
                     '--border-strong' => '#7d8ba3',
+                    // Keep the live aliases in step with the modern tokens
+                    // above. A variant that raised `--text-muted` but left
+                    // `--color-text-muted` at the base's value would leave the
+                    // un-migrated components a shade behind the migrated ones.
                     '--color-text' => '#ffffff',
-                    '--color-text-secondary' => '#d7deea',
+                    '--color-text-muted' => '#d7deea',
                     '--color-border' => '#55637a',
                 ],
             ],

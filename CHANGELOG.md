@@ -9,6 +9,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The vendored sample theme plugin was a stale fork of itself — re-vendored
+  byte-identical to upstream and the cross-repo wire golden re-pinned (review
+  theme-sample__webux M01, with M02's alias defect cured by the same
+  propagation):** `examples/plugins/phlix-plugin-sample-theme/` drifted from
+  the published `detain/phlix-plugin-sample-theme` in exactly the directions a
+  copy rots — its `sample-dusk` payload still set the 9 dead `--color-*`
+  aliases (37 tokens vs the upstream's measured 28; 12 of 13 have zero
+  `var()` consumers in every shipped client), its docblock contradicted
+  upstream's "omitted on purpose" law with "Omitting these would leave
+  un-migrated components...", and its high-contrast variant lifted the DEAD
+  `--color-text-secondary` instead of the live `--color-text-muted` — the
+  alias choice the upstream payload teaches against (M02). The vendored file
+  is now a byte-for-byte copy of upstream `src/SampleThemePlugin.php` (md5
+  equality asserted), the `GET /api/v1/themes` golden regenerated from the
+  real controller (dusk 28, high-contrast 8, built-ins 53 unchanged) and the
+  md5 re-pinned on BOTH sides of the cross-repo contract (this repo's
+  `tests/Unit/Plugins/SampleThemePluginTest::GOLDEN_MD5`, phlix-ui's
+  `src/api/themes.test.ts::GOLDEN_MD5`, twin fixture re-vendored). Token
+  count pin 45→36 with honest prose; the pair's "unresolvable server-side
+  because the server holds no stylesheet" comment corrected — the server
+  DOES know every built-in's 53-token map and publishes it in the list; the
+  wire just never flattens chains (two-sources-of-truth law,
+  `ThemesController` docblock). `ThemeTokenAllowlist`'s LEGACY_ALIAS
+  reason-2 was FALSE at its load-bearing point — "The published
+  detain/phlix-plugin-sample-theme sets all 13 today" was never true (the
+  standalone repo omitted them from its first commit; it was the vendored
+  copy, fixed here) — rewritten to what actually holds the aliases in the
+  grammar: the three `BuiltInThemes` maps, each declaring all 53 keys, whose
+  wire body the golden pins; the stale companion cite (ui's pre-move test
+  path) re-anchored. Examples README: the duplicated false stylesheet-only
+  claim aligned to upstream's cured table, and the "install verbatim with
+  `plugin:install examples/plugins/...`" sentence corrected — the CLI takes
+  archives/catalog URLs, never a bare directory (`SourceUrlResolver` →
+  `HttpInstaller::fetchInto()`); directory install is
+  `PluginLoader::installFromDirectory()`, driven by the lifecycle test.
+
 - **M13 class-sweep survivors cured; the deploy.yaml code-edit recipe
   retired; bind-law docs re-sweep reaches zero survivors (review
   server__devops M13 r2):** the M13 cure (`bda69a35`) rewrote

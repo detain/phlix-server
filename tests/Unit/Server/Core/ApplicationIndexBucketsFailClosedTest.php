@@ -232,7 +232,6 @@ final class ApplicationIndexBucketsFailClosedTest extends TestCase
         $providers = ContainerFactory::defaultProviders();
         // LAST provider wins: replace the media doubles for this route only.
         $providers[] = new class ($connection, $itemsMock, $gateFactory) implements ServiceProviderInterface {
-            /** @param \PHPUnit\Framework\MockObject\MockObject&ItemRepository $items */
             public function __construct(
                 private Connection $connection,
                 private ItemRepository $items,

@@ -9,6 +9,48 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The Coding-Standards job is green again after 15 consecutive red runs
+  (M-SERVER-CSFIX, executing the M-SERVER-09 r2 handoff):** the break-in was
+  commit `74825f1e`'s lock churn, which moved phpstan 2.2.5→2.3.1 and
+  illuminate/collections past v13.32.0 in one sweep. Two independent gates
+  died: PHPStan's production corpus reported 8 errors (a now-unmatched
+  `@phpstan-ignore` in `WebSocketServer.php:223`; twin
+  `notIdentical.alwaysTrue`+`deadCode.unreachable` pairs on both
+  `TraktApi.php` retry tails; a provably-dead `!== ''` ETag guard in
+  `ArtworkByteResponder.php`; a `list<array<mixed,mixed>>` return in
+  `SimilarityService.php`; an `constructor.unusedParameter` on
+  `LocalNfoProvider`), and Psalm 6.5.0 CRASHED (`TypeParseTreeException:
+  Unexpected space`) deep-scanning `Collection::pull()`'s
+  `@phpstan-this-out ($key is null ? static<TKey|int, TValue> : $this)` —
+  conditional types with `$this` in a branch are beyond psalm 6.5.0's type
+  parser and no newer psalm resolves under `config.platform.php=8.3.0`
+  (6.5.1+ need ≥8.3.16, an owner-gated floor change). Cures: the stale
+  phpstan-ignore removed with its docblock rewritten to the measured truth;
+  Trakt tails restructured to a psalm-satisfying `instanceof` guard whose
+  redundancy phpstan's own fold names via one inline
+  `@phpstan-ignore instanceof.alwaysTrue` per tail (runtime-loud; a throw
+  can't silently mask a future control-flow edit) — the dead
+  empty-page `return`s deleted; the 304-path ETag guard folded (non-empty
+  proven on both entry paths, `Last-Modified`'s kept — mtime-0 is real);
+  `SimilarityService::fetchItemsWithCompleteMetadata()` now returns through
+  `RowMap::listFromMixed()`, the estate boundary parser; `LocalNfoProvider`'s
+  intentional-unused ctor param gets its named inline ignore. The crash is
+  cured at the dependency layer: a root `conflict` on
+  `illuminate/collections >=13.32.0` (first offending release; v13.39.0 still
+  offends, so there is no upward cure) pins the lock back to v13.31.0 — a
+  surgical 1-package lock move — and psalm now analyses the full corpus
+  instead of dying. Side effects of the streak also closed: with production
+  green, the `phpstan-tests.neon` CI step (skipped, not absent, for all 15
+  runs) exposes phpstan 2.3.1's 7 new tests-corpus `alreadyNarrowedType`
+  reports — each is a live repeat-call contract pin (memoization,
+  single-shot, idempotence) and is kept with an inline identifier-named
+  ignore per the S186 doctrine — plus 4 test files merged mid-streak carried
+  8 genuine Psalm findings (`MysqlOnlyIndexDialectGateTest` nullable-`db`
+  closures, `ItemRepositoryPagingLawsTest` by-ref property alias + 5
+  count()-derived negative offsets, `JoinPasswordThrottleTest` tail offset,
+  `ApplicationIndexBucketsFailClosedTest` over-promoted mock docblock), all
+  cured at source. Evidence table: `.reviews/fixlog/M-SERVER-CSFIX__fix.md`.
+
 - **The `Release` workflow now asserts the repo's own version law instead
   of contradicting it, curing the seven consecutive red tagged runs
   (M-SERVER-09, review server__devops M1):** every `Release` workflow run

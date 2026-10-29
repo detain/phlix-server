@@ -215,12 +215,20 @@ class WebSocketServer
          *   vendor/workerman/workerman/src/Protocols/Websocket.php:215 — but Worker
          *   does not declare the property, so no static analyser can see it.
          *
-         * The PHPStan counterpart is the trailing `@phpstan-ignore` below and NOT
-         * a `@phpstan-ignore-next-line` in this docblock: PHPStan resolves "next
-         * line" relative to the tag's own line, so inside a multi-line docblock it
-         * lands on a comment line and reports `ignore.unmatchedLine` instead.
+         * No PHPStan ignore accompanies this: phpstan 2.3.1 (the version the CI
+         * gate resolved to in the 2026-10 lock churn) reports nothing on this
+         * line — the property-not-found rule no longer fires here — so the
+         * "phpstan-ignore property.notFound" trailing comment that 2.2.5
+         * required became an `ignore.unmatchedIdentifier` violation and reddened
+         * the gate. (Had an ignore still been needed, it would belong on THIS
+         * line as a trailing comment, not as a "phpstan-ignore-next-line" tag
+         * inside this docblock: PHPStan resolves "next line" relative to the
+         * tag's own line, so inside a multi-line docblock it lands on a comment
+         * line and reports `ignore.unmatchedLine` instead. And note this whole
+         * paragraph: phpstan parses "phpstan-ignore" annotations even inside
+         * docblocks, so naming one in prose requires dropping the at-sign.)
          */
-        $this->worker->onWebSocketPong = [$this, 'onWebSocketPong']; // @phpstan-ignore property.notFound
+        $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
     }
 
     /**

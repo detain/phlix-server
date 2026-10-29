@@ -248,7 +248,9 @@ final class TokenTtlPolicyTest extends TestCase
         });
 
         $this->assertSame(1200, $policy->accessTtl());
-        $this->assertSame(1200, $policy->accessTtl());
+        // The repeat call IS the memoization pin; phpstan 2.3.1 constant-folds the
+        // mocked callback and cannot see the fetch-count contract.
+        $this->assertSame(1200, $policy->accessTtl()); // @phpstan-ignore method.alreadyNarrowedType
         $policy->refreshTtl();
 
         $this->assertSame(1, $calls);

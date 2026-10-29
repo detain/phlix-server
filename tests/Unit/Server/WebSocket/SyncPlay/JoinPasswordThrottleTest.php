@@ -127,7 +127,13 @@ final class JoinPasswordThrottleTest extends TestCase
 
         $this->assertTrue($guest->wasClosed(), 'the 11th failure inside the window must close the socket');
         $frames = $guest->getSentMessages();
-        $last = $frames[count($frames) - 1];
+        $n = count($frames);
+        // Guards the tail-offset for psalm (count() ranges from 0; the offset is only
+        // meaningful — and only asserted — with frames in hand).
+        if ($n < 1) {
+            $this->fail("expected at least one sent frame, got 0");
+        }
+        $last = $frames[$n - 1];
         $this->assertSame(Messages::TYPE_ERROR, $last['type'] ?? null);
         $this->assertSame('syncplay.join_failed', $last['error_code'] ?? null);
         $this->assertStringContainsString('Too many incorrect password attempts', (string) ($last['message'] ?? ''));

@@ -307,7 +307,9 @@ final class CoreUpdateCheckServiceTest extends TestCase
         // A second check with no callback must not re-fire the first one — the
         // pending slot is single-shot, which is what keeps it from growing.
         $service->check();
-        self::assertSame(1, $calls);
+        // The assert AFTER the second check() pins non-refiring of the single-shot
+        // pending slot: still 1 is the contract, invisible under the constant fold.
+        self::assertSame(1, $calls); // @phpstan-ignore staticMethod.alreadyNarrowedType
     }
 
     public function testAThrowingCompletionCallbackDoesNotEscape(): void

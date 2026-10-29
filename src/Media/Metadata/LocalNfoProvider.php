@@ -56,9 +56,13 @@ class LocalNfoProvider implements MetadataProviderInterface
      *
      * @param string $mediaPath Reserved for future use (relative-path resolution).
      *                          Accepted for API compatibility but not currently consulted —
-     *                          all parser entry points take absolute paths.
+     *                          all parser entry points take absolute paths. The trailing
+     *                          "phpstan-ignore constructor.unusedParameter" comment names
+     *                          the only static proof of that: the parameter IS unused on
+     *                          purpose (public contract kept for tests and DI config), so
+     *                          the rule's complaint is real but intentionally accepted.
      */
-    public function __construct(string $mediaPath = '')
+    public function __construct(string $mediaPath = '') // @phpstan-ignore constructor.unusedParameter
     {
         // Reserved: $mediaPath was previously stored on the instance but never
         // read. Constructor parameter is kept to preserve the public contract

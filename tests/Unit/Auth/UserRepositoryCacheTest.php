@@ -202,7 +202,9 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([['status' => 'active', 'tokens_not_valid_after' => null]]);
 
         $this->assertSame('active', $this->repo->getStatus('user-1'));
-        $this->assertSame('active', $this->repo->getStatus('user-1'));
+        // The repeat pins the no-inner-cache contract: two live DB round-trips per the
+        // exactly(2) expectation; the constant fold hides it from phpstan 2.3.1.
+        $this->assertSame('active', $this->repo->getStatus('user-1')); // @phpstan-ignore method.alreadyNarrowedType
     }
 
     public function testGetAuthStateReturnsWatermarkAndNullRowForMissingUser(): void

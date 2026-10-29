@@ -1931,8 +1931,12 @@ class MediaScannerTest extends TestCase
 
         // Three rescans of the same snapshot (source never lands in $existing).
         $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
-        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
-        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
+        // Rescans of the same snapshot pin IDEMPOTENCE of the backfill — the repeat is
+        // the contract, not the value. (See test header.) Fold-hid from phpstan 2.3.1.
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing)); // @phpstan-ignore method.alreadyNarrowedType
+        // Rescans of the same snapshot pin IDEMPOTENCE of the backfill — the repeat is
+        // the contract, not the value. (See test header.) Fold-hid from phpstan 2.3.1.
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing)); // @phpstan-ignore method.alreadyNarrowedType
 
         // Table holds exactly ONE video + ONE audio row — no accumulation.
         $this->assertCount(2, $repo->streamTable['movie-1']);

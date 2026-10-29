@@ -333,7 +333,9 @@ final class FolderWatchSchedulerTest extends TestCase
         $scheduler->tick(); // 5 — cooling down
         $scheduler->tick(); // 6 — cooling down
         $scheduler->tick(); // 7 — cooling down
-        $this->assertSame(3, $attempts);
+        // The cooldown-tick repeat IS the pin: attempts must NOT grow while cooling;
+        // phpstan 2.3.1 folds the counter flow and calls the snapshot tautological.
+        $this->assertSame(3, $attempts); // @phpstan-ignore method.alreadyNarrowedType
         $scheduler->tick(); // 8 — fourth attempt
         $this->assertSame(4, $attempts);
         $this->assertSame(0, $scheduler->registeredCount());

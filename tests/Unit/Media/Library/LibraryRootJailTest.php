@@ -294,7 +294,9 @@ final class LibraryRootJailTest extends TestCase
 
         // Read 1 populates the cache; the repeat is a hit (still one query).
         self::assertSame([$this->tmp . '/library/'], $jail->roots());
-        self::assertSame([$this->tmp . '/library/'], $jail->roots());
+        // The repeat pins the cache HIT: same value from a populated cache, and the
+        // exactly(2) query expectation below proves no extra fetch. Fold-hid contract.
+        self::assertSame([$this->tmp . '/library/'], $jail->roots()); // @phpstan-ignore staticMethod.alreadyNarrowedType
 
         // Age the cache past its TTL without sleeping.
         $ttl = (new \ReflectionClass(LibraryRootJail::class))->getConstant('CACHE_TTL_SECONDS');

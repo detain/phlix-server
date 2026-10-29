@@ -482,12 +482,19 @@ class TraktApi
             }
         }
 
-        // Should not reach here, but if it does, throw the last exception
-        if ($lastException !== null) {
-            throw $lastException;
+        // Safety net, not a branch: phpstan 2.3.1 proves this point is reached
+        // only with a caught TraktRateLimitException in hand (every other path
+        // returned or threw), so its own model calls the instanceof certain —
+        // but psalm types the catch variable nullable and demands a guard
+        // before the re-throw. The guard is the runtime-loud shape (a throw
+        // can't silently mask a future control-flow edit); the ignore names
+        // phpstan's certainty artifact and self-clears the moment the fold
+        // stops firing (reportUnmatchedIgnoredErrors=true).
+        if (!$lastException instanceof TraktRateLimitException) { // @phpstan-ignore instanceof.alwaysTrue
+            throw new TraktApiException('Trakt history retry loop exited without a result');
         }
 
-        return ['items' => [], 'pageCount' => 0];
+        throw $lastException;
     }
 
     /**
@@ -592,12 +599,14 @@ class TraktApi
             }
         }
 
-        // Should not reach here, but if it does, throw the last exception
-        if ($lastException !== null) {
-            throw $lastException;
+        // Safety net, not a branch (see getWatchedHistory): guard satisfies
+        // psalm's nullable view; the inline ignore names phpstan 2.3.1's
+        // certainty artifact and self-clears if the fold ever stops firing.
+        if (!$lastException instanceof TraktRateLimitException) { // @phpstan-ignore instanceof.alwaysTrue
+            throw new TraktApiException('Trakt playback progress retry loop exited without a result');
         }
 
-        return [];
+        throw $lastException;
     }
 
     /**

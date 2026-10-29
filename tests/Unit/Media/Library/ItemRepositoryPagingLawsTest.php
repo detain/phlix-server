@@ -49,10 +49,12 @@ final class ItemRepositoryPagingLawsTest extends TestCase
     private function repo(): ItemRepository
     {
         $db = $this->createMock(Connection::class);
-        $log = &$this->log;
         $db->method('query')
-            ->willReturnCallback(function (string $sql, array $bindings = []) use (&$log): array {
-                $log[] = ['sql' => $sql, 'bindings' => array_values($bindings)];
+            ->willReturnCallback(function (string $sql, array $bindings = []): array {
+                // Direct property write: psalm cannot analyse a by-ref property alias
+                // here (UnsupportedPropertyReferenceUsage), and $this is bound by the
+                // enclosing method so the closure needs no use().
+                $this->log[] = ['sql' => $sql, 'bindings' => array_values($bindings)];
                 if (stripos($sql, 'COUNT(') !== false) {
                     return [['count' => 0]];
                 }
@@ -116,8 +118,10 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $ceiling = $this->ceiling();
         $this->repo()->getByType('lib-1', 'movie', PHP_INT_MAX, 0, ['G', 'PG']);
         $q = $this->lastQuery();
+        $n = count($q['bindings']);
+        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
         // bindings: [library, type, cap-bindings…, limit, offset]
-        $this->assertSame($ceiling, $q['bindings'][count($q['bindings']) - 2]);
+        $this->assertSame($ceiling, $q['bindings'][$n - 2]);
         $this->assertStringContainsString(', id ASC LIMIT ? OFFSET ?', $q['sql']);
     }
 
@@ -126,8 +130,10 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $ceiling = $this->ceiling();
         $this->repo()->getByAllowedRatings('lib-1', ['G', 'PG'], PHP_INT_MAX, -4);
         $q = $this->lastQuery();
-        $this->assertSame($ceiling, $q['bindings'][count($q['bindings']) - 2]);
-        $this->assertSame(0, $q['bindings'][count($q['bindings']) - 1]);
+        $n = count($q['bindings']);
+        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
+        $this->assertSame($ceiling, $q['bindings'][$n - 2]);
+        $this->assertSame(0, $q['bindings'][$n - 1]);
         $this->assertStringContainsString(', id ASC', $q['sql']);
     }
 
@@ -136,8 +142,10 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $ceiling = $this->ceiling();
         $this->repo()->getByAllowedGenres('lib-1', ['Action'], PHP_INT_MAX, -4);
         $q = $this->lastQuery();
-        $this->assertSame($ceiling, $q['bindings'][count($q['bindings']) - 2]);
-        $this->assertSame(0, $q['bindings'][count($q['bindings']) - 1]);
+        $n = count($q['bindings']);
+        $this->assertGreaterThan(1, $n, 'bindings must carry at least limit+offset');
+        $this->assertSame($ceiling, $q['bindings'][$n - 2]);
+        $this->assertSame(0, $q['bindings'][$n - 1]);
         $this->assertStringContainsString(', id ASC', $q['sql']);
     }
 

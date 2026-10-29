@@ -141,12 +141,15 @@ final class ArtworkByteResponder
 
         if ($etagMatch || $notModified) {
             // 304 carries the validators but NO body (do not attach the file).
+            // $etag is provably non-empty on both entry paths: $etagMatch is
+            // only true when $etag !== '' (above), and $notModified requires
+            // $mtime > 0 — i.e. stat() succeeded — which makes the sprintf tag
+            // non-empty. Last-Modified keeps its guard: stat can legitimately
+            // return mtime 0 (epoch), yielding the empty tag.
             $notModifiedResponse = (new Response())
                 ->status(304)
-                ->header('Cache-Control', 'public, max-age=31536000, immutable');
-            if ($etag !== '') {
-                $notModifiedResponse->header('ETag', $etag);
-            }
+                ->header('Cache-Control', 'public, max-age=31536000, immutable')
+                ->header('ETag', $etag);
             if ($lastModified !== '') {
                 $notModifiedResponse->header('Last-Modified', $lastModified);
             }

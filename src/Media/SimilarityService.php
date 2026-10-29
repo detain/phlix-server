@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media;
 
+use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
@@ -283,19 +284,12 @@ final class SimilarityService
             $params
         );
 
-        if (!is_array($results)) {
-            return [];
-        }
-
-        $out = [];
-        foreach ($results as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $out[] = $row;
-        }
-
-        return $out;
+        // The Workerman driver types result rows as array<mixed, mixed>;
+        // RowMap::listFromMixed is the estate-wide boundary parser that narrows
+        // a result set to the declared list<array<string, mixed>> (dropping
+        // non-array rows and non-string keys — real MySQL assoc rows are
+        // unaffected), replacing the hand-rolled is_array filter loop.
+        return RowMap::listFromMixed($results);
     }
 
     /**

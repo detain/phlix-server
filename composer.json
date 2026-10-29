@@ -62,6 +62,9 @@
         "squizlabs/php_codesniffer": "^3.10",
         "vimeo/psalm": "^6.5"
     },
+    "conflict": {
+        "illuminate/collections": ">=13.32.0"
+    },
     "autoload": {
         "psr-4": {
             "Phlix\\": "src/"
@@ -114,7 +117,8 @@
         "phlix": {
             "minHubVersion": "1.0.0",
             "maxHubVersion": "1.9.9",
-            "minPhpVersion": "8.3"
+            "minPhpVersion": "8.3",
+            "staticsPinNote": "conflict illuminate/collections >=13.32.0: v13.32.0+ carries '@phpstan-this-out ($key is null ? static<TKey|int, TValue> : $this)' on Collection::pull(); vimeo/psalm 6.5.0 (highest resolvable under config.platform.php=8.3.0) crashes with TypeParseTreeException on deep-scan via the autoload file graph, and v13.39.0 still offends (no upward cure). Remove only together with a psalm >=6.20 bump, which requires an owner decision to raise platform php to >=8.3.16. Evidence: .reviews/fixlog/M-SERVER-CSFIX__fix.md"
         }
     },
     "repositories": [

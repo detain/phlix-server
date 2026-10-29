@@ -94,7 +94,7 @@ final class MysqlOnlyIndexDialectGateTest extends TestCase
 
     public function testFullChainFreshAppliesGreenOnMysql8WithDirectivesPresent(): void
     {
-        $runner = new MigrationRunner(fn (): Connection => $this->db, $this->migrationsDir);
+        $runner = new MigrationRunner(fn (): Connection => $this->db ?? throw new \RuntimeException("migration runner invoked before setUp connected"), $this->migrationsDir);
         $result = $runner->run();
 
         $this->assertSame(
@@ -123,7 +123,7 @@ final class MysqlOnlyIndexDialectGateTest extends TestCase
 
     public function testMysql8EndStateKeepsFunctionalIndexesAnd051Purge(): void
     {
-        $runner = new MigrationRunner(fn (): Connection => $this->db, $this->migrationsDir);
+        $runner = new MigrationRunner(fn (): Connection => $this->db ?? throw new \RuntimeException("migration runner invoked before setUp connected"), $this->migrationsDir);
         $this->assertSame([], $runner->run()['errors']);
 
         /** @var array<int, array<string, string>> $rows */
@@ -151,7 +151,7 @@ final class MysqlOnlyIndexDialectGateTest extends TestCase
 
     public function testSteadyStateReRunExecutesNothingOnceEveryFileIsLedgered(): void
     {
-        $first = (new MigrationRunner(fn (): Connection => $this->db, $this->migrationsDir))->run();
+        $first = (new MigrationRunner(fn (): Connection => $this->db ?? throw new \RuntimeException("migration runner invoked before setUp connected"), $this->migrationsDir))->run();
         $this->assertSame([], $first['errors']);
 
         $executed = [];

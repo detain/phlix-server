@@ -36,7 +36,7 @@ final class PasswordChangeRequiredException extends RuntimeException
     {
         $this->errorCode = self::ERROR_CODE;
         parent::__construct(
-            'Your password must be changed before you can access the system. Please use the password reset link.'
+            'Your password must be changed before you can sign in. Ask your server administrator to reset it.'
         );
     }
 }

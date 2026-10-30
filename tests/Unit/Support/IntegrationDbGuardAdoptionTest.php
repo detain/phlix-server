@@ -492,7 +492,18 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // siblings — tie-walks at 400 rows measuring 40-41 repeats pre-cure, and a
     // 10,001-row library proving the ABSOLUTE_ROW_CEILING backstop).
     // Measured from the phpunit red.
-    private const EXPECTED_ADOPTERS = 73;
+    // 73→76 by the W-min100/W-min102 lanes (2026-10-30):
+    // +tests/Integration/Media/MediaItemsYearSortMigration121RealDbTest.php
+    // (M-SERVER-20: real-MySQL apply/derive/replay proof for the materialized
+    // year_sort column),
+    // +tests/Integration/Media/Library/MediaItemCreateAtomicityRealDbTest.php
+    // (M-SERVER-21: rollback-propagation, race-reuse and non-duplicate
+    // surfacing over the migrated base),
+    // +tests/Integration/Media/CollectionsForeignKeysMigration122RealDbTest.php
+    // (M-SERVER-22: prune-convergence, the three named CASCADE edges, the 1452
+    // rejection and the ledger-stripped replay).
+    // Measured from the phpunit red (CI run 41090174908).
+    private const EXPECTED_ADOPTERS = 76;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

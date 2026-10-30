@@ -4261,7 +4261,12 @@ class Application
             $subtitleCache = $this->container->get(\Phlix\Media\Subtitles\EmbeddedSubtitleCache::class);
         }
 
-        return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor, $subtitleCache);
+        return new \Phlix\Server\Http\Controllers\SubtitleController(
+            $itemRepository,
+            $ffmpeg,
+            $extractor,
+            $subtitleCache
+        );
     }
 
     /**

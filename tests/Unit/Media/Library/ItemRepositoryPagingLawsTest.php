@@ -208,11 +208,13 @@ final class ItemRepositoryPagingLawsTest extends TestCase
 
     public function testQueryYearSortArmCarriesTheIdTail(): void
     {
-        // year_sort is the arm whose PRIMARY key (CAST(metadata_json->$.year))
-        // ties wholesale across same-year releases — the classic skip/repeat.
+        // year_sort is the arm whose values tie wholesale across same-year
+        // releases — the classic skip/repeat. (Materialized column since
+        // minors M-SERVER-20 / W-min100 migration 121; it used to be
+        // CAST(metadata_json->'$.year') inlined here.)
         $this->repo()->query(['sort' => 'year', 'order' => 'desc'], 'lib-1');
         $q = $this->lastQuery();
-        $this->assertStringContainsString('$.year', $q['sql'], 'the year arm must be the one under test');
+        $this->assertStringContainsString('year_sort DESC', $q['sql'], 'the year arm must be the one under test');
         $this->assertStringContainsString(', id ASC LIMIT ? OFFSET ?', $q['sql']);
     }
 

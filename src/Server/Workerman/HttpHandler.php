@@ -183,6 +183,11 @@ final class HttpHandler
             if ($static !== null) {
                 $responseStatus = $static->getStatusCode();
                 $httpLogger->debug("HttpHandler.__invoke Static file served [uid={$requestUid}]");
+                // minors M-SERVER-50: a reply built outside the app's Response
+                // still gets the SAME security-header + CORS set as a
+                // dispatched one — through the identical value generators
+                // (SecurityHeaders/CorsManager::headerValues), never a copy.
+                self::decorateRawReply($request, $static, $cors, $securityHeaders);
                 $connection->send($static);
                 return;
             }
@@ -202,11 +207,15 @@ final class HttpHandler
                         'error' => 'CSRF validation failed',
                         'code' => 'csrf.invalid_origin',
                     ]) ?: '{"error":"CSRF validation failed","code":"csrf.invalid_origin"}';
-                    $connection->send(new WorkermanResponse(
+                    // minors M-SERVER-50: same decoration as every other exit;
+                    // a cross-origin client must be able to READ this 403.
+                    $rejected = new WorkermanResponse(
                         403,
                         ['Content-Type' => 'application/json; charset=utf-8'],
                         $body,
-                    ));
+                    );
+                    self::decorateRawReply($request, $rejected, $cors, $securityHeaders);
+                    $connection->send($rejected);
                     return;
                 }
             }
@@ -230,6 +239,11 @@ final class HttpHandler
                 $fastResp = $this->fastPaths()->dispatch($request);
                 if ($fastResp !== null) {
                     $responseStatus = $fastResp->statusCode;
+                    // minors M-SERVER-50: these are app Responses — decorated
+                    // through the very same calls the dispatched branches
+                    // below use (no raw-reply helper needed here).
+                    $fastResp = $cors->decorate($request, $fastResp);
+                    $fastResp = $securityHeaders->decorate($fastResp);
                     $connection->send($fastResp->toWorkermanResponse());
                     return;
                 }
@@ -724,6 +738,45 @@ final class HttpHandler
         }
 
         return $response->asHeadReply();
+    }
+
+    /**
+     * Apply the SAME security-header + CORS value sets the dispatched branches
+     * use to a reply built as a raw Workerman response (minors M-SERVER-50).
+     *
+     * The guards that make this safe to call unconditionally:
+     *  - both value generators are keyed on the REPLY's existing headers, so an
+     *    arm that already set one of them keeps its own value (caller wins);
+     *  - CORS emission additionally requires an exactly-allowlisted `Origin`,
+     *    and with the empty default allowlist it emits nothing, byte-for-byte;
+     *  - nothing here buffers or re-encodes: a `withFile()` stream reply stays
+     *    a stream reply and a {@see BodylessResponse} stays head-only (S113).
+     *
+     * @param Request         $request         The parsed request (`Origin` read).
+     * @param WorkermanResponse $reply         The raw reply about to be sent.
+     * @param CorsManager     $cors            This request's CORS decorator.
+     * @param SecurityHeaders $securityHeaders This worker's security decorator.
+     */
+    private static function decorateRawReply(
+        Request $request,
+        WorkermanResponse $reply,
+        CorsManager $cors,
+        SecurityHeaders $securityHeaders,
+    ): void {
+        /** @var array<string, string> $existing */
+        $existing = [];
+        foreach ($reply->getHeaders() as $name => $value) {
+            if (is_string($name) && is_string($value)) {
+                $existing[$name] = $value;
+            }
+        }
+
+        foreach ($securityHeaders->headerValues($existing) as $name => $value) {
+            $reply->header($name, $value);
+        }
+        foreach ($cors->headerValues($request, $existing) as $name => $value) {
+            $reply->header($name, $value);
+        }
     }
 
     /**

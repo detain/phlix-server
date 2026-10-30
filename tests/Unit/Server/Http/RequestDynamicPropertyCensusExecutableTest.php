@@ -804,9 +804,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * the legitimate producer domains pass verbatim). Reads/writes no Request
      * property, so every other census denominator is unchanged. Measured from
      * the phpunit red (2009), not predicted.
+     * Re-pinned 2009→2010 by the W-min101 / M-SERVER-50 early-exit-decora-
+     * tion lane (2026-10-30): +1 — tests/Unit/Server/Workerman/HttpHandler
+     * FastPathDecorationTest.php (static-file, CSRF-403 and pre-router
+     * fast-path replies all carrying the shared SecurityHeaders/CorsManager
+     * value sets, with the no-allowlist and dispatched-control arms proving
+     * the decoration adds nothing it should not). Drives raw Workerman
+     * requests through __invoke(); writes no Request property directly, so
+     * every other census denominator is unchanged. Measured from the
+     * phpunit red (2010), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2009;
+    private const EXPECTED_PHP_FILES = 2010;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

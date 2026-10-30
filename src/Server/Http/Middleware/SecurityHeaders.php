@@ -35,9 +35,13 @@ use Phlix\Server\Http\Response;
  *    itself but no external domain can)
  *
  * Called from {@see \Phlix\Server\Workerman\HttpHandler} after CORS decoration
- * on every response that passes through the Workerman entrypoint. (The
- * historical second caller — the pre-S171 CGI front controller `public/index.php`
- * — no longer exists; this handler is the sole production entry.)
+ * on every response that passes through the Workerman entrypoint — dispatched
+ * replies through {@see self::decorate()}, and the raw early exits (static
+ * files, the CSRF 403) through {@see self::headerValues()}, which is the SAME
+ * value set and the SAME caller-wins guards, so no reply can leave undecorated
+ * by being built outside the app's `Response`. (The historical second caller —
+ * the pre-S171 CGI front controller `public/index.php` — no longer exists;
+ * this handler is the sole production entry.)
  *
  * @package Phlix\Server\Http\Middleware
  */
@@ -58,15 +62,23 @@ final class SecurityHeaders
     }
 
     /**
-     * Apply security headers to a response.
+     * The security header SET to add to a reply, given what it already carries.
      *
-     * @param Response $response The response to decorate (mutated in place).
+     * The single source both decoration paths consume: {@see self::decorate()}
+     * applies it to the app's `Response`, and the raw-Workerman early exits in
+     * {@see \Phlix\Server\Workerman\HttpHandler} apply it through
+     * `Response::header()` — identical values, identical caller-wins guards,
+     * one definition (minors M-SERVER-50).
      *
-     * @return Response The same response (for chaining).
+     * @param array<string, string> $existing Header map of the reply about to
+     *                                        be decorated (only its KEYS are
+     *                                        consulted, case-insensitively).
+     *
+     * @return array<string, string> Headers to set, in emission order.
      */
-    public function decorate(Response $response): Response
+    public function headerValues(array $existing): array
     {
-        $headers = $response->headers;
+        $out = [];
 
         // Guard: don't overwrite an existing value (caller wins). HTTP header
         // names are case-insensitive (RFC 9110 SS4.2) and Response::header() keys
@@ -76,8 +88,8 @@ final class SecurityHeaders
         // enforce the UNION of all policies, so the weaker-looking duplicate key
         // silently changes semantics). Mirrors Response::asHeadReply()'s
         // strcasecmp scan.
-        if (!self::hasHeader($headers, 'X-Content-Type-Options')) {
-            $response->header('X-Content-Type-Options', 'nosniff');
+        if (!self::hasHeader($existing, 'X-Content-Type-Options')) {
+            $out['X-Content-Type-Options'] = 'nosniff';
         }
 
         // X-Frame-Options via the policy's CLOSED value set — frameOptions()
@@ -86,8 +98,8 @@ final class SecurityHeaders
         // is what modern browsers obey either way — see the policy's
         // DO-NOT-EXPOSE note for why the CSP itself is not settings-backed).
         $frameOptions = $this->policy->frameOptions();
-        if ($frameOptions !== SecurityHeadersPolicy::NONE && !self::hasHeader($headers, 'X-Frame-Options')) {
-            $response->header('X-Frame-Options', $frameOptions);
+        if ($frameOptions !== SecurityHeadersPolicy::NONE && !self::hasHeader($existing, 'X-Frame-Options')) {
+            $out['X-Frame-Options'] = $frameOptions;
         }
 
         // HSTS: emitted with the policy's clamped max-age + the fixed
@@ -98,33 +110,45 @@ final class SecurityHeaders
         // never had request/TLS context and always emitted the header; the
         // plain-text MITM-injection concern remains a known open item.
         // max-age=0 is the standard clear-the-pin signal.
-        if (!self::hasHeader($headers, 'Strict-Transport-Security')) {
-            $response->header(
-                'Strict-Transport-Security',
-                'max-age=' . $this->policy->hstsMaxAgeSeconds() . '; includeSubDomains'
-            );
+        if (!self::hasHeader($existing, 'Strict-Transport-Security')) {
+            $out['Strict-Transport-Security']
+                = 'max-age=' . $this->policy->hstsMaxAgeSeconds() . '; includeSubDomains';
         }
 
         // CSP: restrictive by default. script-src is 'self' only — inline SCRIPT
         // is never whitelisted wholesale; the SPA shell opts into a per-request
-        // nonce instead (see below). style-src CARRIES 'unsafe-inline' on
-        // purpose: the SPA themes by setting CSS custom properties through
-        // el.style.setProperty(), which lands in element style attributes — the
-        // exact construct 'unsafe-inline' in style-src permits (and what
-        // AGENTS.md's theming note calls "no script-src relaxation").
-        // frame-ancestors 'self' lets the SPA embed its own pages but blocks
-        // clickjacking from external iframes. base-uri 'self' (not NONE — the
-        // SPA shell resolves relative asset URLs against its own origin)
-        // restricts injected <base> tags to same-origin.
+        // nonce instead (see contentSecurityPolicy()'s $scriptNonce argument).
+        // style-src CARRIES 'unsafe-inline' on purpose: the SPA themes by
+        // setting CSS custom properties through el.style.setProperty(), which
+        // lands in element style attributes — the exact construct 'unsafe-inline'
+        // in style-src permits. frame-ancestors 'self' lets the SPA embed its
+        // own pages but blocks clickjacking from external iframes. base-uri
+        // 'self' (not NONE — the SPA shell resolves relative asset URLs against
+        // its own origin) restricts injected <base> tags to same-origin.
         //
         // Guard: a caller that already set its own CSP wins. The SPA shell
         // ({@see \Phlix\Server\WebPortal\Controllers\SharedUiController}) does
         // exactly this — it serves an inline bootstrap `<script>` and sets a CSP
-        // carrying a per-request `'nonce-…'` (built via {@see contentSecurityPolicy()})
-        // so the inline block executes without weakening `script-src` to
-        // `'unsafe-inline'`.
-        if (!self::hasHeader($headers, 'Content-Security-Policy')) {
-            $response->header('Content-Security-Policy', self::contentSecurityPolicy());
+        // carrying a per-request `'nonce-…'` so the inline block executes
+        // without weakening `script-src` to `'unsafe-inline'`.
+        if (!self::hasHeader($existing, 'Content-Security-Policy')) {
+            $out['Content-Security-Policy'] = self::contentSecurityPolicy();
+        }
+
+        return $out;
+    }
+
+    /**
+     * Apply security headers to a response.
+     *
+     * @param Response $response The response to decorate (mutated in place).
+     *
+     * @return Response The same response (for chaining).
+     */
+    public function decorate(Response $response): Response
+    {
+        foreach ($this->headerValues($response->headers) as $name => $value) {
+            $response->header($name, $value);
         }
 
         return $response;

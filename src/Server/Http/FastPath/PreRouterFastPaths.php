@@ -238,9 +238,12 @@ final class PreRouterFastPaths
             // starts with `pathinfo($path, PATHINFO_EXTENSION)` of its own, which
             // on a dot-less `"jpg"` is `""` — so no map entry ever matched and
             // EVERY avatar was served as `application/octet-stream`. It rendered
-            // anyway only because these fast-path responses carry no
-            // `X-Content-Type-Options: nosniff`, so browsers content-sniffed it;
-            // over the hub relay that header survives to a consumer that may not.
+            // anyway only because those pre-decoration fast-path responses carried
+            // no `X-Content-Type-Options: nosniff`, so browsers content-sniffed
+            // it — since the minors M-SERVER-50 decoration, direct-HTTP replies
+            // carry it too, which makes the constant type load-bearing rather
+            // than merely tidy. Over the hub relay that header survives to a
+            // consumer that may not.
             // {@see AvatarStorage} re-encodes every upload to JPEG and `path()`
             // only ever returns `<userId>.jpg`, so the type is a constant.
             ->header('Content-Type', 'image/jpeg')

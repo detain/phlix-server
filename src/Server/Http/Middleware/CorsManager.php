@@ -33,11 +33,15 @@ use Phlix\Server\Http\Response;
  *  - `Vary: Origin` so caches don't serve one origin's ACAO to another.
  *
  * A preflight `OPTIONS` from an allowlisted origin short-circuits with `204` +
- * the allow-methods / allow-headers / max-age. Both HTTP entry points
- * (the resident {@see \Phlix\Server\Workerman\HttpHandler} and the CGI
- * `public/index.php`) call this ONE class — {@see self::preflightResponse()}
- * before dispatch and {@see self::decorate()} on the final response — so the
- * dual-entry-point behavior cannot drift.
+ * the allow-methods / allow-headers / max-age. The resident {@see
+ * \Phlix\Server\Workerman\HttpHandler} entry point consults this ONE class at
+ * every exit — {@see self::preflightResponse()} before dispatch, {@see
+ * self::decorate()} on dispatched app responses, and {@see self::headerValues()}
+ * on the raw-Workerman early exits (static files, the CSRF 403), alongside the
+ * matching {@see SecurityHeaders::headerValues()} — so the decoration cannot
+ * drift and no reply can leave undecorated by being built outside the app's
+ * `Response`. (The historical dual CGI entry point `public/index.php` was
+ * deleted by S171.)
  *
  * @package Phlix\Server\Http\Middleware
  */
@@ -130,11 +134,37 @@ final class CorsManager
     }
 
     /**
+     * The credentialed CORS header SET to add to a reply, given the request
+     * and what the reply already carries.
+     *
+     * The single source both decoration paths consume: {@see self::decorate()}
+     * applies it to the app's `Response`, and the raw-Workerman early exits in
+     * {@see \Phlix\Server\Workerman\HttpHandler} apply it through
+     * `Response::header()` (minors M-SERVER-50). Empty array = not a matched
+     * origin (or CORS disabled) — the no-op contract both paths share.
+     *
+     * @param Request              $request  The request whose `Origin` may match.
+     * @param array<string, string> $existing Header map of the reply; only a
+     *                                        pre-existing `Vary` is consulted.
+     *
+     * @return array<string, string> Headers to set.
+     */
+    public function headerValues(Request $request, array $existing): array
+    {
+        $origin = $this->matchedOrigin($request);
+        if ($origin === null) {
+            return [];
+        }
+
+        return self::corsHeaders($origin, $existing['Vary'] ?? null);
+    }
+
+    /**
      * Decorate the final response with credentialed CORS headers when the
      * request's `Origin` is allowlisted; otherwise return it untouched.
      *
-     * Safe to call on every response from both entry points: with an empty
-     * allowlist or a non-matching origin it is a no-op.
+     * Safe to call on every dispatched response: with an empty allowlist or a
+     * non-matching origin it is a no-op.
      */
     public function decorate(Request $request, Response $response): Response
     {
@@ -172,10 +202,29 @@ final class CorsManager
      */
     private function withCorsHeaders(Response $response, string $origin): Response
     {
-        return $response
-            ->header('Access-Control-Allow-Origin', $origin)
-            ->header('Access-Control-Allow-Credentials', 'true')
-            ->header('Vary', self::appendVaryOrigin($response->headers['Vary'] ?? null));
+        foreach (self::corsHeaders($origin, $response->headers['Vary'] ?? null) as $name => $value) {
+            $response = $response->header($name, $value);
+        }
+
+        return $response;
+    }
+
+    /**
+     * The three credentialed CORS headers for a matched origin, sharing the
+     * `Vary` merge with the raw-Workerman decoration path.
+     *
+     * @param string      $origin       The exactly-matched request origin.
+     * @param string|null $existingVary A pre-existing `Vary` value, if any.
+     *
+     * @return array<string, string>
+     */
+    private static function corsHeaders(string $origin, ?string $existingVary): array
+    {
+        return [
+            'Access-Control-Allow-Origin' => $origin,
+            'Access-Control-Allow-Credentials' => 'true',
+            'Vary' => self::appendVaryOrigin($existingVary),
+        ];
     }
 
     /**

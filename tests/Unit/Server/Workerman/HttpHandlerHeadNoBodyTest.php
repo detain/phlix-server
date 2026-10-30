@@ -54,11 +54,15 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  */
 final class HttpHandlerHeadNoBodyTest extends TestCase
 {
-    /** The 404 page envelope `HttpHandler::dispatch()` builds. */
-    private const PAGE_404_HTML = '<h1>404 - Page not found</h1>';
+    /**
+     * Body markers of the two pages (M-SERVER-87 grew the bare fragments into
+     * full documents — byte-exact snapshots of copy are not this suite's law;
+     * {@see \Phlix\Tests\Unit\Server\Http\ErrorPagesTest} pins the documents).
+     */
+    private const PAGE_404_HTML = '<h1>Page not found</h1>';
 
-    /** The last-resort envelope the `catch (Throwable)` arm builds. */
-    private const ERROR_500_HTML = '<h1>500 Internal Server Error</h1>';
+    /** Marker of the last-resort document the `catch (Throwable)` arm builds. */
+    private const ERROR_500_HTML = '<h1>Something went wrong</h1>';
 
     private string $publicRoot = '';
 
@@ -421,22 +425,26 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         $headWire = (string) $this->invoke('HEAD', '/api/v1/anything', $exploding);
 
         self::assertStringStartsWith("HTTP/1.1 500 Internal Server Error\r\n", $headWire);
-        self::assertSame(self::ERROR_500_HTML, self::bodyBytes($getWire), 'premise: the GET carries the HTML');
-        $this->assertHeadOf($headWire, $getWire, 'the 500');
-        self::assertStringNotContainsString('Internal Server Error</h1>', $headWire);
         self::assertStringContainsString(
-            'Content-Length: ' . strlen(self::ERROR_500_HTML) . "\r\n",
+            self::ERROR_500_HTML,
+            self::bodyBytes($getWire),
+            'premise: the GET carries the 500 document',
+        );
+        $this->assertHeadOf($headWire, $getWire, 'the 500');
+        self::assertStringNotContainsString(self::ERROR_500_HTML, $headWire);
+        self::assertStringContainsString(
+            'Content-Length: ' . strlen(self::bodyBytes($getWire)) . "\r\n",
             $headWire,
-            'the 500 must still declare its 34-byte entity',
+            'the 500 must still declare the length its GET body carries',
         );
     }
 
     // --- site 5: dispatch()'s 404 page ----------------------------------------
 
     /**
-     * Site 5. `dispatch()`'s own `404 - Page not found` envelope — a different site
-     * from `Router::notFound()` (different class, different body, different
-     * dispatcher) and the one a browser hits for any unrouted non-`/api/` path.
+     * Site 5. `dispatch()`'s 404 page — a different site from `Router::notFound()`
+     * (different class, different body, different dispatcher) and the one a browser
+     * hits for any unrouted non-`/api/` path.
      */
     public function testAHeadForAnUnroutedPageShipsNo404Html(): void
     {
@@ -444,7 +452,11 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         $headWire = (string) $this->invoke('HEAD', '/no-such-page');
 
         self::assertStringStartsWith("HTTP/1.1 404 Not Found\r\n", $headWire);
-        self::assertSame(self::PAGE_404_HTML, self::bodyBytes($getWire), 'premise: the GET carries the HTML');
+        self::assertStringContainsString(
+            self::PAGE_404_HTML,
+            self::bodyBytes($getWire),
+            'premise: the GET carries the 404 document',
+        );
         $this->assertHeadOf($headWire, $getWire, "dispatch()'s 404 page");
         self::assertStringNotContainsString('Page not found', $headWire);
     }
@@ -526,7 +538,7 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
             self::assertNotSame('', $body, $site . ': a GET must still ship its entity');
         }
         self::assertSame(3622, strlen($bodies['serveStatic()']));
-        self::assertSame(self::ERROR_500_HTML, $bodies['the 500']);
-        self::assertSame(self::PAGE_404_HTML, $bodies['the 404 page']);
+        self::assertStringContainsString(self::ERROR_500_HTML, $bodies['the 500']);
+        self::assertStringContainsString(self::PAGE_404_HTML, $bodies['the 404 page']);
     }
 }

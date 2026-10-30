@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal\Controllers;
 
+use Phlix\Server\Http\ErrorPages;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -72,13 +73,7 @@ final class SharedUiController
             $viteAssets = new ViteAssets($this->publicRoot);
             $viteAssets->getEntryJsPath();
         } catch (\RuntimeException) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
-                );
+            return ErrorPages::uiNotBuilt();
         }
 
         $shellPath = $this->publicRoot . self::SHELL_RELATIVE_PATH;
@@ -89,20 +84,12 @@ final class SharedUiController
             || ! str_starts_with($real, $this->publicRoot . DIRECTORY_SEPARATOR)
             || ! is_file($real)
         ) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
-                );
+            return ErrorPages::uiNotBuilt();
         }
 
         $html = file_get_contents($real);
         if ($html === false) {
-            return (new Response())
-                ->status(503)
-                ->html('<h1>503 — Shared UI could not be read</h1>');
+            return ErrorPages::uiUnreadable();
         }
 
         // Inject window.__PHLIX__ config

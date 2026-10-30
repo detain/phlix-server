@@ -842,9 +842,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (arm table + UPLOAD_ERR_OK defensive pin). The two controllers only
      * swap private tables for the shared call; no new Request sites.
      * Measured from the phpunit red (2017), not predicted.
+     * Re-pinned 2017→2019 by the W-min103 / M-SERVER-87 error-pages lane
+     * (2026-10-30): +2 — src/Server/Http/ErrorPages.php (the full-document
+     * 404/500/503 SSOT replacing bare fragments at 9 sites) and tests/Unit/
+     * Server/Http/ErrorPagesTest.php (document chrome, visitor-first copy,
+     * status codes and the no-fragment-regression site guard). The rewritten
+     * arms read no Request property, so every other census denominator is
+     * unchanged. Measured from the phpunit red (2019), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2017;
+    private const EXPECTED_PHP_FILES = 2019;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

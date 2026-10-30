@@ -18,6 +18,7 @@ use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
+use Phlix\Server\Http\ErrorPages;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
@@ -364,7 +365,7 @@ final class HttpHandler
             // S113 (site 2 + site 5): the page-rendering branch is the only one that
             // never passes through a Router, so nothing else has flagged this reply
             // head-only — every SPA shell, every legacy redirect and the
-            // `<h1>404 - Page not found</h1>` envelope from self::dispatch() shipped
+            // then-bare `404 - Page not found` fragment from self::dispatch() shipped
             // their bodies on a HEAD. AFTER compressResponse(), so the pinned length
             // is the gzipped one when the body was gzipped.
             $connection->send(self::headAware($wr, $decorated)->toWorkermanResponse());
@@ -415,7 +416,9 @@ final class HttpHandler
             // hand, so it never saw Response::$headOnly and shipped its HTML body on a
             // HEAD. A crash is exactly when a desynced keep-alive connection is least
             // welcome, so it is fixed here rather than excused as an edge case.
-            $errorBody = '<h1>500 Internal Server Error</h1>';
+            // M-SERVER-87: the body is the shared full 500 document; only its bytes
+            // changed — the HEAD arm below still derives Content-Length from strlen.
+            $errorBody = ErrorPages::serverErrorHtml();
             $errorHeaders = ['Content-Type' => 'text/html; charset=utf-8'];
             if ($wr->method() === 'HEAD') {
                 $errorHeaders['Content-Length'] = (string) strlen($errorBody);
@@ -711,7 +714,7 @@ final class HttpHandler
      * {@see \Phlix\Server\Http\Router::markHeadOnly()} covers everything the routers
      * return, but two branches of {@see self::__invoke()} never reach a router at
      * all — the page-rendering fall-through ({@see self::dispatch()}: the SPA shell,
-     * the legacy redirects and the `404 - Page not found` envelope) and the
+     * the legacy redirects and the then-bare `404 - Page not found` fragment) and the
      * {@see RateLimitException} 429, which is built in the catch block after the
      * limiter threw *through* the router. Both therefore shipped a body on a `HEAD`,
      * which RFC 9110 §9.3.2 forbids: a header-only client leaves those bytes
@@ -1112,7 +1115,7 @@ final class HttpHandler
         if ($path === '/app' || str_starts_with($path, '/app/')) {
             return $this->dispatchSharedUi($request);
         }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        return ErrorPages::notFound();
     }
 
     /**
@@ -1179,7 +1182,7 @@ final class HttpHandler
             // Redirect to the Vue SPA player page
             return $this->legacyRedirect($request, '/app/music/player');
         }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        return ErrorPages::notFound();
     }
 
     private function dispatchBooks(Request $request, string $path): Response
@@ -1206,7 +1209,7 @@ final class HttpHandler
             // Redirect to the Vue SPA books listing
             return $this->legacyRedirect($request, '/app/books');
         }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        return ErrorPages::notFound();
     }
 
     private function dispatchAudiobooks(Request $request, string $path): Response
@@ -1223,7 +1226,7 @@ final class HttpHandler
             // Redirect to the Vue SPA audiobooks listing
             return $this->legacyRedirect($request, '/app/audiobooks');
         }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        return ErrorPages::notFound();
     }
 
     private function dispatchPhoto(Request $request, string $path): Response
@@ -1251,6 +1254,6 @@ final class HttpHandler
         if ($path === '/photo/slideshow') {
             return $this->legacyRedirect($request, '/app/photo/slideshow');
         }
-        return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        return ErrorPages::notFound();
     }
 }

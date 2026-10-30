@@ -1481,18 +1481,67 @@ class FfmpegRunner
      *
      * @param array<string, mixed> $params
      */
-    private static function browserSafeVideoFlags(string $videoCodec, array $params): string
+    private function browserSafeVideoFlags(string $videoCodec, array $params): string
     {
         if ($videoCodec === 'libx264') {
-            return ' -pix_fmt ' . (self::paramString($params, 'pix_fmt') ?? 'yuv420p')
-                . ' -profile:v ' . (self::paramString($params, 'profile') ?? 'high')
-                . ' -level ' . (self::paramString($params, 'level') ?? '4.1');
+            return ' -pix_fmt ' . ($this->argvParam($params, 'pix_fmt') ?? 'yuv420p')
+                . ' -profile:v ' . ($this->argvParam($params, 'profile') ?? 'high')
+                . ' -level ' . ($this->argvParam($params, 'level') ?? '4.1');
         }
         if ($videoCodec === 'libx265') {
-            $pixFmt = self::paramString($params, 'pix_fmt');
+            $pixFmt = $this->argvParam($params, 'pix_fmt');
             return $pixFmt !== null ? ' -pix_fmt ' . $pixFmt : '';
         }
         return '';
+    }
+
+    /**
+     * The boundary every {@code segment_params} string must clear before it is
+     * interpolated UNESCAPED into the ffmpeg argv (minors M-SERVER-77).
+     *
+     * Today the sole producer of these params is TranscodeManager
+     * ({@code computeSegmentParams()} / {@code segmentParamsForRendition()}),
+     * whose codec/preset values come from constants and the
+     * {@see EncodeSettings} allow-list and whose `tone_map_filter` is one of
+     * the two house filter graphs — every legitimate value is inside-domain by
+     * construction. That trust-by-writer convention is exactly what this gate
+     * refuses to depend on: one future param writer wired to request input, or
+     * one hand-edited `transcode_jobs.segment_params` row, would otherwise
+     * become argument injection inside the shell string (and inside the
+     * double-quoted `-vf` context). A value outside its slot's family is
+     * REJECTED before any command is built: fail loud, never sanitize. The
+     * offending payload is deliberately never logged verbatim — it is the
+     * injection attempt itself — only the slot name is.
+     *
+     * Subtitle burn-in fragments are NOT read here: they are assembled by
+     * {@see SubtitleBurner} with its own filtergraph escaping.
+     *
+     * @param array<string, mixed> $params Segment params.
+     * @param string               $key    Slot name, one of {@see self::ARGV_PARAM_BOUNDARIES}.
+     *
+     * @return string|null The validated value, or null when the slot is absent/empty.
+     *
+     * @throws \InvalidArgumentException When the value is outside the slot's allowlist.
+     */
+    private function argvParam(array $params, string $key): ?string
+    {
+        $value = self::paramString($params, $key);
+        if ($value === null) {
+            return null;
+        }
+
+        $pattern = self::ARGV_PARAM_BOUNDARIES[$key];
+        if (preg_match($pattern, $value) === 1) {
+            return $value;
+        }
+
+        $this->logger->error('Segment param rejected at the ffmpeg argv boundary', [
+            'param' => $key,
+        ]);
+        throw new \InvalidArgumentException(sprintf(
+            'transcode segment param "%s" is outside the ffmpeg argv allowlist; refusing to build the command',
+            $key
+        ));
     }
 
     /**
@@ -1530,11 +1579,42 @@ class FfmpegRunner
     }
 
     /**
+     * Per-slot allowlists for every segment param read into the argv unescaped
+     * ({@see self::argvParam()}, minors M-SERVER-77). Families mirror the
+     * legitimate producers' closed sets: ffmpeg codec/encoder names, x264/x265
+     * preset words, pixel-format and profile tokens are `[A-Za-z0-9_]+`;
+     * `level` is numeric (`4.1` or `41`); audio bitrates are `<digits>` with an
+     * optional k/K/m/M suffix (`128k`); the threaded `tone_map_filter` is an
+     * ffmpeg filtergraph restricted to the shell- and quote-safe token set the
+     * two house graphs (zscale/libplacebo) actually use — letters, digits,
+     * `_ = : % ,` — which excludes every character (`" ' \ $ ` ; space & | < >`)
+     * that could break out of the `-vf "…"` double-quoted context. Length caps
+     * keep a bloated row from smearing across the process table.
+     *
+     * @var array<string, string>
+     */
+    private const ARGV_PARAM_BOUNDARIES = [
+        'video_codec' => '/^[A-Za-z0-9_]{1,64}$/',
+        'audio_codec' => '/^[A-Za-z0-9_]{1,64}$/',
+        'preset' => '/^[A-Za-z0-9_]{1,64}$/',
+        'pix_fmt' => '/^[A-Za-z0-9_]{1,64}$/',
+        'profile' => '/^[A-Za-z0-9_]{1,64}$/',
+        'level' => '/^[0-9]{1,3}(\.[0-9]{1,3})?$/',
+        'audio_bitrate' => '/^[0-9]{1,7}[kKmM]?$/',
+        'tone_map_filter' => '/^[A-Za-z0-9_=:%,]{1,4096}$/',
+    ];
+
+    /**
      * Extracts a string value from a mixed parameter array.
      *
      * Returns the value when it is a non-empty string; otherwise null. Numeric
      * scalars are coerced to their string form to remain backwards-compatible
      * with callers that pass numbers as strings (e.g. '128k').
+     *
+     * NOTE (minors M-SERVER-77): reading through this helper is FINE for
+     * comparison/dispatch (callers test the value, they do not splice it).
+     * Anything that reaches the ffmpeg argv UNESCAPED must instead go through
+     * {@see self::argvParam()} — the boundary allowlist.
      *
      * @param array<string, mixed> $params
      */
@@ -1687,10 +1767,7 @@ class FfmpegRunner
         $cmd .= ' -dn -sn';
 
         // Video: a transcoded rung (capped-CRF) OR a genuine stream copy for "Original".
-        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
-        if ($videoCodec === '') {
-            $videoCodec = 'libx264';
-        }
+        $videoCodec = $this->argvParam($params, 'video_codec') ?? 'libx264';
         if ($videoCodec === 'copy') {
             // Genuine passthrough: no encoder/scale flags and NO force_key_frames
             // (a copy cannot synthesise a keyframe mid-GOP). See the method docblock
@@ -1699,7 +1776,7 @@ class FfmpegRunner
         } else {
             $cmd .= ' -c:v ' . $videoCodec;
             if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
-                $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
+                $cmd .= ' -preset ' . ($this->argvParam($params, 'preset') ?? 'veryfast');
                 $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
                 $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
             }
@@ -1729,7 +1806,7 @@ class FfmpegRunner
             // threaded through segment_params — using it directly means ZERO
             // per-segment probe()/needsToneMapping()/getToneMappingProfile()
             // re-derivation (which is what caused the per-segment ffprobe storm).
-            $threadedToneMapFilter = self::paramString($params, 'tone_map_filter');
+            $threadedToneMapFilter = $this->argvParam($params, 'tone_map_filter');
             if ($require_hdr_tone_map && $threadedToneMapFilter !== null) {
                 $filters[] = $threadedToneMapFilter;
             } elseif ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
@@ -1761,7 +1838,7 @@ class FfmpegRunner
             // that starves each intra frame of bits and produces gross vertical column
             // artefacts. See buildHwaccelSegmentCommand() for the mirrored expression.
             $cmd .= ' -force_key_frames ' . escapeshellarg('expr:eq(n,0)');
-            $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
+            $cmd .= $this->browserSafeVideoFlags($videoCodec, $params);
         }
 
         // Audio: dropped entirely for a video-only (audio-group) variant segment,
@@ -1769,15 +1846,12 @@ class FfmpegRunner
         if ($videoOnly) {
             $cmd .= ' -an';
         } else {
-            $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-            if ($audioCodec === '') {
-                $audioCodec = 'aac';
-            }
+            $audioCodec = $this->argvParam($params, 'audio_codec') ?? 'aac';
             if ($audioCodec === 'copy') {
                 $cmd .= ' -c:a copy';
             } else {
                 $cmd .= ' -c:a ' . $audioCodec;
-                $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+                $cmd .= ' -b:a ' . ($this->argvParam($params, 'audio_bitrate') ?? '128k');
                 // Force a browser-safe channel layout (stereo by default) so a
                 // 5.1(side) AC-3 source can't yield channel_configuration=0 AAC
                 // that hls.js refuses to parse. See browserSafeAudioChannels().
@@ -1841,14 +1915,14 @@ class FfmpegRunner
         $cmd .= ' -vn -dn -sn';
         $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
 
-        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-        if ($audioCodec === '' || $audioCodec === 'copy') {
+        $audioCodec = $this->argvParam($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === 'copy') {
             // Audio renditions must stay AAC so every #EXT-X-MEDIA entry matches the
             // advertised mp4a.40.2 — a copy could smuggle a non-HLS codec through.
             $audioCodec = 'aac';
         }
         $cmd .= ' -c:a ' . $audioCodec;
-        $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+        $cmd .= ' -b:a ' . ($this->argvParam($params, 'audio_bitrate') ?? '128k');
         // Force a browser-safe channel layout (stereo by default) so a 5.1(side)
         // AC-3 source can't yield channel_configuration=0 AAC that hls.js refuses
         // to parse. See browserSafeAudioChannels().
@@ -2089,7 +2163,7 @@ class FfmpegRunner
         // job-creation time (TranscodeManager::computeSegmentParams) and threaded
         // through segment_params — using it directly means ZERO per-segment
         // probe()/needsToneMapping()/getToneMappingProfile() re-derivation.
-        $threadedToneMapFilter = self::paramString($params, 'tone_map_filter');
+        $threadedToneMapFilter = $this->argvParam($params, 'tone_map_filter');
         if ($require_hdr_tone_map && $threadedToneMapFilter !== null) {
             $filters[] = $threadedToneMapFilter;
         } else {
@@ -2159,7 +2233,7 @@ class FfmpegRunner
         // (VAAPI/QSV/NVENC/…) keep relying on their own 8-bit output (nv12 hwupload
         // filter above for VAAPI/QSV) and must NOT receive these libx264-only flags.
         if ($capability->vendor === 'software') {
-            $cmd .= self::browserSafeVideoFlags($capability->encoder, $params);
+            $cmd .= $this->browserSafeVideoFlags($capability->encoder, $params);
         }
 
         // Audio: dropped for a video-only (audio-group) variant segment, else
@@ -2167,12 +2241,12 @@ class FfmpegRunner
         if ($videoOnly) {
             $cmd .= ' -an';
         } else {
-            $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+            $audioCodec = $this->argvParam($params, 'audio_codec') ?? 'aac';
             if ($audioCodec === 'copy') {
                 $cmd .= ' -c:a copy';
             } else {
                 $cmd .= ' -c:a ' . $audioCodec;
-                $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+                $cmd .= ' -b:a ' . ($this->argvParam($params, 'audio_bitrate') ?? '128k');
                 // Force a browser-safe channel layout (stereo by default) so a
                 // 5.1(side) AC-3 source can't yield channel_configuration=0 AAC
                 // that hls.js refuses to parse. See browserSafeAudioChannels().

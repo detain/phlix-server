@@ -796,9 +796,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * QuickConnect pins seed $request->query → see EXPECTED_DECLARED_WRITES
      * (+3) in the same commit. Measured from the phpunit red (2008), not
      * predicted.
+     * Re-pinned 2008→2009 by the W-min100 / M-SERVER-77 ffmpeg-argv-boundary
+     * lane (2026-10-30): +1 — tests/Unit/Media/Transcoding/FfmpegRunnerArgv
+     * BoundaryTest.php (per-slot rejection arms for the segment_params strings
+     * spliced unescaped into the ffmpeg command — codec/preset/bitrate/
+     * pix_fmt/profile/level/tone_map_filter — plus the acceptance arms proving
+     * the legitimate producer domains pass verbatim). Reads/writes no Request
+     * property, so every other census denominator is unchanged. Measured from
+     * the phpunit red (2009), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2008;
+    private const EXPECTED_PHP_FILES = 2009;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

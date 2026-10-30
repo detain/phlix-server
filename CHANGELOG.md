@@ -9,6 +9,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The directory checksum materialized the whole watched tree twice per poll — the hash now
+  streams, and the entry list is bounded (review server__srphp M3):**
+  `FolderWatcher::calculateDirectoryChecksum()` collected one `path:mtime` string per file into
+  an array AND concatenated the same entries onto `$checksum` with `.=` before `md5()` — two
+  full materializations per poll, an O(library-size) transient in the resident library-scan
+  worker (the review sized realistic large libraries at 300–500k files). The cure streams the
+  digest: after `sort()`, entries fold one at a time through `hash_init('md5')`/`hash_update()`/
+  `hash_final()`. Streaming a hash context over the same byte sequence yields the byte-identical
+  digest of `md5(concatenation)`, so every checksum VALUE is byte-preserved — stored
+  `lastChecksum`/`fileChecksums` baselines keep their meaning and nothing re-baselines. The
+  array itself is now bounded: a `MAX_WATCHED_FILES_PER_PATH` ceiling (default 1,000,000 —
+  2x the cited scale; instance-settable via `setMaxWatchedFilesPerPath()` on the
+  `setCheckInterval()` precedent) fails loud past the cap instead of growing the list
+  unbounded, and `FolderWatchScheduler` already catches `Throwable` around both entry points
+  with logging and registration backoff, so an over-cap directory is logged and retried —
+  never OOM, and never a silently truncated checksum that would mis-detect every later
+  change (that is why the cap throws rather than truncates). Proved red-first by
+  `tests/Unit/Media/Library/FolderWatcherChecksumTest.php` (5 tests, 15 assertions: the
+  byte-exact digest-contract pin — green on the parent by design, it is the no-re-baseline
+  proof; a structural pin that the method body streams and carries no `.=` accumulator or
+  `md5(`; over-cap fail-loud naming path and cap; exactly-at-cap clean plus one-past-cap
+  rejecting, killing the boundary off-by-one both directions; and the shipped-default
+  ceiling). All four mutants die (reinstating the concatenation reddens the structural pin
+  ALONE — the behavior tests cannot see the absent copy, which is exactly why the pin exists;
+  stripping the cap reddens 2; inverting the sort reddens 2; off-by-one-ing the cap reddens
+  2), and the 35 pre-existing FolderWatcher/FolderWatchScheduler/wiring behavior tests pass
+  untouched — the independent digest-invariance proof. Census denominator rotated 1999→2000
+  from the measured phpunit red.
+
 - **"Add library" answered 201 for paths that do not exist — every path is now
   stat-checked synchronously at the create choke (review server__webux
   M-SERVER-41):** `LibraryController::create()` validated presence and type but

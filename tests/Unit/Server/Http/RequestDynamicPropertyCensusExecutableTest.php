@@ -740,8 +740,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * before-any-write envelope (bogus/non-string/mixed paths → 400
      * invalid_request, manager and job queue never()) and the valid-directory
      * 201. Measured from the phpunit red (1999), not predicted.
+     * Re-pinned 1999→2000 by the M-SERVER-39f folder-watcher single-
+     * materialization lane (2026-10-29): +1 — tests/Unit/Media/Library/
+     * FolderWatcherChecksumTest.php (the byte-preserved-digest pin, the
+     * structural streams-instead-of-concatenating pin, and the watch-cap
+     * fail-loud + boundary + shipped-default pins). Reads/writes no Request
+     * property (tmp-dir filesystem fixtures + reflection on FolderWatcher
+     * only), so every other census denominator is unchanged. Measured from
+     * the phpunit red (2000), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1999;
+    private const EXPECTED_PHP_FILES = 2000;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

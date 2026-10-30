@@ -50,6 +50,22 @@ class FolderWatcher
     private int $checkInterval = 30;
 
     /**
+     * Ceiling on the number of file entries one watched path may materialise.
+     *
+     * The checksum walk necessarily holds one `path:mtime` string per file
+     * while it sorts (review server__srphp M3 sized a realistic large library
+     * at 300-500k files); this ceiling is 2x above that cited scale and turns
+     * a runaway walk into a loud, contained failure instead of an OOM in the
+     * resident library-scan worker. {@see FolderWatchScheduler} catches
+     * Throwable around both entry points, so an over-cap directory is logged
+     * and backed off — never silently watched with a truncated checksum.
+     */
+    private const MAX_WATCHED_FILES_PER_PATH = 1000000;
+
+    /** @var int Watch cap currently in force, see {@see setMaxWatchedFilesPerPath()} */
+    private int $maxWatchedFilesPerPath = self::MAX_WATCHED_FILES_PER_PATH;
+
+    /**
      * Constructor for FolderWatcher.
      *
      * @param StructuredLogger|null $logger Optional custom logger, creates default if not provided
@@ -259,15 +275,27 @@ class FolderWatcher
     /**
      * Calculates a checksum for a directory based on file paths and modification times.
      *
-     * Uses MD5 hash of concatenated file paths and mtimes for efficient
-     * change detection without content hashing.
+     * The digest is the md5 of the sorted `path:mtime` entries — the same
+     * bytes as the historical `md5(implode(...))` form, because streaming a
+     * hash context over a sequence yields the digest of the concatenation.
+     * The entries are folded one at a time through hash_init/hash_update/
+     * hash_final instead of first being concatenated into one whole-tree
+     * string: the file list is materialised once (it must be sorted), the
+     * duplicated megabyte copy is never built (review server__srphp M3 —
+     * two O(library size) materialisations per poll in a resident worker).
+     *
+     * Past {@see self::MAX_WATCHED_FILES_PER_PATH} files the walk fails loud
+     * rather than growing the list without bound; a truncated checksum would
+     * silently mis-detect every later change, which is worse than none.
      *
      * @param string $path The directory path to calculate checksum for
      * @return string The MD5 checksum string
+     *
+     * @throws \RuntimeException when the directory holds more files than the
+     *                           watch cap in force
      */
     private function calculateDirectoryChecksum(string $path): string
     {
-        $checksum = '';
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
         );
@@ -278,16 +306,26 @@ class FolderWatcher
                 continue;
             }
             if ($file->isFile()) {
+                if (count($files) >= $this->maxWatchedFilesPerPath) {
+                    throw new \RuntimeException(sprintf(
+                        'Refusing to checksum %s: it holds more than %d files (the watch cap). '
+                        . 'Raise the cap via setMaxWatchedFilesPerPath() or watch a smaller path.',
+                        $path,
+                        $this->maxWatchedFilesPerPath
+                    ));
+                }
                 $files[] = $file->getPathname() . ':' . $file->getMTime();
             }
         }
 
         sort($files);
-        foreach ($files as $file) {
-            $checksum .= $file;
+
+        $hash = hash_init('md5');
+        foreach ($files as $entry) {
+            hash_update($hash, $entry);
         }
 
-        return md5($checksum);
+        return hash_final($hash);
     }
 
     /**
@@ -319,6 +357,31 @@ class FolderWatcher
     public function getCheckInterval(): int
     {
         return $this->checkInterval;
+    }
+
+    /**
+     * Sets the ceiling on file entries one watched path may materialise.
+     *
+     * Exists for the same reason as {@see setCheckInterval()} — a tuning seam
+     * exercised by the tests — while the shipped default stays the class
+     * ceiling {@see self::MAX_WATCHED_FILES_PER_PATH}.
+     *
+     * @param int $max Files allowed per watched path before the walk fails loud
+     * @return void
+     */
+    public function setMaxWatchedFilesPerPath(int $max): void
+    {
+        $this->maxWatchedFilesPerPath = $max;
+    }
+
+    /**
+     * Gets the watch cap currently in force.
+     *
+     * @return int Files allowed per watched path before the walk fails loud
+     */
+    public function getMaxWatchedFilesPerPath(): int
+    {
+        return $this->maxWatchedFilesPerPath;
     }
 
     /**

@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
@@ -20,6 +21,14 @@ final readonly class MediaMarkerController
     public function __construct(
         private MarkerService $markerService,
         private ItemRepository $itemRepository,
+        /**
+         * minors M-SERVER-80 (W-min100): resolves whether the requesting user
+         * is an ACTIVE admin — the only role allowed to delete ownerless
+         * (legacy NULL `user_id`) marker rows. Required, so PHP-DI autowiring
+         * and the Application fallback both must wire it; an unwired
+         * controller cannot exist.
+         */
+        private UserRepository $users,
     ) {
     }
 
@@ -82,7 +91,8 @@ final readonly class MediaMarkerController
      * 1. The request is authenticated (userId in context)
      * 2. The marker exists for the given media item
      * 3. The current user owns the marker (user_id matches), OR the marker
-     *    has no user_id (NULL = legacy system marker, deletable by any authed user)
+     *    has no user_id (NULL = legacy system marker) and the requester is an
+     *    ACTIVE admin (minors M-SERVER-80: non-admins are refused 403)
      */
     public function deleteMarker(string $id, string $markerId): Response
     {
@@ -105,10 +115,19 @@ final readonly class MediaMarkerController
             return (new Response())->status(404)->json(['error' => 'Marker not found']);
         }
 
-        // P3-S1: Enforce ownership — legacy markers (userId=null) are system-owned
-        // and can be deleted by any authenticated user; user-owned markers require
-        // the requesting user to be the owner.
-        if ($found->userId !== null && $found->userId !== $userId) {
+        // P3-S1: Enforce ownership — user-owned markers require the requesting
+        // user to be the owner. minors M-SERVER-80 (W-min100): legacy NULL-owner
+        // rows are NO LONGER deletable by any authenticated user — that made
+        // every member able to erase another account's (or the system's)
+        // markers on any item. Only an ACTIVE admin may delete them (the
+        // curation path); everyone else gets the same 403 family.
+        if ($found->userId === null) {
+            if ($this->users->findAdminById($userId) === null) {
+                return (new Response())->status(403)->json([
+                    'error' => 'Admin access is required to delete a marker without an owner',
+                ]);
+            }
+        } elseif ($found->userId !== $userId) {
             return (new Response())->status(403)->json(['error' => 'Not authorized to delete this marker']);
         }
 

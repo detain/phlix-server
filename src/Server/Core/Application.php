@@ -4469,7 +4469,11 @@ class Application
             );
             $markerService = new \Phlix\Media\MarkerService($db);
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
-            return new \Phlix\Server\Http\Controllers\MediaMarkerController($markerService, $itemRepository);
+            return new \Phlix\Server\Http\Controllers\MediaMarkerController(
+                $markerService,
+                $itemRepository,
+                new \Phlix\Auth\UserRepository($db),
+            );
         }
 
         /** @var \Phlix\Server\Http\Controllers\MediaMarkerController */

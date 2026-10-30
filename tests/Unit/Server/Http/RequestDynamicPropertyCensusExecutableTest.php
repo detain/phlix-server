@@ -830,9 +830,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * txn wrap and 1062 narrowing add no files to src and touch no Request
      * property, so every other census denominator is unchanged. Measured
      * from the phpunit red (2014), not predicted.
+     * Re-pinned 2014→2015 by the W-min102 / M-SERVER-22 collections-FK lane
+     * (2026-10-30): +1 — tests/Integration/Media/
+     * CollectionsForeignKeysMigration122RealDbTest.php (prune-converge,
+     * cascade-delivery, 1452-rejection and replay-no-op proofs over migration
+     * 122; the .sql file itself is inert to the PHP census). Measured from
+     * the phpunit red (2015), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2014;
+    private const EXPECTED_PHP_FILES = 2015;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

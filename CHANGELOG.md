@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLAUDE.md prescribed the phpstan CLI override AGENTS.md bans, mis-stated the tests-gate
+  level, and linked a deleted doc set (review server__writer M-SERVER-46):** the mirrored
+  agent briefs disagreed with each other and with the live configs. `CLAUDE.md` told readers
+  to run `phpstan analyze src/ --level=9` — since S256-residual the production CI step
+  carries NO path and NO `--level` precisely because a CLI path overrides the config's
+  `parameters.paths` entirely, silently shrinking the `src` + `scripts` corpus (level 9 per
+  `phpstan.neon`) behind a green gate; it called the `phpstan-tests.neon` gate "level 2"
+  while that config carries `level: 4`; and its "Further reading" plus one Conventions bullet
+  still advertised `docs/dev/DEVELOPER.md`, the `docs/archive/` plans and technical-spec set,
+  and the `PLATFORM_*.md` guides — all removed in `77e681fd` ("Do not link them as in-tree"
+  per AGENTS.md). Cured to the AGENTS.md facts: bare `phpstan analyse` with the config-carried
+  paths/level commented at the line, "(level 4)", Further reading trimmed to AGENTS.md's
+  verified-present reference list, and the plans bullet rewritten to the retired-truth
+  wording. Docs-only: no gate, config, or code moved (no test pins CLAUDE.md claims — the
+  absence is disclosed in the lane fixlog).
+
 ### Added
 
 - **License metadata contradicted itself inside single files; every carrier now

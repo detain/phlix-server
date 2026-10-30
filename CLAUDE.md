@@ -22,8 +22,8 @@ php start.php start                         # the ONLY served entry (HTTP :8096,
 # Static analysis / style
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/phpcs --standard=phpcs-tests.xml               # separate tests/ gate
-./vendor/bin/phpstan analyze src/ --level=9
-./vendor/bin/phpstan analyse -c phpstan-tests.neon          # separate tests/ gate (level 2)
+./vendor/bin/phpstan analyse                                # production gate: phpstan.neon paths = src/ + scripts/ (level 9)
+./vendor/bin/phpstan analyse -c phpstan-tests.neon          # separate tests/ gate (level 4)
 find src -name '*.php' -exec php -l {} \;
 
 # Release
@@ -164,7 +164,7 @@ while (!feof($handle)) {
 - Logging always via `LoggerFactory::get(LogChannels::HTTP)` — do not instantiate `new Logger` directly.
 - Smarty is now used **only** for the newsletter email template (`public/templates/emails/newsletter.tpl`); the page-rendering templates were removed. The `/app` Vue SPA (in `web-ui/`) is the web UI.
 - **Version is single-sourced from `src/Common/Version.php`** (`Version::STRING`). `./scripts/release.sh [patch|minor|major]` propagates the bump to `VERSION` and `k8s/helm/phlix/Chart.yaml` (`version` + `appVersion`) in one commit — never edit those by hand, and never add a `version` field to `composer.json` (`composer validate --strict` fails when it is present). See `RELEASE_PROCESS.md`.
-- Plan steps under `docs/archive/plans/phase-N/step-N.M-*.md` finish with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`.
+- The historical per-phase step plans (`docs/archive/plans/phase-N/step-N.M-*.md`) and their branch → commit → PR flow were retired into the external [phlix-docs](https://github.com/detain/phlix-docs) when the in-tree `docs/archive/` directory was removed (commit `77e681fd`); no such plan files remain in this repo — do not follow them as current process.
 
 ## Caliber (pre-commit)
 
@@ -172,7 +172,7 @@ A pre-commit hook may sync agent configs via `caliber refresh`. Before committin
 
 ## Further reading
 
-`AGENTS.md` (module/class reference) · `docs/dev/DEVELOPER.md` · `docs/dev/BLOCKING_IO_EXCEPTIONS.md` · `RELEASE_PROCESS.md` · `docker/README.md` · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/archive/SUPERVISOR_PLAN.md` · `docs/dev/PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
+`AGENTS.md` (the more detailed agent brief) · `README.md` · `RELEASE_PROCESS.md` · `docker/README.md` · `docs/dev/BLOCKING_IO_EXCEPTIONS.md` · `docs/dev/settings-restart-gap.md` · `docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md` · `docs/dev/SYNCPLAY_MEMBER_SYNC_NUDGE.md` · `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`. The narrative docs (`DEVELOPER.md`, the technical spec, the platform guides) are not in this tree — see `AGENTS.md` "Reference docs" for the authoritative list; do not link them as in-tree.
 
 ## Before Committing
 

@@ -716,8 +716,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * the live `php -S` fixture suite pinning the installer's 64 MiB byte budget,
      * the declared-length pre-check and the named 30 s fetch timeout. Measured
      * from the phpunit red (1995), not predicted.
+     * Re-pinned 1995→1996 by the M-SERVER-37 bounded-refresh-registry cure
+     * (2026-10-29): +1 — tests/Unit/Server/Integrations/Trakt/TraktApiRefreshSingleFlightTest.php,
+     * the eviction/cap/bounded-wait/takeover pins plus the two single-flight
+     * invariant pins for TraktApi::refreshAfterAuthFailure()'s registry.
+     * Measured from the phpunit red (1996), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1995;
+    private const EXPECTED_PHP_FILES = 1996;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

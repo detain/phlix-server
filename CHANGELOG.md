@@ -124,6 +124,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The Trakt single-flight refresh registry is bounded and self-cleaning
+  (review server__srphp M-SERVER-37):** `TraktApi::refreshAfterAuthFailure()`
+  kept a method-local static map keyed by md5(refreshToken) whose SUCCESS
+  entries were never removed — Trakt rotates the refresh token per grant, so
+  each completed refresh left a dead key holding a plaintext
+  `{access_token, refresh_token, expires_in}` array for the lifetime of the
+  resident worker: unbounded growth plus permanent plaintext credential
+  retention (the estate's resident-worker static-poison class), with cleanup
+  wired only to the three failure paths. The registry also had no wait ceiling:
+  a holder killed abnormally between claim and completion (e.g. Swoole
+  cancellation skipping the `Throwable` cleanup) poisoned its key with a
+  forever-`pending` marker the spin loop beside it would never abandon. The
+  cure follows the `AuthManager::$rateLimitStore` shape — the registry became
+  a structured private static property of
+  `array{pending:bool, at:int, result:?array<string,mixed>}` entries; completed
+  results are served and kept only for `REFRESH_RESULT_GRACE_SECONDS` (10), the
+  whole store is capped at `REFRESH_CACHE_MAX_ENTRIES` (256) with
+  sweep-then-evict-oldest before insert, and both classes of lapsed entry are
+  pruned at every call entry so an idle worker sheds its plaintext tokens at
+  the next touch. The Phase-1 wait is capped at `REFRESH_WAIT_MAX_ATTEMPTS`
+  (400×5ms, mirroring the adjacent flock loop's existing ceiling) and throws
+  rather than spinning forever, and a `pending` marker older than
+  `REFRESH_PENDING_STALE_SECONDS` (30) is taken over, so a dead holder can no
+  longer poison a token key. Single-flight semantics are preserved and pinned:
+  a late waiter inside the grace window is served the completed result without
+  a second POST, concurrent same-process flights still POST exactly once
+  (real-coroutine drill), the cross-process `flock()` phase is untouched, and
+  failure paths still leave no marker behind. New
+  `tests/Unit/Server/Integrations/Trakt/TraktApiRefreshSingleFlightTest.php`
+  (7 tests / 29 assertions, measured) — five eviction/cap/bounded-wait/takeover
+  reds on the unbounded shape, two invariant pins green across the cure; the
+  bounded-wait throw was itself mutation-proven (replacing it with a takeover
+  `break` reddens exactly that test). Census `EXPECTED_PHP_FILES` 1995→1996,
+  measured from the phpunit red. Zero wire changes, zero new files in src/.
+
 - **The plugin artifact fetch now streams under named byte and time bounds (review
   server__srphp M-SERVER-38):** `HttpInstaller::downloadToTemp()` pulled the entire
   remote artifact into memory with one `@file_get_contents()` — no size cap and no

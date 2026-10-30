@@ -37,6 +37,34 @@ class TraktApi
     private const RETRY_BASE_DELAY_MS = 1_000;
     private const RETRY_MAX_DELAY_MS = 32_000;
 
+    // Bounded single-flight refresh registry (M-SERVER-37). Shape follows
+    // AuthManager::$rateLimitStore: TTL-on-read expiry, hard cap,
+    // sweep-then-evict-oldest before insert. Eviction is age-ordered across
+    // entry kinds: exceeding the cap means 256 distinct rotated tokens held
+    // flights within ~the grace window — in that pathological flood the oldest
+    // entry (possibly a live pending marker) yields its slot and that token's
+    // flight may POST twice; the cap protecting every resident worker beats
+    // the flood-window dedupe, and flock() Phase 2 still serializes the
+    // actual cross-process POSTs.
+    private const REFRESH_RESULT_GRACE_SECONDS = 10;
+    private const REFRESH_PENDING_STALE_SECONDS = 30;
+    private const REFRESH_CACHE_MAX_ENTRIES = 256;
+    private const REFRESH_WAIT_MAX_ATTEMPTS = 400; // ~2s ceiling at 5ms per attempt
+
+    /**
+     * Same-process single-flight registry for refreshAfterAuthFailure().
+     *
+     * Entries are structured so lifetimes can differ by kind: a `pending`
+     * marker only guards concurrent flights and is taken over once stale; a
+     * completed `result` is a plaintext credential and is only served — and
+     * only kept — for the grace window. Trakt rotates the refresh token per
+     * grant, so a completed key is never revisited; without pruning these
+     * entries the resident-worker static would grow forever.
+     *
+     * @var array<string, array{pending: bool, at: int, result: array<string, mixed>|null}>
+     */
+    private static array $inFlightRefresh = [];
+
     private readonly LoggerInterface $logger;
 
     /**
@@ -173,7 +201,13 @@ class TraktApi
      * Trakt's rotating refresh tokens from invalidating each other.
      *
      * Uses a two-level guard:
-     * 1. Static $inFlightRefresh for same-process concurrency (Workerman coroutines)
+     * 1. Static {@see self::$inFlightRefresh} for same-process concurrency
+     *    (Workerman coroutines on same worker), bounded: completed results
+     *    live only for REFRESH_RESULT_GRACE_SECONDS, the whole store is capped
+     *    at REFRESH_CACHE_MAX_ENTRIES entries (evict-oldest), waits are capped
+     *    at REFRESH_WAIT_MAX_ATTEMPTS attempts, and a pending marker older
+     *    than REFRESH_PENDING_STALE_SECONDS is taken over — a dead holder can
+     *    neither leak plaintext credentials nor poison a key forever.
      * 2. flock() for cross-process safety (multiple Workerman workers)
      *
      * @param string $refreshToken Current refresh token
@@ -184,12 +218,13 @@ class TraktApi
      *
      * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
      *
-     * @throws TraktApiException When refresh fails
+     * @throws TraktApiException When refresh fails, when the bounded wait on a
+     *     concurrent flight lapses, or when the cross-process lock cannot be
+     *     acquired
      * @since 0.14.0
      */
     public function refreshAfterAuthFailure(string $refreshToken, ?string $redirectUri = null): array
     {
-        static $inFlightRefresh = [];
         static $lockFile = null;
 
         if ($lockFile === null) {
@@ -199,9 +234,29 @@ class TraktApi
         // Key cache by token hash to avoid cross-token cache pollution
         $tokenKey = md5($refreshToken);
 
+        // Every call entry is a chance to shed lapsed entries, completed
+        // results first among them: they are plaintext credentials for a
+        // rotated (hence never-reused) key, and an idle resident worker must
+        // clear them at the next touch rather than at an unspecified later
+        // sweep. Prune-then-decide, mirroring the TTL-on-read of
+        // AuthManager::$rateLimitStore.
+        self::pruneRefreshRegistry(time());
+
         // Phase 1: Same-process single-flight (Workerman coroutines on same worker)
-        // Use \Co\sleep to yield to the event loop instead of blocking with usleep()
-        while (isset($inFlightRefresh[$tokenKey]) && $inFlightRefresh[$tokenKey] === 'pending') {
+        // Use \Co\sleep to yield to the event loop instead of blocking with usleep().
+        // The wait is bounded like the flock loop below; a marker still pending
+        // past the stale ceiling belongs to a holder that died without cleanup
+        // (e.g. coroutine cancellation skipped the catch below), so it is taken
+        // over instead of spun behind forever.
+        $waitAttempts = 0;
+        while (isset(self::$inFlightRefresh[$tokenKey]) && self::$inFlightRefresh[$tokenKey]['pending']) {
+            if (time() - self::$inFlightRefresh[$tokenKey]['at'] >= self::REFRESH_PENDING_STALE_SECONDS) {
+                unset(self::$inFlightRefresh[$tokenKey]);
+                break;
+            }
+            if (++$waitAttempts > self::REFRESH_WAIT_MAX_ATTEMPTS) {
+                throw new TraktApiException('Timed out waiting for a concurrent Trakt token refresh');
+            }
             if (function_exists('\Co\sleep')) {
                 \Co\sleep(0.005); // 5ms - yields to event loop in async context
             } else {
@@ -209,19 +264,20 @@ class TraktApi
             }
         }
 
-        if (isset($inFlightRefresh[$tokenKey]) && is_array($inFlightRefresh[$tokenKey])) {
-            /** @var array<string, mixed> $result */
-            $result = $inFlightRefresh[$tokenKey];
-
-            return $result;
+        if (isset(self::$inFlightRefresh[$tokenKey])) {
+            $result = self::$inFlightRefresh[$tokenKey]['result'];
+            if (is_array($result)) {
+                return $result;
+            }
         }
 
-        $inFlightRefresh[$tokenKey] = 'pending';
+        self::boundRefreshRegistry(time());
+        self::$inFlightRefresh[$tokenKey] = ['pending' => true, 'at' => time(), 'result' => null];
 
         // Phase 2: Cross-process mutex via flock()
         $fp = fopen($lockFile, 'c+');
         if (!$fp) {
-            unset($inFlightRefresh[$tokenKey]);
+            unset(self::$inFlightRefresh[$tokenKey]);
             throw new TraktApiException('Could not open refresh lock file');
         }
 
@@ -246,23 +302,78 @@ class TraktApi
 
         if (!$acquired) {
             fclose($fp);
-            unset($inFlightRefresh[$tokenKey]);
+            unset(self::$inFlightRefresh[$tokenKey]);
             throw new TraktApiException('Could not acquire refresh lock');
         }
 
         try {
             $result = $this->refreshAccessToken($refreshToken, $redirectUri);
-            $inFlightRefresh[$tokenKey] = $result;
+            // Replace our own pending marker in place: the key already holds a
+            // slot, so no new bound check is needed for this write.
+            self::$inFlightRefresh[$tokenKey] = ['pending' => false, 'at' => time(), 'result' => $result];
             flock($fp, LOCK_UN);
             fclose($fp);
 
             return $result;
         } catch (\Throwable $e) {
-            unset($inFlightRefresh[$tokenKey]);
+            unset(self::$inFlightRefresh[$tokenKey]);
             flock($fp, LOCK_UN);
             fclose($fp);
 
             throw $e;
+        }
+    }
+
+    /**
+     * Drop registry entries whose lifetime has lapsed.
+     *
+     * Completed results live for the grace window only (they are plaintext
+     * OAuth credentials); pending markers survive until the stale ceiling,
+     * past which their holder is presumed dead and the key is freed for
+     * takeover. Called at every refresh entry so an idle worker's store is
+     * swept at the next touch rather than growing untouched.
+     */
+    private static function pruneRefreshRegistry(int $now): void
+    {
+        foreach (self::$inFlightRefresh as $key => $entry) {
+            $age = $now - $entry['at'];
+            $lapses = $entry['pending']
+                ? $age >= self::REFRESH_PENDING_STALE_SECONDS
+                : $age >= self::REFRESH_RESULT_GRACE_SECONDS;
+            if ($lapses) {
+                unset(self::$inFlightRefresh[$key]);
+            }
+        }
+    }
+
+    /**
+     * Enforce the hard cap before admitting a new entry.
+     *
+     * AuthManager::boundFallbackStore() shape: under the cap it returns
+     * immediately; at the cap it first lets the expiry sweep free what it can,
+     * then evicts the oldest entry until a slot is guaranteed.
+     */
+    private static function boundRefreshRegistry(int $now): void
+    {
+        if (count(self::$inFlightRefresh) < self::REFRESH_CACHE_MAX_ENTRIES) {
+            return;
+        }
+
+        self::pruneRefreshRegistry($now);
+
+        while (count(self::$inFlightRefresh) >= self::REFRESH_CACHE_MAX_ENTRIES) {
+            $oldestKey = null;
+            $oldestAt = null;
+            foreach (self::$inFlightRefresh as $key => $entry) {
+                if ($oldestAt === null || $entry['at'] < $oldestAt) {
+                    $oldestAt = $entry['at'];
+                    $oldestKey = $key;
+                }
+            }
+            if ($oldestKey === null) {
+                break; // empty store: headroom is already guaranteed
+            }
+            unset(self::$inFlightRefresh[$oldestKey]);
         }
     }
 

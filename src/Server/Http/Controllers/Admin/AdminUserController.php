@@ -479,8 +479,12 @@ final class AdminUserController
      * S7+F1: Instead of returning a plaintext password (which is a security
      * risk), this method generates a cryptographically secure random token,
      * stores it as a hash in the database with a 15-minute expiry, and sets
-     * the `must_change_password` flag, which blocks the account's login and
-     * token refresh until an operator intervenes.
+     * the `must_change_password` flag, which blocks the account's PASSWORD
+     * login and token refresh until an operator intervenes. The latch gates
+     * neither passkey nor provider sign-in:
+     * WebAuthnController::finishAuthentication() mints a full session without
+     * consulting the flag (WebAuthn is default-enabled in config/auth.php),
+     * and AuthManager::loginWithProvider() never checks it either.
      *
      * M-SERVER-33 (docs truth): no shipped surface delivers or consumes this
      * token — there is no mailer leg and no reset-completion endpoint. The

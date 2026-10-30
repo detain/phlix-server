@@ -27,10 +27,23 @@ use ReflectionMethod;
  * two-step "Bad days" recovery entry, the CLI table caveat, and the
  * controller/AuthManager comments); this test keeps it that way in the
  * house README-claim-detector style (AuthMethodLockoutReadmeTest shape):
- * the load-bearing strings are derived at runtime from the enforcing code
- * — the refusal's exception class and the HTTP status the last-resort
- * handler actually answers, the latch column scraped from
- * UserRepository's own UPDATE, and the fiction phrases the cure removed.
+ * the load-bearing strings are derived at runtime from the enforcing code.
+ *
+ * r4 (review M-SERVER-33__r2) upgraded two structurally toothless arms into
+ * real legs. The refusal story is now attributed PER SENTENCE: the login leg
+ * must name PasswordChangeRequiredException + the bare 500 it truly reaches,
+ * and the refresh leg must name 401 — the r2-shipped blanket sentence that
+ * conflated both legs into "refused by PasswordChangeRequiredException → 500"
+ * reddens the refresh attribution pin (its probe-B was green precisely
+ * because the old pins only checked that strings appeared somewhere in the
+ * block). And the handler docblock pin stopped using getDocComment() to hunt
+ * a phrase that ever lived only in the method BODY — it now scrapes
+ * docblock+body through getStartLine()/getEndLine() (mirroring this file's
+ * UserRepository scraper), so both fiction phrases AND the r2-cured truth
+ * phrases on each plane have teeth. The blanket "the account cannot sign in"
+ * prose, the passkey/provider non-consultation disclosure, and the CLI row's
+ * token-revocation clause (UserRepository::update stamps
+ * tokens_not_valid_after on every password write) are pinned likewise.
  *
  * @package Phlix\Tests\Unit\Admin
  */
@@ -47,9 +60,25 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
     }
 
     /**
+     * Normalize a prose carrier for attribution pins: strip markdown
+     * emphasis/inline-code markers and flatten every run of whitespace
+     * (including source line wrapping) to a single space.
+     */
+    private static function flatten(string $text): string
+    {
+        return (string) preg_replace(
+            '/\s+/',
+            ' ',
+            str_replace(['**', '`'], '', $text)
+        );
+    }
+
+    /**
      * The endpoint row must exist, must name the shipped `{message}`-only
-     * response, and the two fiction phrases must be gone from every prose
-     * plane they ever lived on (README table + controller docblocks).
+     * response, must SCOPE the refusal to the password path (r4: the blanket
+     * "the account cannot sign in" is false — passkey and provider sign-in
+     * never consult the latch), and the fiction phrases must be gone from
+     * every prose plane they ever lived on.
      */
     public function testReadmeRowTellsShippedTruthAndFictionsAreGone(): void
     {
@@ -79,6 +108,21 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
             'the row must route operators to the recovery section (lockout trap cure)'
         );
 
+        // r4 leg-scoping (review M-SERVER-33__r2 remedy 1): the refusal prose
+        // must name what the latch actually gates plus the bypass, so the
+        // blanket sentence cannot silently re-enter via a table-row rewrite.
+        $flatRow = self::flatten((string) $row);
+        $this->assertStringContainsString(
+            'cannot sign in with its password',
+            $flatRow,
+            'the endpoint row must scope the sign-in refusal to the password path (passkey/provider bypass it)'
+        );
+        $this->assertStringContainsString(
+            'passkey',
+            $flatRow,
+            'the endpoint row must disclose that passkey sign-in does not consult the flag'
+        );
+
         $classDoc = (string) (new ReflectionClass(AdminUserController::class))->getDocComment();
         $this->assertStringNotContainsString(
             'generate a new password',
@@ -86,11 +130,53 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
             'the class docblock endpoint list must not promise a returned password'
         );
 
-        $methodDoc = (string) (new ReflectionMethod(AdminUserController::class, 'resetPassword'))->getDocComment();
-        $this->assertStringNotContainsString(
-            'reset-password form',
-            $methodDoc,
-            'the handler docblock must not reference a reset-completion form that never shipped'
+        // r4 (review M-SERVER-33__r2 remedy 3): the old pin hunted
+        // 'reset-password form' with getDocComment(), but that phrase ever
+        // lived ONLY in the method BODY — a structurally unfailable pin
+        // (probe A: restoring the full fiction note stayed green). Scrape
+        // docblock+body via getStartLine()/getEndLine(), mirroring the
+        // UserRepository scraper below, so both planes carry teeth: the
+        // fiction phrases must stay out AND the r2-cured truth phrases must
+        // stay in (a silent revert of either plane now reddens this test).
+        $method = new ReflectionMethod(AdminUserController::class, 'resetPassword');
+        $lines = file((string) $method->getFileName()) ?: [];
+        $methodSource = (string) $method->getDocComment() . "\n" . implode('', array_slice(
+            $lines,
+            (int) $method->getStartLine() - 1,
+            (int) $method->getEndLine() - (int) $method->getStartLine() + 1
+        ));
+        $flatSource = self::flatten($methodSource);
+
+        foreach (['reset-password form', 'sent to the user via email', 'generate a new password'] as $fiction) {
+            $this->assertStringNotContainsString(
+                $fiction,
+                $methodSource,
+                "the handler's live docblock+body source must not carry the fiction '{$fiction}'"
+            );
+        }
+
+        $this->assertStringContainsString(
+            'no mailer leg and no reset-completion endpoint',
+            $flatSource,
+            'the handler docblock must keep stating that delivery/consumption never shipped (r2 cure plane)'
+        );
+        $this->assertStringContainsString(
+            'the plaintext $token is never sent',
+            $flatSource,
+            'the handler body note must keep stating the token never leaves the server (r2 cure plane)'
+        );
+
+        // r4 disclosure (review remedy 1, code plane): the docblock must name
+        // the two unguarded sign-in entry points it scopes the latch away from.
+        $this->assertStringContainsString(
+            'finishAuthentication',
+            $flatSource,
+            'docblock must cite the passkey entry point'
+        );
+        $this->assertStringContainsString(
+            'loginWithProvider',
+            $flatSource,
+            'docblock must cite the provider entry point'
         );
     }
 
@@ -104,6 +190,21 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
      * and the whole README must NOT carry the code as wire contract — the
      * anti-fiction pin is derived from the exception-plane constant so it only
      * ever flips when a real emitter ships (r1 finding 1; estate riders R1-R3).
+     *
+     * r4 (review M-SERVER-33__r2 remedy 2+3): the r2 paragraph collapsed the
+     * two refusal legs into one false sentence. The login leg really dies as an
+     * unmapped `PasswordChangeRequiredException` in the last-resort Throwable
+     * catch (bare 500, error log names the class), but the refresh leg throws a
+     * plain `InvalidArgumentException` that AuthController's own catch turns
+     * into a 401 `{error}` with no code field. Presence-of-strings pins could
+     * not tell that conflation from the truth (the r2 probe-B install stayed
+     * green), so each leg is now pinned AT ITS SENTENCE: any sentence
+     * attributing a refusal to the refresh path must carry the 401 and must
+     * NOT name the login exception; any sentence attributing the login refusal
+     * must name the exception and the 500 it truly reaches. The paragraph must
+     * also carry the passkey/provider non-consultation disclosure — the
+     * security-relevant survivor of r1 MAJOR-1 (WebAuthn ships default-enabled
+     * in config/auth.php and provider login never consults the latch).
      */
     public function testRefusalStoryTellsShippedTruthNotTheUnshippedWireCode(): void
     {
@@ -133,6 +234,74 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
             PasswordChangeRequiredException::ERROR_CODE,
             $readme,
             'no shipped emitter places this code on the wire, so the README must not present it as a wire contract'
+        );
+
+        // r4 leg attribution: split the flattened paragraph into sentences
+        // (period followed by whitespace — code identifiers such as
+        // AuthController::refresh never present that shape) and audit the
+        // refusal carriers separately, per leg.
+        $flat = self::flatten($paragraph);
+        $sentences = preg_split('/(?<=\.)\s+/', $flat) ?: [];
+
+        $refreshSentences = [];
+        $loginSentences = [];
+        foreach ($sentences as $sentence) {
+            if (strpos($sentence, 'refus') === false) {
+                continue;
+            }
+            if (stripos($sentence, 'refresh') !== false) {
+                $refreshSentences[] = $sentence;
+            }
+            if (stripos($sentence, 'login') !== false) {
+                $loginSentences[] = $sentence;
+            }
+        }
+
+        $this->assertNotEmpty($loginSentences, 'the recovery story must keep the login-leg refusal sentence');
+        $this->assertNotEmpty($refreshSentences, 'the recovery story must keep the refresh-leg refusal sentence');
+        foreach ($loginSentences as $sentence) {
+            $this->assertStringContainsString(
+                $exception,
+                $sentence,
+                "the login-leg refusal sentence must name {$exception}: '{$sentence}'"
+            );
+            $this->assertStringContainsString(
+                '500',
+                $sentence,
+                "the login-leg refusal sentence must state the unmapped-exception 500: '{$sentence}'"
+            );
+        }
+        foreach ($refreshSentences as $sentence) {
+            $this->assertStringContainsString(
+                '401',
+                $sentence,
+                'the refresh-leg refusal sentence must state the status '
+                . "AuthController::refresh actually answers: '{$sentence}'"
+            );
+            $this->assertStringNotContainsString(
+                $exception,
+                $sentence,
+                "the refresh-leg refusal must NOT be attributed to {$exception} "
+                . '(it throws plain InvalidArgumentException): ' . "'{$sentence}'"
+            );
+        }
+
+        $this->assertStringContainsString(
+            'InvalidArgumentException',
+            $paragraph,
+            'the recovery story must name the exception the refresh leg really throws'
+        );
+
+        $this->assertStringContainsString('passkey', $flat, 'the recovery story must disclose the passkey bypass');
+        $this->assertStringContainsString(
+            'WebAuthnController',
+            $flat,
+            'the recovery story must name the ungated passkey entry point'
+        );
+        $this->assertStringContainsString(
+            'loginWithProvider',
+            $flat,
+            'the recovery story must name the ungated provider entry point'
         );
     }
 
@@ -173,10 +342,13 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
     }
 
     /**
-     * The CLI table row must stay honest about its own limitation: the
-     * command writes the password hash but never lifts the latch, and the
-     * row says so (closes the second-order misread the endpoint-row cure
-     * would otherwise leave behind).
+     * The CLI table row must stay honest about its own limits: the command
+     * writes the password hash but never lifts the latch (r1 finding), and —
+     * r4, review M-SERVER-33__r2 MINOR-1 carry-over remedy 4 — a password
+     * write is NOT hash-only: the UserRepository::update choke point stamps
+     * tokens_not_valid_after = NOW() on every password write, so the CLI
+     * reset also revokes the account's live sessions. The row must name that
+     * column (the "hash only" understatement reddens).
      */
     public function testCliTableRowDisclosesTheLatchLimitation(): void
     {
@@ -188,6 +360,11 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
                     'must_change_password',
                     $line,
                     'the CLI row must disclose that the command does not clear the force-change flag'
+                );
+                $this->assertStringContainsString(
+                    'tokens_not_valid_after',
+                    $line,
+                    'the CLI row must disclose that the password write also revokes live sessions'
                 );
 
                 return;

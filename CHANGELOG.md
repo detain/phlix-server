@@ -27,6 +27,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **The reset-password recovery story is now fully shipped-truth per leg, and the
+  two structurally toothless pins got real teeth (review server__seceng
+  M-SERVER-33 r4):** the r2 paragraph had conflated the two refusal legs into one
+  false sentence ("login and refresh are refused by
+  `PasswordChangeRequiredException` … bare 500"). The truth is per-leg: the
+  password-login leg really throws `PasswordChangeRequiredException`, which no
+  HTTP boundary maps, so the Workerman last-resort catch answers a bare `500
+  Internal Server Error` and the error log names the class; the refresh leg
+  throws a plain `InvalidArgumentException` that `AuthController::refresh`
+  catches, answering `401` + `{error}` with no code field. The blanket refusal
+  was also half-false: the latch gates the password path only —
+  `WebAuthnController::finishAuthentication` (WebAuthn is default-enabled in
+  `config/auth.php`) and `AuthManager::loginWithProvider` mint sessions without
+  consulting `must_change_password` — and the endpoint row, recovery paragraph
+  and handler docblock now scope the refusal to it and disclose the bypass. The
+  CLI row's "hash only" understatement is cured too: `UserRepository::update`
+  stamps `tokens_not_valid_after = NOW()` on every password write, revoking
+  live sessions. Test-side (`PasswordResetRecoveryReadmeTest`, 4 tests,
+  13→32 assertions measured): the refusal pins are now per-sentence leg-scoped
+  (the conflation sentence reddens — r2's probe-B install was green), and the
+  `getDocComment()` pin hunting 'reset-password form' — a phrase that ever lived
+  only in the method body — was replaced by a getStartLine/getEndLine
+  docblock+body scrape pinning the fiction phrases out and the r2-cured truth
+  phrases in, on their actual planes. Mutation battery N-R1..N-R5 each reddened
+  exactly its named arm and re-greened on revert. Docs/comments/tests only:
+  zero behavior change, zero new wire codes (registry md5 40c1da48 held);
+  census `EXPECTED_PHP_FILES` stays 1995 unmodified — the sibling M38 rung
+  rotated 1994→1995 at my base, and this lane carries zero PHP-file delta. The
+  WsHandshake CI race r2's close-record flagged was already cured at the base by
+  05f90d60 (parity matrix builds liveness state at runtime).
+
 - **License metadata contradicted itself inside single files; every carrier now
   tells the one truth the repo ships — MPL-2.0 (review server__writer
   M-SERVER-44):** `composer.json:5` declares `MPL-2.0`, `LICENSE` carries the

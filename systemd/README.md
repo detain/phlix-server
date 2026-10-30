@@ -147,7 +147,10 @@ The unit applies several sandbox directives:
 - `ProtectSystem=strict` — read-only filesystem outside `ReadWritePaths`
 - `ProtectHome=true` — hide `/home`, `/root`, `/run/user`
 - `ReadWritePaths` — only `/var/phlix`, `/var/log/phlix`, `/var/run/phlix`,
-  and the install dir's `.logs/` + `templates_c/` are writable
+  and the install dir's `.logs/` + `templates_c/` are writable. Note that
+  `/var/log/phlix` is a provisioned operator/placed-log location (the
+  installer creates it); the server's own log files live in the install
+  dir's `.logs/` and its stdout goes to the journal.
 - `RestrictNamespaces=true`, `LockPersonality=true`, `RemoveIPC=true`
 - `RuntimeDirectory=phlix` — systemd creates and chowns `/run/phlix` on
   each start (for the PID file at `config/server.php` `pid_file`)

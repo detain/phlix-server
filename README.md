@@ -29,7 +29,7 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **WebSocket Events**: Real-time progress and notification delivery
 - **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API, `bin/phlix` and an admin-only `/app` Backup page; see [Backups (admin-managed)](#backups-admin-managed)
 - **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
-- **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with 24-hour cache and provider fallback
+- **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with provider fallback. The 24-hour cache freshness window is tunable (`metadata.cache_ttl_hours`), and a minimum title/year match-confidence gate for accepted provider matches (`metadata.min_match_confidence`, default `0` = gate off) — both admin-editable and read live per lookup
 - **Content Filtering**: Parental controls with rating and genre-based filtering
 
 ## Architecture
@@ -48,7 +48,7 @@ src/
 │   │   ├── ConnectionPool.php  # Connection management
 │   │   ├── MessageHandler.php  # Event routing
 │   │   ├── WebSocketServer.php # Server implementation
-│   │   └── Events.php          # Event type constants
+│   │   └── WebSocketEvents.php # Event type constants
 │   └── WebPortal/       # Web portal
 │       ├── WebPortalRouter.php # REST API for the /app Vue SPA (JSON only)
 │       └── Controllers/SharedUiController.php # serves the /app SPA shell (+ ViteAssets.php)
@@ -574,7 +574,7 @@ HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 | `--branch NAME` | Git branch or tag to install (default `master`) |
 | `--repo URL` | Git repository URL (default `detain/phlix-server`) |
 | `--tls` / `--no-tls` | Force or skip Let's Encrypt + HAProxy TLS |
-| `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy) |
+| `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy). In non-interactive mode this must be paired with `--i-know-plaintext-internet-facing` — a no-TLS public deploy needs that explicit typed ack too (interactive runs are prompted instead) |
 | `--update` | Pull new code + run migrations on an existing install (preserves env + secrets) |
 | `--uninstall` | Remove the install — interactive prompts before each destructive step |
 | `--purge` | With `--uninstall`, also drop the DB, delete the Let's Encrypt cert, wipe `/var/phlix`, and remove the dedicated system user |
@@ -701,7 +701,7 @@ and picks the right one per SNI hostname.
 The first install snapshots any pre-Phlix `haproxy.cfg` to
 `/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
 
-**Uninstall behaviour**: `--uninstall` removes only that project's fragment and rebuilds. If
+**Uninstall behavior**: `--uninstall` removes only that project's fragment and rebuilds. If
 other Phlix projects remain, their frontend stays untouched. When the **last** Phlix project
 is uninstalled, the rebuilder restores the pre-Phlix snapshot (or removes `haproxy.cfg`
 outright if there was no pre-Phlix config) and stops/disables `haproxy`.
@@ -716,7 +716,7 @@ own port (8096 for phlix-server, 8800 for phlix-hub) and you point your proxy at
 Everything else is already namespaced: env files (`/etc/phlix-hub.env` vs `/etc/phlix/env`),
 systemd units (`phlix-hub.service` vs `phlix-server.service`), install dirs (`/opt/phlix-hub`
 vs `/var/www/phlix`), service users (`www-data` vs `phlix`), MySQL DBs (`phlix_hub` vs
-`phlix`), backend ports (8800/8802/8803 vs 8096), and certbot artefacts.
+`phlix`), backend ports (8800/8802/8803 vs 8096), and certbot artifacts.
 
 ### Manual install (from source)
 
@@ -733,7 +733,7 @@ composer install
 # create-half of scripts/install.sh's own SQL — run as MySQL root over the
 # local socket; the grant list is exactly what migrations + runtime need.
 # Both host rows matter: a TCP connect to 127.0.0.1 is matched as
-# 'localhost' when reverse DNS resolves it (default Ubuntu behaviour).
+# 'localhost' when reverse DNS resolves it (default Ubuntu behavior).
 # Replace your_strong_password here and below — the two must match.
 sudo mysql <<'SQL'
 CREATE DATABASE IF NOT EXISTS `phlix` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -826,6 +826,12 @@ only after restart; **per-proc** = read on first use inside each worker
 process then memoized — effectively restart-scoped; **live** = `getenv()` on
 every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 [What requires a restart](#what-requires-a-restart) below.
+
+*Where these ticket-style IDs come from:* shorthand like `(R14-05)`, `(S152)`,
+`SV-4.15` or `updates.md #47` sprinkled through this README and the code
+comments references internal Phlix estate review/fix tracker tickets (numbered
+audit waves and the phlix-docs updates log) — provenance annotations for
+maintainers, not resolvable from this repo alone.
 
 #### Database
 
@@ -1192,15 +1198,15 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
 | POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
 | POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
-| GET | `/auth/oidc/authorize` · `/auth/github/authorize` | Start an external login (**unauthenticated**). Redirects to the IdP / GitHub with PKCE + `state`, sets the browser-binding correlation cookie, and stores the resolved absolute `redirect_uri` in the server-side state. `503 provider_not_configured` when the provider is not enabled+configured; `503 callback_url_not_configured` when no absolute callback URL can be resolved (see `PHLIX_DOMAIN`) |
+| GET | `/auth/oidc/authorize` · `/auth/github/authorize` | Start an external login (**unauthenticated**). Redirects to the IdP / GitHub with PKCE + `state`, sets the browser-binding correlation cookie, and stores the resolved absolute `redirect_uri` in the server-side state. `503` with `provider_not_configured` in the JSON body's `error` field (no `code` key) when the provider is not enabled+configured; `503` with `callback_url_not_configured` in `error` when no absolute callback URL can be resolved (see `PHLIX_DOMAIN`) |
 | GET | `/auth/oidc/callback` · `/auth/github/callback` | Provider redirect target (**unauthenticated**). One-shot `state` consume, correlation-cookie check (`403` on mismatch), token exchange with the *same* `redirect_uri` replayed from state, then session cookies + a `302` to the same-origin `redirect_uri`. Also handles the account-link branch |
 | GET | `/auth/identities` | List the current user's linked external identities — auth required |
 | GET | `/auth/identities/link/oidc` · `/auth/identities/link/github` | Start a verified OAuth link onto the current account — auth required |
 | POST | `/auth/identities/link/ldap` | Link an LDAP identity via a live bind (body `{username, password}`) — auth required |
 | POST | `/auth/identities/link/hub` | Link a hub identity from a hub JWT (body `{hub_token}`) verified against the enrolled hub — auth required; `503` `hub.not_enrolled` when this server has no hub enrollment, `400` `hub.token_required` on a missing token, `401` `hub.jwt_invalid` on a bad/expired one |
-| DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours, `409 last_sign_in_method` if it is your last) — auth required |
+| DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours; `409` with `last_sign_in_method` in the JSON body's `error` field, no `code` key, if it is your last) — auth required |
 | GET | `/api/v1/admin/auth-providers` | List registered auth providers — admin-only |
-| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409 not_configured` if it has no saved config). `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
+| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409` with `not_configured` in the JSON body's `error` field — plus the provider `name` — no `code` key; if it has no saved config). `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/oidc/config` | Read / save OIDC config (`provider_url`, `client_id`, `client_secret` write-only, `scopes`, `redirect_uri`). An absent optional key is **preserved**, not cleared — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/ldap/config` | Read / save LDAP config; `POST .../ldap/test` dry-runs a bind — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
@@ -1253,27 +1259,48 @@ always-`true` behavior.
 
 ### WebSocket Events
 
+Event names are defined as constants in `src/Server/WebSocket/WebSocketEvents.php`
+(the full catalogue — 26 wire events — is below; `SYNCPLAY_PREFIX` in the same
+file is a name-building helper, not an event).
+
 **Connection Events:**
-- `connected` - Sent on successful connection
-- `client_disconnected` - Broadcast when client disconnects
+- `connected` - Fired when a client successfully connects
+- `disconnected` - Fired when a client disconnects from the server
+- `client_disconnected` - Broadcast when an authenticated client disconnects
 
 **Authentication Events:**
-- `auth_request` - Request authentication
-- `auth_success` - Authentication successful
+- `auth_request` - Client requests authentication
+- `auth_success` - Authentication was successful
 - `auth_failure` - Authentication failed
+
+**Session Events:**
+- `session_start` - A new playback session has started
+- `session_end` - A playback session has ended
+- `session_join` - Client joined a session
+- `session_leave` - Client left a session
 
 **Playback Events:**
 - `playback_start` - Playback started
 - `playback_pause` - Playback paused
 - `playback_stop` - Playback stopped
-- `playback_progress` - Progress update
-- `playback_seek` - Seek performed
+- `playback_progress` - Playback progress update
+- `playback_seek` - Playback seek performed
 
 **SyncPlay Events:**
-- `syncplay_create_group` - Create watch group
-- `syncplay_join_group` - Join watch group
-- `syncplay_leave_group` - Leave watch group
-- `syncplay_sync_state` - State synchronization
+- `syncplay_create_group` - Request to create a SyncPlay group
+- `syncplay_join_group` - Request to join a SyncPlay group
+- `syncplay_leave_group` - Request to leave a SyncPlay group
+- `syncplay_sync_state` - SyncPlay state synchronization
+- `syncplay_sync_request` - SyncPlay sync request
+
+**General Events:**
+- `error` - General error event
+- `ping` - Ping request
+- `pong` - Pong response
+- `notification` - General notification
+- `library_updated` - Library content has been updated
+- `dashboard_now_playing` - Dashboard now-playing update broadcast
+- `subscribe_dashboard` - Client subscribes to dashboard now-playing updates
 
 ## Development
 
@@ -1324,7 +1351,7 @@ and probe-job exceptions, the S352 re-derived KNOWN LIMITS) lives in
 [docs/dev/skipped-test-names.md](docs/dev/skipped-test-names.md).
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
-behaviour (it is the OAuth callback-URL allowlist — see
+behavior (it is the OAuth callback-URL allowlist — see
 [Environment variables](#environment-variables)), so every test that depends on
 it sets it in `setUp()` and restores the ambient value in `tearDown()`, and the
 "no allowlist" cases pass `''` explicitly instead of relying on the env being
@@ -1598,6 +1625,74 @@ Full operator + contributor docs live on the
 3. Push to remote: `git push origin feature/my-feature`
 4. Create Pull Request on GitHub
 5. After review, merge via squash-merge
+
+## Troubleshooting
+
+Symptom-first triage. The two universal log surfaces: the server's own
+application log files under `<install>/.logs/` (`app.log`, `error.log`,
+`plugins.log`, and `events.log` when `PHLIX_DEBUG_EVENTS` is on — see
+[Environment variables](#environment-variables)), and stdout/stderr, which on
+a systemd install goes to the journal (`journalctl -u phlix-server`).
+
+### Web playback buffers or fails to start
+
+Playback that the server must re-encode depends on ffmpeg and the HLS/transcode
+pipeline ([HLS & transcoding](#hls--transcoding) for the tunables). Check
+`.logs/app.log` and the journal for ffmpeg failures or "all coroutines are
+asleep" aborts, confirm `ffmpeg` is installed and reachable by the service
+user, and look at accelerator selection (`PREFERRED_ACCELERATOR`). Direct play
+of codec-compatible files bypasses this pipeline entirely — if one device
+buffers while others do not, suspect its capability negotiation
+(`X-Phlix-Client-Capabilities`) rather than the server.
+
+### A SyncPlay / watch group gets stuck
+
+Groups are host-managed over the SyncPlay WebSocket on port `8097` (the
+`:8097` + token endpoint law; see [SyncPlay - Group Watching](#syncplay---group-watching)).
+A member that silently stops following usually lost its socket and did not
+re-join. Have the member leave and re-join: on a successful join the server
+sends the current group state (`syncplay_group_state`) directly to the joiner,
+so a healthy re-join re-synchronizes it. The admin area of the web portal
+(`/app`) shows live group state, and `.logs/events.log` (with
+`PHLIX_DEBUG_EVENTS` on) records the command flow.
+
+### A Live TV recording is missing
+
+Recordings and their scheduler state live behind the admin Live TV surface:
+`GET /api/v1/admin/livetv/recordings` (plus `/recordings/upcoming` and per-series
+listing — see [Live TV & DVR (admin-managed)](#live-tv--dvr-admin-managed)).
+A scheduled-but-absent recording means the recorder job failed: check
+`.logs/app.log` and the journal around the program start, the tuner's health via
+`GET /api/v1/admin/livetv/tuners`, and the recording storage path's free space
+(the DVR data dir — same storage discipline as [Backups (admin-managed)](#backups-admin-managed)).
+
+### A cast device is not found
+
+Device enumeration is per protocol: `GET /api/v1/cast/devices` (Chromecast),
+`/api/v1/airplay/devices`, `/api/v1/roku/devices`, `/api/v1/dlna/renderers`.
+Discovery (SSDP/mDNS) listeners are built at boot, so a network change after
+start needs a service restart; the SSDP advertisement binds `:1900`. Casting
+routes sit behind `CastingEnabledMiddleware` — confirm the subsystem is enabled
+(`casting.chromecast.enabled` and siblings) before suspecting discovery.
+
+### A webhook never fires
+
+There are two webhook surfaces with separate stores: the legacy endpoint CRUD
+(`GET/POST/PUT/DELETE /api/v1/admin/webhooks`, `POST /api/v1/admin/webhooks/{id}/test`
+— `webhooks`/`webhook_logs` tables) and the V2 subscription system
+(`GET/POST /api/v1/admin/webhooks/subscriptions`, `GET /api/v1/admin/webhooks/deliveries`
+for per-event delivery history — `webhook_subscriptions`/`webhook_deliveries`).
+Use `{id}/test` (legacy) or check `/deliveries?event_id=…` (V2) to see whether
+the event never triggered or the delivery failed, and tail `.logs/` for the
+dispatcher's HTTP errors. Note the two subsystems differ in payload signing
+(see the `src/Webhooks/` docblocks).
+
+### Locked out of admin settings
+
+The auth-method lock-out guards refuse changes that would leave no way back in;
+the full decision table is in [Auth-method lock-out guards](#auth-method-lock-out-guards).
+If passwords are gone entirely, CLI recovery is the escape hatch
+([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)).
 
 ## Contributing
 

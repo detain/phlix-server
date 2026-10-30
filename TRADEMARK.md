@@ -1,7 +1,7 @@
 # Phlix trademark policy
 
 The Phlix **code** is open source under the [Mozilla Public License 2.0](LICENSE).
-The Phlix **name and logo** are separate from the code licence and are not granted
+The Phlix **name and logo** are separate from the code license and are not granted
 by it. This page says plainly what you may and may not do with them.
 
 This exists so that "Phlix" keeps meaning this project. It is not intended to
@@ -9,7 +9,7 @@ restrict anyone's use of the software.
 
 ## What the MPL already gives you
 
-The licence covers the code and is unaffected by anything here. You may use,
+The license covers the code and is unaffected by anything here. You may use,
 modify, self-host, redistribute, embed in a larger product, and sell services
 around Phlix Server, subject only to MPL-2.0 (§2, §3) — chiefly that if you modify
 a Phlix source file, that file's source stays available under MPL-2.0.
@@ -50,7 +50,7 @@ a Phlix source file, that file's source stays available under MPL-2.0.
 ## Attribution
 
 Attribution is **appreciated but not required** — MPL-2.0 requires only that you
-preserve the licence notices already in the source files (§3.4), and nothing here
+preserve the license notices already in the source files (§3.4), and nothing here
 adds a requirement to display anything in your user interface.
 
 If you would like to credit the project, "Powered by Phlix" with a link to the

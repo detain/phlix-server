@@ -48,9 +48,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-# Writable paths: /var/phlix (data), /var/log/phlix (logs),
+# Writable paths: /var/phlix (data), /var/log/phlix (provisioned by the
+# installer for operator/placed log output and scanned by uninstall
+# artifact-detect — the server itself logs to the install dir's .logs/
+# below and to stdout via the journal, never writing here),
 # /var/run/phlix (pid_file in config/server.php), the install dir's
-# .logs/ + templates_c/ (stdout log + Smarty compile cache), var/
+# .logs/ + templates_c/ (application log files + Smarty compile cache), var/
 # (runtime plugin installs in var/plugins + ui-theme extraction in var/themes),
 # and /var/artwork (local TMDB poster cache — config/artwork.php's
 # ARTWORK_STORAGE_PATH default). Without /var/artwork the scanner fails with

@@ -124,6 +124,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The README's restart-semantics prose finally puts TRUSTED_PROXIES in one
+  camp (review server__writer M-SERVER-45):** "What requires a restart" listed
+  `TRUSTED_PROXIES` twice — boot-frozen "by `RateLimitProfiles` pre-flight in
+  `start.php`" in the restart bullets and "rebuilt per request" in the runtime
+  paragraph — and the freezing claim was fiction on top of the contradiction:
+  `RateLimitProfiles` reads no proxy env at all. Shipped truth (re-verified at
+  this commit): `TrustedProxyResolver::configuredProxies()` reads the bare env
+  per call and the constructor snapshots it; the REST path
+  (`Request::getTrustedClientIp()`) builds a fresh resolver per request — live;
+  the WS-connect path (`WebSocketServer::$trustedProxyResolver`) memoizes one
+  resolver per worker — restart-scoped, the same class as the
+  `PHLIX_SSRF_ALLOW_CIDRS`/`PHLIX_LIBRARY_ROOTS` per-process memos. `RATE_LIMIT_*`
+  genuinely is boot-frozen, but by the config layer (`config/server.php` at
+  config load + per-worker PHP-DI profile construction + the `WS_CONNECT` warm
+  in `start.php`), and it never froze the proxy env. The cure is docs-only: the
+  frozen bullet now states that mechanism and names only `RATE_LIMIT_*`; the
+  runtime camp carries the REST/WS split; the env-table row keeps the legend
+  column value (`live`, the REST-dominant path r1 endorsed) and discloses both
+  paths in prose. `config/server.php`'s `trusted_proxies` key is its own
+  self-declared introspection copy with zero readers estate-wide — untouched.
+  Zero behavior change, zero new wire codes (registry md5 40c1da48 held).
+  New `tests/Unit/Deploy/TrustedProxiesReadmeRestartClassTest.php` (9 tests/29
+  assertions, measured) pins the one-camp law, bans the fiction wording, and
+  cross-checks the three code anchors so prose and code cannot silently
+  diverge again — the house `BackupSubsystemReadmeTest`/
+  `SystemdReloadSignalTest` style. Red-on-parent measured: 5 of the 9 fail on
+  the pre-cure README (the four code-anchor pins are README-inert by design).
+  Census `EXPECTED_PHP_FILES` 1997→1998 (above the M40 rung), measured from the phpunit red. This
+  is the item's third visit: the two earlier closeouts cited commits that do
+  not exist; this one lands on master with the pin.
+
 - **The Trakt single-flight refresh registry is bounded and self-cleaning
   (review server__srphp M-SERVER-37):** `TraktApi::refreshAfterAuthFailure()`
   kept a method-local static map keyed by md5(refreshToken) whose SUCCESS

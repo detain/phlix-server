@@ -726,8 +726,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * pinning the auth error/notice chain (and every sibling legacy page redirect)
      * to carry its incoming query into the /app target. Measured from the phpunit
      * red (1997), not predicted.
+     * Re-pinned 1997→1998 by the M-SERVER-45 trusted-proxy restart-class lane
+     * (2026-10-29): +1 — tests/Unit/Deploy/TrustedProxiesReadmeRestartClassTest.php,
+     * the README-claim detector pinning the README restart-semantics camps for
+     * TRUSTED_PROXIES (exactly one camp, the real freezing mechanism, the
+     * REST-per-request vs WS-per-worker-boot disclosure) to the enforcing code.
+     * Reads/writes no Request property (touches only README + source text), so
+     * every other census denominator is unchanged. Measured from the phpunit
+     * red (1997), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1997;
+    private const EXPECTED_PHP_FILES = 1998;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

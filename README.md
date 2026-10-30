@@ -953,7 +953,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 |----------|---------|---------|---------|-------------|
 | `PHLIX_CORS_ALLOWED_ORIGINS` | _unset_ | no | live | `CorsManager` — comma-separated origin allowlist |
 | `PHLIX_DOMAIN` | _unset_ | no | live | `config/hub.php` composition + the OAuth2/OIDC `redirect_uri` Host allowlist: `/auth/{oidc,github}/authorize` derives `<scheme>://<Host><path>` only when `Host` equals this value; unset/malformed ⇒ fail-closed `503 callback_url_not_configured` (absolute per-provider `redirect_uri` is the escape hatch) |
-| `TRUSTED_PROXIES` | loopback (`127.0.0.1`, `::1`) | no | live | `TrustedProxyResolver` — CIDR list of proxy hops allowed to assert `X-Forwarded-For`; unlisted non-loopback proxies bucket every request under the proxy address |
+| `TRUSTED_PROXIES` | loopback (`127.0.0.1`, `::1`) | no | live | `TrustedProxyResolver` — CIDR list of proxy hops allowed to assert `X-Forwarded-For`; unlisted non-loopback proxies bucket every request under the proxy address. REST reads it on every request (a fresh resolver per `Request::getTrustedClientIp()`); the WS-connect path memoizes one resolver per worker (`WebSocketServer`), so there a changed value applies at the next worker boot |
 | `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface | no | yes | `config/server.php` → `rate_limit`; `<SURFACE>` ∈ `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` |
 | `PHLIX_SSRF_ALLOW_CIDRS` | _unset_ (deny-all private) | no | per-proc | `src/Common/Net/SsrfGuard.php` — extra trusted CIDRs for outbound fetches (e.g. LAN metadata hosts); read on first guard use per worker process, then memoized |
 | `PHLIX_METRICS_ENABLED` | `1` | no | yes | `config/metrics.php` (per-worker boot gate) |
@@ -1007,14 +1007,22 @@ short list of why, grouped by the mechanism that reads it early:
 - **Config-load paths:** the job-queue dirs (`PHLIX_JOB_QUEUE_ROOT`,
   `PHLIX_*_JOBS_DIR`) — a daemon and a standalone worker started at different
   times with different values will not share a queue until both restart.
-- **Rate-limit profiles:** `RATE_LIMIT_*` and `TRUSTED_PROXIES` semantics are
-  frozen by `RateLimitProfiles` pre-flight in `start.php`.
+- **Rate-limit profiles:** `RATE_LIMIT_*` is boot-frozen — `config/server.php`
+  reads the values at config load, the PHP-DI limiter profiles are constructed
+  per worker, and `start.php` warms the `WS_CONNECT` profile at boot (with
+  `PHLIX_CONTAINER_COMPILE` the config is baked into the pre-fork compiled
+  container). `RateLimitProfiles` itself reads no proxy env, and no proxy
+  setting is frozen here.
 
 Everything else (metadata keys like `metadata.*`, `PHLIX_SIGNED_URL_*`,
-`PHLIX_CORS_ALLOWED_ORIGINS`, `TRUSTED_PROXIES` — rebuilt per request — and
-the plugin gates read at each composer/install invocation) is resolved at
-runtime and applies to the next request/job without a restart. The two
-per-process memos (`PHLIX_SSRF_ALLOW_CIDRS`, `PHLIX_LIBRARY_ROOTS`) apply on
+`PHLIX_CORS_ALLOWED_ORIGINS`, and the plugin gates read at each
+composer/install invocation) is resolved at runtime and applies to the next
+request/job without a restart. `TRUSTED_PROXIES` is runtime as well, with one
+split: the REST path builds a fresh `TrustedProxyResolver` on every request
+(`Request::getTrustedClientIp()`), so there a change applies at the next
+request, while the WS-connect path memoizes one resolver per worker
+(`WebSocketServer`), so there the change applies at the next worker boot. The
+two per-process memos (`PHLIX_SSRF_ALLOW_CIDRS`, `PHLIX_LIBRARY_ROOTS`) apply on
 the next worker boot rather than the next request.
 
 > **Rate limiting.** The auth surfaces above (`register` / `refresh` / WebAuthn

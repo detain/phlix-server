@@ -72,4 +72,15 @@ return [
      * @var int
      */
     'top_media_limit' => 5,
+
+    /**
+     * Absolute public base URL the newsletter's links are rendered against
+     * (e.g. https://phlix.example.com). Empty means "derive": the wiring
+     * falls back to hub.public_url (the same public hostname pairing uses),
+     * and when that is empty too the email ships with NO links at all —
+     * never dead anchors (M-SERVER-02).
+     *
+     * @var string
+     */
+    'base_url' => '',
 ];

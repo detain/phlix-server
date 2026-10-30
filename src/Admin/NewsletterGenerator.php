@@ -70,7 +70,32 @@ class NewsletterGenerator
             'subject_template' => 'Your Phlix Weekly Watch Report',
             'from_email' => 'phlix@example.com',
             'from_name' => 'Phlix Media Server',
+            'base_url' => '',
         ], $config);
+    }
+
+    /**
+     * Resolve the absolute base URL the newsletter's links are rendered against.
+     *
+     * M-SERVER-02: the template used to ship literal `href="#"` anchors, so
+     * every mailed button — including a fake "Unsubscribe" — went out dead.
+     * Links now render only when the deployment provides a public base URL
+     * (newsletter.base_url, falling back to hub.public_url at the wiring
+     * site); an empty/foreign value means the template omits the anchors
+     * entirely rather than linking nowhere.
+     *
+     * @return string Absolute http(s) origin without a trailing slash, '' = no links
+     */
+    private function resolveLinksBase(): string
+    {
+        $base = $this->config['base_url'] ?? '';
+        if (!is_string($base)) {
+            return '';
+        }
+
+        $base = rtrim(trim($base), '/');
+
+        return preg_match('#^https?://#i', $base) === 1 ? $base : '';
     }
 
     /**
@@ -135,6 +160,7 @@ class NewsletterGenerator
             'top_media' => $topMedia,
             'user_id' => $userId,
             'year' => (int) date('Y'),
+            'links_base' => $this->resolveLinksBase(),
         ]);
 
         $subject = $this->renderSubject($smarty);

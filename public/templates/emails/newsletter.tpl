@@ -323,22 +323,26 @@
                 </div>
 
                 <!-- CTA Section -->
+                {if $links_base}
                 <div class="cta-section">
-                    <a href="#" class="cta-button">View in Phlix</a>
+                    <a href="{$links_base}/app" class="cta-button">View in Phlix</a>
                 </div>
+                {/if}
             </div>
 
             <!-- Footer -->
             <div class="email-footer">
+                {if $links_base}
                 <div class="footer-links">
-                    <a href="#">Visit Phlix</a>
-                    <a href="#">Help Center</a>
-                    <a href="#">Preferences</a>
+                    <a href="{$links_base}/app">Visit Phlix</a>
+                    <a href="{$links_base}/app/settings">Preferences</a>
                 </div>
+                {/if}
                 <p class="footer-text">
                     You're receiving this email because you have an active Phlix account.
                     <br />
-                    <a href="#" class="unsubscribe-link">Unsubscribe</a> from these emails.
+                    These emails are controlled by your server administrator; to stop receiving
+                    them, ask your server administrator to disable the newsletter.
                 </p>
                 <p class="footer-text">
                     &copy; {$year|default:'2024'} Phlix Media Server. All rights reserved.

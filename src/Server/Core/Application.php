@@ -2936,6 +2936,20 @@ class Application
             return;
         }
 
+        // M-SERVER-02: newsletter links render only against a public base URL.
+        // Operators may set newsletter.base_url directly; otherwise fall back
+        // to hub.public_url — the same public hostname pairing/Quick-Connect
+        // advertise. Still empty: the template omits anchors entirely rather
+        // than mail dead `href="#"` buttons.
+        $configuredBaseUrl = $newsletterConfig['base_url'] ?? '';
+        if (!is_string($configuredBaseUrl) || $configuredBaseUrl === '') {
+            $hubConfig = is_array($this->config['hub'] ?? null) ? $this->config['hub'] : [];
+            $hubPublicUrl = $hubConfig['public_url'] ?? null;
+            if (is_string($hubPublicUrl) && $hubPublicUrl !== '') {
+                $newsletterConfig['base_url'] = $hubPublicUrl;
+            }
+        }
+
         if ($this->container === null) {
             return;
         }

@@ -317,7 +317,7 @@ slips into a fresh server just because it is reachable.
 - **Playback Queue**: Host-managed queue with media info (title, thumbnail), capped at 1000 items per group (`GroupState::MAX_QUEUE_SIZE`); an add past the cap is refused with the `syncplay.queue_limit_exceeded` error code
 - **Host Election**: Automatic host election when current host leaves (oldest member becomes host)
 - **Password Protection**: Optional password protection for private watch parties
-- **Position Tolerance**: Configurable sync tolerance (default 2s) to prevent excessive seeking
+- **Position Tolerance**: The sync tolerance window is fixed at 2000 ms (`GroupState::POSITION_TOLERANCE`) to prevent excessive seeking; there is no config key, admin setting, or env for it, and the constructor seams on `GroupState`/`SyncPlayManager` are test-only — no shipped caller passes them
 - **Naming layers**: the same concept is named per layer — on the **wire** it is a
   *group* (`/api/v1/syncplay/groups`, the `syncplay_create_group` event); in the
   **server internals** older prose says *room* (the `SyncPlayManager`/`GroupState`

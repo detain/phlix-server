@@ -849,9 +849,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * status codes and the no-fragment-regression site guard). The rewritten
      * arms read no Request property, so every other census denominator is
      * unchanged. Measured from the phpunit red (2019), not predicted.
+     * Re-pinned 2019→2024 by the srv-majors true-miss lane (M-SERVER-01/-02/
+     * -03/-04/-31, 2026-10-31): +5 — the five new truth guards tests/Unit/
+     * Deploy/InstallerFirstRunProseTest.php, tests/Unit/Auth/
+     * PasswordChangeRequiredCopyTest.php, tests/Unit/Admin/
+     * NewsletterLinksTruthTest.php, tests/Unit/Server/Http/Middleware/
+     * StreamLimitProfileNotFoundEnvelopeTest.php and tests/Unit/Session/
+     * SyncPlay/PositionToleranceReadmeTruthTest.php. Zero src/ files added
+     * (every cure edits an existing file), so no other denominator moves for
+     * that reason. Measured from the phpunit red (2024), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2019;
+    private const EXPECTED_PHP_FILES = 2024;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1114,6 +1123,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (2026-10-30): +2 declared-member WRITES — the new RouterMethodNotAllowedTest
      * makeRequest helper stamps $request->method and $request->path. Zero src/
      * writes added. Measured from the phpunit red (1096), not predicted.
+     * Re-pinned 1101→1103 by the srv-majors true-miss lane (M-SERVER-04,
+     * 2026-10-31): +2 declared-member WRITES — the new
+     * StreamLimitProfileNotFoundEnvelopeTest seeds $request->method and
+     * $request->path on a bare `new Request()` — same sanctioned harness-seed
+     * pattern. Zero src/ writes added (the envelope cures only swap label
+     * strings). Measured from the phpunit red (1103), not predicted.
      */
     // M-SERVER-05 (+1 write = the new law test's makeRequest() seeding
     // $request->body, the same sanctioned pattern every sibling pin uses).
@@ -1123,7 +1138,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // W-min103 / M-SERVER-08 (+1 write = the new ProfilesControllerTest
     // form-size pin seeding $request->files — same sanctioned pattern; zero
     // src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1101;
+    // srv-majors M-SERVER-04 (+2 writes = the new envelope law test seeding
+    // $request->method + $request->path — same sanctioned harness-seed pattern).
+    private const EXPECTED_DECLARED_WRITES = 1103;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

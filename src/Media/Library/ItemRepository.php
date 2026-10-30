@@ -3091,7 +3091,10 @@ class ItemRepository
 
         $bucketExpr = match ($field) {
             'name' => self::letterExpression(),
-            'year' => self::yearValueExpression(),
+            // Release year = the materialized indexed column (migration 121);
+            // NULL year rows bucket under NULL exactly as the old per-row
+            // CAST(JSON…) expression did.
+            'year' => 'year_sort',
             'rating' => self::ratingValueExpression(),
             'runtime' => self::runtimeValueExpression(),
             'date_added' => 'DATE(created_at)',
@@ -3105,7 +3108,7 @@ class ItemRepository
         // underlying column/expression so can never drift apart.
         $orderByExpr = match ($field) {
             'name' => self::letterExpression() . ($desc ? ' DESC' : ' ASC'),
-            'year' => $this->yearSortExpression($desc),
+            'year' => 'year_sort' . ($desc ? ' DESC' : ' ASC'),
             'rating' => $this->ratingSortExpression($desc),
             'runtime' => $this->runtimeSortExpression($desc),
             'date_added' => $this->createdAtSortExpression($desc),
@@ -3146,11 +3149,6 @@ class ItemRepository
         return $out;
     }
 
-    /** RELEASE year from metadata (NOT the row's created date). */
-    private static function yearValueExpression(): string
-    {
-        return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
-    }
     /** Content-rating string (G/PG/…) — the materialized, indexed column (migration 050). */
     private static function ratingValueExpression(): string
     {
@@ -3165,15 +3163,6 @@ class ItemRepository
     private static function artistValueExpression(): string
     {
         return "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.artist'))";
-    }
-
-    /**
-     * Year ORDER BY fragment — the RELEASE year (was YEAR(created_at), which
-     * filed every recently-added title under one "this year" bucket).
-     */
-    private function yearSortExpression(bool $desc): string
-    {
-        return self::yearValueExpression() . ($desc ? ' DESC' : ' ASC');
     }
 
     /** Rating ORDER BY fragment (`rating_sort` was never a real column). */
@@ -3624,10 +3613,13 @@ class ItemRepository
     }
 
     /**
-     * Normalizes the sort field to a safe column name.
+     * Normalizes the sort field to a safe column name (or materialized sort key
+     * consumed by {@see buildOrderClause()}).
      *
      * @param string $sort Raw sort field from query param
-     * @return string Safe column name (always one of: name, year, rating, date_added, runtime)
+     * @return string Safe column name (always one of: name, year_sort,
+     *                 rating_sort, created_at, runtime_sort, genre_sort,
+     *                 artist_sort)
      */
     private function normalizeSortField(string $sort): string
     {
@@ -3736,7 +3728,11 @@ class ItemRepository
         $titleTie = self::titleOrder($direction);
 
         if ($sort === 'year_sort') {
-            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.year')) AS SIGNED) {$direction}, {$titleTie}";
+            // The materialized release year (migration 121) — the same value
+            // the old per-row CAST(JSON_EXTRACT(metadata_json,'$.year'))
+            // computed, as an indexed column the planner resolves with an
+            // ordered range scan. RELEASE year, NOT the row's created date.
+            return "year_sort {$direction}, {$titleTie}";
         }
 
         if ($sort === 'rating_sort') {

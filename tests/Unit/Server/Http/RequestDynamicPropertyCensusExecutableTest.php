@@ -771,9 +771,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (the 405/Allow semantics for existing-path wrong-method misses, the
      * 404-boundary pins for never-registered paths, and the head-framing arm).
      * Measured from the phpunit red (2004), not predicted.
+     * Re-pinned 2005→2006 by the W-min100 / M-SERVER-20 materialized-year
+     * lane (2026-10-30): +1 — tests/Integration/Media/MediaItemsYearSort
+     * Migration121RealDbTest.php (real-MySQL apply/derive/replay/hostile-write
+     * pins for migration 121's year_sort column). Migration 121 itself is a
+     * .sql file (outside the PHP census); the repository and unit-test edits
+     * are in-place. Reads/writes no Request property, so every other census
+     * denominator is unchanged. Measured from the phpunit red at this commit's
+     * tree — the S-80 marker-ownership law test is still untracked on this
+     * lane's disk (2007 here) and joins the next commit, re-pinning from its
+     * own measured red then.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2005;
+    private const EXPECTED_PHP_FILES = 2006;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

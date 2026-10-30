@@ -2789,8 +2789,10 @@ class ItemRepositoryTest extends TestCase
                 if (str_contains($sql, 'COUNT(*)')) {
                     return true;
                 }
-                // Year primary, then the materialized sort_title as the tiebreak.
-                return str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.year')")
+                // M-SERVER-18 (W-min100): year primary = the materialized,
+                // indexed column (migration 121), then the materialized
+                // sort_title as the tiebreak — never the per-row JSON CAST.
+                return str_contains($sql, 'ORDER BY year_sort ASC')
                     && str_contains($sql, 'ASC, sort_title ASC, name ASC');
             }))
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
@@ -3554,8 +3556,10 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    // Year bucket groups/orders by the RELEASE year from metadata.
-                    $e = "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
+                    // M-SERVER-18 (W-min100): the RELEASE-year bucket rides the
+                    // materialized, indexed column (migration 121) — the same
+                    // value the old per-row CAST(JSON…) computed.
+                    $e = 'year_sort';
                     return str_contains($sql, "{$e} AS bucket_value")
                         && str_contains($sql, "GROUP BY {$e}")
                         && str_contains($sql, "ORDER BY {$e} ASC");
@@ -3638,8 +3642,11 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    // desc order must be reflected in both ORDER BY and GROUP BY (MySQL allows expr DESC in GROUP BY)
-                    $e = "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
+                    // M-SERVER-18 (W-min100): desc order reflected on the
+                    // materialized year column (migration 121); GROUP BY stays
+                    // direction-free (MySQL allows expr DESC but the bare
+                    // column is what the ORDER BY shares — no drift).
+                    $e = 'year_sort';
                     return str_contains($sql, "ORDER BY {$e} DESC")
                         && str_contains($sql, "GROUP BY {$e}");
                 }),
@@ -4065,5 +4072,60 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(0, $deferredTagQueries, 'deferring must skip the two profile_tags queries');
         $this->assertSame([], $filtered, 'the default must still drop a row carrying a blocked tag');
         $this->assertSame(2, $tagQueries, 'the default call pays exactly the two profile_tags queries');
+    }
+
+    /**
+     * M-SERVER-18 (W-min100): the hot `sort=year` browse path must ORDER BY the
+     * materialized, indexed `year_sort` column (migration 121) — never the
+     * per-row CAST(JSON_EXTRACT(metadata_json,'$.year')) the old arm emitted.
+     */
+    public function testQueryYearSortRidesMaterializedColumnNotJsonExtraction(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = []) use (&$capturedSql): array {
+                if (str_contains($sql, 'SELECT * FROM media_items')) {
+                    $capturedSql = $sql;
+                }
+                return str_starts_with(trim($sql), 'SELECT COUNT') ? [['total' => 0]] : [];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+        $repo->query(['sort' => 'year', 'order' => 'desc']);
+
+        $this->assertStringContainsString('ORDER BY year_sort DESC', $capturedSql);
+        $this->assertStringNotContainsString(
+            "JSON_EXTRACT(metadata_json, '$.year')",
+            $capturedSql,
+            'release-year sort must ride the materialized indexed column (migration 121), never the per-row JSON CAST'
+        );
+    }
+
+    /**
+     * M-SERVER-18 sibling law: the year index-bucket facets group AND order on
+     * the same materialized column, so bucket values can never drift from the
+     * browse ordering.
+     */
+    public function testValueBucketsYearGroupsByMaterializedColumn(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = []) use (&$capturedSql): array {
+                if (str_contains($sql, 'AS bucket_value')) {
+                    $capturedSql = $sql;
+                }
+                return [];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('year', []);
+
+        $this->assertStringContainsString('SELECT year_sort AS bucket_value', $capturedSql);
+        $this->assertStringContainsString('GROUP BY year_sort', $capturedSql);
+        $this->assertStringContainsString('ORDER BY year_sort ASC', $capturedSql);
     }
 }

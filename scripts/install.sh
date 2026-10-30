@@ -2281,6 +2281,8 @@ info "Env file      : ${ENV_FILE}  (DB_PASSWORD + JWT_SECRET + PHLIX_SECRET_KEY 
 info "Database pass : stored in ${ENV_FILE} (mode 640) — show with: sudo grep '^DB_PASSWORD=' ${ENV_FILE}"
 echo
 info "Next:"
-info "  - Open the URL and complete the first-run setup wizard."
+info "  - Sign in at the URL. There is no setup wizard — create the first admin from the CLI:"
+info "      php $INSTALL_PATH/bin/phlix user:create <name> --email=<email> --password=<password>"
+info "      php $INSTALL_PATH/bin/phlix user:promote <name>"
 info "  - Pair with a Phlix Hub via 'php $INSTALL_PATH/scripts/pair-with-hub.php' if needed."
 info "  - Drop a TMDB_API_KEY into $ENV_FILE for metadata enrichment."

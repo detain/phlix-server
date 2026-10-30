@@ -62,6 +62,9 @@ final class LibraryOptionsAutoCollectionsIntegrationTest extends TestCase
     /** @var list<string> Every library id created during a test, for teardown. */
     private array $libraryIds = [];
 
+    /** @var list<string> Scratch dirs created for path validation (M-SERVER-41). */
+    private array $createdDirs = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -112,6 +115,17 @@ final class LibraryOptionsAutoCollectionsIntegrationTest extends TestCase
             }
         }
         $this->libraryIds = [];
+        // Scratch dirs created by createLibrary() (M-SERVER-41 path stat gate),
+        // deepest-first, then the shared parent if it is now empty.
+        foreach (array_reverse($this->createdDirs) as $dir) {
+            if (is_dir($dir)) {
+                @rmdir($dir);
+            }
+        }
+        $this->createdDirs = [];
+        if (is_dir('/tmp/phlix-s33-it')) {
+            @rmdir('/tmp/phlix-s33-it');
+        }
         parent::tearDown();
     }
 
@@ -315,6 +329,17 @@ final class LibraryOptionsAutoCollectionsIntegrationTest extends TestCase
     {
         $controller = $this->controller;
         $this->assertNotNull($controller);
+
+        // M-SERVER-41: create() now stats every path synchronously before
+        // persisting, so this file's display-only scratch paths must actually
+        // exist on disk. The strings themselves are asserted nowhere — only
+        // `options` round-trips — so materialising them keeps every pin intact.
+        foreach ((array) ($body['paths'] ?? []) as $path) {
+            if (is_string($path) && !is_dir($path)) {
+                $this->assertTrue(mkdir($path, 0o755, true) || is_dir($path), 'scratch dir ' . $path);
+                $this->createdDirs[] = $path;
+            }
+        }
 
         $response = $controller->create($this->adminRequest($body), []);
         $this->assertSame(201, $response->statusCode, 'create() must return 201; body: ' . $response->body);

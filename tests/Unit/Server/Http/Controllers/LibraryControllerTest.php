@@ -95,6 +95,39 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * One real, existing directory shared by every happy-path create() test in
+     * this file. M-SERVER-41 made create() stat each path synchronously, so
+     * the formerly-fictional `/mnt/movies` fixtures can no longer reach the
+     * options-merge behavior these tests actually pin; a single memoized
+     * scratch dir keeps the mock `with()` pins and request bodies equal within
+     * a run. The parallel runner (scripts/parallel/run-suite.sh) executes suites in
+     * separate processes, so the name carries the pid to avoid collisions.
+     */
+    private static function libDir(): string
+    {
+        if (self::$sharedLibDir === null) {
+            $dir = sys_get_temp_dir() . '/phlix_lct_lib_' . getmypid();
+            if (!is_dir($dir) && !mkdir($dir, 0o755, true)) {
+                self::fail('could not create shared scratch dir ' . $dir);
+            }
+            self::$sharedLibDir = $dir;
+        }
+
+        return self::$sharedLibDir;
+    }
+
+    /** @var string|null memoized scratch dir for {@see self::libDir()} */
+    private static ?string $sharedLibDir = null;
+
+    public static function tearDownAfterClass(): void
+    {
+        if (self::$sharedLibDir !== null && is_dir(self::$sharedLibDir)) {
+            @rmdir(self::$sharedLibDir);
+        }
+        self::$sharedLibDir = null;
+    }
+
+    /**
      * Happy path: index() returns 200 with libraries list for authenticated user,
      * each enriched with item_count.
      *
@@ -280,7 +313,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/mnt/movies'], [])
+            ->with('Movies', 'movie', [self::libDir()], [])
             ->willReturn('new-lib-id');
 
         // Note: AdminMiddleware is final and cannot be mocked in unit tests.
@@ -300,7 +333,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
         ];
 
         $response = $controller->create($request, []);
@@ -323,7 +356,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Anime', 'series', ['/vault1/anime'], ['series_per_directory' => true])
+            ->with('Anime', 'series', [self::libDir()], ['series_per_directory' => true])
             ->willReturn('series-lib');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -335,7 +368,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Anime',
             'type' => 'series',
-            'paths' => ['/vault1/anime'],
+            'paths' => [self::libDir()],
             // Sent as the string "true" — must coerce to a real bool.
             'series_per_directory' => 'true',
         ];
@@ -354,7 +387,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Anime', 'series', ['/vault1/anime'], ['series_per_directory' => true])
+            ->with('Anime', 'series', [self::libDir()], ['series_per_directory' => true])
             ->willReturn('series-lib');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -366,7 +399,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Anime',
             'type' => 'series',
-            'paths' => ['/vault1/anime'],
+            'paths' => [self::libDir()],
             'options' => ['series_per_directory' => 1],
         ];
 
@@ -384,7 +417,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/mnt/movies'], [])
+            ->with('Movies', 'movie', [self::libDir()], [])
             ->willReturn('movie-lib');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -396,7 +429,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             'series_per_directory' => true,
         ];
 
@@ -532,7 +565,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => false]])
+            ->with('Movies', 'movie', [self::libDir()], ['autoCollections' => ['enabled' => false]])
             ->willReturn('lib-new');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -544,7 +577,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/vault1/movies'],
+            'paths' => [self::libDir()],
             'autoCollections' => false,
         ];
 
@@ -723,7 +756,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => $enabled]])
+            ->with('Movies', 'movie', [self::libDir()], ['autoCollections' => ['enabled' => $enabled]])
             ->willReturn('lib-new');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -735,7 +768,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/vault1/movies'],
+            'paths' => [self::libDir()],
             'autoCollections' => ['enabled' => $enabled],
         ];
 
@@ -766,7 +799,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/vault1/movies'], ['autoCollections' => ['enabled' => true]])
+            ->with('Movies', 'movie', [self::libDir()], ['autoCollections' => ['enabled' => true]])
             ->willReturn('lib-new');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -778,7 +811,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/vault1/movies'],
+            'paths' => [self::libDir()],
             'autoCollections' => true,
         ];
 
@@ -826,7 +859,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'invalid_type',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
         ];
 
         $response = $controller->create($request, []);
@@ -1899,7 +1932,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/mnt/movies'], [
+            ->with('Movies', 'movie', [self::libDir()], [
                 'metadata_priority' => ['movie' => ['imdb', 'tmdb']],
             ])
             ->willReturn('movie-lib');
@@ -1913,7 +1946,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             'metadata_priority' => ['movie' => ['imdb', ' tmdb ']],
         ];
 
@@ -1930,7 +1963,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/mnt/movies'], [
+            ->with('Movies', 'movie', [self::libDir()], [
                 'metadata_priority' => ['movie' => ['imdb']],
             ])
             ->willReturn('movie-lib');
@@ -1944,7 +1977,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             'options' => ['metadata_priority' => ['movie' => ['imdb']]],
         ];
 
@@ -1969,7 +2002,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             // A list value is required per type — a string is malformed.
             'metadata_priority' => ['movie' => 'tmdb'],
         ];
@@ -1992,7 +2025,7 @@ class LibraryControllerTest extends TestCase
         $libraryManager = $this->createMock(LibraryManager::class);
         $libraryManager->expects($this->once())
             ->method('createLibrary')
-            ->with('Movies', 'movie', ['/mnt/movies'], [])
+            ->with('Movies', 'movie', [self::libDir()], [])
             ->willReturn('movie-lib');
 
         $scanJobs = $this->createMock(ScanJobRepository::class);
@@ -2004,7 +2037,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             'metadata_priority' => [],
         ];
 
@@ -2182,7 +2215,7 @@ class LibraryControllerTest extends TestCase
             ->with(
                 'Movies',
                 'movie',
-                ['/mnt/movies'],
+                [self::libDir()],
                 $this->callback(static function (mixed $options): bool {
                     if (!is_array($options) || !isset($options['image_types'])) {
                         return false;
@@ -2211,7 +2244,7 @@ class LibraryControllerTest extends TestCase
         $request->body = [
             'name' => 'Movies',
             'type' => 'movie',
-            'paths' => ['/mnt/movies'],
+            'paths' => [self::libDir()],
             'image_types' => [
                 'poster' => true,
                 'backdrop' => false,

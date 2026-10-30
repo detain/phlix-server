@@ -9,6 +9,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **"Add library" answered 201 for paths that do not exist — every path is now
+  stat-checked synchronously at the create choke (review server__webux
+  M-SERVER-41):** `LibraryController::create()` validated presence and type but
+  never touched the filesystem; `LibraryManager::createLibrary()` inserted the
+  row and the background scan was enqueued blind. The bogus path surfaced only
+  later as a `Scan path does not exist` warning in the server log plus a
+  green-badge, zero-item completed scan — after the 201 whose message claimed
+  "Library created; initial scan started in the background." Worse, the path
+  collection loop silently DROPPED non-string entries, so `{"paths":[123]}`
+  passed the `$paths !== []` presence guard and persisted a zero-path library
+  (reproduced live: the red test at the old tip shows
+  `createLibrary('Movies', 'movie', [], [])`). Now every entry of the multi-path
+  field must be a non-empty string that exists, is a directory, and is readable;
+  any offender rejects the WHOLE request with the canonical
+  `{error, code: 'invalid_request', invalid_paths: [{path, reason}]}` envelope —
+  `invalid_request` is the already-registered @phlix/contracts code this repo
+  already REST-emits (QuickConnectController), so the registry stays byte-frozen
+  and no OpenAPI enum member moves. `create()` is the sole `createLibrary()`
+  caller and `update()` never writes `paths`, so this single choke covers every
+  HTTP path into the column; the DVR registrar's internal find-or-create seeds
+  its path from a file it just wrote and is out of that surface. The
+  `not_readable` arm is defense-in-depth for non-root deployments and cannot be
+  pinned venue-independently (root reads chmod-000 dirs). Proved red-first by
+  `tests/Unit/Server/Http/Controllers/LibraryCreatePathValidationTest.php`
+  (5 tests, 42 assertions: bogus/file/non-string/mixed all 400 with the manager
+  and job queue pinned `never()`, and two real dirs still 201); the 13 formerly
+  fake-path happy-path fixtures in `LibraryControllerTest` (78 tests) and the
+  real-MySQL auto-collections integration now run against real scratch dirs.
+
 - **CLAUDE.md prescribed the phpstan CLI override AGENTS.md bans, mis-stated the tests-gate
   level, and linked a deleted doc set (review server__writer M-SERVER-46):** the mirrored
   agent briefs disagreed with each other and with the live configs. `CLAUDE.md` told readers

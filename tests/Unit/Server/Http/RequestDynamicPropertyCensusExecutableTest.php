@@ -734,8 +734,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * Reads/writes no Request property (touches only README + source text), so
      * every other census denominator is unchanged. Measured from the phpunit
      * red (1997), not predicted.
+     * Re-pinned 1998→1999 by the M-SERVER-41 library-path stat-check lane
+     * (2026-10-29): +1 — tests/Unit/Server/Http/Controllers/
+     * LibraryCreatePathValidationTest.php, pinning the create choke's reject-
+     * before-any-write envelope (bogus/non-string/mixed paths → 400
+     * invalid_request, manager and job queue never()) and the valid-directory
+     * 201. Measured from the phpunit red (1999), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1998;
+    private const EXPECTED_PHP_FILES = 1999;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -976,8 +982,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (2026-10-29): +2 declared-member WRITES — the new test fixture stamps
      * $request->path and $request->query before invoking dispatch(). Zero src/
      * writes added. Measured from the phpunit red (1068), not predicted.
+     * Re-pinned 1068→1078 by the M-SERVER-41 library-path stat-check lane
+     * (2026-10-29): +10 declared-member WRITES — the new test file stamps
+     * $request->userId and $request->body once each in its five tests. Zero
+     * src/ writes added (the validating loop reads the body array only; the
+     * converted fixtures replaced path literals, not property stamps).
+     * Measured from the phpunit red (1078), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1068;
+    private const EXPECTED_DECLARED_WRITES = 1078;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

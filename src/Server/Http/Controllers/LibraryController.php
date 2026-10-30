@@ -427,11 +427,59 @@ class LibraryController
             ]);
         }
 
+        // M-SERVER-41 (review server__webux major 2): the admin "Add library"
+        // form used to accept any path the operator typed. Presence and type
+        // were validated, but nothing ever touched the filesystem, so a bogus
+        // path persisted, enqueued a scan, answered 201 ("initial scan
+        // started"), and only failed later as a log warning + a green-badge,
+        // zero-item completed scan. Paths are now stat-checked SYNCHRONOUSLY
+        // at this choke — the sole production caller of createLibrary(), and
+        // update() never writes `paths` — before anything reaches the DB or
+        // the job queue: each entry must be a non-empty string that exists, is
+        // a directory, and is readable. The whole request is rejected listing
+        // every offending entry (machine `invalid_paths` mirrors the
+        // `valid_types` echo idiom above). `invalid_request` is the
+        // already-registered @phlix/contracts wire code already REST-emitted
+        // by QuickConnectController — no new code, no registry move. The old
+        // loop silently DROPPED non-string entries, so `{"paths":[123]}`
+        // created a zero-path library; non-strings are now reported, not
+        // discarded. The `not_readable` arm is defense-in-depth for non-root
+        // deployments: under root every directory reads, so it cannot be
+        // pinned venue-independently.
         $stringPaths = [];
+        $invalidPaths = [];
         foreach ($paths as $path) {
-            if (is_string($path)) {
+            if (!is_string($path)) {
+                $invalidPaths[] = ['path' => null, 'reason' => 'not_a_string'];
+            } elseif ($path === '') {
+                $invalidPaths[] = ['path' => '', 'reason' => 'empty'];
+            } elseif (!file_exists($path)) {
+                $invalidPaths[] = ['path' => $path, 'reason' => 'does_not_exist'];
+            } elseif (!is_dir($path)) {
+                $invalidPaths[] = ['path' => $path, 'reason' => 'not_a_directory'];
+            } elseif (!is_readable($path)) {
+                $invalidPaths[] = ['path' => $path, 'reason' => 'not_readable'];
+            } else {
                 $stringPaths[] = $path;
             }
+        }
+        if ($invalidPaths !== []) {
+            $described = array_map(
+                static fn (array $entry): string => is_string($entry['path']) && $entry['path'] !== ''
+                    ? $entry['path'] . ' (' . $entry['reason'] . ')'
+                    : $entry['reason'],
+                $invalidPaths
+            );
+
+            $pathsMessage = 'Invalid library paths: ' . implode('; ', $described)
+                . '. Paths must exist and be readable directories.';
+
+            return (new Response())->error(
+                400,
+                'invalid_request',
+                $pathsMessage,
+                ['invalid_paths' => $invalidPaths]
+            );
         }
 
         $optionsRaw = $data['options'] ?? [];

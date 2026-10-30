@@ -279,6 +279,11 @@ final class PreRouterFastPathsMediaStreamTest extends TestCase
             'wav'  => ['/m/song.wav', 'audio/wav'],
             'mp4-retained'  => ['/m/clip.mp4', 'video/mp4'],
             'webm-retained' => ['/m/clip.webm', 'video/webm'],
+            // minors M-SERVER-54(b): .mov is the QuickTime container; its
+            // registered type is video/quicktime (what the estate's DLNA +
+            // theme-stream mappers already answer). The old video/mp4 lie
+            // mislabelled the wire on every .mov direct-play fast path.
+            'mov-quicktime' => ['/m/clip.mov', 'video/quicktime'],
             'unknown'       => ['/m/song.xyz', 'application/octet-stream'],
         ];
     }

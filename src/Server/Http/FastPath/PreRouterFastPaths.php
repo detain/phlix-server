@@ -688,7 +688,11 @@ final class PreRouterFastPaths
             // Video
             'mp4'  => 'video/mp4',
             'm4v'  => 'video/mp4',
-            'mov'  => 'video/mp4',
+            // minors M-SERVER-54(b): .mov is the QuickTime container with its
+            // own registered type — the estate's other mappers (DlnaMimeTypes,
+            // ThemeMediaStreamController) already answer video/quicktime. The
+            // old video/mp4 mislabelled every .mov direct-play reply.
+            'mov'  => 'video/quicktime',
             'webm' => 'video/webm',
             'ogv'  => 'video/ogg',
             'mkv'  => 'video/x-matroska',

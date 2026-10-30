@@ -6,7 +6,7 @@
  * - Top 5 media of the week with posters
  * - New items added this week
  * - View in Phlix CTA button
- * - Unsubscribe link
+ * - Newsletter control statement (admin toggle; no user-facing opt-out route)
  *
  * @author Phlix Team
  * @version 1.0.0
@@ -234,12 +234,6 @@
             font-size: 12px;
             color: #6c757d;
             margin: 0;
-        }
-
-        .unsubscribe-link {
-            color: #6c757d;
-            text-decoration: underline;
-            font-size: 12px;
         }
 
         /* Responsive */

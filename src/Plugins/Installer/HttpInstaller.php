@@ -503,7 +503,10 @@ class HttpInstaller
         if ($out === false) {
             fclose($handle);
             @unlink($localFile);
-            throw new PluginInstallException(sprintf('Cannot write temporary file for plugin download of %s.', $sourceUrl));
+            throw new PluginInstallException(sprintf(
+                'Cannot write temporary file for plugin download of %s.',
+                $sourceUrl
+            ));
         }
 
         $copied = @stream_copy_to_stream($handle, $out, self::MAX_PACKAGE_BYTES + 1);

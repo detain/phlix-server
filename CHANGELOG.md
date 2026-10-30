@@ -9,6 +9,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **Admin settings type errors become human-readable sentences, and theming/CSP/endpoint docs are re-cured to shipped truth (server minors batch W-min96: 6 cured, 1 stale-verified, 1 contract-blocked).**
+  - **M-SERVER-10 (cured):** the admin settings type-mismatch message was machine-only (`Expected type bool.`). It now names the expected and received value in operator terms via `AdminSettingsController::typeMismatchMessage()` (`Expected a value of type true/false — got number.`); the `MediaItemController` JSON-object body error and the `LibraryController` `autoCollections` hint are reworded to the same human register. Two pin tests rotated with the copy (`AdminSettingsSegmentFormatTest`, `AdminSettingsRealSchemaPutTest`). The `PluginAdminController` twin `sprintf` was left untouched — it is outside this batch evidence set (disclosed follow-up).
+  - **M-SERVER-16 (cured):** new `docs/data-model.md` catalogs the migrated schema table-by-table with each table's creating migration, states the migration-numbering law (`glob` + lexicographic `sort`, gaps legal and never reused), and contrasts `collections` (005, user playlists) with `media_collections` (064, TMDB box sets); README gained the matching numbering-law paragraph.
+  - **M-SERVER-32 (stale-verified, already cured at `5f57bd25`):** `systemd/phlix-server.service` already ships `ExecReload=/bin/kill -SIGUSR2 $MAINPID` with the Workerman graceful-reload rationale — the review's ask is satisfied on disk; no change.
+  - **M-SERVER-61 / M-SERVER-65 (cured):** the README endpoint table is extended to the library-maintenance, casting-device, quick-connect, hub-token, OPDS and scrobbler-admin surfaces, the "Complete API" overclaim softened to point at `openapi.yaml` (the machine-checked bijection), and the `POST /auth/identities/link/hub` S301 route added to both the narrative and the table.
+  - **M-SERVER-66 (cured):** the README SyncPlay section documents the three naming layers (wire `group` / internals `room` / user-facing `watch party`) so the mixed vocabulary is explained where an operator meets it; full one-noun consolidation stays an open owner decision.
+  - **M-SERVER-68 (cured):** `AGENTS.md` and `src/Theming/TokenTheme.php` now state the CSP truth — `script-src` ships nonce-only (no relaxation) and `style-src 'self' 'unsafe-inline'` is DELIBERATE for the token-theme inline-`style` surface, citing `SecurityHeaders::contentSecurityPolicy()`.
+  - **M-SERVER-88 (reported-blocked):** the "unify the error envelope to one shape everywhere" ask needs new/changed wire error codes and a response-shape contract change; the `@phlix/contracts` registry is byte-frozen this campaign (no new codes) so it is escalated as an owner-wave item, not mutated here.
+
 - **M-SERVER-41 r2 — the update-PUT leg gets the SAME path validation; the
   "single choke" claim cured to truth (review server__dba major):** r1 gated
   only `LibraryController::create()` and its prose claimed "`update()` never

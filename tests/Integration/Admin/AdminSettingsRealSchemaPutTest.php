@@ -223,13 +223,14 @@ final class AdminSettingsRealSchemaPutTest extends TestCase
     public function testWrongTypeForBoolKeyIsRejectedBeforeTheGuardAndPersistsNothing(): void
     {
         // 1.5 is a float; the allow-list type for the quintet is bool, and
-        // 1.5 is not in the bool-ish set — 400 "Expected type bool." from the
-        // type stage, guard never reached, nothing persisted.
+        // 1.5 is not in the bool-ish set — 400 "Expected a value of type
+        // true/false — got number." from the type stage, guard never
+        // reached, nothing persisted.
         $response = $this->controller()->update($this->put([self::PW => 1.5]), []);
 
         $this->assertSame(400, $response->statusCode);
         $body = $this->jsonBody($response);
-        $this->assertSame('Expected type bool.', $body['errors'][self::PW] ?? null);
+        $this->assertSame('Expected a value of type true/false — got number.', $body['errors'][self::PW] ?? null);
         $this->assertNull($this->rowFor(self::PW));
     }
 

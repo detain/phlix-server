@@ -373,7 +373,7 @@ final class AdminSettingsSegmentFormatTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         self::assertSame(
-            'Expected type string.',
+            'Expected a value of type text — got number.',
             $this->errorsOf($response)[self::KEY]
         );
     }

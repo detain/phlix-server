@@ -264,7 +264,7 @@ class LibraryController
     private function autoCollectionsError(): Response
     {
         return (new Response())->status(400)->json([
-            'error' => 'autoCollections must be a boolean, or a { "enabled": bool } object',
+            'error' => 'Set autoCollections to true/false, or {"enabled": true/false}.',
         ]);
     }
 

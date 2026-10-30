@@ -1051,7 +1051,7 @@ class MediaItemController
 
         $body = $request->body;
         if (!is_array($body)) {
-            return (new Response())->status(400)->json(['error' => 'Request body must be JSON object']);
+            return (new Response())->status(400)->json(['error' => 'Request body must be a JSON object.']);
         }
 
         $updateData = [];

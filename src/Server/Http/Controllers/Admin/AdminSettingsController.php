@@ -653,7 +653,7 @@ final class AdminSettingsController
 
                 $type = $allowed[$key];
                 if (!self::valueMatchesType($value, $type)) {
-                    $errors[$key] = sprintf('Expected type %s.', $type);
+                    $errors[$key] = self::typeMismatchMessage($type, $value);
                     continue;
                 }
 
@@ -897,6 +897,65 @@ final class AdminSettingsController
             'int'   => (int) (is_numeric($value) ? $value : 0),
             'float' => (float) (is_numeric($value) ? $value : 0),
             default => $value,
+        };
+    }
+
+    /**
+     * The 400 `errors` copy for a type mismatch (M-SERVER-10): the old
+     * `Expected type int.` was compiler-speak for a message an admin reads
+     * next to the form field it names. Each label says what the form has to
+     * actually submit, and the received side says what came back.
+     *
+     * @param string $type  Declared allow-list type.
+     * @param mixed  $value Raw submitted value.
+     *
+     * @return string The message shown to the admin.
+     */
+    private static function typeMismatchMessage(string $type, mixed $value): string
+    {
+        return sprintf(
+            'Expected a value of type %s — got %s.',
+            self::humanTypeName($type),
+            self::receivedTypeName($value)
+        );
+    }
+
+    /**
+     * Human label for an allow-list type name (see
+     * {@see typeMismatchMessage()}).
+     *
+     * @param string $type Declared allow-list type.
+     *
+     * @return string The label shown to the admin.
+     */
+    private static function humanTypeName(string $type): string
+    {
+        return match ($type) {
+            'bool'          => 'true/false',
+            'int', 'float'  => 'number',
+            'string'        => 'text',
+            'json'          => 'object/array',
+            default         => $type,
+        };
+    }
+
+    /**
+     * Human label for the type of the submitted value, paired with
+     * {@see humanTypeName()} in the 400 `errors` copy.
+     *
+     * @param mixed $value Raw submitted value.
+     *
+     * @return string The label shown to the admin.
+     */
+    private static function receivedTypeName(mixed $value): string
+    {
+        return match (true) {
+            is_bool($value)                => 'true/false',
+            is_int($value), is_float($value) => 'number',
+            is_string($value)              => 'text',
+            is_array($value)               => 'object/array',
+            $value === null                => 'nothing',
+            default                        => 'something else',
         };
     }
 }

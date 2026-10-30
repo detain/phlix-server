@@ -19,7 +19,10 @@ namespace Phlix\Theming;
  * checked against {@see ThemeTokenAllowlist} and
  * {@see ThemeTokenValidator}'s value grammar. That is what lets the SPA apply
  * a plugin theme with `el.style.setProperty()` instead of injecting a
- * `<style>` tag, so no `unsafe-inline` CSP relaxation is needed.
+ * `<style>` tag, which is why `script-src` needs no relaxation (it ships
+ * nonce-only). The CSP's `style-src 'unsafe-inline'` remains, deliberately,
+ * for the inline style attribute surface — see
+ * {@see \Phlix\Server\Http\Middleware\SecurityHeaders::contentSecurityPolicy()}.
  *
  * Instances are only ever produced by {@see ThemeTokenValidator::validate()},
  * so an instance existing is itself the proof that its tokens are safe.

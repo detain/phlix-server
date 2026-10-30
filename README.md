@@ -130,7 +130,10 @@ Every environment variable the server process reads is inventoried in the defini
   → their `/app` pages), dispatched in `src/Server/Workerman/HttpHandler.php` (the served daemon; the pre-S171 `public/index.php` copy of that logic was unserved and deleted). Smarty (`smarty/smarty`) is retained on the
   server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
   `public/templates/emails/newsletter.tpl`).
-- **REST API Endpoints**: Complete API for library browsing, media info, and user data
+- **REST API Endpoints**: library browsing, media info, user data, collections, casting, SyncPlay and
+  admin surfaces. The [HTTP Endpoints](#http-endpoints) table below is the curated operator view;
+  **`openapi.yaml` is the exhaustive list** — a machine-checked bijection with the composed route
+  registry, CI-enforced by `OpenapiSpecCurrencyTest`
 - **JWT Authentication**: Integrated token-based auth with refresh support
 - **Responsive Design**: CSS-first approach with utility classes
 - **JavaScript Client**: ApiClient helper with auth, library, and player helpers
@@ -192,7 +195,10 @@ named instances from the admin console is a later step).
 - **Account linking** — an already-signed-in user can attach an external identity to their
   account. `GET /auth/identities` lists linked identities; `GET /auth/identities/link/oidc` and
   `GET /auth/identities/link/github` start a verified OAuth round-trip link;
-  `POST /auth/identities/link/ldap` links via a live LDAP bind; `DELETE /auth/identities/{id}`
+  `POST /auth/identities/link/ldap` links via a live LDAP bind;
+  `POST /auth/identities/link/hub` links a hub identity from a hub JWT
+  (body `{hub_token}`) validated against the enrolled hub;
+  `DELETE /auth/identities/{id}`
   unlinks one (own identity only, refused with `409` if it would remove your last sign-in
   method). Linking always proves control of the identity and never mints a new session; an
   identity already linked to another account is rejected with `409`. A linked identity is then
@@ -302,6 +308,13 @@ slips into a fresh server just because it is reachable.
 - **Host Election**: Automatic host election when current host leaves (oldest member becomes host)
 - **Password Protection**: Optional password protection for private watch parties
 - **Position Tolerance**: Configurable sync tolerance (default 2s) to prevent excessive seeking
+- **Naming layers**: the same concept is named per layer — on the **wire** it is a
+  *group* (`/api/v1/syncplay/groups`, the `syncplay_create_group` event); in the
+  **server internals** older prose says *room* (the `SyncPlayManager`/`GroupState`
+  docblocks in `src/Session/SyncPlay/`); in **user-facing copy** it is a
+  *watch party* (the feature line above). A one-noun consolidation is an open
+  owner decision — until it lands, this map is the translation table between
+  the three vocabularies.
 
 ### Session Management
 - **Device Sessions**: Track authenticated devices with activity timestamps
@@ -1091,6 +1104,12 @@ the next worker boot rather than the next request.
 
 ### HTTP Endpoints
 
+Curated operator view of the main surfaces. **`openapi.yaml` is the exhaustive
+list** — its `paths` are a machine-checked bijection with the composed route
+registry (`OpenapiSpecCurrencyTest`), including each route's exact middleware
+chain (`x-phlix-middleware`). A route missing below is documentation debt, not
+absence; a route missing from `openapi.yaml` turns CI red.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
@@ -1130,6 +1149,22 @@ the next worker boot rather than the next request.
 | DELETE | `/api/v1/collections/{id}/items/{mediaItemId}` | Remove one item — same gate (`:2214`) |
 | POST | `/api/v1/collections/{id}/bulk-add` | Add many items — body `{media_item_ids: string[] (required, non-empty)}` → `{message, added_count}`; `400` missing/empty; owner-or-admin gate (`:2217`) |
 | POST | `/api/v1/collections/{id}/refresh` | Re-evaluate a **smart** collection (one carrying `smart_playlist_id`) against its playlist rules → `200 {message:"Smart collection refreshed"}`; `400` "Collection is not a smart collection" on a plain row; owner-or-admin (`:2218`) |
+| POST | `/api/v1/libraries` | Create a library — body `{name: string (required), type: movie\|series\|music\|audiobook\|photo\|book\|video (required), paths: string[] (required, non-empty), options?, series_per_directory?, metadata_priority?}`; each path is stat-checked before anything reaches the DB; `400` on missing/invalid fields (`valid_types` echoed for a bad type) — admin (enforced in-handler, not route-level middleware) |
+| GET/PUT/DELETE | `/api/v1/libraries/{id}` | Read / partial-update / remove one library (update re-validates submitted `paths` through the same gate as create) — admin (in-handler) |
+| POST | `/api/v1/libraries/{id}/scan` · `/rescan` · `/refresh-metadata` · `/match-metadata` | Queue the add-library initial scan / a full rescan / a metadata re-fetch / a metadata re-match — admin (in-handler); progress via `GET /api/v1/libraries/{id}/scan-history` · `/scan-status` |
+| POST | `/api/v1/libraries/{id}/clear-artwork` · `/clear-metadata` · `/prune` · `/regenerate-assets` · `/delete-all` | Library maintenance operations (drop cached artwork / drop metadata / prune vanished files / rebuild derived assets / remove all items) — admin (in-handler) |
+| GET | `/api/v1/airplay/devices` · `/api/v1/cast/devices` · `/api/v1/roku/devices` · `/api/v1/dlna/renderers` | Enumerate reachable cast targets per protocol — auth required (`AuthMiddleware`; airplay/cast/roku additionally `CastingEnabledMiddleware`) |
+| GET/POST | `/api/v1/airplay/devices/{id}/status` · `/stream` · `/pause` · `/resume` · `/stop` | AirPlay device state and playback control — auth + `CastingEnabledMiddleware` |
+| GET/POST | `/api/v1/cast/devices/{id}/status` · `/cast` · `/play` · `/pause` · `/seek` · `/stop` | Chromecast device state and playback control — auth + `CastingEnabledMiddleware` |
+| GET/POST | `/api/v1/roku/devices/{id}/status` · `/send` · `/launch/{channelId}` · `/key/{keyName}` | Roku device state, key/EPIT send, channel launch — auth + `CastingEnabledMiddleware` |
+| GET/POST | `/api/v1/dlna/renderers/{id}/status` · `/play` · `/pause` · `/seek` · `/stop` | DLNA/UPnP renderer state and transport control — auth required |
+| POST | `/api/v1/auth/quick-connect/initiate` | Start a TV quick-connect pairing (returns the short code and its polling URL) — public, rate-limited |
+| GET | `/api/v1/auth/quick-connect/{code}/status` | The TV's poll endpoint until a signed-in device approves the pairing — public, rate-limited |
+| POST | `/api/v1/auth/quick-connect/{code}/approve` | An authenticated device approves a pending pairing and binds it to its account — auth required |
+| POST | `/api/v1/auth/quick-connect/{code}/token` | The TV redeems an approved pairing for a token pair — public, one-shot |
+| POST | `/api/v1/auth/hub-token` | Exchange a hub-issued JWT (`{hub_token}`) for a server session token (`{server_session_token}`) — the backward-compatibility path for clients that do not speak hub JWTs; `503` `hub.not_enrolled`, `400` `hub.token_required`, `401` `hub.jwt_invalid` |
+| GET | `/opds/v1.2` · `/opds/v1.2/libraries` · `/opds/v1.2/libraries/{id}` · `/opds/v1.2/books/{id}/cover` · `/opds/v1.2/books/{id}/download` | OPDS 1.2 catalog of the book libraries for e-readers — `SignedUrlMiddleware`: access rides a signed URL, not a bearer header |
+| GET | `/api/v1/admin/services/{trakt,lastfm}/status` | Per-provider link/quota status as the admin panel sees it — admin-only (`POST /api/v1/admin/services/{trakt,lastfm}/disconnect` unlinks; the user-side connect flows are `GET /api/v1/oauth/{trakt,lastfm}` with `GET .../callback`) |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only. A write-set touching the five `auth.<method>.enabled` toggles is guard-checked first: refused transitions answer `422` + machine `reason` and persist **nothing** (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |
@@ -1148,6 +1183,7 @@ the next worker boot rather than the next request.
 | GET | `/auth/identities` | List the current user's linked external identities — auth required |
 | GET | `/auth/identities/link/oidc` · `/auth/identities/link/github` | Start a verified OAuth link onto the current account — auth required |
 | POST | `/auth/identities/link/ldap` | Link an LDAP identity via a live bind (body `{username, password}`) — auth required |
+| POST | `/auth/identities/link/hub` | Link a hub identity from a hub JWT (body `{hub_token}`) verified against the enrolled hub — auth required; `503` `hub.not_enrolled` when this server has no hub enrollment, `400` `hub.token_required` on a missing token, `401` `hub.jwt_invalid` on a bad/expired one |
 | DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours, `409 last_sign_in_method` if it is your last) — auth required |
 | GET | `/api/v1/admin/auth-providers` | List registered auth providers — admin-only |
 | POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409 not_configured` if it has no saved config). `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
@@ -1471,6 +1507,17 @@ php bin/phlix backup:list                          # table of stored backups, ne
 ```
 
 `php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service, and both bootstrap the managed env file the same way — each requires `scripts/bootstrap_env.php` right after the Composer autoloader (default `/etc/phlix/env`, override with `PHLIX_ENV_FILE`; already-set variables are never clobbered), so on an install.sh-managed box neither command needs `DB_PASSWORD` exported by hand (M27). Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
+
+**Numbering law.** Migration files are `NNN_snake_case_description.sql` with a
+zero-padded three-digit prefix; the runner discovers them with `glob() + sort()`
+— plain lexicographic order, which equals numeric order at that fixed width
+(`MigrationRunner::discoverMigrationFiles()` mirrors the script's behavior). **Gaps are
+legal and historical** — a retired number is never reused, new work takes the
+next free one (the current tree has real gaps, e.g. `016`, `099`), and one
+legacy name deviates by design: `012a_livetv_recordings.sql` sorts between `012`
+and `013`. The `cleanup_NNN.php` files are one-shot data cleanups, not schema
+migrations. What every shipped table is for, and which migration creates it, is
+catalogued in [docs/data-model.md](docs/data-model.md).
 
 **Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 

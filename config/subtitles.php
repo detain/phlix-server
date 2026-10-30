@@ -9,6 +9,8 @@
  * @since 0.11.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     'enabled' => true,
 
@@ -35,7 +37,7 @@ return [
     //
     // Operator-overridable via SUBTITLE_STORAGE_PATH so self-hosted installs can
     // point it at a larger/faster volume; the directory is created on demand.
-    'storage_path' => getenv('SUBTITLE_STORAGE_PATH') ?: '/var/subtitles',
+    'storage_path' => EnvConfig::text('SUBTITLE_STORAGE_PATH', '/var/subtitles'),
 
     // subtitles.provider_priority — ordered list of subtitle SOURCE names
     // (plugin `SubtitleSourceInterface::getName()` values) the fetch pipeline

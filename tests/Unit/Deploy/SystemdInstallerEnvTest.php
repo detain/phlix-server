@@ -327,6 +327,11 @@ final class SystemdInstallerEnvTest extends TestCase
             if (preg_match_all("/getenv\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]/", $text, $g) > 0) {
                 $readers = array_merge($readers, $g[1]);
             }
+            // The typed env reader (M-SERVER-34) is a read too: an EnvConfig::
+            // call naming the key literal is how config/ now consumes the env.
+            if (preg_match_all("/EnvConfig::(?:integer|text|nullableText)\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]/", $text, $g) > 0) {
+                $readers = array_merge($readers, $g[1]);
+            }
             if (preg_match_all('/\$_ENV\[\s*[\x27"]([A-Z][A-Z0-9_]*)[\x27"]/', $text, $g) > 0) {
                 $readers = array_merge($readers, $g[1]);
             }

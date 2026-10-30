@@ -5,9 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+House discipline this file maintains (established by review W-min90/91/92):
+
+- `## [Unreleased]` carries **one section per type** (`### Added`, `### Changed`,
+  `### Removed`, `### Fixed`, `### Security`) — a batch PREPENDS its entries under
+  the matching heading instead of dragging in a duplicate heading set. The single
+  auxiliary section `### Known gaps (documented, NOT fixed)` is a deliberate
+  exception: it lists what is NOT fixed and must never fold into `### Fixed`.
+- Entry leads open with the user-visible sentence; internal IDs (step numbers,
+  review-ticket labels) trail the lead, never replace it.
+- Within a type, entries are newest-first. Dated release sections below are
+  verbatim history: corrections are disclosed in a newer entry (or an italic note
+  like the `SV-*` / missing-`1.0.0` ones in place), never by rewriting content.
+- Sections whose heading is an internal track-milestone label (`## [SV-<n>]`) are
+  not SemVer releases; they sit in date position and are annotated, not relabeled.
+
 ## [Unreleased]
 
 ### Fixed
+
+- **`RATE_LIMIT_*_MAX=0` finally means deny: config env reads centralize on a typed reader that preserves the literal "0", plus config/changelog/haproxy/README doc-truth passes (server minors batch W-min97: 8 cured).**
+  - **M-SERVER-34 (cured):** new `src/Common/Env/EnvConfig.php` (`integer`/`text`/`nullableText`) centralizes the numeric- and string-knob env reads across 11 `config/*.php` files — unset and empty-string fall back to the default, but the literal `"0"` is PRESERVED, so `RATE_LIMIT_<surface>_MAX=0` (deny-all operator intent) no longer silently reverts to the permissive default. Boolean `filter_var` sites were left in their original `getenv() ?:` form per reviewer verdict (the ask is the numeric knobs; a blanket boolean rewrite would have changed security-adjacent posture on e.g. `PHLIX_RELAY_TLS_VERIFY=0`). 13 unit tests in `EnvConfigTest` pin the `"0"`-survival cure red-then-green.
+  - **M-SERVER-28 (cured):** `docker/README.md` said the boot-smoke gate "makes 11 assertions"; the script's `EXPECTED_CHECKS` list is 20 — corrected, with a pointer naming `EXPECTED_CHECKS` as the authoritative list.
+  - **M-SERVER-56 (cured):** the README environment-variable census gained the `PHLIX_DATABASE_*` alias family row (compose/helm set it; `docker-entrypoint.sh` maps it to the bare `DB_*` the PHP runtime actually reads) that was identical to the `DB_*` story yet absent from the table.
+  - **M-SERVER-74 (cured):** `deploy/haproxy.cfg` binds the WS health-check frontend to `127.0.0.1:8098` (was `*:8098`, silently proxying external traffic straight to the WS worker past the firewall posture) and the stats block gained a one-line warning that `stats admin if TRUE` is unauthenticated runtime control — keep it loopback-bound.
+  - **M-SERVER-90 (cured):** `## [Unreleased]` repeated `### Fixed` 17×, `### Added` 12×, `### Changed` 10×, `### Removed` 5×, `### Security` 4× — the batch closeout fold merged every type into ONE section (multiset-verified: all 7,333 content lines preserved, zero dropped); the `### Fixed (live production batch)` variant was folded into `### Fixed` with an in-place provenance note, and the load-bearing `### Known gaps (documented, NOT fixed)` qualifier was retained so it never reads as a fixes section.
+  - **M-SERVER-91 (cured):** the `[SV-0.2]` section (an internal track-milestone label sitting in the SemVer sequence) and the missing-`[1.0.0]` story each got a one-line in-place note at their headings rather than a relabel — history stays verbatim per house rule.
+  - **M-SERVER-92 (cured):** the two cited commit-shorthand leads (the deny-all cap pin and the SRV-HYGIENE batch) are re-led with the user-visible sentence with IDs demoted to a trailing parenthetical, and the CHANGELOG preamble now states the lead/ordering/fold discipline going forward.
+  - **M-SERVER-97 (cured):** the ~145-line skip-set deep-contract chapter moved out of the operator README into `docs/dev/skipped-test-names.md` (its proper home); the README keeps a 5-line summary pointing there. The chapter's self-contradictory limit tally ("two closed / four remain" vs "three closed / three open") is corrected to the script header's canonical statement (KNOWN LIMITS 1–3 closed by S352, 4–6 open, plus limit 2's refusal side-effect), each remaining bullet tagged with its KNOWN LIMIT number.
 
 - **Admin settings type errors become human-readable sentences, and theming/CSP/endpoint docs are re-cured to shipped truth (server minors batch W-min96: 6 cured, 1 stale-verified, 1 contract-blocked).**
   - **M-SERVER-10 (cured):** the admin settings type-mismatch message was machine-only (`Expected type bool.`). It now names the expected and received value in operator terms via `AdminSettingsController::typeMismatchMessage()` (`Expected a value of type true/false — got number.`); the `MediaItemController` JSON-object body error and the `LibraryController` `autoCollections` hint are reworded to the same human register. Two pin tests rotated with the copy (`AdminSettingsSegmentFormatTest`, `AdminSettingsRealSchemaPutTest`). The `PluginAdminController` twin `sprintf` was left untouched — it is outside this batch evidence set (disclosed follow-up).
@@ -135,154 +160,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   verified-present reference list, and the plans bullet rewritten to the retired-truth
   wording. Docs-only: no gate, config, or code moved (no test pins CLAUDE.md claims — the
   absence is disclosed in the lane fixlog).
-
-### Added
-
-- **The reset-password recovery story is now fully shipped-truth per leg, and the
-  two structurally toothless pins got real teeth (review server__seceng
-  M-SERVER-33 r4):** the r2 paragraph had conflated the two refusal legs into one
-  false sentence ("login and refresh are refused by
-  `PasswordChangeRequiredException` … bare 500"). The truth is per-leg: the
-  password-login leg really throws `PasswordChangeRequiredException`, which no
-  HTTP boundary maps, so the Workerman last-resort catch answers a bare `500
-  Internal Server Error` and the error log names the class; the refresh leg
-  throws a plain `InvalidArgumentException` that `AuthController::refresh`
-  catches, answering `401` + `{error}` with no code field. The blanket refusal
-  was also half-false: the latch gates the password path only —
-  `WebAuthnController::finishAuthentication` (WebAuthn is default-enabled in
-  `config/auth.php`) and `AuthManager::loginWithProvider` mint sessions without
-  consulting `must_change_password` — and the endpoint row, recovery paragraph
-  and handler docblock now scope the refusal to it and disclose the bypass. The
-  CLI row's "hash only" understatement is cured too: `UserRepository::update`
-  stamps `tokens_not_valid_after = NOW()` on every password write, revoking
-  live sessions. Test-side (`PasswordResetRecoveryReadmeTest`, 4 tests,
-  13→32 assertions measured): the refusal pins are now per-sentence leg-scoped
-  (the conflation sentence reddens — r2's probe-B install was green), and the
-  `getDocComment()` pin hunting 'reset-password form' — a phrase that ever lived
-  only in the method body — was replaced by a getStartLine/getEndLine
-  docblock+body scrape pinning the fiction phrases out and the r2-cured truth
-  phrases in, on their actual planes. Mutation battery N-R1..N-R5 each reddened
-  exactly its named arm and re-greened on revert. Docs/comments/tests only:
-  zero behavior change, zero new wire codes (registry md5 40c1da48 held);
-  census `EXPECTED_PHP_FILES` stays 1995 unmodified — the sibling M38 rung
-  rotated 1994→1995 at my base, and this lane carries zero PHP-file delta. The
-  WsHandshake CI race r2's close-record flagged was already cured at the base by
-  05f90d60 (parity matrix builds liveness state at runtime).
-
-- **License metadata contradicted itself inside single files; every carrier now
-  tells the one truth the repo ships — MPL-2.0 (review server__writer
-  M-SERVER-44):** `composer.json:5` declares `MPL-2.0`, `LICENSE` carries the
-  verbatim Mozilla Public License 2.0 text, the README license section explains
-  the per-file weak-copyleft posture, and `TRADEMARK.md` is built on it — yet
-  881 PHP file/class header lines claimed `@license MIT` (boilerplate emitted
-  by `scripts/add-headers.php`, whose template still seeded the false tag) and
-  8 of those same files additionally carried a third, mutually exclusive
-  `@license Proprietary` + `@copyright 2024 Phlix Media Server` class-docblock
-  block with no supporting evidence anywhere. Metadata-only cure: the header
-  sweep rewrites all 881 claims to the canonical ` * @license   MPL-2.0`
-  (also folding the 14 non-canonical single-space variants into it), the 8
-  false `Proprietary`/6 stale 2024-copyright lines are deleted from the second
-  docblocks (informative `@author`/`@see`/`@package` members kept), and
-  `scripts/add-headers.php`'s template now seeds `MPL-2.0` so the false claim
-  cannot regrow. Deliberately untouched as truthful self-consistent claims of
-  *other* works: the vendored `examples/plugins/phlix-plugin-sample-theme/**`
-  (MIT, matching the plugin/theme estate family), the
-  `tests/Fixtures/Plugins/fixture-plugin/composer.json` `"proprietary"` value
-  (installer-parser test input, not a license statement about this code), and
-  npm dependency licenses in `web-ui/package-lock.json`/built assets.
-  `@copyright 2026 Joe Huss <detain@interserver.net>` attribution held
-  (matches estate authorship). Zero behavior change: 881 header lines flipped,
-  14 lines deleted, one script template string; census `EXPECTED_PHP_FILES`
-  untouched (no files added or removed).
-
-- **The admin reset-password recovery story is told as shipped truth (review
-  server__seceng M-SERVER-33):** the README documented
-  `POST /api/v1/admin/users/{id}/reset-password` as "(returns new password)"
-  while the shipped handler stores a hashed reset token, sets
-  `must_change_password`, revokes the account's sessions and answers `{message}`
-  only — no new password, and no shipped surface delivers or consumes the
-  token. The cure is docs-only: the endpoint table row, the CLI-table caveat
-  (`user:reset-password` writes the password hash but never lifts the latch)
-  and a new "Bad days" recovery entry (two steps: `php bin/phlix
-  user:reset-password` + the direct `UPDATE users SET must_change_password = 0`
-  write — the only shipped clear path) now tell the truth, and the
-  `AdminUserController`/`AuthManager` docblock fictions ("generate a new
-  password", "reset-password form", "via the reset-token flow") are cured
-  comment-only — zero behavior change, zero new wire codes (registry md5
-  40c1da48 held). The r1 draft recovery sentence claimed the refusal answers a
-  `403` with a stable code; the r2 runtime trace corrected that too:
-  `PasswordChangeRequiredException` (a RuntimeException) has no catch arm
-  anywhere in src/, so the served Workerman path answers a bare `500 Internal
-  Server Error` while the HTTP error log names the exception class — exactly
-  what the README now says, with the code kept out of the docs until a real
-  emitter ships (estate riders R1-R3). New
-  `tests/Unit/Admin/PasswordResetRecoveryReadmeTest.php` (4 tests/13
-  assertions, measured) pins every load-bearing string runtime-derived from
-  the enforcing code — including the anti-fiction pin that reddens if the
-  unshipped wire code ever re-enters the README. Census
-  `EXPECTED_PHP_FILES` 1993→1994, measured from the phpunit red.
-
-- **The 34 wire success codes openapi.yaml never told the truth about are corrected to
-  shipped code, and the spec-currency gate gains a response-code leg (review
-  server__fedev M24):** `OpenapiSpecCurrencyTest` pinned path/method/middleware bijection
-  only, so response-status drift was structurally invisible — and 34 operations had it:
-  14 creates emit `->status(201)` (sessions, libraries, collections/playlists, profiles,
-  profile schedules+tags incl. their admin-alias registrations, users, webhooks, plugin
-  install) while the spec declared 200; 10 async-job enqueues (the nine
-  `LibraryController` job endpoints + `POST /api/v1/admin/updates/check`) emit
-  `->status(202)` with the `{job_id,status}` body their docblocks promise, declared 200;
-  the two webhook deletes emit bare `->status(204)`, declared 200-WITH-a-body; and all
-  eight OAuth endpoints (lastfm/trakt/github/oidc authorize + callback) 302-redirect with
-  a `Location` header, declared as JSON 200 that was never returned. The cure is
-  docs-only — the spec follows shipped truth (contract law: no runtime status line moved,
-  no new wire codes, registry untouched). Adjudicated NOT-drift: the `/auth/register` and
-  `/auth/login` browser aliases keep their `[302, 429]` declarations —
-  `AuthController::isBrowserRequest()` (src/Server/Http/Controllers/AuthController.php:497)
-  hard-routes every `/auth/*` request to the redirect contract, so the API-path
-  201/202/200 JSON emitters are unreachable there and the aliases' existing prose is
-  truthful. `OpenapiSpecCurrencyTest` grows from 4 tests/10261 assertions to 6/10267
-  (measured): the 34-row adjudicated table asserts declared code, ghost-200 ban,
-  204-bodyless, 302-Location-shape, and that the emitter still carries the literal
-  `->status(<code>)` (token presence, not a line pin — controller churn must not false-red
-  the spec gate), plus a planted-reversion red-proof following the file's existing
-  mutation pattern; both legs FAIL LOUD on the pre-fix spec (68 named problems = 34 ops ×
-  two laws). openapi.yaml +100/−110 lines.
-
-- **Auth-method lock-out guards get their documentation surface (review
-  server__pm M-SERVER-30):** the `422` refusals on `PUT /api/v1/admin/settings`
-  (auth-toggled write-sets) and `POST /api/v1/admin/auth-providers/{name}/disable`
-  have always carried a machine-readable `reason` token
-  (`all_methods_disabled` / `admin_lockout`, `AuthMethodLockoutException::REASON_*`)
-  — but nothing anywhere explained the rules, the tokens, or the recovery, so an
-  admin hitting the guard mid-workflow met an intentional safety behavior shipped
-  as a mystery (grep of `admin_lockout|methods_all_disabled` across README.md and
-  `docs/` was zero at the parent). Ships: a README `### Auth-method lock-out
-  guards` section (five toggles, R1/R2, reason → what-to-do table, the
-  sign-in-factor-vs-account-creation residual, the WebAuthn list/delete escape
-  hatch, the `auth.methods_all_disabled_fallback` posture); an API-Reference
-  `**Auth-method lock-out guard (422).**` error-meaning paragraph in the
-  Rate-limiting idiom, with both guarded endpoint rows amended to anchor it; a
-  recovery leg in "Bad days: recovery from the CLI" (a refusal persists nothing —
-  the only reachable locked state is a bypass write, re-opened with the concrete
-  `UPDATE server_settings SET setting_value = '1' WHERE setting_key =
-  'auth.password.enabled';` and taken live on the next decision, no restart); and
-  `docs/dev/AUTH_METHOD_LOCKOUT.md` for integrators (envelope shapes, the B2
-  `FOR UPDATE` serialization law, absent-key semantics, fail-closed 500 siblings,
-  accepted boundaries). New pin
-  `tests/Unit/Admin/AuthMethodLockoutReadmeTest.php` (5 tests/19 assertions,
-  red-on-parent measured 5F, token-drift mutation reddens exactly 1): every
-  documented token/key/event string is derived at runtime from
-  `AuthMethodLockoutException`, `AuthMethodPolicy::FALLBACK_EVENT`,
-  `METHODS`/`settingsKey()` and the REASON_* constant set is asserted total.
-  Census `EXPECTED_PHP_FILES` re-pinned 1990→1991 from the measured red (+1 — the
-  new test file; staircase line carries attribution). Docs only: no new wire
-  codes, no behavior or envelope change — the guard family (`AuthMethodPolicyTest`,
-  `AdminSettingsControllerAuth*`, `AuthProviderControllerDisableGuardTest`,
-  `AuthManagerAuthMethodGateTest`) stayed green UNMODIFIED (61 tests/164
-  assertions targeted). phpcs PSR12 + phpcs-tests.xml exit 0 on both touched test
-  files; phpstan (tests config) clean.
-
-### Fixed
 
 - **The README's restart-semantics prose finally puts TRUSTED_PROXIES in one
   camp (review server__writer M-SERVER-45):** "What requires a restart" listed
@@ -1407,7 +1284,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `downloadToTemp` returned past its `tempnam` without unlinking it, which
   reddened the S439 zero-residue census via the new tests — the throw path
   now unlinks before propagating, exception byte-identical.
-- **Review-fix lane (2026-10-15) — deny-all cap pin de-self-referenced:**
+- **The deny-all fallback pin no longer grades itself against its own source — it asserts the literal fail-closed shape (Review-fix lane, 2026-10-15):**
   `ApplicationIndexBucketsFailClosedTest` verified the broken-gate fallback
   by comparing captured params against `RatingGate::denyAll()`'s own output,
   so a future flip of `allowUnrated` INSIDE `denyAll()` would have kept the
@@ -1415,88 +1292,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   the literal fail-closed shape (`['__phlix_no_user__']`, `allowUnrated =>
   false`) and keeps a separate SSOT-linkage assertion against `denyAll()`
   (mutation-proven: flipping `denyAll` internally reddens exactly this test).
-
-### Added
-
-- **SRV-OPS remediation (2026-10-14 review family) — R14-09 stdout log
-  sink + R3-08 `PHLIX_LOG_LEVEL` wired:** application logs previously
-  reached only the repo's `.logs/*.log`, invisible to `docker logs` and
-  `journalctl` unless someone tailed files. `config/logger.php` now ships a
-  `stdout` handler (Monolog stream → `php://stdout`, all channels, INFO
-  floor) gated OFF by default behind truthy `PHLIX_LOG_STDOUT`
-  (`LogChannels::LOG_STDOUT_ENV`) — enabling it ADDS the sink, the file
-  handlers keep working unchanged, unset means byte-identical routing
-  (`LoggerConfigPolicyTest`'s S130 size-bound law amended to exempt only a
-  `php://stdout` stream). And the long-documented-but-never-read
-  `PHLIX_LOG_LEVEL` (`LogChannels::LOG_LEVEL_ENV`) is now real:
-  `StructuredLogger::createHandler()` resolves every level-driven handler's
-  floor from the env name when set — PSR-3 vocabulary case-insensitive,
-  `warn` accepted — and fails SOFT on an unknown or empty value, leaving the
-  shipped per-handler levels (`file` info / `error` error / `events`+
-  `plugins` debug) in force. Read at logger construction ⇒ a
-  process-restart knob (README restart-semantics table). New
-  `LogEnvironmentKnobsTest` (8 tests: shipped shape, env-gated attach,
-  additive-sink proof, debug-loosens/error-quiets, case-insensitivity,
-  fail-soft typo, empty-is-unset).
-
-### Changed
-
-- **SRV-HYGIENE micro-lane (2026-10-14 review family) — R18-03/07/09/10/16/17,
-  R15-23/29, and three dead-code retirements:**
-  - R18-03: `declare(strict_types=1)` added to the last seven files missing it
-    (`AuditLogger` + the six `src/Dlna/` classes); `src/` is now 100% strict.
-    No coercion fallout — Dlna/Common/Integration filters all green.
-  - R18-07: fifteen verified-dead classes deleted (RemoteAirPlayClient,
-    DebugLogger, RecordingHooksRunner + RecordingHooks, HlsRelaySessionFactory,
-    Dvbt/HdHomeRun tuner driver factories, Audiobook/Book/Photo LibraryType,
-    the two Hwaccel exceptions, TranscodeProfile, SessionOidcStateStore,
-    Webhooks PluginRegistry). `MusicLibraryManager` was KEPT — it gained a live
-    `new` at `MusicLibraryType` (plugin LibraryType contract) after the review.
-    Census `EXPECTED_PHP_FILES` re-pinned from the measured red.
-  - R18-09: `SmartRuleVocabulary` moved `Phlix\Collection\` → `Phlix\Collections\`
-    (PSR-4 dir/namespace agreement); sole consumer import updated; twin dir gone.
-  - R18-10: `src/Server/WebSocket/Events.php` no-op compat shim deleted (its
-    phpstan keep-reason was retired at S343; `excludePaths` stays `[]`).
-  - R18-16: loose compares tightened — RatingGate admin flag now uses the
-    estate `!empty()` idiom (with a 5-case pin), PhotoScanner EXIF rationals
-    parse both halves then compare strictly (string '0' denominators no longer
-    produce INF), and MediaScanner's JSON-round-trip array `!=` is annotated
-    as intentionally order-insensitive rather than blindly tightened.
-  - R18-17: `RelayConfig::fromEnv()`'s ten `getenv(...) ?: default` sites
-    replaced by typed `envString`/`envInt`/`envFloat` helpers — unset and
-    empty-string are both explicitly "not provided", '0' keeps its old falsy
-    fallback, garbage strings keep the old cast semantics; 5 new pin tests.
-  - TimeSync vestiges retired: the standalone :8098 worker died in 22ce232c;
-    `DEFAULT_PORT`, the `$host`/`$port` ctor params and `getHost()`/`getPort()`
-    (zero production readers) removed with a tombstone docblock.
-  - Helm phlix chart: `PHLIX_HUB_ENROLLMENT_JWT` env + `hub-enrollment-jwt`
-    secret key + `hub.enrollmentJwt`/`hub_pairing_code` values dropped — zero
-    PHP readers; enrollment is file-based (`hub-enrollment.json`).
-  - R15-23: success-message taxonomy — one canonical string per operation
-    ('Settings updated.', 'PIN cleared successfully', 'Profile deleted
-    successfully'); one admin test pin re-pinned with attribution.
-    R15-29: newsletter tpl subject defaults aligned to the generator's
-    'Your Phlix Weekly Watch Report'.
-  - Foreign-gate repair: `WebPortalRouterParentalEnforcementTest` updated to
-    RecommendationService's post-R19-12 single-arg ctor — `phpstan
-    -c phpstan-tests.neon` fully green again.
-
-- **SRV-OPS remediation (2026-10-14 review family) — R14-05 README env
-  census + R14-20 restart semantics:** the README's "Environment variables"
-  section claimed six knobs; the runtime actually reads ~100. Replaced it
-  with the definitive grep-censused inventory (every `getenv()`/`$_ENV` read
-  in `src/`, `config/`, `start.php`, `bin/`, `scripts/`), grouped by
-  subsystem, each row carrying Default / Secret? / Restart class / consuming
-  file. Honest truth markings included: `PHLIX_MIGRATIONS_STRICT` and
-  `PHLIX_SECRET_KEY` are docker-entrypoint shell-side names, `PHLIX_HUB_ENROLLMENT_TOKEN`
-  / `PHLIX_PUBLIC_URL` / `PHLIX_HWACCEL` have zero read sites in this repo,
-  and the `config/playback.php`/`config/port-forward.php` knobs are
-  `$_ENV`-only (inert under the common `variables_order = "GPCS"`). New
-  "What requires a restart" subsection classifies every knob as boot-read,
-  per-process-memoized, or live. Config example port corrected 8080 → 8096
-  (truth again post-R14-06).
-
-### Fixed
 
 - **SRV-SEC remediation (2026-10-14 review family) — R20-01/R20-02/R20-03/R20-05
   outbound-HTTP and exposure fixes + R5-03 webhook vocabulary unification:**
@@ -1772,7 +1567,2476 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   LAST_INSERT_ID trickery would trade one indexed point-read for fragile
   session state.
 
+- **`updatePlaybackPreferences()` now maps a rejected `updateSettings()` to the
+  same flat `{error}` 400 envelope as `PUT /api/v1/users/me/settings`
+  (defense-in-depth, 2026-10-14).** The read-modify-write handler had no
+  `InvalidArgumentException` catch: it is safe today only because its
+  `unset($settings['theme'])` guard strips the only field that validates, but
+  any validation a future lane adds to `UserRepository::updateSettings()`
+  would otherwise turn stored garbage into an uncaught 500 on every unrelated
+  crossfade save. The catch is folded in at the call site (the repo idiom the
+  settings route already uses; no new error codes). Pinned by a new
+  `WebPortalRouterSettingsTest` case injecting the throw at the repository
+  seam; the pre-existing legacy-RMW test keeps pinning the guard itself.
+
+- **`PUT /api/v1/users/me/settings` theme writes now validate against LIVE theme
+  truth — the pre-S85 fossil whitelist that silently dropped EVERY theme while
+  answering 200 is retired, and `UserRepository` consults the container
+  `ThemeSourceRegistry` singleton (2026-10-14).** The theme branch inside
+  `updateSettings()` accepted only `'phlix-light'/'phlix-dark'/'phlix-amoled'/
+  'phlix-contrast'` — the id namespace from before S85's registry theming — while
+  live ids are `BuiltInThemes::IDS` (`nocturne`/`daylight`/`midnight`) ∪ the
+  plugin ids enabled into `ThemeSourceRegistry`. The intersection is EMPTY, so no
+  theme PUT ever reached `user_profiles.active_theme_id` yet the endpoint kept
+  returning 200 "Settings updated" (no test covered the branch, so CI never saw
+  it). Now: a submitted `theme` is parsed BEFORE any write (a rejected payload
+  changes zero rows) and must be a string naming a built-in or a registry-
+  registered theme; unknown/non-string values throw `InvalidArgumentException`,
+  which the router maps to the endpoint's existing flat `{error}` 400 envelope —
+  no new error codes (contract law). Wiring: `UserRepository::__construct` gains
+  `?ThemeSourceRegistry $themeSources = null`; because PHP-DI skips optional ctor
+  params during autowiring, `AuthServicesProvider` names it explicitly —
+  `constructorParameter('themeSources', get(ThemeSourceRegistry::class))` —
+  keeping the singleton law (the same instance `PluginLoader` enables into and
+  `ThemesController` lists from). The unwired fallback accepts built-ins only.
+  Read-modify-write guard: `updatePlaybackPreferences()` re-passes the
+  `getSettings()` read-back — which injects the STORED theme, possibly a legacy
+  id — so it now drops `theme` before the re-pass: a legacy stored id can never
+  400 an unrelated crossfade save, and that endpoint never touches user_profiles
+  (pinned). INTENTIONAL behavior changes: fossil ids, unknown ids, and explicit
+  `"theme": null`/non-string values now 400 where they were previously ignored
+  with a 200 — a 200 from this endpoint no longer lies about a theme write.
+  Tests: `UserRepositorySettingsTest` +9 (built-in persists; plugin theme
+  persists through a real registry fixture; upsert→theme statement-order pin;
+  fossil/unknown/non-string throw with zero-write proofs; unwired-registry
+  plugin rejection; error message lists the built-in∪plugin id set) and
+  `WebPortalRouterSettingsTest` +3 (repo rejection → 400 echoing the message;
+  valid theme → 200; legacy-stored-theme crossfade save → 200 with zero
+  `UPDATE user_profiles`). Census rotations: `RequestDynamicPropertyCensus-
+  ExecutableTest` EXPECTED_DECLARED_READS 448→451 and EXPECTED_DECLARED_WRITES
+  1042→1051 — every delta is an inline `$request->userId`/`->body`/`->rawBody`
+  stamp in the three new router fixtures; measured from the phpunit red, not
+  predicted.
+- **Thumbnails, trickplay sprites and BIF frames no longer hard-abort on ffmpeg
+  ≥ 7.1 — every mjpeg/image2 output `FfmpegRunner` builds now carries
+  `-strict unofficial` (the CI BtbN n6.1.3 pin retires with it).**
+  User-visible impact: on any deployment running a modern distro ffmpeg (7.1+;
+  Ubuntu 26.04 ships 8.x), chapter thumbnails, poster extraction, trickplay
+  sprite sheets and Roku BIF frame passes died with exit 234 — "Non full-range
+  YUV is non-standard" — whenever an output flushed EMPTY, i.e. whenever a
+  requested `-ss` timestamp landed past EOF (short/variable-length media, a
+  chapter marker beyond a remux's duration). Worse, in the S-F19 batch path one
+  unreachable timestamp poisoned the whole command: reachable frames that were
+  already being written were discarded and the batch reported failure. Root
+  cause: JPEG is full-range YUV; from 7.1 the mjpeg encoder treats a
+  limited-range (yuv420p) frame as a fatal compliance violation instead of the
+  6.x/7.0-era warning, and an EMPTY output opens its encoder at the EOF flush
+  with exactly that default. `-strict unofficial` restores the pre-7.1 semantics
+  the S-F19 partial-success contract documents (exit 0, reachable frames
+  written, unreachable ones simply absent). Scope law: the flag is attached ONLY
+  to the four mjpeg/image2 output sites — single thumbnail
+  (`buildThumbnailCommand`, extracted for testability), thumbnail batch (per
+  output group), trickplay sprite (`buildTrickplaySpriteCommand`) and BIF frames
+  (`buildBifFramesCommand`) — never to HLS/segment/audio commands, so the
+  compliance relaxation cannot mask conformance problems in streaming encodes;
+  `FfmpegRunnerSegmentFormatTest`'s byte-identical literal pins stay green
+  UNMODIFIED as the structural proof. Tests: +5 argv-shape pins in
+  `FfmpegRunnerThumbnailBatchTest` (flag count/adjacency/placement laws per mjpeg
+  site + the negative half: segment and audio commands never contain `-strict`).
+  Measured 2026-10-08 with real binaries through the actual PHP code path:
+  pre-fix batch returns false with exit 234 on BtbN master (N-127252) and
+  7.1/8.x apt builds; post-fix exit 0 with frame_00000 written and frame_00001
+  absent, identical on 6.1.1/6.1.3 (flag inert there — no regression). CI: the
+  ubuntu-26.04 migration's interim `Install ffmpeg (pinned BtbN n6.1.3 static)`
+  workaround is retired in favour of the distro binary (the thumbnail suite now
+  runs against the ffmpeg real deployments ship). No new wire codes; no
+  migrations.
+
+- **`GET /livetv/recording/{id}/stream` now honours the parental rating cap (wave I close — the audit finding: the serve-time over-cap gate covered HLS/DASH jobs only; LiveTV streams bypassed it).**
+  A completed DVR recording is registered as a `media_items` row by `RecordingMediaRegistrar` and linked
+  back through `livetv_recordings.media_item_id` (migration 077), so the library rails already gate that
+  content: `show`/`getPlaybackInfo`/`getDownload` refuse over-cap items (S235 handler-side deny-all) and the
+  HLS/DASH byte paths re-check via `TranscodeFileServer::transcodeJobOverCap()`. The recording stream route
+  served the IDENTICAL `.ts` bytes from the recording id alone with no gate anywhere on the path — and the
+  recording uuid is not secret: the registered item's absolute `path` (`{storage}/{recordingId}.ts`) ships
+  in the member-facing item payload (`MediaItemShaper::shape()['path']`), so a capped member can derive the
+  bypass URL from any visible row, on top of the leaked/replayed signed-URL posture Finding 1b closed for
+  HLS. `LiveTvStreamController::streamRecording()` now runs the exact same predicate: the recording's linked
+  media id through `RatingGate::resolveFilterForSignedRequest()` (this route sits behind
+  `SignedUrlMiddleware` like `/hls`, so the S235 signature-only opt-out carries over unchanged — bare
+  signed fetches keep playing, pinned) and `isAllowed()`, refusing over-cap streams with a 404 whose body
+  is byte-identical to the existing not-found answer (no existence oracle). An UNLINKED recording
+  (in-progress capture, or a failed/zero-length completion the registrar never registered) has no library
+  counterpart to key on and stays ungated — the trait's stale-job pass-through posture.
+  `Recorder::mapRecording()` surfaces `media_item_id` (the `SELECT *` already carried it) so the gate reads
+  it without a second query. Deliberate non-change, documented in the controller: the timeshift routes
+  serve the live tuner's rolling window — session rows carry only `channel_id`, channels have no rating
+  concept, and `livetv_programs.rating` is ingest/display-only with zero gate consumers estate-wide — so
+  operator-configured lineups remain unrated-by-design; a profile-level channel restriction would be a NEW
+  concept (owner decision), not gate parity. Red-first proofs (outsider over-cap fetch served 200 pre-fix →
+  refused post-fix; admin/owner, within-cap, unlinked and anonymous-signed postures pinned green across the
+  flip) in `tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php`; the Application factory
+  wiring is guarded by a whole-line source pin in the same file (fa30b871 law: a trailing-optional param no
+  factory passes is a silent no-op). No new error codes, no route/middleware tuple moves; census
+  tripwires re-pinned from measured reds (files 1941→1942, declared reads 446→448, writes 1032→1033).
+
+  **Correction (2026-10-02, wave-I review) — the derivability claim above is
+  overstated, forward-only note (the shipped commit message is not rewritten).**
+  Capped surfaces filter over-cap rows by the active profile's cap BEFORE shaping
+  (the `ItemRepository` content-rating allowlist plus the S235 handler-side
+  denials), so a capped member is not handed the row whose `path` would leak the
+  recording uuid; registered recordings are additionally unrated-at-birth — the
+  registrar writes no `rating`/`official_rating` metadata, so `content_rating` is
+  NULL and only a deny-unrated cap filters them at all. The real pre-fix vectors
+  were signed-URL replay under the deliberate S235 signature-only opt-out,
+  shared-account profile-switch boundaries, and uuids learned via UNCAPPED
+  household surfaces (admin/uncapped payloads do ship `path`). The fix posture
+  stands unchanged — the serve-time re-check answers every session-bearing
+  request however the URL was learned; only the justification narrative is
+  corrected. A container-resolution wiring guard (`tests/Unit/Server/Core/`
+  `LiveTvStreamControllerWiringGuardTest.php`) now complements the whole-line
+  source pin: it resolves the production provider stack and fails on the null
+  gate that `optionalRatingGate()`'s catch would otherwise swallow silently.
+
+- **`PATCH /api/v1/media/{id}/metadata` now parses `metadata_json` against a closed allowlist at the HTTP boundary (scan residual F-08).**
+  The handler merged the user-supplied `metadata_json` object straight into the stored provider blob
+  unvalidated. Two exposures closed: (1) any authenticated user (the route is `AuthMiddleware`-only) could
+  plant `rating`/`official_rating` in the blob, which `ItemRepository::update()` materializes into the
+  `content_rating` COLUMN the parental gate reads — `{"rating":null}` nulled the column and leaked the item
+  into kids profiles; plus `canonical_key` (dedup identity), `source`/`streams` (ABR-ladder input),
+  poster/trailer/`theme_audio_url` (the last ships to clients un-sanitized at emit) and the matcher-identity
+  `external_ids` family were all user-writable. (2) `hydrateItem()` keeps `metadata_json` as the raw JSON
+  string and only the decoded array in `metadata`, so the old `is_array($item['metadata_json'])` merge base
+  collapsed to `[]` in production and every PATCH REPLACED the stored blob, clobbering provider metadata —
+  the merge base is now the decoded `metadata` slot. The patch is parsed, not validated: twelve
+  reader-evidenced descriptive keys (`summary`, `overview`, `tagline`, `episode_title`, `artist`, `album` —
+  strings; `year`, `runtime`, `season`, `episode` — non-negative ints; `genres`, `tags` — lists of ≤64
+  non-empty strings ≤255 bytes) are the only accepted top-level keys, each coerced to its declared shape;
+  unknown keys are REFUSED with 400 naming them (zero legitimate HTTP senders of `metadata_json` exist in
+  the estate — web-ui never PATCHes this route, phlix-ui's `updateMetadata` caller sends only `title`, and
+  the native clients never call it — so fail-loud costs nothing and a future legit key arrives in the same
+  change that reads it), as are non-object payloads, patches over 65536 serialized bytes (documented bound;
+  the column itself is MySQL `JSON`), nested object/array-of-array bombs and scalar-shape mismatches. The
+  allowlist guards the HTTP boundary ONLY — scanner, matcher and `MediaPosterController` keep writing the
+  full provider vocabulary through `ItemRepository::update()`, which stays permissive (pinned). Proofs in
+  `tests/Unit/Server/Http/Controllers/MediaItemControllerMetadataMergeTest.php`.
+
+- **`WebPortalRouter::isAdminUser()` now demands an ACTIVE admin (reviewer-flagged predicate alignment).**
+  The L-4 paths-redaction gate (and the `files` disclosure on media detail) resolved the caller via
+  `UserRepository::findById()` + `is_admin == 1` — a softer predicate than the repo-wide standard
+  `is_admin = 1 AND status = 'active'` that `AdminMiddleware::checkAccess()`/`isAdmin()` and the
+  daemon-twin `LibraryController` redaction enforce via `findAdminById()`. A disabled/pending/suspended
+  admin inside the token-revocation latency window therefore satisfied the disclosure gate while failing
+  the hard admin gate. On direct HTTP the window is ≤5 s (AuthManager re-checks account status per
+  request through its 5 s auth-state cache, failing closed — `AuthManagerRevocationCeilingTest`), and the
+  relay path was audited as the load-bearing consumer: the server trusts the hub-stamped relay principal
+  and never re-reads its own users table per relayed request. `isAdminUser()` now delegates to the same
+  shared seam (`findAdminById() !== null`), mirroring `AdminMiddleware` exactly (one indexed PK lookup,
+  same uncached cost the soft admin gate already pays). No caller needed "admin regardless of status" —
+  all three call sites are disclosure gates. Pins: `WebPortalRouterPathsRedactionTest` gains
+  disabled/pending/suspended × both library handlers (red-first: each leaked `paths` pre-fix), and the
+  fixture user-mock now mirrors `findAdminById`'s real SQL beside `findById` so both sides of the swap
+  stay faithful.
+
+- **The SPA `/app/library/scan` route is admin-gated (L-4 follow-up, layer 2 of 2).** L-4 stopped
+  shipping `paths` to non-admins on `/api/v1/libraries`, but the scan page still mounted for them:
+  the route in `web-ui/src/main.ts` carried no gate, and the page's `v-if="library.paths.length"`
+  turns a stripped payload into a render TypeError (`undefined.length`), not the clean degradation
+  the L-4 comment assumed. The route now declares `meta: { requiresAdmin: true }` — the exact key
+  `@phlix/ui`'s `authGuard` checks (`to.meta?.requiresAdmin === true`, v0.99.7 already honors it) —
+  so a logged-in non-admin is bounced to home before the page renders, and the anonymous flow goes
+  to login. `web-ui/tests/library-scan-route.test.ts` pins the meta against the LIVE
+  `buildAdminRoutes()` sibling shape, not a frozen string. The independent second layer —
+  `paths?: string[]` on the ui Library view-models + `?.` guards on every library-payload read site
+  — landed in phlix-ui 5c9cf4ed and rides the next tag cascade (the vendored v0.99.7 bundle needs
+  no rebuild for it). The committed `/app` bundle under `public/assets/app` is regenerated from the
+  gated `main.ts` (entry-hash cascade renames every lazy page chunk; byte-deterministic across
+  three consecutive local rebuilds on the CI-paired toolchain).
+- **Seven security-scan hygiene findings (L-3/L-4/L-5/L-6/L-7/L-8 + the M-3 twin).**
+  **L-3 — anonymous `GET /system/info` stops fingerprinting the runtime stack.** The
+  route carries NO middleware, and it used to answer `php_version` (`PHP_VERSION`)
+  plus `workerman_version` (`Workerman\Worker::VERSION`) beside `server`/`version` —
+  a free CVE-targeting hint to every internet scanner. The estate consumer sweep
+  found exactly ONE reader (`phlix-windows-client` `src/main/versionCheck.ts`,
+  re-targeted in 992c7f0) and it reads only the top-level `version`; the two extras
+  have ZERO consumers, so they are DROPPED outright rather than admin-gated (gating
+  keys nobody fetches adds surface, not safety). `openapi.yaml` declares the payload
+  `additionalProperties: true` with no properties — spec-compatible, no edit needed.
+  Pinned by `SystemInfoPayloadHygieneTest` (full production-container dispatch).
+  **L-4 — library `paths` (absolute filesystem roots) are admin-only.**
+  `LibraryController::index()/show()` and `WebPortalRouter::getLibraries()/getLibrary()`
+  returned the raw row — `paths` included — to any authenticated user, while the
+  sibling media surface has always admin-gated its raw-file `files` block. Consumers
+  of `paths` are exclusively admin surfaces (phlix-ui admin LibrariesPage +
+  api/admin client, console/mobile Admin screens; LibraryScanPage's admin-scoped
+  `v-if` degrades cleanly; roku/tizen/windows read it nowhere), so the key simply
+  stops shipping for non-admins — redaction runs on the local array copy, leaving
+  the LibraryManager process-static cache intact for the next admin. New side-effect-
+  free soft gate `AdminMiddleware::isAdmin()` (NOT `checkAccess()`, which would
+  audit every ordinary non-admin browse as a permission denial); WebPortalRouter
+  reuses its existing `isAdminUser()` predicate. Pinned by
+  `LibraryControllerPathsRedactionTest` + `WebPortalRouterPathsRedactionTest`.
+  **L-5 — the dead-wired `HubJwtMiddleware` is deleted.** Autowired in
+  `HubServicesProvider` but attached to NO route on any dispatch surface (estate-wide
+  grep, 2026-09-30), and its only output `$request->hubUser` was read by nothing — a
+  security mirage beside the live hub-auth path (AccountLinkController/HubTokenController
+  validate via `HubJwtValidator` directly). Class + DI registration + its 18-case test
+  removed (precedent: the `src/Plugin/` deletion b0007060); `Request::$hubUser` stays
+  as a census-pinned RESERVED declared slot with corrected prose. `hub.jwt_invalid`
+  remains emitted (and contracts-registered) from its live sites; the contracts
+  `errors.ts` JWT_INVALID cite's `HubJwtMiddleware.php:73` coordinate is retired in a
+  companion contracts-repo commit. Census re-pinned from red: files 1916→1920,
+  declared reads 423→422, writes 1014→1018.
+  **L-6 — Chromecast 500-handlers stop echoing `getMessage()`.** `stop()`, `seek()`
+  and the shared `controlSession()` (play/pause) returned cast-layer exception text
+  verbatim — which carries the receiver's LAN `host:port` ("Connection refused to
+  192.168.1.50:8009"). Now constant client messages ('Failed to stop/seek/play/pause
+  cast session') with the detail to the MEDIA log channel, per the d052b488
+  CastApiClient convention; `ChromecastControllerErrorHygieneTest` pins exactness
+  (assertSame on the constant + assertStringNotContainsString on the host + positive
+  controls so the throwing fixtures can't pass vacuously).
+  **L-7 — SecurityHeaders prose now tells the truth, and the caller-wins guards are
+  case-insensitive.** The class docblock claimed "script/style self-only" and "Base-uri
+  NONE" while the shipped policy carries `style-src 'self' 'unsafe-inline'` and
+  `base-uri 'self'` — the inline-style allowance is DELIBERATE (the SPA themes via
+  `el.style.setProperty()`, i.e. element style attributes), now documented as such;
+  `script-src` remains nonce-only. Separately, the "don't overwrite a caller-set
+  header" guards were case-sensitive `isset()` lookups over Response's exact-case
+  header map: a caller writing lowercase `content-security-policy` was missed and
+  decorate() emitted a SECOND CSP key — browsers enforce the UNION of duplicate
+  policies, silently overriding the caller's intent. Guards now scan with
+  `strcasecmp` (mirroring `Response::asHeadReply()`); pinned by
+  `SecurityHeadersCaseInsensitiveGuardTest` (RED 3/4 pre-fix).
+  **L-8 — `Router::dispatch()`'s six per-request `error_log('[DEBUG] …')` calls are
+  deleted.** Zero test dependencies (the only repo mention is IntegrationDbGuard's
+  comment citing this very hazard: PHPUnit dies on error_log stdout under stdout
+  capture — the ConnectionPool precedent 8e72825d). Gated dispatch ran this hot for
+  every request in production logs; deleting beats env-gating.
+  **M-3 twin — the pre-router direct-play fast path no longer skips stream limiting
+  on a missing `session_id`.** `PreRouterFastPaths::checkStreamLimit()` still carried
+  the middleware's pre-fix bail-out, so any `/media/{id}/stream` client that omitted
+  `session_id` dodged the per-profile concurrency cap before the router (and thus
+  StreamLimitMiddleware) ever ran. It now falls back to the SAME synthetic
+  `(profileId, deviceId)` bucket as the middleware — derivation extracted to the
+  single shared helper `StreamLimitMiddleware::syntheticSessionBucket()` so a device
+  crossing both paths occupies the identical slot; the documented no-device-name
+  pass-through is preserved. Pinned by `PreRouterFastPathsSyntheticSessionBucketTest`
+  (registration/stability/cap-bite/pass-through; RED 3/5 pre-fix).
+  No new error-code literals anywhere (all sites reuse registered codes or keep
+  their existing ones).
+
+- **Three security-scan findings (M-1/M-2/M-3, scan @9e765895).**
+  **M-1 — `POST /api/v1/music/scan` is now ADMIN-ONLY.** The handler walks an
+  operator-supplied ABSOLUTE path with synchronous filesystem I/O inside a
+  resident HTTP worker but sat behind bare `AuthMiddleware`, so any authenticated
+  user could stall a worker on an arbitrary tree. It moved into WebPortalRouter's
+  `AdminMiddleware` group, mirroring `LibraryController::scan`'s posture through the
+  same house gate (401 unauthenticated, 403 + permission-denied audit for non-admins,
+  enforced before the handler so a refusal touches zero disk); the route is now one of
+  the FOUR admin-collaborator-conditional registrations, so an unwired construction
+  fails closed to a 404 rather than degrading to auth-only (the S282 lesson). The
+  admin-inline blocking-IO exposure that remains is registered honestly as Exception 7
+  in `docs/dev/BLOCKING_IO_EXCEPTIONS.md`; a queue was rejected because none exists for
+  raw-path music scans today (out-of-scope new infra). `openapi.yaml` `x-phlix-middleware`
+  flipped to `[AdminMiddleware]`. Pinned by `tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`
+  + the `WebPortalRouterWirePathGuardTest`/`OpenapiSpecCurrencyTest` cascade.
+  **M-2 — trickplay + chapter-thumbnail asset rails now honor the file's own S235
+  rating invariant for IDENTIFIED requests.** `MediaItemController::getTrickplay()`
+  and `::getChapterThumbnail()` are registered PUBLIC but returned derived copies of
+  the media (frame-accurate sprites, chapter stills) with no cap check. A Bearer-carrying
+  request over the item's effective rating now gets the exact `show()` 404 (never 403)
+  before any chapter parsing or file I/O, via the new `identifiedRequestIsOverCap()`
+  helper; the DOCUMENTED anonymous posture ("public, no auth required") stays
+  byte-identical because that helper treats an empty user id as not-over-cap rather
+  than reusing `resolveRatingFilter()`'s handler-side deny-all. `realpath` containment on
+  the withFile path was assessed and skipped — the sole writer (`MediaAssetGenerationJob`)
+  only ever emits `<transcodeDir>/chapters/<itemId>/<index>.jpg`, so provenance is safe
+  and adding containment would need new DI plumbing (out of scope). Pinned in
+  `MediaItemControllerParentalTest`.
+  **M-3 — the stream limit no longer skips session-less authenticated streams.**
+  `StreamLimitMiddleware` returned `null` (never registered) when no `session_id`
+  was supplied, so any authenticated client could dodge the per-profile concurrency
+  cap by omitting it. It now falls back to a SYNTHETIC stable bucket
+  `synthetic:<sha256(profileId|deviceId)>` (deviceId already carries its UA-hash
+  fallback): the same device/profile always derives the same id, so its streams occupy
+  exactly one slot that rides the normal heartbeat + 60s stale-GC lifecycle and cannot
+  leak rows. Only a request with no device name at all still passes unregistered. No new
+  error-code literals — a full synthetic bucket hits the same 429 `stream.limit_exceeded`.
+  Pinned in `tests/Unit/Server/Http/Middleware/StreamLimitSyntheticSessionBucketTest.php`.
+
+- **The S60 CSP browser control no longer depends on task-queue luck (E2E flake, run
+  36645892753).** `Fmp4HlsThroughControllerE2ETest::testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy`
+  failed attempt 1 with `Failed asserting that an array contains 'media-src'` and went green on
+  rerun: `tests/Support/Browser/hls-playback-probe.mjs` serialized its report at the first poll
+  that observed `window.__probe.done`, but the browser dispatches the refusal's
+  `securitypolicyviolation` event as its own task, unordered against the hls.js error task that
+  latches `done` — on a loaded runner the violation landed after the snapshot and the control
+  reported "playback failed with no named violation" while the policy was biting exactly as
+  designed. `done` is now the START of a settle, not the end: while the caller's `--timeout`
+  budget runs, the probe keeps re-reading the page until `cspViolations` has been unchanged for
+  a 600 ms quiet window (a late violation restarts it; a policy that refuses nothing costs one
+  window; non-CSP runs never settle). Proven both directions — a synthetic 500 ms delivery delay
+  reddens the OLD loop deterministically with the exact CI signature and the fixed probe catches
+  the same delayed violation (`OK (27 assertions)`); commenting out the CSP header emission still
+  reddens the control via `assertFalse($probe['ok'])`, so the assertion genuinely still proves
+  the block. Test-infra only: no `src/`, and no assertion was weakened.
+
+- **`SyncPlayAuthMiddleware::redactTokenQuery()` now masks `token` query params case-insensitively
+  (bearer-law review residual).** Query-name case survives server-side — `parse_str` does NOT
+  lowercase keys, and Workerman's `Request::get('token')` is an exact-key lookup, so `?TOKEN=`
+  never populates the credential read and never authenticates the handshake. The exposure was
+  purely in the logs: the one mismatch-forensics call site (WebSocketServer's `onWebSocketConnect`
+  reject branch) writes the raw URI through `redactTokenQuery`, and a request carrying a live JWT
+  (valid against REST) under a wrong-case name beside a lowercase decoy `?token=` — the exact
+  half-migration shape that fires the mismatch — leaked that real credential past the
+  lowercase-only regex while only the decoy was masked. The pattern gains the `/i` flag on the
+  whole-name match, masking every token-named spelling in the logged URI regardless of case; the
+  cost is mild over-redaction of spellings the exact-key read would never treat as credentials,
+  which is the safe direction on a log-only path (over-redacting a log line is safe; leaking one
+  unmasked spelling is not). Near-miss names (`?mytoken=`, `?MYTOKEN=`) and non-token queries stay
+  byte-identical — pinned alongside the new upper/mixed-case and repeat-param proofs in
+  `tests/Unit/Server/WebSocket/WsAuthenticationTest.php`.
+
+- **`NatPmpClient` mapped TCP as UDP (inverted RFC 6886 §3.3 opcodes), returned a refused
+  mapping's zeroed port as success, and padded the §3.2 address request with slack bytes.**
+  The closing half of the wire-fidelity pass a34f698d left documented in-place. (1) §3.3 assigns
+  "1 - Map UDP, 2 - Map TCP" (rfc-editor.org/rfc/rfc6886.txt lines 526-528); the class constants
+  were the other way round, so every TCP forward `PortForwardService::autoConfigure()` requested
+  rode the wire as a UDP mapping request — gateways created wrong-protocol mappings, and the
+  §3.4 teardown keyed by the same inverted constant deleted them again (add/delete flipped
+  together, so the pair stayed self-consistent while never opening the TCP port the API names).
+  The corrected constants finally request the protocol the API advertises; the UPnP-IGD leg of the
+  fallback chain is unaffected (its SOAP `NewProtocol` string was already `TCP`). (2) `mapPort()`
+  now parses the 16-bit Result Code at bytes 2-3 of the §3.3 mapping reply via a new
+  `parseMappingResponse()` before reading the port/lifetime slots: §3.5 mandates zeroed
+  "Mapped External Port" and lifetime on any failure, which the old reader returned as int `0` —
+  `PortForwardService` would then persist the endpoint `ip:0` as a successful forward. Every
+  defined code (1-5) and any undefined code (§3.5: "MUST be treated as fatal errors of the
+  request") now yields null. (3) `buildPublicAddressRequest()` sent 4 bytes against §3.2's
+  2-byte diagram (`Vers|OP` only, no Reserved field); servers ignore datagram slack so there was
+  no live impact — pinned end-to-end by the unchanged fork-responder round trip — but the request
+  is now spec-true. Deliberately NOT changed: the `NAT_PMP_PORT = 5350` destination (the RFC
+  sends requests to 5351; 5350 is the client-side announcement listener — separate lane, own
+  live-wire decision) and `removePortMapping()`'s ACK check, which still returns true on any
+  opcode-matching reply without gating its §3.5 result code (same class as fixed here, left for
+  its own scoped pass per the unmap decision). Byte-pin tests gained an anti-inversion constant
+  tripwire, a non-symmetric per-protocol opcode pair, the 2-byte address-request shape, and two
+  real socket round trips through the public API (captured on-wire TCP opcode 2 + assigned-port
+  passthrough; refused reply yields null, not `0`). Mutation proofs: re-inverting the constants
+  reddens 5 pins, neutering the mapping gate reddens 7, re-adding the address slack reddens 1,
+  dropping the reply-opcode match guard reddens 1.
+- **`NatPmpClient` wrote the NAT-PMP mapping request's two port slots swapped, and its
+  public-address parser treated a failed result code as success.** (1) RFC 6886 §3.3 lays the
+  12-byte mapping request out with the Internal Port at bytes 4-5 and the Suggested External
+  Port at bytes 6-7; `buildMapRequest()` emitted them the other way round. The error
+  self-cancels for the symmetric `addPortMapping($gw, $p, $p)` call PortForwardService makes —
+  equal values in either order — but an anonymous request (suggested external 0) told the
+  gateway the INTERNAL port was 0, and any mismatched pair was wired backwards.
+  `buildUnmapRequest()` needed no byte move: §3.4 keys a deletion by the Internal Port slot and
+  mandates Suggested External Port = 0 (set by the client, ignored by the gateway), so the wire
+  order there was already spec-true; the fix renames the parameter, documents the §3.4 rule,
+  and a new pin forbids mechanically copying the map swap into the deletion path, where
+  internal=0/external=0/lifetime=0 is §3.4's wildcard that deletes EVERY mapping the client owns
+  for the opcode's protocol. (2) `parseExternalIp()` never read the 16-bit Result Code at
+  bytes 2-3, so a refused lookup (§3.5: 1 Unsupported Version, 2 Not Authorized/Refused,
+  3 Network Failure, 4 Out of resources, 5 Unsupported opcode) still decoded bytes 8-11 — an
+  RFC-compliant zero-filled failure field came back as the success-looking string `0.0.0.0`.
+  The parser now gates `result !== 0` to null (logged) and ignores the address field exactly as
+  §3.2 commands. New byte-pin tests (reflection idiom per `UpnpIgdClientTest`) pin the
+  non-symmetric map request offsets, the zero-suggestion shape, the §3.4 deletion shape, every
+  §3.5 failure code against a non-compliant junk address, and the RFC-shaped success arm;
+  mutation proofs: reverting the map swap reddens 2 pins, neutering the gate reddens 6, and
+  slot-swapping the unmap reddens the deletion pin. Two residuals are documented in-place and
+  deliberately NOT changed here (beyond this pass's wire scope): the class's opcode constants
+  invert the RFC's §3.3 assignment (the class sends TCP=1/UDP=2; §3.3 defines 1=UDP, 2=TCP),
+  and `mapPort()`/`removePortMapping()` read their reply ports/ACKs without the result-code gate.
+- **`NatPmpClient::parseExternalIp()` read the external IP from the wrong bytes, and
+  `StunClient::getPublicIp()` silently refused every IP-literal server config.**
+  (1) RFC 6886 §3.2 lays the 12-byte public-address reply out as version(1) + opcode(1) +
+  16-bit result code(2) + Seconds Since Start of Epoch(4) + External IPv4(4): the address is at
+  bytes 8-11, but the parser read bytes 4-7 — the gateway's epoch counter — and the device
+  rework lane's fixture had pinned that deviation. The parser now reads bytes 8-11 with the
+  layout table in its docblock, and `natPmpPublicAddressReply()` is RFC-constructed (opcode
+  128, non-zero epoch), mutation-proven: reverting the offset reddens the L4 wrong-source test
+  with `0.15.66.64`. The mapping reply needs no change — §3.3 puts the mapped external port at
+  bytes 10-11, which is where `mapPort()` already reads it. (2) `gethostbyname()` returns its
+  input unchanged both for an IP literal and for a failed lookup, so the old equality test read
+  a pre-resolved/numeric `stunServer` as a resolution failure and never probed. New
+  `resolveStunServerIp()` short-circuits IPv4 literals to themselves first and only then treats
+  an unresolved NAME as failure; tests pin all three arms (literal config probes and parses over
+  a real loopback exchange, unresolvable name refuses loudly through the logged gate, name path
+  unaffected).
+- **Three long-red CI jobs greened (`test-server` PHPUnit, `Psalm-on-tests`, S180 probe), none of
+  them by weakening what they test.**
+  (1) `BackupControllerBodyPersistenceTest::test_supplied_label_reaches_the_persisted_backup_row`
+  turned the MySQL-less `test-server` job red after the mysqldump exit-code strictness fix
+  (`ce295f9d`) made `BackupManager::createDatabaseDump()` fail loudly on an unreachable DB — the
+  old lenient contract had been silently tolerating exactly that. The test now rides the house
+  `RequiresRealDatabase` gate (skip when absent, redden when unusable), and `IntegrationDbGuard`
+  routes `error_log` to `/dev/null` for the probe window only: `ConnectionPool`'s `[DEBUG]`
+  connection-minting lines corrupted a `@runInSeparateProcess` child's captured result stream
+  (`PHPUnit\Framework\Exception: [DEBUG] ...`), a harness artifact, not a database verdict.
+  Adopter census 62→63.
+  (2) `psalm -c psalm-tests.xml` 6→0 errors: non-emptiness narrowing (`assertNotEmpty`) before the
+  three `[count(…) - 1]` tail reads in `RelayConsumerTest`/`SyncPlayManagerTest`, a
+  `/** @var array<int|string, …> */` boundary parse over `consumerState()`'s stream map, and a
+  production docblock spelling in `SsdpDiscovery` — `callable(string): (array{…}|null)` now
+  parenthesizes the inner union, which psalm needs to see the fetcher seam's documented
+  transport-failure `null` instead of reading it as a callable-level union and refusing the very
+  closure the SSRF suite's contract demands (the test was right; the annotation was mis-parsed).
+  (3) The S180 probe's `WebAuthnCeremonyTest::derToRawEcSignature` NOT-REACHED is recorded in
+  `probe-baseline.json`: the probed line is the `self::fail('not a DER integer')` arm of the
+  `$readInt` closure and cannot execute in any green run — its only caller feeds VALID DER, so
+  making the line run would break the behaviour under test.
+
+- **A freshly booted worker now reconciles theme state on its first request instead of
+  recording a foreign stamp as its baseline (`S499`).** S498's cross-worker fleet sync adopts
+  the current `plugins`-table stamp on a worker's very first theme request and rebuilds only
+  on a later change — an assumption that holds only while nothing moved between that worker's
+  `bootstrapEnabled()` and its first served request. An audit found the cold-worker hole: when
+  a peer install/enable/disable/uninstall lands in that window, the new worker captures the
+  foreign-current stamp while its in-memory registry is still from the older boot generation,
+  so the two stamps then agree forever and it serves the stale catalogue until the process
+  recycles — the exact W99 symptom, minus the restart that would have hidden it. The stamp now
+  starts as an explicit "never reconciled" sentinel that a real (always-40-hex) stamp can never
+  equal, so the first served request falls through to the existing rebuild-from-durable path and
+  only then adopts the stamp; that boot reconcile is tagged on the log line so an operator can
+  prove, from the log alone, that no worker ever baseline-captured a foreign generation. The
+  extra rebuild cannot duplicate a theme: the rebuild clears then re-registers each enabled
+  source once (a worker that booted current just re-materialises the same bytes), reusing
+  `register()`'s existing replace-per-source idempotency unchanged. The adopted stamp is now
+  committed only after the rebuild completes — a one-line ordering hardening that keeps
+  "stamp equals current" meaning "this process is reconciled to it" under any future
+  request-interleaving model. The theme-arm scope is unchanged; version-unchanged content swaps
+  and settings-driven theme output still do not move the stamp, exactly as before S498.
+
+- **A plugin/theme registry mutation is now visible across the whole Workerman pool
+  without a restart (`S498`).** `ThemeSourceRegistry` is per-process by design and
+  `PluginLoader::enable()/disable()/uninstall()` mutate only the ONE worker that served
+  the admin request; a live W99 run measured ~6 of 30 sampled `GET /api/v1/themes`
+  responses still serving an uninstalled plugin's themes until a full service restart.
+  `ThemesController` now carries an optional `ThemeRegistryFleetSync`: before every
+  themes response it folds the shared `plugins` table (`name:enabled:version` per row)
+  into one stamp and, only when that stamp moved since this worker last served, rebuilds
+  this process's registry from durable truth — clear, then re-register the currently
+  enabled theme sources through the same validating door `register()` has always had.
+  The stamp is derived from the very rows every lifecycle mutation already writes, so
+  there is no separate epoch counter to race or lose; the check is one indexed read of a
+  tens-of-rows table on an auth-gated endpoint, and boot's `bootstrapEnabled()` wiring is
+  adopted as the baseline without churn. Convergence is the worker's next theme request
+  — bounded, pool-wide, restart-free — and the served shape is byte-identical (the
+  regression test asserts pooled equality with the pre-install baseline body). The
+  metadata/subtitle/writer registries keep their existing boot-time wiring untouched.
+
+- **The merged `merge-junit: … assertions=` total is now declared informational at the
+  emitter, and the one passing test that actually manufactured its run-to-run drift is
+  fixed (`S488`).** Two byte-identical source trees (differing only in `.md`/`.gitignore`)
+  reported `assertions=107654` and `assertions=107652` while `worker files`, `tests`,
+  `errors`, `failures` and `skipped` stayed byte-equal — because the estate quotes the
+  whole line as the CI-verbatim baseline, so a `−2` there reads as a causeless delta.
+  Reproducing the parallel lanes locally and diffing per-testcase JUnit `assertions`
+  attributed it: `CliScanJobVisibilityTest`'s `db()` accessor ran `assertInstanceOf()` on
+  EVERY `waitFor()` poll (once per 50 ms while the SIGTERM cases wait on a real OS-signal /
+  `SELECT SLEEP()` timing boundary), so its executed-assertion count equalled 7 + the poll
+  count and drifted ±1–2 with contention while the test itself stayed green. `db()` now
+  fail-fasts with a `RuntimeException` instead — identical safety (reaching it without a live
+  `Connection` still halts loudly), and the method's assertions are constant (verified 6×
+  under load). Broader than any single test, several Integration lanes legitimately execute a
+  data-driven number of assertions (per-segment loops over real ffmpeg output, per-poll
+  guards), so the emitter now records the known-limit in repo: baseline identity is
+  { worker-file count, tests, errors, failures, skipped } and `assertions=` is informational,
+  printed on the unchanged stdout line plus a new stderr declaration, pinned by
+  `ParallelTestWiringTest::testTheAssertionsCounterIsDeclaredInformationalAtTheEmitter`.
+
+- **The teardowns in `tests/Integration/Media/Library/OrphanMusicContainerReapIntegrationTest.php`
+  and `tests/Integration/Media/Transcoding/HlsServingIntegrationTest.php` called `chmod()`/`unlink()`
+  on paths that were already gone, and the parallel gate printed it (`S486`).** Two distinct
+  mechanisms, one shared blind spot: `@` hides a PHP warning from every serial printer — PHPUnit's
+  collector drops suppressed events — while the paraunit gate PRINTER surfaces them, so both defects
+  were invisible locally and loud in CI. OrphanMusic's was same-process and deterministic:
+  `testHealingRescan…` registers the renamed file in `$cleanupFiles` while its parent sits in
+  `$cleanupDirs`, and the old directory pass unlinked every child first, so the blind files pass that
+  ran after it always called `chmod()`/`unlink()` on a vanished path. HlsServing's was the S460 class
+  of race: `ensureSegment()` returns when the published fragment EXISTS, but the detached fMP4 wrapper
+  (`FfmpegRunner::startSegmentEncode`) deletes its `seg-*.part-*` marker and `.m3u8` sibling *after*
+  that, and the blind recursive `unlink()` could scan before the wrapper's trailing `rm -f` and warn
+  ENOENT on the names it lost. OrphanMusic now removes existence-guarded, registered-files-first, and
+  verifies every attempted removal with a fresh stat — a path it could not delete fails loudly naming
+  its lane sentinel instead of stranding a `phlix_s153_it_*` for the census to blame anonymously.
+  HlsServing now adopts the S460 shape: a bounded poll for the expected post-condition (every
+  `seg-*.part-*` marker GONE — the marker is the last thing the wrapper's write phase touches, so its
+  absence means no detached writer can create or delete anything under the job dirs anymore), then a
+  guarded recursive removal with bounded retries, then verification — a surviving directory fails
+  loudly with its entries named. Both `setUp()`s mint their temp dirs with `random_bytes` instead of
+  a name-collision-prone `uniqid()`/unguarded `mkdir()`. No global warning suppression was added
+  anywhere; production code is untouched. Proven on this machine: 10× loud-suppression runs of each
+  class and 3× the real paraunit gate shape (`--parallel=8` over `Integration/Media`) now print zero
+  `No such file or directory` lines and zero residue, while an `LD_PRELOAD` unlink-delay + slow-`rm`
+  venue that deterministically forces the wrapper-vs-teardown interleaving (pre-fix: 2 warnings per
+  run, the exact CI pair) comes back clean; mutation-checking both directions, reintroducing the old
+  blind loops reproduces the CI warning text verbatim and removing the marker poll reopens the race.
+
+- **`scripts/parallel/run-suite.sh` graded paraunit's exit status exactly instead of
+  re-exiting any non-zero verbatim (`S485`).** paraunit 2.11.0 maps every test verdict to
+  exactly 0 or 10 (`Runner::onProcessParsingCompleted` — any worker exiting non-zero ⇒ 10),
+  and children run under `failOnWarning=true`, so a warnings-only Integration tail exited 10
+  and killed CI (run 34651283031 attempt-1: the identical chmod/unlink warning text had
+  passed with exit 0 twice before) while the wrapper's own comment claimed warnings were
+  non-fatal — the comment was the intent, the code was the flake. The verdict is now derived
+  from the artifacts paraunit produces, via a new `paraunit_verdict()` function shared by the
+  run path and a `verdict <status> <log> <junit-dir>` subcommand: statuses outside {0,10}
+  are console/config failures that never reached a child (measured exit 1) and propagate
+  verbatim; under status 10 the lane is fatal when the recap records ERRORS, FAILURES,
+  ABNORMAL TERMINATIONS or RISKY OUTCOME, when the WARNINGS block carries a ` [UNKNOWN]`
+  entry — paraunit's own attribution for runner-level warnings, which is how the S439
+  zero-residue census lands and it stays red in the parallel lanes — when any JUnit tail
+  holds an `<error>`/`<failure>` element (a PHP warning can never appear in JUnit, so this
+  is the backstop against recap wording drift), or when no JUnit tail exists at all (a gate
+  that cannot read results must not report success); otherwise the warnings-only lane passes
+  deterministically with the warning note still echoed.
+  `tests/Unit/Support/ParaunitVerdictExactnessTest.php` executes the mechanism: five real
+  paraunit scratch runs (warnings, failure, error, clean, census) whose artifact shape is
+  pinned before the verdict is graded — so format drift screams instead of silently
+  demoting — plus two mutation controls on a copy of the script proving the narrowing and
+  the `[UNKNOWN]` route are each load-bearing (reverting either flips exactly the verdict
+  it guards). The file-count census moved 1862→1863 with it.
+- **`scripts/install.sh` compiled Swoole and php-uv from floating default-branch HEADs
+  while claiming verbatim parity with the pinned `docker/Dockerfile.base` (`S482`).** The
+  bare-metal installer is the one build path an operator's PHP receives third-party source
+  from, and it was the residual S309 explicitly left open outside CI scope: both clones ran
+  `--depth=1` with no ref, so whatever each repo's HEAD was that day got compiled and
+  `make install`ed into the host. Swoole now clones `--branch v6.2.1` — the same release tag
+  the base image's `ARG SWOOLE_REF` names — with a `git rev-parse HEAD` self-verify against
+  the tag's recorded commit, so a force-moved tag fails the install loudly before anything
+  is compiled; shallow-plus-tag is safe where S309 rejected shallow-plus-bare-SHA because a
+  tag always resolves to its own commit. php-uv now uses S309's durable form verbatim: full
+  clone, `git checkout --quiet --detach` onto the same 40-hex commit as the base image's
+  `ARG PHP_UV_REF`, rev-parse self-verify. `ThirdPartyClonePinGuardTest` no longer stops
+  at `.github/workflows/*.yml`: it walks install.sh line-by-line (comments stripped, the
+  existing precedent), sweeps each clone site inside its own shell-function region (one
+  file carries two different pins), asserts the per-site pin forms, counts the clone sites,
+  flags the pre-S482 floating shapes as the anti-vacuity control, and holds
+  install.sh ↔ `Dockerfile.base` refs string-equal — mutation-proven red at each site
+  separately, green at tip. Alongside, `RELEASE_PROCESS.md` was trued against the shipped
+  S474 registry regime (folding in the phlix-server half of `S483`): the promised
+  `v1.2.0`/`v1.2`/`nightly-YYYYMMDD` image tags and the "build and push Helm chart" step
+  never existed, and are now marked NOT-YET-PUBLISHED pending the owner's S274
+  release-authority decision; rollback documentation moved from a phantom `v1.2.2` image
+  tag to the real `<full-sha>-<variant>` immutable form with an anonymous `tags/list`
+  recipe for finding current SHAs.
+
+- **The detached-launch tests in `tests/Unit/Media/Transcoding/FfmpegRunnerHlsTest.php`
+  raced their own cleanup, and a mid-test failure handed the residue to the whole suite
+  (`S460`).** Each launch test mints a `phlix_*` scratch dir under sys temp and lets
+  `FfmpegRunner::startDetached()` run its `if … then touch .complete; trailing…; else
+  touch .failed; fi` chain in a detached `nohup` wrapper; the tests then removed the dir
+  inline with no wait. The wrapper writes the marker *after* the primary command exits
+  (and, for the CMAF trailing case, writes `trailing-ran` only *after* `.complete`
+  appeared, which the bare assertion sampled with no poll), so removal could land first —
+  the wrapper recreated the dir under temp, and the S439 `ZeroResidueCensus` extension
+  (snapshot at bootstrap, diff of `/phlix_*` at `ExecutionFinished`) failed the entire
+  suite for it. That is what crashed W59's first master-CI attempt; the class has been
+  latent since #253 and multiplies under the S457 paraunit shard fan-out. The file now
+  polls the one file each wrapper is contractually expected to write, with a bounded wait
+  and a loud, named timeout failure whose every clause (dir existence, tracked wrapper
+  pid, process-alive probe, observed entries) is re-observed at failure time; scratch
+  dirs are registered per-test and reclaimed in `tearDown()` — so a mid-test failure
+  cleans up too, and removal first waits for the tracked wrapper pid, which under the
+  `nohup`→`timeout`→`sh` chain exits strictly after the last write. Mutation-checked in
+  both directions on this machine: the old shape with a forced mid-test failure leaks the
+  dir and reddens the census; the new shape with the same forced failure leaves zero
+  residue and the census stays silent. Production `FfmpegRunner` is untouched.
+
+- **Five real defects in `scripts/`, surfaced by putting the directory under PHPStan
+  level 9 and Psalm (`S256` residual).** None of these files had ever been opened by
+  an analyser, and the tools were right five times: `backfill-chapters.php` passed the
+  raw MySQL connection where `MarkerCandidateRepository`'s constructor demands an
+  `ItemRepository` — a TypeError at boot, the script could never have run past that
+  line; `run-media-asset-worker.php` passed the connection as `FfmpegRunner`'s first
+  parameter, which is the ffmpeg **binary path** (string) — the worker could never
+  have started from this entry point, and it now builds its runner from
+  `config/ffmpeg.php` like every sibling does, with the `ConnectionPool::init()` call
+  the review pass found still missing from it (without it, `getConnection()` throws);
+  `add-headers.php` skipped an excluded
+  directory by `continue`ing on the directory entry itself, which prunes nothing — the
+  traversal descended anyway and rewrote headers inside `node_modules/` and
+  `generated/`, the exact subtrees its own docblock promised to leave alone — while
+  its mid-iteration `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` lands on the
+  inner `FilesystemIterator`, where 16 means something else entirely, and its named
+  `collect()` would fatal on redeclaration against `crell/fp`'s global the moment an
+  autoloader entered the process (the hub's S248 rewrite of this same file is now
+  ported); `backfill-streams.php` read a config key `probe_path` that does not exist —
+  the real key is `ffprobe_path`, so a custom ffprobe binary was silently ignored and
+  `/usr/bin/ffprobe` always won; and `backfill-ratings.php` passed `__LINE__, __FILE__`
+  as positional arguments to `Connection::query()`, binding the line number as PDO's
+  fetch mode, while the `--limit` it documents was interpolated into a SQL string that
+  was then thrown away in favour of an inline batch query — `--limit` never applied
+  (the batching loop now honours it as its usage block advertises, and because the
+  `--execute` candidate set shrinks under every successful upsert, the loop pages by
+  primary key rather than by advancing offset: offset paging would have silently
+  skipped roughly one still-missing candidate for every row the run fixed). The remaining
+  findings were type honesty: mixed-from-`json_decode`/row envelopes parsed into
+  asserted shapes at the boundary instead of offset-cast blindly
+  (`dump-syncplay-envelope-pin-vectors.php`, `backfill-ratings.php`), `$_SERVER['argv']`
+  members asserted as strings rather than `strval`-mapped (`fmp4-rebase-segment.php`),
+  a nullsafe parent lookup (`parallel/merge-junit.php`), a short-name `@var` that
+  resolved to a class the analyser could not see, deleted because the loop analysis
+  proves the variable's type without it (`parallel/merge-coverage.php`), and a ternary
+  that re-read an array offset after narrowing, which Psalm reads differently than
+  PHPStan (`ci-browser-e2e-prereqs.php`).
+
+- **A healing rescan now leaves the music hierarchy cleaner than it found it (`S153`).**
+  The S145 repair re-parents a mis-filed track onto the album and artist its tags name and
+  mints those container rows when absent, but the rows the tracks came from were only ever
+  recounted — never removed. Measured on production during the first post-S151 full-read
+  rescan: one complete, successful pass grew `music_albums` from 11,535 rows to 11,596 and
+  took zero-track artists from 13 to 16 while clearing only 50 shell albums. Each healing
+  pass therefore filled shells and minted new ones, so retags accumulate shells
+  indefinitely. The prune pass now also reaps `music_albums` rows with no tracks and
+  `music_artists` rows with no tracks and no albums, attributed to the library through the
+  container's own `media_items` anchor (the `music_*` tables carry no `library_id`), with
+  the zero-children predicate re-proven inside each `DELETE` so no execution of the pass
+  can cascade a live track away through the `ON DELETE CASCADE` foreign keys of migration
+  065 — a shell album and a populated album that differ by exactly one track is the pinned
+  fixture. A `rescan` runs the same pass automatically when it saw zero read failures, and
+  a standalone `prune` job runs it only when the library's latest completed scan reports
+  zero failures, no scan is live, and every configured root is present right now, because
+  a shell can also be storage that is merely dark; every refusal is logged. `media_items`
+  container rows are deliberately out of scope and survive the containers they anchored.
+  No migration — the `prune` job type and both lookup indexes already exist.
+
+- **The pool-concurrency soak's assertion count is now a fixed 27, whatever the load does (S137).**
+  `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php` asserted INSIDE its reader
+  coroutines: `assertIsArray($e)` ran once per successful reader iteration (up to 1,440 times per run), a
+  failing one threw into the coroutine's own `catch (Throwable)` which aborted that reader's remaining
+  iterations, and the post-join error check added two asserts per recorded error — so the run's total rode
+  machine timing. Measured on this box: `OK (3 tests, 1461 assertions)` clean versus 791 assertions when
+  readers were forced to abort early. A count that moves with load means a run that exercised barely half
+  the invariants could still report green. The per-iteration check is now pure evidence collection inside
+  the coroutine — the reader records which reader id and iteration number saw a non-array entry — gated
+  ONCE after the join over a fixed-size shape, and the error list is scanned once per fingerprint
+  (error 2014, "commands out of sync") instead of twice per error. The class is constant at
+  `OK (3 tests, 27 assertions)` across five consecutive runs and under 48× CPU oversubscription with a
+  second concurrent client hammering the same MySQL; a forced-degraded run through the existing
+  `PHLIX_S106_POOL_ACQUIRE_TIMEOUT` override fails deterministically at the same 16 assertions every
+  time where the old code swung. Detection is unchanged, mutation-proven against `src/` with each
+  mutation reverted after: a pool that never returns its leases reddens the soak on the pool-exhaustion
+  error; an injected `2014 Commands out of sync` failure reddens the named fingerprint assert ahead of
+  the catch-all; a no-op cache invalidation reddens the epoch-guard convergence assert; every read
+  returning null reddens the hoisted row gate; and a fabricated never-written value reddens the
+  corruption gate — several of those REDS also showing the count stay put. The structural
+  lease-lifetime half of the step had already been closed on this base by the per-query-borrow change
+  and the timeout contract of the two earlier pool steps, and with them the assertion-escape
+  probe-baseline exclusion for this file — which this change makes moot again: the file now contains no
+  assertion-bearing closure at all, so the prober can never flip its verdict with the pool's behaviour.
+  Test-only: no `src/`, no config, no baseline edit.
+
+- **Three tests that could only ever report the wrong thing now report the truth (S452, S453, S454).** All three were
+  re-derived at tip `75431da6`; all three fixes are test-side — no route, OpenAPI, `src/` or composer file is touched.
+
+- **`BackupManagerTest::testCreateBackupGeneratesIdAndPath` ran for real instead of skipping forever (S452).**
+  The case opened with an unconditional `markTestSkipped('createBackup requires actual filesystem and mysqldump …')`,
+  so it skipped on every machine — CI included, where the name sits in the skip set of run 34390345172 — while the
+  job stayed green. Its stated reason was also false: `BackupManager::createDatabaseDump()` throws only when
+  `returnCode !== 0` **and** the dump file does not exist, and the shell `>` redirect creates that file whatever
+  `mysqldump` does, so the step is tolerant by construction and `tar` is the sole external it truly needs. The case
+  now drives `createBackup()` end to end in its own process (`@runInSeparateProcess` + `@preserveGlobalState disabled`,
+  because `PHLIX_CONFIG_DIR`/`PHLIX_DATA_DIR` are constants — the same venue `BackupConfigRecursionTest` and
+  `BackupControllerBodyPersistenceTest` already use), against a scratch config whose `backup.php` points
+  `local_path` at a temp sink and a `database.php` built from `phpunit.xml`'s own `DB_*` env, with the `backups`
+  table mocked. It pins a real RFC-4122 v4 `backup_id`, an archive that exists inside the configured sink under the
+  label prefix, a `tar tzf` listing that contains `database.sql` and `config/backup.php`, `size_bytes` equal to the
+  `filesize()` of that archive, and the S439 staging-directory sweep. Measured on this box before and after:
+  `Tests: 14, Assertions: 23, Skipped: 1` → `OK (14 tests, 35 assertions)`; `scripts/skipped-test-names.sh` over a run
+  of the file now prints zero names. The forced coupling was repaired in the same commit — `SkippedTestNameReportingTest`
+  borrowed that permanent skip as its "exactly one skip" fixture (10 of its 47 cases went red the moment the skip died),
+  and now mints its own one-skip probe into the run's scratch dir, so a guard of the skip-reporting mechanism can never
+  again depend on an unrelated case staying dead. The estate gains no new skip: a full 11,129-test suite run on this box
+  lists ten skips, nine for a missing Chrome/Chromium binary and one for a missing FFI extension, and zero occurrences
+  of `BackupManager`.
+
+- **The audiobook traversal test pinned the host's directory layout instead of the path jail (S453).**
+  `AudiobookControllerTest::testStreamAudiobookRejectsPathTraversalEscapingRoot` planted its secret file in
+  `sys_get_temp_dir()` and depended on `LibraryRootGuard::FALLBACK_ROOTS` containing `/home` to keep it outside, with
+  the raw traversal path hardcoding the username `my`. That premise is host-shaped, not code-shaped: with `TMPDIR`
+  under `/home/...` the planted file lands *inside* the fallback jail, the guard answers true, the controller serves
+  it, and the expected refusal becomes a 200 — deterministic red on this box (`Failed asserting that an array contains
+  200`), green in CI only because `HOME=/home/runner` happens to share the prefix. Jail and escape are now both built
+  inside one directory the test owns and pinned explicitly through `PHLIX_LIBRARY_ROOTS` + `LibraryRootGuard::reset()`
+  (the guard's documented test seam, already used by `PhotoControllerTest` and `BookControllerTest`), with the previous
+  env value restored and the guard reset in a `finally`. The traversal path still carries the jail root as a literal
+  substring while `realpath()`-ing out of it — exactly the shape the pre-guard `str_contains()` allowlist admitted —
+  and an in-jail positive control now proves the guard is not simply refusing everything, so a guard weakened to refuse
+  all and a guard weakened to admit substrings both redden the case. Assertion semantics are unchanged; no username
+  appears anywhere. Green under the default `TMPDIR`, `TMPDIR=/tmp` and a `TMPDIR` under `/home` (7 assertions each),
+  and red again with `LibraryRootGuard`'s containment check reverted to the raw-substring form.
+
+- **The music-scanner memory ceiling stopped pinning one PHP build's zval sizes (S454).**
+  `MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree` compared retained bytes with a fixed 13,600,000 B
+  budget derived from a hardcoded 1,700 B per buffered entry. That figure was a snapshot of the machine that measured
+  it: the same unchanged scanner code retained 11,656,488 B when the constant was written and 13,732,640 B on this box's
+  PHP 8.3.6 — a deterministic red, alone and at 13,983,120 B inside a full suite run, with nothing leaked, green in CI.
+  The primary bound is now a ratio measured in-run: a calibration walk over the bounded window alone (32 albums × 249
+  files, one short of `MAX_TRACKS_PER_FLUSH`) followed by the 14,000-file worst case in the same process, with the worst
+  case allowed 1.3× the window's own retained bytes. Allocator and temp-path drift cancel between the two measurements,
+  which is what removes the venue dependency; the absolute figure survives only as a deliberately coarse 2,400 B/entry
+  tripwire against per-entry inflation a ratio cannot see, with the pre-S95 whole-tree estimate recomputed from this
+  runtime's measured entry cost rather than a remembered one. Bounded ratios measured here: 1.135× single-file
+  (byte-identical across three runs under both temp dirs), 1.156× with `TMPDIR` under `/home`, 1.155–1.158× inside a
+  full run of the class. Reproducing the pre-S95 retention (`MAX_OPEN_ALBUMS` 32 → 20000) reddens at 2.089× — 24,686,928 B
+  against 11,815,512 B — so the case still fails loudly on a real leak, and no skip was added anywhere.
+
+- **The `tests/` PHPStan gate now runs at level 4, every finding fixed at source (S186).**
+  `phpstan-tests.neon` was raised from level 2 to level 4; re-derivation at tip `5986b61d` found 85
+  level-4 findings — not the ~34 the plan had claimed. Every finding was triaged with per-error
+  mutation evidence and fixed at source across 61 test files: tautological/impossible asserts,
+  dead guards and constant-folded runtime pins, dead catches, by-ref param-out types, and
+  readonly-property adjudications. Zero `ignoreErrors` entries, no baseline; 3 precisely-scoped
+  inline `@phpstan-ignore` adjudications carry their rationale in place. Closed at `e926aec7`.
+
+- **Connection-pool concurrency test no longer flakes on the fixed 10 s acquire deadline (S106).** `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php` (added by `ae4d097d`, S9) built its pools without overriding `PooledMySQLConnection`'s hardcoded 10 s acquire timeout — the deadline `0ad7a080` (S339, the per-query-borrow change that made a writer hold a lease across a whole UPDATE) left at its constructor default — so on durable-default MySQL, exactly CI's `mysql:8.0` service (`innodb_flush_log_at_trx_commit=1`, `sync_binlog=1`), a writer's slow fsync-bound UPDATE could starve a waiter on the deliberately-oversubscribed pool until the deadline threw `pool exhausted: no idle connection available after 10 s` (`98f07479`) with nothing actually leaked. Proven a genuine timing flake, not a code defect: the same branch/container/load gave FAIL then PASS back-to-back, and the assertion count swung 87/443/1457 purely because the run aborted at a nondeterministic point. The fix stays entirely inside the test — `src/` untouched: the `pool()` helper now passes the constructor's already-configurable `$acquireTimeout`, a generous 120 s default, overridable via `PHLIX_S106_POOL_ACQUIRE_TIMEOUT`, and the resolver fails loud on any non-finite or out-of-`(0, 3600]` value instead of silently falling back. A generous ceiling rejects only sub-window fsync JITTER, never a real leak: a stranded lease pins `created` at `maxSize` and every later acquirer still blocks the full window before the pool throws, so the leak detector is window-independent — verified by planting an accepted-but-tight `0.02 s` window, which reddens the soak on `assertSame([], $errors)` with that exact message and re-greens on removal. Determinism is preserved by construction: the run now always completes to the same fixed set of assertions (10/10 consecutive targeted runs at load 6–7, every one `OK (3 tests, 1461 assertions)`) rather than aborting mid-flight — chosen over a measured-latency skip so the class adds ZERO new skips. CI durability config, `phpstan-tests.neon`, and every sibling test are untouched; sibling dir `tests/Integration/Media/Transcoding/` green (41 tests, 2087 assertions). Test/infra only — no `src/`, no routes, no migrations.
+
+- **Docker boot gates are now bounded and self-reporting (S210).** `docker-boot-gate` carried no `timeout-minutes`, so the 2026-08-04 PR #623 intel/nvidia legs sat past 34 minutes inside "Boot and smoke-test the image" with no line naming what they waited on, until a human cancelled them — burning the GitHub 360-minute default as failure mode. The R1 pass mined 500 `docker.yml` runs (2026-07-22..2026-09-09, paginated past the ~150-run API window): the "hangs on PR, fine on master" theory is **disproven by measurement** — the same Ubuntu-mirror bandwidth storms degrade master pushes identically (worst SUCCESS anywhere: nvidia PR 4530s on 2026-09-05; same-night master legs 2113s/2818s; #623's last pre-cancel line was a mid-apt `Get:331` in plain-build output), so this is slow silent builds, not a PR-scoped cache defect, and no infinite hang is in evidence. The fix bounds and illuminates instead of guessing at the mirror: `timeout-minutes: 90` on the boot-gate job (1.19x the worst measured success, 9.8x master p95 — the tempting 15–20 min bound was REJECTED because it would have reddened 11 legs that measurably completed, manufacturing false-red pressure); every smoke-script phase banner now carries a UTC timestamp and records into a phase file that a heartbeat subprocess logs against every `HEARTBEAT_INTERVAL` (default 30s) — emitting NO verdict id, so the pinned 20-check name set is untouched; and gate builds run `--progress=plain` under a capability probe, so a mirror storm prints the exact fetch in flight. A permanent wiring guard `tests/Unit/Support/BootGateTimeoutWiringTest.php` pins the bound EXACTLY (quiet edits to 360 or to 15 both redden it), the leg name set, and the heartbeat's no-verdict contract; six planted mutations verified it non-vacuous. KNOWN LIMIT: the bound is calibrated to five weeks of history, not to a promise about the future — a storm worse than any observed will now produce a clean red at 90 min whose last heartbeat and build line name what was waited on, which is the honest failure AC-1 asks for. No check loosened: no skipped legs, no continue-on-error, no assertion lowered; `src/` untouched, zero routes, zero migrations; estate census pin 1838→1839.
+
+- **Order-independent relay timer self-skip cases (S266).** Six cases in `tests/Unit/LiveTv/Relay/{HlsRelayManagerTest,HlsSegmentPrefetcherTest}.php` self-skipped on a `Timer::add()` probe, which Workerman v5.2.2 throws only when both `Workerman\Timer::$event` and `Workerman\Worker::getAllWorkers()` are empty. Under the single-process `executionOrder="random"` suite, whichever relay class ran before the first `Worker::$workers` polluter skipped its three cases — order-dependent ±3 noise on the estate-wide skip count, the tripwire that flags a neutered gate. S266 fixes both ends: a new `WorkermanTimerFixture` trait guarantees the Timer static (snapshot/restore around a never-run pure-PHP Select loop), all six self-skip gates deleted so the cases always run; the four polluters (`WebhookServiceTest`, `StreamSessionServiceTest`, `RecordingSchedulerTest`, `WebSocketServerTest`) now snapshot/restore the registry on the `DlnaEnabledGateTest` idiom. A `WorkermanStaticStateLeakGuardTest` guard (+ `StaticProbeBootstrap`) proves the six end with pristine statics in a child process; its positive control must SEE a leaked bare `Worker`. On the lane box the skip name-set is now seed-invariant (pre-fix the relay triples flipped across seeds); a planted `markTestSkipped` moves it by exactly one. Tests/infra only — `src/` untouched, zero routes, zero migrations, `@group workerman @group integration` kept; estate census pin 1835→1838. Suspected polluters `LibraryScanWorkerTest`/`TraktSyncBootRealDbTest` already restore their statics — models, not targets.
+
+- **The relay/admin control surface now resolves its config dir absolutely (S211).** Five read sites in `src/Server/Core/Application.php` used
+  `$this->config['_config_dir'] ?? 'config'` — and `_config_dir` is never set in production — so every hub/relay state path silently depended on the
+  process CWD: started anywhere but the install root (manual `php start.php`, a container with a different WORKDIR, cron/debug runs),
+  `RelayStateStore::writeState()`'s `@mkdir` created a stray `./config/` and the operator kill-switch wrote `relay-control.json` where the relay fork
+  would never look — the API still returned success. The supported deployment worked only because systemd/install scripts set `WorkingDirectory`.
+  Fix: a single `Application::resolveConfigDir()` — honors the absolute `_config_dir` test seam, else production `hub.config_dir` (`config/hub.php`,
+  an absolute `__DIR__` — the same source `HealthController` already used), else a documented absolute default derived from `__DIR__`; relative or
+  filesystem-root values throw instead of silently resolving. `RelayStateStore` and `AdminHubController` constructors refuse empty/relative/root
+  config dirs (`AdminHubController`'s own default is now absolute): the admin relay writer and the relay fork reader now provably resolve the same
+  directory — the previous silent-wrong-dir write is impossible by construction. Known limit: an absent `hub.config_dir` diverges from the container
+  provider's fallback chain — unreachable with shipped config, documented as a KNOWN LIMIT in the resolver docblock. New regression test
+  `tests/Unit/Server/Core/ApplicationConfigDirResolutionTest.php` (15 executions): resolution against the REAL `config/server.php` with the process
+  CWD moved to a directory with no `config/` sibling — and no test sets `_config_dir` — plus a writer/relay-fork kill-switch round-trip under a
+  foreign CWD, loud-fail cases, and a comment-stripped source guard with positive controls forbidding resurrection of the relative-fallback shapes. Census `EXPECTED_PHP_FILES` re-pinned 1833→1834. Zero new routes, zero migrations.
+
+- **A duplicate storage snapshot is now structurally impossible: migration 105 + an accumulating upsert (S114, S102 fix r1).** `stats_storage` carried no unique key since migration 019, so two concurrent snapshot writers could each store a full five-row generation for the same second. The bare `UNIQUE (recorded_at, media_type, library_id)` alone is INERT on the old schema — `library_id` is nullable and MySQL treats NULLs as distinct in a UNIQUE index (measured on 8.0.46: duplicate NULL tuples accepted with the index live) — while making the column deterministic first turns any plain `INSERT` behind that index DESTRUCTIVE (a rejected or ignored duplicate row is lost data). Migration 105 therefore closes both halves in one pass: it collapses NULL `library_id` onto a `''` "not library-scoped" sentinel and makes the column `CHAR(36) NOT NULL DEFAULT ''`, MERGES every pre-existing `(recorded_at, media_type, library_id)` duplicate onto its `MIN(id)` survivor with SUMmed `item_count`/`total_bytes`/`transcode_cache_bytes` (first-write-wins would silently shrink the dashboard, which S102's reader builds on sums), then adds `UNIQUE KEY uq_stats_storage_recorded_media_library`. The write path in `StatsCollector::recordStorageSnapshots()` becomes an ACCUMULATING upsert (`col = COALESCE(col, 0) + VALUES(col)` — NULL-safe, because 105's merge faithfully keeps an all-NULL legacy group's survivor NULL and bare `NULL + VALUES(col)` would erase the incoming bytes on a fold onto it), so a repeated stamp+bucket+library folds into the existing row and `DashboardService::getStorageSummary()` is byte-identical before and after for any write history. Every mutating statement is behind an information_schema shape probe (103/096/097 idiom), so the file is a true no-op on the ledger-bypassing replays — raw `mysql < file` and a lost ledger row — and converges from a half-applied or inert-index install. The old explicit-NULL seed in the S102 reader test becomes the `''` sentinel (strict mode rejects an explicit INSERT NULL on a NOT NULL column, measured 1048). Proven against real MySQL by `tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php`.
+
+- **Migration 104 corrects the false `rescan=purge+rescan` claim in the live `library_scan_jobs.type` column COMMENT (S154).** `rescan` never purges the library — it re-reads every file and prunes only items whose source file has gone (`LibraryManager::pruneRemovedItems()`, behind a per-root presence guard). The falsehood had been baked into the column comment since migration 027 and restated by every later ENUM widening (030, 081, 084, 101); it is the copy a DBA sees in `SHOW FULL COLUMNS`, and the one S149's documentation sweep could not reach because it lives in SQL. Migration 104 re-issues the full `MODIFY COLUMN` definition — all nine ENUM members and their ordinals, `NOT NULL`, `DEFAULT 'scan'` and the inherited `utf8mb4_unicode_ci` collation copied byte-for-byte from the live schema — changing ONLY the comment text. Migrations 027/030/081/084/101 are left byte-identical on purpose: their `COMMENT` is executable SQL held in every install's `schema_migrations` ledger, so editing any in place would flip its checksum and re-run the whole ALTER everywhere. Proven against real MySQL by `tests/Integration/Common/Database/RescanEnumCommentGuardTest.php`.
+
+- **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**
+  Three comments asserted that photo and book libraries are scanned for EXIF / EPUB / PDF / CBZ content via
+  `PhotoLibraryManager` / `PhotoScanner` / `BookScanner`. They are not: `scanPhotoLibrary()` and
+  `scanBookLibrary()` route both types through the shared `MediaScanner`
+  (`$this->scanner->scan(…, 'image'|'book', …)`), and neither the photo-EXIF nor the book-harvest path is
+  reachable from here — the manager/scanner classes are not even imported. The comments now state the harvest
+  path is DORMANT rather than pretending it is live (wiring the photo route to `PhotoLibraryManager` is a
+  separate behaviour change with its own scan-path blast radius, explicitly NOT this step). The three
+  genuinely-unused `use` lines (`MusicLibraryType`, `BookLibraryType`, `AudiobookLibraryType` — the plan's
+  "two" undercounts by one, and nothing in the estate's toolchain flags an unused import) are removed; the
+  kept imports were re-derived by a tokenized (`php -w`, comments stripped) source census rather than a
+  `use`-grep alone. Separately, `docker/Dockerfile.base`'s `ext-exif` comment claimed *"every photo/PDF scan
+  in the published image would have fatalled"*; corrected to the measured truth — those two `@exif_read_data`
+  call sites are dormant as shipped so none fatalled, while `ext-exif` stays a declared hard platform
+  requirement that the missing extension still failed at `composer check-platform-reqs`. No behaviour change:
+  the `src/` diff is comments plus three imports only.
+
+- **Migration 103 collapses the music tables' duplicate UNIQUE indexes to one named constraint each (S155).** `070_fix_music_fk_types.sql` declares its fixed columns with a column-level inline `UNIQUE` inside `MODIFY COLUMN` (070:28,35,42); MySQL auto-names such an index, so a replay never collides, never raises 1061, and `MigrationRunner`'s idempotent squelch never fires — every re-application minted ONE MORE unique index over the same `media_item_id` column (production carried 24 per table; even a first chain pass lands on two: 065's own inline `UNIQUE` + 070's re-mint). 070 is untouched — its checksum is in every install's ledger — and 103 instead ensures the named `uq_music_{artists,albums,tracks}_media_item`, drops every other unique over exactly that column in one multi-drop ALTER (FK-safe: the survivor backs `fk_*_media_item` before the final state is validated — measured on MySQL 8.0.46; the constraints themselves are never dropped, since 1553/1826 are not in the squelch set), and follows the S161 shape standard: a same-named NON-UNIQUE imposter is replaced, never skipped, and a duplicate-dirty table refuses loudly with the remedy in the error text, altering nothing, so 103 also self-heals on empty-ledger transitions (070 re-mints before 103 collapses in the same pass). Proven by `MusicMediaItemUniqueIndexGuardTest` (9 real-MySQL tests: collapse, silent replay, re-mint self-healing, post-collapse 1452 FK + 1062 unique INSERT probes, imposter replacement, dirty refusal, column-set scoping) and by twice-replayed from-scratch chain runs. No routes touched; `ROUTE_MANIFEST` byte-identical.
+
+- **False historical claims in the `MusicLibraryType::getScanner()` narrowing comment (S132, W42 rescope; comments only).**
+  The docblock cited `MediaScanner.php:290` for a constructor that lives at `src/Media/Library/MediaScanner.php:483`,
+  claimed `createDefaultLogger()` "mints its own `/tmp/phlix_media_*` directory" when since the temp-dir minter was
+  retired (unnumbered S167 arm, 1d505406 + f53c8567; S439, e4853f0f) it returns the shared
+  `LoggerFactory::get(LogChannels::MEDIA)` logger, and deferred to "S132 … the blocker" for a future constructor
+  widening that the W42 rescope retired — the signature was never widened and needs no un-blocker. The prose now
+  matches shipped code: the narrowing is forced by the current `?StructuredLogger $logger = null` parameter. No
+  behavior change; no test pins this prose (`git grep -F 'S132' tests/` is empty by design, and stays so).
+
+- **Composer `ClassLoader` autoload leak per plugin disable/uninstall cycle (S166).**
+  `PluginLoader::wire()` and `getEntryInstance()` `require_once`-d each installed plugin's generated
+  `vendor/autoload.php`, which registers a `ClassLoader` on the `spl_autoload` chain, and nothing ever
+  unregistered it. In a resident Workerman/Swoole worker every
+  enable→disable→uninstall cycle appended another dead loader — consulted on every future
+  class-resolution miss and, post-uninstall, pointing at a deleted directory for the life of the
+  worker. The loader now diffs `spl_autoload_functions()` around each require, keeps the exact
+  captured callables per plugin (object identity, never a stringified name) and detaches them on
+  `disable()`/`uninstall()` — including the lazy `getEntryInstance()` path, which leaked without
+  any enable cycle. Re-enable in the same process re-attaches the captured handles, since
+  `require_once` cannot re-fire the already-included file. Pinned by three process-isolated
+  invariant tests driving the real shipped sample theme plugin in
+  `tests/Integration/Plugins/SampleThemeLifecycleTest.php`.
+
+- **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index
+  migrations (and `PlaybackStateDeduper::hasUniqueKey()`/`addUniqueKey()`) decided "already
+  applied?" by matching `INDEX_NAME` alone, so a same-named NON-UNIQUE index made the file
+  no-op and record success forever while duplicates survived and the upsert could never fire —
+  the original S156 defect made permanently invisible. The probe now requires `NON_UNIQUE = 0`
+  plus the exact column set: an equivalent UNIQUE under a different name is recognised (no
+  second, redundant index), and a same-named wrong-shape imposter is dropped and replaced in
+  one atomic ALTER. Pinned in both directions against real MySQL by
+  `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`.
+
+- **S439 minter gap surfaced by this lane's CI park (S227).** `AccessScheduleHeadNoBodyWireTest`
+  boots the real `Application` in a spawned worker, which mints the shared
+  `/tmp/phlix_media_asset_jobs` + `/tmp/phlix_similarity_jobs` queue dirs without owning a sweep;
+  under `executionOrder="random"` its residue survived only until a later sweeper test ran — and
+  on an unlucky seed it survived the whole `Server Component Tests` run and tripped the
+  zero-residue census. The minter now owns its sweep (same S439 block the other nine minters
+  carry), and `ApplicationTest` — the suite's other MySQL-dependent minter — gets the identical
+  block. Product untouched; the deeper lazy-mkdir-in-ctor fix stays the documented follow-up.
+
+- **Poster, trailer and logo keys pass the S101 artwork URL allowlist too (S112).** In
+  `MediaItemShaper`, `poster_url` — the whole fallback chain including the
+  `cover_image_large`/`cover_image_extralarge` legs — the stored `poster_srcset`, `trailer_url`,
+  `logo_url` and the nested `production_companies[].logo_url` now all run through the same scheme
+  allowlist (`safeImageUrl()`/`safeImageSrcset()`) S101 introduced for the backdrop keys;
+  legitimate values are byte-identical on both the list and detail shapes (proven by a
+  value-identity harness plus per-key matrices). The `logo_url` guard runs before
+  `SignedUrl::refreshArtworkUrl()`, so signed internal artwork URLs still re-mint (closing the
+  untrimmed-value skip that shipped expired signatures), and a rejected poster candidate falls
+  through to the next fallback instead of being echoed.
+
+- **`SignedUrl::refreshArtworkUrl()` re-mints from RAW query bytes only (S449).** The re-mint ran
+  `parse_str()` over the stored query and re-emitted the DECODED size into a freshly signed URL, so
+  a stored `size=%22onmouseover%3D…` — which the S112 emission guards pass because they blacklist
+  literal quote/angle/backtick bytes, absent from the encoded form — came back out as a validly
+  signed link carrying the literal breakout toward every consumer. The benign corruption shared the
+  mechanism: a `+` turned into a space and a double-encoding lost one level per pass, breaking byte
+  identity without any malice. The size is now extracted from the raw query bytes and re-minted
+  only when the capture is byte-identical to its urldecoded form; anything that drifts on decode
+  (hostile, `+`-bearing, double-encoded) passes through untouched, its stale signature inert at the
+  serving gate. Canonical plain sizes keep re-minting byte-identically, `verify()` is untouched
+  (the size was never signed, per the `PreRouterFastPaths` doctrine) and no caller changed. Pinned
+  by a 12-test matrix in `SignedUrlTest` — plain re-mint regression, hostile encoded, `+`,
+  double-encoded, inert-stale-token, byte-no-op encodings and the end-to-end shaper-chain
+  composition — with a mutation proof: reverting the guard turns 10 named tests red.
+
+- **`Uuid::v4()` entropy moved from `mt_rand()` to the CSPRNG (S443).** The shared UUID mint — every
+  `CHAR(36)` primary key on the Music scan path (`MusicLibraryScanner::createMediaItem()`) and the
+  `ItemRepository::create()` fallback — drew all 122 random bits from the process-global Mersenne
+  Twister. PHPUnit's runner re-seeds that same engine for `executionOrder="random"`
+  (`mt_srand(randomOrderSeed)`), the order `shuffle()` consumes it, and tests re-pin it mid-run
+  (jitter/fixture determinism) — so a pinned `--random-order-seed` rerun, or one seeding test between
+  two minting consumers, replayed byte-identical PKs and the second INSERT died with MySQL 1062
+  `Duplicate entry … for key 'PRIMARY'` (the intermittent Music red from the s252 suite run). `v4()`
+  now draws 16 bytes from `random_bytes()` and sets the RFC 4122 version/variant nibbles — the same
+  S111/S334 conversion the test-side `FixtureIdGenerator` got, applied to the production source. Nine
+  test-local `sprintf(mt_rand(...))` uuid copies were swept to the single shared generator in the same
+  commit. No test relied on seeded-uuid reproducibility (the seeded consumers — webhook retry jitter —
+  draw `mt_rand()` at their own call sites and are unaffected). Pinned by
+  `tests/Unit/Common/UuidOrderSeedFuzzTest.php` (named order-seed fuzz: reddens element-for-element on
+  any revert to `mt_rand`, greens deterministically after) and
+  `tests/Integration/Media/Music/UuidSeedReplayPkCollisionIntegrationTest.php` (the same replay against
+  a real `media_items.PRIMARY`; S431 census re-pinned 1787→1789, S126 adopters 51→52).
+
+- **Auth-provider list emits `live`/`enabled` badge signals over the TOGGLEABLE universe (S252).**
+  `AuthProviderController::listProviders()` iterated the registry — by construction only enabled+configured
+  providers — so a configured-but-disabled provider was absent entirely and `enabled: false` was
+  unrepresentable, while the S44-a UI's strict `p?.live === true` read everything as Disabled. The list is
+  now `AuthProviderBootstrapper::TOGGLEABLE` (oidc, ldap, github) with two computed booleans per row:
+  `live` ← `AuthProviderRegistry::hasProvider()`, `enabled` ← `AuthProviderBootstrapper::isEnabled()`.
+  Pinned by `tests/Unit/Auth/AuthProviderBadgeSignalsTest.php`.
+
+- **S14 HIDE finished on the two missed blank-row surfaces (S220).** `DashboardService::getRecentPlaybackEvents()`
+  emitted `username => null` / `details.media_title => null` activity rows after user/item deletion, and
+  `NewsletterGenerator::getTopMedia()` rendered deleted items as the literal `'Unknown'` row (`LEFT JOIN` +
+  `COALESCE`) — the exact placeholder S14's decision rejected. Both now hide orphaned rows (null-skip / INNER
+  JOIN), matching the S14-fixed Top Users / Top Media cards. Pinned against real MySQL by
+  `tests/Integration/Admin/BlankRowHideRealDbIntegrationTest.php`; sibling auth/library feeds' nullable
+  usernames are enumerated out of scope.
+
+- **Route parameters are percent-decoded ONCE at the routing boundary (S435).** The Router
+  compiled `{param}` to `(?P<$1>[^/]+)` and handed handlers the RAW encoded segment, so
+  `GET /api/v1/music/albums/Abbey%20Road` looked up an album literally named `Abbey%20Road` —
+  `MusicController::getArtist()`/`getAlbum()` passed the still-encoded value into
+  `MusicLibraryService::findArtistByName()`'s `WHERE a.name = ?`, and every artist/album with
+  a space, accent or unicode name 404'd library-wide. `Router::dispatch()` and
+  `Router::dispatchAsHead()` (the estate's only two param-extraction sites — `pathParams` is
+  written nowhere else) now decode through one private `decodePathParams()` **after** pattern
+  matching: the raw path keeps its routing meaning (`%2F` cannot split segments or forge
+  routes, and upstream traversal guards keep vetting the exact bytes they saw), handlers get
+  parsed names, and no handler decodes again — the `%2520` fixture resolves the artist whose
+  name literally contains `%20`, never the space-named one. Policy: `rawurldecode()`, not
+  `urldecode()` — a `+` in a path segment is a literal plus (RFC 3986); `+`-means-space is
+  the query-string form encoding; malformed sequences (`%ZZ`, trailing `%`) pass through
+  verbatim without throwing. Additive: every existing route path still matches; the
+  console-client pin asserting the encoded wire form (`/api/v1/music/albums/Abbey%20Road`)
+  stays correct — the server now decodes on receipt. Pinned by
+  `tests/Unit/Server/Http/RouterPathParamDecodingTest.php` and, against real MySQL through
+  the composed `Application::loadMusicRoutes()` table direct AND over the real
+  `RelayConsumer::buildRequest()` relay path,
+  `tests/Integration/Server/Http/MusicEncodedRouteParamE2eTest.php` (S431 census re-pinned
+  1769→1771, declared-write denominator 940→949 — all writes on declared members).
+
+- **The curated coroutine-hook allowlist is now enforced and DELIVERY-PROVEN at worker
+  start (S433, was S255).** Workerman's `Events\Swoole` constructor re-installs
+  `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy — `Coroutine::set(['hook_flags'
+  => …])` from inside the `onWorkerStart` coroutine — measured on this estate's stack,
+  updates only the REPORTED mask: `getOptions()` reads the curated `0x42fe` while the
+  `NATIVE_CURL`/`FILE`/`PROC` handlers stay physically installed, so the SIGSEGV mitigation
+  could reach no worker and the standard check reported success either way (the
+  `EventLoopTls.php:44-64` docblock testifies). Per-worker enforcement now goes through the
+  full-mask replacement API and a behavioural verdict: new `Phlix\Server\Runtime\HookDelivery`
+  calls `Swoole\Runtime::enableCoroutine()` (the only API measured to un-swap handlers, and —
+  narrowing S255's fix-direction note — from inside the worker coroutine too; the API, not the
+  calling context, is the variable) and then proves the configured mask is the mask in force
+  with a sibling-tick probe (a cURL to a never-answered local listener that either blocks the
+  worker or yields dozens of ticks; `getOptions()` is never consulted). Non-delivery and
+  inconclusive samples throw `HookDeliveryException` — startup fails LOUD, and the
+  background-timer worker's best-effort `catch (\Throwable)` now rethrows exactly that
+  exception instead of warning past it. The `coroutine.enabled=false` and
+  `coroutine.hook_flags` config paths are now true: mask `0` is enforced (the shipped default
+  left `ALL` installed even with the hook disabled) and an operator mask that re-enables a cURL
+  hook verifies green — the check is two-sided, and its negative half (config claims a yielding
+  cURL over a physically blocking worker → throw) runs on every Swoole build, while the
+  positive half measures which cURL bit the build actually delivers before asserting
+  (the CI PECL build refuses runtime emulated-cURL installation outright — measured, S433).
+  New `CuratedHookDeliveryProbeTest` (7 tests, real Swoole 6.2.1, reproduces the vendor adapter
+  constructor's `ALL`-installed
+  state order-independently via the authoritative API; skips without ext-swoole/
+  ext-curl) + `HookAllowlistEnforcementGuardTest` (5 tokenized guards incl. the six-worker
+  census); `SwooleRuntimeTest` gains 3 pure tests for `runtimeHookMask()`/`curlHookFlags()`.
+  Planted-drift proof: replacing `verify()`'s tick comparison with the `getOptions()` equality
+  reddens `CuratedHookDeliveryProbeTest::test_the_old_in_coroutine_set_lies_and_the_probe_catches_it`
+  and the guard's no-`getOptions` rule; restore → green. The probe class's own teardown zeroes
+  the PHYSICAL hook state rather than restoring the reported option baseline — the same lie-API
+  trap, re-encountered in CI's random order as cross-test `proc_open` contamination and
+  measured away (`AccessScheduleHeadNoBodyWireTest` now co-scheduled green in `tests/Unit/Server`). `EventLoopTls`'s registered
+  blocking-I/O exception note updated: with the allowlist enforced the documented bounded
+  stall — not the accidental yield — is the live behavior. The S431 executable census
+  denominator re-pins 1,760→1,764 in this same commit (four new first-party files; every
+  other pin untouched, exactly as the re-pin protocol demands). No `SAFE_HOOK_NAMES` change;
+  no migration.
+
+- **S271 mutation-arm description corrected (S428, server leg).** The
+  `BackupControllerBodyPersistenceTest` header claimed reverting either dead-property arm
+  "reddens exactly one named test (mutation-verified)". Both arms re-run at the S427 tip prove the
+  claim asymmetric: the `create()` arm reddens exactly the one named label test (string-diff
+  `-'nightly-pre-fix' +''`), while the `updateSchedule()` arm reddens TWO — the named schedule test
+  (`7 is identical to 9`) plus the collateral non-numeric-validation test (`200 is identical to 400`),
+  because the dead read also disarms that handler's 400 guards. Comment-only; no test or product
+  code changed.
+
+- **The Trakt pull-sync timer has a structural boot catch-up (S340).** `start.php` armed the
+  worker-0 Trakt→Phlix watched-history pull on a bare `Timer::add($intervalMinutes * 60, …)` —
+  first tick a full interval after process start, countdown reset on every boot — so on a box
+  restarted (deploy, reboot, the admin Restart button) more often than the interval the pull
+  never ran, the last live instance of the boot-catch-up defect. The timer is now a 60-second
+  sweep delegating to the new `TraktSyncBoot` (`src/Server/Integrations/Trakt/TraktSyncBoot.php`),
+  which holds the pure due-decision, persists the last completed pull in `server_settings`
+  (`trakt.sync_last_run_at`), and runs the pull only when the configured interval has genuinely
+  elapsed — the S308 structural due-check shape, not the one-shot sibling shape. The first sweep
+  a minute after every boot catches up exactly when a poll was missed; a pull longer than the
+  interval cannot re-trigger (the persisted stamp is the completion time). The plugin (an
+  external, non-vendored package) is injected as the sync callback, so the testable surface is
+  the due-decision itself: unit tests enumerate every branch, the real-MySQL integration test
+  simulates the restart (stale last-run → sync runs on the first sweep, fresh last-run → no
+  re-run, last-run survives restart), and a real event-loop control observes the pre-fix bare
+  interval NOT firing within an uptime shorter than the interval. A comment-stripped structural
+  pin (`TraktSyncBootWiringTest`) keeps `start.php` delegating to the gate, since `start.php`
+  itself runs outside CI.
+
+- **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that
+  matches the bytes (S53).** `<res>` was built by `LibraryBridge::getStreamUrl()` →
+  `HlsStreamer`, which emitted `{hls.base_url}/hls/{mediaItemId}/playlist.m3u8`. That URL is not
+  merely "not found": measured against the composed route table it **does** match the registered
+  `/hls/{job_id}/{file}` route — it is *mis*routed. It passes a media-item id where a transcode
+  **job** id belongs, names a playlist file that does not exist, sits behind
+  `SignedUrlMiddleware` (which a renderer, having no credentials concept at all, can never
+  satisfy), and defaults to a `localhost` a TV resolves to itself. Every DLNA item was therefore
+  browsable and unplayable.
+
+  `<res>` now points at `DlnaRoutes::STREAM_PATTERN` — the authless, allowlist-gated,
+  Range-serving `/dlna/stream/{id}` route S52 shipped, whose `DlnaRoutes::stream()` builder had
+  had **zero callers in `src/`** until now. `DlnaResUrlIsRoutableTest` proves it end to end the
+  way a renderer does: it reads the URL out of a real Browse response, resolves its path against
+  the **production** route table (exact pattern equality — a substring test cannot tell a sibling
+  wildcard from the real route), then feeds the same URL back through `Application::dispatch()`
+  from an allowlisted peer and requires the file's bytes, under the exact MIME the same `<res>`
+  advertised.
+
+- **`protocolInfo` no longer claims an H.264 profile for every video (S53).**
+  `ContentDirectory::getProtocolInfo()` asserted `DLNA.ORG_PN=AVC_MP4_MP_HD` for anything typed
+  `video`/`movie` — a `.mkv`, an `.avi`, an MPEG-2 `.ts` alike. A renderer that trusts a
+  `DLNA.ORG_PN` starts a decoder for that exact profile and fails mid-stream. A profile is now
+  claimed only where the container settles the question, and the MIME is resolved through
+  `DlnaMimeTypes` by the same decisions, in the same order, that `DlnaStreamController` uses to
+  pick the served `Content-Type` — including the direct-play gate, so a `.iso` typed `movie` is
+  no longer announced `video/mp4` and then answered `415`. `DLNA.ORG_OP=01;DLNA.ORG_CI=0` are
+  now advertised, and are facts about that route: byte-seek yes, time-seek no, no transcode.
+
+- **The DLNA type table is exhaustive over the 13-member `media_items.type` ENUM (S53).**
+  `episode`, `track` and `audiobook` — the types the TV, music and audiobook scanners actually
+  write — all fell to a `default` arm, and a dead `'image'` arm pretended to cover stills (the
+  ENUM member is `photo`). `DlnaMimeTypes::TYPE_FALLBACK_MIME` now carries one entry per member,
+  keyed off `MediaItemType::ALL`, and `DlnaTypeCoverageTest` reddens if a 14th member is ever
+  added without a DLNA answer.
+
+- **🚨 A DLNA Browse response no longer leaks absolute filesystem paths (S53).**
+  `ContentDirectory::addItemMetadata()` ended in a no-`LibraryBridge` fallback that emitted
+  `$item['path']` — the media file's absolute on-disk path — as the `<res>` value. A CDS Browse
+  carries no authentication (the only gate is `DlnaAllowlistMiddleware`'s IP allowlist), so that
+  disclosed the server's directory layout to anything on the LAN, and it was not even playable.
+  The arm is deleted: a bridge-less ContentDirectory serves stub data and has nothing streamable
+  to point at, so it now correctly emits no `<res>` at all.
+
+- **`dlna.advertise_host` is honoured by the SSDP `LOCATION` header (S53).** `start.php`
+  constructs `new SsdpAdvertiser(null, …)`, so `getIpAddress()` ignored the setting entirely and
+  always auto-detected, while the device description **did** honour it. The two agreed only by
+  coincidence under the shipped default of `''`; the moment an operator set the key — exactly
+  what `config/dlna.php` tells them to do on a multi-homed or Docker host — a control point
+  fetched the description from one host and every URL inside it named another. The setting is
+  now read in one place, `Phlix\Dlna\DlnaAdvertisedHost`, by all three of the `LOCATION` header,
+  the description's service URLs and the `<res>` stream URL.
+
+- **Relayed browse can render posters and avatars again (S238).** `GET /api/v1/artwork/{id}`
+  and `GET /api/v1/users/{id}/avatar` were private pre-router methods on `HttpHandler` and
+  appear in **no** route table. `Hub\RelayRequestDispatcher` consults only the two route
+  tables, so measured through the real composed container (345 `Application` routes + 47
+  `WebPortalRouter` routes) both paths answered **404** over the hub tunnel and a relayed
+  inline-browse could show **no images at all**.
+
+  The gate here is **not** the one S164 found for `/media/{id}/stream`. Both of these paths
+  do begin with `/api/`, so the `WebPortalRouter` second-chance fallback fires for them — and
+  404s as well, because the route is absent from both tables. So these two have exactly **one**
+  gate (missing registration) where `/media/{id}/stream` has two. The `/api/v1/media/1` control
+  answers **401** through that same fallback, which is what makes the 404s mean "no such route"
+  rather than "auth rejected before routing".
+
+  Both endpoints now live in the transport-neutral `Server\Http\FastPath\PreRouterFastPaths`,
+  consulted at the same pipeline position by **both** entry points: `HttpHandler::__invoke()`
+  (after auth, before the router) and `RelayRequestDispatcher::dispatch()` (after the DLNA hard
+  deny, before the router). One implementation, so the two transports cannot drift. Bytes still
+  stream lazily on both: `Response::toWorkermanResponse()` hands the file to Workerman's
+  event-loop `withFile()`, and `RelayConsumer::streamFileChunks()` chunks it over the tunnel.
+
+  **Auth is unchanged and was proved on both sides separately:** each endpoint still authorises
+  inline on a resolved session **or** a valid signed URL, before anything is stat'd or streamed.
+  An anonymous relayed request with no signature is still **401** on both paths, and a tampered
+  signature is still refused.
+
+  `/media/{id}/stream`, the third pre-router fast path, is **deliberately left where it is**:
+  whether direct-play should be relayable at all is S164's open product question, and moving it
+  would decide it silently while starting to carry whole video files over the tunnel.
+
+- **Avatars now declare `image/jpeg` instead of `application/octet-stream` (found while doing
+  S238).** `HttpHandler::serveUserAvatar()` passed the bare extension `"jpg"` to a helper that
+  begins by running `pathinfo(..., PATHINFO_EXTENSION)` of its own; on a dot-less `"jpg"` that
+  yields `""`, so no map entry ever matched and **every** avatar was served as
+  `application/octet-stream`. Browsers rendered them anyway only because these fast-path
+  responses carry no `X-Content-Type-Options: nosniff` — a guarantee that need not survive an
+  intermediary such as the relay this change makes the endpoint reachable through. `AvatarStorage`
+  re-encodes every upload to JPEG and `path()` only ever returns `<userId>.jpg`, so the type is
+  a constant.
+
+- **Reconciled the four version sources and repaired `scripts/release.sh` (S74 follow-up).**
+  `c17bb9ec` ("Release v1.2.3", 2026-07-12) bumped `k8s/helm/phlix/Chart.yaml` to 1.2.3 and
+  pushed the annotated tag `v1.2.3`, but never touched `Phlix\Common\Version::STRING`, which
+  stayed at 1.2.2 — so for three weeks the Helm chart, the git tag and the version the running
+  server reported over its own API disagreed, silently. `Version::STRING` and the root `VERSION`
+  marker are now **1.2.3**, matching the published tag and the chart.
+
+  `src/Common/Version.php::STRING` is now documented and enforced as the single authoritative
+  source. `scripts/release.sh` was rewritten to read it and bump **every** mirror in one commit
+  (`Version.php`, `VERSION`, `Chart.yaml` `version:` + `appVersion:`); it refuses to release from
+  a tree whose sources disagree, and it never writes a `composer.json` `version` field — that
+  field makes `composer validate --strict` (the `composer-validate` CI job) exit non-zero, which
+  is why `f5375f7a` deleted it.
+
+  The old script had been broken since that same `f5375f7a`: it read the version from the
+  composer key that had just been deleted, so it computed the empty string and produced
+  `New version: ..1`, wrote `version: ..1` into `Chart.yaml`, committed it, and then aborted on
+  `fatal: 'v..1' is not a valid tag name` — after the commit. It also parsed `--dry-run` only in
+  argument position 2, ran relative `sed`s against the caller's working directory, and swept any
+  already-staged file into the release commit. All four are fixed.
+
+  New pins: `tests/Unit/Server/Updates/VersionSourcesAgreeTest.php` (every source agrees;
+  composer.json declares no version field; the script's managed-file list matches) and
+  `tests/Unit/Scripts/ReleaseScriptTest.php` (runs the script for real in a throwaway git
+  sandbox). `RELEASE_PROCESS.md` no longer instructs releasers to hand-edit `composer.json`.
+
+- **S120 AC audit — the assertion-escape guard was one deletable line from silent, and
+  the defect class had already recurred.** Auditing S120 by planting escapes rather than
+  by reading the guard turned up three things a green CI run could not have shown.
+  - **A live escape that shipped after S120.**
+    `SmartPlaylistRefreshSubscriberTest::test_drain_tick_refreshes_the_linked_smart_collections`
+    asserted inside a `willReturnCallback` reached through
+    `SmartPlaylistRefreshSubscriber::drainTick()`, which wraps `refreshLibrary()` in
+    `catch (Throwable)` so a failed refresh cannot kill the worker's timer. Breaking the
+    production line the test pinned (`SmartPlaylistRepository::findByLibraryId()`'s bound
+    parameter) turned the test red on `refreshSmartCollection … called 0 times` — naming
+    neither the query nor the binding. Fixed with S102's remedy (the callback RECORDS,
+    the assertions run OUTSIDE it); the same mutation now fails on *"the smart-playlist
+    lookup must be scoped to the drained library"* with the actual diff.
+  - **Deleting one line from `phpunit.xml` disabled the whole guard, silently.** With the
+    `<extensions><bootstrap>` registration removed, a run containing twelve deliberately
+    planted escapes — eight of which the guard reported a moment earlier — wrote no
+    report and `php scripts/assertion-escape-check.php` printed "no escapes reported" and
+    exited 0. Deleting the workflow step was equally silent. New
+    `tests/Unit/Support/AssertionEscapeGuardWiringTest.php` closes both, plus the check
+    script's two exit paths; each of its assertions was verified by mutating the line it
+    protects (registration deleted, registration commented out, CI step removed,
+    `continue-on-error` added, `if: always()` dropped, check step moved ahead of PHPUnit,
+    `exit(1)` → `exit(0)`, script deleted — eight mutants, eight named failures).
+  - **A fourth blind spot, previously undocumented.** `FAILED_OUTCOME_BUDGET = 1` assumes
+    a failing test failed *through* an `assertThat()` assertion. When the visible failure
+    is `Assert::fail()` or a mock parameter/invocation rule — neither of which emits an
+    event — the budget goes unspent and absorbs one genuinely swallowed assertion. That
+    is exactly how the escape above stayed invisible. Documented rather than closed:
+    separating the two would need message correlation between `AssertionFailed` and
+    `Failed::throwable()`, whose texts differ by construction, and a heuristic that
+    mis-fires reports healthy tests as vacuous. `scripts/assertion-escape-audit.php
+    --probe` decides the same site correctly (`DEGRADED`, exit 1) with no heuristic.
+
+- **Assertions inside a callback can no longer pass a test while asserting `false`**
+  (S120). PHPUnit's `ExpectationFailedException` extends `AssertionFailedError` extends
+  `PHPUnit\Framework\Exception` extends `RuntimeException`, so any assertion that runs
+  inside a callback which is invoked under `try { … } catch (\Throwable)` or
+  `catch (\RuntimeException)` is caught by the code doing the catching and never reaches
+  PHPUnit.
+
+  A 24-site census over the 699 `.php` files then under `tests/` — each site decided by
+  planting a tripwire and reading the run, not by grep — found **2 fully vacuous** tests
+  (`TranscodeManagerTest::testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows`,
+  `::testInFlightCounterReleasedWhenLaunchThrowsBeforePolling`: green with
+  `assertTrue(false)` planted, and their own `assertNotNull($thrown, …)` was **satisfied
+  by the swallowed failure** — verbatim, the two messages were
+  `'the exception propagates, it is not swallowed'` and `'the RuntimeException must
+  propagate, not be swallowed'`, at `tests/Unit/Media/Transcoding/TranscodeManagerTest.php:3716`
+  and `:4868` before this change) and **2 swallowed-but-red** ones whose diagnostics were
+  degraded (`LibraryScanCommandTest::testProgressTicksStreamOntoTheJobRow`, swallowed by
+  `LibraryScanCommand.php:246`; `StatsCollectorTest::testRecordStorageSnapshotsSumsEveryTypeThatSharesABucket`).
+  All four now follow the established remedy — **the callback RECORDS, the assertions run
+  OUTSIDE it** — and the two `TranscodeManagerTest` tests gained a
+  `catch (AssertionFailedError) { throw $e; }` arm ahead of their `catch (\RuntimeException)`
+  so a future in-callback assertion cannot be swallowed either.
+
+  The other **20** sites were left untouched: 18 whose tripwire executed and took the
+  test red with its own message, and 2 whose tripwire never executed — **undecided by
+  the probe, not verified**. Every one of these numbers is MEASURED by running
+  `php scripts/assertion-escape-audit.php --probe`, and one row is
+  environment-dependent: the Integration site
+  (`PooledConnectionConcurrencyTest.php:392`, also a known pre-existing flake under
+  coroutine churn) self-skips without a live database, so it reports `NOT-REACHED` on a
+  box with no DB and has been observed as `GATES` on one with. A run on a DB-less box
+  therefore prints `20 site(s) probed — 17 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED`.
+  Re-run the probe rather than quoting a remembered count.
+
+- **A fresh install now actually HAS the `playback_state` progress-upsert unique key**
+  (S156). Migration `090_playback_state_session_media_unique.sql` is NAMED for
+  `uq_playback_state_session_media (session_id, media_item_id)` but carries no executable
+  statement at all — it is a pure comment block that reserves the number and defers the
+  key to `migrations/cleanup_090.php`. That script is MANUAL: no auto-run path — not
+  `scripts/run-migrations.php`, not `bin/phlix migrate`, not `scripts/install.sh`, not the
+  Docker entrypoint — has ever called it. A database built by the migration chain alone
+  therefore carried **no `(session_id, media_item_id)` constraint at all**. New
+  `migrations/097_playback_state_unique_key.sql` adds it as part of the chain, sorted
+  after `001_initial_schema.sql`, which creates the table.
+
+  🔴 **This is the recorded root cause of "a finished episode never leaves Continue
+  Watching."** `PlaybackController::reportProgress()` and
+  `StreamManager::persistStreamState()` persist progress with an
+  `INSERT … ON DUPLICATE KEY UPDATE` whose intended conflict target is that pair;
+  `playback_state` otherwise has only the `id` PRIMARY KEY — a fresh random UUID on every
+  call — so `ON DUPLICATE KEY` could never fire and every ~15 s tick INSERTed a brand-new
+  row. The finish signal wrote a new row instead of updating the in-progress one, so the
+  stale `position_ticks < duration * 0.95` row survived and kept surfacing; Next Up and
+  Most Watched could not be built on a "current" row per pair that was not single-valued;
+  and `playback_state` grew without bound. Production had the key only because somebody
+  ran the finalizer by hand once — which is also why every measurement taken against
+  production looked correct and proved nothing about a fresh install.
+
+  The migration is safe on a **dirty** database, which is why 090 refused to emit a bare
+  ALTER (1062 on any table that still holds duplicates, retried and failing on every
+  deploy): it checks `information_schema` first (already present → a true no-op, no 1061
+  note, no table rebuild, and the duplicate scan is skipped because the constraint proves
+  there are none), and if duplicates remain it alters nothing, touches no row, and fails
+  with exactly one error whose text carries the remedy — `Unknown column 'playback_state
+  duplicates: run php migrations/cleanup_090.php' in 'field list'`. The rest of the chain
+  still runs, and the file is left unrecorded so it retries on the next deploy once the
+  duplicates have been merged. 090 and `cleanup_090.php` get comment-only edits, which are
+  checksum-neutral: `MigrationRunner::checksum()` strips full-line comments, so an
+  already-migrated install sees no ledger divergence.
+
+  `migrations/cleanup_090.php` keeps ownership of **de-duplication only**. Choosing which
+  duplicate survives decides where a user resumes playback, so that rule stays in one
+  place — `PlaybackStateDeduper::findKeeperId()`: greatest `updated_at`, ties broken by
+  greatest `id`, which is deliberately the same ordering
+  `PlaybackController::getContinueWatching()` already picks its row with, so merging is
+  behaviour-preserving with respect to the read path. Its `addUniqueKey()` step stays in
+  place, idempotent, for operators part-way through an upgrade.
+
+  The read-path `ROW_NUMBER() OVER (PARTITION BY ps.media_item_id ORDER BY ps.updated_at
+  DESC, ps.id DESC)` dedup in `getContinueWatching()` is still required after this
+  migration — one user can have several *sessions* watching the same item, and this key
+  only constrains a single session — but it is no longer being asked to paper over a
+  per-session write bug.
+
+  ⚠ **A test was green while destroying the constraint.**
+  `PlaybackStateDeduperIntegrationTest` dropped the key in `setUp()` (it has to, to seed
+  hundreds of duplicate groups) and then dropped it *again* in `tearDown()`, so against a
+  097-built schema it stripped a real constraint off the shared test database and still
+  reported `OK`. It now records whether the key pre-existed and restores it — at the very
+  end of `purgeFixtures()`, after the fixture rows are deleted, because re-adding before
+  the deletes would fail 1062 on the fixture's own duplicates and leave the database
+  unconstrained anyway.
+
+- **A fresh install now actually HAS the path-dedupe unique index** (S152). Migration
+  072 added the `path_hash` generated column but deferred
+  `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` to the manual
+  `migrations/cleanup_072.php`, and migration 087 then DROPped the index outright. No
+  auto-run path — not `scripts/run-migrations.php`, not `bin/phlix migrate`, not
+  `scripts/install.sh`, not the Docker entrypoint — ever re-created it, so a database
+  built by the migration chain alone carried **no duplicate-path constraint at all**.
+  New `migrations/096_path_hash_unique_index.sql` adds it as part of the chain, sorted
+  after 087 so it cannot fight the DROP.
+
+  🔴 **The data-integrity half is the serious one.** That unique key is what makes a
+  duplicate media row impossible and what `ItemRepository::upsertByPath()` catches 1062
+  on to win a concurrent-insert race. Production was protected only because somebody
+  ran the finalizer by hand once — which is also why every measurement taken against
+  production looked correct and proved nothing about a fresh install. The perf half:
+  without the index the S151 track lookup degrades from `type=const`/`rows=1` back to
+  `type=ref`/`key_len=144` — identical to pre-S151. (Measured on a clean
+  migrations-only MySQL 8.0 database, 400 track rows: `ref`/`idx_library`/`rows=400`
+  before, `const`/`key_len=305`/`rows=1` after.)
+
+  The migration is safe on a **dirty** database, which is why 072/087 refused to do it:
+  it checks `information_schema` first (already present → a true no-op, no 1061 note, no
+  table rebuild), and if duplicates remain it alters nothing and fails with exactly one
+  error whose text carries the remedy — `Unknown column 'media_items duplicate paths:
+  run php migrations/cleanup_072.php' in 'field list'`. The rest of the chain still
+  runs, and the file is left unrecorded so it retries on the next deploy once the
+  duplicates have been merged.
+
+  `migrations/cleanup_072.php` keeps ownership of **de-duplication only** — the keeper
+  scoring plus twenty-table reference repointing that lives once in `PathDeduper` and is
+  shared with `media:dedupe-paths`. Its `ADD UNIQUE INDEX` stays in place, idempotent,
+  for operators part-way through an upgrade.
+
+  ⚠ **`playback_state` has the same defect and is NOT fixed here.**
+  `uq_playback_state_session_media (session_id, media_item_id)` is created *only* by the
+  manual `migrations/cleanup_090.php`; migration 090 carries no executable statement at
+  all. A fresh install therefore still lacks it, and every ~15 s progress tick inserts a
+  new row instead of updating.
+
+- **A `HEAD` refused by a global middleware short-circuit no longer receives the
+  refusal body (S295).** `Application::dispatch()` runs the global chain before
+  `Router::markHeadOnly()`, so the `AccessScheduleMiddleware` wrapper's short-circuit
+  reply used to return unflagged and `HttpHandler`'s matched-route branch shipped the
+  403 envelope as a body on a `HEAD` — the recoverable RFC 9110 §9.3.2 shape, but a
+  keep-alive desync for a header-only client. The reply is now flagged where the global
+  chain returns: the constructor's wrapper routes every global short-circuit through the
+  new `Application::flagHeadShortCircuitReply()` → `Response::asHeadReply()` on a `HEAD`
+  (a `GET` is returned untouched), so all three refusal branches (unprofiled user,
+  unresolvable profile, blocked schedule window) ship head-only with the real
+  `Content-Length`. Proved on a live Workerman worker beside a desyncing control
+  (`AccessScheduleHeadNoBodyWireTest` + `tests/Support/Browser/s295-head-body-server.php`).
+  The denominator is one global middleware — the registration count re-measured at 1 by
+  `ApplicationHeadOnlyBoundaryTest` (count-history line added); route-group middleware
+  was already inside the router's guarantee and no global CSRF middleware exists.
+  No migration (next-free stays 103).
+
+- **DLNA advertised far more children than it could deliver on EVERY root, and none
+  of them could be paged** (S147). `LibraryBridge::getLibraryChildCount()` counted
+  with the unbounded `ItemRepository::countAllByType()` while
+  `getLibraryItems()` listed with `getAllByType()`'s default `LIMIT 100`, and
+  `ContentDirectory::browseChildren()` then applied the renderer's `StartingIndex`
+  **in PHP to that already-truncated list** — so any index past the truncation
+  point returned an empty page while `TotalMatches` still advertised the whole
+  container. Measured read-only on production 2026-07-27: Video advertised
+  **10,718** movies and **26,389** episodes against pages of 100 (**107x** and
+  **264x**), and the Audio root — whose advertised count S97 had already clamped to
+  2,000 to stop it lying — left **2,656 of 4,656 artists unreachable by any
+  navigation**.
+
+  `StartingIndex` is now resolved in **SQL** on every branch:
+  `getLibraryItems()` takes an offset and spends it against the same per-type
+  counts the container advertises (so a page straddling the movie→series boundary
+  is contiguous); the `music_*` drill-downs and the `parent_id` drill-down
+  (`ItemRepository::findByParentPage()`) take one too; and `browseChildren()` no
+  longer slices — it asks for the requested window and reads `TotalMatches` from a
+  COUNT that shares the listing's predicate.
+
+  **S97's clamp is removed in the same change**, which is the half that makes this
+  a fix rather than a swap: a renderer told "2,000" stops at 2,000 however good the
+  paging underneath is, so the advertised count is the true unbounded total again
+  and `LibraryBridge::MAX_PAGE_ROWS` is a **page size**, not a ceiling.
+
+  Ordering across page boundaries is the other half. `getAllByType()` ordered by
+  `sort_title, name` and `findByParent()` by `name` — neither is unique, and with
+  ties MySQL arranges the tied rows differently per `LIMIT`+`OFFSET`. Measured on
+  MySQL 8.0.46 with 400 rows sharing one name, paged 50 at a time: **400 rows
+  returned, only 372 distinct** — 28 silently repeated, 28 never returned at all.
+  Both queries now end their `ORDER BY` on the `id` PRIMARY KEY, making the order
+  total; a real-MySQL test pages a whole container and asserts the concatenated
+  pages equal the unpaged listing row for row.
+
+  `SortCriteria` is honoured **globally** for any container that fits in one page
+  (`LibraryBridge::MAX_PAGE_ROWS`, 2,000): the whole container is fetched and sorted
+  before the window is taken, so the criteria decides *which* rows the page contains.
+  The first revision of this change sorted only the page it had already fetched,
+  which on a 20-child Video root with `RequestedCount 5` and `-dc:title` returned the
+  five alphabetically **lowest** titles reversed instead of the five highest — a
+  regression against the previous sort-then-slice behaviour, now pinned by a test.
+  Past 2,000 children the sort still applies within the returned page only; making it
+  global there needs the sort key in every listing's `ORDER BY` **and** a merge across
+  a category's types, and is deliberately left out rather than trading pageability
+  for it.
+
+  One `Browse` now resolves the category counts **once**. Fetching the page and the
+  advertised total went through two entry points that each recomputed them, so a
+  single Video-root browse issued `countAllByType()` six times (`movie, series,
+  video` twice over) — double the COUNTs on an unauthenticated path, and a window in
+  which a row written between the two evaluations made the advertised total disagree
+  with the offsets the listing had already spent. The bridge-less `TotalMatches` is
+  likewise a `countByParent()` now, instead of re-listing the whole container purely
+  to measure it.
+
+  DLNA remains **off by default and unauthenticated**, so this is a functional gap
+  closed, not a security change.
+
+- **A retagged music track could NEVER be re-parented, and `rescan` could not reach
+  the tracks that needed it** (S145). Editing a file's `ALBUM` or `ARTIST` tag left
+  `music_tracks.album_id` / `artist_id` pointing at the *old* album permanently.
+
+  Two independent halves, both required:
+
+  1. **`MusicLibraryScanner::upsertTrack()` could not see, or write, parentage.** Its
+     change predicate compared exactly four fields — `title`, `track_number`,
+     `disc_number`, `duration_secs` — and its `UPDATE` named exactly those four
+     columns. Change only the album or artist tag and all four stay identical, so the
+     call returned `'skipped'` having written nothing. A repo-wide grep finds just
+     three statements that write `music_tracks`, all in this one file, and the other
+     two are INSERTs — so nothing in the codebase could move a track. The columns are
+     `INT UNSIGNED NOT NULL` with enforced foreign keys (migration 065), so the row was
+     never NULL and never violated a constraint: it was **wrong but valid**, which is
+     why nothing ever surfaced it. The `SELECT`, the predicate and the `UPDATE` now all
+     carry `album_id` and `artist_id`, and the album a track *leaves* has its
+     `total_tracks` recomputed (`flushAlbum()`'s `finally` only ever refreshes the
+     album being flushed, and `MusicLibraryService` sums that column onto the artist
+     page).
+
+  2. **⚠ `rescan` now RE-READS EVERY FILE for a music library, and that is the fix —
+     today's fast `rescan` is the thing that was wrong.** Fixing `upsertTrack()` alone
+     is cosmetic: the unchanged-file fast path skips a file *before* it is opened, so
+     an already-stamped row never reaches the repair at all. Measured on the production
+     library, **29,134 of 61,111 tracks (47.7 %, rising)** would be skipped by an
+     ordinary scan. `LibraryManager::rescanLibrary()` therefore asks the music scanner
+     to leave its skip index unloaded. Migration 084 has documented `rescan` as the
+     heavy option since it was written — this restores a promise the schema already
+     made rather than inventing a new one, so there is **no migration, no new job type
+     and no new command**: the admin *Rescan* action and
+     `php bin/phlix library:scan <id> --rescan` both get it for free.
+
+     **Expect a music rescan to take hours, not minutes** (the last completed one took
+     **9 h 55 m** for 61,111 tracks — an earlier note here said "~3.5 h", which was an
+     estimate presented as a measurement; S151 attacks the dominant cost but its effect
+     on that wall clock is not yet measured),
+     and to report `updated` in the thousands on its first run — that is the repair, not
+     an error. It is interruptible and idempotent; re-running continues. The scan
+     summary gains `reparented` (how many tracks moved) and `read_every_file` (whether
+     the scan really was a full read). **Use `scan`, not `rescan`, for an incremental
+     refresh** — the incremental path is unchanged and still skips unchanged files.
+
+  Measured impact on production 2026-07-27: **310 albums owning zero tracks** plus 7
+  empty artists; **292 tracks provably mis-parented** (a floor — the rest cannot be
+  identified by SQL, because the truth is in the file's tags and the tags are not in
+  the database). It was accumulating, not dormant: of the albums created once the
+  initial import settled, **100 % (07-26) and 97.8 % (07-27) were empty shells**, i.e.
+  essentially every new album the scanner created was one whose tracks it then refused
+  to move.
+
+  Not done here, deliberately: the now-vacated shell albums are **not** deleted.
+  `fk_tracks_album` is `ON DELETE CASCADE`, so reaping them is a destructive decision
+  with artwork behind it and is a follow-up step of its own.
+
+- **`media_item_id` was silently ALWAYS dropped on all three music DTOs** (S121).
+  `MusicArtist::fromRow()`, `MusicAlbum::fromRow()` and `MusicTrack::fromRow()` each
+  coerced `media_item_id` through
+  `is_numeric($row['media_item_id']) ? (int)… : <fallback>`, while the column is a
+  **`CHAR(36)` UUID** in all three tables. `is_numeric()` is false for every UUID, so
+  the field was the fallback no matter what the row held: **`null`** on artist/album,
+  **`0`** on track. The coercion matches the columns' *pre-070* shape — they were
+  `INT UNSIGNED` when the music DTOs landed (2026-07-09) and migration **070**
+  converted all three to `CHAR(36)` the next day, because `media_items.id` is a UUID —
+  and it was never updated with them. Confirmed against real MySQL 8.0 rather than
+  inferred: `information_schema` reads `music_artists.media_item_id char(36) YES`,
+  `music_albums char(36) YES`, `music_tracks char(36) NO`, and `workerman/mysql` hands
+  the value back as a PHP `string`.
+
+  All three DTOs now declare `public ?string $mediaItemId` and coerce through a
+  private `mediaItemIdFromRow(): ?string`:
+  - a **non-string** (`int`, `float`, `bool`) or the **empty string** becomes `null`;
+  - **any other non-empty string passes through unchanged** — including `'0'` and a
+    truncated UUID. Format validation is deliberately not the DTO's job; the FK to
+    `media_items` is.
+  - **`?string` on the NOT NULL `music_tracks.media_item_id` is deliberate.**
+    `fromRow()` never throws — it is also fed hand-built, cached and JSON rows, not
+    just real `SELECT`s — so an absent column must still produce a value, and `null`
+    is the only one that cannot be mistaken for an id. The old `0` fallback could be:
+    `0` is a plausible-looking id that survives the `!== null` / `?? …` /
+    `is_string()` tests callers actually write, which is exactly how a dropped field
+    stayed invisible. So `null` on a track means "the SELECT did not carry the
+    column", not "no artwork yet" — the latter is what it legitimately means on
+    artist/album, whose columns are NULLable and which the scanner writes as NULL when
+    its `createMediaItem()` mint fails, backfilling on a later pass.
+  - The sibling `id` / `artist_id` / `album_id` / `year` / `total_tracks` /
+    `total_discs` / `track_number` / `disc_number` / `duration_secs` columns really are
+    `int unsigned` and **keep** their `is_numeric()` guards.
+
+  **No served payload changed** — re-verified, not assumed. `MusicController` formats
+  artists through `formatArtist()`
+  (`name`/`image_url`/`album_count`/`track_count`/`albums_truncated`/`albums`), and the
+  one route that could have nested a DTO's `toArray()` —
+  `MusicArtistWithAlbums::toArray()`, which nests `MusicArtist::toArray()` and so would
+  emit the field — has had no caller in `src/` since S99 removed the music GET handlers. So this closes a latent
+  trap on a **live** read path — `getAllArtists()` builds `MusicArtist::fromRow()` off
+  `SELECT a.*` on every `GET /api/v1/music/artists` — without widening any response.
+  The stale note in `MusicLibraryService`'s class docblock, which had described this
+  exact bug for **`MusicTrack` only** since S99, is replaced by a "fixed in S121" block
+  that states the asymmetric `null`-vs-`0` fallback correctly.
+
+  **Guarded mechanically, because a hand-written list is what created the bug** — the
+  defect was written down for `MusicTrack` alone and both siblings were missed.
+  `tests/Unit/Media/Music/MusicDtoMediaItemIdTest.php` therefore names no DTO: it walks
+  `src/Media/Music/` **recursively**, derives each file's PSR-4 FQCN, and reflects
+  **every** class that declares a `mediaItemId` property, asserting the declared type is
+  `?string` — so a fourth music DTO landing with the old `is_numeric()`/`int` coercion
+  goes red on its own, and the accompanying set-equality test forces these docblocks to
+  be updated with it. The walk **fails loudly instead of skipping**, in two shapes: a
+  file it cannot load raises a named `RuntimeException` quoting the unresolved class and
+  its path plus the usual causes, and two files resolving to **one** class identity
+  (filenames differing only in case, a `class_alias()`, a namespace that does not match
+  the directory, a symlink) raise one naming **both** colliding paths and inferring the
+  cause from them rather than asserting it. Either surfaces as a PHPUnit error with a
+  non-zero exit — a silently skipped file would be precisely the partial sweep this step
+  exists to remove. Two companions pin the behaviour itself:
+  `MusicDtoFromRowCoercionTest` covers the value space the predicate has to survive
+  (non-strings → `null`; `'0'` and `'123'` unchanged, asserted with `assertSame` so
+  neither an `!empty()` rewrite nor a re-added `(int)` cast survives; plus
+  `parseDateTime()`'s four outcomes), and `MusicDtoMediaItemIdIntegrationTest` reads a
+  minted UUID back out of all three tables against real MySQL in **both** pooled and
+  unpooled connection modes. 62 tests across the three files.
+
+  **Not fixed, documented instead** (each recorded in the DTO docblocks):
+  - **Two of the five copies of this coercion predicate are pinned by no test.** The
+    same predicate is inlined as a *local variable* in `MusicLibraryScanner`'s
+    `upsertArtist()` and `upsertAlbum()` — `grep -rn "media_item_id'\] !== ''" src/`
+    finds exactly those two and none of the DTOs — and a guard that reflects
+    *properties* structurally cannot see a local. Filed as **S127**; deferred rather
+    than bodged because S96 rewrites that file, so any source-text guard written now
+    would be rework.
+  - **Whitespace is not normalised.** There is no `trim()`, so `' '` returns `' '` and
+    a padded UUID keeps its padding; the two mutants that would add one leave both unit
+    test files green. It is the one input where the "make 'no id' detectable" goal
+    fails, and it is disclosed rather than closed because the driver cannot produce it —
+    MySQL strips a `CHAR` value's trailing pad spaces, so an all-space column reads back
+    as `''`.
+  - **`parseDateTime()` still fabricates a timestamp from `''`** (it returns *now*) and
+    returns `null` for a `DateTimeImmutable`, because its guard is `instanceof
+    \DateTime`. Pre-existing, byte-untouched by this change, filed as **S143**.
+  - **The TypeScript contract still disagrees.** `phlix-contracts`' `src/Music.ts`
+    types `mediaItemId` as a `number`. No client reads the field today; filed as
+    **S123** rather than edited from a `phlix-server` branch.
+
+- **An auth-provider settings save no longer WIPES the keys it did not send**
+  (updates.md #54 / S48). A provider settings save is a wholesale replace of the
+  stored document, and both admin controllers built that document from the request
+  body alone — so a client that did not know about a field silently deleted it. This
+  is the exact shape that **wiped live Trakt OAuth tokens on production** during a
+  plugin update, and it was live, not theoretical: the admin SPA's OIDC form posts
+  `provider_url`/`client_id`/`client_secret`/`scopes` and knows nothing about
+  `redirect_uri`, so one click on Save would have erased a `redirect_uri` configured
+  through the API — which, with the change above, hard-`503`s every OIDC login.
+
+  The invariant is now explicit in `GithubAdminController` and `OidcAdminController`,
+  for every optional key (`scopes`, `redirect_uri`): **a key ABSENT from the request
+  body is PRESERVED; only an explicitly empty value clears it.** Absent is never a
+  deletion. (`client_secret` already behaved this way — blank keeps the stored
+  secret.) A rejected save (`invalid_redirect_uri`, `missing_client_id`, …) mutates
+  nothing, and repeated partial saves do not erode the row. Guarded by
+  `AuthProviderSettingsPreservationRealDbIntegrationTest`, which drives both real
+  controllers through the real repository against real MySQL and reads
+  `plugin_settings.settings_json` straight back out of the table; reverting either
+  key on either controller to a wholesale replace fails it with a message naming the
+  incident.
+
+  **Not fixed, documented instead:** `LdapAdminController::saveSettings()` still
+  rebuilds its document from the request body alone (only `bind_pw` is kept on
+  blank), so a *scripted* partial save resets an omitted `port`/`ssl`/`bind_dn`/
+  `user_filter`/`admin_group` to its default. The admin console's LDAP form always
+  posts the complete set, so no shipped client is affected; API callers must send the
+  full map. Noted in the class docblock and in the SSO guide.
+
+- **Every episode / track / photo play threw an uncaught `PDOException` in the HTTP
+  worker** (S102). `PlaybackController::dispatchPlaybackStarted()` passes the RAW
+  `media_items.type` value into `StatsCollector::recordPlaybackStart()` — correct, and the
+  entire point of S31 — but migration 019 had declared
+  `stats_playback_events.media_type` as `ENUM('movie','series','music','photo')`: **four**
+  of the column's **thirteen** members. Under `STRICT_TRANS_TABLES` every other value is
+  MySQL error **1265 "Data truncated for column 'media_type'"**, which the driver raises as
+  a `PDOException` that nothing on the path caught. Production corroborates exactly that:
+  **all 235** stored rows were `movie`, and every non-movie play since S31 threw instead of
+  recording.
+  - **Migration 094 widens the column to the full 13-member vocabulary**, in
+    `media_items.type` column order so both share one ordinal numbering. Widening (rather
+    than folding the 13 types down to 4) is safe *and* correct here because the column has
+    **no readers** — every query over `stats_playback_events`
+    (`getPlaybackStats`/`getTopUsers`/`getTopMedia`, `NewsletterGenerator`,
+    `DashboardService::getRecentPlaybackEvents`) aggregates by date / user / media item and
+    never selects or groups by `media_type` — so no consumer's output shape changes, while
+    folding would have permanently destroyed the per-type resolution S31 exists to capture
+    (`episode`→`series`, `track`→`music`, `audiobook`→`book` are all one-way). The new
+    member list is a strict superset of the old one, so no stored value can be truncated;
+    verified against real MySQL 8.0 with 235 seeded `movie` rows.
+  - **`stats_storage.media_type` deliberately stays coarse** and is fixed the *other* way.
+    It is the one such column with a real reader — `DashboardService::getStorageSummary()`
+    groups by it into a fixed `{movie,series,music,photo,book}_bytes` shape — so widening it
+    would have dropped bytes into that `match`'s `default` arm and quietly broken the admin
+    dashboard. Instead the snapshot writer folds whatever it is handed through
+    `StorageSnapshotHelper::TYPE_TO_BUCKET` (exhaustive, and idempotent because every bucket
+    maps to itself), so a caller passing a raw `episode` gets a correct `series` row rather
+    than error 1265. Both existing callers already passed bucket names and are unaffected.
+  - **Statistics can no longer break playback at all.** Every `StatsCollector` *write* now
+    runs behind a containment boundary that logs the failure at `error` level (so it lands
+    in `.logs/error-YYYY-MM-DD.log` — the `error` handler is a `rotating_file`, so the
+    configured `error.log` path is date-stamped on disk) and swallows it — telemetry is
+    strictly less important than the action that triggered it, and
+    `dispatchPlaybackStarted()` has no try/catch of its own. Repeated failures are counted
+    per operation and the log is throttled to one line per operation **per exception class**
+    per minute, with `failures_total` / `suppressed_since_last_log` /
+    `operation_failures_total` in the context and the running totals (still keyed per
+    operation) readable via `StatsCollector::writeFailureCounters()`. The exception class is
+    part of the window key because keying on the operation alone suppressed a *new kind* of
+    failure for an already-failing operation: once `library_change` had logged a
+    `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same 60 s window
+    was counted but its message never reached the log. A repeat is noise; a different class
+    is news. `ItemRepository::recordChange()`
+    records one library change per scanned item, so an un-throttled boundary would have
+    written ~29,000 identical error lines during one music scan of the production library.
+    *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
+    query must surface as a visible error rather than a silently empty chart.
+  - **The dashboard's five storage roll-ups now equal the bytes that were written.** Folding
+    raw types onto five buckets means several types share a bucket, and every row of one
+    snapshot run carries the same `NOW()` second — so `getStorageSummary()`'s
+    `MAX(recorded_at)` join legitimately returns *several* rows per bucket (also one per
+    `library_id`). It used to **assign** (`=`) each bucket's bytes while ordering by
+    `total_bytes DESC`, so the smallest colliding row won and the rest disappeared: 13 folded
+    types worth 91,000 bytes produced five totals summing to **31,000**. Both sides are now
+    additive — `SUM(…) GROUP BY media_type` in SQL and `+=` in PHP — and a snapshot run is
+    written as ONE batch (`StatsCollector::recordStorageSnapshots()`), which sums per bucket
+    before inserting so a run cannot produce two rows for the same bucket. Verified on real
+    MySQL: 13 types / 91,000 bytes in, 91,000 across the five roll-ups out.
+    `StorageSnapshotHelper::bootstrapSnapshot()` also finally honours its documented "if data
+    is stale or missing" contract (it was called on *every* PHP-FPM request, re-running
+    `du -sb` over both vault roots each time), because summing same-second rows would
+    otherwise double the totals when two snapshot runs land in one second. That staleness
+    check compares the age by ABSOLUTE distance, so a newest row dated in the *future* (a
+    clock that stepped backwards, or one stray row) reads as stale rather than as "fresh
+    forever" — measured pre-fix: one row dated +1 day and the fallback never refreshed again.
+  - **A snapshot run now carries ONE `recorded_at`, so a looping caller cannot lose bytes to
+    a wall-clock second boundary.** `recorded_at` is a second-precision `DATETIME` and the
+    dashboard joins on `MAX(recorded_at)` *per `media_type`*, so a run whose rows straddle two
+    seconds silently loses every bucket that received rows in more than one of them. With a
+    fresh `NOW()` per INSERT that was decided by luck: measured on a loaded box, 13
+    `recordStorageSnapshot()` calls spread over three seconds and the dashboard reported
+    **44,000 of the 91,000 bytes handed in**. The run's second is now computed once and bound
+    through `FROM_UNIXTIME(?)` — a bound unix second rather than a PHP-formatted string, so
+    the value is exactly what `NOW()` would have produced in the MySQL session's own time
+    zone. What ends a run is a *stall* between two snapshot writes — a gap of **5 s or more**
+    (the comparison is `<`, so exactly 5.000000000 s already starts a new generation) — and
+    not an elapsed duration, so a run cannot be split into generations by its own length: 13
+    calls a full second apart (13 s end to end) round-trip all 91,000 bytes and 13 of 13 item
+    counts, where the same run on the old write path reported 48,000 and 5. The batch form was
+    already immune by accident (one row per bucket makes the per-type `MAX` a no-op); the
+    guarantee is now structural for both forms, pinned by an integration test that crosses a
+    second boundary on purpose and stamps nothing, and — since a stall boundary that no test
+    could see would be deleted by the next cleanup — by a unit test that discriminates
+    "continued" from "recomputed" with a sentinel stamp and brackets the window at 4.9 s / 5.0 s
+    with no database. Note what the gap window does *not* buy: it cannot tell a stalled run
+    from a busy one, because all it sees is the interval between two *writes*. For a
+    hypothetical per-library writer that interval **is** the next library's `du -sb` (measured
+    warm on the dev box at 151–257 k inodes/s depending on load, so 5 s buys only ~0.75–1.3 M
+    inodes — and a six-hourly snapshot always meets a *cold* cache), so such a writer must hand
+    its whole run to one `recordStorageSnapshots()` call — which is exactly what both current
+    callers do, taking the stamp once before the write loop, so the window is never consulted
+    between one run's own rows.
+  - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
+    media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
+    set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the
+    whole suite stayed green with *either* reverted, and only the simultaneous revert failed.
+    That matters because per-library snapshots will legitimately produce several rows per
+    bucket and "the SQL already groups" is a plausible reason to simplify the arms back to
+    `=`, which would render three 1 TB libraries as 1 TB. The `+=` half now has a
+    database-free test (two `movie` rows, 1,000 + 2,000, must be 3,000) and the SQL half a
+    real-MySQL one (two rows per bucket in one second must come back as five `items` rows).
+  - **An unrecognised media type is now dropped from the storage snapshot, loudly.** It used
+    to fall back to `movie`, i.e. unknown bytes were added to a real bucket with only a
+    warning in `app.log`. `migrations/086_stats_storage_book_bucket.sql` already wrote the
+    rule down — *"a wrong number that looks right is worse than a visibly missing one"* — so
+    the writer now logs at `error` and writes no row. `MediaItemType::FALLBACK` remains
+    correct for *labels* (`normalize()`, `shape()`, `lookupMediaType()`) and is no longer
+    used for a byte accumulator.
+  - **Root cause was a duplicated type vocabulary, so that is what got fixed.** The
+    13-member list had been re-typed by hand in four places, each carrying a comment asking
+    the next author to keep it "in lockstep" — a convention that had already failed three
+    times (this bug; `book`/`audiobook` bytes missing from the dashboard, migration 086;
+    `track` missing from the Music totals). New `Phlix\Media\MediaItemType` holds the list
+    **once**, `MediaItemShaper::VALID_TYPES` is now an alias of it, and a new drift test
+    **parses the migration SQL** and fails the build when the constant, any consumer map
+    (`TYPE_TO_BUCKET`, `UpnpClassMap::TYPE_TO_CLASS`, `VALID_TYPES`) or any of the
+    type-carrying columns disagree. The previous cross-checks compared the PHP copies only
+    to each other, which is why all of them could agree while the actual column did not.
+    The parser reads `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]` /
+    `CHANGE [COLUMN] <old> <new>` / `ADD [COLUMN]` clauses — backticked or bare,
+    schema-qualified or not, in any position of a multi-clause `ALTER`, any case, any
+    whitespace — i.e. every style this repo's migrations actually use, each pinned by its own
+    test case. `ADD [COLUMN]` is included because it was the one style that could redefine a
+    tracked column while leaving the alarm green (as `DROP COLUMN` + `ADD COLUMN`), and
+    because `users.status` — defined that way by `migrations/037` — was the single ENUM column
+    of the 29 in a fully migrated schema the parser could not read. Three blind spots are
+    deliberate and now documented on `MediaItemType`: DDL assembled at runtime inside a
+    `PREPARE`/`EXECUTE` string (as `migrations/011` does) is **skipped** rather than
+    half-parsed, so a widening must be written as a plain statement to be seen (parsing it
+    naively yielded 24 empty-string "members" that the first version of the guard accepted as
+    success); a bare `DROP COLUMN` with no re-`ADD` cannot widen an ENUM; and
+    `migrations/*.php` files are not read at all — which is safe because `MigrationRunner`
+    likewise globs `*.sql` only, and a test now reddens if any `.php` migration ever contains
+    an `ENUM(` definition.
+  - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
+    any string for any column and cannot reproduce an ENUM rejection — the same class of
+    miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members
+    round-trip verbatim, an unknown playback type is coerced instead of rejected, an unknown
+    storage type writes no row at all, a failing write is contained, the storage roll-ups
+    equal the bytes written, and a first progress report on an `episode` records
+    `media_type=episode` without throwing.
+
+- **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
+  wire** (updates.md #44 / S52 review). Workerman's response encoder
+  (`Protocols/Http/Response::__toString()`) appends its own
+  `Content-Length: strlen($body)` **unconditionally** and **last**, so a handler that
+  correctly set the real size on a bodyless `HEAD` reply emitted
+  `Content-Length: <size>` followed by `Content-Length: 0`. RFC 9110 §8.6 makes such a
+  message invalid — recipients must reject it, hardened proxies (HAProxy) drop it as a
+  request-smuggling defence, and clients disagree about which value wins. DLNA
+  renderers probe a resource with `HEAD` *before* they open it, so the reply meant to
+  advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
+  narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
+  body (and delegates to Workerman untouched for everything else). It is reached two
+  different ways, because the two affected routes are dispatched by different code:
+  `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
+  a GET that merely came out empty, whose stale length would be a keep-alive framing
+  desync rather than a fix — which is what fixes `HEAD /dlna/stream/{id}`; the
+  pre-existing twin on `HEAD /media/{id}/stream` is fixed by **naming the class
+  directly** in `HttpHandler::serveMediaStream()`, which runs *before*
+  `Application::dispatch()` and returns Workerman responses, so it never builds a
+  Phlix `Response` and has no `headOnly` flag to select on. Every other reply,
+  204/304/redirect/416 included, is byte-identical to before. Pinned by assertions on
+  the **encoded bytes**, with the expected bytes *derived from* Workerman's own encoder
+  so a future dependency bump cannot make the narrowed copy diverge silently — the
+  previous tests inspected the header *array*, which cannot observe this defect at all.
+
+- **A route registered for `HEAD` in its own right relied on its handler remembering
+  to flag the reply** (S52 post-merge review, finding 1). `Response::$headOnly` is what
+  selects the narrowed encoder above, and it was set **only** by
+  `Router::dispatchAsHead()` — the GET→HEAD *fallback*. A route registered as
+  `match(['GET', 'HEAD'], …)` (which is how the DLNA stream route is registered, so
+  that a file-backed body is not suppressed to `Content-Length: 0`) never reaches that
+  method, so the router set nothing and correctness depended on each controller setting
+  the flag by hand. The one such route today does, but the next one to declare a
+  `Content-Length` on its HEAD arm and forget the flag would have shipped
+  `Content-Length: 123456789` followed by `Content-Length: 0` again with the whole
+  suite green. `Router::dispatch()` now flags **every** response it returns for a
+  `HEAD` request (`markHeadOnly()`, the single writer of the flag in the class: both
+  route maps, both middleware short-circuits, and the fallback), so the framing is a
+  property of the framework rather than a convention. It cannot flag a GET — the method
+  test is the whole body — and it is idempotent, so the DLNA controller keeps its own
+  explicit set as defence in depth for callers that are not `Router::dispatch()`.
+  **One live reply does change on the wire, for the better:** the DLNA stream route is
+  registered inside a group carrying `DlnaAllowlistMiddleware`, and that gate's refusal
+  is now flagged too, so an off-LAN `HEAD /dlna/stream/{id}` answers
+  `403 … Content-Length: 0` with **no** body (101 B) where it previously shipped its
+  104-byte `{"code":"dlna.forbidden"}` JSON alongside `Content-Length: 104` (207 B).
+  RFC 9110 §9.3.2 forbids content in a `HEAD` response, so the new bytes are the
+  conforming ones — but a `HEAD` probe can no longer read *why* it was refused (use a
+  `GET`), and the `Content-Length: 0` under-reports what the equivalent `GET` would
+  return, exactly as the pre-existing `withFile()`-on-a-HEAD case does. The
+  HEAD-registered stream route's own 200 reply is unchanged (its controller already set
+  the flag), as is every 204/304/redirect/416. Pinned by `RouterTest` tests that
+  register a HEAD route which does **not** set the flag and assert on the **encoded
+  bytes** that exactly one `Content-Length` reaches the wire, with a control showing
+  the framework encoder emits two for the same shape — including all three arms r1
+  found unpinned (`dispatch()`'s static short-circuit and both halves of the parametric
+  GET→HEAD fallback, the live path for `/api/v1/media/{id}`, `/hls/{job}/{seg}` and
+  `/stream/theme-media/{libraryId}/audio`, where an unflagged reply measured
+  4,377 B with two lengths against 113 B with one).
+  **Bounded, not covered:** a *global* middleware registered on `Application` runs
+  before the router, so a `HEAD` it short-circuits is never flagged and still ships its
+  body. Today only `AccessScheduleMiddleware` can do that and its refusals declare no
+  `Content-Length` of their own, so the reply is the recoverable "body on a HEAD" shape
+  rather than the unrecoverable two-length one — the same shape as `Router::notFound()`
+  and `HttpHandler`'s SPA/static/404 replies, all of which move together in a separate
+  change. `ApplicationHeadOnlyBoundaryTest` pins that boundary from both sides so it
+  cannot drift, and `Application::dispatch()`'s docblock states it.
+
+- **`Router::group()` could leak its middleware onto every later route** if the group
+  callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`
+  copies the current group middleware onto every route registered afterwards — so one
+  throw inside `loadCdsRoutes()` would have silently attached the DLNA **IP
+  allowlist** to the ~15 route loaders that run after it, and those endpoints would
+  have begun refusing every non-LAN caller. Low probability, wide blast radius; the
+  restore is now unconditional and the log call inside that catch is itself guarded.
+  Pinned by tests that register a throwing group (flat and nested) and assert both
+  that a route registered afterwards carries no leaked middleware and that a nested
+  group restores the *outer* prefix and middleware rather than clearing them.
+
+- **"Original" quality was silently unavailable for every HEVC / non-AAC title**
+  (updates.md #30 / S49). The v7 ABR ladder FOLDED the `original` rendition out of
+  `LadderResult::streamVariants()` whenever a re-encoded (non-copy) Original was the
+  same frame at effectively the same BANDWIDTH as the top ladder rung — which is the
+  normal outcome for a low-bitrate source, since the ladder caps every rung at the
+  source bitrate. `TranscodeManager::writeVodPlaylists()` iterates exactly that list,
+  so a folded Original never got a media playlist written at all: `media_voriginal.m3u8`
+  simply did not exist, and "Original" was either missing from the quality menu or a
+  404 (masked only by a serve-time alias that quietly served the top rung's playlist
+  instead). Every job now always publishes a real Original variant:
+  - `LadderResult::streamVariants()` always returns `[original, ...renditions]`; the
+    fold is gone from the variant list.
+  - `TranscodeManager::getJobVariants()` no longer mirrors that fold (its private
+    `originalDuplicatesTopRung()` helper is removed), so the client `variants[]`
+    payload always advertises `{id: 'original', …}` with its own media-playlist url.
+  - The duplicate-BANDWIDTH problem the fold existed to prevent is now solved where
+    it belongs — in the master playlist. `writeVodPlaylists()`'s SV-4.6 switchable
+    filter (`TranscodeManager::switchableVariants()`, still using
+    `Rendition::duplicatesForAbr()`) withholds a variant from the ABR-switchable
+    `#EXT-X-STREAM-INF` set in exactly two cases: a stream-COPY variant, always (its
+    segment boundaries can drift off the uniform timeline), and a TRANSCODE `original`
+    that duplicates the top rung's frame + BANDWIDTH, which is the low-bitrate
+    collapse a player would merge into one level. Both still get their own media
+    playlist, which is what makes "Original" explicitly selectable.
+    **The master's advertised level set is therefore unchanged from v8**: a transcode
+    `original` that is NOT such a duplicate stays the master's top level, exactly as
+    before — including the large class of sources whose original height matches no
+    canonical rung (2.39:1 crops, DCI-2K). An interim revision of this change excluded
+    every `original` from the switchable set; that dropped the master's top level for
+    those sources (e.g. a 1920×1080 HEVC @8 Mbps master went from `original` at
+    10.0 Mbps down to `1080p` at 5.478 Mbps, halving the auto-ABR ceiling) and is NOT
+    what shipped. Four tests now pin the full level set — ids + BANDWIDTH +
+    RESOLUTION — per source shape (copy / distinct transcode / anamorphic / duplicate).
+  - `TranscodeManager::ensurePlaylistRegenerated()` rebuilt its variant list from the
+    persisted `renditions` **only**, so an LRU cache eviction destroyed
+    `media_voriginal.m3u8` permanently — even for a never-folded stream-COPY Original
+    that had been written correctly. It now reproduces the same `original`-first set
+    `ensureHlsJob()` wrote. The same method also read audio tracks from a
+    `transcode_jobs.audio_tracks` column that has never existed in any migration
+    (`JOB_ROW_COLUMNS` cannot select it), so multi-audio jobs regenerated with no
+    `#EXT-X-MEDIA` audio group and no `media_a{N}.m3u8` playlists; they are read from
+    the persisted ladder JSON now.
+  - `TranscodeManager::ensurePlaylistRegenerated()` also now validates each persisted
+    rendition id against the same `^[a-z0-9]+$` allowlist the segment serve path uses
+    (the id is interpolated into `media_v{id}.m3u8` and into the master's URI), and
+    returns `false` instead of writing a master with zero `#EXT-X-STREAM-INF` levels
+    when nothing in a corrupt ladder survives that check — such a file would otherwise
+    short-circuit every later regeneration attempt and permanently break the job.
+  - `JOB_KEY_VERSION` **v8 → v9** so pre-existing jobs (whose directories lack the
+    Original playlist) are not reused and age out via the cache sweep. `HlsController`'s
+    folded-original serve-time alias is retained for pre-v9 job directories still on
+    disk (bounded by the cache sweep's idle TTL, 3 h by default) so already-issued
+    signed URLs keep playing; its removal is tracked as part of **S59**.
+  - **No client change was required, because the master's advertised level set is
+    unchanged** (see above): `quality.ts`/`QualityMenu.vue` resolve "Original" by
+    matching a master level of the same height and then load `media_voriginal.m3u8`
+    directly, which is precisely the file that now exists. That client gate does have a
+    pre-existing blind spot this change neither introduces nor fixes — a stream-COPY
+    Original is (as before) never a master level, so when its height matches no level
+    and exceeds them all (e.g. a 1920×800 H.264/AAC source against a 720p top rung)
+    the menu still hides "Original" even though the playlist is now guaranteed to
+    exist. Hardening that gate to key off the server's `variants[]` entry rather than
+    level height-matching is tracked as a `phlix-ui` follow-up.
+
+- **External identities were stored with a hardcoded `provider='external'`**
+  (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which
+  provider actually authenticated, so an OIDC `sub` and an LDAP DN could collide onto
+  the same account. It now takes a `$provider` argument (threaded from the
+  `AuthResult`), scopes the lookup by `(provider, external_id)`, and stores the real
+  provider (`oidc` / `ldap`) — two providers presenting the same identifier map to
+  distinct users. This is the foundation S45–S47 (account-linking / multi-identity)
+  build on.
+
+- **First OIDC/LDAP login 500'd because `users.password_hash` was `NOT NULL`**
+  (updates.md #37 / S44). External (passwordless) users are created with
+  `password_hash = NULL`, but the column had never been relaxed since migration 001.
+  New migration `091_users_password_hash_nullable.sql` (`ALTER TABLE users MODIFY
+  password_hash VARCHAR(255) NULL`) fixes it; it applies automatically via the
+  migration runner on upgrade (no manual step). External users with no email/username
+  from the IdP are still created — they get a deterministic placeholder derived from
+  `(provider, external_id)` so two email-less accounts can't collide on the unique
+  `email` / `username` columns.
+
+- **Relay tunnel forced TLS regardless of scheme → silent hang against a plaintext
+  hub relay port** (updates.md #38 / S38). `openHubConnection()` previously set
+  `transport='ssl'` and attached an SSL context unconditionally, and `RelayConfig`
+  derived a `wss://` relay URL for any `https://` hub — so a default deploy tried to
+  do a TLS handshake against the hub's plaintext relay listener (`:8802`), which
+  produced no `onError`/`onClose` and simply deadlocked. The transport now keys off
+  the *resolved URL scheme*: a new pure `RelayConsumer::resolveHubTransport()` helper
+  derives `useTls = (scheme === 'wss')`, rewrites `wss://` → `ws://` for the Workerman
+  address (wss is not a registered transport), and only `openHubConnection()` when
+  `useTls` sets `transport='ssl'` + the SSL context. **The default derived relay
+  scheme is now plaintext `ws://`**, matching the hub's plaintext-by-default relay
+  listener — a change from the old always-`wss://` behavior. A TLS relay tunnel now
+  requires `PHLIX_RELAY_TLS=1` on the server together with `HUB_RELAY_TLS=true` on
+  the hub (see the new keys under Added). At boot, if the resolved relay URL is
+  `wss://` while `relay_tls` is off, a clear once-per-process `logger.hub` warning
+  explains the likely hang and the envs to set.
+
+- **Admin Relay Tunnel Enable/Disable/Ping/Status now reflect the REAL tunnel
+  instead of a never-started in-worker object** (updates.md #39 / S39). The four
+  `AdminHubController` relay endpoints (`GET /api/v1/admin/remote/relay/status`,
+  `POST …/relay/enable`, `…/relay/disable`, `…/relay/ping`) were operating on a
+  container-local `RelayConsumer`/`RelayApplication` copy that never runs (the real
+  tunnel is the forked `phlix-relay-tunnel` process) and probed liveness with a
+  blocking `exec('pgrep -f phlix-relay-tunnel')` + log-scrape inside the event loop.
+  That blocking subprocess I/O is **removed entirely** (the endpoints now read the
+  cross-process state files `RelayStateStore` maintains — `relay-tunnel.state.json`,
+  `hub-heartbeat.state.json`, `relay-control.json`), and the fake `{"success":true}`
+  no-ops are gone:
+  - **Enable/Disable are an honest, persisted kill-switch, effective on next server
+    reload** — not an instant in-process start/stop. Disable writes `disabled:true`
+    to `relay-control.json` (which the relay fork honors at boot in addition to the
+    `PHLIX_RELAY_DISABLED` env var); Enable clears it. Both return
+    `{success, disabled, enrolled, takesEffectOnReload:true, message}`. Enable
+    **cannot unset the `PHLIX_RELAY_DISABLED` env var**, so when the env kill-switch
+    is set the response stays `disabled:true` with an honest message; a persist
+    failure returns `500`.
+  - **Status** returns the real persisted `connected`/`active`/`enrolled` plus
+    `reconnectAttempts`, `activeSessions`, `lastDisconnectTime`, the last
+    `lastConnectError`/`lastConnectErrorAt` reason, the effective `disabled`
+    kill-switch, and `updatedAt` (fork-write staleness signal). Back-compat keys
+    `endpoint`/`establishedAt` are retained for the current UI.
+  - **Ping** reports the persisted latency: `{success, connected, active, latencyMs,
+    lastHeartbeatAt, latencySource:"persisted"}`, with `latencyMs:null` = "not
+    measured yet" (never a fabricated timing), and returns **`409`** (with
+    `lastConnectError`/`lastConnectErrorAt`) when the tunnel is not connected rather
+    than pretending to ping.
+
+  Kill-switch single-writer discipline is preserved: `relay-control.json` is written
+  only by the HTTP worker, read by the relay fork at boot; the fork writes the two
+  state files, the HTTP worker only reads them. Consumed by the reframed
+  `@phlix/ui` admin Remote Access panel (v0.98.29).
+
+- **Network Health now reflects real cross-process tunnel/heartbeat state; the
+  `/health/network` probe no longer side-effects a heartbeat** (updates.md #40 / S40).
+  `Admin\HealthController::relayHealth()` (`GET /api/v1/health/relay`) and
+  `networkHealth()` (`GET /api/v1/health/network`) previously read a never-started,
+  container-local `RelayConsumer`/`HubClient` copy — so the admin Network Health
+  panel always showed offline/0/null even on a healthy, enrolled, connected box.
+  Both endpoints now read the persisted cross-process snapshots via `RelayStateStore`
+  (`relay-tunnel.state.json` + `hub-heartbeat.state.json`, written by the
+  `phlix-relay-tunnel` and `phlix-hub-heartbeat` forks); `relayHealth` adds
+  additive `relay.lastConnectError`/`lastConnectErrorAt` and `hub.lastLatencyMs`
+  fields, and the heartbeat fork now records real round-trip latency each tick via
+  monotonic `hrtime(true)` in `HubClient::performHeartbeatTick()` (lighting up the
+  S39 Ping latency). Critically, **`/health/network` is now a cheap, side-effect-free
+  reachability probe**: the previous implementation fired a REAL
+  `POST /api/v1/servers/{id}/heartbeat` to the hub on **every** poll of the admin
+  network-health indicator (mutating hub state and hammering the hub as the poller
+  ran); it now just reads the latency/health snapshot the heartbeat fork already
+  persists. Status classification is unchanged (`healthy` <100ms, `degraded`
+  ≤500ms, otherwise `offline`; `offline` when not enrolled, no successful heartbeat
+  yet, or the heartbeat is currently failing). Single-writer discipline preserved —
+  only the heartbeat fork arms `HubClient::startHeartbeatLoop()` and writes
+  `hub-heartbeat.state.json`. Known follow-up: no `updatedAt`-staleness guard, so a
+  stale "healthy" snapshot could persist if the heartbeat fork itself hangs.
+
+- **`CollectionService` empty-TMDB-key smell** (S33). `getOrCreateCollection()` and
+  `syncCollectionForMovie()` took a `$tmdbApiKey` argument the bodies never used —
+  the scanner passed an empty string (`syncCollectionForMovie($id, '')`). The TMDB
+  key is actually resolved by the injected `TmdbProvider` (constructed with the
+  configured key), so the dead parameter is removed from both methods.
+  `syncCollectionForMovie()` now also skips cleanly (no HTTP, no DB writes, returns
+  a no-op success) when `TmdbProvider::hasApiKey()` is false, instead of issuing
+  requests that would just fail. TMDB calls continue to flow through the async
+  `MetadataHttpClient` — never a new inline/blocking call in the scan path.
+
+- **Playback stats now record each item's real `media_items.type` instead of hardcoding `movie`**
+  (updates.md #31 / S31). `PlaybackController::dispatchPlaybackStarted()` previously wrote a
+  literal `'movie'` type for every playback-start stats event, so Most Watched / Top Media and
+  every other type-partitioned stat mis-attributed episodes, tracks, etc. as movies. A new
+  private `lookupMediaType()` runs `SELECT type FROM media_items WHERE id = ? LIMIT 1` and records
+  the raw stored ENUM value verbatim (no remap — `photo` stays `photo`, honoring the 13-member
+  type ENUM), falling back to `'movie'` only when the row is missing/empty (the same default
+  `MediaItemShaper::shape()` coerces unknown types to). The lookup runs only on the stats path
+  (`statsCollector !== null && userId !== ''`), so a non-stats deployment pays no extra query.
+
+- **`playback_state` progress upserts now update in place instead of inserting a new row every ~15s**
+  (updates.md #29 / S29). Every progress tick from `PlaybackController::reportProgress()` (and
+  `StreamManager::persistStreamState()`) writes via `INSERT ... ON DUPLICATE KEY UPDATE`, but the
+  `playback_state` table only carried its `id` PRIMARY KEY — a fresh random UUID per call — and had no
+  key on the upsert's real conflict target, so `ON DUPLICATE KEY` could never fire and each ~15s tick
+  inserted a brand-new row, bloating the table and undermining resume / Continue Watching. Adds
+  `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` so the existing upserts
+  finally update the matching row. No controller change was needed — both upserts already INSERT
+  `(id, session_id, media_item_id, ...)` and touch only `position_ticks`/`duration_ticks`/
+  `playback_status`/`updated_at` in their `ON DUPLICATE KEY UPDATE`, i.e. they already target exactly
+  the new key's columns. Mirrors the migration-072 `path_hash` dedupe-then-constrain precedent:
+  `migrations/090_playback_state_session_media_unique.sql` is documentation-only (it splits to zero
+  executable statements, reserving the number in the ledger), and the unique key is added out-of-band
+  by the new one-time `migrations/cleanup_090.php`, which first merges any pre-existing duplicate
+  `(session_id, media_item_id)` groups — keeps the max `updated_at`, tie-break max `id`, batched via
+  the new `Phlix\Session\PlaybackStateDeduper` so a large production table drains safely across
+  multiple bounded passes — so the `ADD UNIQUE KEY` cannot fail 1062.
+  **⚠️ Post-deploy one-time step (like `cleanup_072.php`): after migration `090` is applied, run
+  `php migrations/cleanup_090.php` ONCE.** `scripts/install.sh` and the Docker entrypoint do NOT run it
+  automatically; until it runs, the unique key does not exist and progress writes keep duplicating.
+  The script is idempotent and re-run-safe (the dedupe is a no-op once clean and `addUniqueKey()`
+  swallows a duplicate-key-name; re-run it if it reports lingering duplicates).
+
+- **Top Media / Top Users leaderboards no longer show blank rows for deleted items/users**
+  (updates.md #14 / S14). The admin dashboard's Top Media list previously rendered play-count
+  rows with no title/poster (and Top Users rows with no username) whenever a media item or user
+  that had recorded plays was later deleted — the aggregate queries counted the surviving
+  `stats_playback_events` rows while the per-row hydrate found nothing to render.
+  `StatsCollector::getTopMedia()` / `getTopUsers()` now `INNER JOIN media_items` / `users`
+  (`mi ON e.media_item_id = mi.id` / `u ON e.user_id = u.id`), so events whose item or user no
+  longer exists are excluded at the query level, mirroring `WatchHistoryService`. A
+  defense-in-depth null-skip in `DashboardService::getTopMedia()` / `getTopUsers()`
+  (`continue` when `findById()` / `getUsernameById()` returns null) closes the narrow TOCTOU
+  window if a row is deleted between the aggregate query and the hydrate. **Decision: orphaned
+  rows are hidden**, not shown as a "(deleted item)" placeholder carrying the historical
+  play-count. The joins are 1:1 on the PKs, so watch-time / play-count / ordering semantics for
+  surviving items and users are unchanged, and the underlying `stats_playback_events` rows are
+  retained (purging orphaned stats is a separate maintenance task, S77). New positive coverage in
+  `DashboardServiceTest` (null-skip) and `StatsCollectorTest` (INNER JOIN present).
+
+- **DLNA Start/Stop toggle now genuinely enables/disables the ContentDirectory service**
+  (updates.md #28 / S28). The admin `POST /api/v1/admin/dlna/start` and `/stop` endpoints
+  previously only flipped an in-memory boolean on the single request-worker's `CdsServer` (the SSDP
+  announce), which neither registered the browse routes, reached the other worker processes, nor
+  survived the next reload — the ContentDirectory routes are registered once per worker at boot in
+  `Application::loadCdsRoutes()`, gated on the effective `dlna.cds_enabled` setting. `start()`/
+  `stop()` now **persist** `dlna.cds_enabled` via the shared `SettingsRepository`
+  (`set(..., 'bool')`, the same store the generic admin settings page writes) and schedule a
+  **graceful SIGUSR2 reload** via a new reusable `AdminRestartController::scheduleGracefulReload()`,
+  so every worker re-reads the setting at its next `onWorkerStart` and registers or drops the CDS
+  routes accordingly. Idempotent — `409` when already in the desired state (no write, no reload);
+  `503` when the settings store is unwired; `500` if the persist throws.
+  `GET /api/v1/admin/dlna/status` now reports truthfully: `enabled` (persisted intent, read live
+  from the store), `running` (whether THIS worker is actually serving the routes right now, frozen
+  at its boot), and a new transient `reloadPending` (`enabled !== running`) the SPA can surface as
+  "applying…". The reload is a Workerman one-shot timer + `posix_kill` probe — no blocking I/O,
+  exit, or static request state in the request path. New `AdminDlnaServerControllerTest` (11 tests)
+  and first-ever coverage of `scheduleGracefulReload()` in `AdminRestartControllerTest`.
+
+- **DLNA ContentDirectory SOAP control parsing hardened against DIDL-Lite argument bleed**
+  (updates.md #28 / S28). The live control parser `DlnaContentDirectoryController::parseSoapBody`
+  (the `POST /dlna/content_directory` path) walked the whole document with `XMLReader`, taking the
+  first text value for each localName found at ANY depth — so a same-named element nested inside
+  embedded DIDL-Lite metadata (e.g. `<Filter><ObjectID>injected</ObjectID></Filter>`) could bleed
+  into a top-level argument. A new namespace-aware, XXE-safe `Phlix\Dlna\SoapArgumentExtractor`
+  reads arguments ONLY from the SOAP action element's DIRECT children (XPath `*`, so a wrapper
+  element carrying nested metadata contributes no text and is skipped), parsing with `LIBXML_NONET`
+  and never `LIBXML_NOENT`/`LIBXML_DTDLOAD` so external entities are never substituted.
+  `DlnaServer::parseSoapBody` was de-duplicated onto the same helper (single source of truth, so the
+  two parsers cannot diverge). The legacy `/cds/control` handler
+  (`CdsControlHandler::parseSoapEnvelope`) was already direct-child scoped and is left unchanged.
+  Real Browse/Search envelopes are unaffected; the empty-body `400` and the unknown-action UPnP
+  fault are preserved. New `SoapArgumentExtractorTest` (18 tests) plus a regression test asserting a
+  nested same-named element does not bleed into the extracted arguments (mutation-verified against
+  the old any-descendant walk).
+
+  **S218 follow-up — `u:Search` now has LIVE-path coverage, and the dead pointer is labelled.**
+  Before this, `grep -F 'u:Search' tests/` hit a docblock and `DlnaServerTest.php` only. Those cases
+  drive `DlnaServer::processSoapRequest()`, which has **no production caller**: a repo-wide search
+  (src/, tests/, `vendor/`, and the sibling repos under `/home/sites/phlix`) finds its definition,
+  one docblock mention, and seven callers — every one of them inside `DlnaServerTest.php` — and
+  `DlnaServer` performs no dynamic dispatch. The container builds the class only for
+  `getContentDirectory()`, `getScpdXml()` and the device description. So Search was covered only on
+  code no renderer can reach, while Browse alone was covered on the served path.
+
+  New `tests/Unit/Server/Http/Controllers/Dlna/DlnaContentDirectorySearchLivePathTest.php` (6 tests)
+  drives real namespaced `u:Search` envelopes with a real `SOAPACTION` header through
+  `DlnaContentDirectoryController::handle()` — the `POST /dlna/content_directory` route registered in
+  `Application::loadCdsRoutes()`. It pins: the arguments reaching `ContentDirectory::search()`
+  verbatim; a Browse **control** on the same driver taking the other `dispatchAction()` arm (so the
+  Search assertion is discriminating, not just "200 OK"); an end-to-end filter through a REAL
+  `ContentDirectory` (two rows in, one out — a Search that degraded to a Browse returns both); the
+  DIDL-bleed hardening in a Search-shaped variant (nested `<SearchCriteria>` inside `<Filter>`, no
+  top-level one); and UPnP error 800 surfacing as a fault rather than an empty 200. An
+  anti-vacuity floor asserts the fixture really is a namespaced `<u:Search>` first child of
+  `<Body>`, so the coverage cannot silently weaken below its own description.
+
+  `DlnaServer::processSoapRequest()`, `SoapArgumentExtractor`'s class docblock and `DlnaServerTest`'s
+  class docblock now each say, in place, that this path is not served and where live coverage
+  belongs. No behaviour changed.
+
+- **CSP `img-src` allowlists the TMDB image CDN so remote poster/backdrop/cast artwork renders**
+  (updates.md #1). `SecurityHeaders::contentSecurityPolicy()` previously served artwork loaded
+  directly from TMDB only under the default `'self'` policy, so any image not yet cached on our
+  origin was blocked by the browser. `img-src` now explicitly names the two TMDB hosts —
+  `https://image.tmdb.org` and `https://tmdb.org` (no wildcard) — alongside `'self' data: blob:`.
+  This is a **stopgap**: an inline `// TODO(updates.md #47 / S71-S73)` marks it for removal once the
+  generic image caching/loader work proxies all remote artwork through our own origin. Single source
+  of truth in `SecurityHeaders`, also consumed by the `/app` shell's nonce'd variant; covered by an
+  extended `SecurityHeadersTest` asserting both hosts are present and no wildcard is used.
+
+- **The last two dishonest `restart: true` settings are now honest** (closes out the item below,
+  which fixed 14 of 16 keys). Bumps `detain/phlix-shared` to **v0.26.0** (43 → 42 settings keys).
+
+  **`hwaccel.probe_timeout` — DELETED, not wired.** It resolved to a config default, so it passed
+  every resolvability test, but **no code ever read the effective value** — while the admin UI still
+  rendered "requires a server restart to take effect" beside it. Two independent causes, both
+  re-verified: `HwaccelRegistry` is built via `getInstance()` with no config
+  (`FfmpegRunner.php:1359`) and its `initialize()` hands `HwaccelProbe` only a binary path
+  (`HwaccelProbe.php:51`); and `HwAccelConfig::get()` resolved
+  `$transcodingConfig['probe_timeout'] ?? $hwaccelBase['probe_timeout']` (`HwAccelConfig.php:103`)
+  while `config/transcoding.php:33` always declares the key, so the `hwaccel.*` side could never win.
+  Deleted rather than wired (plan §4 rule 10) because wiring is neither cheap nor safe: the real
+  timeouts are **two different** hardcoded constants (`ShellTimeout::FFMPEG_TIMEOUT = 10`,
+  `::GPU_TOOL_TIMEOUT = 5`) reached through 22 static call sites across seven `VendorProbe` classes;
+  the schema permitted `minimum: 0` and coreutils `timeout 0 CMD` means **no timeout**, which would
+  let an admin hang a resident worker at boot — precisely what `ShellTimeout` exists to prevent; and
+  the shipped `helpText` described a per-file pre-transcode probe that does not exist (the real one
+  is a one-time process-wide capability scan). `config/hwaccel_base.php` and `config/transcoding.php`
+  keep their `probe_timeout` literals, so the merged array shape is unchanged — it is simply no
+  longer an admin setting. Flipping `restart` to `false` was rejected: that would claim the key is
+  *live*, which is even less true.
+
+  **`process.<worker>.enabled` (5 keys) — the half-live asymmetry is now disclosed in the UI.** The
+  old `helpText` claimed the worker "is not spawned", which is **false**: `start.php` spawns it
+  regardless and the gate lives in each worker's `onWorkerStart`, which logs and skips arming the
+  poll timer. Since the admin only ever sees `helpText`, all five now state that turning a worker
+  OFF applies after a restart; that turning one back ON also applies after a restart *unless* it is
+  disabled in the on-disk `config/process.php`, in which case the in-app Restart button (SIGUSR2, a
+  graceful reload of the already-executed master) cannot help and the service itself must be
+  restarted; and that a worker switched off here still occupies an idle process. No behaviour
+  change — the gate is unchanged and correct; only the promise made to the admin was wrong.
+
+  Server-side: the hand-written allow-list lock-in and key-count assertions in
+  `tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php` go 43 → 42 (the list is
+  deliberately **not** derived from the schema — mutation-verified: re-adding the deleted key to it
+  turns the test red). Two tests that used `hwaccel.probe_timeout` merely as a convenient int-typed
+  key now use `marker_detection.intro_max_duration`.
+  `tests/Unit/Admin/SettingsDefaultResolvabilityTest` still passes with **every** key resolving.
+  `docs/dev/settings-restart-gap.md`'s per-key table updated to final reality.
+
+- **`restart: true` settings now actually take effect on restart.** The shared settings schema marks
+  16 boot-only keys `"restart": true` and the admin SPA renders "requires a server restart to take
+  effect" beside each one — a promise nothing kept. `SettingsRepository::getEffective()` resolves
+  `override ?? default`, but almost nothing called it: every other consumer read the boot `$config`
+  array (which `start.php` `include`s ONCE in the master and closes over) or `include`d a
+  `config/*.php` file straight from disk, and **nothing merged the `server_settings` table into
+  either**. Changing one of these settings and restarting — even a full `systemctl restart` — did
+  nothing. New `Phlix\Config\EffectiveConfig` loads the persisted overrides once per process and
+  overlays them onto the config defaults using the same dotted-key semantics as
+  `SettingsRepository` (leading segment = config *file*, remainder = path inside it). It is called
+  as `bootstrapAndOverlay($config)` at the top of every `onWorkerStart` in `start.php` (HTTP,
+  WebSocket, hub-heartbeat, relay-tunnel, managed workers) **and** in `public/index.php`, before
+  `ContainerFactory::create()`, so every DI provider that reads boot config observes the effective
+  value with no per-provider wiring; consumers that bypass `$config` by `include`ing a config file
+  directly (`HwAccelConfig::get()`, `FfmpegRunner::getTranscodeTimeout()`,
+  `Recorder::getTranscodeTimeout()`) now read `EffectiveConfig::file()` instead.
+  **Note the recommended design was wrong and was corrected:** overlaying only the boot `$config`
+  array covers just 4 of the 16 keys, because dotted keys name config *files* and only
+  `server.hls.*` lives in `config/server.php`.
+  **15 of 16 keys are now live after a restart or the in-app graceful reload.** Two honest
+  exceptions, documented rather than hidden: `hwaccel.probe_timeout` has **no consumer at all**
+  (`HwaccelRegistry` is constructed without this config) and is additionally shadowed by
+  `config/transcoding.php`'s own always-present `probe_timeout` — it needs a `phlix-shared`
+  follow-up to either wire it up or drop the key; and `process.<worker>.enabled` can *disable* a
+  worker on reload (the gate moved into the worker's own `onWorkerStart`, which skips arming the
+  poll timer and logs) but cannot *enable* one that `config/process.php` disables on disk, because
+  the master's spawn loop runs before `Worker::runAll()` and Workerman cannot fork a Worker group
+  afterwards. A settings-store failure — DB down, `server_settings` missing on a fresh install —
+  degrades to the shipped file defaults rather than crash-looping the worker, and an override is
+  applied only where the default already exists, so a malformed or unknown persisted row cannot
+  inject a config key. Per-key status table and the reasoning behind both exceptions live in
+  `docs/dev/settings-restart-gap.md`, rewritten from "known gap" to reflect the fix.
+
+- **Trakt operator credentials are settable from the admin Settings page again.** The v0.24.0
+  schema sweep (above) deleted `trakt.client_id`, `trakt.client_secret` and `trakt.redirect_uri`
+  because `SettingsRepository::getDefault()` resolves a two-segment key like `trakt.client_id`
+  against a FLAT `config/trakt.php`, and the real config lives at `config/scrobblers/trakt.php`.
+  The *read* path never broke — `TraktOAuthController::SETTING_KEY_MAP`
+  (`src/Server/Http/Controllers/TraktOAuthController.php:63-67`) maps those keys itself, so
+  installs with existing overrides kept working — but the admin `PUT` allow-list is derived from
+  the schema, so saving any of the three started failing with
+  `{"errors":{"trakt.client_id":"Unknown setting key."}}`. Operators were left with env vars and a
+  file edit.
+
+  **Fix:** new `config/trakt.php`, a one-line re-export
+  (`return require __DIR__ . '/scrobblers/trakt.php';`) using the same idiom `config/hwaccel.php`
+  already uses for `config/hwaccel_base.php`. The three keys resolve again under their **original
+  flat names** — no rename, no orphaned `server_settings` rows, no read-path change, no migration.
+  `config/scrobblers/trakt.php` remains the canonical file; the shim holds no values of its own and
+  is asserted to return the identical array.
+
+  They were deliberately **not** renamed to `scrobblers.trakt.*`, even though `getDefault()` now
+  walks nested config paths and would resolve that form: `trakt.*` overrides are already persisted
+  on live installs and are what the controller reads, so a rename would silently drop working Trakt
+  credentials on upgrade.
+
+  Both credential halves are masked (`"secret": true` upstream), matching this schema's existing
+  treatment of `lastfm.api_key` — the exact analogue, since Phlix sends the Trakt client_id as the
+  `trakt-api-key` header on every request. `trakt.redirect_uri` is a public URL and is not masked.
+  The documented secret set grows from a trio to a quintet.
+
+  `"restart": false` on all three is verified rather than assumed:
+  `TraktOAuthController::applySettingsOverrides()` (`:414-429`) calls
+  `SettingsRepository::getOverride()` at `:421` on every request via `loadConfig()` (`:402`), reached
+  from `authorize()` (`:158`), `callback()` (`:226`) and `status()` (`:511`). A saved credential is
+  live on the very next request. These are among the few settings for which `restart: false` is
+  literally true — the general boot-only override gap remains open and is tracked in
+  `docs/dev/settings-restart-gap.md`.
+
+  New `tests/Unit/Server/Http/Controllers/Admin/TraktSettingsEndToEndTest.php` asserts the
+  **consequence, not the shape**: that a `PUT` is accepted and persisted, that the saved client_id
+  is the one that actually ends up in the Trakt authorize redirect (`status()` flips to
+  `configured: true` and `authorize()` goes 503 → 302 with no restart), that the secret never
+  appears in a GET or PUT body, and that re-submitting the mask sentinel leaves the *stored*
+  credential intact and Trakt still working. Mutation-verified: deleting the shim, removing the keys
+  from the vendored schema, and disabling the PUT mask guard each fail it.
+- **`POST /api/v1/admin/restart` could not work on any real box.** Three separate defects:
+  1. **The PID file nothing wrote.** The controller read `config/server.php`'s
+     `worker.pid_file` (`/var/run/phlix/pid`), but `Worker::$pidFile` was never assigned anywhere in
+     the repo, so Workerman used its own default (`dirname(start.php)/workerman.start.php.pid`).
+     Every call returned HTTP 500 "PID file not found". New `Phlix\Server\Runtime\PidFile` is
+     applied from `start.php` before `Worker::runAll()` so the writer and the reader agree; it
+     creates the directory when needed and degrades to Workerman's default (with a stderr warning)
+     rather than aborting boot if the location is unusable.
+  2. **The signal was inverted.** In Workerman, `SIGUSR2` is the *graceful* reload and `SIGUSR1` is
+     the *non-graceful* one (`Worker::reload()`: `$sig = getGracefulStop() ? SIGUSR2 : SIGUSR1;`);
+     SIGUSR1 stops children immediately and arms a `SIGKILL`. The endpoint sent SIGUSR1 while both
+     docblocks asserted the exact opposite. It now sends `SIGUSR2`, and the docblocks are corrected.
+  3. **The signal fired mid-request.** `posix_kill()` ran before the `Response` was even built, so
+     the caller could get a connection reset instead of the ack — which the SPA renders as "Failed
+     to restart server" for a restart that did happen. The handler now pre-flights the target with
+     `posix_kill($pid, 0)` (a probe that sends no signal, so a stale PID is still a real 500) and
+     defers the actual `SIGUSR2` to a Workerman one-shot timer, so the JSON ack flushes first.
+
+  The response body is `{"success":true,"message":"Restart signal sent"}`. The tests were rewritten
+  to exercise the pid-path agreement between `start.php`, `config/server.php` and the DI provider,
+  and to assert which signal is sent and that it is deferred — none of which the previous
+  `sendSignal()`-stubbing suite covered.
+- **`ffmpeg.max_concurrent_transcodes` is no longer a fake setting.**
+  `TranscodeManager::__construct()` assigned a bare literal `$this->maxConcurrentTranscodes = 4;` —
+  not a constructor parameter, not a config read — so `config/ffmpeg.php`'s value and its admin-UI
+  setting (min 1 / max 64 / default 4, whose help text advises "a 16-core CPU with an NVIDIA GPU can
+  typically handle 6–8") were both inert. An admin who set 8 still got 4. The ceiling is now a
+  constructor parameter resolved by `TranscodeServicesProvider` from the **effective** value (config
+  default merged with any `server_settings` override), with `DEFAULT_MAX_CONCURRENT_TRANSCODES` as
+  the fallback. A settings-store failure degrades to the config default rather than breaking
+  transcoding.
+- **`SettingsRepository::getDefault()` can now resolve nested config paths.** The dotted-key rule
+  treated the first segment as the entire filename, so `config/scrobblers/trakt.php` — a real,
+  shipped config file — was unreachable by any key, and anything pointing at it resolved to a `null`
+  default. The file part may now span subdirectories (longest match wins:
+  `scrobblers.trakt.client_id` → `config/scrobblers/trakt.php`'s `client_id`). Purely additive — a
+  multi-segment file path never resolved before — and the path jail is tightened to validate every
+  segment, so no key can escape `config/`.
+
+_Folded in from the former `### Fixed (live production batch)` heading (W-min90 closeout merge): the entries from here through the end of this section's production-hotfix run shipped as a live production batch._
+
+- **Continue-Watching rail 500 on both clients (MySQL error 1060).** `PlaybackController::getContinueWatching()`
+  emitted a duplicate `mi.id AS id` column in its derived table, which MySQL rejected with
+  `ERROR 1060 (Duplicate column name 'id')`, 500-ing the CW rail on the SPA and console. The duplicate
+  projection was removed.
+- **Continue-Watching poster/progress shape for authless clients.** CW rows are shaped via
+  `MediaItemShaper` so each carries top-level `id` / `poster_url` / `runtime` (episodes resolve the
+  **series** poster); additionally the nested `metadata.poster_url` is **re-minted** at response time so
+  the console (which reads the nested metadata) gets a fresh signed artwork URL rather than an expired one.
+- **Signed artwork URLs expiring for authless clients (console 401s).** `poster_url`, `poster_srcset`,
+  `backdrop_url`, `backdrop_srcset`, and `logo_url` are now **re-signed at response time**
+  (`SignedUrl::refreshArtworkUrl()` / `SignedUrl::refreshArtworkSrcset()`), so clients that cannot
+  re-authenticate a request (e.g. the console) no longer receive `401`s on artwork whose signature had
+  aged out.
+- **PHP 8.5 — logging + PDO hardening under coroutines.** The MySQL buffered-query attribute now uses the
+  `\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY` class constant (the global `PDO::` alias is deprecated on 8.5),
+  `connect()` suppresses the PDO `E_DEPRECATED`, and every Monolog handler is wrapped in
+  `WhatFailureGroupHandler` so a concurrent-coroutine `E_DEPRECATED` raised mid-write can no longer crash
+  the log write (which had surfaced as fatal request failures during metadata matching).
+- **Spurious "circular dependency" 500 from a php-di coroutine race.** `WebPortalRouter` is now **warmed
+  once at worker start** (`start.php`), so concurrent coroutines no longer collide on php-di's in-progress
+  resolution guard and mis-report a circular dependency.
+- **RelayConsumer `connect()` debug logging TypeError.** The connect-path debug log is now null-safe, so a
+  synchronous disconnect (null connection) no longer throws `spl_object_id(null)`.
+- **Transcode — undecodable 10-bit H.264 on the hwaccel software-fallback path.** When hardware accel is
+  enabled but only a software encoder is registered, segments were re-encoded to **10-bit** H.264
+  ("High 10") from 10-bit HEVC sources — which no browser can decode. That path now forces browser-safe
+  **8-bit** output (`-pix_fmt yuv420p -profile:v high -level 4.1`), matching the pure-software path; true
+  hardware encoders keep their own `nv12` 8-bit output. `TranscodeManager::JOB_KEY_VERSION` was bumped
+  **v3 → v4** so any cached 10-bit segments are invalidated and regenerated as 8-bit.
+- **Transcode — HLS audio now downmixed to stereo AAC for browser compatibility.** A re-encoded HLS
+  audio stream from an **AC-3 5.1(side)** source (side channels SL/SR) produced AAC that FFmpeg's native
+  encoder tagged with `channel_configuration=0` (a PCE) in the ADTS header, which **hls.js cannot parse** —
+  it failed to build the audio MSE `SourceBuffer` and the whole player load errored **even with valid
+  8-bit H.264 video**. Re-encoded audio is now forced to **stereo** (`-ac 2`, `channel_configuration=2`,
+  universally browser-safe) via the new `FfmpegRunner::browserSafeAudioChannels()` helper, applied on every
+  re-encode path (direct-play `audio_codec === 'copy'` passthrough is untouched). `TranscodeManager::JOB_KEY_VERSION`
+  was bumped again so any cached surround-AAC segments are invalidated and regenerated as stereo. Together
+  with the 8-bit video fix above and the CSP `blob:` allowances below, this made a **10-bit HEVC + AC-3
+  5.1** episode actually play in a normal browser (confirmed via headless Chrome under enforced CSP) — browser
+  HLS playback requires **all three layers**: 8-bit video **+** stereo AAC audio **+** CSP `blob:` allowances.
+- **CSP — SPA now allows `media-src`/`worker-src 'self' blob:` so browser HLS playback works.** The SPA
+  Content-Security-Policy (`SecurityHeaders::contentSecurityPolicy()`) added `media-src 'self' blob:` and
+  `worker-src 'self' blob:`, required so hls.js can attach its MSE `blob:` object URL to the `<video>`
+  element and spawn its `blob:`-sourced transmux Web Worker. Without them a strict browser rejected the
+  load with `MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check`, blocking **all**
+  HLS/transcoded playback.
+- **CSP — `/app` shell inline bootstrap now runs under a per-request script nonce (no `'unsafe-inline'`).**
+  The `/app` SPA shell's inline `window.__PHLIX__` bootstrap `<script>` now carries a per-request
+  cryptographically-random **nonce**: `SharedUiController` emits `<script nonce="…">` and sets a matching
+  CSP built via `SecurityHeaders::contentSecurityPolicy($nonce)` (adds `'nonce-…'` to `script-src`), so the
+  inline block executes **without** weakening `script-src` to `'unsafe-inline'`. Non-`/app` responses keep
+  the strict default policy (no nonce).
+- **Transcode — 480p rung no longer 404s on a 16:9 source (odd-width reject).** A 480p HLS rung scaled
+  from a 1920×1080 source computed **853×480** — an **odd width** that libx264 rejects, so the rung 404'd.
+  The transcode scale filter now appends `:force_divisible_by=2` so widths round to an even value.
+  `TranscodeManager::JOB_KEY_VERSION` was bumped **v5 → v6** to invalidate any cached/failed rungs.
+
+- **WS-A — Continue-Watching now shows poster images and a progress bar in the `/app` SPA.**
+  `PlaybackController::getContinueWatching()` (which backs both `GET /api/v1/me/continue-watching` and `GET /api/v1/users/me/continue-watching`) now runs every row through `MediaItemShaper::shape()`, so each entry gains the same top-level fields the SPA `MediaCard` renders: `id` (= **media item id**, so cards navigate to the correct detail page — previously the playback-state id), `poster_url`, `poster_srcset`, `runtime` (minutes), `year`, and `rating`. For **episodes** a two-level `LEFT JOIN` (season → series) resolves the **series** poster (falling back to the season poster, then the episode's own poster) *before* shaping, replacing the TMDB still/screengrab that previously showed. The playback-progress fields `position_ticks` and `duration_ticks` are re-attached at the top level (the SPA `useResumeSync` reads `position_ticks` for the progress bar), and `parent_id`, `media_item_id`, and the full `metadata` map are preserved so the console `fromContinueWatching` mapper and the profile rating-gate (`media_item_id` filter) keep working. `ROW_NUMBER()` de-dup (one row per media item, newest first) is retained. Tests: strengthened unit assertions on the top-level `poster_url`/`runtime`/`id` in `tests/Unit/Session/PlaybackControllerTest.php`, plus a new real-MySQL integration test `tests/Integration/Session/ContinueWatchingIntegrationTest.php` that seeds series/season/episode + movie + duplicate playback rows and asserts the shaped output including the dedup.
+- **WS-C — Logging no longer triple-writes to app.log, events.log, plugins.log.**
+  Previously every handler attached to every per-channel logger, so each debug/info record was written to `app.log`, `events.log`, and `plugins.log` at once (identical firehoses) and the two subsystem logs were polluted with unrelated records. Handlers in `config/logger.php` are now routed by two optional gates that `StructuredLogger::setupHandlers()` evaluates per channel: `channels` (absent/empty = attach to ALL channels) and `env` (attach only when the named env var is truthy). Resulting routing: `app.log` is the **master firehose** — the untagged `file` handler still captures every channel at debug+ (nothing is lost); `error.log` is the **severity mirror** — untagged too, so all channels at error+ aggregate there; `plugins.log` is scoped to the `PLUGINS` channel only (plugin lifecycle); `events.log` is scoped to the `EVENTS` channel **and** gated behind `PHLIX_DEBUG_EVENTS`, so it stays **empty by default** — event-dispatch records still land in `app.log`, so no diagnostic coverage is lost when the switch is off (this is why an operator sees an empty `events.log` without `PHLIX_DEBUG_EVENTS=1`). Also removed a dead `'default' => 'file'` key from `config/logger.php` that `setupHandlers()` never read (the catch-all comes from the untagged handler, not that key). Routing helpers `handlerAppliesToChannel()` / `handlerEnvEnabled()`; tests in `tests/Unit/Common/Logger/StructuredLoggerTest.php`.
+
+- **WS-D — phpstan cast in `WebPortalRouter::getMusicTracks()`.** The music-tracks row mapper cast a
+  `mixed` id straight to `string`; it now guards with `is_string`/`is_scalar` before casting (empty string
+  otherwise). Behavior is unchanged for the real (string) rows; the fix clears the level-9 error surfaced
+  when wiring up the newly-reachable `/app/music/tracks` page.
+- **PHP 8.5 compatibility — removed deprecated no-op `curl_close()` / `imagedestroy()` calls.** Both have been no-ops since PHP 8.0 and emit `E_DEPRECATED` under PHP 8.5, which surfaced as fatal log-write failures during TV-series metadata matching (16 `curl_close()` sites across 13 files; 19 `imagedestroy()` sites in `ArtworkStorage`/`AvatarStorage`/`PhotoController`). Behavior is unchanged — the calls did nothing. (`finfo_close()` was already removed previously.)
+- **Admin Logs page — removed a redundant `[LEVEL] <datetime>` prefix** that ~37 Monolog call sites (across 6 worker/handler files) hand-built into their message strings. Monolog's `LineFormatter` already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built prefix doubled the level and timestamp on every rendered line; each record is now a single, clean level/timestamp. (`error_log()` sites are untouched — there the prefix is the only metadata.) The client-side Logs renderer overhaul ships in `@phlix/ui` v0.82.0.
+- **Router `HEAD` fallback for static-only `GET` routes.** A `HEAD` request now correctly falls back to a purely-static `GET` route even when no parametric `GET` routes are registered (previously the fallback could 404 or warn on a null iteration).
+- **SV-4.16 — JWKS endpoint 500 on operator-supplied Ed25519 keys.** `GET /.well-known/jwks.json` returned an unhandled **500** whenever `config/hub-server-key.pem` was a standard PKCS#8 Ed25519 key (`-----BEGIN PRIVATE KEY-----`, as produced by `openssl genpkey -algorithm Ed25519`) — `Ed25519KeyManager::parsePem()` only accepted the app's custom `-----BEGIN ED25519 PRIVATE KEY-----` label wrapping a raw libsodium secret. The reader now accepts **both** formats: for PKCS#8 it validates the Ed25519 OID (`1.3.101.112`), extracts the 32-byte seed, and expands it via `sodium_crypto_sign_seed_keypair()` to the 64-byte secret the rest of the code expects (non-Ed25519 PKCS#8 keys are rejected at the OID gate; the native format parses exactly as before). The writer (`buildPem()`) still emits the native format — no key rotation or identity change. As defense-in-depth, `HubClient::getPublicKeysJwk()` now catches any key-load failure, logs it at **ERROR**, and serves a valid RFC 7517 `{"keys":[]}` at HTTP **200** instead of letting the exception escape as a 500 (the `429` rate-limit path is thrown before this and is unaffected).
+- **item-5+ — WebSocket connection metrics recorded the loopback proxy IP and invented phantom rows.** The `:8097` S2 connection metrics now record the resolved **real** client IP (derived like the auth surfaces, not the loopback HAProxy peer). Additionally, connections that fire a bare-TCP `onConnect` but never complete the WebSocket handshake (health checks, port scanners, aborted upgrades) no longer produce a phantom `metrics_connections` row mislabeled `kind=http` with a null IP: the server now only touches (via `onClose` and the periodic touch timer) connections it actually opened after the handshake.
+- **item-5a — noisy per-segment hardware-accel diagnostics.** The per-segment `[HWACCEL_DEBUG]` transcode logs were emitted at **ERROR** and carried a per-call `debug_backtrace()`; they are now logged at **debug** with the backtrace dropped, so normal hardware-accelerated playback no longer floods `error.log`.
+- **item-5c3 — enabled plugins do not re-attach their event listeners after a restart (still OPEN — a first fix was reverted).** `PluginLoader::bootstrapEnabled()` exists but is never called in any resident boot path, so PSR-14 event listeners (e.g. Trakt PUSH scrobbling on `PlaybackStarted`/`PlaybackStopped`) go dead after every restart until a manual re-enable. A first attempt wired `bootstrapEnabled()` into the HTTP + relay `onWorkerStart` (commit `f645edbc`); it was **reverted** (`f3c57fd8`) because several plugins' `onEnable()` perform **blocking network I/O at boot** (e.g. an anidb titles fetch), which stalled worker startup and, combined with a logger-write cascade, left workers half-initialized (surfacing as intermittent request failures on deploy). The correct fix must run plugin bootstrap **without blocking worker startup** (deferred/async, or making `onEnable()` non-blocking) — tracked as a follow-up. The single-shot CGI/FPM `public/index.php` path is unaffected (throwaway per-request container).
+
+- **The backup `label` option and the schedule body parameters are LIVE (S271).**
+  `BackupController::create()` and `::updateSchedule()` read `$request->jsonBody` — a property
+  that does not exist on `Phlix\Server\Http\Request` (the decoded body is `Request::$body`) —
+  and the `?? []` swallowed the undefined-property null, so those handlers silently ignored
+  every parameter a client sent: created backups always carried an empty `label`, and
+  `auto_backup_interval_days` / `retention_count` never reached the config file they rewrite.
+  A repo-wide sweep (git grep over `src/`+`scripts/` AND a filesystem sweep of the gitignored
+  vendor tree — 10k+ files, with a `function __get` positive control so the zero is a measured
+  zero, not an unsearched one) confirmed exactly these two sites read the name and nothing ever
+  defined it. Both now read `->body`. Pinned by `BackupControllerBodyPersistenceTest`: a label
+  driven through the real `BackupManager` write path is read back from the persisted `backups`
+  row (plus the on-disk archive name), and schedule values are read back from the rewritten
+  config file; reverting either property name reddens exactly one named test (mutation-verified).
+  `MaintenanceController::runTask()`'s warning comment — which documented this defect as present
+  and misattributed it to `::restore()` (which never read a body) — moved in the same commit.
+  No migration.
+
+- **Two doc/comment corrections — zero behavior change.** The `AGENTS.md` S508 entry claimed
+  `MediaItemController::getPlaybackInfo()` "honors" `?forceTranscode`/`?excludeHevc` through
+  `QualitySelector::selectQuality()`; it does not — the pre-flight endpoint only **acknowledges**
+  the parsed values (the add-only `playback_constraints` echo, exactly as its own docblock says),
+  and no HTTP caller threads the options into `selectQuality()` yet. The `AGENTS.md` sentence now
+  matches the code. Separately, the READS re-pin note in
+  `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php` attributed the census
+  scanner's blind spot to `functionScopes()`; the actual mechanism is the dead final-parameter
+  branch in `rootsDeclaredInParams()` (`$depth--` runs before the `$depth !== 1` segment-boundary
+  check), which unregisters EVERY last parameter — any arity, any type or return shape. The
+  corrected comment names the real mechanism so future re-pinners don't misjudge counts; all
+  census pins (1877 files / 391 reads / 973 writes) are unchanged.
+
+- **F7 rework (CRITICAL): `AuthMethodPolicy` no longer memoizes its settings snapshot.**
+  The class shipped in 1f8a09cc carried a per-instance `stateCache` whose docblock premise —
+  "instances are request-scoped through the container" — is FALSE in production: PHP-DI memoizes
+  built instances and each Workerman worker builds ONE container for its lifetime (the same
+  resident-worker fact `AuthManager` admits for its in-memory rate-limit buckets and that forces
+  the `AuthProviderBootstrapper` request-path self-heal). Consequences pinned by the reviewer:
+  the write guards' base (`assertSafeTransition(currentState() + change)`) ran stale, enabling a
+  live R2 bypass via any external/legacy DB write, and enforcement on warm workers kept honoring
+  a method after it was disabled — contradicting the "applies immediately" help text.
+  Design: the per-instance memo is deleted; every public decision (`isEnabled`, `currentState`)
+  now takes exactly ONE fresh `getAllOverrides()` snapshot per call — fresh ACROSS decisions,
+  single-SELECT WITHIN one (the ≤1-read-per-decision law is re-pinned, honestly re-counted).
+  Cost: one small settings SELECT per login attempt (which already pays a user SELECT, an
+  Argon2ID verify, and the bootstrapper's own per-call `getOverride`) and per admin toggle write —
+  noise against the I/O around it; no request-lifecycle machinery invented.
+  Regression pins: resident-instance liveness (build ONCE, flip the row through the same repo
+  seam, both directions) and the production call-shape R2-bypass test
+  (`array_merge(currentState(), touched)` → must now reject); self-mutation proof: re-planting
+  the memo reddens exactly these three law pins. Docblocks corrected in the same commit (truth
+  law), incl. the bounded once-per-worker-life fallback alarm and the accepted residual that
+  password-off + open `auth.signup_mode` still mints fresh-account sessions (signup_mode is the
+  account-creation control; the quintet governs sign-in factors only).
+- **W3 rework (P2): the two metadata settings policies now have a production-DI binding guard.**
+  The adversarial review dropped BOTH `constructorParameter` lines (`confidencePolicy` on
+  `MovieMetadataResolver`, `cachePolicy` on `MetadataManager`) and the full suite stayed green —
+  each consumer silently falls back to a STORE-LESS `new MatchConfidencePolicy()` /
+  `new MetadataCachePolicy()`, freezing `metadata.min_match_confidence` at gate-off and
+  `metadata.cache_ttl_hours` at 24 h while every hand-built test passes the policy positionally.
+  New `tests/Unit/Media/Metadata/MetadataPoliciesWiringGuardTest.php` copies the
+  DiscoveryPolicyWiringGuardTest (W2) / SecurityHeadersPolicyWiringGuardTest (W4) shape: the
+  production container must yield both policies store-backed AND thread them (store-intact) into
+  both consumers. Mutation-proven: each single drop reddens exactly its consumer pin, the double
+  drop reddens both, restore is byte-identical green. Test-only; census rotated 1972→1973 from
+  the measured red.
 ### Added
+
+- **The reset-password recovery story is now fully shipped-truth per leg, and the
+  two structurally toothless pins got real teeth (review server__seceng
+  M-SERVER-33 r4):** the r2 paragraph had conflated the two refusal legs into one
+  false sentence ("login and refresh are refused by
+  `PasswordChangeRequiredException` … bare 500"). The truth is per-leg: the
+  password-login leg really throws `PasswordChangeRequiredException`, which no
+  HTTP boundary maps, so the Workerman last-resort catch answers a bare `500
+  Internal Server Error` and the error log names the class; the refresh leg
+  throws a plain `InvalidArgumentException` that `AuthController::refresh`
+  catches, answering `401` + `{error}` with no code field. The blanket refusal
+  was also half-false: the latch gates the password path only —
+  `WebAuthnController::finishAuthentication` (WebAuthn is default-enabled in
+  `config/auth.php`) and `AuthManager::loginWithProvider` mint sessions without
+  consulting `must_change_password` — and the endpoint row, recovery paragraph
+  and handler docblock now scope the refusal to it and disclose the bypass. The
+  CLI row's "hash only" understatement is cured too: `UserRepository::update`
+  stamps `tokens_not_valid_after = NOW()` on every password write, revoking
+  live sessions. Test-side (`PasswordResetRecoveryReadmeTest`, 4 tests,
+  13→32 assertions measured): the refusal pins are now per-sentence leg-scoped
+  (the conflation sentence reddens — r2's probe-B install was green), and the
+  `getDocComment()` pin hunting 'reset-password form' — a phrase that ever lived
+  only in the method body — was replaced by a getStartLine/getEndLine
+  docblock+body scrape pinning the fiction phrases out and the r2-cured truth
+  phrases in, on their actual planes. Mutation battery N-R1..N-R5 each reddened
+  exactly its named arm and re-greened on revert. Docs/comments/tests only:
+  zero behavior change, zero new wire codes (registry md5 40c1da48 held);
+  census `EXPECTED_PHP_FILES` stays 1995 unmodified — the sibling M38 rung
+  rotated 1994→1995 at my base, and this lane carries zero PHP-file delta. The
+  WsHandshake CI race r2's close-record flagged was already cured at the base by
+  05f90d60 (parity matrix builds liveness state at runtime).
+
+- **License metadata contradicted itself inside single files; every carrier now
+  tells the one truth the repo ships — MPL-2.0 (review server__writer
+  M-SERVER-44):** `composer.json:5` declares `MPL-2.0`, `LICENSE` carries the
+  verbatim Mozilla Public License 2.0 text, the README license section explains
+  the per-file weak-copyleft posture, and `TRADEMARK.md` is built on it — yet
+  881 PHP file/class header lines claimed `@license MIT` (boilerplate emitted
+  by `scripts/add-headers.php`, whose template still seeded the false tag) and
+  8 of those same files additionally carried a third, mutually exclusive
+  `@license Proprietary` + `@copyright 2024 Phlix Media Server` class-docblock
+  block with no supporting evidence anywhere. Metadata-only cure: the header
+  sweep rewrites all 881 claims to the canonical ` * @license   MPL-2.0`
+  (also folding the 14 non-canonical single-space variants into it), the 8
+  false `Proprietary`/6 stale 2024-copyright lines are deleted from the second
+  docblocks (informative `@author`/`@see`/`@package` members kept), and
+  `scripts/add-headers.php`'s template now seeds `MPL-2.0` so the false claim
+  cannot regrow. Deliberately untouched as truthful self-consistent claims of
+  *other* works: the vendored `examples/plugins/phlix-plugin-sample-theme/**`
+  (MIT, matching the plugin/theme estate family), the
+  `tests/Fixtures/Plugins/fixture-plugin/composer.json` `"proprietary"` value
+  (installer-parser test input, not a license statement about this code), and
+  npm dependency licenses in `web-ui/package-lock.json`/built assets.
+  `@copyright 2026 Joe Huss <detain@interserver.net>` attribution held
+  (matches estate authorship). Zero behavior change: 881 header lines flipped,
+  14 lines deleted, one script template string; census `EXPECTED_PHP_FILES`
+  untouched (no files added or removed).
+
+- **The admin reset-password recovery story is told as shipped truth (review
+  server__seceng M-SERVER-33):** the README documented
+  `POST /api/v1/admin/users/{id}/reset-password` as "(returns new password)"
+  while the shipped handler stores a hashed reset token, sets
+  `must_change_password`, revokes the account's sessions and answers `{message}`
+  only — no new password, and no shipped surface delivers or consumes the
+  token. The cure is docs-only: the endpoint table row, the CLI-table caveat
+  (`user:reset-password` writes the password hash but never lifts the latch)
+  and a new "Bad days" recovery entry (two steps: `php bin/phlix
+  user:reset-password` + the direct `UPDATE users SET must_change_password = 0`
+  write — the only shipped clear path) now tell the truth, and the
+  `AdminUserController`/`AuthManager` docblock fictions ("generate a new
+  password", "reset-password form", "via the reset-token flow") are cured
+  comment-only — zero behavior change, zero new wire codes (registry md5
+  40c1da48 held). The r1 draft recovery sentence claimed the refusal answers a
+  `403` with a stable code; the r2 runtime trace corrected that too:
+  `PasswordChangeRequiredException` (a RuntimeException) has no catch arm
+  anywhere in src/, so the served Workerman path answers a bare `500 Internal
+  Server Error` while the HTTP error log names the exception class — exactly
+  what the README now says, with the code kept out of the docs until a real
+  emitter ships (estate riders R1-R3). New
+  `tests/Unit/Admin/PasswordResetRecoveryReadmeTest.php` (4 tests/13
+  assertions, measured) pins every load-bearing string runtime-derived from
+  the enforcing code — including the anti-fiction pin that reddens if the
+  unshipped wire code ever re-enters the README. Census
+  `EXPECTED_PHP_FILES` 1993→1994, measured from the phpunit red.
+
+- **The 34 wire success codes openapi.yaml never told the truth about are corrected to
+  shipped code, and the spec-currency gate gains a response-code leg (review
+  server__fedev M24):** `OpenapiSpecCurrencyTest` pinned path/method/middleware bijection
+  only, so response-status drift was structurally invisible — and 34 operations had it:
+  14 creates emit `->status(201)` (sessions, libraries, collections/playlists, profiles,
+  profile schedules+tags incl. their admin-alias registrations, users, webhooks, plugin
+  install) while the spec declared 200; 10 async-job enqueues (the nine
+  `LibraryController` job endpoints + `POST /api/v1/admin/updates/check`) emit
+  `->status(202)` with the `{job_id,status}` body their docblocks promise, declared 200;
+  the two webhook deletes emit bare `->status(204)`, declared 200-WITH-a-body; and all
+  eight OAuth endpoints (lastfm/trakt/github/oidc authorize + callback) 302-redirect with
+  a `Location` header, declared as JSON 200 that was never returned. The cure is
+  docs-only — the spec follows shipped truth (contract law: no runtime status line moved,
+  no new wire codes, registry untouched). Adjudicated NOT-drift: the `/auth/register` and
+  `/auth/login` browser aliases keep their `[302, 429]` declarations —
+  `AuthController::isBrowserRequest()` (src/Server/Http/Controllers/AuthController.php:497)
+  hard-routes every `/auth/*` request to the redirect contract, so the API-path
+  201/202/200 JSON emitters are unreachable there and the aliases' existing prose is
+  truthful. `OpenapiSpecCurrencyTest` grows from 4 tests/10261 assertions to 6/10267
+  (measured): the 34-row adjudicated table asserts declared code, ghost-200 ban,
+  204-bodyless, 302-Location-shape, and that the emitter still carries the literal
+  `->status(<code>)` (token presence, not a line pin — controller churn must not false-red
+  the spec gate), plus a planted-reversion red-proof following the file's existing
+  mutation pattern; both legs FAIL LOUD on the pre-fix spec (68 named problems = 34 ops ×
+  two laws). openapi.yaml +100/−110 lines.
+
+- **Auth-method lock-out guards get their documentation surface (review
+  server__pm M-SERVER-30):** the `422` refusals on `PUT /api/v1/admin/settings`
+  (auth-toggled write-sets) and `POST /api/v1/admin/auth-providers/{name}/disable`
+  have always carried a machine-readable `reason` token
+  (`all_methods_disabled` / `admin_lockout`, `AuthMethodLockoutException::REASON_*`)
+  — but nothing anywhere explained the rules, the tokens, or the recovery, so an
+  admin hitting the guard mid-workflow met an intentional safety behavior shipped
+  as a mystery (grep of `admin_lockout|methods_all_disabled` across README.md and
+  `docs/` was zero at the parent). Ships: a README `### Auth-method lock-out
+  guards` section (five toggles, R1/R2, reason → what-to-do table, the
+  sign-in-factor-vs-account-creation residual, the WebAuthn list/delete escape
+  hatch, the `auth.methods_all_disabled_fallback` posture); an API-Reference
+  `**Auth-method lock-out guard (422).**` error-meaning paragraph in the
+  Rate-limiting idiom, with both guarded endpoint rows amended to anchor it; a
+  recovery leg in "Bad days: recovery from the CLI" (a refusal persists nothing —
+  the only reachable locked state is a bypass write, re-opened with the concrete
+  `UPDATE server_settings SET setting_value = '1' WHERE setting_key =
+  'auth.password.enabled';` and taken live on the next decision, no restart); and
+  `docs/dev/AUTH_METHOD_LOCKOUT.md` for integrators (envelope shapes, the B2
+  `FOR UPDATE` serialization law, absent-key semantics, fail-closed 500 siblings,
+  accepted boundaries). New pin
+  `tests/Unit/Admin/AuthMethodLockoutReadmeTest.php` (5 tests/19 assertions,
+  red-on-parent measured 5F, token-drift mutation reddens exactly 1): every
+  documented token/key/event string is derived at runtime from
+  `AuthMethodLockoutException`, `AuthMethodPolicy::FALLBACK_EVENT`,
+  `METHODS`/`settingsKey()` and the REASON_* constant set is asserted total.
+  Census `EXPECTED_PHP_FILES` re-pinned 1990→1991 from the measured red (+1 — the
+  new test file; staircase line carries attribution). Docs only: no new wire
+  codes, no behavior or envelope change — the guard family (`AuthMethodPolicyTest`,
+  `AdminSettingsControllerAuth*`, `AuthProviderControllerDisableGuardTest`,
+  `AuthManagerAuthMethodGateTest`) stayed green UNMODIFIED (61 tests/164
+  assertions targeted). phpcs PSR12 + phpcs-tests.xml exit 0 on both touched test
+  files; phpstan (tests config) clean.
+
+- **SRV-OPS remediation (2026-10-14 review family) — R14-09 stdout log
+  sink + R3-08 `PHLIX_LOG_LEVEL` wired:** application logs previously
+  reached only the repo's `.logs/*.log`, invisible to `docker logs` and
+  `journalctl` unless someone tailed files. `config/logger.php` now ships a
+  `stdout` handler (Monolog stream → `php://stdout`, all channels, INFO
+  floor) gated OFF by default behind truthy `PHLIX_LOG_STDOUT`
+  (`LogChannels::LOG_STDOUT_ENV`) — enabling it ADDS the sink, the file
+  handlers keep working unchanged, unset means byte-identical routing
+  (`LoggerConfigPolicyTest`'s S130 size-bound law amended to exempt only a
+  `php://stdout` stream). And the long-documented-but-never-read
+  `PHLIX_LOG_LEVEL` (`LogChannels::LOG_LEVEL_ENV`) is now real:
+  `StructuredLogger::createHandler()` resolves every level-driven handler's
+  floor from the env name when set — PSR-3 vocabulary case-insensitive,
+  `warn` accepted — and fails SOFT on an unknown or empty value, leaving the
+  shipped per-handler levels (`file` info / `error` error / `events`+
+  `plugins` debug) in force. Read at logger construction ⇒ a
+  process-restart knob (README restart-semantics table). New
+  `LogEnvironmentKnobsTest` (8 tests: shipped shape, env-gated attach,
+  additive-sink proof, debug-loosens/error-quiets, case-insensitivity,
+  fail-soft typo, empty-is-unset).
 
 - **Provider parity CLOSED: the B2 serialization protocol now guards BOTH auth
   write surfaces — the residual provider×admin interleave the B2 entry above
@@ -2523,7 +4787,890 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   workflow's dead image env block — zero references, implying a publish step it does not
   perform — is gone with it.
 
+- **Generic keyed image service extracted from the poster pipeline (`S71`).** New
+  `src/Media/Storage/ImageResizer.php` carries the validation, width-variant resize and
+  temp-then-rename atomic-write guarantees that previously lived inside `ArtworkStorage` —
+  moved verbatim — but addressed by a flat, media-item-agnostic target KEY (a UUID,
+  `people-42`, or a content hash; anything matching the exact `[a-zA-Z0-9-]+` gate, refused
+  before any filesystem call otherwise) under a configurable base directory, so backdrops and
+  people photos (S72/S73) can reuse the same guarantees without a second resize implementation.
+  `storeBytes()` is the verbatim-bytes path for formats that must not be re-encoded (the
+  transparency-safe title-logo PNG). `ArtworkStorage` keeps its entire public API and behavior:
+  it now delegates internally, its item-id gate still rejects exactly the pre-extraction id set
+  with the historical message, and its TMDB path-fragment download seam is deliberately NOT
+  widened to arbitrary URLs — that is the SSRF surface owed to S73's allowlist. `AvatarStorage`
+  and `PhotoController::generateThumbnail` remain separate consolidations (S456). The service
+  ships with 47 new unit executions covering flat-key resizing, exact exception wording on every
+  unusable key/filename shape, and mutation-proven spy pins on each delegation seam. No DB
+  migration, no config change, no new dependencies.
+
+- **CI-pinned composed-route inventory (server only) (`S64`).** A real-DI in-process harness
+  (`tests/Unit/Server/Core/ComposedRouteInventoryTest.php`) composes `Application::loadRoutes()` — the
+  primary production route surface, built from `ContainerFactory::defaultProviders()` with only the MySQL
+  `Workerman\MySQL\Connection` doubled (a `createMock`, so no socket opens) — with no DB, no workers and
+  no real network, then asserts the committed inventory (`tests/Fixtures/Routes/composed-route-inventory.json`)
+  in BOTH directions (`array_diff` missing + extra, then `assertSame`), pinning **365** composed routes
+  (GET 192 · POST 124 · DELETE 26 · PUT 22 · PATCH 1) for the server. The container-built
+  `WebPortalRouter` 404-fallback surface is separate, is not produced by `loadRoutes()`, and is not
+  pinned by this gate. Two control proofs make the gate honest rather than self-satisfying: a
+  **planted-drift** test registers a throwaway in-memory route, reddens the diff, and proves the gate
+  greens again on a fresh composition (nothing is persisted); an **unbound-stub**
+  control builds `Application` over a container whose `get()` throws, and the exact message
+  `unbound: Phlix\Server\Http\Controllers\AuthController` proves the real PHP-DI container — not a
+  hand-wire fallback — is what composes the table. The inventory token is code-resident (a `const`
+  in the harness). Tests and
+  a JSON fixture only: no routes added or changed, no `src/`, no migrations, no behavior change — the
+  hub half of the original step stays CLOSED (its bijection is already enforced by
+  `OpenApiSpecMatchesRouterTest`).
+
+- **CLI user/admin management (`S61`).** Seven new `bin/phlix` commands mirroring `user:reset-password`:
+  `user:list [--status=]`, `user:create {username} --email= --password=`, `user:promote {user} [--revoke]`,
+  `user:delete {user} [--force]` and the server-only status-flow trio `user:approve`/`user:disable`/`user:reject`.
+  Every one takes `--json`, emitting the shared `{"ok":true,"data":[...]}` / `{"ok":false,"error":"..."}`
+  envelope from a new `Phlix\Console\Commands\Concerns\JsonOutput` trait. `user:list` redacts the
+  `SELECT *` secret columns (`password_hash`, `password_reset_token`, `provider_data`) before output. A
+  repository-level last-admin guard (`UserRepository::countAdmins()`/`isLastAdmin()`, mirroring the admin
+  controller's predicate) refuses demoting/disabling/deleting the final administrator, and `--force` is a
+  confirmation bypass only — never a guard bypass. Commands are registered explicitly in `bin/phlix` behind a
+  lazy `UserRepository` factory, so `php bin/phlix list` still opens no database. No HTTP routes, no migrations.
+
+- **Embedded-tag writer — destructive in-file tag writing, strictly opt-in and default OFF (S89).** The
+  second and riskier writer for the S87 write-back plumbing: the built-in
+  `Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter` implements `MetadataWriterInterface` and writes
+  canonical metadata INTO the media file — `getid3_writetags` for audio (MP3/FLAC/OGG/M4A/…), and an
+  `ffmpeg -map 0 -c copy -metadata …` remux for MP4/MKV that rewrites only the metadata container and
+  leaves the audio/video streams byte-identical. It is default-off at two layers: the S87 per-library
+  enqueue gate (`libraries.options.metadataWrite.enabled`) still has to be on for a job to be queued at
+  all, and on top of that this writer re-checks its OWN dedicated global setting
+  (`metadata.embedded_write_enabled`, resolved by the new `Phlix\Media\Metadata\EmbeddedWritePolicy`,
+  shipped default FALSE) before a single byte is touched — so enabling the safe sidecar writer can never
+  implicitly start rewriting media files. Three safety rails, each proven by tests:
+  (1) **atomic-rename discipline** — every mutation stages a unique sibling temp file in the media
+  directory and only then `rename()`s over the original, so a remux interrupted at any point (a non-zero
+  exit, a signal kill, a failed publish) leaves the ORIGINAL bytes intact; `getid3_writetags` rewrites in
+  place, so the original is never handed to it — only a copy. (The stage carries deliberately NO media
+  extension — invisible to a concurrent scan and matched by the shipped `scanner.ignore_patterns` `.tmp`
+  rule — so the muxer is PINNED on the command line instead (`-f mp4`/`-f matroska`), and the stage is
+  created exclusively (`fopen 'xb'`); a symlink at the media path is refused rather than dereferenced.
+  The extension-less + pinned-muxer shape was found against the real binary, not a fake runner.)
+  (2) **overwrite policy** — when a file already carries content embedded tags, the existing
+  `MetadataOverwritePolicy` is consulted; a deny is a normal return with a logged reason, never a throw
+  (ruling R1). (3) **per-file curation** — a concrete predicate runs IN FRONT of the global policy: an
+  existing stem or Kodi-convention (`movie.nfo`/`tvshow.nfo`/`episode.nfo`) sidecar that does NOT carry the
+  sidecar writer's generator marker is treated as operator-curated and blocks the destructive write
+  (ruling R2); an unreadable sidecar also blocks it, because the writer must not clobber what it cannot
+  prove is machine-made. A pre-flight refuses a degenerate/empty media dir, a missing file, or an
+  unwritable directory via the named `EmbeddedWriteFailedException` (item id + path + reason), which the
+  worker's per-writer `catch` surfaces as a warning. External process calls run through a small
+  `ExternalCommandRunnerInterface` seam (production: `ExecExternalCommandRunner`, a blocking `exec()`
+  inside the managed fork per the S87 AC-2 contract) so every interruption exit path is deterministically
+  testable. Registration rides the SAME `MetadataWriterRegistry` DI seam S88 established, ordered AFTER
+  the sidecar writer within a drain (ruling R4); zero new routes, zero migrations. Known limits, measured
+  not implied: in the combined sidecar→embedded drain the sidecar re-stamps the stem NFO with its marker
+  first, so the curation predicate there guards the Kodi-convention names and a not-rewritten stem; a
+  hand-edited NFO that still carries the marker reads as machine-made; and `metadata.embedded_write_enabled`
+  has no admin-UI surface until `detain/phlix-shared`'s `server-settings.schema.json` declares the key.
+
+- **Sidecar metadata writer — NFO + poster/fanart next to the media file (S88).** The first writer for the
+  S87 write-back plumbing: the built-in `Phlix\Media\Metadata\Writer\SidecarWriter` implements
+  `MetadataWriterInterface` and writes `<basename>.nfo` (XBMC/Kodi XML), `poster.jpg` and `fanart.jpg`
+  beside the media file — non-destructive (the media file itself is never touched; embedded tags are S89)
+  and human-visible. Every sidecar lands atomically (temp file + rename), so a failure mid-write leaves the
+  previous on-disk bytes intact, and re-writing the same item is byte-identical. The emitted NFO round-trips
+  through the existing `LocalNfoProvider` reader (pinned by tests in both directions), and discovered image
+  sidecars are exactly the ones its `findLocalImages()` poster/backdrop patterns already recognise. Ruling R1
+  registers it via the `MetadataWriterRegistry` DI definition in `MediaServicesProvider`, so every process
+  that builds the container — the `metadata-write` worker fork and any admin/status consumer — sees the
+  writer; the `PluginLoader` capability arm keeps its plugin-only semantics. The `is_writable()` pre-flight
+  throws the named `SidecarNotWritableException` carrying item id + target directory + remediation hint
+  (missing dir vs. unwritable dir, the latter citing the systemd `ReadWritePaths` lesson from the
+  `/var/artwork` sandbox incident); the worker's per-writer `catch (Throwable)` turns it into a warning log
+  line — the operator-visible status. Image sidecars are opportunistic and jailed: poster bytes come from the
+  server's own artwork cache, and a `poster_path`/`backdrop_path` reference is copied only when it resolves
+  inside the item's own media directory — provider-controlled remote paths and absolute paths elsewhere on
+  disk never become file reads. Per-library opt-in stays exactly as S87 shipped it
+  (`libraries.options.metadataWrite.enabled`, default OFF).
+
+- **Metadata write-back plumbing — queue + capability arm, zero writers yet (S87).** The first head-step
+  of the S87→S88→S89 arc: a plugin can now declare the disk write-back capability by implementing the new
+  `Phlix\Media\Metadata\Writer\MetadataWriterInterface` (`supports(type)` / `write(item, canonicalMetadata,
+  mediaDir)`), and `PluginLoader::enable()` wires it into the process-scoped `MetadataWriterRegistry` —
+  the fourth arm of the typed-capability pattern after the metadata source, the F3 subtitle source and the
+  S84 theme source, deregistered on `disable()` for a leak-free cycle. The scan side is enqueue-only:
+  `MediaScanner::processFile()` drops one lightweight `MetadataWriteJob` file per finalized item into the
+  new `MetadataWriteJobStore` (a `CollectionJobStore`-style bounded, idempotent, lazily-minted file queue —
+  no `/tmp` residue at construction, S439 census) **when the library opts in** via the existing
+  `libraries.options` JSON column: `options.metadataWrite.enabled`, resolved by the new
+  `LibraryRow::metadataWriteEnabled()`. That gate defaults to OFF (the inverse of S33's
+  absent-means-on `autoCollections`): writing metadata back mutates the operator's media directory, so it
+  is opt-in per library. No blocking filesystem I/O ever happens inline in the scan path — the new
+  `MetadataWriteWorker` managed process (config `metadata-write`, spawned by `start.php`, which also
+  re-runs `PluginLoader::bootstrapEnabled()` inside that fork because plugin registries are per-process
+  resident state) is the ONLY place a writer executes, and with no writers shipped yet every drain is a
+  documented no-op. S88 adds the sidecar (NFO/poster/fanart) writer; S89 adds the embedded-tag writer on
+  top of the existing `MetadataOverwritePolicy`.
+
+- **`POST /api/v1/admin/updates/check` — the "check now" trigger the admin UI was missing (S273).**
+  `GET /api/v1/admin/updates/status` only ever serialised the cached marker result, so the S78 button
+  was honestly labelled "Check update status" because nothing could trigger a check. This adds the
+  trigger: the handler calls the new `CoreUpdateCheckService::checkNow()` — which dispatches the
+  marker fetch through the existing non-blocking `VersionMarkerFetcherInterface` (explicit
+  `updates.timeout_seconds` socket timeout, default 10 s) and answers `202` without waiting, because
+  an HTTP handler in a resident Workerman/Swoole worker must never block the event loop on a
+  third-party host. Every failure path leaves the previously cached status INTACT (the service
+  records the error text beside the surviving version, never blanks it); a synchronously-throwing
+  transport becomes a `503` instead of an unhandled error in the worker. Unlike the periodic poll,
+  the explicit trigger ignores the `updates.check_enabled` toggle — that switch governs background
+  cadence, not an operator pressing a button; the response payload still reports the toggle
+  truthfully. Registered in the `[AdminMiddleware]` group with the controller's own defence-in-depth
+  gate; the 365th tuple landed in `ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST` in the same
+  commit. Phlix-ui relabel follows in the same program (cs#26 → ui re-vendor).
+
+- **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**
+  Psalm 6 admits one `errorLevel` per config, so `tests/` gets its own shipped `psalm-tests.xml`
+  (header records the measured ladder L1 4236 → L5 290 → L8 79, all on Psalm 6.5.0) and
+  `coding-standards.yml`'s Psalm job gains an assert-guard plus a second step,
+  `./vendor/bin/psalm -c psalm-tests.xml --show-info=false --no-progress`. `psalm.xml` stays src-only
+  untouched. All 290 L5 findings were fixed at the source — except one written-why exclusion
+  (`tests/codeception/acceptance/SyncPlayCest.php`: Codeception assembles actor methods at
+  codecept-build time, and Psalm — unlike PHPStan — only honours the hand-written `@method` tags when
+  the class declares `__call`, which no committed `SyncPlayTester` does), and the swoole-bundled
+  `Swoole\Coroutine\WaitGroup` now enters Psalm's view through `<stubs>` on the existing drift-tested
+  `phpstan-stubs/Swoole/Coroutine/WaitGroup.stub`, the same file PHPStan scans — one declaration, two
+  analysers. `tests/Unit/Support/StaticAnalysisScopeTest.php` pins both CI command lines verbatim,
+  both configs' directory sets as exact allow-lists, the exclusion union, the stub, the ladder
+  evidence, the absence of `ignoreErrors`/`IssueHandler`/baseline, and a negative fuzz proving each
+  pin bites when `tests/` silently leaves scope. No new `.php` files, so the census stays 1789.
+
+- **TMDB collection-sync job queue (S215).** `CollectionJob` + `CollectionJobStore` +
+  `CollectionWorker` (`src/Media/`) mirror the SV-2.9 similarity trio: a file-based queue the scan
+  path enqueues into and a supervised consumer that drains it (`config/collection_jobs.php`,
+  `config/managed_workers.php` + `config/process.php` 'collection' entry,
+  `scripts/run-collection-worker.php`). The store mints its queue directory lazily on first
+  enqueue — never at construction — so resolving the DI factory leaves zero `/tmp/phlix_*`
+  residue (S439 census).
+
+- **Test-suite zero-residue census (S439, finish-S167).** audit31 measured 212 leftover
+  `/tmp/phlix_*` entries after an isolated full-suite run at `3bd64b84`; every offender site
+  now carries a teardown, `BackupManager::createBackup()` cleans its temp dir on the success
+  path too (moved to `finally`), and a new `ZeroResidueCensusExtension` registered from
+  `phpunit.xml` snapshots the temp dir before execution and fails the run — by name — if the
+  suite leaves any `phlix_*` entry behind. Wiring pinned by `tests/Unit/Media/ZeroResidueCensusTest.php`
+  (S431 denominator re-pinned 1773→1775).
+
+- **Coroutine-socket construction guards (S434).** S207 measured `new \Swoole\Coroutine\Socket(...)`
+  SIGSEGVing the worker INSIDE the constructor — through `catch (\Throwable)` — on an invalid socket
+  type and on a genuine `socket(2)` EMFILE; a signal is not throwable, so the fix is prevention.
+  Every construction in `src/Network/` (5 sites, 4 classes) now routes through
+  `Phlix\Network\CoroutineSocketGuard::create()`, the only raw construction allowed in `src/`,
+  which refuses those two entry states beforehand as a typed `CoroutineSocketConstructionRefused`
+  carrying a `CoroutineSocketFault` (S169 `PortProbeOutcome` shape) — domains/types are membership-
+  checked, and soft-`RLIMIT_NOFILE` headroom below the margin fails closed; each site's existing
+  S197 `catch (\Throwable)` turns the refusal into its documented blocking-fallback degradation,
+  so healthy paths are behaviour-unchanged. Re-measured on the actual prod base image
+  (ghcr.io/detain/phlix-base, PHP 8.3.33-alpine, swoole 6.2.1): both S207 arms now throw catchable
+  `Swoole\Coroutine\Socket\Exception` instead of faulting — honest non-reproduction on the current
+  prod build, recorded in the test; the guard stands because the fault lived in the vendor binary.
+  Census, refusal taxonomy and the never-catches law are pinned by runtime tokenization in
+  `tests/Unit/Network/CoroutineSocketGuardTest.php` (S431 denominator re-pinned 1764→1768).
+
+- **Request dynamic-property reachability guard (S427).** `Phlix\Server\Http\Request` now pairs
+  `__get()`/`__isset()` so an UNGUARDED read of an undeclared property throws a named
+  `LogicException` instead of silently answering a PHP-warning null. The posture was chosen from a
+  tokenized census of the whole repo (1,756 PHP files): 331 property reads on typed Request roots,
+  every one on a declared member; zero dynamic writes; zero dynamic-name accesses — so the throw
+  can only ever fire on a would-be S271 bug shape. Guarded reads (`$request->jsonBody ?? []`,
+  `isset()`, `empty()`) keep their exact pre-guard empty-default semantics because PHP consults
+  `__isset()` before `__get()` — which is also why both S271 mutation arms in
+  `BackupControllerBodyPersistenceTest` fail identically before and after this change (re-run on
+  this tip). Census and static-analysis blindness documented in the `Request::__get` docblock;
+  every pinned shape in `tests/Unit/Server/Http/RequestDynamicPropertyGuardTest.php`.
+
+- **Executable S427 census (S431).** `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php`
+  re-tokenizes the whole estate at run time and pins the five census numbers as class constants
+  (per the S342 `WriteResultAdoptionGuardTest` denominator pattern) instead of leaving them as
+  prose: file count, declared-read and declared-write denominators, and the two posture zeros
+  (dynamic-name reads/writes on Request roots) — a planted dynamic read now reddens naming its
+  `file:line`. Runtime re-measurement drifts against the S427 prose (1,756→1,760 files as the
+  estate grew; 331→391 reads and 1,037→940 writes because the lane's unpublished scan rules are
+  arithmetically unreproducible — its write number matches plain writes plus the 97 offset-write
+  sites while its read number does not reconcile with the same split); every qualitative claim
+  holds — all counted sites are on declared members and all three zeros measure zero. The pinned
+  numbers govern from here; legitimate landscape changes re-pin the two denominators in the same
+  commit, the zeros are posture and are fixed in source.
+
+- **Self-service profiles: end-user CRUD / PIN / switch / avatar (S81).** A logged-in
+  user can now manage their own profiles through `ProfilesController` (auth-only group,
+  never `/api/v1/admin`): `GET|POST /api/v1/profiles`, `GET|PUT|DELETE /api/v1/profiles/{id}`,
+  `POST|DELETE /api/v1/profiles/{id}/pin`, `POST /api/v1/profiles/{id}/pin/verify`,
+  `POST /api/v1/profiles/{id}/switch`, `POST /api/v1/profiles/{id}/avatar`. Ownership runs
+  through `ProfileAccessPolicy::canManageProfile()` and refusals answer **404, never 403**
+  (no existence oracle). All five S81 blockers closed, each pinned: (1) the rating cap is no
+  longer account-scoped — `getActiveProfile()`/`getActiveRatingFilter()` take an optional
+  session `profileId` (ownership re-derived; `null` keeps today's behaviour) and
+  `RatingGate::resolveFilterForUser()` defaults it from `RequestContext::getProfileId()`
+  (the S80 claim) — a Kid session on a switched profile now gets the Kid's cap, pinned on
+  real rows incl. the foreign-claim refusal beside its succeeding control; (2) `verifyPin()`
+  **fails closed** (a PIN-less profile is not a pass) with a new `hasPin()` distinction
+  (409 `profile.no_pin` vs 403 `profile.pin_mismatch`), behind a new DB-backed
+  `rate_limiter.pin_verify` profile (5 / 300 s, per-profile key) — the unlimited-attempt
+  oracle is gone; (3) the switch endpoint calls `switchProfile()` (its first caller) and the
+  clear-then-set is now transactional, leaving exactly one active row (`COUNT = 1` asserted
+  on the real table); (4) the switch RE-MINTS tokens via `AuthManager::buildAuthResponse()`
+  so the session moves immediately, not at token expiry; (5) signup creates a first profile
+  ('Main') on BOTH entry points — `AuthManager::register()` inside the existing transaction
+  (active accounts only; pending heals via `resolveProfileIdForUser()`) and the external-provider
+  create path (`UserRepository::findOrCreateByExternalId()` gained a `created` out-param so only
+  the INSERT path mints a profile). `PUT` refuses `is_active` (400 `profile.use_switch` —
+  activation is switch-only, closing the two-active hole `update()` could otherwise re-open) and
+  `DELETE` refuses the last profile (409). No DB migration (`user_profiles.avatar_url` already
+  exists); no tag; new routes registered in `ROUTE_MANIFEST` (364 entries) and pinned.
+
+- **The admin-maintenance route surface is now mirrored against phlix-ui in BOTH directions
+  (S330).** S78's In-scope list named eight Tasks-page sections and only four shipped; an AC
+  narrower than its own In-scope list is a mis-specified step, and three of the four missing
+  sections (scan-all, recompute-similarity, newsletter send-now) were owned by no step. This
+  entry records the three-way decision for each, then closes the drift class with a guard.
+
+  **The decision, per action by name — all three CLOSED, not silently dropped:**
+  - **scan-all — CLOSED.** No server-wide scan service exists. Per-library scan
+    (`POST /api/v1/libraries/{id}/scan`, the Libraries page) is the bounded, safe path; a
+    server-wide scan would be an unbounded whole-vault filesystem walk (the S116
+    filesystem-work-on-the-request-path concern; even a single music library scan runs
+    4 h 09 m before its first durable write, the measured 21600 s floor) and would monopolise
+    the count=1 maintenance queue worker for the duration. The admin Tasks page keeps its
+    honest note explaining the absence.
+  - **recompute-similarity — CLOSED.** Similarity is already computed per-item on scan by the
+    live `SimilarityWorker` managed worker (`config/managed_workers.php` → `'similarity'`,
+    SV-2.9 enqueues one job per new item, candidate set bounded per library). A server-wide
+    recompute would enqueue the entire catalogue into an O(N²)-per-library background pipeline —
+    unbounded, redundant with the per-scan compute, and not wanted. The admin Tasks page gains
+    an honest note explaining the absence.
+  - **newsletter send-now — CLOSED.** The newsletter is a deliberately scheduled weekly blast
+    (`Application::startBackgroundTimers()` → `startNewsletterTimerIfEnabled()`, day/hour from
+    config); a send-now would fire an unscheduled email to every user, and `NewsletterSender`
+    is not DI-wired (constructed manually in `Application.php`), so a maintenance-queue path
+    would duplicate its construction for an action the schedule already provides. Not wanted.
+    The admin Tasks page gains an honest note explaining the absence.
+
+  No task name, route or `MaintenanceTask` vocabulary entry changes — the existing
+  queued/sync tasks stay the five-task catalogue and `MaintenanceTaskCoverageTest`'s count is
+  unchanged. What ships instead is `AdminMaintenanceRoutesUiMirrorGuardTest`, the S348-shaped
+  cross-repo pin for the ADMIN maintenance surface: it parses the production route table
+  (reflected `Application`, MySQL doubled, `ContainerFactory::defaultProviders()`), extracts the
+  eight `/api/v1/admin/maintenance/*` routes (three GET reads incl. the two-segment
+  `jobs/{id}` + five POST actions) and the five POST action suffixes, and asserts each equals
+  its phlix-ui `AdminMaintenanceApi` mirror (`MAINTENANCE_TASK_NAMES` for the suffixes,
+  `MAINTENANCE_ENDPOINTS` plus the derived `jobs/{id}` template for the full path set) in BOTH
+  directions — `missing` (UI declares, server does not register) and `extra` (server registers,
+  UI has no entry) each asserted empty with the compared denominators printed and an
+  anti-vacuity floor. Both planted mutations were shown red and removed (a dummy
+  `/maintenance/scan-all` route and a dummy UI `scan-all` name). No S348 collision: that guard
+  covers only the library-maintenance surface (`/api/v1/libraries/{id}/<suffix>` →
+  `LibraryController`); this one covers `/api/v1/admin/maintenance/*` → `MaintenanceController`.
+
+- **The scan-job type allowlist is pinned to the migration ENUM, and the failure message names
+  phlix-ui's mirror (S341).** New `ScanJobsEnumMigrationTest` parses migration
+  `101_library_scan_jobs_media_assets_type.sql` — the real file, through
+  `MigrationRunner::splitStatements()` itself, never a hand-written fixture — and asserts
+  `ScanJobRepository::ALLOWED_TYPES` equals the 9-member ENUM in value AND ordinal order (MySQL
+  stores ENUMs by index; an insertion in the middle re-numbers every stored row). It also fails
+  loudly when 101 stops being the latest declarer, when the runner sees more than one statement, or
+  when the parse yields zero members. The equality failure message names `phlix-ui`'s `SCAN_JOB_TYPES`
+  in `src/api/admin/libraries.ts` as the mirror to update — the step exists because that UI array
+  drifted to 8 while the DB had 9 (migration 101's ship note claimed "zero client change") and no
+  server-side gate noticed. Demonstrated red: adding a 10th member to a scratch copy of migration 101
+  turns `test_allowed_types_equals_the_enum_parsed_from_the_migration` red; restoring the file
+  returns it to green.
+
+- **The library-maintenance POST-route set is pinned to phlix-ui's `AdminLibrariesApi` mirror, in
+  both directions (S348).** S284 shipped `POST /api/v1/libraries/{id}/regenerate-assets` and the
+  admin UI never gained a `regenerateAssets` method — the S332 class again: a hand-written method
+  list that grows with the LIST, not the ROUTES. New `LibraryMaintenanceRoutesUiMirrorGuardTest`
+  reflects the PRODUCTION route table off an `Application` built from
+  `ContainerFactory::defaultProviders()` (MySQL doubled, exactly as the S239 wire-path guard),
+  extracts the maintenance POST-route set (`POST /api/v1/libraries/{id}/<suffix>` handled by
+  `LibraryController` — the nine async actions the UI mirrors), and asserts it equals the mirror
+  list in BOTH directions: `missing` (a UI method with no server route) and `extra` (a server route
+  with no UI method) are each asserted empty, with the full expected/actual suffix denominator
+  printed in every failure. The mirror is spelled as the phlix-ui method NAMES (`scan`,
+  `matchMetadata`, `regenerateAssets`, …) with the kebab-case URL suffix derived mechanically; the
+  failure message names `src/api/admin/libraries.ts` as the mirror to update, and an anti-tamper
+  identity test stops a "fix" that deletes a mirror member from silencing the guard. Demonstrated
+  red: planting `POST /api/v1/libraries/{id}/regenerate-thumbnails` in a scratch copy of
+  `Application.php` turns the both-directions test red naming the extra suffix; restoring the file
+  returns it to green. Registration-only — response envelopes, status codes and the in-handler
+  admin gate stay pinned by S284's `LibraryRegenerateAssetsAdminGateTest` and the S272
+  destructive-actions gate test.
+
+- **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
+  count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
+  `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —
+  into a sorted, `comm`-ready set of `Class::method` names.
+
+  **Why a count was never enough.** Measured on master run `32027697809`: the log says
+  `Skipped: 3` and contains **zero** `There were N skipped tests:` sections, so the only published
+  fact about the skip set was its size. A size cannot distinguish *a test started skipping* from *a
+  conditionally-skipped test turned into a failure* from *a test disappeared* — all three move it
+  identically, and any two of them together can leave it **unmoved**. It also drifts on its own:
+  this repo has legitimate environment-dependent skips, and a box with no MySQL, Chromium or
+  mysqldump reports **259** where CI reports **3**. Two audits had to record skip movement as
+  "unproven" for exactly this reason.
+
+  The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
+  invoked from five places in this repo — twice in `.github/workflows/phpunit.yml`, twice in
+  `.github/workflows/syncplay-e2e.yml` and once in `scripts/assertion-escape-audit.php` — plus
+  every developer's shell, and a flag would have to be re-added to each of them and to every job
+  added later. The attribute is read by every invocation that loads `phpunit.xml`, so a new job
+  cannot silently ship without it. Those sites are named by FILE and their count is RE-DERIVED by
+  `SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones`;
+  the first revision of this entry cited line numbers and its own commit moved them.
+
+  ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
+  skips: PHPUnit builds the default result printer for testdox with its
+  `$displayDetailsOnSkippedTests` argument hardcoded `false` — the `outputIsTestDox()` branch of
+  `Facade::createResultPrinter()`, `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` in
+  the pinned PHPUnit 10.5.64 — so it counts them in
+  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml`
+  passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
+  whole-run-log comparison by adding to the count while contributing no name. The
+  `assertion-escape-probe` job captures PHPUnit's output into a PHP variable and never echoes it
+  (`scripts/assertion-escape-audit.php`), so no name set is obtainable from that job either;
+  its config is not at fault. The script reports the testdox case as exit **5** with that
+  explanation rather than blaming `phpunit.xml`.
+
+  The attribute enables **two** lists, not one — `printSkippedTestSuites()` as well as
+  `printSkippedTests()`, because `Skipped: N` is the sum of both event kinds
+  (`SummaryPrinter.php:106`). A skipped SUITE is named under `There were N skipped test suites:`
+  with no `::` in its entries, and a run in which every suite skipped prints `No tests executed!`
+  with no `Tests:` line at all. The script parses both, emitting a suite as `SUITE:<name>`, and
+  accounts for the missing totals line instead of reporting drift. Verified against the real binary,
+  not a hand-written fixture.
+
+  It is **purely additive** — verified by running the full suite either side of the change on one
+  seed: identical exit status (`1` both times, from a pre-existing environment-dependent failure on
+  the measuring box), identical `Tests: 10249, Assertions: 67983, Failures: 1, Skipped: 259.`, and a
+  diff of the two outputs that is empty apart from the new list and the `--` separator PHPUnit puts
+  between lists. `failOnSkipped` is a separate setting and is not set here.
+
+  The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
+  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
+  **4** when skips were counted, no detail list was printed and testdox does not account for them
+  (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
+  those reproduced against master's own CI log), **5** when the unnamed skips are matched one-for-one
+  by testdox skip glyphs, **3** when the numbers do not add up and **6** when the sorted set could not
+  be written in full. Each code names the cause its own arithmetic supports and never attributes more
+  to a cause than that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the
+  number of testdox SKIP lines (` ↩ `) and taken only when that number **equals** the shortfall —
+  never on the mere presence of testdox-looking output, which would exonerate `phpunit.xml` about a
+  run whose only fault is `phpunit.xml`. When testdox covers part of the shortfall both causes are
+  named. When there are **more** skip glyphs than unnamed skips nothing is attributed to testdox at
+  all: a real testdox run cannot produce a surplus (PHPUnit counts every glyph it prints in the same
+  run's `Skipped: N`), so a surplus is evidence of foreign output in the log — `gh run view --log`
+  carries every tool's — and it is reported as unattributable while both candidate causes stay in
+  play. The clamp that used to trim such a surplus down to the shortfall, and so printed "Do NOT
+  change phpunit.xml" about a config that was the cause, is **removed**: it had no legitimate input.
+  Entries declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
+  because they have no skip count of their own to match.
+
+  ⚠ It is **not** claimed that every exit is right for every input. All of the denominators are
+  **input-wide sums**, so in a multi-run log (`gh run view <id> --log`) one run's shortfall can be
+  paid for by another run's surplus and net out to a code that is right for the sum and wrong for
+  both runs — measured on the shipped version: a run declaring two names but summarising one, followed
+  by a count-only run summarising one, exits **0** with a two-name set. Two such inputs were measured
+  in round 3 of this step's review and are closed with fixtures, and the testdox-glyph surplus is
+  closed by deleting the branch that read it; a `--testdox` run that also skips a whole test SUITE is
+  not closed, because a skipped suite produces no testdox glyph, and neither is exit 5's reliance on
+  an equality of two whole-input totals (N stray glyphs beside a run that lost N names look the same
+  as one testdox run that skipped N). The durable fix is **per-run segmentation** of the parser, which is
+  filed as a follow-up rather than done here. Two smaller limits complete the list: a data-set label
+  containing a literal **newline** is emitted truncated at that newline (the only shape that escapes
+  the denominator cross-check — no provider here produces one, and the truncation is stable, so `comm`
+  is not corrupted), and a drift in PHPUnit's list HEADER text refuses loudly but as exit **4** blaming
+  `phpunit.xml` rather than exit 3 blaming the parser — the right refusal with the wrong cause, since a
+  vanished header and a missing attribute are arithmetically identical. The script's header is the
+  canonical statement: it enumerates every exit path, the input class that reaches it, and all five
+  known limits by number, each with the input measured to reach it.
+
+  `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
+  `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the
+  `comm` comparison — and it drives the **real** `phpunit` binary for the plain, `--testdox` and
+  skipped-suite shapes, so a hand-written fixture can no longer diverge from what PHPUnit actually
+  prints. It also re-derives the `--testdox` ban from every `.yml` **and** `.yaml` workflow, parsing
+  each one and folding shell continuations first (a `.yaml` file and a wrapped command both defeated
+  the first version of that guard), and re-derives the invocation-site count the paragraphs above
+  claim. Both testdox glyphs have their own stray-line fixture: `✔` (attributes nothing, reported as
+  evidence) and ` ↩ ` (attributed at most once, never exonerating), plus the surplus case — two stray
+  ` ↩ ` lines beside a count-only run — which is RED against the removed clamp. The `✔`-only fixture
+  is why the surplus defect survived three review rounds.
+
+- **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
+  `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit
+  in-body admin re-check in every handler (two of the five tasks are destructive, and a group's
+  middleware is one refactor away from being lost):
+
+  | Verb | Path | Mode |
+  |------|------|------|
+  | GET  | `/api/v1/admin/maintenance/tasks`                  | catalogue |
+  | GET  | `/api/v1/admin/maintenance/jobs`                   | recent queued runs (`?limit=`, `?task=`) |
+  | GET  | `/api/v1/admin/maintenance/jobs/{id}`              | one job, for polling |
+  | POST | `/api/v1/admin/maintenance/storage-snapshot`       | **queued** → `202` |
+  | POST | `/api/v1/admin/maintenance/reap-scan-jobs`         | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/reap-transcode-jobs`    | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/cleanup-orphaned-stats` | sync → `200` |
+  | POST | `/api/v1/admin/maintenance/dedupe-paths`           | **queued** → `202` |
+
+  **The sync/queued split is a property of the task, not of the caller.** `storage-snapshot`
+  `shell_exec`s `du -sb` per bucket over `/vault1` and `/vault2` (which on the live host hold the
+  whole media library) and `dedupe-paths` scans `media_items` whole with a transaction per
+  duplicate group — running either in a Workerman HTTP worker stalls every concurrent connection
+  on that process. Both are enqueued onto the new `maintenance_jobs` table (migration 098) and
+  drained by a 5-second timer inside the existing `count = 1` `phlix-background-timers` fork,
+  which is what makes "one maintenance job at a time" true. A repeat POST while the same task is
+  pending answers `200 {created: false}` with the EXISTING job, so a double-clicked button cannot
+  start two `du -sb` walks.
+
+  **`cleanup-orphaned-stats` closes out S14's deferred cleanup action.** S14 shipped the read-side
+  INNER JOINs so orphaned rows stopped appearing as blank dashboard entries; they were never
+  removed. It deletes from `stats_playback_events` (both `media_item_id` and `user_id`),
+  `stats_library_changes` and `stats_user_activity`, bounded by a per-table `LIMIT` that reports
+  `truncated: true` rather than looping. 🚨 It **refuses outright** when `media_items` or `users`
+  reports zero rows: `NOT EXISTS (SELECT 1 FROM media_items …)` is true for every row against an
+  empty parent, so a fresh install or half-restored backup would otherwise delete the entire
+  playback history in one click.
+
+  **`reap-scan-jobs` imposes a six-hour FLOOR on the age it will accept**, derived from the
+  4 h 09 m production music scan recorded in `LibraryScanWorker::start()`. `library_scan_jobs` has
+  no heartbeat column — `started_at` is the only age signal and it is never refreshed while a scan
+  runs — so honouring a short request would mark a healthy scan `failed` AND make
+  `hasActiveJobForLibrary()` report the library idle, re-opening the door to a second concurrent
+  scan over the same files. `ScanJobRepository::reapStaleJobs()` gained an optional age bound for
+  this; its default (null) is the unchanged boot catch-up contract, which still reaps every
+  `running` row and must stay reachable only from `LibraryScanWorker::start()`.
+
+  **`dedupe-paths` defaults to a DRY RUN.** `apply` must be strictly `true` — the string `"false"`
+  is truthy, and this deletes media rows. The keeper-selection and merge rules moved out of
+  `MediaDedupePathsCommand` into `Phlix\Media\Library\PathDedupeRunner` so the CLI and the task
+  share ONE copy rather than two that drift.
+
+- **The AccessSchedule `timeToMinutes()` `intdiv` fix is now pinned by a regression test (S336).**
+  `tests/Unit/Access/AccessScheduleTest.php` (11 tests, 80 assertions) drives the REAL call graph
+  `timeToMinutes()` → `isActiveAt()` → `AccessScheduleService::getActiveScheduleForProfile()` line 69
+  against a mocked `Workerman\MySQL\Connection`, and names the boundary cases the fix was introduced
+  for individually: the `"00:10:30"` non-multiple-of-60 example, the `fromRow()` default
+  `end_time "23:59:59"`, second-granularity across a full minute, exact start/end inclusivity, one
+  second before start / after end denial, and the inclusive overnight window. Red-on-revert is
+  demonstrated, not asserted: mutating `intdiv` back to `/ 60` makes **7 of the 11 tests fail with
+  `TypeError: Return value must be of type int, float returned`** under `strict_types=1` (the four
+  that stay green are the `:00`-seconds boundary-pinning probes, documented as such). The
+  prevention question — why PHPStan level 9 cannot pin this shape (it types `$int / 60` as a
+  benevolent `(float|int)` union; verified against PHPStan 2.2.5) — is written into the
+  `AccessSchedule.php` docblock.
+
+- **The S111 fixture-id uniqueness pin is now provable from its CSPRNG half, and the last
+  `mt_rand()`-based test id generators are gone (S334).** `BrowseIndexUsageTest`'s S111 pin ("a
+  pinned mt_rand seed must not reproduce a fixture id") was satisfiable by the generator's
+  monotonic counter ALONE: freezing `bin2hex(random_bytes(9))` to a constant would have kept every
+  assertion green while reinstating the cross-run collisions S111 removed. The generator now lives
+  in `tests/Support/FixtureIdGenerator` so a unit-level test (`FixtureIdGeneratorTest`, 3 tests)
+  can probe the REAL generator without MySQL; the new guard compares only the random half
+  (positions 0-23, the 12-hex counter field at position 24 excluded), and the mutation is
+  demonstrated red — frozen prefix → `Failed asserting that two strings are not identical` — with
+  the counter left intact. The S111 pin in `BrowseIndexUsageTest` gains the same (2b) prefix
+  assertion for the CI/MySQL path. `PooledConnectionConcurrencyTest::uuid()`'s 8 executable
+  `mt_rand()` calls are converted to the same CSPRNG pattern (`random_bytes(16)` with v4/variant
+  nibbles), so a pinned `--random-order-seed` can no longer regenerate identical PK ids across
+  same-seed runs.
+
+- **S219 — the DLNA admin controller's production DI wiring is now pinned (test-only).**
+  `AdminDlnaServerController::setSettingsRepository()` / `::setRestartController()` have exactly
+  two production call sites, `Application::loadDlnaAdminRoutes()` at `Application.php:1089` and
+  `:1102`, and **every existing test wired the controller by hand.** Replacing the first call site
+  with a no-op left `DlnaAdminRoutesTest` + `tests/Unit/Server/Http/Controllers/Dlna` +
+  `tests/Unit/Dlna` at `OK (310 tests, 929 assertions)`. In production that same no-op makes every
+  DLNA start/stop answer `503 "DLNA settings store is unavailable…"`, because `applyEnabled()`
+  short-circuits on `$this->settings === null` before anything else — the admin toggle would just
+  stop working, silently.
+
+  New `tests/Unit/Server/Core/ApplicationDlnaAdminWiringGuardTest.php` (6 tests) never constructs
+  the wired controller. Following the S239 precedent, it reflects the `Router` a real `Application`
+  composed from `ContainerFactory::defaultProviders()` (only the MySQL `Connection` doubled) and
+  pulls the controller **back out of the route table**, which is where `loadDlnaAdminRoutes()` put
+  it. Those three routes bind an already-constructed instance, not a class-string, which is exactly
+  why the wiring has to be read off the registered object.
+
+  It pins: both collaborators present on the container-composed instance; all three DLNA admin
+  routes sharing that one instance (a per-route instance would leave two unwired); and the
+  production CONSEQUENCE — `stop()` on the composed controller answers **409** ("already disabled",
+  since `dlna.cds_enabled` ships false), not the unwired **503**. Because 409 and 503 are both
+  refusals, a hand-built unwired controller sits beside it as the CONTROL, answering 503 with the
+  unwired message — which is also the floor proving those fields genuinely can be null. The S239
+  300-route anti-vacuity floor is carried over so a hollowed loader or a hand-rolled container
+  (53 routes vs 345) fails loudly instead of passing vacuously.
+
+- **S74 — the server can now tell an operator that a newer phlix-server exists.** New
+  `Phlix\Server\Updates\` (`CoreUpdateCheckService`, `CoreUpdateCheckWorker`,
+  `CoreUpdateStatus`, `VersionMarkerFetcherInterface`, `AsyncVersionMarkerFetcher`), a new
+  repo-root `VERSION` marker, `config/updates.php`, and two admin endpoints:
+  `GET /api/v1/admin/updates/status` and `PUT /api/v1/admin/updates/settings`
+  (body `{"checkEnabled": bool}`), both inside the `AdminMiddleware`-gated group and both
+  carrying their own in-handler admin gate.
+
+  **No apply action, deliberately.** The status payload carries `updateCommand`, a
+  copy-to-clipboard `curl … | sudo bash -s -- --update -y` one-liner. The HTTP handler
+  never invokes git/composer/systemctl, and `testThereIsNoInlineApplyRoute` pins that
+  closed.
+
+  **The fetch is async and fork-free.** The step text prescribed
+  `PluginCatalogService::defaultFetcher()`; that shape forks on
+  `WorkerContext::inCoroutine()` and PHPUnit is never in a coroutine (`getCid()` is always
+  `-1`), so the arm production takes would have been structurally untestable — the S170
+  defect class. `AsyncVersionMarkerFetcher` uses `workerman/http-client` in **callback
+  mode** with BOTH `success` and `error` supplied, which keeps `Client::request()` out of
+  its coroutine-suspending branch (vendor `Client.php:78`) entirely. Nothing blocks the
+  worker and there is no untestable arm.
+
+  **The worker has two independent arms**, armed from
+  `Application::startBackgroundTimers()` on the count=1 `phlix-background-timers` worker:
+  a **one-shot boot catch-up** 300 s after start, plus the **persistent daily poll**. A
+  bare `Timer::add(86400, …)` fires only after 24 h of uninterrupted uptime and every
+  restart resets the countdown — the identical defect already shipped twice here (empty
+  `backups`, `PluginAutoUpdateWorker` never running). Both arms are pinned by separate
+  tests that FIRE the scheduled callbacks rather than reading intervals.
+
+  ⚠ **`VERSION` is a second source of truth for the version and must be bumped in lockstep
+  with `Phlix\Common\Version::STRING`.** `tests/Unit/Server/Updates/VersionMarkerFileTest.php`
+  makes drift a red test: behind the constant and no release ever announces itself; ahead
+  of it and every install nags about a release that was never cut.
+
+- **S131 — one predicate for "did this write anything", and a measured contract to go with
+  it.** New `Phlix\Common\Database\WriteResult::wroteNothing()`
+  (`src/Common/Database/WriteResult.php`) promotes the predicate S96 added privately as
+  `MusicLibraryScanner::statementWroteNothing()`, which now delegates to it. **Nothing was
+  broken:** there are zero falsy tests on an insert result anywhere in the repo, so this
+  closes an unguarded contract rather than a live defect.
+
+  **The contract, read out of `vendor/workerman/mysql/src/Connection.php::query()`
+  (`:1854-1869`) rather than inferred.** The client dispatches on the first
+  *space-delimited* token of the trimmed SQL: `select`/`show` → an array,
+  `update`/`delete`/`replace` → an `int` `rowCount()`, `insert` → `lastInsertId()` as a
+  **string** when rows were affected and **`null`** when none were, and anything it does
+  not recognise → `null`. A real error never returns at all — `execute()` (`:1742-1786`)
+  rethrows. Three consequences are now documented at the helper and pinned in
+  `tests/Unit/Common/Database/WriteResultTest.php`: (1) `false` is a value this client
+  never produces, so the `=== false` shape at the six unguarded sites was simultaneously
+  unreachable and blind to `null`; (2) 🔴 a SUCCESSFUL insert into a `CHAR(36)`-PK table
+  returns the string `'0'`, which is FALSY in PHP, so `if (!$result)` reads a success as a
+  failure; (3) the keyword match is whitespace-sensitive, so reformatting SQL into a
+  heredoc can move a site onto the `null` arm without changing a semantic.
+
+  **Applied to five of the six named sites, and deliberately NOT to the sixth.**
+  `DbOidcStateStore`, `DbOAuth2StateStore`, `DbTraktOAuthStateStore`,
+  `DbLastfmOAuthStateStore` (insert guards, plus their four `$deleteResult === false`
+  guards) and `DbLoginRateLimitStore` now route through the helper.
+  `StreamSessionService::updateStreamLimit()` does not: its
+  `INSERT … ON DUPLICATE KEY UPDATE` returns `null` when the values are already current
+  (measured against real MySQL 8) and the falsy string `'0'` when a row really is written
+  — and **both are success**, so inverting the helper into that return value would report
+  a failed update for an idempotent PUT. The site returns `true` (which is exactly what
+  `$result !== false` always evaluated to) with the reasoning stated in place, and both
+  shapes are pinned so the tempting "completion" reddens.
+
+  **Two corrections to the inventory.** It was quoted as 11 sites; re-derived by walking
+  every `->query()` whose verb is `INSERT`/`REPLACE` — 85 calls in `src/`, of which 74
+  discard the result outright — it is **12**: `ScanJobRepository::startRunningIfIdle()`
+  landed with S151 after the count was taken, and was already correct. And
+  `StreamSessionService::cleanupStaleStreams()` is a DELETE, not an insert: it returned a
+  constant `1` behind a `!== false` that could never be false, contradicting its own
+  `@return int The number of stale streams removed`. It now returns the `rowCount()`.
+
+  **The doubles were fixed too, because a fix that changes what a client returns must
+  change the double that impersonates it.** S96 proved that: deleting the `null` arm left
+  the entire scanner suite byte-identically green because no double could produce `null`.
+  `MusicLibraryScannerTest`'s two remaining callback doubles returned `int 1` for an
+  INSERT — a value the client cannot produce — and now return the measured shapes (`'0'`
+  for `media_items`, a string id elsewhere). Proof: removing the `null` arm is **15 RED**
+  across six files, removing the `false` arm is **12 RED**, and `return !$result;` — the
+  `'0'` trap — is **72 RED**.
+
+- **S180 — the assertion-escape PROBER now runs in CI, behind a tracked baseline.** S120
+  shipped two halves and wired only one. The runtime guard (the `test` job's "S120
+  assertion-escape guard" step) sees an escape only when the assertion actually fails and
+  only when the failure went through `Assert::assertThat()`. The static half —
+  `scripts/assertion-escape-audit.php --probe`, which plants a named tripwire before the
+  first assertion of every assertion-bearing closure and decides by EXECUTION whether it
+  can fail its test — was left out because one Integration site is a known flake, and a
+  gate that reds intermittently gets deleted. New job `assertion-escape-probe` in
+  `.github/workflows/phpunit.yml` runs it. **The two halves catch different things and the
+  static one caught the case that actually occurred:** the live escape found on 2026-08-02
+  (`SmartPlaylistRefreshSubscriberTest`) probed `DEGRADED` while the runtime guard reported
+  exit 0, silent.
+
+  **Census, re-measured rather than quoted** (dev box, `origin/master` @ `94881d73`). The
+  numbers in circulation disagreed and both were stale as a description of master: the
+  planning text said 23/19/4, this file's S120 entry said 20/17/3 — correct for the
+  20-closure tree S120 shipped against, which is why it carries "re-run the probe rather
+  than quoting a remembered count". Actual, with the exclusion applied:
+  `22 site(s) probed — 19 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED, 1 EXCLUDED`, exit 0,
+  **identical with a live mysql:8.0.46 and with no database at all** — every probed site
+  uses a mocked connection. Full 23-site figure before the exclusion: 19 GATES + 4
+  NOT-REACHED without a DB, 20 GATES + 3 NOT-REACHED with one.
+
+  **The undecided count is now a checked fact, not folklore.**
+  `tests/Support/AssertionEscape/probe-baseline.json` enumerates the three `NOT-REACHED`
+  sites with a reason each — all three are a `$this->fail(…)` guard on a path that must not
+  be taken, so a probe *cannot* decide them; two are S120 census sites 10 and 14.
+  `ProbeBaseline::reconcile()` reds the gate in **both** directions: an observed
+  `NOT-REACHED` that is not listed, AND a listed entry that has started gating or has
+  disappeared. A list that only ever grows is how a gate becomes a permanent hole.
+
+  **The flake is excluded with its measurement, not on trust.**
+  `PooledConnectionConcurrencyTest::runChurn` probes non-deterministically — 19 `--only`
+  runs against a live MySQL gave 18 `GATES` and 1 `NOT-REACHED`, and the same file with no
+  tripwire at all failed 3 of 20 bare runs with `reader: pool exhausted: no idle connection
+  available after 10 s`. It flips between `GATES` and `NOT-REACHED`, which no single
+  baseline state can express, so *either* choice reds the gate over S137's pool defect
+  rather than over an assertion. Decide it by hand with
+  `--probe --only=<n>`, which deliberately ignores the exclusion list.
+
+  ⚠ **ADDITIVE, NOT A REPLACEMENT — a green here is not whole-suite safety.** The
+  enumeration is LEXICAL: 186 closures reach an assertion only through a HELPER and carry
+  no `assert*` token, so this job sees none of them. The runtime guard covers those. Both
+  the script header and the job's own output say so, because the failure mode to avoid is
+  someone deleting one half on the strength of the other being green.
+
+- **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh
+  install and `--update`.** Implements the applicable parts of the
+  [kernel-optimization appendix](https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html):
+  - `LimitNOFILE=1048576` in the systemd unit. This is the one that mattered:
+    systemd does **not** read `/etc/security/limits.conf`, so the daemon was
+    running at systemd's soft default of **1024** open files — one fd per live
+    connection plus open HLS segment files, reachable under load and surfacing
+    as "Too many open files" with clients dropped mid-stream. Retrofitted into
+    existing units by `--update`, only when the directive is absent.
+  - `/etc/sysctl.d/99-phlix-net.conf` — `net.core.somaxconn=65535` (was 4096,
+    and it silently clamps every listen backlog), `tcp_max_syn_backlog=262144`,
+    `netdev_max_backlog=30000`, and `ip_local_port_range=16384 65535` (a
+    *widening* — 49,152 ephemeral ports vs the 28,232 of the 32768-60999
+    default; the floor stops at 16384 rather than the page's 10240 so the
+    registered-port band, which includes every port Phlix listens on, stays
+    outside the ephemeral range).
+  - `/etc/security/limits.d/99-phlix.conf` — nofile soft 65536 / hard 1048576
+    for `root` and the service user, covering login shells and hand-run CLI
+    scripts (systemd is unaffected by this file; see `LimitNOFILE` above).
+
+  Four settings from that page are deliberately **not** applied, each with the
+  reason recorded in the generated sysctl file: `fs.file-max` and
+  `tcp_max_tw_buckets` would *lower* modern kernel defaults,
+  `tcp_tw_recycle` was removed from Linux in 4.12, and `nf_conntrack_max` is
+  only meaningful behind a stateful firewall. `--uninstall` removes both
+  drop-ins.
+
+- **A mechanical guard for the swallowed-assertion class** (S120), in two independent
+  parts:
+  - `tests/Support/AssertionEscape/` — a PHPUnit extension (registered in `phpunit.xml`)
+    that reports any test where an assertion failure did not decide the outcome. The
+    **measurement** is exact rather than heuristic: `Assert::assertThat()` emits
+    `Test\AssertionFailed` from a `finally` **before** the exception propagates, so the
+    event fires even when the exception is subsequently swallowed. Its limits are stated
+    rather than papered over, in `EscapeCollector`'s docblock:
+    - **Blind spots** — three paths throw an assertion failure without going through
+      `assertThat()` and so emit no event: `Assert::fail()`; mock parameter/invocation
+      rules (`Parameters.php:117` → `Constraint.php:106`); and
+      `markTestSkipped()`/`markTestIncomplete()`, whose exceptions are also
+      `RuntimeException` subclasses. Both of the latter two are currently harmless —
+      mock rules are re-verified at `TestCase.php:688`, after `runTest()` returns and
+      thus outside any swallowing callback, and a token scan finds 0 `markTest*` calls
+      inside closures — but they are not covered.
+    - **False positives** — a test that *deliberately* catches its own assertion failure
+      (the usual way to test an assertion helper) is reported as a violation and fails
+      CI. There is no opt-out, deliberately: an escape hatch would be reached for at
+      precisely the moment a real escape is being looked at. The docblock records the
+      non-tripping remedies instead.
+  - `scripts/assertion-escape-audit.php` — enumerates every assertion-bearing **closure**
+    under `tests/`, probing its **first** assertion (the unit is the closure, because
+    being swallowed is a property of the call site; on this tree that is 20 of the 51
+    assert-like calls inside closures), and with `--probe` plants a tripwire and
+    classifies each site `GATES` / `VACUOUS` / `DEGRADED` / `NOT-REACHED`. Covers
+    `Assert::fail()` and sites that are green today. Runs PHPUnit with `--no-extensions`
+    so it stays independent of the runtime guard.
+
+  `scripts/assertion-escape-check.php` turns the extension's report into a non-zero exit
+  and is wired into `.github/workflows/phpunit.yml` as an additive `if: always()` step.
+  A static rule was considered and rejected on evidence: deciding whether an assertion in
+  a callback can fail requires knowing which production frame invokes that callback — a
+  binding PHPUnit's mock builder makes at runtime — and the one purely-lexical
+  approximation available ("assertion-bearing closure in a test method that also has its
+  own `try`/`catch (\Throwable)`") produces a false positive on
+  `PooledConnectionConcurrencyTest`, where the caught message is deliberately re-surfaced
+  by `assertSame([], $errors, …)`.
+
+- **A CLI scan is now VISIBLE in the admin UI, and can no longer strand a
+  permanently-`running` job row** (S150/S151). `php bin/phlix library:scan <id>`
+  previously wrote *nothing* to `library_scan_jobs`, so the admin Libraries page kept
+  showing whatever the last web-enqueued job had left behind — measured on production
+  during the S145 healing rescan as a red `failed` badge sitting over a healthy scan
+  that had been repairing rows for 45 minutes. The command now opens its own `running`
+  row up front, streams `items_found` / `items_updated` / `current_path` through the
+  same throttled sink the background worker uses, and stamps `completed`/`failed` on
+  every exit path — including SIGTERM/SIGINT/SIGHUP and a fatal-error shutdown.
+
+  It also **refuses to start while the library already has a `queued`/`running` job**,
+  because two scanners over one library race on every per-file find-or-create and only
+  one of them can own the badge. The refusal is enforced *inside* the INSERT
+  (`INSERT … SELECT … WHERE NOT EXISTS`), not by a read-then-write pair, so two
+  invocations started in the same instant cannot both win. **`--force`** overrides it,
+  for the one case the check cannot distinguish: a row left `running` by a `kill -9` or
+  a power loss, which no in-process handler can ever clean up.
+
+  ⚠ **Two residuals, stated rather than glossed.** `SIGKILL` cannot be trapped by
+  anyone. And `LibraryScanWorker`'s startup reaper is unscoped and ageless, so a
+  `phlix-server` restart during a long CLI scan marks that row `failed` while the CLI
+  keeps running — which also makes the library look idle to the refusal check.
+  Bounding the reaper needs per-job worker ownership, i.e. a schema change.
+
+- **`enum` / `minimum` / `maximum` are now enforced on `PUT /api/v1/admin/settings`.** The endpoint
+  previously validated the internal *type* only; the schema's 4 `enum`, 21 `minimum` and 18
+  `maximum` constraints were emitted to the UI for display and never checked on write, so every
+  bound was cosmetic and trivially bypassed with a direct PUT (`auth.signup_mode` could be set to
+  any string, `transcoding.max_concurrent_transcodes` to `0` or `999999`). Coerced values are now
+  validated against their own JSON-Schema property sub-schema using `justinrainbow/json-schema`
+  (already a dependency, previously unused here), reported through the same `errors{}` map the SPA
+  renders as inline per-field errors. The UI's "Auto-detect" accelerator option is the schema's
+  empty-string enum member and validates directly — the narrow shim that briefly translated the
+  SPA's `"null"` string against a JSON `null` enum member was removed once `phlix-shared` v0.24.0
+  swapped that member for `""` (see *Changed* below).
+- **`SettingsRepository::hasDefault()`**, distinguishing "the config declares this key and its value
+  is null" from "no such config path exists" — which `getDefault()` cannot express. Backs a new
+  regression test asserting every schema key resolves to a real config default. That test ran
+  quarantined behind a 25-key `PENDING_SHARED_REVENDOR` list while the schema still declared
+  unresolvable keys; the v0.24.0 re-vendor removed them all, so the constant and its companion
+  staleness test were deleted and the assertion now runs unconditionally over all 40 keys —
+  **43 as of the v0.25.0 re-vendor below**, still unconditionally, still with no quarantine.
+
+- **Phase 1 — `AdminSettingsController` now emits `meta` block in GET `/api/v1/admin/settings`.**
+  Each key in `data.meta` carries per-setting metadata: `label`, `helpText`, `helpLinks`, `tier`, `group`,
+  `enum`, `enumLabels`, `optionHelp`, `minimum`, `maximum`, `default`, `secret`, and `restart`. As
+  defensive defaults `helpLinks` resolves to `[]` (empty array) and `tier` resolves to `'standard'` when
+  not explicitly set in the schema.
+- **Phase 2 — 28 new server settings added to `schemas/server-settings.schema.json` and `config/*.php`.**
+  Schema extended with Phase 2A–2C settings: `transcoding.preferred_accelerator`,
+  `transcoding.include_software_fallback`, `transcoding.tone_mapping_mode`,
+  `transcoding.prefer_hdr_output`, `transcoding.max_concurrent_transcodes`,
+  `transcoding.transcode_timeout`, `transcoding.max_concurrent_scan_probes` (Phase 2A);
+  `metadata.preferred_language`, `metadata.preferred_country`, `metadata.fanart_api_key`
+  (Phase 2B); `database.pool_size`, `database.timeout`, `relay.reconnect_delay`,
+  `relay.ping_interval`, `hls.segment_seconds`, `hls.max_concurrent_segments` (Phase 2C).
+  All keys are optional with defensive defaults in `config/*.php`.
+- **Phase 3 — server tunables added to schema: segment cache limits, stale-job age, global inflight cap.**
+  New keys: `transcoding.segment_max_inflight_global`, `transcoding.segment_cache_max_age`,
+  `transcoding.segment_cache_max_bytes`, `transcoding.stale_job_max_age`.
+- **Phase 4 — subsystem killswitches: scan, plugin auto-update, marker detection, asset jobs, similarity.**
+  New keys: `subsystem.library_scan_enabled`, `subsystem.plugin_auto_update_enabled`,
+  `subsystem.marker_detection_enabled`, `subsystem.media_asset_jobs_enabled`,
+  `subsystem.similarity_enabled` — each a boolean kill-switch to disable heavy background
+  subsystems independently.
+- **Phase 5 — auth settings: enabled flag, rate limit override, session lifetime.**
+  New keys: `auth.enabled`, `auth.rate_limit`, `auth.session_lifetime`. Consumed by
+  `AuthManager` to gate auth surfaces and override per-surface rate limits.
+- **WS-D — media SPA pages are now reachable under `/app` (Smarty retirement pending owner verification).**
+  `web-ui/src/main.ts` now registers routes **and** top-bar nav entries for SPA pages that shipped in
+  `@phlix/ui` but were previously unreachable on the server: **Books** (`/app/books`, `/app/books/:id`,
+  `/app/books/:id/read`), **Audiobooks** (`/app/audiobooks`, `/app/audiobooks/:id`, `/app/audiobooks/:id/play`),
+  **Photos** (`/app/photo/albums`, `/app/photo/album/:id`, `/app/photo/photo/:id`, `/app/photo/slideshow`),
+  **Search** (`/app/search`), and the **Music** sub-pages (`/app/music/artists`, `/app/music/artist/:name`,
+  `/app/music/album/:name`, `/app/music/tracks`, `/app/music/player`), plus nav links (Music, Books,
+  Audiobooks, Photos, Search). The passkey/WebAuthn surface is now a **Security** tab on the SPA Settings
+  page (`/app/settings/security`) rather than a standalone page. **Update:** these `/app` pages are now
+  verified live and the equivalent Smarty SSR templates + routes have since been **deleted** (see the
+  Smarty-retirement entries under *Changed* / *Removed* above); the legacy page paths now 302-redirect to
+  `/app`.
+- **SV-3.3 — loudness normalization + client capability negotiation.**
+  - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
+  - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.
+- **SV-1.9 — configurable segment-cache disk-space threshold.** New `hls.min_disk_space_bytes` config key (env `HLS_MIN_DISK_SPACE_BYTES`, default **500 MiB**). When free space on the segment-cache directory falls below the threshold, the server sweeps the cache and returns **`503`** with `Retry-After: 3` instead of failing an encode with `ENOSPC`.
+
+- **colors.css ⇄ the server transcription are now diffed mechanically, and the legacy-alias
+  justification is a measured census (S228).** `@phlix/tokens/src/css/colors.css` — the canonical
+  stylesheet behind `BuiltInThemes::PAYLOADS` and `ThemeTokenAllowlist` — lived in another repo
+  that nothing in CI could read, so both were pinned against hand transcriptions (the test file
+  restated 159 values; the allowlist test restated 53 names) and a hex edit upstream was invisible
+  estate-wide. The fix: a dev-only composer package `detain/phlix-tokens`, fetched by the `composer
+  install` CI already runs, delivered from the immutable commit SHA `5500d70b…` (tag v0.2.0; its
+  `colors.css` is byte-identical to master tip today), plus a guard that pins the delivered bytes
+  by sha256, parses the stylesheet, resolves its `var()` chains, and diffs name set + order +
+  every value against the allowlist and the transcription. Both hand transcriptions are deleted —
+  the expectation now comes from the delivered artifact. Mutating one hex on either side reddens
+  a named test (both directions mutation-proven in this run: transcription-side edit → 1 red;
+  vendor-stylesheet hex edit → 2 reds incl. the byte pin; one-block rename → 3 reds). The 13
+  legacy `--color-*` aliases S228 measured dead stay, and `LEGACY_ALIAS`'s docblock now states
+  why with a 2026-09-05 estate-wide reader census (12 of 13 have zero `var()` consumers across
+  server `src/`+`web-ui/`, ui, windows, tizen, mobile, roku, console and hub at their origin tips;
+  `--color-primary`'s only reader is the ui's dev-only swatch page; phlix-website's same-named
+  vars are its own per-site palettes, a disjoint namespace): removal is a coordinated cross-repo
+  deprecation — it would fight the new name-parity guard, make `ThemeSourceRegistry::register()`
+  reject the published sample plugin (which sets all 13 today), byte-change the
+  `GET /api/v1/themes` body that is md5-pinned against a copy in phlix-ui, and desync phlix-ui's
+  mirrored `THEME_TOKEN_ALLOWLIST`. The S84 "un-migrated components" folklore is gone. Collateral,
+  disclosed: `scripts/release.sh`'s root-`version`-field detector matched `"version"` at ANY
+  indentation, so the legitimate nested one inside the new inline composer `repositories` entry
+  false-reddened 11 `ReleaseScriptTest` cases; both the script and one test now ask the decoded
+  JSON root instead of the raw text. No migration.
 ### Changed
+
+- **Hygiene sweep makes `src/` 100% strict-typed, deletes fifteen verified-dead classes, and retires two more dead subsystems (IDs: SRV-HYGIENE micro-lane, 2026-10-14 review family — R18-03/07/09/10/16/17, R15-23/29, and three dead-code retirements):**
+  - R18-03: `declare(strict_types=1)` added to the last seven files missing it
+    (`AuditLogger` + the six `src/Dlna/` classes); `src/` is now 100% strict.
+    No coercion fallout — Dlna/Common/Integration filters all green.
+  - R18-07: fifteen verified-dead classes deleted (RemoteAirPlayClient,
+    DebugLogger, RecordingHooksRunner + RecordingHooks, HlsRelaySessionFactory,
+    Dvbt/HdHomeRun tuner driver factories, Audiobook/Book/Photo LibraryType,
+    the two Hwaccel exceptions, TranscodeProfile, SessionOidcStateStore,
+    Webhooks PluginRegistry). `MusicLibraryManager` was KEPT — it gained a live
+    `new` at `MusicLibraryType` (plugin LibraryType contract) after the review.
+    Census `EXPECTED_PHP_FILES` re-pinned from the measured red.
+  - R18-09: `SmartRuleVocabulary` moved `Phlix\Collection\` → `Phlix\Collections\`
+    (PSR-4 dir/namespace agreement); sole consumer import updated; twin dir gone.
+  - R18-10: `src/Server/WebSocket/Events.php` no-op compat shim deleted (its
+    phpstan keep-reason was retired at S343; `excludePaths` stays `[]`).
+  - R18-16: loose compares tightened — RatingGate admin flag now uses the
+    estate `!empty()` idiom (with a 5-case pin), PhotoScanner EXIF rationals
+    parse both halves then compare strictly (string '0' denominators no longer
+    produce INF), and MediaScanner's JSON-round-trip array `!=` is annotated
+    as intentionally order-insensitive rather than blindly tightened.
+  - R18-17: `RelayConfig::fromEnv()`'s ten `getenv(...) ?: default` sites
+    replaced by typed `envString`/`envInt`/`envFloat` helpers — unset and
+    empty-string are both explicitly "not provided", '0' keeps its old falsy
+    fallback, garbage strings keep the old cast semantics; 5 new pin tests.
+  - TimeSync vestiges retired: the standalone :8098 worker died in 22ce232c;
+    `DEFAULT_PORT`, the `$host`/`$port` ctor params and `getHost()`/`getPort()`
+    (zero production readers) removed with a tombstone docblock.
+  - Helm phlix chart: `PHLIX_HUB_ENROLLMENT_JWT` env + `hub-enrollment-jwt`
+    secret key + `hub.enrollmentJwt`/`hub_pairing_code` values dropped — zero
+    PHP readers; enrollment is file-based (`hub-enrollment.json`).
+  - R15-23: success-message taxonomy — one canonical string per operation
+    ('Settings updated.', 'PIN cleared successfully', 'Profile deleted
+    successfully'); one admin test pin re-pinned with attribution.
+    R15-29: newsletter tpl subject defaults aligned to the generator's
+    'Your Phlix Weekly Watch Report'.
+  - Foreign-gate repair: `WebPortalRouterParentalEnforcementTest` updated to
+    RecommendationService's post-R19-12 single-arg ctor — `phpstan
+    -c phpstan-tests.neon` fully green again.
+
+- **SRV-OPS remediation (2026-10-14 review family) — R14-05 README env
+  census + R14-20 restart semantics:** the README's "Environment variables"
+  section claimed six knobs; the runtime actually reads ~100. Replaced it
+  with the definitive grep-censused inventory (every `getenv()`/`$_ENV` read
+  in `src/`, `config/`, `start.php`, `bin/`, `scripts/`), grouped by
+  subsystem, each row carrying Default / Secret? / Restart class / consuming
+  file. Honest truth markings included: `PHLIX_MIGRATIONS_STRICT` and
+  `PHLIX_SECRET_KEY` are docker-entrypoint shell-side names, `PHLIX_HUB_ENROLLMENT_TOKEN`
+  / `PHLIX_PUBLIC_URL` / `PHLIX_HWACCEL` have zero read sites in this repo,
+  and the `config/playback.php`/`config/port-forward.php` knobs are
+  `$_ENV`-only (inert under the common `variables_order = "GPCS"`). New
+  "What requires a restart" subsection classifies every knob as boot-read,
+  per-process-memoized, or live. Config example port corrected 8080 → 8096
+  (truth again post-R14-06).
 
 - **The `@phlix/ui` tarball pin moves `v0.99.8` → `v0.99.9` and the served `/app` bundle is
   regenerated — the grid 'Add to playlist' flow now honors the server create contract in the
@@ -3010,1155 +6157,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `version` field still reads `0.99.1` — that string is the stale field inside the tagged
   package itself: the tag is the authority, the `resolved` URL and integrity are the proof.
 
-### Removed
-
-- **`UserProfileManager::setActiveThemeId()` deleted — the unvalidated bypass
-  door around the live theme law (2026-10-14).** The method wrote
-  `user_profiles.active_theme_id` with ZERO validation — the exact defect
-  class the same-day `UserRepository::updateSettings()` fix retired — and an
-  estate-wide grep (this repo's `src/`, `tests/`, `bin/`, `scripts/`,
-  `start.php`, `docs/`, plus every `phlix-*` sibling repo's tracked tree)
-  found zero callers. Its only surviving mention was the historical S85-era
-  CHANGELOG release note, which is a record, not an adoption promise — so
-  deletion beats deprecation. `UserRepository::updateSettings()` is now the
-  estate's SINGLE writer of the column; `getActiveThemeId()`'s stale
-  `@see setActiveThemeId()` line re-points there. No routes, no runtime
-  behavior change (dead code), no census movement from the deletion itself.
-
-- **Untracked the repo-root `PROGRESS.md` lane journal; sandbox journals stay out of git (`S487`).**
-  The file was a lane's scratch progress log that entered the tracked tree with the two W71 merges and
-  belongs only under `.sandboxes/<lane>/`, outside every git working tree. Both authored versions remain
-  recoverable from history; the root `.gitignore` now carries a `PROGRESS.md` line so a future
-  `git add -A` can never re-track a repo-root journal. No routes, no behavior change, no census change.
-
-- **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by
-  nothing on any published deployment artifact — re-measured at the step's tip: the Dockerfiles run
-  php-cli only under supervisord's `start.php` program (the fpm/nginx binaries are removed from the
-  base image), `systemd/phlix-server.service` ExecStarts `start.php`, the compose files and examples
-  reference nothing under `public/` as a program, `scripts/install.sh` actively REWRITES legacy
-  `public/index.php start` units onto `start.php`, and the docker boot gate ASSERTS no
-  index.php/php-fpm/nginx process runs in the image. The file nevertheless kept compiling, kept being
-  tokenized by the census, and kept reading like a supported path — enough that S99's audit had to
-  qualify its own finding as "Workerman path only". Deleted with a permanent Unit guard
-  (`tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php`) pinning the absence plus that
-  the artifacts it pins — supervisord, the Dockerfiles, the compose files, the shipped
-  reverse-proxy configs, the helm charts, the systemd unit — front nothing; mutation-verified
-  (recreating the file reddens it). The S163
-  incident block in `docker/supervisord.conf` and the `docker/README.md` narrative are updated to
-  past tense; the dual-entry-point pin in `ThemeEndpointsReachabilityTest` is reworked to the sole
-  authoritative entry point. S116's `du -sb` request-path residual closes with the file — the daemon
-  records snapshots via its timer instead. "Unserved" is measured on THIS deployment; the guard
-  claims no impossibility on a third-party fpm stack. No routes, no migrations, no behavior change
-  to the daemon.
-
-- **Whole-tree unused-import reflow (`S187`).** 150 dead `use` statements removed across 100 files
-  (`src/` 58, `tests/` 90, `scripts/` 2) — content-neutral by construction: the phlix-contracts server
-  route manifest regenerates byte-identical (401 tuples) before and after, and PHPStan (`src` level 9 +
-  `tests` level 2) and both Psalm configs report identical issue sets. A permanent detector now guards
-  the invariant: `tests/Unit/Support/UnusedImportGuardTest.php` tokenises every first-party PHP file
-  and fails on any import unreferenced in its own file, counting docblock-only mentions as used
-  (PHPStan/Psalm resolve FQCNs through them). Planted-import mutation proofs for both `src/`-style and
-  `tests/`-style fixtures ship inside the same guard; an empty scan tree fails fast instead of passing.
-  No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
-
-### Fixed
-
-- **`updatePlaybackPreferences()` now maps a rejected `updateSettings()` to the
-  same flat `{error}` 400 envelope as `PUT /api/v1/users/me/settings`
-  (defense-in-depth, 2026-10-14).** The read-modify-write handler had no
-  `InvalidArgumentException` catch: it is safe today only because its
-  `unset($settings['theme'])` guard strips the only field that validates, but
-  any validation a future lane adds to `UserRepository::updateSettings()`
-  would otherwise turn stored garbage into an uncaught 500 on every unrelated
-  crossfade save. The catch is folded in at the call site (the repo idiom the
-  settings route already uses; no new error codes). Pinned by a new
-  `WebPortalRouterSettingsTest` case injecting the throw at the repository
-  seam; the pre-existing legacy-RMW test keeps pinning the guard itself.
-
-- **`PUT /api/v1/users/me/settings` theme writes now validate against LIVE theme
-  truth — the pre-S85 fossil whitelist that silently dropped EVERY theme while
-  answering 200 is retired, and `UserRepository` consults the container
-  `ThemeSourceRegistry` singleton (2026-10-14).** The theme branch inside
-  `updateSettings()` accepted only `'phlix-light'/'phlix-dark'/'phlix-amoled'/
-  'phlix-contrast'` — the id namespace from before S85's registry theming — while
-  live ids are `BuiltInThemes::IDS` (`nocturne`/`daylight`/`midnight`) ∪ the
-  plugin ids enabled into `ThemeSourceRegistry`. The intersection is EMPTY, so no
-  theme PUT ever reached `user_profiles.active_theme_id` yet the endpoint kept
-  returning 200 "Settings updated" (no test covered the branch, so CI never saw
-  it). Now: a submitted `theme` is parsed BEFORE any write (a rejected payload
-  changes zero rows) and must be a string naming a built-in or a registry-
-  registered theme; unknown/non-string values throw `InvalidArgumentException`,
-  which the router maps to the endpoint's existing flat `{error}` 400 envelope —
-  no new error codes (contract law). Wiring: `UserRepository::__construct` gains
-  `?ThemeSourceRegistry $themeSources = null`; because PHP-DI skips optional ctor
-  params during autowiring, `AuthServicesProvider` names it explicitly —
-  `constructorParameter('themeSources', get(ThemeSourceRegistry::class))` —
-  keeping the singleton law (the same instance `PluginLoader` enables into and
-  `ThemesController` lists from). The unwired fallback accepts built-ins only.
-  Read-modify-write guard: `updatePlaybackPreferences()` re-passes the
-  `getSettings()` read-back — which injects the STORED theme, possibly a legacy
-  id — so it now drops `theme` before the re-pass: a legacy stored id can never
-  400 an unrelated crossfade save, and that endpoint never touches user_profiles
-  (pinned). INTENTIONAL behavior changes: fossil ids, unknown ids, and explicit
-  `"theme": null`/non-string values now 400 where they were previously ignored
-  with a 200 — a 200 from this endpoint no longer lies about a theme write.
-  Tests: `UserRepositorySettingsTest` +9 (built-in persists; plugin theme
-  persists through a real registry fixture; upsert→theme statement-order pin;
-  fossil/unknown/non-string throw with zero-write proofs; unwired-registry
-  plugin rejection; error message lists the built-in∪plugin id set) and
-  `WebPortalRouterSettingsTest` +3 (repo rejection → 400 echoing the message;
-  valid theme → 200; legacy-stored-theme crossfade save → 200 with zero
-  `UPDATE user_profiles`). Census rotations: `RequestDynamicPropertyCensus-
-  ExecutableTest` EXPECTED_DECLARED_READS 448→451 and EXPECTED_DECLARED_WRITES
-  1042→1051 — every delta is an inline `$request->userId`/`->body`/`->rawBody`
-  stamp in the three new router fixtures; measured from the phpunit red, not
-  predicted.
-- **Thumbnails, trickplay sprites and BIF frames no longer hard-abort on ffmpeg
-  ≥ 7.1 — every mjpeg/image2 output `FfmpegRunner` builds now carries
-  `-strict unofficial` (the CI BtbN n6.1.3 pin retires with it).**
-  User-visible impact: on any deployment running a modern distro ffmpeg (7.1+;
-  Ubuntu 26.04 ships 8.x), chapter thumbnails, poster extraction, trickplay
-  sprite sheets and Roku BIF frame passes died with exit 234 — "Non full-range
-  YUV is non-standard" — whenever an output flushed EMPTY, i.e. whenever a
-  requested `-ss` timestamp landed past EOF (short/variable-length media, a
-  chapter marker beyond a remux's duration). Worse, in the S-F19 batch path one
-  unreachable timestamp poisoned the whole command: reachable frames that were
-  already being written were discarded and the batch reported failure. Root
-  cause: JPEG is full-range YUV; from 7.1 the mjpeg encoder treats a
-  limited-range (yuv420p) frame as a fatal compliance violation instead of the
-  6.x/7.0-era warning, and an EMPTY output opens its encoder at the EOF flush
-  with exactly that default. `-strict unofficial` restores the pre-7.1 semantics
-  the S-F19 partial-success contract documents (exit 0, reachable frames
-  written, unreachable ones simply absent). Scope law: the flag is attached ONLY
-  to the four mjpeg/image2 output sites — single thumbnail
-  (`buildThumbnailCommand`, extracted for testability), thumbnail batch (per
-  output group), trickplay sprite (`buildTrickplaySpriteCommand`) and BIF frames
-  (`buildBifFramesCommand`) — never to HLS/segment/audio commands, so the
-  compliance relaxation cannot mask conformance problems in streaming encodes;
-  `FfmpegRunnerSegmentFormatTest`'s byte-identical literal pins stay green
-  UNMODIFIED as the structural proof. Tests: +5 argv-shape pins in
-  `FfmpegRunnerThumbnailBatchTest` (flag count/adjacency/placement laws per mjpeg
-  site + the negative half: segment and audio commands never contain `-strict`).
-  Measured 2026-10-08 with real binaries through the actual PHP code path:
-  pre-fix batch returns false with exit 234 on BtbN master (N-127252) and
-  7.1/8.x apt builds; post-fix exit 0 with frame_00000 written and frame_00001
-  absent, identical on 6.1.1/6.1.3 (flag inert there — no regression). CI: the
-  ubuntu-26.04 migration's interim `Install ffmpeg (pinned BtbN n6.1.3 static)`
-  workaround is retired in favour of the distro binary (the thumbnail suite now
-  runs against the ffmpeg real deployments ship). No new wire codes; no
-  migrations.
-
-- **`GET /livetv/recording/{id}/stream` now honours the parental rating cap (wave I close — the audit finding: the serve-time over-cap gate covered HLS/DASH jobs only; LiveTV streams bypassed it).**
-  A completed DVR recording is registered as a `media_items` row by `RecordingMediaRegistrar` and linked
-  back through `livetv_recordings.media_item_id` (migration 077), so the library rails already gate that
-  content: `show`/`getPlaybackInfo`/`getDownload` refuse over-cap items (S235 handler-side deny-all) and the
-  HLS/DASH byte paths re-check via `TranscodeFileServer::transcodeJobOverCap()`. The recording stream route
-  served the IDENTICAL `.ts` bytes from the recording id alone with no gate anywhere on the path — and the
-  recording uuid is not secret: the registered item's absolute `path` (`{storage}/{recordingId}.ts`) ships
-  in the member-facing item payload (`MediaItemShaper::shape()['path']`), so a capped member can derive the
-  bypass URL from any visible row, on top of the leaked/replayed signed-URL posture Finding 1b closed for
-  HLS. `LiveTvStreamController::streamRecording()` now runs the exact same predicate: the recording's linked
-  media id through `RatingGate::resolveFilterForSignedRequest()` (this route sits behind
-  `SignedUrlMiddleware` like `/hls`, so the S235 signature-only opt-out carries over unchanged — bare
-  signed fetches keep playing, pinned) and `isAllowed()`, refusing over-cap streams with a 404 whose body
-  is byte-identical to the existing not-found answer (no existence oracle). An UNLINKED recording
-  (in-progress capture, or a failed/zero-length completion the registrar never registered) has no library
-  counterpart to key on and stays ungated — the trait's stale-job pass-through posture.
-  `Recorder::mapRecording()` surfaces `media_item_id` (the `SELECT *` already carried it) so the gate reads
-  it without a second query. Deliberate non-change, documented in the controller: the timeshift routes
-  serve the live tuner's rolling window — session rows carry only `channel_id`, channels have no rating
-  concept, and `livetv_programs.rating` is ingest/display-only with zero gate consumers estate-wide — so
-  operator-configured lineups remain unrated-by-design; a profile-level channel restriction would be a NEW
-  concept (owner decision), not gate parity. Red-first proofs (outsider over-cap fetch served 200 pre-fix →
-  refused post-fix; admin/owner, within-cap, unlinked and anonymous-signed postures pinned green across the
-  flip) in `tests/Unit/Server/Http/Controllers/LiveTvRecordingParentalGateTest.php`; the Application factory
-  wiring is guarded by a whole-line source pin in the same file (fa30b871 law: a trailing-optional param no
-  factory passes is a silent no-op). No new error codes, no route/middleware tuple moves; census
-  tripwires re-pinned from measured reds (files 1941→1942, declared reads 446→448, writes 1032→1033).
-
-  **Correction (2026-10-02, wave-I review) — the derivability claim above is
-  overstated, forward-only note (the shipped commit message is not rewritten).**
-  Capped surfaces filter over-cap rows by the active profile's cap BEFORE shaping
-  (the `ItemRepository` content-rating allowlist plus the S235 handler-side
-  denials), so a capped member is not handed the row whose `path` would leak the
-  recording uuid; registered recordings are additionally unrated-at-birth — the
-  registrar writes no `rating`/`official_rating` metadata, so `content_rating` is
-  NULL and only a deny-unrated cap filters them at all. The real pre-fix vectors
-  were signed-URL replay under the deliberate S235 signature-only opt-out,
-  shared-account profile-switch boundaries, and uuids learned via UNCAPPED
-  household surfaces (admin/uncapped payloads do ship `path`). The fix posture
-  stands unchanged — the serve-time re-check answers every session-bearing
-  request however the URL was learned; only the justification narrative is
-  corrected. A container-resolution wiring guard (`tests/Unit/Server/Core/`
-  `LiveTvStreamControllerWiringGuardTest.php`) now complements the whole-line
-  source pin: it resolves the production provider stack and fails on the null
-  gate that `optionalRatingGate()`'s catch would otherwise swallow silently.
-
-- **`PATCH /api/v1/media/{id}/metadata` now parses `metadata_json` against a closed allowlist at the HTTP boundary (scan residual F-08).**
-  The handler merged the user-supplied `metadata_json` object straight into the stored provider blob
-  unvalidated. Two exposures closed: (1) any authenticated user (the route is `AuthMiddleware`-only) could
-  plant `rating`/`official_rating` in the blob, which `ItemRepository::update()` materializes into the
-  `content_rating` COLUMN the parental gate reads — `{"rating":null}` nulled the column and leaked the item
-  into kids profiles; plus `canonical_key` (dedup identity), `source`/`streams` (ABR-ladder input),
-  poster/trailer/`theme_audio_url` (the last ships to clients un-sanitized at emit) and the matcher-identity
-  `external_ids` family were all user-writable. (2) `hydrateItem()` keeps `metadata_json` as the raw JSON
-  string and only the decoded array in `metadata`, so the old `is_array($item['metadata_json'])` merge base
-  collapsed to `[]` in production and every PATCH REPLACED the stored blob, clobbering provider metadata —
-  the merge base is now the decoded `metadata` slot. The patch is parsed, not validated: twelve
-  reader-evidenced descriptive keys (`summary`, `overview`, `tagline`, `episode_title`, `artist`, `album` —
-  strings; `year`, `runtime`, `season`, `episode` — non-negative ints; `genres`, `tags` — lists of ≤64
-  non-empty strings ≤255 bytes) are the only accepted top-level keys, each coerced to its declared shape;
-  unknown keys are REFUSED with 400 naming them (zero legitimate HTTP senders of `metadata_json` exist in
-  the estate — web-ui never PATCHes this route, phlix-ui's `updateMetadata` caller sends only `title`, and
-  the native clients never call it — so fail-loud costs nothing and a future legit key arrives in the same
-  change that reads it), as are non-object payloads, patches over 65536 serialized bytes (documented bound;
-  the column itself is MySQL `JSON`), nested object/array-of-array bombs and scalar-shape mismatches. The
-  allowlist guards the HTTP boundary ONLY — scanner, matcher and `MediaPosterController` keep writing the
-  full provider vocabulary through `ItemRepository::update()`, which stays permissive (pinned). Proofs in
-  `tests/Unit/Server/Http/Controllers/MediaItemControllerMetadataMergeTest.php`.
-
-- **`WebPortalRouter::isAdminUser()` now demands an ACTIVE admin (reviewer-flagged predicate alignment).**
-  The L-4 paths-redaction gate (and the `files` disclosure on media detail) resolved the caller via
-  `UserRepository::findById()` + `is_admin == 1` — a softer predicate than the repo-wide standard
-  `is_admin = 1 AND status = 'active'` that `AdminMiddleware::checkAccess()`/`isAdmin()` and the
-  daemon-twin `LibraryController` redaction enforce via `findAdminById()`. A disabled/pending/suspended
-  admin inside the token-revocation latency window therefore satisfied the disclosure gate while failing
-  the hard admin gate. On direct HTTP the window is ≤5 s (AuthManager re-checks account status per
-  request through its 5 s auth-state cache, failing closed — `AuthManagerRevocationCeilingTest`), and the
-  relay path was audited as the load-bearing consumer: the server trusts the hub-stamped relay principal
-  and never re-reads its own users table per relayed request. `isAdminUser()` now delegates to the same
-  shared seam (`findAdminById() !== null`), mirroring `AdminMiddleware` exactly (one indexed PK lookup,
-  same uncached cost the soft admin gate already pays). No caller needed "admin regardless of status" —
-  all three call sites are disclosure gates. Pins: `WebPortalRouterPathsRedactionTest` gains
-  disabled/pending/suspended × both library handlers (red-first: each leaked `paths` pre-fix), and the
-  fixture user-mock now mirrors `findAdminById`'s real SQL beside `findById` so both sides of the swap
-  stay faithful.
-
-- **The SPA `/app/library/scan` route is admin-gated (L-4 follow-up, layer 2 of 2).** L-4 stopped
-  shipping `paths` to non-admins on `/api/v1/libraries`, but the scan page still mounted for them:
-  the route in `web-ui/src/main.ts` carried no gate, and the page's `v-if="library.paths.length"`
-  turns a stripped payload into a render TypeError (`undefined.length`), not the clean degradation
-  the L-4 comment assumed. The route now declares `meta: { requiresAdmin: true }` — the exact key
-  `@phlix/ui`'s `authGuard` checks (`to.meta?.requiresAdmin === true`, v0.99.7 already honors it) —
-  so a logged-in non-admin is bounced to home before the page renders, and the anonymous flow goes
-  to login. `web-ui/tests/library-scan-route.test.ts` pins the meta against the LIVE
-  `buildAdminRoutes()` sibling shape, not a frozen string. The independent second layer —
-  `paths?: string[]` on the ui Library view-models + `?.` guards on every library-payload read site
-  — landed in phlix-ui 5c9cf4ed and rides the next tag cascade (the vendored v0.99.7 bundle needs
-  no rebuild for it). The committed `/app` bundle under `public/assets/app` is regenerated from the
-  gated `main.ts` (entry-hash cascade renames every lazy page chunk; byte-deterministic across
-  three consecutive local rebuilds on the CI-paired toolchain).
-- **Seven security-scan hygiene findings (L-3/L-4/L-5/L-6/L-7/L-8 + the M-3 twin).**
-  **L-3 — anonymous `GET /system/info` stops fingerprinting the runtime stack.** The
-  route carries NO middleware, and it used to answer `php_version` (`PHP_VERSION`)
-  plus `workerman_version` (`Workerman\Worker::VERSION`) beside `server`/`version` —
-  a free CVE-targeting hint to every internet scanner. The estate consumer sweep
-  found exactly ONE reader (`phlix-windows-client` `src/main/versionCheck.ts`,
-  re-targeted in 992c7f0) and it reads only the top-level `version`; the two extras
-  have ZERO consumers, so they are DROPPED outright rather than admin-gated (gating
-  keys nobody fetches adds surface, not safety). `openapi.yaml` declares the payload
-  `additionalProperties: true` with no properties — spec-compatible, no edit needed.
-  Pinned by `SystemInfoPayloadHygieneTest` (full production-container dispatch).
-  **L-4 — library `paths` (absolute filesystem roots) are admin-only.**
-  `LibraryController::index()/show()` and `WebPortalRouter::getLibraries()/getLibrary()`
-  returned the raw row — `paths` included — to any authenticated user, while the
-  sibling media surface has always admin-gated its raw-file `files` block. Consumers
-  of `paths` are exclusively admin surfaces (phlix-ui admin LibrariesPage +
-  api/admin client, console/mobile Admin screens; LibraryScanPage's admin-scoped
-  `v-if` degrades cleanly; roku/tizen/windows read it nowhere), so the key simply
-  stops shipping for non-admins — redaction runs on the local array copy, leaving
-  the LibraryManager process-static cache intact for the next admin. New side-effect-
-  free soft gate `AdminMiddleware::isAdmin()` (NOT `checkAccess()`, which would
-  audit every ordinary non-admin browse as a permission denial); WebPortalRouter
-  reuses its existing `isAdminUser()` predicate. Pinned by
-  `LibraryControllerPathsRedactionTest` + `WebPortalRouterPathsRedactionTest`.
-  **L-5 — the dead-wired `HubJwtMiddleware` is deleted.** Autowired in
-  `HubServicesProvider` but attached to NO route on any dispatch surface (estate-wide
-  grep, 2026-09-30), and its only output `$request->hubUser` was read by nothing — a
-  security mirage beside the live hub-auth path (AccountLinkController/HubTokenController
-  validate via `HubJwtValidator` directly). Class + DI registration + its 18-case test
-  removed (precedent: the `src/Plugin/` deletion b0007060); `Request::$hubUser` stays
-  as a census-pinned RESERVED declared slot with corrected prose. `hub.jwt_invalid`
-  remains emitted (and contracts-registered) from its live sites; the contracts
-  `errors.ts` JWT_INVALID cite's `HubJwtMiddleware.php:73` coordinate is retired in a
-  companion contracts-repo commit. Census re-pinned from red: files 1916→1920,
-  declared reads 423→422, writes 1014→1018.
-  **L-6 — Chromecast 500-handlers stop echoing `getMessage()`.** `stop()`, `seek()`
-  and the shared `controlSession()` (play/pause) returned cast-layer exception text
-  verbatim — which carries the receiver's LAN `host:port` ("Connection refused to
-  192.168.1.50:8009"). Now constant client messages ('Failed to stop/seek/play/pause
-  cast session') with the detail to the MEDIA log channel, per the d052b488
-  CastApiClient convention; `ChromecastControllerErrorHygieneTest` pins exactness
-  (assertSame on the constant + assertStringNotContainsString on the host + positive
-  controls so the throwing fixtures can't pass vacuously).
-  **L-7 — SecurityHeaders prose now tells the truth, and the caller-wins guards are
-  case-insensitive.** The class docblock claimed "script/style self-only" and "Base-uri
-  NONE" while the shipped policy carries `style-src 'self' 'unsafe-inline'` and
-  `base-uri 'self'` — the inline-style allowance is DELIBERATE (the SPA themes via
-  `el.style.setProperty()`, i.e. element style attributes), now documented as such;
-  `script-src` remains nonce-only. Separately, the "don't overwrite a caller-set
-  header" guards were case-sensitive `isset()` lookups over Response's exact-case
-  header map: a caller writing lowercase `content-security-policy` was missed and
-  decorate() emitted a SECOND CSP key — browsers enforce the UNION of duplicate
-  policies, silently overriding the caller's intent. Guards now scan with
-  `strcasecmp` (mirroring `Response::asHeadReply()`); pinned by
-  `SecurityHeadersCaseInsensitiveGuardTest` (RED 3/4 pre-fix).
-  **L-8 — `Router::dispatch()`'s six per-request `error_log('[DEBUG] …')` calls are
-  deleted.** Zero test dependencies (the only repo mention is IntegrationDbGuard's
-  comment citing this very hazard: PHPUnit dies on error_log stdout under stdout
-  capture — the ConnectionPool precedent 8e72825d). Gated dispatch ran this hot for
-  every request in production logs; deleting beats env-gating.
-  **M-3 twin — the pre-router direct-play fast path no longer skips stream limiting
-  on a missing `session_id`.** `PreRouterFastPaths::checkStreamLimit()` still carried
-  the middleware's pre-fix bail-out, so any `/media/{id}/stream` client that omitted
-  `session_id` dodged the per-profile concurrency cap before the router (and thus
-  StreamLimitMiddleware) ever ran. It now falls back to the SAME synthetic
-  `(profileId, deviceId)` bucket as the middleware — derivation extracted to the
-  single shared helper `StreamLimitMiddleware::syntheticSessionBucket()` so a device
-  crossing both paths occupies the identical slot; the documented no-device-name
-  pass-through is preserved. Pinned by `PreRouterFastPathsSyntheticSessionBucketTest`
-  (registration/stability/cap-bite/pass-through; RED 3/5 pre-fix).
-  No new error-code literals anywhere (all sites reuse registered codes or keep
-  their existing ones).
-
-- **Three security-scan findings (M-1/M-2/M-3, scan @9e765895).**
-  **M-1 — `POST /api/v1/music/scan` is now ADMIN-ONLY.** The handler walks an
-  operator-supplied ABSOLUTE path with synchronous filesystem I/O inside a
-  resident HTTP worker but sat behind bare `AuthMiddleware`, so any authenticated
-  user could stall a worker on an arbitrary tree. It moved into WebPortalRouter's
-  `AdminMiddleware` group, mirroring `LibraryController::scan`'s posture through the
-  same house gate (401 unauthenticated, 403 + permission-denied audit for non-admins,
-  enforced before the handler so a refusal touches zero disk); the route is now one of
-  the FOUR admin-collaborator-conditional registrations, so an unwired construction
-  fails closed to a 404 rather than degrading to auth-only (the S282 lesson). The
-  admin-inline blocking-IO exposure that remains is registered honestly as Exception 7
-  in `docs/dev/BLOCKING_IO_EXCEPTIONS.md`; a queue was rejected because none exists for
-  raw-path music scans today (out-of-scope new infra). `openapi.yaml` `x-phlix-middleware`
-  flipped to `[AdminMiddleware]`. Pinned by `tests/Unit/Server/WebPortal/MusicScanAdminGateTest.php`
-  + the `WebPortalRouterWirePathGuardTest`/`OpenapiSpecCurrencyTest` cascade.
-  **M-2 — trickplay + chapter-thumbnail asset rails now honor the file's own S235
-  rating invariant for IDENTIFIED requests.** `MediaItemController::getTrickplay()`
-  and `::getChapterThumbnail()` are registered PUBLIC but returned derived copies of
-  the media (frame-accurate sprites, chapter stills) with no cap check. A Bearer-carrying
-  request over the item's effective rating now gets the exact `show()` 404 (never 403)
-  before any chapter parsing or file I/O, via the new `identifiedRequestIsOverCap()`
-  helper; the DOCUMENTED anonymous posture ("public, no auth required") stays
-  byte-identical because that helper treats an empty user id as not-over-cap rather
-  than reusing `resolveRatingFilter()`'s handler-side deny-all. `realpath` containment on
-  the withFile path was assessed and skipped — the sole writer (`MediaAssetGenerationJob`)
-  only ever emits `<transcodeDir>/chapters/<itemId>/<index>.jpg`, so provenance is safe
-  and adding containment would need new DI plumbing (out of scope). Pinned in
-  `MediaItemControllerParentalTest`.
-  **M-3 — the stream limit no longer skips session-less authenticated streams.**
-  `StreamLimitMiddleware` returned `null` (never registered) when no `session_id`
-  was supplied, so any authenticated client could dodge the per-profile concurrency
-  cap by omitting it. It now falls back to a SYNTHETIC stable bucket
-  `synthetic:<sha256(profileId|deviceId)>` (deviceId already carries its UA-hash
-  fallback): the same device/profile always derives the same id, so its streams occupy
-  exactly one slot that rides the normal heartbeat + 60s stale-GC lifecycle and cannot
-  leak rows. Only a request with no device name at all still passes unregistered. No new
-  error-code literals — a full synthetic bucket hits the same 429 `stream.limit_exceeded`.
-  Pinned in `tests/Unit/Server/Http/Middleware/StreamLimitSyntheticSessionBucketTest.php`.
-
-- **The S60 CSP browser control no longer depends on task-queue luck (E2E flake, run
-  36645892753).** `Fmp4HlsThroughControllerE2ETest::testRemovingBlobFromMediaSrcBlocksPlaybackUnderTheSamePolicy`
-  failed attempt 1 with `Failed asserting that an array contains 'media-src'` and went green on
-  rerun: `tests/Support/Browser/hls-playback-probe.mjs` serialized its report at the first poll
-  that observed `window.__probe.done`, but the browser dispatches the refusal's
-  `securitypolicyviolation` event as its own task, unordered against the hls.js error task that
-  latches `done` — on a loaded runner the violation landed after the snapshot and the control
-  reported "playback failed with no named violation" while the policy was biting exactly as
-  designed. `done` is now the START of a settle, not the end: while the caller's `--timeout`
-  budget runs, the probe keeps re-reading the page until `cspViolations` has been unchanged for
-  a 600 ms quiet window (a late violation restarts it; a policy that refuses nothing costs one
-  window; non-CSP runs never settle). Proven both directions — a synthetic 500 ms delivery delay
-  reddens the OLD loop deterministically with the exact CI signature and the fixed probe catches
-  the same delayed violation (`OK (27 assertions)`); commenting out the CSP header emission still
-  reddens the control via `assertFalse($probe['ok'])`, so the assertion genuinely still proves
-  the block. Test-infra only: no `src/`, and no assertion was weakened.
-
-- **`SyncPlayAuthMiddleware::redactTokenQuery()` now masks `token` query params case-insensitively
-  (bearer-law review residual).** Query-name case survives server-side — `parse_str` does NOT
-  lowercase keys, and Workerman's `Request::get('token')` is an exact-key lookup, so `?TOKEN=`
-  never populates the credential read and never authenticates the handshake. The exposure was
-  purely in the logs: the one mismatch-forensics call site (WebSocketServer's `onWebSocketConnect`
-  reject branch) writes the raw URI through `redactTokenQuery`, and a request carrying a live JWT
-  (valid against REST) under a wrong-case name beside a lowercase decoy `?token=` — the exact
-  half-migration shape that fires the mismatch — leaked that real credential past the
-  lowercase-only regex while only the decoy was masked. The pattern gains the `/i` flag on the
-  whole-name match, masking every token-named spelling in the logged URI regardless of case; the
-  cost is mild over-redaction of spellings the exact-key read would never treat as credentials,
-  which is the safe direction on a log-only path (over-redacting a log line is safe; leaking one
-  unmasked spelling is not). Near-miss names (`?mytoken=`, `?MYTOKEN=`) and non-token queries stay
-  byte-identical — pinned alongside the new upper/mixed-case and repeat-param proofs in
-  `tests/Unit/Server/WebSocket/WsAuthenticationTest.php`.
-
-- **`NatPmpClient` mapped TCP as UDP (inverted RFC 6886 §3.3 opcodes), returned a refused
-  mapping's zeroed port as success, and padded the §3.2 address request with slack bytes.**
-  The closing half of the wire-fidelity pass a34f698d left documented in-place. (1) §3.3 assigns
-  "1 - Map UDP, 2 - Map TCP" (rfc-editor.org/rfc/rfc6886.txt lines 526-528); the class constants
-  were the other way round, so every TCP forward `PortForwardService::autoConfigure()` requested
-  rode the wire as a UDP mapping request — gateways created wrong-protocol mappings, and the
-  §3.4 teardown keyed by the same inverted constant deleted them again (add/delete flipped
-  together, so the pair stayed self-consistent while never opening the TCP port the API names).
-  The corrected constants finally request the protocol the API advertises; the UPnP-IGD leg of the
-  fallback chain is unaffected (its SOAP `NewProtocol` string was already `TCP`). (2) `mapPort()`
-  now parses the 16-bit Result Code at bytes 2-3 of the §3.3 mapping reply via a new
-  `parseMappingResponse()` before reading the port/lifetime slots: §3.5 mandates zeroed
-  "Mapped External Port" and lifetime on any failure, which the old reader returned as int `0` —
-  `PortForwardService` would then persist the endpoint `ip:0` as a successful forward. Every
-  defined code (1-5) and any undefined code (§3.5: "MUST be treated as fatal errors of the
-  request") now yields null. (3) `buildPublicAddressRequest()` sent 4 bytes against §3.2's
-  2-byte diagram (`Vers|OP` only, no Reserved field); servers ignore datagram slack so there was
-  no live impact — pinned end-to-end by the unchanged fork-responder round trip — but the request
-  is now spec-true. Deliberately NOT changed: the `NAT_PMP_PORT = 5350` destination (the RFC
-  sends requests to 5351; 5350 is the client-side announcement listener — separate lane, own
-  live-wire decision) and `removePortMapping()`'s ACK check, which still returns true on any
-  opcode-matching reply without gating its §3.5 result code (same class as fixed here, left for
-  its own scoped pass per the unmap decision). Byte-pin tests gained an anti-inversion constant
-  tripwire, a non-symmetric per-protocol opcode pair, the 2-byte address-request shape, and two
-  real socket round trips through the public API (captured on-wire TCP opcode 2 + assigned-port
-  passthrough; refused reply yields null, not `0`). Mutation proofs: re-inverting the constants
-  reddens 5 pins, neutering the mapping gate reddens 7, re-adding the address slack reddens 1,
-  dropping the reply-opcode match guard reddens 1.
-- **`NatPmpClient` wrote the NAT-PMP mapping request's two port slots swapped, and its
-  public-address parser treated a failed result code as success.** (1) RFC 6886 §3.3 lays the
-  12-byte mapping request out with the Internal Port at bytes 4-5 and the Suggested External
-  Port at bytes 6-7; `buildMapRequest()` emitted them the other way round. The error
-  self-cancels for the symmetric `addPortMapping($gw, $p, $p)` call PortForwardService makes —
-  equal values in either order — but an anonymous request (suggested external 0) told the
-  gateway the INTERNAL port was 0, and any mismatched pair was wired backwards.
-  `buildUnmapRequest()` needed no byte move: §3.4 keys a deletion by the Internal Port slot and
-  mandates Suggested External Port = 0 (set by the client, ignored by the gateway), so the wire
-  order there was already spec-true; the fix renames the parameter, documents the §3.4 rule,
-  and a new pin forbids mechanically copying the map swap into the deletion path, where
-  internal=0/external=0/lifetime=0 is §3.4's wildcard that deletes EVERY mapping the client owns
-  for the opcode's protocol. (2) `parseExternalIp()` never read the 16-bit Result Code at
-  bytes 2-3, so a refused lookup (§3.5: 1 Unsupported Version, 2 Not Authorized/Refused,
-  3 Network Failure, 4 Out of resources, 5 Unsupported opcode) still decoded bytes 8-11 — an
-  RFC-compliant zero-filled failure field came back as the success-looking string `0.0.0.0`.
-  The parser now gates `result !== 0` to null (logged) and ignores the address field exactly as
-  §3.2 commands. New byte-pin tests (reflection idiom per `UpnpIgdClientTest`) pin the
-  non-symmetric map request offsets, the zero-suggestion shape, the §3.4 deletion shape, every
-  §3.5 failure code against a non-compliant junk address, and the RFC-shaped success arm;
-  mutation proofs: reverting the map swap reddens 2 pins, neutering the gate reddens 6, and
-  slot-swapping the unmap reddens the deletion pin. Two residuals are documented in-place and
-  deliberately NOT changed here (beyond this pass's wire scope): the class's opcode constants
-  invert the RFC's §3.3 assignment (the class sends TCP=1/UDP=2; §3.3 defines 1=UDP, 2=TCP),
-  and `mapPort()`/`removePortMapping()` read their reply ports/ACKs without the result-code gate.
-- **`NatPmpClient::parseExternalIp()` read the external IP from the wrong bytes, and
-  `StunClient::getPublicIp()` silently refused every IP-literal server config.**
-  (1) RFC 6886 §3.2 lays the 12-byte public-address reply out as version(1) + opcode(1) +
-  16-bit result code(2) + Seconds Since Start of Epoch(4) + External IPv4(4): the address is at
-  bytes 8-11, but the parser read bytes 4-7 — the gateway's epoch counter — and the device
-  rework lane's fixture had pinned that deviation. The parser now reads bytes 8-11 with the
-  layout table in its docblock, and `natPmpPublicAddressReply()` is RFC-constructed (opcode
-  128, non-zero epoch), mutation-proven: reverting the offset reddens the L4 wrong-source test
-  with `0.15.66.64`. The mapping reply needs no change — §3.3 puts the mapped external port at
-  bytes 10-11, which is where `mapPort()` already reads it. (2) `gethostbyname()` returns its
-  input unchanged both for an IP literal and for a failed lookup, so the old equality test read
-  a pre-resolved/numeric `stunServer` as a resolution failure and never probed. New
-  `resolveStunServerIp()` short-circuits IPv4 literals to themselves first and only then treats
-  an unresolved NAME as failure; tests pin all three arms (literal config probes and parses over
-  a real loopback exchange, unresolvable name refuses loudly through the logged gate, name path
-  unaffected).
-- **Three long-red CI jobs greened (`test-server` PHPUnit, `Psalm-on-tests`, S180 probe), none of
-  them by weakening what they test.**
-  (1) `BackupControllerBodyPersistenceTest::test_supplied_label_reaches_the_persisted_backup_row`
-  turned the MySQL-less `test-server` job red after the mysqldump exit-code strictness fix
-  (`ce295f9d`) made `BackupManager::createDatabaseDump()` fail loudly on an unreachable DB — the
-  old lenient contract had been silently tolerating exactly that. The test now rides the house
-  `RequiresRealDatabase` gate (skip when absent, redden when unusable), and `IntegrationDbGuard`
-  routes `error_log` to `/dev/null` for the probe window only: `ConnectionPool`'s `[DEBUG]`
-  connection-minting lines corrupted a `@runInSeparateProcess` child's captured result stream
-  (`PHPUnit\Framework\Exception: [DEBUG] ...`), a harness artifact, not a database verdict.
-  Adopter census 62→63.
-  (2) `psalm -c psalm-tests.xml` 6→0 errors: non-emptiness narrowing (`assertNotEmpty`) before the
-  three `[count(…) - 1]` tail reads in `RelayConsumerTest`/`SyncPlayManagerTest`, a
-  `/** @var array<int|string, …> */` boundary parse over `consumerState()`'s stream map, and a
-  production docblock spelling in `SsdpDiscovery` — `callable(string): (array{…}|null)` now
-  parenthesizes the inner union, which psalm needs to see the fetcher seam's documented
-  transport-failure `null` instead of reading it as a callable-level union and refusing the very
-  closure the SSRF suite's contract demands (the test was right; the annotation was mis-parsed).
-  (3) The S180 probe's `WebAuthnCeremonyTest::derToRawEcSignature` NOT-REACHED is recorded in
-  `probe-baseline.json`: the probed line is the `self::fail('not a DER integer')` arm of the
-  `$readInt` closure and cannot execute in any green run — its only caller feeds VALID DER, so
-  making the line run would break the behaviour under test.
-
-- **A freshly booted worker now reconciles theme state on its first request instead of
-  recording a foreign stamp as its baseline (`S499`).** S498's cross-worker fleet sync adopts
-  the current `plugins`-table stamp on a worker's very first theme request and rebuilds only
-  on a later change — an assumption that holds only while nothing moved between that worker's
-  `bootstrapEnabled()` and its first served request. An audit found the cold-worker hole: when
-  a peer install/enable/disable/uninstall lands in that window, the new worker captures the
-  foreign-current stamp while its in-memory registry is still from the older boot generation,
-  so the two stamps then agree forever and it serves the stale catalogue until the process
-  recycles — the exact W99 symptom, minus the restart that would have hidden it. The stamp now
-  starts as an explicit "never reconciled" sentinel that a real (always-40-hex) stamp can never
-  equal, so the first served request falls through to the existing rebuild-from-durable path and
-  only then adopts the stamp; that boot reconcile is tagged on the log line so an operator can
-  prove, from the log alone, that no worker ever baseline-captured a foreign generation. The
-  extra rebuild cannot duplicate a theme: the rebuild clears then re-registers each enabled
-  source once (a worker that booted current just re-materialises the same bytes), reusing
-  `register()`'s existing replace-per-source idempotency unchanged. The adopted stamp is now
-  committed only after the rebuild completes — a one-line ordering hardening that keeps
-  "stamp equals current" meaning "this process is reconciled to it" under any future
-  request-interleaving model. The theme-arm scope is unchanged; version-unchanged content swaps
-  and settings-driven theme output still do not move the stamp, exactly as before S498.
-
-- **A plugin/theme registry mutation is now visible across the whole Workerman pool
-  without a restart (`S498`).** `ThemeSourceRegistry` is per-process by design and
-  `PluginLoader::enable()/disable()/uninstall()` mutate only the ONE worker that served
-  the admin request; a live W99 run measured ~6 of 30 sampled `GET /api/v1/themes`
-  responses still serving an uninstalled plugin's themes until a full service restart.
-  `ThemesController` now carries an optional `ThemeRegistryFleetSync`: before every
-  themes response it folds the shared `plugins` table (`name:enabled:version` per row)
-  into one stamp and, only when that stamp moved since this worker last served, rebuilds
-  this process's registry from durable truth — clear, then re-register the currently
-  enabled theme sources through the same validating door `register()` has always had.
-  The stamp is derived from the very rows every lifecycle mutation already writes, so
-  there is no separate epoch counter to race or lose; the check is one indexed read of a
-  tens-of-rows table on an auth-gated endpoint, and boot's `bootstrapEnabled()` wiring is
-  adopted as the baseline without churn. Convergence is the worker's next theme request
-  — bounded, pool-wide, restart-free — and the served shape is byte-identical (the
-  regression test asserts pooled equality with the pre-install baseline body). The
-  metadata/subtitle/writer registries keep their existing boot-time wiring untouched.
-
-- **The merged `merge-junit: … assertions=` total is now declared informational at the
-  emitter, and the one passing test that actually manufactured its run-to-run drift is
-  fixed (`S488`).** Two byte-identical source trees (differing only in `.md`/`.gitignore`)
-  reported `assertions=107654` and `assertions=107652` while `worker files`, `tests`,
-  `errors`, `failures` and `skipped` stayed byte-equal — because the estate quotes the
-  whole line as the CI-verbatim baseline, so a `−2` there reads as a causeless delta.
-  Reproducing the parallel lanes locally and diffing per-testcase JUnit `assertions`
-  attributed it: `CliScanJobVisibilityTest`'s `db()` accessor ran `assertInstanceOf()` on
-  EVERY `waitFor()` poll (once per 50 ms while the SIGTERM cases wait on a real OS-signal /
-  `SELECT SLEEP()` timing boundary), so its executed-assertion count equalled 7 + the poll
-  count and drifted ±1–2 with contention while the test itself stayed green. `db()` now
-  fail-fasts with a `RuntimeException` instead — identical safety (reaching it without a live
-  `Connection` still halts loudly), and the method's assertions are constant (verified 6×
-  under load). Broader than any single test, several Integration lanes legitimately execute a
-  data-driven number of assertions (per-segment loops over real ffmpeg output, per-poll
-  guards), so the emitter now records the known-limit in repo: baseline identity is
-  { worker-file count, tests, errors, failures, skipped } and `assertions=` is informational,
-  printed on the unchanged stdout line plus a new stderr declaration, pinned by
-  `ParallelTestWiringTest::testTheAssertionsCounterIsDeclaredInformationalAtTheEmitter`.
-
-- **The teardowns in `tests/Integration/Media/Library/OrphanMusicContainerReapIntegrationTest.php`
-  and `tests/Integration/Media/Transcoding/HlsServingIntegrationTest.php` called `chmod()`/`unlink()`
-  on paths that were already gone, and the parallel gate printed it (`S486`).** Two distinct
-  mechanisms, one shared blind spot: `@` hides a PHP warning from every serial printer — PHPUnit's
-  collector drops suppressed events — while the paraunit gate PRINTER surfaces them, so both defects
-  were invisible locally and loud in CI. OrphanMusic's was same-process and deterministic:
-  `testHealingRescan…` registers the renamed file in `$cleanupFiles` while its parent sits in
-  `$cleanupDirs`, and the old directory pass unlinked every child first, so the blind files pass that
-  ran after it always called `chmod()`/`unlink()` on a vanished path. HlsServing's was the S460 class
-  of race: `ensureSegment()` returns when the published fragment EXISTS, but the detached fMP4 wrapper
-  (`FfmpegRunner::startSegmentEncode`) deletes its `seg-*.part-*` marker and `.m3u8` sibling *after*
-  that, and the blind recursive `unlink()` could scan before the wrapper's trailing `rm -f` and warn
-  ENOENT on the names it lost. OrphanMusic now removes existence-guarded, registered-files-first, and
-  verifies every attempted removal with a fresh stat — a path it could not delete fails loudly naming
-  its lane sentinel instead of stranding a `phlix_s153_it_*` for the census to blame anonymously.
-  HlsServing now adopts the S460 shape: a bounded poll for the expected post-condition (every
-  `seg-*.part-*` marker GONE — the marker is the last thing the wrapper's write phase touches, so its
-  absence means no detached writer can create or delete anything under the job dirs anymore), then a
-  guarded recursive removal with bounded retries, then verification — a surviving directory fails
-  loudly with its entries named. Both `setUp()`s mint their temp dirs with `random_bytes` instead of
-  a name-collision-prone `uniqid()`/unguarded `mkdir()`. No global warning suppression was added
-  anywhere; production code is untouched. Proven on this machine: 10× loud-suppression runs of each
-  class and 3× the real paraunit gate shape (`--parallel=8` over `Integration/Media`) now print zero
-  `No such file or directory` lines and zero residue, while an `LD_PRELOAD` unlink-delay + slow-`rm`
-  venue that deterministically forces the wrapper-vs-teardown interleaving (pre-fix: 2 warnings per
-  run, the exact CI pair) comes back clean; mutation-checking both directions, reintroducing the old
-  blind loops reproduces the CI warning text verbatim and removing the marker poll reopens the race.
-
-- **`scripts/parallel/run-suite.sh` graded paraunit's exit status exactly instead of
-  re-exiting any non-zero verbatim (`S485`).** paraunit 2.11.0 maps every test verdict to
-  exactly 0 or 10 (`Runner::onProcessParsingCompleted` — any worker exiting non-zero ⇒ 10),
-  and children run under `failOnWarning=true`, so a warnings-only Integration tail exited 10
-  and killed CI (run 34651283031 attempt-1: the identical chmod/unlink warning text had
-  passed with exit 0 twice before) while the wrapper's own comment claimed warnings were
-  non-fatal — the comment was the intent, the code was the flake. The verdict is now derived
-  from the artifacts paraunit produces, via a new `paraunit_verdict()` function shared by the
-  run path and a `verdict <status> <log> <junit-dir>` subcommand: statuses outside {0,10}
-  are console/config failures that never reached a child (measured exit 1) and propagate
-  verbatim; under status 10 the lane is fatal when the recap records ERRORS, FAILURES,
-  ABNORMAL TERMINATIONS or RISKY OUTCOME, when the WARNINGS block carries a ` [UNKNOWN]`
-  entry — paraunit's own attribution for runner-level warnings, which is how the S439
-  zero-residue census lands and it stays red in the parallel lanes — when any JUnit tail
-  holds an `<error>`/`<failure>` element (a PHP warning can never appear in JUnit, so this
-  is the backstop against recap wording drift), or when no JUnit tail exists at all (a gate
-  that cannot read results must not report success); otherwise the warnings-only lane passes
-  deterministically with the warning note still echoed.
-  `tests/Unit/Support/ParaunitVerdictExactnessTest.php` executes the mechanism: five real
-  paraunit scratch runs (warnings, failure, error, clean, census) whose artifact shape is
-  pinned before the verdict is graded — so format drift screams instead of silently
-  demoting — plus two mutation controls on a copy of the script proving the narrowing and
-  the `[UNKNOWN]` route are each load-bearing (reverting either flips exactly the verdict
-  it guards). The file-count census moved 1862→1863 with it.
-- **`scripts/install.sh` compiled Swoole and php-uv from floating default-branch HEADs
-  while claiming verbatim parity with the pinned `docker/Dockerfile.base` (`S482`).** The
-  bare-metal installer is the one build path an operator's PHP receives third-party source
-  from, and it was the residual S309 explicitly left open outside CI scope: both clones ran
-  `--depth=1` with no ref, so whatever each repo's HEAD was that day got compiled and
-  `make install`ed into the host. Swoole now clones `--branch v6.2.1` — the same release tag
-  the base image's `ARG SWOOLE_REF` names — with a `git rev-parse HEAD` self-verify against
-  the tag's recorded commit, so a force-moved tag fails the install loudly before anything
-  is compiled; shallow-plus-tag is safe where S309 rejected shallow-plus-bare-SHA because a
-  tag always resolves to its own commit. php-uv now uses S309's durable form verbatim: full
-  clone, `git checkout --quiet --detach` onto the same 40-hex commit as the base image's
-  `ARG PHP_UV_REF`, rev-parse self-verify. `ThirdPartyClonePinGuardTest` no longer stops
-  at `.github/workflows/*.yml`: it walks install.sh line-by-line (comments stripped, the
-  existing precedent), sweeps each clone site inside its own shell-function region (one
-  file carries two different pins), asserts the per-site pin forms, counts the clone sites,
-  flags the pre-S482 floating shapes as the anti-vacuity control, and holds
-  install.sh ↔ `Dockerfile.base` refs string-equal — mutation-proven red at each site
-  separately, green at tip. Alongside, `RELEASE_PROCESS.md` was trued against the shipped
-  S474 registry regime (folding in the phlix-server half of `S483`): the promised
-  `v1.2.0`/`v1.2`/`nightly-YYYYMMDD` image tags and the "build and push Helm chart" step
-  never existed, and are now marked NOT-YET-PUBLISHED pending the owner's S274
-  release-authority decision; rollback documentation moved from a phantom `v1.2.2` image
-  tag to the real `<full-sha>-<variant>` immutable form with an anonymous `tags/list`
-  recipe for finding current SHAs.
-
-- **The detached-launch tests in `tests/Unit/Media/Transcoding/FfmpegRunnerHlsTest.php`
-  raced their own cleanup, and a mid-test failure handed the residue to the whole suite
-  (`S460`).** Each launch test mints a `phlix_*` scratch dir under sys temp and lets
-  `FfmpegRunner::startDetached()` run its `if … then touch .complete; trailing…; else
-  touch .failed; fi` chain in a detached `nohup` wrapper; the tests then removed the dir
-  inline with no wait. The wrapper writes the marker *after* the primary command exits
-  (and, for the CMAF trailing case, writes `trailing-ran` only *after* `.complete`
-  appeared, which the bare assertion sampled with no poll), so removal could land first —
-  the wrapper recreated the dir under temp, and the S439 `ZeroResidueCensus` extension
-  (snapshot at bootstrap, diff of `/phlix_*` at `ExecutionFinished`) failed the entire
-  suite for it. That is what crashed W59's first master-CI attempt; the class has been
-  latent since #253 and multiplies under the S457 paraunit shard fan-out. The file now
-  polls the one file each wrapper is contractually expected to write, with a bounded wait
-  and a loud, named timeout failure whose every clause (dir existence, tracked wrapper
-  pid, process-alive probe, observed entries) is re-observed at failure time; scratch
-  dirs are registered per-test and reclaimed in `tearDown()` — so a mid-test failure
-  cleans up too, and removal first waits for the tracked wrapper pid, which under the
-  `nohup`→`timeout`→`sh` chain exits strictly after the last write. Mutation-checked in
-  both directions on this machine: the old shape with a forced mid-test failure leaks the
-  dir and reddens the census; the new shape with the same forced failure leaves zero
-  residue and the census stays silent. Production `FfmpegRunner` is untouched.
-
-- **Five real defects in `scripts/`, surfaced by putting the directory under PHPStan
-  level 9 and Psalm (`S256` residual).** None of these files had ever been opened by
-  an analyser, and the tools were right five times: `backfill-chapters.php` passed the
-  raw MySQL connection where `MarkerCandidateRepository`'s constructor demands an
-  `ItemRepository` — a TypeError at boot, the script could never have run past that
-  line; `run-media-asset-worker.php` passed the connection as `FfmpegRunner`'s first
-  parameter, which is the ffmpeg **binary path** (string) — the worker could never
-  have started from this entry point, and it now builds its runner from
-  `config/ffmpeg.php` like every sibling does, with the `ConnectionPool::init()` call
-  the review pass found still missing from it (without it, `getConnection()` throws);
-  `add-headers.php` skipped an excluded
-  directory by `continue`ing on the directory entry itself, which prunes nothing — the
-  traversal descended anyway and rewrote headers inside `node_modules/` and
-  `generated/`, the exact subtrees its own docblock promised to leave alone — while
-  its mid-iteration `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` lands on the
-  inner `FilesystemIterator`, where 16 means something else entirely, and its named
-  `collect()` would fatal on redeclaration against `crell/fp`'s global the moment an
-  autoloader entered the process (the hub's S248 rewrite of this same file is now
-  ported); `backfill-streams.php` read a config key `probe_path` that does not exist —
-  the real key is `ffprobe_path`, so a custom ffprobe binary was silently ignored and
-  `/usr/bin/ffprobe` always won; and `backfill-ratings.php` passed `__LINE__, __FILE__`
-  as positional arguments to `Connection::query()`, binding the line number as PDO's
-  fetch mode, while the `--limit` it documents was interpolated into a SQL string that
-  was then thrown away in favour of an inline batch query — `--limit` never applied
-  (the batching loop now honours it as its usage block advertises, and because the
-  `--execute` candidate set shrinks under every successful upsert, the loop pages by
-  primary key rather than by advancing offset: offset paging would have silently
-  skipped roughly one still-missing candidate for every row the run fixed). The remaining
-  findings were type honesty: mixed-from-`json_decode`/row envelopes parsed into
-  asserted shapes at the boundary instead of offset-cast blindly
-  (`dump-syncplay-envelope-pin-vectors.php`, `backfill-ratings.php`), `$_SERVER['argv']`
-  members asserted as strings rather than `strval`-mapped (`fmp4-rebase-segment.php`),
-  a nullsafe parent lookup (`parallel/merge-junit.php`), a short-name `@var` that
-  resolved to a class the analyser could not see, deleted because the loop analysis
-  proves the variable's type without it (`parallel/merge-coverage.php`), and a ternary
-  that re-read an array offset after narrowing, which Psalm reads differently than
-  PHPStan (`ci-browser-e2e-prereqs.php`).
-
-- **A healing rescan now leaves the music hierarchy cleaner than it found it (`S153`).**
-  The S145 repair re-parents a mis-filed track onto the album and artist its tags name and
-  mints those container rows when absent, but the rows the tracks came from were only ever
-  recounted — never removed. Measured on production during the first post-S151 full-read
-  rescan: one complete, successful pass grew `music_albums` from 11,535 rows to 11,596 and
-  took zero-track artists from 13 to 16 while clearing only 50 shell albums. Each healing
-  pass therefore filled shells and minted new ones, so retags accumulate shells
-  indefinitely. The prune pass now also reaps `music_albums` rows with no tracks and
-  `music_artists` rows with no tracks and no albums, attributed to the library through the
-  container's own `media_items` anchor (the `music_*` tables carry no `library_id`), with
-  the zero-children predicate re-proven inside each `DELETE` so no execution of the pass
-  can cascade a live track away through the `ON DELETE CASCADE` foreign keys of migration
-  065 — a shell album and a populated album that differ by exactly one track is the pinned
-  fixture. A `rescan` runs the same pass automatically when it saw zero read failures, and
-  a standalone `prune` job runs it only when the library's latest completed scan reports
-  zero failures, no scan is live, and every configured root is present right now, because
-  a shell can also be storage that is merely dark; every refusal is logged. `media_items`
-  container rows are deliberately out of scope and survive the containers they anchored.
-  No migration — the `prune` job type and both lookup indexes already exist.
-
-### Added
-
-- **Generic keyed image service extracted from the poster pipeline (`S71`).** New
-  `src/Media/Storage/ImageResizer.php` carries the validation, width-variant resize and
-  temp-then-rename atomic-write guarantees that previously lived inside `ArtworkStorage` —
-  moved verbatim — but addressed by a flat, media-item-agnostic target KEY (a UUID,
-  `people-42`, or a content hash; anything matching the exact `[a-zA-Z0-9-]+` gate, refused
-  before any filesystem call otherwise) under a configurable base directory, so backdrops and
-  people photos (S72/S73) can reuse the same guarantees without a second resize implementation.
-  `storeBytes()` is the verbatim-bytes path for formats that must not be re-encoded (the
-  transparency-safe title-logo PNG). `ArtworkStorage` keeps its entire public API and behavior:
-  it now delegates internally, its item-id gate still rejects exactly the pre-extraction id set
-  with the historical message, and its TMDB path-fragment download seam is deliberately NOT
-  widened to arbitrary URLs — that is the SSRF surface owed to S73's allowlist. `AvatarStorage`
-  and `PhotoController::generateThumbnail` remain separate consolidations (S456). The service
-  ships with 47 new unit executions covering flat-key resizing, exact exception wording on every
-  unusable key/filename shape, and mutation-proven spy pins on each delegation seam. No DB
-  migration, no config change, no new dependencies.
-
-- **CI-pinned composed-route inventory (server only) (`S64`).** A real-DI in-process harness
-  (`tests/Unit/Server/Core/ComposedRouteInventoryTest.php`) composes `Application::loadRoutes()` — the
-  primary production route surface, built from `ContainerFactory::defaultProviders()` with only the MySQL
-  `Workerman\MySQL\Connection` doubled (a `createMock`, so no socket opens) — with no DB, no workers and
-  no real network, then asserts the committed inventory (`tests/Fixtures/Routes/composed-route-inventory.json`)
-  in BOTH directions (`array_diff` missing + extra, then `assertSame`), pinning **365** composed routes
-  (GET 192 · POST 124 · DELETE 26 · PUT 22 · PATCH 1) for the server. The container-built
-  `WebPortalRouter` 404-fallback surface is separate, is not produced by `loadRoutes()`, and is not
-  pinned by this gate. Two control proofs make the gate honest rather than self-satisfying: a
-  **planted-drift** test registers a throwaway in-memory route, reddens the diff, and proves the gate
-  greens again on a fresh composition (nothing is persisted); an **unbound-stub**
-  control builds `Application` over a container whose `get()` throws, and the exact message
-  `unbound: Phlix\Server\Http\Controllers\AuthController` proves the real PHP-DI container — not a
-  hand-wire fallback — is what composes the table. The inventory token is code-resident (a `const`
-  in the harness). Tests and
-  a JSON fixture only: no routes added or changed, no `src/`, no migrations, no behavior change — the
-  hub half of the original step stays CLOSED (its bijection is already enforced by
-  `OpenApiSpecMatchesRouterTest`).
-
-- **CLI user/admin management (`S61`).** Seven new `bin/phlix` commands mirroring `user:reset-password`:
-  `user:list [--status=]`, `user:create {username} --email= --password=`, `user:promote {user} [--revoke]`,
-  `user:delete {user} [--force]` and the server-only status-flow trio `user:approve`/`user:disable`/`user:reject`.
-  Every one takes `--json`, emitting the shared `{"ok":true,"data":[...]}` / `{"ok":false,"error":"..."}`
-  envelope from a new `Phlix\Console\Commands\Concerns\JsonOutput` trait. `user:list` redacts the
-  `SELECT *` secret columns (`password_hash`, `password_reset_token`, `provider_data`) before output. A
-  repository-level last-admin guard (`UserRepository::countAdmins()`/`isLastAdmin()`, mirroring the admin
-  controller's predicate) refuses demoting/disabling/deleting the final administrator, and `--force` is a
-  confirmation bypass only — never a guard bypass. Commands are registered explicitly in `bin/phlix` behind a
-  lazy `UserRepository` factory, so `php bin/phlix list` still opens no database. No HTTP routes, no migrations.
-
-- **Embedded-tag writer — destructive in-file tag writing, strictly opt-in and default OFF (S89).** The
-  second and riskier writer for the S87 write-back plumbing: the built-in
-  `Phlix\Media\Metadata\Writer\EmbeddedMetadataWriter` implements `MetadataWriterInterface` and writes
-  canonical metadata INTO the media file — `getid3_writetags` for audio (MP3/FLAC/OGG/M4A/…), and an
-  `ffmpeg -map 0 -c copy -metadata …` remux for MP4/MKV that rewrites only the metadata container and
-  leaves the audio/video streams byte-identical. It is default-off at two layers: the S87 per-library
-  enqueue gate (`libraries.options.metadataWrite.enabled`) still has to be on for a job to be queued at
-  all, and on top of that this writer re-checks its OWN dedicated global setting
-  (`metadata.embedded_write_enabled`, resolved by the new `Phlix\Media\Metadata\EmbeddedWritePolicy`,
-  shipped default FALSE) before a single byte is touched — so enabling the safe sidecar writer can never
-  implicitly start rewriting media files. Three safety rails, each proven by tests:
-  (1) **atomic-rename discipline** — every mutation stages a unique sibling temp file in the media
-  directory and only then `rename()`s over the original, so a remux interrupted at any point (a non-zero
-  exit, a signal kill, a failed publish) leaves the ORIGINAL bytes intact; `getid3_writetags` rewrites in
-  place, so the original is never handed to it — only a copy. (The stage carries deliberately NO media
-  extension — invisible to a concurrent scan and matched by the shipped `scanner.ignore_patterns` `.tmp`
-  rule — so the muxer is PINNED on the command line instead (`-f mp4`/`-f matroska`), and the stage is
-  created exclusively (`fopen 'xb'`); a symlink at the media path is refused rather than dereferenced.
-  The extension-less + pinned-muxer shape was found against the real binary, not a fake runner.)
-  (2) **overwrite policy** — when a file already carries content embedded tags, the existing
-  `MetadataOverwritePolicy` is consulted; a deny is a normal return with a logged reason, never a throw
-  (ruling R1). (3) **per-file curation** — a concrete predicate runs IN FRONT of the global policy: an
-  existing stem or Kodi-convention (`movie.nfo`/`tvshow.nfo`/`episode.nfo`) sidecar that does NOT carry the
-  sidecar writer's generator marker is treated as operator-curated and blocks the destructive write
-  (ruling R2); an unreadable sidecar also blocks it, because the writer must not clobber what it cannot
-  prove is machine-made. A pre-flight refuses a degenerate/empty media dir, a missing file, or an
-  unwritable directory via the named `EmbeddedWriteFailedException` (item id + path + reason), which the
-  worker's per-writer `catch` surfaces as a warning. External process calls run through a small
-  `ExternalCommandRunnerInterface` seam (production: `ExecExternalCommandRunner`, a blocking `exec()`
-  inside the managed fork per the S87 AC-2 contract) so every interruption exit path is deterministically
-  testable. Registration rides the SAME `MetadataWriterRegistry` DI seam S88 established, ordered AFTER
-  the sidecar writer within a drain (ruling R4); zero new routes, zero migrations. Known limits, measured
-  not implied: in the combined sidecar→embedded drain the sidecar re-stamps the stem NFO with its marker
-  first, so the curation predicate there guards the Kodi-convention names and a not-rewritten stem; a
-  hand-edited NFO that still carries the marker reads as machine-made; and `metadata.embedded_write_enabled`
-  has no admin-UI surface until `detain/phlix-shared`'s `server-settings.schema.json` declares the key.
-
-- **Sidecar metadata writer — NFO + poster/fanart next to the media file (S88).** The first writer for the
-  S87 write-back plumbing: the built-in `Phlix\Media\Metadata\Writer\SidecarWriter` implements
-  `MetadataWriterInterface` and writes `<basename>.nfo` (XBMC/Kodi XML), `poster.jpg` and `fanart.jpg`
-  beside the media file — non-destructive (the media file itself is never touched; embedded tags are S89)
-  and human-visible. Every sidecar lands atomically (temp file + rename), so a failure mid-write leaves the
-  previous on-disk bytes intact, and re-writing the same item is byte-identical. The emitted NFO round-trips
-  through the existing `LocalNfoProvider` reader (pinned by tests in both directions), and discovered image
-  sidecars are exactly the ones its `findLocalImages()` poster/backdrop patterns already recognise. Ruling R1
-  registers it via the `MetadataWriterRegistry` DI definition in `MediaServicesProvider`, so every process
-  that builds the container — the `metadata-write` worker fork and any admin/status consumer — sees the
-  writer; the `PluginLoader` capability arm keeps its plugin-only semantics. The `is_writable()` pre-flight
-  throws the named `SidecarNotWritableException` carrying item id + target directory + remediation hint
-  (missing dir vs. unwritable dir, the latter citing the systemd `ReadWritePaths` lesson from the
-  `/var/artwork` sandbox incident); the worker's per-writer `catch (Throwable)` turns it into a warning log
-  line — the operator-visible status. Image sidecars are opportunistic and jailed: poster bytes come from the
-  server's own artwork cache, and a `poster_path`/`backdrop_path` reference is copied only when it resolves
-  inside the item's own media directory — provider-controlled remote paths and absolute paths elsewhere on
-  disk never become file reads. Per-library opt-in stays exactly as S87 shipped it
-  (`libraries.options.metadataWrite.enabled`, default OFF).
-
-- **Metadata write-back plumbing — queue + capability arm, zero writers yet (S87).** The first head-step
-  of the S87→S88→S89 arc: a plugin can now declare the disk write-back capability by implementing the new
-  `Phlix\Media\Metadata\Writer\MetadataWriterInterface` (`supports(type)` / `write(item, canonicalMetadata,
-  mediaDir)`), and `PluginLoader::enable()` wires it into the process-scoped `MetadataWriterRegistry` —
-  the fourth arm of the typed-capability pattern after the metadata source, the F3 subtitle source and the
-  S84 theme source, deregistered on `disable()` for a leak-free cycle. The scan side is enqueue-only:
-  `MediaScanner::processFile()` drops one lightweight `MetadataWriteJob` file per finalized item into the
-  new `MetadataWriteJobStore` (a `CollectionJobStore`-style bounded, idempotent, lazily-minted file queue —
-  no `/tmp` residue at construction, S439 census) **when the library opts in** via the existing
-  `libraries.options` JSON column: `options.metadataWrite.enabled`, resolved by the new
-  `LibraryRow::metadataWriteEnabled()`. That gate defaults to OFF (the inverse of S33's
-  absent-means-on `autoCollections`): writing metadata back mutates the operator's media directory, so it
-  is opt-in per library. No blocking filesystem I/O ever happens inline in the scan path — the new
-  `MetadataWriteWorker` managed process (config `metadata-write`, spawned by `start.php`, which also
-  re-runs `PluginLoader::bootstrapEnabled()` inside that fork because plugin registries are per-process
-  resident state) is the ONLY place a writer executes, and with no writers shipped yet every drain is a
-  documented no-op. S88 adds the sidecar (NFO/poster/fanart) writer; S89 adds the embedded-tag writer on
-  top of the existing `MetadataOverwritePolicy`.
-
-- **`POST /api/v1/admin/updates/check` — the "check now" trigger the admin UI was missing (S273).**
-  `GET /api/v1/admin/updates/status` only ever serialised the cached marker result, so the S78 button
-  was honestly labelled "Check update status" because nothing could trigger a check. This adds the
-  trigger: the handler calls the new `CoreUpdateCheckService::checkNow()` — which dispatches the
-  marker fetch through the existing non-blocking `VersionMarkerFetcherInterface` (explicit
-  `updates.timeout_seconds` socket timeout, default 10 s) and answers `202` without waiting, because
-  an HTTP handler in a resident Workerman/Swoole worker must never block the event loop on a
-  third-party host. Every failure path leaves the previously cached status INTACT (the service
-  records the error text beside the surviving version, never blanks it); a synchronously-throwing
-  transport becomes a `503` instead of an unhandled error in the worker. Unlike the periodic poll,
-  the explicit trigger ignores the `updates.check_enabled` toggle — that switch governs background
-  cadence, not an operator pressing a button; the response payload still reports the toggle
-  truthfully. Registered in the `[AdminMiddleware]` group with the controller's own defence-in-depth
-  gate; the 365th tuple landed in `ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST` in the same
-  commit. Phlix-ui relabel follows in the same program (cs#26 → ui re-vendor).
-
-### Removed
-
-- **The pre-S84 `ThemeRegistry` theming island (S227).** `ThemeRegistry`, `Theme`,
-  `ThemePluginInterface`, `config/themes.php` and their unit test had zero implementors and zero
-  resolvers estate-wide — only `ThemingServicesProvider` still constructed the registry, and nobody
-  resolved it. With S84–S86 complete they were a second, fake theming subsystem beside the real
-  token-map one, carrying the name a reader reaches for first. The container binding is gone, two
-  historical `{@see}` pointers were reworded, and `tests/Unit/Theming/ThemingIslandRemovedTest.php`
-  now fails if any of it returns. `ThemeSourceRegistry` and the real subsystem are untouched.
-
-### Fixed
-
-- **The pool-concurrency soak's assertion count is now a fixed 27, whatever the load does (S137).**
-  `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php` asserted INSIDE its reader
-  coroutines: `assertIsArray($e)` ran once per successful reader iteration (up to 1,440 times per run), a
-  failing one threw into the coroutine's own `catch (Throwable)` which aborted that reader's remaining
-  iterations, and the post-join error check added two asserts per recorded error — so the run's total rode
-  machine timing. Measured on this box: `OK (3 tests, 1461 assertions)` clean versus 791 assertions when
-  readers were forced to abort early. A count that moves with load means a run that exercised barely half
-  the invariants could still report green. The per-iteration check is now pure evidence collection inside
-  the coroutine — the reader records which reader id and iteration number saw a non-array entry — gated
-  ONCE after the join over a fixed-size shape, and the error list is scanned once per fingerprint
-  (error 2014, "commands out of sync") instead of twice per error. The class is constant at
-  `OK (3 tests, 27 assertions)` across five consecutive runs and under 48× CPU oversubscription with a
-  second concurrent client hammering the same MySQL; a forced-degraded run through the existing
-  `PHLIX_S106_POOL_ACQUIRE_TIMEOUT` override fails deterministically at the same 16 assertions every
-  time where the old code swung. Detection is unchanged, mutation-proven against `src/` with each
-  mutation reverted after: a pool that never returns its leases reddens the soak on the pool-exhaustion
-  error; an injected `2014 Commands out of sync` failure reddens the named fingerprint assert ahead of
-  the catch-all; a no-op cache invalidation reddens the epoch-guard convergence assert; every read
-  returning null reddens the hoisted row gate; and a fabricated never-written value reddens the
-  corruption gate — several of those REDS also showing the count stay put. The structural
-  lease-lifetime half of the step had already been closed on this base by the per-query-borrow change
-  and the timeout contract of the two earlier pool steps, and with them the assertion-escape
-  probe-baseline exclusion for this file — which this change makes moot again: the file now contains no
-  assertion-bearing closure at all, so the prober can never flip its verdict with the pool's behaviour.
-  Test-only: no `src/`, no config, no baseline edit.
-
-- **Three tests that could only ever report the wrong thing now report the truth (S452, S453, S454).** All three were
-  re-derived at tip `75431da6`; all three fixes are test-side — no route, OpenAPI, `src/` or composer file is touched.
-
-- **`BackupManagerTest::testCreateBackupGeneratesIdAndPath` ran for real instead of skipping forever (S452).**
-  The case opened with an unconditional `markTestSkipped('createBackup requires actual filesystem and mysqldump …')`,
-  so it skipped on every machine — CI included, where the name sits in the skip set of run 34390345172 — while the
-  job stayed green. Its stated reason was also false: `BackupManager::createDatabaseDump()` throws only when
-  `returnCode !== 0` **and** the dump file does not exist, and the shell `>` redirect creates that file whatever
-  `mysqldump` does, so the step is tolerant by construction and `tar` is the sole external it truly needs. The case
-  now drives `createBackup()` end to end in its own process (`@runInSeparateProcess` + `@preserveGlobalState disabled`,
-  because `PHLIX_CONFIG_DIR`/`PHLIX_DATA_DIR` are constants — the same venue `BackupConfigRecursionTest` and
-  `BackupControllerBodyPersistenceTest` already use), against a scratch config whose `backup.php` points
-  `local_path` at a temp sink and a `database.php` built from `phpunit.xml`'s own `DB_*` env, with the `backups`
-  table mocked. It pins a real RFC-4122 v4 `backup_id`, an archive that exists inside the configured sink under the
-  label prefix, a `tar tzf` listing that contains `database.sql` and `config/backup.php`, `size_bytes` equal to the
-  `filesize()` of that archive, and the S439 staging-directory sweep. Measured on this box before and after:
-  `Tests: 14, Assertions: 23, Skipped: 1` → `OK (14 tests, 35 assertions)`; `scripts/skipped-test-names.sh` over a run
-  of the file now prints zero names. The forced coupling was repaired in the same commit — `SkippedTestNameReportingTest`
-  borrowed that permanent skip as its "exactly one skip" fixture (10 of its 47 cases went red the moment the skip died),
-  and now mints its own one-skip probe into the run's scratch dir, so a guard of the skip-reporting mechanism can never
-  again depend on an unrelated case staying dead. The estate gains no new skip: a full 11,129-test suite run on this box
-  lists ten skips, nine for a missing Chrome/Chromium binary and one for a missing FFI extension, and zero occurrences
-  of `BackupManager`.
-
-- **The audiobook traversal test pinned the host's directory layout instead of the path jail (S453).**
-  `AudiobookControllerTest::testStreamAudiobookRejectsPathTraversalEscapingRoot` planted its secret file in
-  `sys_get_temp_dir()` and depended on `LibraryRootGuard::FALLBACK_ROOTS` containing `/home` to keep it outside, with
-  the raw traversal path hardcoding the username `my`. That premise is host-shaped, not code-shaped: with `TMPDIR`
-  under `/home/...` the planted file lands *inside* the fallback jail, the guard answers true, the controller serves
-  it, and the expected refusal becomes a 200 — deterministic red on this box (`Failed asserting that an array contains
-  200`), green in CI only because `HOME=/home/runner` happens to share the prefix. Jail and escape are now both built
-  inside one directory the test owns and pinned explicitly through `PHLIX_LIBRARY_ROOTS` + `LibraryRootGuard::reset()`
-  (the guard's documented test seam, already used by `PhotoControllerTest` and `BookControllerTest`), with the previous
-  env value restored and the guard reset in a `finally`. The traversal path still carries the jail root as a literal
-  substring while `realpath()`-ing out of it — exactly the shape the pre-guard `str_contains()` allowlist admitted —
-  and an in-jail positive control now proves the guard is not simply refusing everything, so a guard weakened to refuse
-  all and a guard weakened to admit substrings both redden the case. Assertion semantics are unchanged; no username
-  appears anywhere. Green under the default `TMPDIR`, `TMPDIR=/tmp` and a `TMPDIR` under `/home` (7 assertions each),
-  and red again with `LibraryRootGuard`'s containment check reverted to the raw-substring form.
-
-- **The music-scanner memory ceiling stopped pinning one PHP build's zval sizes (S454).**
-  `MusicLibraryScannerTest::testMemoryStaysBoundedAcrossALargeTree` compared retained bytes with a fixed 13,600,000 B
-  budget derived from a hardcoded 1,700 B per buffered entry. That figure was a snapshot of the machine that measured
-  it: the same unchanged scanner code retained 11,656,488 B when the constant was written and 13,732,640 B on this box's
-  PHP 8.3.6 — a deterministic red, alone and at 13,983,120 B inside a full suite run, with nothing leaked, green in CI.
-  The primary bound is now a ratio measured in-run: a calibration walk over the bounded window alone (32 albums × 249
-  files, one short of `MAX_TRACKS_PER_FLUSH`) followed by the 14,000-file worst case in the same process, with the worst
-  case allowed 1.3× the window's own retained bytes. Allocator and temp-path drift cancel between the two measurements,
-  which is what removes the venue dependency; the absolute figure survives only as a deliberately coarse 2,400 B/entry
-  tripwire against per-entry inflation a ratio cannot see, with the pre-S95 whole-tree estimate recomputed from this
-  runtime's measured entry cost rather than a remembered one. Bounded ratios measured here: 1.135× single-file
-  (byte-identical across three runs under both temp dirs), 1.156× with `TMPDIR` under `/home`, 1.155–1.158× inside a
-  full run of the class. Reproducing the pre-S95 retention (`MAX_OPEN_ALBUMS` 32 → 20000) reddens at 2.089× — 24,686,928 B
-  against 11,815,512 B — so the case still fails loudly on a real leak, and no skip was added anywhere.
-
-- **The `tests/` PHPStan gate now runs at level 4, every finding fixed at source (S186).**
-  `phpstan-tests.neon` was raised from level 2 to level 4; re-derivation at tip `5986b61d` found 85
-  level-4 findings — not the ~34 the plan had claimed. Every finding was triaged with per-error
-  mutation evidence and fixed at source across 61 test files: tautological/impossible asserts,
-  dead guards and constant-folded runtime pins, dead catches, by-ref param-out types, and
-  readonly-property adjudications. Zero `ignoreErrors` entries, no baseline; 3 precisely-scoped
-  inline `@phpstan-ignore` adjudications carry their rationale in place. Closed at `e926aec7`.
-
-- **Connection-pool concurrency test no longer flakes on the fixed 10 s acquire deadline (S106).** `tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php` (added by `ae4d097d`, S9) built its pools without overriding `PooledMySQLConnection`'s hardcoded 10 s acquire timeout — the deadline `0ad7a080` (S339, the per-query-borrow change that made a writer hold a lease across a whole UPDATE) left at its constructor default — so on durable-default MySQL, exactly CI's `mysql:8.0` service (`innodb_flush_log_at_trx_commit=1`, `sync_binlog=1`), a writer's slow fsync-bound UPDATE could starve a waiter on the deliberately-oversubscribed pool until the deadline threw `pool exhausted: no idle connection available after 10 s` (`98f07479`) with nothing actually leaked. Proven a genuine timing flake, not a code defect: the same branch/container/load gave FAIL then PASS back-to-back, and the assertion count swung 87/443/1457 purely because the run aborted at a nondeterministic point. The fix stays entirely inside the test — `src/` untouched: the `pool()` helper now passes the constructor's already-configurable `$acquireTimeout`, a generous 120 s default, overridable via `PHLIX_S106_POOL_ACQUIRE_TIMEOUT`, and the resolver fails loud on any non-finite or out-of-`(0, 3600]` value instead of silently falling back. A generous ceiling rejects only sub-window fsync JITTER, never a real leak: a stranded lease pins `created` at `maxSize` and every later acquirer still blocks the full window before the pool throws, so the leak detector is window-independent — verified by planting an accepted-but-tight `0.02 s` window, which reddens the soak on `assertSame([], $errors)` with that exact message and re-greens on removal. Determinism is preserved by construction: the run now always completes to the same fixed set of assertions (10/10 consecutive targeted runs at load 6–7, every one `OK (3 tests, 1461 assertions)`) rather than aborting mid-flight — chosen over a measured-latency skip so the class adds ZERO new skips. CI durability config, `phpstan-tests.neon`, and every sibling test are untouched; sibling dir `tests/Integration/Media/Transcoding/` green (41 tests, 2087 assertions). Test/infra only — no `src/`, no routes, no migrations.
-
-- **Docker boot gates are now bounded and self-reporting (S210).** `docker-boot-gate` carried no `timeout-minutes`, so the 2026-08-04 PR #623 intel/nvidia legs sat past 34 minutes inside "Boot and smoke-test the image" with no line naming what they waited on, until a human cancelled them — burning the GitHub 360-minute default as failure mode. The R1 pass mined 500 `docker.yml` runs (2026-07-22..2026-09-09, paginated past the ~150-run API window): the "hangs on PR, fine on master" theory is **disproven by measurement** — the same Ubuntu-mirror bandwidth storms degrade master pushes identically (worst SUCCESS anywhere: nvidia PR 4530s on 2026-09-05; same-night master legs 2113s/2818s; #623's last pre-cancel line was a mid-apt `Get:331` in plain-build output), so this is slow silent builds, not a PR-scoped cache defect, and no infinite hang is in evidence. The fix bounds and illuminates instead of guessing at the mirror: `timeout-minutes: 90` on the boot-gate job (1.19x the worst measured success, 9.8x master p95 — the tempting 15–20 min bound was REJECTED because it would have reddened 11 legs that measurably completed, manufacturing false-red pressure); every smoke-script phase banner now carries a UTC timestamp and records into a phase file that a heartbeat subprocess logs against every `HEARTBEAT_INTERVAL` (default 30s) — emitting NO verdict id, so the pinned 20-check name set is untouched; and gate builds run `--progress=plain` under a capability probe, so a mirror storm prints the exact fetch in flight. A permanent wiring guard `tests/Unit/Support/BootGateTimeoutWiringTest.php` pins the bound EXACTLY (quiet edits to 360 or to 15 both redden it), the leg name set, and the heartbeat's no-verdict contract; six planted mutations verified it non-vacuous. KNOWN LIMIT: the bound is calibrated to five weeks of history, not to a promise about the future — a storm worse than any observed will now produce a clean red at 90 min whose last heartbeat and build line name what was waited on, which is the honest failure AC-1 asks for. No check loosened: no skipped legs, no continue-on-error, no assertion lowered; `src/` untouched, zero routes, zero migrations; estate census pin 1838→1839.
-
-- **Order-independent relay timer self-skip cases (S266).** Six cases in `tests/Unit/LiveTv/Relay/{HlsRelayManagerTest,HlsSegmentPrefetcherTest}.php` self-skipped on a `Timer::add()` probe, which Workerman v5.2.2 throws only when both `Workerman\Timer::$event` and `Workerman\Worker::getAllWorkers()` are empty. Under the single-process `executionOrder="random"` suite, whichever relay class ran before the first `Worker::$workers` polluter skipped its three cases — order-dependent ±3 noise on the estate-wide skip count, the tripwire that flags a neutered gate. S266 fixes both ends: a new `WorkermanTimerFixture` trait guarantees the Timer static (snapshot/restore around a never-run pure-PHP Select loop), all six self-skip gates deleted so the cases always run; the four polluters (`WebhookServiceTest`, `StreamSessionServiceTest`, `RecordingSchedulerTest`, `WebSocketServerTest`) now snapshot/restore the registry on the `DlnaEnabledGateTest` idiom. A `WorkermanStaticStateLeakGuardTest` guard (+ `StaticProbeBootstrap`) proves the six end with pristine statics in a child process; its positive control must SEE a leaked bare `Worker`. On the lane box the skip name-set is now seed-invariant (pre-fix the relay triples flipped across seeds); a planted `markTestSkipped` moves it by exactly one. Tests/infra only — `src/` untouched, zero routes, zero migrations, `@group workerman @group integration` kept; estate census pin 1835→1838. Suspected polluters `LibraryScanWorkerTest`/`TraktSyncBootRealDbTest` already restore their statics — models, not targets.
-
-- **The relay/admin control surface now resolves its config dir absolutely (S211).** Five read sites in `src/Server/Core/Application.php` used
-  `$this->config['_config_dir'] ?? 'config'` — and `_config_dir` is never set in production — so every hub/relay state path silently depended on the
-  process CWD: started anywhere but the install root (manual `php start.php`, a container with a different WORKDIR, cron/debug runs),
-  `RelayStateStore::writeState()`'s `@mkdir` created a stray `./config/` and the operator kill-switch wrote `relay-control.json` where the relay fork
-  would never look — the API still returned success. The supported deployment worked only because systemd/install scripts set `WorkingDirectory`.
-  Fix: a single `Application::resolveConfigDir()` — honors the absolute `_config_dir` test seam, else production `hub.config_dir` (`config/hub.php`,
-  an absolute `__DIR__` — the same source `HealthController` already used), else a documented absolute default derived from `__DIR__`; relative or
-  filesystem-root values throw instead of silently resolving. `RelayStateStore` and `AdminHubController` constructors refuse empty/relative/root
-  config dirs (`AdminHubController`'s own default is now absolute): the admin relay writer and the relay fork reader now provably resolve the same
-  directory — the previous silent-wrong-dir write is impossible by construction. Known limit: an absent `hub.config_dir` diverges from the container
-  provider's fallback chain — unreachable with shipped config, documented as a KNOWN LIMIT in the resolver docblock. New regression test
-  `tests/Unit/Server/Core/ApplicationConfigDirResolutionTest.php` (15 executions): resolution against the REAL `config/server.php` with the process
-  CWD moved to a directory with no `config/` sibling — and no test sets `_config_dir` — plus a writer/relay-fork kill-switch round-trip under a
-  foreign CWD, loud-fail cases, and a comment-stripped source guard with positive controls forbidding resurrection of the relative-fallback shapes. Census `EXPECTED_PHP_FILES` re-pinned 1833→1834. Zero new routes, zero migrations.
-
-- **A duplicate storage snapshot is now structurally impossible: migration 105 + an accumulating upsert (S114, S102 fix r1).** `stats_storage` carried no unique key since migration 019, so two concurrent snapshot writers could each store a full five-row generation for the same second. The bare `UNIQUE (recorded_at, media_type, library_id)` alone is INERT on the old schema — `library_id` is nullable and MySQL treats NULLs as distinct in a UNIQUE index (measured on 8.0.46: duplicate NULL tuples accepted with the index live) — while making the column deterministic first turns any plain `INSERT` behind that index DESTRUCTIVE (a rejected or ignored duplicate row is lost data). Migration 105 therefore closes both halves in one pass: it collapses NULL `library_id` onto a `''` "not library-scoped" sentinel and makes the column `CHAR(36) NOT NULL DEFAULT ''`, MERGES every pre-existing `(recorded_at, media_type, library_id)` duplicate onto its `MIN(id)` survivor with SUMmed `item_count`/`total_bytes`/`transcode_cache_bytes` (first-write-wins would silently shrink the dashboard, which S102's reader builds on sums), then adds `UNIQUE KEY uq_stats_storage_recorded_media_library`. The write path in `StatsCollector::recordStorageSnapshots()` becomes an ACCUMULATING upsert (`col = COALESCE(col, 0) + VALUES(col)` — NULL-safe, because 105's merge faithfully keeps an all-NULL legacy group's survivor NULL and bare `NULL + VALUES(col)` would erase the incoming bytes on a fold onto it), so a repeated stamp+bucket+library folds into the existing row and `DashboardService::getStorageSummary()` is byte-identical before and after for any write history. Every mutating statement is behind an information_schema shape probe (103/096/097 idiom), so the file is a true no-op on the ledger-bypassing replays — raw `mysql < file` and a lost ledger row — and converges from a half-applied or inert-index install. The old explicit-NULL seed in the S102 reader test becomes the `''` sentinel (strict mode rejects an explicit INSERT NULL on a NOT NULL column, measured 1048). Proven against real MySQL by `tests/Integration/Stats/StatsStorageUniqueKeyUpsertGuardTest.php`.
-
-- **Migration 104 corrects the false `rescan=purge+rescan` claim in the live `library_scan_jobs.type` column COMMENT (S154).** `rescan` never purges the library — it re-reads every file and prunes only items whose source file has gone (`LibraryManager::pruneRemovedItems()`, behind a per-root presence guard). The falsehood had been baked into the column comment since migration 027 and restated by every later ENUM widening (030, 081, 084, 101); it is the copy a DBA sees in `SHOW FULL COLUMNS`, and the one S149's documentation sweep could not reach because it lives in SQL. Migration 104 re-issues the full `MODIFY COLUMN` definition — all nine ENUM members and their ordinals, `NOT NULL`, `DEFAULT 'scan'` and the inherited `utf8mb4_unicode_ci` collation copied byte-for-byte from the live schema — changing ONLY the comment text. Migrations 027/030/081/084/101 are left byte-identical on purpose: their `COMMENT` is executable SQL held in every install's `schema_migrations` ledger, so editing any in place would flip its checksum and re-run the whole ALTER everywhere. Proven against real MySQL by `tests/Integration/Common/Database/RescanEnumCommentGuardTest.php`.
-
-- **Four stale claims in `LibraryManager` and the base-image comment now match what the code does (S322 comment-truth).**
-  Three comments asserted that photo and book libraries are scanned for EXIF / EPUB / PDF / CBZ content via
-  `PhotoLibraryManager` / `PhotoScanner` / `BookScanner`. They are not: `scanPhotoLibrary()` and
-  `scanBookLibrary()` route both types through the shared `MediaScanner`
-  (`$this->scanner->scan(…, 'image'|'book', …)`), and neither the photo-EXIF nor the book-harvest path is
-  reachable from here — the manager/scanner classes are not even imported. The comments now state the harvest
-  path is DORMANT rather than pretending it is live (wiring the photo route to `PhotoLibraryManager` is a
-  separate behaviour change with its own scan-path blast radius, explicitly NOT this step). The three
-  genuinely-unused `use` lines (`MusicLibraryType`, `BookLibraryType`, `AudiobookLibraryType` — the plan's
-  "two" undercounts by one, and nothing in the estate's toolchain flags an unused import) are removed; the
-  kept imports were re-derived by a tokenized (`php -w`, comments stripped) source census rather than a
-  `use`-grep alone. Separately, `docker/Dockerfile.base`'s `ext-exif` comment claimed *"every photo/PDF scan
-  in the published image would have fatalled"*; corrected to the measured truth — those two `@exif_read_data`
-  call sites are dormant as shipped so none fatalled, while `ext-exif` stays a declared hard platform
-  requirement that the missing extension still failed at `composer check-platform-reqs`. No behaviour change:
-  the `src/` diff is comments plus three imports only.
-
-- **Migration 103 collapses the music tables' duplicate UNIQUE indexes to one named constraint each (S155).** `070_fix_music_fk_types.sql` declares its fixed columns with a column-level inline `UNIQUE` inside `MODIFY COLUMN` (070:28,35,42); MySQL auto-names such an index, so a replay never collides, never raises 1061, and `MigrationRunner`'s idempotent squelch never fires — every re-application minted ONE MORE unique index over the same `media_item_id` column (production carried 24 per table; even a first chain pass lands on two: 065's own inline `UNIQUE` + 070's re-mint). 070 is untouched — its checksum is in every install's ledger — and 103 instead ensures the named `uq_music_{artists,albums,tracks}_media_item`, drops every other unique over exactly that column in one multi-drop ALTER (FK-safe: the survivor backs `fk_*_media_item` before the final state is validated — measured on MySQL 8.0.46; the constraints themselves are never dropped, since 1553/1826 are not in the squelch set), and follows the S161 shape standard: a same-named NON-UNIQUE imposter is replaced, never skipped, and a duplicate-dirty table refuses loudly with the remedy in the error text, altering nothing, so 103 also self-heals on empty-ledger transitions (070 re-mints before 103 collapses in the same pass). Proven by `MusicMediaItemUniqueIndexGuardTest` (9 real-MySQL tests: collapse, silent replay, re-mint self-healing, post-collapse 1452 FK + 1062 unique INSERT probes, imposter replacement, dirty refusal, column-set scoping) and by twice-replayed from-scratch chain runs. No routes touched; `ROUTE_MANIFEST` byte-identical.
-
-- **False historical claims in the `MusicLibraryType::getScanner()` narrowing comment (S132, W42 rescope; comments only).**
-  The docblock cited `MediaScanner.php:290` for a constructor that lives at `src/Media/Library/MediaScanner.php:483`,
-  claimed `createDefaultLogger()` "mints its own `/tmp/phlix_media_*` directory" when since the temp-dir minter was
-  retired (unnumbered S167 arm, 1d505406 + f53c8567; S439, e4853f0f) it returns the shared
-  `LoggerFactory::get(LogChannels::MEDIA)` logger, and deferred to "S132 … the blocker" for a future constructor
-  widening that the W42 rescope retired — the signature was never widened and needs no un-blocker. The prose now
-  matches shipped code: the narrowing is forced by the current `?StructuredLogger $logger = null` parameter. No
-  behavior change; no test pins this prose (`git grep -F 'S132' tests/` is empty by design, and stays so).
-
-- **Composer `ClassLoader` autoload leak per plugin disable/uninstall cycle (S166).**
-  `PluginLoader::wire()` and `getEntryInstance()` `require_once`-d each installed plugin's generated
-  `vendor/autoload.php`, which registers a `ClassLoader` on the `spl_autoload` chain, and nothing ever
-  unregistered it. In a resident Workerman/Swoole worker every
-  enable→disable→uninstall cycle appended another dead loader — consulted on every future
-  class-resolution miss and, post-uninstall, pointing at a deleted directory for the life of the
-  worker. The loader now diffs `spl_autoload_functions()` around each require, keeps the exact
-  captured callables per plugin (object identity, never a stringified name) and detaches them on
-  `disable()`/`uninstall()` — including the lazy `getEntryInstance()` path, which leaked without
-  any enable cycle. Re-enable in the same process re-attaches the captured handles, since
-  `require_once` cannot re-fire the already-included file. Pinned by three process-isolated
-  invariant tests driving the real shipped sample theme plugin in
-  `tests/Integration/Plugins/SampleThemeLifecycleTest.php`.
-
-- **Shape-aware UNIQUE-index detection in migrations 096/097 (S161).** Both chain-owned index
-  migrations (and `PlaybackStateDeduper::hasUniqueKey()`/`addUniqueKey()`) decided "already
-  applied?" by matching `INDEX_NAME` alone, so a same-named NON-UNIQUE index made the file
-  no-op and record success forever while duplicates survived and the upsert could never fire —
-  the original S156 defect made permanently invisible. The probe now requires `NON_UNIQUE = 0`
-  plus the exact column set: an equivalent UNIQUE under a different name is recognised (no
-  second, redundant index), and a same-named wrong-shape imposter is dropped and replaced in
-  one atomic ALTER. Pinned in both directions against real MySQL by
-  `tests/Integration/Common/Database/UniqueIndexShapeGuardTest.php`.
-
-- **S439 minter gap surfaced by this lane's CI park (S227).** `AccessScheduleHeadNoBodyWireTest`
-  boots the real `Application` in a spawned worker, which mints the shared
-  `/tmp/phlix_media_asset_jobs` + `/tmp/phlix_similarity_jobs` queue dirs without owning a sweep;
-  under `executionOrder="random"` its residue survived only until a later sweeper test ran — and
-  on an unlucky seed it survived the whole `Server Component Tests` run and tripped the
-  zero-residue census. The minter now owns its sweep (same S439 block the other nine minters
-  carry), and `ApplicationTest` — the suite's other MySQL-dependent minter — gets the identical
-  block. Product untouched; the deeper lazy-mkdir-in-ctor fix stays the documented follow-up.
-
-- **Poster, trailer and logo keys pass the S101 artwork URL allowlist too (S112).** In
-  `MediaItemShaper`, `poster_url` — the whole fallback chain including the
-  `cover_image_large`/`cover_image_extralarge` legs — the stored `poster_srcset`, `trailer_url`,
-  `logo_url` and the nested `production_companies[].logo_url` now all run through the same scheme
-  allowlist (`safeImageUrl()`/`safeImageSrcset()`) S101 introduced for the backdrop keys;
-  legitimate values are byte-identical on both the list and detail shapes (proven by a
-  value-identity harness plus per-key matrices). The `logo_url` guard runs before
-  `SignedUrl::refreshArtworkUrl()`, so signed internal artwork URLs still re-mint (closing the
-  untrimmed-value skip that shipped expired signatures), and a rejected poster candidate falls
-  through to the next fallback instead of being echoed.
-
-- **`SignedUrl::refreshArtworkUrl()` re-mints from RAW query bytes only (S449).** The re-mint ran
-  `parse_str()` over the stored query and re-emitted the DECODED size into a freshly signed URL, so
-  a stored `size=%22onmouseover%3D…` — which the S112 emission guards pass because they blacklist
-  literal quote/angle/backtick bytes, absent from the encoded form — came back out as a validly
-  signed link carrying the literal breakout toward every consumer. The benign corruption shared the
-  mechanism: a `+` turned into a space and a double-encoding lost one level per pass, breaking byte
-  identity without any malice. The size is now extracted from the raw query bytes and re-minted
-  only when the capture is byte-identical to its urldecoded form; anything that drifts on decode
-  (hostile, `+`-bearing, double-encoded) passes through untouched, its stale signature inert at the
-  serving gate. Canonical plain sizes keep re-minting byte-identically, `verify()` is untouched
-  (the size was never signed, per the `PreRouterFastPaths` doctrine) and no caller changed. Pinned
-  by a 12-test matrix in `SignedUrlTest` — plain re-mint regression, hostile encoded, `+`,
-  double-encoded, inert-stale-token, byte-no-op encodings and the end-to-end shaper-chain
-  composition — with a mutation proof: reverting the guard turns 10 named tests red.
-
-### Added
-
-- **`tests/` under Psalm at the measured level 5 (S306 server half, hub precedent #274).**
-  Psalm 6 admits one `errorLevel` per config, so `tests/` gets its own shipped `psalm-tests.xml`
-  (header records the measured ladder L1 4236 → L5 290 → L8 79, all on Psalm 6.5.0) and
-  `coding-standards.yml`'s Psalm job gains an assert-guard plus a second step,
-  `./vendor/bin/psalm -c psalm-tests.xml --show-info=false --no-progress`. `psalm.xml` stays src-only
-  untouched. All 290 L5 findings were fixed at the source — except one written-why exclusion
-  (`tests/codeception/acceptance/SyncPlayCest.php`: Codeception assembles actor methods at
-  codecept-build time, and Psalm — unlike PHPStan — only honours the hand-written `@method` tags when
-  the class declares `__call`, which no committed `SyncPlayTester` does), and the swoole-bundled
-  `Swoole\Coroutine\WaitGroup` now enters Psalm's view through `<stubs>` on the existing drift-tested
-  `phpstan-stubs/Swoole/Coroutine/WaitGroup.stub`, the same file PHPStan scans — one declaration, two
-  analysers. `tests/Unit/Support/StaticAnalysisScopeTest.php` pins both CI command lines verbatim,
-  both configs' directory sets as exact allow-lists, the exclusion union, the stub, the ladder
-  evidence, the absence of `ignoreErrors`/`IssueHandler`/baseline, and a negative fuzz proving each
-  pin bites when `tests/` silently leaves scope. No new `.php` files, so the census stays 1789.
-
-- **TMDB collection-sync job queue (S215).** `CollectionJob` + `CollectionJobStore` +
-  `CollectionWorker` (`src/Media/`) mirror the SV-2.9 similarity trio: a file-based queue the scan
-  path enqueues into and a supervised consumer that drains it (`config/collection_jobs.php`,
-  `config/managed_workers.php` + `config/process.php` 'collection' entry,
-  `scripts/run-collection-worker.php`). The store mints its queue directory lazily on first
-  enqueue — never at construction — so resolving the DI factory leaves zero `/tmp/phlix_*`
-  residue (S439 census).
-
-- **Test-suite zero-residue census (S439, finish-S167).** audit31 measured 212 leftover
-  `/tmp/phlix_*` entries after an isolated full-suite run at `3bd64b84`; every offender site
-  now carries a teardown, `BackupManager::createBackup()` cleans its temp dir on the success
-  path too (moved to `finally`), and a new `ZeroResidueCensusExtension` registered from
-  `phpunit.xml` snapshots the temp dir before execution and fails the run — by name — if the
-  suite leaves any `phlix_*` entry behind. Wiring pinned by `tests/Unit/Media/ZeroResidueCensusTest.php`
-  (S431 denominator re-pinned 1773→1775).
-
-- **Coroutine-socket construction guards (S434).** S207 measured `new \Swoole\Coroutine\Socket(...)`
-  SIGSEGVing the worker INSIDE the constructor — through `catch (\Throwable)` — on an invalid socket
-  type and on a genuine `socket(2)` EMFILE; a signal is not throwable, so the fix is prevention.
-  Every construction in `src/Network/` (5 sites, 4 classes) now routes through
-  `Phlix\Network\CoroutineSocketGuard::create()`, the only raw construction allowed in `src/`,
-  which refuses those two entry states beforehand as a typed `CoroutineSocketConstructionRefused`
-  carrying a `CoroutineSocketFault` (S169 `PortProbeOutcome` shape) — domains/types are membership-
-  checked, and soft-`RLIMIT_NOFILE` headroom below the margin fails closed; each site's existing
-  S197 `catch (\Throwable)` turns the refusal into its documented blocking-fallback degradation,
-  so healthy paths are behaviour-unchanged. Re-measured on the actual prod base image
-  (ghcr.io/detain/phlix-base, PHP 8.3.33-alpine, swoole 6.2.1): both S207 arms now throw catchable
-  `Swoole\Coroutine\Socket\Exception` instead of faulting — honest non-reproduction on the current
-  prod build, recorded in the test; the guard stands because the fault lived in the vendor binary.
-  Census, refusal taxonomy and the never-catches law are pinned by runtime tokenization in
-  `tests/Unit/Network/CoroutineSocketGuardTest.php` (S431 denominator re-pinned 1764→1768).
-
-- **Request dynamic-property reachability guard (S427).** `Phlix\Server\Http\Request` now pairs
-  `__get()`/`__isset()` so an UNGUARDED read of an undeclared property throws a named
-  `LogicException` instead of silently answering a PHP-warning null. The posture was chosen from a
-  tokenized census of the whole repo (1,756 PHP files): 331 property reads on typed Request roots,
-  every one on a declared member; zero dynamic writes; zero dynamic-name accesses — so the throw
-  can only ever fire on a would-be S271 bug shape. Guarded reads (`$request->jsonBody ?? []`,
-  `isset()`, `empty()`) keep their exact pre-guard empty-default semantics because PHP consults
-  `__isset()` before `__get()` — which is also why both S271 mutation arms in
-  `BackupControllerBodyPersistenceTest` fail identically before and after this change (re-run on
-  this tip). Census and static-analysis blindness documented in the `Request::__get` docblock;
-  every pinned shape in `tests/Unit/Server/Http/RequestDynamicPropertyGuardTest.php`.
-
-- **Executable S427 census (S431).** `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php`
-  re-tokenizes the whole estate at run time and pins the five census numbers as class constants
-  (per the S342 `WriteResultAdoptionGuardTest` denominator pattern) instead of leaving them as
-  prose: file count, declared-read and declared-write denominators, and the two posture zeros
-  (dynamic-name reads/writes on Request roots) — a planted dynamic read now reddens naming its
-  `file:line`. Runtime re-measurement drifts against the S427 prose (1,756→1,760 files as the
-  estate grew; 331→391 reads and 1,037→940 writes because the lane's unpublished scan rules are
-  arithmetically unreproducible — its write number matches plain writes plus the 97 offset-write
-  sites while its read number does not reconcile with the same split); every qualitative claim
-  holds — all counted sites are on declared members and all three zeros measure zero. The pinned
-  numbers govern from here; legitimate landscape changes re-pin the two denominators in the same
-  commit, the zeros are posture and are fixed in source.
-
-- **Self-service profiles: end-user CRUD / PIN / switch / avatar (S81).** A logged-in
-  user can now manage their own profiles through `ProfilesController` (auth-only group,
-  never `/api/v1/admin`): `GET|POST /api/v1/profiles`, `GET|PUT|DELETE /api/v1/profiles/{id}`,
-  `POST|DELETE /api/v1/profiles/{id}/pin`, `POST /api/v1/profiles/{id}/pin/verify`,
-  `POST /api/v1/profiles/{id}/switch`, `POST /api/v1/profiles/{id}/avatar`. Ownership runs
-  through `ProfileAccessPolicy::canManageProfile()` and refusals answer **404, never 403**
-  (no existence oracle). All five S81 blockers closed, each pinned: (1) the rating cap is no
-  longer account-scoped — `getActiveProfile()`/`getActiveRatingFilter()` take an optional
-  session `profileId` (ownership re-derived; `null` keeps today's behaviour) and
-  `RatingGate::resolveFilterForUser()` defaults it from `RequestContext::getProfileId()`
-  (the S80 claim) — a Kid session on a switched profile now gets the Kid's cap, pinned on
-  real rows incl. the foreign-claim refusal beside its succeeding control; (2) `verifyPin()`
-  **fails closed** (a PIN-less profile is not a pass) with a new `hasPin()` distinction
-  (409 `profile.no_pin` vs 403 `profile.pin_mismatch`), behind a new DB-backed
-  `rate_limiter.pin_verify` profile (5 / 300 s, per-profile key) — the unlimited-attempt
-  oracle is gone; (3) the switch endpoint calls `switchProfile()` (its first caller) and the
-  clear-then-set is now transactional, leaving exactly one active row (`COUNT = 1` asserted
-  on the real table); (4) the switch RE-MINTS tokens via `AuthManager::buildAuthResponse()`
-  so the session moves immediately, not at token expiry; (5) signup creates a first profile
-  ('Main') on BOTH entry points — `AuthManager::register()` inside the existing transaction
-  (active accounts only; pending heals via `resolveProfileIdForUser()`) and the external-provider
-  create path (`UserRepository::findOrCreateByExternalId()` gained a `created` out-param so only
-  the INSERT path mints a profile). `PUT` refuses `is_active` (400 `profile.use_switch` —
-  activation is switch-only, closing the two-active hole `update()` could otherwise re-open) and
-  `DELETE` refuses the last profile (409). No DB migration (`user_profiles.avatar_url` already
-  exists); no tag; new routes registered in `ROUTE_MANIFEST` (364 entries) and pinned.
-
-### Changed
-
 - **S130 size-bounded log policy: app.log runs at `info`, and every file log has a real on-disk ceiling.**
   `config/logger.php`'s `file` (app.log) handler shipped at `level: debug` — never a considered production
   choice, just the inherited default, and the volume lever behind the music scan S96 had to attack at the
@@ -4233,8 +6231,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   camelCase spelling is pinned separately in `ParentalControlsCreateContractTest` (S234 section) — dropping
   that spelling alone reddens (mutation-verified per key, incl. `isActive: false` not defaulting to true).
   No migration; no authz change; response shapes unchanged.
-
-### Changed
 
 - **Relayed direct play works end-to-end for the first time (S301 — finish S247).**
   Three measured items landed together. (1) The direct-play byte stream
@@ -4428,964 +6424,6 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 
 - **The three SSDP residue defects S51 deliberately left are closed (S297).** (1) *Target-set single source*: the periodic `NOTIFY` now emits one datagram per advertised target from the responder's single target enumeration, with `USN` paired per target exactly as search responses pair `ST` with `USN` — a passive control point and an active one now see the same device, where previously one saw a single target and the other saw five. (2) *Real multicast join*: `SsdpSocket` was "joining" 239.255.255.250 with an outbound-interface selector under a comment claiming to join; it now uses the S296-proven multicast-join option spelling, proven by a three-arm real-datagram test in which the pre-fix spelling receives ZERO datagrams while the production join receives. (3) *Spawn gate*: `start.php` now forks the SSDP advertiser only when BOTH `dlna.cds_enabled` and `dlna.enabled` are on — the same two-switch rule the runtime gate uses — so a CDS-disabled install (the shipped default) no longer forks an idle worker whose listen socket squats `udp://0.0.0.0:1900`. The gate decision is unit-tested; the real-boot proof (cds_enabled off → :1900 free, on → worker binds) is in the S297 record. Alongside the join, `search()` now collects only HTTP response-shaped datagrams, so NOTIFY/M-SEARCH noise on the now-heard multicast group cannot surface as discovered devices (including self-discovery). No migration (next-free stays 103).
 
-### Fixed
-
-- **`Uuid::v4()` entropy moved from `mt_rand()` to the CSPRNG (S443).** The shared UUID mint — every
-  `CHAR(36)` primary key on the Music scan path (`MusicLibraryScanner::createMediaItem()`) and the
-  `ItemRepository::create()` fallback — drew all 122 random bits from the process-global Mersenne
-  Twister. PHPUnit's runner re-seeds that same engine for `executionOrder="random"`
-  (`mt_srand(randomOrderSeed)`), the order `shuffle()` consumes it, and tests re-pin it mid-run
-  (jitter/fixture determinism) — so a pinned `--random-order-seed` rerun, or one seeding test between
-  two minting consumers, replayed byte-identical PKs and the second INSERT died with MySQL 1062
-  `Duplicate entry … for key 'PRIMARY'` (the intermittent Music red from the s252 suite run). `v4()`
-  now draws 16 bytes from `random_bytes()` and sets the RFC 4122 version/variant nibbles — the same
-  S111/S334 conversion the test-side `FixtureIdGenerator` got, applied to the production source. Nine
-  test-local `sprintf(mt_rand(...))` uuid copies were swept to the single shared generator in the same
-  commit. No test relied on seeded-uuid reproducibility (the seeded consumers — webhook retry jitter —
-  draw `mt_rand()` at their own call sites and are unaffected). Pinned by
-  `tests/Unit/Common/UuidOrderSeedFuzzTest.php` (named order-seed fuzz: reddens element-for-element on
-  any revert to `mt_rand`, greens deterministically after) and
-  `tests/Integration/Media/Music/UuidSeedReplayPkCollisionIntegrationTest.php` (the same replay against
-  a real `media_items.PRIMARY`; S431 census re-pinned 1787→1789, S126 adopters 51→52).
-
-- **Auth-provider list emits `live`/`enabled` badge signals over the TOGGLEABLE universe (S252).**
-  `AuthProviderController::listProviders()` iterated the registry — by construction only enabled+configured
-  providers — so a configured-but-disabled provider was absent entirely and `enabled: false` was
-  unrepresentable, while the S44-a UI's strict `p?.live === true` read everything as Disabled. The list is
-  now `AuthProviderBootstrapper::TOGGLEABLE` (oidc, ldap, github) with two computed booleans per row:
-  `live` ← `AuthProviderRegistry::hasProvider()`, `enabled` ← `AuthProviderBootstrapper::isEnabled()`.
-  Pinned by `tests/Unit/Auth/AuthProviderBadgeSignalsTest.php`.
-
-- **S14 HIDE finished on the two missed blank-row surfaces (S220).** `DashboardService::getRecentPlaybackEvents()`
-  emitted `username => null` / `details.media_title => null` activity rows after user/item deletion, and
-  `NewsletterGenerator::getTopMedia()` rendered deleted items as the literal `'Unknown'` row (`LEFT JOIN` +
-  `COALESCE`) — the exact placeholder S14's decision rejected. Both now hide orphaned rows (null-skip / INNER
-  JOIN), matching the S14-fixed Top Users / Top Media cards. Pinned against real MySQL by
-  `tests/Integration/Admin/BlankRowHideRealDbIntegrationTest.php`; sibling auth/library feeds' nullable
-  usernames are enumerated out of scope.
-
-- **Route parameters are percent-decoded ONCE at the routing boundary (S435).** The Router
-  compiled `{param}` to `(?P<$1>[^/]+)` and handed handlers the RAW encoded segment, so
-  `GET /api/v1/music/albums/Abbey%20Road` looked up an album literally named `Abbey%20Road` —
-  `MusicController::getArtist()`/`getAlbum()` passed the still-encoded value into
-  `MusicLibraryService::findArtistByName()`'s `WHERE a.name = ?`, and every artist/album with
-  a space, accent or unicode name 404'd library-wide. `Router::dispatch()` and
-  `Router::dispatchAsHead()` (the estate's only two param-extraction sites — `pathParams` is
-  written nowhere else) now decode through one private `decodePathParams()` **after** pattern
-  matching: the raw path keeps its routing meaning (`%2F` cannot split segments or forge
-  routes, and upstream traversal guards keep vetting the exact bytes they saw), handlers get
-  parsed names, and no handler decodes again — the `%2520` fixture resolves the artist whose
-  name literally contains `%20`, never the space-named one. Policy: `rawurldecode()`, not
-  `urldecode()` — a `+` in a path segment is a literal plus (RFC 3986); `+`-means-space is
-  the query-string form encoding; malformed sequences (`%ZZ`, trailing `%`) pass through
-  verbatim without throwing. Additive: every existing route path still matches; the
-  console-client pin asserting the encoded wire form (`/api/v1/music/albums/Abbey%20Road`)
-  stays correct — the server now decodes on receipt. Pinned by
-  `tests/Unit/Server/Http/RouterPathParamDecodingTest.php` and, against real MySQL through
-  the composed `Application::loadMusicRoutes()` table direct AND over the real
-  `RelayConsumer::buildRequest()` relay path,
-  `tests/Integration/Server/Http/MusicEncodedRouteParamE2eTest.php` (S431 census re-pinned
-  1769→1771, declared-write denominator 940→949 — all writes on declared members).
-
-- **The curated coroutine-hook allowlist is now enforced and DELIVERY-PROVEN at worker
-  start (S433, was S255).** Workerman's `Events\Swoole` constructor re-installs
-  `SWOOLE_HOOK_ALL` per worker, and `start.php`'s remedy — `Coroutine::set(['hook_flags'
-  => …])` from inside the `onWorkerStart` coroutine — measured on this estate's stack,
-  updates only the REPORTED mask: `getOptions()` reads the curated `0x42fe` while the
-  `NATIVE_CURL`/`FILE`/`PROC` handlers stay physically installed, so the SIGSEGV mitigation
-  could reach no worker and the standard check reported success either way (the
-  `EventLoopTls.php:44-64` docblock testifies). Per-worker enforcement now goes through the
-  full-mask replacement API and a behavioural verdict: new `Phlix\Server\Runtime\HookDelivery`
-  calls `Swoole\Runtime::enableCoroutine()` (the only API measured to un-swap handlers, and —
-  narrowing S255's fix-direction note — from inside the worker coroutine too; the API, not the
-  calling context, is the variable) and then proves the configured mask is the mask in force
-  with a sibling-tick probe (a cURL to a never-answered local listener that either blocks the
-  worker or yields dozens of ticks; `getOptions()` is never consulted). Non-delivery and
-  inconclusive samples throw `HookDeliveryException` — startup fails LOUD, and the
-  background-timer worker's best-effort `catch (\Throwable)` now rethrows exactly that
-  exception instead of warning past it. The `coroutine.enabled=false` and
-  `coroutine.hook_flags` config paths are now true: mask `0` is enforced (the shipped default
-  left `ALL` installed even with the hook disabled) and an operator mask that re-enables a cURL
-  hook verifies green — the check is two-sided, and its negative half (config claims a yielding
-  cURL over a physically blocking worker → throw) runs on every Swoole build, while the
-  positive half measures which cURL bit the build actually delivers before asserting
-  (the CI PECL build refuses runtime emulated-cURL installation outright — measured, S433).
-  New `CuratedHookDeliveryProbeTest` (7 tests, real Swoole 6.2.1, reproduces the vendor adapter
-  constructor's `ALL`-installed
-  state order-independently via the authoritative API; skips without ext-swoole/
-  ext-curl) + `HookAllowlistEnforcementGuardTest` (5 tokenized guards incl. the six-worker
-  census); `SwooleRuntimeTest` gains 3 pure tests for `runtimeHookMask()`/`curlHookFlags()`.
-  Planted-drift proof: replacing `verify()`'s tick comparison with the `getOptions()` equality
-  reddens `CuratedHookDeliveryProbeTest::test_the_old_in_coroutine_set_lies_and_the_probe_catches_it`
-  and the guard's no-`getOptions` rule; restore → green. The probe class's own teardown zeroes
-  the PHYSICAL hook state rather than restoring the reported option baseline — the same lie-API
-  trap, re-encountered in CI's random order as cross-test `proc_open` contamination and
-  measured away (`AccessScheduleHeadNoBodyWireTest` now co-scheduled green in `tests/Unit/Server`). `EventLoopTls`'s registered
-  blocking-I/O exception note updated: with the allowlist enforced the documented bounded
-  stall — not the accidental yield — is the live behavior. The S431 executable census
-  denominator re-pins 1,760→1,764 in this same commit (four new first-party files; every
-  other pin untouched, exactly as the re-pin protocol demands). No `SAFE_HOOK_NAMES` change;
-  no migration.
-
-- **S271 mutation-arm description corrected (S428, server leg).** The
-  `BackupControllerBodyPersistenceTest` header claimed reverting either dead-property arm
-  "reddens exactly one named test (mutation-verified)". Both arms re-run at the S427 tip prove the
-  claim asymmetric: the `create()` arm reddens exactly the one named label test (string-diff
-  `-'nightly-pre-fix' +''`), while the `updateSchedule()` arm reddens TWO — the named schedule test
-  (`7 is identical to 9`) plus the collateral non-numeric-validation test (`200 is identical to 400`),
-  because the dead read also disarms that handler's 400 guards. Comment-only; no test or product
-  code changed.
-
-### Security
-
-- **`/api/v1/health/relay` and `/api/v1/health/network` are now authenticated (S437).**
-  Both routes were registered with `$router->get(path, closure)` and no middleware, while
-  every sibling `/api/v1/*` telemetry route is `AuthMiddleware`-gated. `relayHealth()`
-  returns `relay.lastConnectError` / `lastConnectErrorAt`, whose raw text is recorded by
-  `RelayConsumer::recordConnectError()` as `': ' . $e->getMessage()` — a socket-error string
-  that embeds the hub host:port. Any anonymous caller could therefore read internal relay
-  connection failures and hub network topology; S40 widened the surface by adding the
-  latency snapshot. Both registrations now sit inside a nested `''`-prefix group carrying
-  `[new AuthMiddleware()]`, so the METHOD+PATH tuples are byte-for-byte unchanged (only the
-  route-level middleware column moves — the wire-path manifest records `[]` → `[AuthMiddleware]`
-  for the two lines and nothing else). The sole consumer is the authenticated admin UI, so
-  parity is preserved. Deliberate open liveness is untouched: the separate bare `/health`
-  route (status/timestamp/version only) — the target of the Docker `HEALTHCHECK`, k8s probes
-  and `scripts/docker-boot-smoke.sh` — stays unauthenticated, so no infra probe breaks. Pinned
-  by `tests/Unit/Server/Core/HealthRoutesAuthGuardTest.php`: the production route table shows
-  both gated, anonymous dispatch to each returns 401 `auth.required` with the health payload
-  keys absent and the hub host/port/socket-error substrings absent, `/health` still answers 200,
-  and the controller still returns the documented shapes when reached. (Census re-pinned
-  1771→1772 files and 949→952 declared Request writes in the same commit — the guard test names
-  `Request` directly.)
-
-- **The last nullable admin middleware is gone — the family is closed (S338).**
-  `MaintenanceController` was the S323-phase-2 note's "one instance survives",
-  the sixth controller holding `private readonly ?AdminMiddleware $adminGuard = null`
-  whose `requireAdmin()` returned "authorised" when the guard was absent. Its
-  eight `/api/v1/admin/maintenance/*` handlers (three reads; five actions, two
-  of them destructive: `cleanup-orphaned-stats` deletes rows and
-  `dedupe-paths --apply` merges media items) are now all behind a **required,
-  non-nullable, `readonly`** `AdminMiddleware` constructor parameter; the
-  `=== null → return null` fail-open inside `requireAdmin()` is deleted and
-  `checkAccess()` is called unconditionally. Constructing the controller
-  without a gate is now an `ArgumentCountError` at the `new` — demonstrated in
-  both the rewritten wiring test and the new structural pin, each with a
-  three-argument positive control.
-
-  **The exposure class is the logged-in NON-ADMIN, not the anonymous caller.**
-  `requireAdmin()` refuses a null/empty `$request->userId` with a 401
-  `auth.required` BEFORE consulting the guard, so a gate-less construction
-  would have degraded these routes to "any authenticated user" — the same class
-  as S323 phase 2, lower than phase 1's anonymous exposure. Latent, as in every
-  prior phase: production wiring always supplied the guard, and no exploitation
-  is claimed.
-
-  **Wiring simplified because the trap is structurally impossible.** The explicit
-  `constructorParameter('adminGuard', get(AdminMiddleware::class))` binding in
-  `AdminServicesProvider` is now a plain `autowire()` — PHP-DI skips OPTIONAL
-  parameters, and there is no optional parameter left to skip. The two
-  construction sites are enumerated: the provider's autowire and
-  `AdminRoutes::register()`'s `$container->get()` (which resolves eagerly at
-  bind time, so an un-suppliable gate fails loudly at boot, not silently per
-  request). There was no live `$container->has()` guard for this controller.
-
-  **The fail-open pin is inverted.** `MaintenanceContainerWiringTest`'s
-  `test_an_unwired_controller_really_does_lose_the_in_body_admin_check()`
-  demonstrated the old hazard (2-arg construction → null guard → non-admin gets
-  200). That construction path no longer exists; the test now proves the new
-  contract — reflective two-argument construction throws `ArgumentCountError`
-  (positive control included), and a wired controller refuses a non-admin with
-  403 `auth.not_admin`.
-
-  **The seventh structural pin lands where the walker can see it.**
-  `MaintenanceControllerAdminGateIsStructuralTest.php` lives at
-  `tests/Unit/Server/Http/Controllers/Admin/` — inside the recursively-walked
-  `PIN_DIRECTORY`, NOT beside the controller's other tests in
-  `tests/Unit/Admin/Maintenance/` (which the S323-phase-2 recursion fix
-  deliberately does not reach) — and `RouterDispatchableHandlersTest`'s pin
-  count is bumped 6 → 7 in the same change. The pin uses the shared
-  `RouterDispatchableHandlers` trait (never a copied helper), asserts its
-  denominator (8 handlers, all gated — `UNGATED_REQUEST_HANDLERS` is empty),
-  drives every handler anon/non-admin/admin, and carries two secondary nets: a
-  per-handler source check that each gated handler reaches `requireAdmin()`
-  (directly or via `runTask()`) and a global call-site count of 4 (`tasks`,
-  `jobs`, `job`, and the single `runTask()` call that gates all five actions).
-  All three regression shapes were demonstrated to fail it on scratch copies:
-  a restored nullable/defaulted gate, a re-added `setAdminGuard()` setter, and
-  newly added ungated handlers in BOTH escaping spellings (`mixed $request`
-  native, and `Request|Response` union) — the drift detector enumerates 10 vs
-  the asserted 8. A tokenized `?AdminMiddleware` scan over all of `src/`
-  (comments stripped) now returns **zero** hits; the other eight raw hits are
-  the S282/S323 conversion-comment docblock prose, which the tokenizer
-  correctly ignores.
-
-- **The LDAP operation-timeout bound is now asserted to FIRE, not just declared (S328).** The
-  `LDAP_OPT_TIMEOUT` option in `LdapConnection::connectionConfig()` had only config-presence
-  coverage — no test opened a real LDAP socket, so a regression that kept the config literal
-  present but rendered the bound ineffective at runtime passed silently. `LdapConnectionTimeoutTest`
-  now carries two real-timing cases against a controlled dead dependency on loopback: a peer that
-  accepts the TCP handshake and never answers consumes the 5-second operation bound (measured
-  ~5.0 s, asserted `>= 0.5` and `< 8.0`), while a refused peer fails fast (measured < 0.5 s) —
-  both fail with the identical `success:false, error:'ldap_error'` shape, so elapsed time is the
-  only discriminator. Mutations prove the guard: removing the option turns the config assertions
-  red and makes the real-timing case hang; bloating `OPERATION_TIMEOUT_SECONDS` to 15 turns the
-  upper-bound assertion red at ~15.0 s.
-
-- **The admin gate on four more controllers is now a construction-time requirement, not an optional
-  one (S323, phase 2 of 2 — S323 is complete).** `WebhookAdminController`, `MediaMatchController`,
-  `MediaPosterController` and the TRaSH-Guides `Arr\SyncController` each held their `AdminMiddleware`
-  in a **nullable property filled by an optional `setAdminMiddleware()` setter**, with
-  `requireAdmin()` wrapping its decision in `if ($this->adminMiddleware !== null)` — the identical
-  shape phase 1 removed from `ThemeMediaController`. A controller built without the setter returned
-  "authorised" from `requireAdmin()` **without any admin decision having been taken**, across twelve
-  endpoints:
-
-  | Verb | Path | Controller |
-  |------|------|------------|
-  | GET    | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
-  | POST   | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
-  | PUT    | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
-  | DELETE | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
-  | POST   | `/api/v1/admin/webhooks/{id}/test`  | `WebhookAdminController` |
-  | GET    | `/api/v1/media/{id}/match/search`   | `MediaMatchController` |
-  | POST   | `/api/v1/media/{id}/match/apply`    | `MediaMatchController` |
-  | GET    | `/api/v1/media/{id}/posters`        | `MediaPosterController` |
-  | PUT    | `/api/v1/media/{id}/poster`         | `MediaPosterController` |
-  | POST   | `/api/v1/admin/sync/trash-guides`   | `Arr\SyncController` |
-  | GET    | `/api/v1/admin/sync/status`         | `Arr\SyncController` |
-  | PUT    | `/api/v1/admin/sync/enable`         | `Arr\SyncController` |
-
-  **The severity here is LOWER than phase 1's, and the difference is stated rather than implied.**
-  All four refuse an unauthenticated caller BEFORE consulting the middleware (`requireAuth()`, or the
-  equivalent empty-`$request->userId` check), so the missing decision would have degraded these
-  routes to **any authenticated user** — never, as in phase 1, to an anonymous one. As in phase 1 it
-  was **latent and no exploitation is claimed**: every production wiring site called the setter. The
-  change removes the possibility structurally rather than closing an observed bypass, because "the
-  wiring calls the setter" is a property of today's wiring and not of the class, and PHP-DI's
-  `autowire()` skips optional parameters.
-
-  The null state is now unrepresentable on all four: `AdminMiddleware` is a **required, non-nullable,
-  `readonly`** constructor parameter, `setAdminMiddleware()` is deleted, and `checkAccess()` is called
-  unconditionally. Constructing one without a gate is an `ArgumentCountError` at the `new`. Every
-  `if ($container->has(AdminMiddleware::class))` escape hatch is deleted — **four** of them, one each
-  in `Application::getWebhookAdminController()`, `getMediaMatchController()`, `getArrSyncController()`
-  and `getMediaPosterController()`. `MediaPosterController`'s second construction site,
-  `WebPortalRouter`'s admin group, never had a `has()` guard: it called `setAdminMiddleware()` inside
-  an `if ($this->userRepository !== null && $this->auditLogger !== null)` wiring guard that is
-  fail-CLOSED (without those dependencies the poster routes are not registered at all — verified by
-  exercise: 404 on every call), and that call is now a constructor argument. The dead container-less
-  fallback in `getWebhookAdminController()` / `getArrSyncController()` is replaced by a loud
-  `?? throw` at boot. A container that cannot supply the middleware now fails at route-registration
-  time instead of yielding a working-but-ungated controller.
-
-  **S282's `LibraryController` pin is re-based on the population that can actually regress.** It
-  counted `requireAdmin()` CALL SITES and asserted 14 — a number that only rises when a handler is
-  added WITH a gate, so it was structurally blind to a fifteenth handler added WITHOUT one. It now
-  enumerates every handler the router can dispatch and requires each to be listed as either
-  admin-gated or explicitly exempt; the call-site count survives as a secondary net, so nothing it
-  caught was traded away.
-
-  **The enumeration itself had a hole, found in review and closed in ONE place.** The
-  "does this method take a `Request`" helper was six verbatim private copies matching a native type
-  spelled `Request` or an `@param` mentioning `Request` — and asserting in its own docblock that the
-  population was closed. It was not: `public function purge(mixed $request, array $params)` and
-  `public function purge(Request|Response $request, array $params)` were each measured passing all
-  six pins **and** `phpstan analyse -c phpstan.neon.dist` (src/, level 9), while being fully
-  dispatchable. The predicate is now a single shared trait
-  (`tests/Support/Http/RouterDispatchableHandlers.php`) that derives the answer from the dispatcher —
-  "would PHP let `$instance->$method($request, $params)` reach this body?" — rather than from a list
-  of type spellings, and it carries its own pin over a fixture of every shape, both escaping
-  spellings included. The secondary call-site counts now run over tokenised source with comments
-  stripped — as do the per-method source slices the null-guard checks read — so a comment quoting
-  the counted literal can no longer inflate a count or stand in for the real call. (Tokenising
-  removes the COMMENT class of that trap and only that class: a string literal or heredoc holding
-  the same text still counts. Stated rather than glossed, and no controller does it.)
-
-  **The pins that share the predicate are discovered recursively**, so the enforcement cannot be
-  side-stepped by filing the next pin in a subdirectory. `RouterDispatchableHandlersTest` walks
-  `tests/Unit/Server/Http/Controllers/` (all depths) for `*AdminGateIsStructuralTest.php`, derives
-  each class name from its path, and asserts the pin count — 6 today, re-measured rather than
-  assumed — plus that every pin found uses the trait. The previous flat `glob()` could not see a
-  pin under `Controllers/Admin/`, which is where the next one would naturally land.
-
-  **Existing tests that pinned the fail-open in EFFECT now run through a real gate.**
-  `SyncControllerTest`, `WebhookAdminControllerTest`, `MediaMatchControllerTest`,
-  `MediaPosterControllerTest` and `WebhookTestDeliveryTest` built these controllers with no
-  middleware at all while sending an admin user id and asserting a handler outcome — so they
-  depended on the null branch without ever saying so. Each now constructs a real `AdminMiddleware`
-  admitting exactly the user id it sends (not a permissive stub), with every existing assertion
-  unchanged.
-
-  ⚠ **"S323 is complete" means its five named controllers, not that this shape is gone from the
-  tree.** One instance survives, out of S323's scope and owned by **S338**:
-  `src/Server/Http/Controllers/Admin/MaintenanceController.php` holds
-  `private readonly ?AdminMiddleware $adminGuard = null` and its `requireAdmin()` returns
-  "authorised" when that dependency is absent. Its exposure is lower — the eight `/maintenance/*`
-  routes sit inside `AdminRoutes`' `[$adminMiddleware]` group, so the in-body check is a second gate
-  rather than the only one — but that is a property of the current route registration and not of the
-  class, which is the argument this change exists to reject. Recorded here rather than left in a
-  worklog.
-
-- **The admin gate on the two theme-media mutation endpoints is now a construction-time
-  requirement, not an optional one (S323, phase 1 of 2).**
-  `POST /api/v1/libraries/{id}/theme-media/scan` and `DELETE /api/v1/libraries/{id}/theme-media`
-  are admin-only. Until now `ThemeMediaController` held its `AdminMiddleware` in a **nullable
-  property filled by an optional `setAdminMiddleware()` setter**, and each of the two handlers
-  wrapped its decision in `if ($this->adminMiddleware !== null)`. A controller constructed
-  without that setter therefore ran both handler bodies with **no admin decision having been
-  taken at all**.
-
-  **What that would have meant, stated precisely.** These two routes are registered bare in
-  `Application::loadLibraryRoutes()` — there is no `AuthMiddleware` group and no `requireAuth()`
-  ahead of the inline check — so the missing decision would not merely have degraded the routes
-  to "any logged-in user": they would have been reachable by an **anonymous** caller. That is a
-  more severe class than the same shape S282 removed from `LibraryController`, where an auth
-  layer still stood in front.
-
-  **This was latent, and no exploitation is claimed.** `ThemeMediaController` has exactly one
-  production construction site (`Application::getThemeMediaController()`), and it always wired
-  the middleware, so every controller this server has actually served requests from carried its
-  gate. The defect was in what the class *permitted*, not in what the shipped wiring *produced*;
-  the change removes the possibility structurally rather than closing an observed bypass. It
-  matters because "the wiring calls the setter" is a property of today's wiring and not of the
-  class, and because PHP-DI's `autowire()` skips optional parameters — the mechanism by which
-  this codebase has produced silently-null dependencies before.
-
-  The null state is now unrepresentable:
-
-  - `AdminMiddleware` is a **required, non-nullable, promoted `readonly`** fourth constructor
-    parameter; `setAdminMiddleware()` is deleted; `checkAccess()` is called unconditionally in
-    both `scanThemeMedia()` and `deleteThemeMedia()` — there is no null branch left to take.
-    Constructing the controller without a gate is an `ArgumentCountError` at the `new`
-    (demonstrated, not asserted from reading), rather than a silent authorization downgrade at
-    request time.
-  - `Application::getThemeMediaController()` loses **both** escape hatches: the dead
-    container-less fallback (`$this->container` is written exactly once, from a non-nullable
-    constructor parameter, so that branch was unreachable — and it hardcoded a
-    `127.0.0.1`/`root`/`password` connection) and the `if ($container->has(AdminMiddleware::class))`
-    wiring guard. A container that cannot supply the middleware now fails loudly at
-    route-registration time instead of yielding a working-but-ungated controller.
-
-  `GET /api/v1/libraries/{id}/theme-media` is a genuine read path and is deliberately **not**
-  admin-gated; that is unchanged, and is pinned as an explicit exemption rather than left
-  implicit.
-
-  **Why a structural test and not only behavioural ones.** A re-added setter that nobody calls
-  changes no behaviour, so no behavioural test can see it: re-introducing an empty
-  `setAdminMiddleware()` was measured to redden exactly one test — the structural pin — with the
-  whole behavioural suite still green. `ThemeMediaControllerAdminGateIsStructuralTest` therefore
-  rejects a nullable type, a default value, a re-added setter, and a re-added
-  `if ($this->adminMiddleware !== null)` guard, and enumerates every public `Request`-taking
-  handler on the controller so that a **new** handler added without a gate — including a `static`
-  one, or one whose `Request` parameter is declared only in a docblock — fails the suite until it
-  is classified as either admin-gated or explicitly exempt. Behavioural coverage pins all three
-  arms (anonymous → `401 auth.required`, authenticated non-admin → `403 auth.not_admin`, admin →
-  reaches the handler body) on both mutations, with the admin arm acting as the succeeding
-  control so a blanket-deny regression cannot read as a pass.
-
-  **This was phase 1 of 2, and it is superseded — read the phase-2 entry above for the current
-  state.** When this shipped, the identical optional-`setAdminMiddleware()` shape was still present
-  on `WebhookAdminController`, `MediaMatchController`, `MediaPosterController` and
-  `Arr\SyncController`, and S282's `LibraryController` pin still enumerated `requireAdmin()` call
-  sites rather than handlers. Both statements are now **historical**: phase 2 removed the shape from
-  all four controllers, assessed their exposure (auth-only degradation, not anonymous), and re-based
-  S282's pin on the wider enumeration. S323 is complete.
-
-### Added
-
-- **The admin-maintenance route surface is now mirrored against phlix-ui in BOTH directions
-  (S330).** S78's In-scope list named eight Tasks-page sections and only four shipped; an AC
-  narrower than its own In-scope list is a mis-specified step, and three of the four missing
-  sections (scan-all, recompute-similarity, newsletter send-now) were owned by no step. This
-  entry records the three-way decision for each, then closes the drift class with a guard.
-
-  **The decision, per action by name — all three CLOSED, not silently dropped:**
-  - **scan-all — CLOSED.** No server-wide scan service exists. Per-library scan
-    (`POST /api/v1/libraries/{id}/scan`, the Libraries page) is the bounded, safe path; a
-    server-wide scan would be an unbounded whole-vault filesystem walk (the S116
-    filesystem-work-on-the-request-path concern; even a single music library scan runs
-    4 h 09 m before its first durable write, the measured 21600 s floor) and would monopolise
-    the count=1 maintenance queue worker for the duration. The admin Tasks page keeps its
-    honest note explaining the absence.
-  - **recompute-similarity — CLOSED.** Similarity is already computed per-item on scan by the
-    live `SimilarityWorker` managed worker (`config/managed_workers.php` → `'similarity'`,
-    SV-2.9 enqueues one job per new item, candidate set bounded per library). A server-wide
-    recompute would enqueue the entire catalogue into an O(N²)-per-library background pipeline —
-    unbounded, redundant with the per-scan compute, and not wanted. The admin Tasks page gains
-    an honest note explaining the absence.
-  - **newsletter send-now — CLOSED.** The newsletter is a deliberately scheduled weekly blast
-    (`Application::startBackgroundTimers()` → `startNewsletterTimerIfEnabled()`, day/hour from
-    config); a send-now would fire an unscheduled email to every user, and `NewsletterSender`
-    is not DI-wired (constructed manually in `Application.php`), so a maintenance-queue path
-    would duplicate its construction for an action the schedule already provides. Not wanted.
-    The admin Tasks page gains an honest note explaining the absence.
-
-  No task name, route or `MaintenanceTask` vocabulary entry changes — the existing
-  queued/sync tasks stay the five-task catalogue and `MaintenanceTaskCoverageTest`'s count is
-  unchanged. What ships instead is `AdminMaintenanceRoutesUiMirrorGuardTest`, the S348-shaped
-  cross-repo pin for the ADMIN maintenance surface: it parses the production route table
-  (reflected `Application`, MySQL doubled, `ContainerFactory::defaultProviders()`), extracts the
-  eight `/api/v1/admin/maintenance/*` routes (three GET reads incl. the two-segment
-  `jobs/{id}` + five POST actions) and the five POST action suffixes, and asserts each equals
-  its phlix-ui `AdminMaintenanceApi` mirror (`MAINTENANCE_TASK_NAMES` for the suffixes,
-  `MAINTENANCE_ENDPOINTS` plus the derived `jobs/{id}` template for the full path set) in BOTH
-  directions — `missing` (UI declares, server does not register) and `extra` (server registers,
-  UI has no entry) each asserted empty with the compared denominators printed and an
-  anti-vacuity floor. Both planted mutations were shown red and removed (a dummy
-  `/maintenance/scan-all` route and a dummy UI `scan-all` name). No S348 collision: that guard
-  covers only the library-maintenance surface (`/api/v1/libraries/{id}/<suffix>` →
-  `LibraryController`); this one covers `/api/v1/admin/maintenance/*` → `MaintenanceController`.
-
-- **The scan-job type allowlist is pinned to the migration ENUM, and the failure message names
-  phlix-ui's mirror (S341).** New `ScanJobsEnumMigrationTest` parses migration
-  `101_library_scan_jobs_media_assets_type.sql` — the real file, through
-  `MigrationRunner::splitStatements()` itself, never a hand-written fixture — and asserts
-  `ScanJobRepository::ALLOWED_TYPES` equals the 9-member ENUM in value AND ordinal order (MySQL
-  stores ENUMs by index; an insertion in the middle re-numbers every stored row). It also fails
-  loudly when 101 stops being the latest declarer, when the runner sees more than one statement, or
-  when the parse yields zero members. The equality failure message names `phlix-ui`'s `SCAN_JOB_TYPES`
-  in `src/api/admin/libraries.ts` as the mirror to update — the step exists because that UI array
-  drifted to 8 while the DB had 9 (migration 101's ship note claimed "zero client change") and no
-  server-side gate noticed. Demonstrated red: adding a 10th member to a scratch copy of migration 101
-  turns `test_allowed_types_equals_the_enum_parsed_from_the_migration` red; restoring the file
-  returns it to green.
-
-- **The library-maintenance POST-route set is pinned to phlix-ui's `AdminLibrariesApi` mirror, in
-  both directions (S348).** S284 shipped `POST /api/v1/libraries/{id}/regenerate-assets` and the
-  admin UI never gained a `regenerateAssets` method — the S332 class again: a hand-written method
-  list that grows with the LIST, not the ROUTES. New `LibraryMaintenanceRoutesUiMirrorGuardTest`
-  reflects the PRODUCTION route table off an `Application` built from
-  `ContainerFactory::defaultProviders()` (MySQL doubled, exactly as the S239 wire-path guard),
-  extracts the maintenance POST-route set (`POST /api/v1/libraries/{id}/<suffix>` handled by
-  `LibraryController` — the nine async actions the UI mirrors), and asserts it equals the mirror
-  list in BOTH directions: `missing` (a UI method with no server route) and `extra` (a server route
-  with no UI method) are each asserted empty, with the full expected/actual suffix denominator
-  printed in every failure. The mirror is spelled as the phlix-ui method NAMES (`scan`,
-  `matchMetadata`, `regenerateAssets`, …) with the kebab-case URL suffix derived mechanically; the
-  failure message names `src/api/admin/libraries.ts` as the mirror to update, and an anti-tamper
-  identity test stops a "fix" that deletes a mirror member from silencing the guard. Demonstrated
-  red: planting `POST /api/v1/libraries/{id}/regenerate-thumbnails` in a scratch copy of
-  `Application.php` turns the both-directions test red naming the extra suffix; restoring the file
-  returns it to green. Registration-only — response envelopes, status codes and the in-handler
-  admin gate stay pinned by S284's `LibraryRegenerateAssetsAdminGateTest` and the S272
-  destructive-actions gate test.
-
-- **Skipped tests are now reported BY NAME, so a skip set can be compared with `comm` instead of by
-  count (S345).** `phpunit.xml` gains `displayDetailsOnSkippedTests="true"`, and
-  `scripts/skipped-test-names.sh` turns any run's output — local, or a `gh run view <id> --log` —
-  into a sorted, `comm`-ready set of `Class::method` names.
-
-  **Why a count was never enough.** Measured on master run `32027697809`: the log says
-  `Skipped: 3` and contains **zero** `There were N skipped tests:` sections, so the only published
-  fact about the skip set was its size. A size cannot distinguish *a test started skipping* from *a
-  conditionally-skipped test turned into a failure* from *a test disappeared* — all three move it
-  identically, and any two of them together can leave it **unmoved**. It also drifts on its own:
-  this repo has legitimate environment-dependent skips, and a box with no MySQL, Chromium or
-  mysqldump reports **259** where CI reports **3**. Two audits had to record skip movement as
-  "unproven" for exactly this reason.
-
-  The **config attribute** was chosen over the `--display-skipped` CLI flag deliberately: PHPUnit is
-  invoked from five places in this repo — twice in `.github/workflows/phpunit.yml`, twice in
-  `.github/workflows/syncplay-e2e.yml` and once in `scripts/assertion-escape-audit.php` — plus
-  every developer's shell, and a flag would have to be re-added to each of them and to every job
-  added later. The attribute is read by every invocation that loads `phpunit.xml`, so a new job
-  cannot silently ship without it. Those sites are named by FILE and their count is RE-DERIVED by
-  `SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones`;
-  the first revision of this entry cited line numbers and its own commit moved them.
-
-  ⚠ **It is not universal, and two exceptions are real.** A `--testdox` run can never name its
-  skips: PHPUnit builds the default result printer for testdox with its
-  `$displayDetailsOnSkippedTests` argument hardcoded `false` — the `outputIsTestDox()` branch of
-  `Facade::createResultPrinter()`, `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221` in
-  the pinned PHPUnit 10.5.64 — so it counts them in
-  `Skipped: N` and prints no list, with or without `--display-skipped`. `syncplay-e2e.yml`
-  passed `--testdox`; **it no longer does** — the prettified list was cosmetic and it also broke a
-  whole-run-log comparison by adding to the count while contributing no name. The
-  `assertion-escape-probe` job captures PHPUnit's output into a PHP variable and never echoes it
-  (`scripts/assertion-escape-audit.php`), so no name set is obtainable from that job either;
-  its config is not at fault. The script reports the testdox case as exit **5** with that
-  explanation rather than blaming `phpunit.xml`.
-
-  The attribute enables **two** lists, not one — `printSkippedTestSuites()` as well as
-  `printSkippedTests()`, because `Skipped: N` is the sum of both event kinds
-  (`SummaryPrinter.php:106`). A skipped SUITE is named under `There were N skipped test suites:`
-  with no `::` in its entries, and a run in which every suite skipped prints `No tests executed!`
-  with no `Tests:` line at all. The script parses both, emitting a suite as `SUITE:<name>`, and
-  accounts for the missing totals line instead of reporting drift. Verified against the real binary,
-  not a hand-written fixture.
-
-  It is **purely additive** — verified by running the full suite either side of the change on one
-  seed: identical exit status (`1` both times, from a pre-existing environment-dependent failure on
-  the measuring box), identical `Tests: 10249, Assertions: 67983, Failures: 1, Skipped: 259.`, and a
-  diff of the two outputs that is empty apart from the new list and the `--` separator PHPUnit puts
-  between lists. `failOnSkipped` is a separate setting and is not set here.
-
-  The script refuses to be quietly empty, because a parser that matches nothing reads as a pass: it
-  prints its denominators on stderr and exits **2** when the input is not a PHPUnit run at all,
-  **4** when skips were counted, no detail list was printed and testdox does not account for them
-  (i.e. the attribute went missing, or that invocation did not load `phpunit.xml` — the first of
-  those reproduced against master's own CI log), **5** when the unnamed skips are matched one-for-one
-  by testdox skip glyphs, **3** when the numbers do not add up and **6** when the sorted set could not
-  be written in full. Each code names the cause its own arithmetic supports and never attributes more
-  to a cause than that cause can carry; a wrong diagnosis is worse than none, so 5 is gated on the
-  number of testdox SKIP lines (` ↩ `) and taken only when that number **equals** the shortfall —
-  never on the mere presence of testdox-looking output, which would exonerate `phpunit.xml` about a
-  run whose only fault is `phpunit.xml`. When testdox covers part of the shortfall both causes are
-  named. When there are **more** skip glyphs than unnamed skips nothing is attributed to testdox at
-  all: a real testdox run cannot produce a surplus (PHPUnit counts every glyph it prints in the same
-  run's `Skipped: N`), so a surplus is evidence of foreign output in the log — `gh run view --log`
-  carries every tool's — and it is reported as unattributable while both candidate causes stay in
-  play. The clamp that used to trim such a surplus down to the shortfall, and so printed "Do NOT
-  change phpunit.xml" about a config that was the cause, is **removed**: it had no legitimate input.
-  Entries declared by a `No tests executed!` run are subtracted out before the shortfall is computed,
-  because they have no skip count of their own to match.
-
-  ⚠ It is **not** claimed that every exit is right for every input. All of the denominators are
-  **input-wide sums**, so in a multi-run log (`gh run view <id> --log`) one run's shortfall can be
-  paid for by another run's surplus and net out to a code that is right for the sum and wrong for
-  both runs — measured on the shipped version: a run declaring two names but summarising one, followed
-  by a count-only run summarising one, exits **0** with a two-name set. Two such inputs were measured
-  in round 3 of this step's review and are closed with fixtures, and the testdox-glyph surplus is
-  closed by deleting the branch that read it; a `--testdox` run that also skips a whole test SUITE is
-  not closed, because a skipped suite produces no testdox glyph, and neither is exit 5's reliance on
-  an equality of two whole-input totals (N stray glyphs beside a run that lost N names look the same
-  as one testdox run that skipped N). The durable fix is **per-run segmentation** of the parser, which is
-  filed as a follow-up rather than done here. Two smaller limits complete the list: a data-set label
-  containing a literal **newline** is emitted truncated at that newline (the only shape that escapes
-  the denominator cross-check — no provider here produces one, and the truncation is stable, so `comm`
-  is not corrupted), and a drift in PHPUnit's list HEADER text refuses loudly but as exit **4** blaming
-  `phpunit.xml` rather than exit 3 blaming the parser — the right refusal with the wrong cause, since a
-  vanished header and a missing attribute are arithmetically identical. The script's header is the
-  canonical statement: it enumerates every exit path, the input class that reaches it, and all five
-  known limits by number, each with the input measured to reach it.
-
-  `tests/Unit/Support/SkippedTestNameReportingTest.php` fails if the attribute is removed from
-  `phpunit.xml`, if the script loses its executable bit, or if the README stops documenting the
-  `comm` comparison — and it drives the **real** `phpunit` binary for the plain, `--testdox` and
-  skipped-suite shapes, so a hand-written fixture can no longer diverge from what PHPUnit actually
-  prints. It also re-derives the `--testdox` ban from every `.yml` **and** `.yaml` workflow, parsing
-  each one and folding shell continuations first (a `.yaml` file and a wrapped command both defeated
-  the first version of that guard), and re-derives the invocation-site count the paragraphs above
-  claim. Both testdox glyphs have their own stray-line fixture: `✔` (attributes nothing, reported as
-  evidence) and ` ↩ ` (attributed at most once, never exonerating), plus the surplus case — two stray
-  ` ↩ ` lines beside a count-only run — which is RED against the removed clamp. The `✔`-only fixture
-  is why the surplus defect survived three review rounds.
-
-- **Admin maintenance endpoints — the backend for the admin Tasks page (S77).** Eight routes on
-  `/api/v1/admin/maintenance/*`, inside `AdminRoutes`' `AdminMiddleware` group, with an explicit
-  in-body admin re-check in every handler (two of the five tasks are destructive, and a group's
-  middleware is one refactor away from being lost):
-
-  | Verb | Path | Mode |
-  |------|------|------|
-  | GET  | `/api/v1/admin/maintenance/tasks`                  | catalogue |
-  | GET  | `/api/v1/admin/maintenance/jobs`                   | recent queued runs (`?limit=`, `?task=`) |
-  | GET  | `/api/v1/admin/maintenance/jobs/{id}`              | one job, for polling |
-  | POST | `/api/v1/admin/maintenance/storage-snapshot`       | **queued** → `202` |
-  | POST | `/api/v1/admin/maintenance/reap-scan-jobs`         | sync → `200` |
-  | POST | `/api/v1/admin/maintenance/reap-transcode-jobs`    | sync → `200` |
-  | POST | `/api/v1/admin/maintenance/cleanup-orphaned-stats` | sync → `200` |
-  | POST | `/api/v1/admin/maintenance/dedupe-paths`           | **queued** → `202` |
-
-  **The sync/queued split is a property of the task, not of the caller.** `storage-snapshot`
-  `shell_exec`s `du -sb` per bucket over `/vault1` and `/vault2` (which on the live host hold the
-  whole media library) and `dedupe-paths` scans `media_items` whole with a transaction per
-  duplicate group — running either in a Workerman HTTP worker stalls every concurrent connection
-  on that process. Both are enqueued onto the new `maintenance_jobs` table (migration 098) and
-  drained by a 5-second timer inside the existing `count = 1` `phlix-background-timers` fork,
-  which is what makes "one maintenance job at a time" true. A repeat POST while the same task is
-  pending answers `200 {created: false}` with the EXISTING job, so a double-clicked button cannot
-  start two `du -sb` walks.
-
-  **`cleanup-orphaned-stats` closes out S14's deferred cleanup action.** S14 shipped the read-side
-  INNER JOINs so orphaned rows stopped appearing as blank dashboard entries; they were never
-  removed. It deletes from `stats_playback_events` (both `media_item_id` and `user_id`),
-  `stats_library_changes` and `stats_user_activity`, bounded by a per-table `LIMIT` that reports
-  `truncated: true` rather than looping. 🚨 It **refuses outright** when `media_items` or `users`
-  reports zero rows: `NOT EXISTS (SELECT 1 FROM media_items …)` is true for every row against an
-  empty parent, so a fresh install or half-restored backup would otherwise delete the entire
-  playback history in one click.
-
-  **`reap-scan-jobs` imposes a six-hour FLOOR on the age it will accept**, derived from the
-  4 h 09 m production music scan recorded in `LibraryScanWorker::start()`. `library_scan_jobs` has
-  no heartbeat column — `started_at` is the only age signal and it is never refreshed while a scan
-  runs — so honouring a short request would mark a healthy scan `failed` AND make
-  `hasActiveJobForLibrary()` report the library idle, re-opening the door to a second concurrent
-  scan over the same files. `ScanJobRepository::reapStaleJobs()` gained an optional age bound for
-  this; its default (null) is the unchanged boot catch-up contract, which still reaps every
-  `running` row and must stay reachable only from `LibraryScanWorker::start()`.
-
-  **`dedupe-paths` defaults to a DRY RUN.** `apply` must be strictly `true` — the string `"false"`
-  is truthy, and this deletes media rows. The keeper-selection and merge rules moved out of
-  `MediaDedupePathsCommand` into `Phlix\Media\Library\PathDedupeRunner` so the CLI and the task
-  share ONE copy rather than two that drift.
-
-- **The AccessSchedule `timeToMinutes()` `intdiv` fix is now pinned by a regression test (S336).**
-  `tests/Unit/Access/AccessScheduleTest.php` (11 tests, 80 assertions) drives the REAL call graph
-  `timeToMinutes()` → `isActiveAt()` → `AccessScheduleService::getActiveScheduleForProfile()` line 69
-  against a mocked `Workerman\MySQL\Connection`, and names the boundary cases the fix was introduced
-  for individually: the `"00:10:30"` non-multiple-of-60 example, the `fromRow()` default
-  `end_time "23:59:59"`, second-granularity across a full minute, exact start/end inclusivity, one
-  second before start / after end denial, and the inclusive overnight window. Red-on-revert is
-  demonstrated, not asserted: mutating `intdiv` back to `/ 60` makes **7 of the 11 tests fail with
-  `TypeError: Return value must be of type int, float returned`** under `strict_types=1` (the four
-  that stay green are the `:00`-seconds boundary-pinning probes, documented as such). The
-  prevention question — why PHPStan level 9 cannot pin this shape (it types `$int / 60` as a
-  benevolent `(float|int)` union; verified against PHPStan 2.2.5) — is written into the
-  `AccessSchedule.php` docblock.
-
-- **The S111 fixture-id uniqueness pin is now provable from its CSPRNG half, and the last
-  `mt_rand()`-based test id generators are gone (S334).** `BrowseIndexUsageTest`'s S111 pin ("a
-  pinned mt_rand seed must not reproduce a fixture id") was satisfiable by the generator's
-  monotonic counter ALONE: freezing `bin2hex(random_bytes(9))` to a constant would have kept every
-  assertion green while reinstating the cross-run collisions S111 removed. The generator now lives
-  in `tests/Support/FixtureIdGenerator` so a unit-level test (`FixtureIdGeneratorTest`, 3 tests)
-  can probe the REAL generator without MySQL; the new guard compares only the random half
-  (positions 0-23, the 12-hex counter field at position 24 excluded), and the mutation is
-  demonstrated red — frozen prefix → `Failed asserting that two strings are not identical` — with
-  the counter left intact. The S111 pin in `BrowseIndexUsageTest` gains the same (2b) prefix
-  assertion for the CI/MySQL path. `PooledConnectionConcurrencyTest::uuid()`'s 8 executable
-  `mt_rand()` calls are converted to the same CSPRNG pattern (`random_bytes(16)` with v4/variant
-  nibbles), so a pinned `--random-order-seed` can no longer regenerate identical PK ids across
-  same-seed runs.
-
-### Fixed
-
-- **The Trakt pull-sync timer has a structural boot catch-up (S340).** `start.php` armed the
-  worker-0 Trakt→Phlix watched-history pull on a bare `Timer::add($intervalMinutes * 60, …)` —
-  first tick a full interval after process start, countdown reset on every boot — so on a box
-  restarted (deploy, reboot, the admin Restart button) more often than the interval the pull
-  never ran, the last live instance of the boot-catch-up defect. The timer is now a 60-second
-  sweep delegating to the new `TraktSyncBoot` (`src/Server/Integrations/Trakt/TraktSyncBoot.php`),
-  which holds the pure due-decision, persists the last completed pull in `server_settings`
-  (`trakt.sync_last_run_at`), and runs the pull only when the configured interval has genuinely
-  elapsed — the S308 structural due-check shape, not the one-shot sibling shape. The first sweep
-  a minute after every boot catches up exactly when a poll was missed; a pull longer than the
-  interval cannot re-trigger (the persisted stamp is the completion time). The plugin (an
-  external, non-vendored package) is injected as the sync callback, so the testable surface is
-  the due-decision itself: unit tests enumerate every branch, the real-MySQL integration test
-  simulates the restart (stale last-run → sync runs on the first sweep, fresh last-run → no
-  re-run, last-run survives restart), and a real event-loop control observes the pre-fix bare
-  interval NOT firing within an uptime shorter than the interval. A comment-stripped structural
-  pin (`TraktSyncBootWiringTest`) keeps `start.php` delegating to the gate, since `start.php`
-  itself runs outside CI.
-
-- **DLNA Browse now advertises a stream URL that actually resolves, and a `protocolInfo` that
-  matches the bytes (S53).** `<res>` was built by `LibraryBridge::getStreamUrl()` →
-  `HlsStreamer`, which emitted `{hls.base_url}/hls/{mediaItemId}/playlist.m3u8`. That URL is not
-  merely "not found": measured against the composed route table it **does** match the registered
-  `/hls/{job_id}/{file}` route — it is *mis*routed. It passes a media-item id where a transcode
-  **job** id belongs, names a playlist file that does not exist, sits behind
-  `SignedUrlMiddleware` (which a renderer, having no credentials concept at all, can never
-  satisfy), and defaults to a `localhost` a TV resolves to itself. Every DLNA item was therefore
-  browsable and unplayable.
-
-  `<res>` now points at `DlnaRoutes::STREAM_PATTERN` — the authless, allowlist-gated,
-  Range-serving `/dlna/stream/{id}` route S52 shipped, whose `DlnaRoutes::stream()` builder had
-  had **zero callers in `src/`** until now. `DlnaResUrlIsRoutableTest` proves it end to end the
-  way a renderer does: it reads the URL out of a real Browse response, resolves its path against
-  the **production** route table (exact pattern equality — a substring test cannot tell a sibling
-  wildcard from the real route), then feeds the same URL back through `Application::dispatch()`
-  from an allowlisted peer and requires the file's bytes, under the exact MIME the same `<res>`
-  advertised.
-
-- **`protocolInfo` no longer claims an H.264 profile for every video (S53).**
-  `ContentDirectory::getProtocolInfo()` asserted `DLNA.ORG_PN=AVC_MP4_MP_HD` for anything typed
-  `video`/`movie` — a `.mkv`, an `.avi`, an MPEG-2 `.ts` alike. A renderer that trusts a
-  `DLNA.ORG_PN` starts a decoder for that exact profile and fails mid-stream. A profile is now
-  claimed only where the container settles the question, and the MIME is resolved through
-  `DlnaMimeTypes` by the same decisions, in the same order, that `DlnaStreamController` uses to
-  pick the served `Content-Type` — including the direct-play gate, so a `.iso` typed `movie` is
-  no longer announced `video/mp4` and then answered `415`. `DLNA.ORG_OP=01;DLNA.ORG_CI=0` are
-  now advertised, and are facts about that route: byte-seek yes, time-seek no, no transcode.
-
-- **The DLNA type table is exhaustive over the 13-member `media_items.type` ENUM (S53).**
-  `episode`, `track` and `audiobook` — the types the TV, music and audiobook scanners actually
-  write — all fell to a `default` arm, and a dead `'image'` arm pretended to cover stills (the
-  ENUM member is `photo`). `DlnaMimeTypes::TYPE_FALLBACK_MIME` now carries one entry per member,
-  keyed off `MediaItemType::ALL`, and `DlnaTypeCoverageTest` reddens if a 14th member is ever
-  added without a DLNA answer.
-
-- **🚨 A DLNA Browse response no longer leaks absolute filesystem paths (S53).**
-  `ContentDirectory::addItemMetadata()` ended in a no-`LibraryBridge` fallback that emitted
-  `$item['path']` — the media file's absolute on-disk path — as the `<res>` value. A CDS Browse
-  carries no authentication (the only gate is `DlnaAllowlistMiddleware`'s IP allowlist), so that
-  disclosed the server's directory layout to anything on the LAN, and it was not even playable.
-  The arm is deleted: a bridge-less ContentDirectory serves stub data and has nothing streamable
-  to point at, so it now correctly emits no `<res>` at all.
-
-- **`dlna.advertise_host` is honoured by the SSDP `LOCATION` header (S53).** `start.php`
-  constructs `new SsdpAdvertiser(null, …)`, so `getIpAddress()` ignored the setting entirely and
-  always auto-detected, while the device description **did** honour it. The two agreed only by
-  coincidence under the shipped default of `''`; the moment an operator set the key — exactly
-  what `config/dlna.php` tells them to do on a multi-homed or Docker host — a control point
-  fetched the description from one host and every URL inside it named another. The setting is
-  now read in one place, `Phlix\Dlna\DlnaAdvertisedHost`, by all three of the `LOCATION` header,
-  the description's service URLs and the `<res>` stream URL.
-
-- **Relayed browse can render posters and avatars again (S238).** `GET /api/v1/artwork/{id}`
-  and `GET /api/v1/users/{id}/avatar` were private pre-router methods on `HttpHandler` and
-  appear in **no** route table. `Hub\RelayRequestDispatcher` consults only the two route
-  tables, so measured through the real composed container (345 `Application` routes + 47
-  `WebPortalRouter` routes) both paths answered **404** over the hub tunnel and a relayed
-  inline-browse could show **no images at all**.
-
-  The gate here is **not** the one S164 found for `/media/{id}/stream`. Both of these paths
-  do begin with `/api/`, so the `WebPortalRouter` second-chance fallback fires for them — and
-  404s as well, because the route is absent from both tables. So these two have exactly **one**
-  gate (missing registration) where `/media/{id}/stream` has two. The `/api/v1/media/1` control
-  answers **401** through that same fallback, which is what makes the 404s mean "no such route"
-  rather than "auth rejected before routing".
-
-  Both endpoints now live in the transport-neutral `Server\Http\FastPath\PreRouterFastPaths`,
-  consulted at the same pipeline position by **both** entry points: `HttpHandler::__invoke()`
-  (after auth, before the router) and `RelayRequestDispatcher::dispatch()` (after the DLNA hard
-  deny, before the router). One implementation, so the two transports cannot drift. Bytes still
-  stream lazily on both: `Response::toWorkermanResponse()` hands the file to Workerman's
-  event-loop `withFile()`, and `RelayConsumer::streamFileChunks()` chunks it over the tunnel.
-
-  **Auth is unchanged and was proved on both sides separately:** each endpoint still authorises
-  inline on a resolved session **or** a valid signed URL, before anything is stat'd or streamed.
-  An anonymous relayed request with no signature is still **401** on both paths, and a tampered
-  signature is still refused.
-
-  `/media/{id}/stream`, the third pre-router fast path, is **deliberately left where it is**:
-  whether direct-play should be relayable at all is S164's open product question, and moving it
-  would decide it silently while starting to carry whole video files over the tunnel.
-
-- **Avatars now declare `image/jpeg` instead of `application/octet-stream` (found while doing
-  S238).** `HttpHandler::serveUserAvatar()` passed the bare extension `"jpg"` to a helper that
-  begins by running `pathinfo(..., PATHINFO_EXTENSION)` of its own; on a dot-less `"jpg"` that
-  yields `""`, so no map entry ever matched and **every** avatar was served as
-  `application/octet-stream`. Browsers rendered them anyway only because these fast-path
-  responses carry no `X-Content-Type-Options: nosniff` — a guarantee that need not survive an
-  intermediary such as the relay this change makes the endpoint reachable through. `AvatarStorage`
-  re-encodes every upload to JPEG and `path()` only ever returns `<userId>.jpg`, so the type is
-  a constant.
-
-- **Reconciled the four version sources and repaired `scripts/release.sh` (S74 follow-up).**
-  `c17bb9ec` ("Release v1.2.3", 2026-07-12) bumped `k8s/helm/phlix/Chart.yaml` to 1.2.3 and
-  pushed the annotated tag `v1.2.3`, but never touched `Phlix\Common\Version::STRING`, which
-  stayed at 1.2.2 — so for three weeks the Helm chart, the git tag and the version the running
-  server reported over its own API disagreed, silently. `Version::STRING` and the root `VERSION`
-  marker are now **1.2.3**, matching the published tag and the chart.
-
-  `src/Common/Version.php::STRING` is now documented and enforced as the single authoritative
-  source. `scripts/release.sh` was rewritten to read it and bump **every** mirror in one commit
-  (`Version.php`, `VERSION`, `Chart.yaml` `version:` + `appVersion:`); it refuses to release from
-  a tree whose sources disagree, and it never writes a `composer.json` `version` field — that
-  field makes `composer validate --strict` (the `composer-validate` CI job) exit non-zero, which
-  is why `f5375f7a` deleted it.
-
-  The old script had been broken since that same `f5375f7a`: it read the version from the
-  composer key that had just been deleted, so it computed the empty string and produced
-  `New version: ..1`, wrote `version: ..1` into `Chart.yaml`, committed it, and then aborted on
-  `fatal: 'v..1' is not a valid tag name` — after the commit. It also parsed `--dry-run` only in
-  argument position 2, ran relative `sed`s against the caller's working directory, and swept any
-  already-staged file into the release commit. All four are fixed.
-
-  New pins: `tests/Unit/Server/Updates/VersionSourcesAgreeTest.php` (every source agrees;
-  composer.json declares no version field; the script's managed-file list matches) and
-  `tests/Unit/Scripts/ReleaseScriptTest.php` (runs the script for real in a throwaway git
-  sandbox). `RELEASE_PROCESS.md` no longer instructs releasers to hand-edit `composer.json`.
-
-### Added
-
-- **S219 — the DLNA admin controller's production DI wiring is now pinned (test-only).**
-  `AdminDlnaServerController::setSettingsRepository()` / `::setRestartController()` have exactly
-  two production call sites, `Application::loadDlnaAdminRoutes()` at `Application.php:1089` and
-  `:1102`, and **every existing test wired the controller by hand.** Replacing the first call site
-  with a no-op left `DlnaAdminRoutesTest` + `tests/Unit/Server/Http/Controllers/Dlna` +
-  `tests/Unit/Dlna` at `OK (310 tests, 929 assertions)`. In production that same no-op makes every
-  DLNA start/stop answer `503 "DLNA settings store is unavailable…"`, because `applyEnabled()`
-  short-circuits on `$this->settings === null` before anything else — the admin toggle would just
-  stop working, silently.
-
-  New `tests/Unit/Server/Core/ApplicationDlnaAdminWiringGuardTest.php` (6 tests) never constructs
-  the wired controller. Following the S239 precedent, it reflects the `Router` a real `Application`
-  composed from `ContainerFactory::defaultProviders()` (only the MySQL `Connection` doubled) and
-  pulls the controller **back out of the route table**, which is where `loadDlnaAdminRoutes()` put
-  it. Those three routes bind an already-constructed instance, not a class-string, which is exactly
-  why the wiring has to be read off the registered object.
-
-  It pins: both collaborators present on the container-composed instance; all three DLNA admin
-  routes sharing that one instance (a per-route instance would leave two unwired); and the
-  production CONSEQUENCE — `stop()` on the composed controller answers **409** ("already disabled",
-  since `dlna.cds_enabled` ships false), not the unwired **503**. Because 409 and 503 are both
-  refusals, a hand-built unwired controller sits beside it as the CONTROL, answering 503 with the
-  unwired message — which is also the floor proving those fields genuinely can be null. The S239
-  300-route anti-vacuity floor is carried over so a hollowed loader or a hand-rolled container
-  (53 routes vs 345) fails loudly instead of passing vacuously.
-
-- **S74 — the server can now tell an operator that a newer phlix-server exists.** New
-  `Phlix\Server\Updates\` (`CoreUpdateCheckService`, `CoreUpdateCheckWorker`,
-  `CoreUpdateStatus`, `VersionMarkerFetcherInterface`, `AsyncVersionMarkerFetcher`), a new
-  repo-root `VERSION` marker, `config/updates.php`, and two admin endpoints:
-  `GET /api/v1/admin/updates/status` and `PUT /api/v1/admin/updates/settings`
-  (body `{"checkEnabled": bool}`), both inside the `AdminMiddleware`-gated group and both
-  carrying their own in-handler admin gate.
-
-  **No apply action, deliberately.** The status payload carries `updateCommand`, a
-  copy-to-clipboard `curl … | sudo bash -s -- --update -y` one-liner. The HTTP handler
-  never invokes git/composer/systemctl, and `testThereIsNoInlineApplyRoute` pins that
-  closed.
-
-  **The fetch is async and fork-free.** The step text prescribed
-  `PluginCatalogService::defaultFetcher()`; that shape forks on
-  `WorkerContext::inCoroutine()` and PHPUnit is never in a coroutine (`getCid()` is always
-  `-1`), so the arm production takes would have been structurally untestable — the S170
-  defect class. `AsyncVersionMarkerFetcher` uses `workerman/http-client` in **callback
-  mode** with BOTH `success` and `error` supplied, which keeps `Client::request()` out of
-  its coroutine-suspending branch (vendor `Client.php:78`) entirely. Nothing blocks the
-  worker and there is no untestable arm.
-
-  **The worker has two independent arms**, armed from
-  `Application::startBackgroundTimers()` on the count=1 `phlix-background-timers` worker:
-  a **one-shot boot catch-up** 300 s after start, plus the **persistent daily poll**. A
-  bare `Timer::add(86400, …)` fires only after 24 h of uninterrupted uptime and every
-  restart resets the countdown — the identical defect already shipped twice here (empty
-  `backups`, `PluginAutoUpdateWorker` never running). Both arms are pinned by separate
-  tests that FIRE the scheduled callbacks rather than reading intervals.
-
-  ⚠ **`VERSION` is a second source of truth for the version and must be bumped in lockstep
-  with `Phlix\Common\Version::STRING`.** `tests/Unit/Server/Updates/VersionMarkerFileTest.php`
-  makes drift a red test: behind the constant and no release ever announces itself; ahead
-  of it and every install nags about a release that was never cut.
-
-- **S131 — one predicate for "did this write anything", and a measured contract to go with
-  it.** New `Phlix\Common\Database\WriteResult::wroteNothing()`
-  (`src/Common/Database/WriteResult.php`) promotes the predicate S96 added privately as
-  `MusicLibraryScanner::statementWroteNothing()`, which now delegates to it. **Nothing was
-  broken:** there are zero falsy tests on an insert result anywhere in the repo, so this
-  closes an unguarded contract rather than a live defect.
-
-  **The contract, read out of `vendor/workerman/mysql/src/Connection.php::query()`
-  (`:1854-1869`) rather than inferred.** The client dispatches on the first
-  *space-delimited* token of the trimmed SQL: `select`/`show` → an array,
-  `update`/`delete`/`replace` → an `int` `rowCount()`, `insert` → `lastInsertId()` as a
-  **string** when rows were affected and **`null`** when none were, and anything it does
-  not recognise → `null`. A real error never returns at all — `execute()` (`:1742-1786`)
-  rethrows. Three consequences are now documented at the helper and pinned in
-  `tests/Unit/Common/Database/WriteResultTest.php`: (1) `false` is a value this client
-  never produces, so the `=== false` shape at the six unguarded sites was simultaneously
-  unreachable and blind to `null`; (2) 🔴 a SUCCESSFUL insert into a `CHAR(36)`-PK table
-  returns the string `'0'`, which is FALSY in PHP, so `if (!$result)` reads a success as a
-  failure; (3) the keyword match is whitespace-sensitive, so reformatting SQL into a
-  heredoc can move a site onto the `null` arm without changing a semantic.
-
-  **Applied to five of the six named sites, and deliberately NOT to the sixth.**
-  `DbOidcStateStore`, `DbOAuth2StateStore`, `DbTraktOAuthStateStore`,
-  `DbLastfmOAuthStateStore` (insert guards, plus their four `$deleteResult === false`
-  guards) and `DbLoginRateLimitStore` now route through the helper.
-  `StreamSessionService::updateStreamLimit()` does not: its
-  `INSERT … ON DUPLICATE KEY UPDATE` returns `null` when the values are already current
-  (measured against real MySQL 8) and the falsy string `'0'` when a row really is written
-  — and **both are success**, so inverting the helper into that return value would report
-  a failed update for an idempotent PUT. The site returns `true` (which is exactly what
-  `$result !== false` always evaluated to) with the reasoning stated in place, and both
-  shapes are pinned so the tempting "completion" reddens.
-
-  **Two corrections to the inventory.** It was quoted as 11 sites; re-derived by walking
-  every `->query()` whose verb is `INSERT`/`REPLACE` — 85 calls in `src/`, of which 74
-  discard the result outright — it is **12**: `ScanJobRepository::startRunningIfIdle()`
-  landed with S151 after the count was taken, and was already correct. And
-  `StreamSessionService::cleanupStaleStreams()` is a DELETE, not an insert: it returned a
-  constant `1` behind a `!== false` that could never be false, contradicting its own
-  `@return int The number of stale streams removed`. It now returns the `rowCount()`.
-
-  **The doubles were fixed too, because a fix that changes what a client returns must
-  change the double that impersonates it.** S96 proved that: deleting the `null` arm left
-  the entire scanner suite byte-identically green because no double could produce `null`.
-  `MusicLibraryScannerTest`'s two remaining callback doubles returned `int 1` for an
-  INSERT — a value the client cannot produce — and now return the measured shapes (`'0'`
-  for `media_items`, a string id elsewhere). Proof: removing the `null` arm is **15 RED**
-  across six files, removing the `false` arm is **12 RED**, and `return !$result;` — the
-  `'0'` trap — is **72 RED**.
-
-- **S180 — the assertion-escape PROBER now runs in CI, behind a tracked baseline.** S120
-  shipped two halves and wired only one. The runtime guard (the `test` job's "S120
-  assertion-escape guard" step) sees an escape only when the assertion actually fails and
-  only when the failure went through `Assert::assertThat()`. The static half —
-  `scripts/assertion-escape-audit.php --probe`, which plants a named tripwire before the
-  first assertion of every assertion-bearing closure and decides by EXECUTION whether it
-  can fail its test — was left out because one Integration site is a known flake, and a
-  gate that reds intermittently gets deleted. New job `assertion-escape-probe` in
-  `.github/workflows/phpunit.yml` runs it. **The two halves catch different things and the
-  static one caught the case that actually occurred:** the live escape found on 2026-08-02
-  (`SmartPlaylistRefreshSubscriberTest`) probed `DEGRADED` while the runtime guard reported
-  exit 0, silent.
-
-  **Census, re-measured rather than quoted** (dev box, `origin/master` @ `94881d73`). The
-  numbers in circulation disagreed and both were stale as a description of master: the
-  planning text said 23/19/4, this file's S120 entry said 20/17/3 — correct for the
-  20-closure tree S120 shipped against, which is why it carries "re-run the probe rather
-  than quoting a remembered count". Actual, with the exclusion applied:
-  `22 site(s) probed — 19 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED, 1 EXCLUDED`, exit 0,
-  **identical with a live mysql:8.0.46 and with no database at all** — every probed site
-  uses a mocked connection. Full 23-site figure before the exclusion: 19 GATES + 4
-  NOT-REACHED without a DB, 20 GATES + 3 NOT-REACHED with one.
-
-  **The undecided count is now a checked fact, not folklore.**
-  `tests/Support/AssertionEscape/probe-baseline.json` enumerates the three `NOT-REACHED`
-  sites with a reason each — all three are a `$this->fail(…)` guard on a path that must not
-  be taken, so a probe *cannot* decide them; two are S120 census sites 10 and 14.
-  `ProbeBaseline::reconcile()` reds the gate in **both** directions: an observed
-  `NOT-REACHED` that is not listed, AND a listed entry that has started gating or has
-  disappeared. A list that only ever grows is how a gate becomes a permanent hole.
-
-  **The flake is excluded with its measurement, not on trust.**
-  `PooledConnectionConcurrencyTest::runChurn` probes non-deterministically — 19 `--only`
-  runs against a live MySQL gave 18 `GATES` and 1 `NOT-REACHED`, and the same file with no
-  tripwire at all failed 3 of 20 bare runs with `reader: pool exhausted: no idle connection
-  available after 10 s`. It flips between `GATES` and `NOT-REACHED`, which no single
-  baseline state can express, so *either* choice reds the gate over S137's pool defect
-  rather than over an assertion. Decide it by hand with
-  `--probe --only=<n>`, which deliberately ignores the exclusion list.
-
-  ⚠ **ADDITIVE, NOT A REPLACEMENT — a green here is not whole-suite safety.** The
-  enumeration is LEXICAL: 186 closures reach an assertion only through a HELPER and carry
-  no `assert*` token, so this job sees none of them. The runtime guard covers those. Both
-  the script header and the job's own output say so, because the failure mode to avoid is
-  someone deleting one half on the strength of the other being green.
-
-### Fixed
-
-- **S120 AC audit — the assertion-escape guard was one deletable line from silent, and
-  the defect class had already recurred.** Auditing S120 by planting escapes rather than
-  by reading the guard turned up three things a green CI run could not have shown.
-  - **A live escape that shipped after S120.**
-    `SmartPlaylistRefreshSubscriberTest::test_drain_tick_refreshes_the_linked_smart_collections`
-    asserted inside a `willReturnCallback` reached through
-    `SmartPlaylistRefreshSubscriber::drainTick()`, which wraps `refreshLibrary()` in
-    `catch (Throwable)` so a failed refresh cannot kill the worker's timer. Breaking the
-    production line the test pinned (`SmartPlaylistRepository::findByLibraryId()`'s bound
-    parameter) turned the test red on `refreshSmartCollection … called 0 times` — naming
-    neither the query nor the binding. Fixed with S102's remedy (the callback RECORDS,
-    the assertions run OUTSIDE it); the same mutation now fails on *"the smart-playlist
-    lookup must be scoped to the drained library"* with the actual diff.
-  - **Deleting one line from `phpunit.xml` disabled the whole guard, silently.** With the
-    `<extensions><bootstrap>` registration removed, a run containing twelve deliberately
-    planted escapes — eight of which the guard reported a moment earlier — wrote no
-    report and `php scripts/assertion-escape-check.php` printed "no escapes reported" and
-    exited 0. Deleting the workflow step was equally silent. New
-    `tests/Unit/Support/AssertionEscapeGuardWiringTest.php` closes both, plus the check
-    script's two exit paths; each of its assertions was verified by mutating the line it
-    protects (registration deleted, registration commented out, CI step removed,
-    `continue-on-error` added, `if: always()` dropped, check step moved ahead of PHPUnit,
-    `exit(1)` → `exit(0)`, script deleted — eight mutants, eight named failures).
-  - **A fourth blind spot, previously undocumented.** `FAILED_OUTCOME_BUDGET = 1` assumes
-    a failing test failed *through* an `assertThat()` assertion. When the visible failure
-    is `Assert::fail()` or a mock parameter/invocation rule — neither of which emits an
-    event — the budget goes unspent and absorbs one genuinely swallowed assertion. That
-    is exactly how the escape above stayed invisible. Documented rather than closed:
-    separating the two would need message correlation between `AssertionFailed` and
-    `Failed::throwable()`, whose texts differ by construction, and a heuristic that
-    mis-fires reports healthy tests as vacuous. `scripts/assertion-escape-audit.php
-    --probe` decides the same site correctly (`DEGRADED`, exit 1) with no heuristic.
-
-### Changed
-
 - **S120 doc corrections, each contradicted by execution.**
   - `failOnPhpunitWarning` **defaults to `true`** (`vendor/phpunit/phpunit/phpunit.xsd:184`;
     `.../TextUI/Configuration/Xml/Loader.php:833`), so "`phpunit.xml` does not set it,
@@ -5398,236 +6436,6 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
     `return` inside a `finally` discards the exception with no `catch` at all. All four
     shapes were planted and confirmed swallowed, so a grep for the two catch types is not
     a sound search for this defect.
-
-### Added
-
-- **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh
-  install and `--update`.** Implements the applicable parts of the
-  [kernel-optimization appendix](https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html):
-  - `LimitNOFILE=1048576` in the systemd unit. This is the one that mattered:
-    systemd does **not** read `/etc/security/limits.conf`, so the daemon was
-    running at systemd's soft default of **1024** open files — one fd per live
-    connection plus open HLS segment files, reachable under load and surfacing
-    as "Too many open files" with clients dropped mid-stream. Retrofitted into
-    existing units by `--update`, only when the directive is absent.
-  - `/etc/sysctl.d/99-phlix-net.conf` — `net.core.somaxconn=65535` (was 4096,
-    and it silently clamps every listen backlog), `tcp_max_syn_backlog=262144`,
-    `netdev_max_backlog=30000`, and `ip_local_port_range=16384 65535` (a
-    *widening* — 49,152 ephemeral ports vs the 28,232 of the 32768-60999
-    default; the floor stops at 16384 rather than the page's 10240 so the
-    registered-port band, which includes every port Phlix listens on, stays
-    outside the ephemeral range).
-  - `/etc/security/limits.d/99-phlix.conf` — nofile soft 65536 / hard 1048576
-    for `root` and the service user, covering login shells and hand-run CLI
-    scripts (systemd is unaffected by this file; see `LimitNOFILE` above).
-
-  Four settings from that page are deliberately **not** applied, each with the
-  reason recorded in the generated sysctl file: `fs.file-max` and
-  `tcp_max_tw_buckets` would *lower* modern kernel defaults,
-  `tcp_tw_recycle` was removed from Linux in 4.12, and `nf_conntrack_max` is
-  only meaningful behind a stateful firewall. `--uninstall` removes both
-  drop-ins.
-
-### Fixed
-
-- **Assertions inside a callback can no longer pass a test while asserting `false`**
-  (S120). PHPUnit's `ExpectationFailedException` extends `AssertionFailedError` extends
-  `PHPUnit\Framework\Exception` extends `RuntimeException`, so any assertion that runs
-  inside a callback which is invoked under `try { … } catch (\Throwable)` or
-  `catch (\RuntimeException)` is caught by the code doing the catching and never reaches
-  PHPUnit.
-
-  A 24-site census over the 699 `.php` files then under `tests/` — each site decided by
-  planting a tripwire and reading the run, not by grep — found **2 fully vacuous** tests
-  (`TranscodeManagerTest::testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows`,
-  `::testInFlightCounterReleasedWhenLaunchThrowsBeforePolling`: green with
-  `assertTrue(false)` planted, and their own `assertNotNull($thrown, …)` was **satisfied
-  by the swallowed failure** — verbatim, the two messages were
-  `'the exception propagates, it is not swallowed'` and `'the RuntimeException must
-  propagate, not be swallowed'`, at `tests/Unit/Media/Transcoding/TranscodeManagerTest.php:3716`
-  and `:4868` before this change) and **2 swallowed-but-red** ones whose diagnostics were
-  degraded (`LibraryScanCommandTest::testProgressTicksStreamOntoTheJobRow`, swallowed by
-  `LibraryScanCommand.php:246`; `StatsCollectorTest::testRecordStorageSnapshotsSumsEveryTypeThatSharesABucket`).
-  All four now follow the established remedy — **the callback RECORDS, the assertions run
-  OUTSIDE it** — and the two `TranscodeManagerTest` tests gained a
-  `catch (AssertionFailedError) { throw $e; }` arm ahead of their `catch (\RuntimeException)`
-  so a future in-callback assertion cannot be swallowed either.
-
-  The other **20** sites were left untouched: 18 whose tripwire executed and took the
-  test red with its own message, and 2 whose tripwire never executed — **undecided by
-  the probe, not verified**. Every one of these numbers is MEASURED by running
-  `php scripts/assertion-escape-audit.php --probe`, and one row is
-  environment-dependent: the Integration site
-  (`PooledConnectionConcurrencyTest.php:392`, also a known pre-existing flake under
-  coroutine churn) self-skips without a live database, so it reports `NOT-REACHED` on a
-  box with no DB and has been observed as `GATES` on one with. A run on a DB-less box
-  therefore prints `20 site(s) probed — 17 GATES, 3 NOT-REACHED, 0 VACUOUS, 0 DEGRADED`.
-  Re-run the probe rather than quoting a remembered count.
-
-- **A fresh install now actually HAS the `playback_state` progress-upsert unique key**
-  (S156). Migration `090_playback_state_session_media_unique.sql` is NAMED for
-  `uq_playback_state_session_media (session_id, media_item_id)` but carries no executable
-  statement at all — it is a pure comment block that reserves the number and defers the
-  key to `migrations/cleanup_090.php`. That script is MANUAL: no auto-run path — not
-  `scripts/run-migrations.php`, not `bin/phlix migrate`, not `scripts/install.sh`, not the
-  Docker entrypoint — has ever called it. A database built by the migration chain alone
-  therefore carried **no `(session_id, media_item_id)` constraint at all**. New
-  `migrations/097_playback_state_unique_key.sql` adds it as part of the chain, sorted
-  after `001_initial_schema.sql`, which creates the table.
-
-  🔴 **This is the recorded root cause of "a finished episode never leaves Continue
-  Watching."** `PlaybackController::reportProgress()` and
-  `StreamManager::persistStreamState()` persist progress with an
-  `INSERT … ON DUPLICATE KEY UPDATE` whose intended conflict target is that pair;
-  `playback_state` otherwise has only the `id` PRIMARY KEY — a fresh random UUID on every
-  call — so `ON DUPLICATE KEY` could never fire and every ~15 s tick INSERTed a brand-new
-  row. The finish signal wrote a new row instead of updating the in-progress one, so the
-  stale `position_ticks < duration * 0.95` row survived and kept surfacing; Next Up and
-  Most Watched could not be built on a "current" row per pair that was not single-valued;
-  and `playback_state` grew without bound. Production had the key only because somebody
-  ran the finalizer by hand once — which is also why every measurement taken against
-  production looked correct and proved nothing about a fresh install.
-
-  The migration is safe on a **dirty** database, which is why 090 refused to emit a bare
-  ALTER (1062 on any table that still holds duplicates, retried and failing on every
-  deploy): it checks `information_schema` first (already present → a true no-op, no 1061
-  note, no table rebuild, and the duplicate scan is skipped because the constraint proves
-  there are none), and if duplicates remain it alters nothing, touches no row, and fails
-  with exactly one error whose text carries the remedy — `Unknown column 'playback_state
-  duplicates: run php migrations/cleanup_090.php' in 'field list'`. The rest of the chain
-  still runs, and the file is left unrecorded so it retries on the next deploy once the
-  duplicates have been merged. 090 and `cleanup_090.php` get comment-only edits, which are
-  checksum-neutral: `MigrationRunner::checksum()` strips full-line comments, so an
-  already-migrated install sees no ledger divergence.
-
-  `migrations/cleanup_090.php` keeps ownership of **de-duplication only**. Choosing which
-  duplicate survives decides where a user resumes playback, so that rule stays in one
-  place — `PlaybackStateDeduper::findKeeperId()`: greatest `updated_at`, ties broken by
-  greatest `id`, which is deliberately the same ordering
-  `PlaybackController::getContinueWatching()` already picks its row with, so merging is
-  behaviour-preserving with respect to the read path. Its `addUniqueKey()` step stays in
-  place, idempotent, for operators part-way through an upgrade.
-
-  The read-path `ROW_NUMBER() OVER (PARTITION BY ps.media_item_id ORDER BY ps.updated_at
-  DESC, ps.id DESC)` dedup in `getContinueWatching()` is still required after this
-  migration — one user can have several *sessions* watching the same item, and this key
-  only constrains a single session — but it is no longer being asked to paper over a
-  per-session write bug.
-
-  ⚠ **A test was green while destroying the constraint.**
-  `PlaybackStateDeduperIntegrationTest` dropped the key in `setUp()` (it has to, to seed
-  hundreds of duplicate groups) and then dropped it *again* in `tearDown()`, so against a
-  097-built schema it stripped a real constraint off the shared test database and still
-  reported `OK`. It now records whether the key pre-existed and restores it — at the very
-  end of `purgeFixtures()`, after the fixture rows are deleted, because re-adding before
-  the deletes would fail 1062 on the fixture's own duplicates and leave the database
-  unconstrained anyway.
-
-- **A fresh install now actually HAS the path-dedupe unique index** (S152). Migration
-  072 added the `path_hash` generated column but deferred
-  `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` to the manual
-  `migrations/cleanup_072.php`, and migration 087 then DROPped the index outright. No
-  auto-run path — not `scripts/run-migrations.php`, not `bin/phlix migrate`, not
-  `scripts/install.sh`, not the Docker entrypoint — ever re-created it, so a database
-  built by the migration chain alone carried **no duplicate-path constraint at all**.
-  New `migrations/096_path_hash_unique_index.sql` adds it as part of the chain, sorted
-  after 087 so it cannot fight the DROP.
-
-  🔴 **The data-integrity half is the serious one.** That unique key is what makes a
-  duplicate media row impossible and what `ItemRepository::upsertByPath()` catches 1062
-  on to win a concurrent-insert race. Production was protected only because somebody
-  ran the finalizer by hand once — which is also why every measurement taken against
-  production looked correct and proved nothing about a fresh install. The perf half:
-  without the index the S151 track lookup degrades from `type=const`/`rows=1` back to
-  `type=ref`/`key_len=144` — identical to pre-S151. (Measured on a clean
-  migrations-only MySQL 8.0 database, 400 track rows: `ref`/`idx_library`/`rows=400`
-  before, `const`/`key_len=305`/`rows=1` after.)
-
-  The migration is safe on a **dirty** database, which is why 072/087 refused to do it:
-  it checks `information_schema` first (already present → a true no-op, no 1061 note, no
-  table rebuild), and if duplicates remain it alters nothing and fails with exactly one
-  error whose text carries the remedy — `Unknown column 'media_items duplicate paths:
-  run php migrations/cleanup_072.php' in 'field list'`. The rest of the chain still
-  runs, and the file is left unrecorded so it retries on the next deploy once the
-  duplicates have been merged.
-
-  `migrations/cleanup_072.php` keeps ownership of **de-duplication only** — the keeper
-  scoring plus twenty-table reference repointing that lives once in `PathDeduper` and is
-  shared with `media:dedupe-paths`. Its `ADD UNIQUE INDEX` stays in place, idempotent,
-  for operators part-way through an upgrade.
-
-  ⚠ **`playback_state` has the same defect and is NOT fixed here.**
-  `uq_playback_state_session_media (session_id, media_item_id)` is created *only* by the
-  manual `migrations/cleanup_090.php`; migration 090 carries no executable statement at
-  all. A fresh install therefore still lacks it, and every ~15 s progress tick inserts a
-  new row instead of updating.
-
-### Added
-
-- **A mechanical guard for the swallowed-assertion class** (S120), in two independent
-  parts:
-  - `tests/Support/AssertionEscape/` — a PHPUnit extension (registered in `phpunit.xml`)
-    that reports any test where an assertion failure did not decide the outcome. The
-    **measurement** is exact rather than heuristic: `Assert::assertThat()` emits
-    `Test\AssertionFailed` from a `finally` **before** the exception propagates, so the
-    event fires even when the exception is subsequently swallowed. Its limits are stated
-    rather than papered over, in `EscapeCollector`'s docblock:
-    - **Blind spots** — three paths throw an assertion failure without going through
-      `assertThat()` and so emit no event: `Assert::fail()`; mock parameter/invocation
-      rules (`Parameters.php:117` → `Constraint.php:106`); and
-      `markTestSkipped()`/`markTestIncomplete()`, whose exceptions are also
-      `RuntimeException` subclasses. Both of the latter two are currently harmless —
-      mock rules are re-verified at `TestCase.php:688`, after `runTest()` returns and
-      thus outside any swallowing callback, and a token scan finds 0 `markTest*` calls
-      inside closures — but they are not covered.
-    - **False positives** — a test that *deliberately* catches its own assertion failure
-      (the usual way to test an assertion helper) is reported as a violation and fails
-      CI. There is no opt-out, deliberately: an escape hatch would be reached for at
-      precisely the moment a real escape is being looked at. The docblock records the
-      non-tripping remedies instead.
-  - `scripts/assertion-escape-audit.php` — enumerates every assertion-bearing **closure**
-    under `tests/`, probing its **first** assertion (the unit is the closure, because
-    being swallowed is a property of the call site; on this tree that is 20 of the 51
-    assert-like calls inside closures), and with `--probe` plants a tripwire and
-    classifies each site `GATES` / `VACUOUS` / `DEGRADED` / `NOT-REACHED`. Covers
-    `Assert::fail()` and sites that are green today. Runs PHPUnit with `--no-extensions`
-    so it stays independent of the runtime guard.
-
-  `scripts/assertion-escape-check.php` turns the extension's report into a non-zero exit
-  and is wired into `.github/workflows/phpunit.yml` as an additive `if: always()` step.
-  A static rule was considered and rejected on evidence: deciding whether an assertion in
-  a callback can fail requires knowing which production frame invokes that callback — a
-  binding PHPUnit's mock builder makes at runtime — and the one purely-lexical
-  approximation available ("assertion-bearing closure in a test method that also has its
-  own `try`/`catch (\Throwable)`") produces a false positive on
-  `PooledConnectionConcurrencyTest`, where the caught message is deliberately re-surfaced
-  by `assertSame([], $errors, …)`.
-
-- **A CLI scan is now VISIBLE in the admin UI, and can no longer strand a
-  permanently-`running` job row** (S150/S151). `php bin/phlix library:scan <id>`
-  previously wrote *nothing* to `library_scan_jobs`, so the admin Libraries page kept
-  showing whatever the last web-enqueued job had left behind — measured on production
-  during the S145 healing rescan as a red `failed` badge sitting over a healthy scan
-  that had been repairing rows for 45 minutes. The command now opens its own `running`
-  row up front, streams `items_found` / `items_updated` / `current_path` through the
-  same throttled sink the background worker uses, and stamps `completed`/`failed` on
-  every exit path — including SIGTERM/SIGINT/SIGHUP and a fatal-error shutdown.
-
-  It also **refuses to start while the library already has a `queued`/`running` job**,
-  because two scanners over one library race on every per-file find-or-create and only
-  one of them can own the badge. The refusal is enforced *inside* the INSERT
-  (`INSERT … SELECT … WHERE NOT EXISTS`), not by a read-then-write pair, so two
-  invocations started in the same instant cannot both win. **`--force`** overrides it,
-  for the one case the check cannot distinguish: a row left `running` by a `kill -9` or
-  a power loss, which no in-process handler can ever clean up.
-
-  ⚠ **Two residuals, stated rather than glossed.** `SIGKILL` cannot be trapped by
-  anyone. And `LibraryScanWorker`'s startup reaper is unscoped and ageless, so a
-  `phlix-server` restart during a long CLI scan marks that row `failed` while the CLI
-  keeps running — which also makes the library look idle to the refusal check.
-  Bounding the reaper needs per-job worker ownership, i.e. a schema change.
-
-### Changed
 
 - **A healing `rescan` no longer rewrites every row it reads** (S148). S145 implemented
   the full-read mode by *not loading* the S122(a) skip index. That forced every file to
@@ -6309,8 +7117,6 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   envelope. Mutation-verified: deleting the registration turns all ten new tests red
   with 404, and moving the route outside the admin group turns both gate tests red.
 
-### Changed
-
 - **The OAuth2/OIDC `redirect_uri` is now always ABSOLUTE, and is derived only from a
   `Host` that matches `PHLIX_DOMAIN`** (updates.md #54 / S48). Both browser flows used
   to send a path-only `redirect_uri` (`/auth/oidc/callback`), which providers reject
@@ -6372,649 +7178,451 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   unchanged. The old values were simply wrong, so this is an improvement, but it is a
   visible change in the Browse response.
 
-### Fixed
+- **Bumped `detain/phlix-shared` to `^0.27.0`; the server-settings schema went 42 keys → 41.**
+  `transcoding.include_software_fallback` was deleted upstream as a **consumerless** key —
+  the same defect shape as `hwaccel.probe_timeout` in v0.26.0, and the reason
+  `SettingsDefaultResolvabilityTest` did not catch either: **resolvable ≠ consumed.** The
+  key resolved cleanly to `config/transcoding.php:44` and `HwAccelConfig::get()` copied it
+  into the merged hwaccel array, but nothing read the merged value. That array reaches
+  exactly two consumers, and neither reads this key: `FfmpegRunner::setConfig()`
+  (`Application.php:2971`, `TranscodeServicesProvider.php:149`), which reads precisely
+  `tone_mapping_mode` / `prefer_hdr_output` / `preferred_accelerator` / `enabled` /
+  `prefer_hardware` and whose `getConfig()` accessor has no caller in `src/`; and
+  `HwaccelRegistry`, whose software-fallback branch (`HwaccelRegistry.php:160,206`) reads
+  the **separate** `hwaccel.fallback_to_software` key out of `config/hwaccel_base.php`. So
+  the toggle was inert in both directions — turning it off never disabled software
+  fallback, turning it on never enabled anything.
 
-- **A `HEAD` refused by a global middleware short-circuit no longer receives the
-  refusal body (S295).** `Application::dispatch()` runs the global chain before
-  `Router::markHeadOnly()`, so the `AccessScheduleMiddleware` wrapper's short-circuit
-  reply used to return unflagged and `HttpHandler`'s matched-route branch shipped the
-  403 envelope as a body on a `HEAD` — the recoverable RFC 9110 §9.3.2 shape, but a
-  keep-alive desync for a header-only client. The reply is now flagged where the global
-  chain returns: the constructor's wrapper routes every global short-circuit through the
-  new `Application::flagHeadShortCircuitReply()` → `Response::asHeadReply()` on a `HEAD`
-  (a `GET` is returned untouched), so all three refusal branches (unprofiled user,
-  unresolvable profile, blocked schedule window) ship head-only with the real
-  `Content-Length`. Proved on a live Workerman worker beside a desyncing control
-  (`AccessScheduleHeadNoBodyWireTest` + `tests/Support/Browser/s295-head-body-server.php`).
-  The denominator is one global middleware — the registration count re-measured at 1 by
-  `ApplicationHeadOnlyBoundaryTest` (count-history line added); route-group middleware
-  was already inside the router's guarantee and no global CSRF middleware exists.
-  No migration (next-free stays 103).
+  Deleted rather than wired (plan §4 rule 10) because the working equivalent already
+  exists: `hwaccel.fallback_to_software` is genuinely consumed and is the key to expose if
+  a software-fallback toggle is wanted. The `config/transcoding.php` default and the
+  `HwAccelConfig::get()` merge line are **retained**, now carrying a "NOT AN ADMIN SETTING"
+  comment, so the merged array shape is unchanged for any caller reading it defensively —
+  mirroring exactly what v0.26.0 did for `probe_timeout`. The `assertCount` lock-in and its
+  dotted-key → internal-type map in `AdminSettingsControllerTest` were updated to 41 and
+  remain **deliberately hand-written**: deriving them from the vendored schema would make
+  the assertion tautological. Mutation-verified by re-adding the key to the hand-written
+  list and confirming the test goes red against the 41-key vendored schema.
 
-- **DLNA advertised far more children than it could deliver on EVERY root, and none
-  of them could be paged** (S147). `LibraryBridge::getLibraryChildCount()` counted
-  with the unbounded `ItemRepository::countAllByType()` while
-  `getLibraryItems()` listed with `getAllByType()`'s default `LIMIT 100`, and
-  `ContentDirectory::browseChildren()` then applied the renderer's `StartingIndex`
-  **in PHP to that already-truncated list** — so any index past the truncation
-  point returned an empty page while `TotalMatches` still advertised the whole
-  container. Measured read-only on production 2026-07-27: Video advertised
-  **10,718** movies and **26,389** episodes against pages of 100 (**107x** and
-  **264x**), and the Audio root — whose advertised count S97 had already clamped to
-  2,000 to stop it lying — left **2,656 of 4,656 artists unreachable by any
-  navigation**.
+- **Bumped `detain/phlix-shared` to `^0.25.0`; the server-settings schema went 53 keys → 40 → 43.**
+  The v0.24.0 re-vendor deleted every key that resolved to no config path and had no runtime
+  consumer — the `trakt.*` trio, the `subsystem.*`, `database.*` and `hls.*` families, the duplicated
+  `transcoding.*` tunables (the surviving equivalents live under `ffmpeg.*`, `server.hls.*` and
+  `process.*`), and the unimplemented `metadata.preferred_*` / `metadata.fanart_api_key` / `auth.*`
+  extras. Those keys rendered in the admin Settings page, accepted a `PUT`, and reported `null`
+  forever; they are now simply absent. The controller derives its allow-list from the schema, so no
+  server-side key list needed editing — but the `assertCount(53)` lock-in test and its explicit
+  dotted-key → internal-type map were updated to the real count, deliberately kept hand-written so an
+  unreviewed schema addition still fails loudly rather than being auto-derived into a no-op.
 
-  `StartingIndex` is now resolved in **SQL** on every branch:
-  `getLibraryItems()` takes an offset and spends it against the same per-type
-  counts the container advertises (so a page straddling the movie→series boundary
-  is contiguous); the `music_*` drill-downs and the `parent_id` drill-down
-  (`ItemRepository::findByParentPage()`) take one too; and `browseChildren()` no
-  longer slices — it asks for the requested window and reads `TotalMatches` from a
-  COUNT that shares the listing's predicate.
+  **Correction — the `trakt.*` trio should not have been in that sweep, and is restored in
+  v0.25.0 (see *Fixed* below).** Unlike the other deletions, those three keys always had a real
+  runtime consumer; only their *config default* was unreachable. Deleting them cost a genuine
+  admin capability, and the earlier suggestion here to re-add them as `scrobblers.trakt.*` was
+  wrong: that prefix does resolve, but renaming would orphan `trakt.*` rows already persisted in
+  `server_settings` on live installs.
+- **`transcoding.preferred_accelerator`'s "auto-detect" sentinel is now the empty string, not
+  `null`.** `config/transcoding.php` defaulted to `getenv('PREFERRED_ACCELERATOR') ?: null` against a
+  schema whose auto-detect enum member is `""`, so `GET /api/v1/admin/settings` returned `null`, the
+  SPA's `<select>` matched no option and rendered blank, and saving that blank value back failed the
+  new enum enforcement. The config default is now `''`. The consumer in `FfmpegRunner` was already
+  correct (`is_string($x) && $x !== ''`), so no transcoding behaviour changes. The schema's enum was
+  also corrected upstream for accuracy: `nvenc` was dropped (it is an FFmpeg *encoder*, not an
+  hwaccel name) and `v4l2` became `v4l2m2m`; `d3d11va` and `dxva2` were added. A new test asserts
+  every `enum`-constrained key's config default is one of its declared members, which covers this
+  whole class of drift rather than just the one key.
 
-  **S97's clamp is removed in the same change**, which is the half that makes this
-  a fix rather than a swap: a renderer told "2,000" stops at 2,000 however good the
-  paging underneath is, so the advertised count is the true unbounded total again
-  and `LibraryBridge::MAX_PAGE_ROWS` is a **page size**, not a ceiling.
+- **Legacy Smarty page UI retired — the `/app` Vue SPA is now the ONLY web UI.** All legacy
+  server-rendered (Smarty) portal page routes now issue a **302 redirect** to their `/app` equivalent
+  (dispatched in `public/index.php`), and the SPA shell is served for `/app` + `/app/*`. High-level
+  redirect map: `/` → `/app`; `/login` → `/app/login`; `/register` → `/app/signup`; `/library` → `/app`;
+  `/library/{id}` → `/app/library/{id}`; `/media/{id}` → `/app/media/{id}`; `/player/{id}` →
+  `/app/player/{id}`; `/search` → `/app/search`; `/settings` → `/app/settings`; `/admin` →
+  `/app/admin/dashboard`; `/admin/plugins` → `/app/admin/plugins`; the **Music** pages
+  (`/music`, `/music/album/*`, `/music/artists`, `/music/artist/*`, `/music/tracks`, `/music/player`)
+  → `/app/music/*`; **Books** (`/books`, `/books/{id}`, `/books/{id}/read`) → `/app/books/*`;
+  **Audiobooks** (`/audiobooks`, `/audiobooks/{id}`, `/audiobooks/{id}/read`) → `/app/audiobooks/*`;
+  and **Photos** (`/photo/albums`, `/photo/album/{id}`, `/photo/photo/{id}`, `/photo/slideshow`,
+  preserving the `library_id` query string) → `/app/photo/*`. The redirects stay auth-gated where the
+  legacy page was, so an unauthenticated browser is bounced to `/app/login` first.
 
-  Ordering across page boundaries is the other half. `getAllByType()` ordered by
-  `sort_title, name` and `findByParent()` by `name` — neither is unique, and with
-  ties MySQL arranges the tied rows differently per `LIMIT`+`OFFSET`. Measured on
-  MySQL 8.0.46 with 400 rows sharing one name, paged 50 at a time: **400 rows
-  returned, only 372 distinct** — 28 silently repeated, 28 never returned at all.
-  Both queries now end their `ORDER BY` on the `id` PRIMARY KEY, making the order
-  total; a real-MySQL test pages a whole container and asserts the concatenated
-  pages equal the unpaged listing row for row.
+- **Test-coverage hardening.** Added missing behavioral tests across SV-0.6 (TMDB collections UUID handling), SV-0.7 (marker/intro-detection worker supervision), SV-1.8 (CSRF Origin exact-match), SV-1.9 (ENOSPC guard), SV-4.8 (Router static-map fast path + DI string-handler resolution), and SV-4.12 (stale-job reaper glob), plus the SV-3.3 and SV-4.15 features above — closing "green-but-untested" gaps found during re-audit. No behavior change beyond the fixes listed above.
+- **Plugin catalog pinned to v2.1.8.** Bumped `OFFICIAL_PINNED_REF` (the tag of `detain/phlix-plugins` the admin **Plugins** catalog resolves against) to **v2.1.8**, shipping the trakt/musicbrainz/anilist PHP-8.5 `curl_close()` fixes to the catalog listing.
 
-  `SortCriteria` is honoured **globally** for any container that fits in one page
-  (`LibraryBridge::MAX_PAGE_ROWS`, 2,000): the whole container is fetched and sorted
-  before the window is taken, so the criteria decides *which* rows the page contains.
-  The first revision of this change sorted only the page it had already fetched,
-  which on a 20-child Video root with `RequestedCount 5` and `-dc:title` returned the
-  five alphabetically **lowest** titles reversed instead of the five highest — a
-  regression against the previous sort-then-slice behaviour, now pinned by a test.
-  Past 2,000 children the sort still applies within the returned page only; making it
-  global there needs the sort key in every listing's `ORDER BY` **and** a merge across
-  a category's types, and is deliberately left out rather than trading pageability
-  for it.
+- **The mDNS multicast join in `MdnsSocket` was a silent no-op; it now joins 224.0.0.251 with the
+  `MCAST_JOIN_GROUP` spelling and logs failure (S296).** The join used the BSD `IP_ADD_MEMBERSHIP`
+  spelling, a constant PHP 8.3 does not define (measured `defined()` === false), so the call fell
+  back to raw option 12 with `inet_pton($group)` (a 4-byte binary string) as optval;
+  `socket_set_option()` returned `TRUE` and joined NOTHING — zero multicast datagrams reached
+  mDNS/Bonjour discovery while every caller believed the join succeeded (a `TRUE` return is
+  exactly why it went unnoticed). The join now uses `MCAST_JOIN_GROUP` + array optval
+  (`['group' => '224.0.0.251', 'interface' => 0]`) — the exact spelling S51 shipped and measured
+  in `Dlna\SsdpAdvertiser` — extracted into `joinMulticastGroup()`, with failure now logged
+  (fail-loud: this hazard class is silent failure). The Swoole coroutine-runtime socket variance
+  is guarded: the parameter is deliberately untyped because `SWOOLE_HOOK_SOCKETS` hands
+  `socket_create()` back a `Swoole\Coroutine\Socket`, not a `\Socket`, and the call is wrapped in
+  `try/catch(\Throwable)` so the daemon can never TypeError/fatal on this path. Proven by
+  `tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php`, a three-arm experiment on real sockets:
+  (A) no join receives nothing (control); (B) the pre-fix spelling replayed verbatim returns
+  `TRUE` and receives NOTHING (failing control, measured on PHP 8.3.6); (C) the production join
+  method receives the datagram; both mutations (join line deleted, spelling regressed) redden the
+  test. KNOWN LIMIT: this box/dev-VM loops IPv4 multicast back only on `lo`, so `interface => 0`
+  kernel route selection is NOT validated — the option spelling is what is proven, not the
+  interface pick. No migration (next-free server migration stays 103).
+### Removed
 
-  One `Browse` now resolves the category counts **once**. Fetching the page and the
-  advertised total went through two entry points that each recomputed them, so a
-  single Video-root browse issued `countAllByType()` six times (`movie, series,
-  video` twice over) — double the COUNTs on an unauthenticated path, and a window in
-  which a row written between the two evaluations made the advertised total disagree
-  with the offsets the listing had already spent. The bridge-less `TotalMatches` is
-  likewise a `countByParent()` now, instead of re-listing the whole container purely
-  to measure it.
+- **`UserProfileManager::setActiveThemeId()` deleted — the unvalidated bypass
+  door around the live theme law (2026-10-14).** The method wrote
+  `user_profiles.active_theme_id` with ZERO validation — the exact defect
+  class the same-day `UserRepository::updateSettings()` fix retired — and an
+  estate-wide grep (this repo's `src/`, `tests/`, `bin/`, `scripts/`,
+  `start.php`, `docs/`, plus every `phlix-*` sibling repo's tracked tree)
+  found zero callers. Its only surviving mention was the historical S85-era
+  CHANGELOG release note, which is a record, not an adoption promise — so
+  deletion beats deprecation. `UserRepository::updateSettings()` is now the
+  estate's SINGLE writer of the column; `getActiveThemeId()`'s stale
+  `@see setActiveThemeId()` line re-points there. No routes, no runtime
+  behavior change (dead code), no census movement from the deletion itself.
 
-  DLNA remains **off by default and unauthenticated**, so this is a functional gap
-  closed, not a security change.
+- **Untracked the repo-root `PROGRESS.md` lane journal; sandbox journals stay out of git (`S487`).**
+  The file was a lane's scratch progress log that entered the tracked tree with the two W71 merges and
+  belongs only under `.sandboxes/<lane>/`, outside every git working tree. Both authored versions remain
+  recoverable from history; the root `.gitignore` now carries a `PROGRESS.md` line so a future
+  `git add -A` can never re-track a repo-root journal. No routes, no behavior change, no census change.
 
-- **A retagged music track could NEVER be re-parented, and `rescan` could not reach
-  the tracks that needed it** (S145). Editing a file's `ALBUM` or `ARTIST` tag left
-  `music_tracks.album_id` / `artist_id` pointing at the *old* album permanently.
+- **Unserved CGI front controller deleted (`S171`).** `public/index.php` (376 lines) was executed by
+  nothing on any published deployment artifact — re-measured at the step's tip: the Dockerfiles run
+  php-cli only under supervisord's `start.php` program (the fpm/nginx binaries are removed from the
+  base image), `systemd/phlix-server.service` ExecStarts `start.php`, the compose files and examples
+  reference nothing under `public/` as a program, `scripts/install.sh` actively REWRITES legacy
+  `public/index.php start` units onto `start.php`, and the docker boot gate ASSERTS no
+  index.php/php-fpm/nginx process runs in the image. The file nevertheless kept compiling, kept being
+  tokenized by the census, and kept reading like a supported path — enough that S99's audit had to
+  qualify its own finding as "Workerman path only". Deleted with a permanent Unit guard
+  (`tests/Unit/Docker/PublicFrontControllerRemovalGuardTest.php`) pinning the absence plus that
+  the artifacts it pins — supervisord, the Dockerfiles, the compose files, the shipped
+  reverse-proxy configs, the helm charts, the systemd unit — front nothing; mutation-verified
+  (recreating the file reddens it). The S163
+  incident block in `docker/supervisord.conf` and the `docker/README.md` narrative are updated to
+  past tense; the dual-entry-point pin in `ThemeEndpointsReachabilityTest` is reworked to the sole
+  authoritative entry point. S116's `du -sb` request-path residual closes with the file — the daemon
+  records snapshots via its timer instead. "Unserved" is measured on THIS deployment; the guard
+  claims no impossibility on a third-party fpm stack. No routes, no migrations, no behavior change
+  to the daemon.
 
-  Two independent halves, both required:
+- **Whole-tree unused-import reflow (`S187`).** 150 dead `use` statements removed across 100 files
+  (`src/` 58, `tests/` 90, `scripts/` 2) — content-neutral by construction: the phlix-contracts server
+  route manifest regenerates byte-identical (401 tuples) before and after, and PHPStan (`src` level 9 +
+  `tests` level 2) and both Psalm configs report identical issue sets. A permanent detector now guards
+  the invariant: `tests/Unit/Support/UnusedImportGuardTest.php` tokenises every first-party PHP file
+  and fails on any import unreferenced in its own file, counting docblock-only mentions as used
+  (PHPStan/Psalm resolve FQCNs through them). Planted-import mutation proofs for both `src/`-style and
+  `tests/`-style fixtures ship inside the same guard; an empty scan tree fails fast instead of passing.
+  No new dependencies, no baselines, no ignore lists (`composer.lock` byte-unchanged).
 
-  1. **`MusicLibraryScanner::upsertTrack()` could not see, or write, parentage.** Its
-     change predicate compared exactly four fields — `title`, `track_number`,
-     `disc_number`, `duration_secs` — and its `UPDATE` named exactly those four
-     columns. Change only the album or artist tag and all four stay identical, so the
-     call returned `'skipped'` having written nothing. A repo-wide grep finds just
-     three statements that write `music_tracks`, all in this one file, and the other
-     two are INSERTs — so nothing in the codebase could move a track. The columns are
-     `INT UNSIGNED NOT NULL` with enforced foreign keys (migration 065), so the row was
-     never NULL and never violated a constraint: it was **wrong but valid**, which is
-     why nothing ever surfaced it. The `SELECT`, the predicate and the `UPDATE` now all
-     carry `album_id` and `artist_id`, and the album a track *leaves* has its
-     `total_tracks` recomputed (`flushAlbum()`'s `finally` only ever refreshes the
-     album being flushed, and `MusicLibraryService` sums that column onto the artist
-     page).
+- **The pre-S84 `ThemeRegistry` theming island (S227).** `ThemeRegistry`, `Theme`,
+  `ThemePluginInterface`, `config/themes.php` and their unit test had zero implementors and zero
+  resolvers estate-wide — only `ThemingServicesProvider` still constructed the registry, and nobody
+  resolved it. With S84–S86 complete they were a second, fake theming subsystem beside the real
+  token-map one, carrying the name a reader reaches for first. The container binding is gone, two
+  historical `{@see}` pointers were reworded, and `tests/Unit/Theming/ThemingIslandRemovedTest.php`
+  now fails if any of it returns. `ThemeSourceRegistry` and the real subsystem are untouched.
 
-  2. **⚠ `rescan` now RE-READS EVERY FILE for a music library, and that is the fix —
-     today's fast `rescan` is the thing that was wrong.** Fixing `upsertTrack()` alone
-     is cosmetic: the unchanged-file fast path skips a file *before* it is opened, so
-     an already-stamped row never reaches the repair at all. Measured on the production
-     library, **29,134 of 61,111 tracks (47.7 %, rising)** would be skipped by an
-     ordinary scan. `LibraryManager::rescanLibrary()` therefore asks the music scanner
-     to leave its skip index unloaded. Migration 084 has documented `rescan` as the
-     heavy option since it was written — this restores a promise the schema already
-     made rather than inventing a new one, so there is **no migration, no new job type
-     and no new command**: the admin *Rescan* action and
-     `php bin/phlix library:scan <id> --rescan` both get it for free.
+- **`dash_url` dropped from the transcode/status response payloads** (updates.md #11 / S11).
+  `POST /api/v1/media/{id}/transcode` and `GET /api/v1/transcode/{jobId}/status` (via
+  `TranscodeController::start()` / `::status()`), plus both `TranscodeManager::ensureHlsJob()`
+  return arrays (reused-job and fresh-job), previously advertised a
+  `dash_url` → `/dash/{job}/manifest.mpd`. Real DASH is **not** produced by the on-demand
+  pipeline: `ensureHlsJob()` emits a multi-variant HLS `.ts` ladder and never invokes the CMAF
+  DASH muxer (`FfmpegRunner::buildCmafCommand()` / `startCmafTranscode()` exist but are not wired
+  into the on-demand flow), so that manifest never exists on disk and every request to the
+  advertised URL 404'd. The field is now removed — and the `ensureHlsJob()` `@return` docblock
+  narrowed to match — so clients are no longer handed an unresolvable URL. The DASH library
+  (`DashStreamer`, `StreamManager`, and the CMAF muxer path) is left untouched, reserved for real
+  DASH support tracked as **S56-S60** (updates.md #57). Repo-wide grep confirmed no `dash_url`
+  reader remained in `src/`, `tests/`, phlix-ui, or web-ui — no known client depended on the key's
+  presence; tests dropped their `dash_url` assertions in lockstep and added absence guards.
 
-     **Expect a music rescan to take hours, not minutes** (the last completed one took
-     **9 h 55 m** for 61,111 tracks — an earlier note here said "~3.5 h", which was an
-     estimate presented as a measurement; S151 attacks the dominant cost but its effect
-     on that wall clock is not yet measured),
-     and to report `updated` in the thousands on its first run — that is the repair, not
-     an error. It is interruptible and idempotent; re-running continues. The scan
-     summary gains `reparented` (how many tracks moved) and `read_every_file` (whether
-     the scan really was a full read). **Use `scan`, not `rescan`, for an incremental
-     refresh** — the incremental path is unchanged and still skips unchanged files.
+- **Dead `Router::dashStreaming()` route removed** (updates.md #28 / S28). The helper wired `/dash/*`
+  to `DashController::getMasterManifest`/`getAdaptationSetManifest`/`getSegment` — methods that do
+  not exist — and had ZERO callers (grep-clean across `src/`, `tests/`, `public/`). It is deleted.
+  The real DASH routes registered in `Application::loadStreamingRoutes()`
+  (`GET /dash/{job}/manifest` → `getManifest`, `GET /dash/{job}/{file}` → `serveFile`) and the
+  `DashStreamer`/`DashController` library are untouched, reserved for real DASH support tracked as
+  **S56-S60** (updates.md #57). An incidental genuinely-dead `$scpdUrls` property + `setupScpdUrls()`
+  in `DlnaServer` (surfaced by the SOAP-parser rewrite; `getScpdXml()` reads the services directly
+  and never the map) was removed in the same step. A `DashRouteRemovalTest` guards that the dead
+  route and phantom controller methods stay gone while the real `getManifest`/`serveFile` remain.
 
-  Measured impact on production 2026-07-27: **310 albums owning zero tracks** plus 7
-  empty artists; **292 tracks provably mis-parented** (a floor — the rest cannot be
-  identified by SQL, because the truth is in the file's tags and the tags are not in
-  the database). It was accumulating, not dormant: of the albums created once the
-  initial import settled, **100 % (07-26) and 97.8 % (07-27) were empty shells**, i.e.
-  essentially every new album the scanner created was one whose tracks it then refused
-  to move.
+- **Deleted the migrated Smarty page-rendering stack.** `PageRenderer`, the media/admin page
+  controllers, all `public/templates/**/*.tpl` page templates (auth, home, library, player, music,
+  books, audiobooks, photo, search, settings, admin dashboard/plugins/music/lastfm, layouts, partials),
+  and the legacy per-page JS/CSS were removed now that the `/app` SPA supersedes them.
+  **Retained on the server (still live):** `smarty/smarty` (composer) + `src/Admin/NewsletterGenerator.php`
+  + `public/templates/emails/newsletter.tpl` — the **newsletter email** still renders via Smarty;
+  `ThemeMiddleware`; `WebPortalRouter` (serves the portal JSON under `/api/v1/*`);
+  `SharedUiController` + `ViteAssets` (serve the SPA shell + built bundle); and the legacy **binary**
+  API routes (artwork, book cover/download, photo thumbnail/full, media stream). This supersedes the
+  earlier "Smarty retirement pending owner verification" note in this changelog.
 
-  Not done here, deliberately: the now-vacated shell albums are **not** deleted.
-  `fk_tracks_album` is `ON DELETE CASCADE`, so reaping them is a destructive decision
-  with artwork behind it and is a follow-up step of its own.
-
-- **`media_item_id` was silently ALWAYS dropped on all three music DTOs** (S121).
-  `MusicArtist::fromRow()`, `MusicAlbum::fromRow()` and `MusicTrack::fromRow()` each
-  coerced `media_item_id` through
-  `is_numeric($row['media_item_id']) ? (int)… : <fallback>`, while the column is a
-  **`CHAR(36)` UUID** in all three tables. `is_numeric()` is false for every UUID, so
-  the field was the fallback no matter what the row held: **`null`** on artist/album,
-  **`0`** on track. The coercion matches the columns' *pre-070* shape — they were
-  `INT UNSIGNED` when the music DTOs landed (2026-07-09) and migration **070**
-  converted all three to `CHAR(36)` the next day, because `media_items.id` is a UUID —
-  and it was never updated with them. Confirmed against real MySQL 8.0 rather than
-  inferred: `information_schema` reads `music_artists.media_item_id char(36) YES`,
-  `music_albums char(36) YES`, `music_tracks char(36) NO`, and `workerman/mysql` hands
-  the value back as a PHP `string`.
-
-  All three DTOs now declare `public ?string $mediaItemId` and coerce through a
-  private `mediaItemIdFromRow(): ?string`:
-  - a **non-string** (`int`, `float`, `bool`) or the **empty string** becomes `null`;
-  - **any other non-empty string passes through unchanged** — including `'0'` and a
-    truncated UUID. Format validation is deliberately not the DTO's job; the FK to
-    `media_items` is.
-  - **`?string` on the NOT NULL `music_tracks.media_item_id` is deliberate.**
-    `fromRow()` never throws — it is also fed hand-built, cached and JSON rows, not
-    just real `SELECT`s — so an absent column must still produce a value, and `null`
-    is the only one that cannot be mistaken for an id. The old `0` fallback could be:
-    `0` is a plausible-looking id that survives the `!== null` / `?? …` /
-    `is_string()` tests callers actually write, which is exactly how a dropped field
-    stayed invisible. So `null` on a track means "the SELECT did not carry the
-    column", not "no artwork yet" — the latter is what it legitimately means on
-    artist/album, whose columns are NULLable and which the scanner writes as NULL when
-    its `createMediaItem()` mint fails, backfilling on a later pass.
-  - The sibling `id` / `artist_id` / `album_id` / `year` / `total_tracks` /
-    `total_discs` / `track_number` / `disc_number` / `duration_secs` columns really are
-    `int unsigned` and **keep** their `is_numeric()` guards.
-
-  **No served payload changed** — re-verified, not assumed. `MusicController` formats
-  artists through `formatArtist()`
-  (`name`/`image_url`/`album_count`/`track_count`/`albums_truncated`/`albums`), and the
-  one route that could have nested a DTO's `toArray()` —
-  `MusicArtistWithAlbums::toArray()`, which nests `MusicArtist::toArray()` and so would
-  emit the field — has had no caller in `src/` since S99 removed the music GET handlers. So this closes a latent
-  trap on a **live** read path — `getAllArtists()` builds `MusicArtist::fromRow()` off
-  `SELECT a.*` on every `GET /api/v1/music/artists` — without widening any response.
-  The stale note in `MusicLibraryService`'s class docblock, which had described this
-  exact bug for **`MusicTrack` only** since S99, is replaced by a "fixed in S121" block
-  that states the asymmetric `null`-vs-`0` fallback correctly.
-
-  **Guarded mechanically, because a hand-written list is what created the bug** — the
-  defect was written down for `MusicTrack` alone and both siblings were missed.
-  `tests/Unit/Media/Music/MusicDtoMediaItemIdTest.php` therefore names no DTO: it walks
-  `src/Media/Music/` **recursively**, derives each file's PSR-4 FQCN, and reflects
-  **every** class that declares a `mediaItemId` property, asserting the declared type is
-  `?string` — so a fourth music DTO landing with the old `is_numeric()`/`int` coercion
-  goes red on its own, and the accompanying set-equality test forces these docblocks to
-  be updated with it. The walk **fails loudly instead of skipping**, in two shapes: a
-  file it cannot load raises a named `RuntimeException` quoting the unresolved class and
-  its path plus the usual causes, and two files resolving to **one** class identity
-  (filenames differing only in case, a `class_alias()`, a namespace that does not match
-  the directory, a symlink) raise one naming **both** colliding paths and inferring the
-  cause from them rather than asserting it. Either surfaces as a PHPUnit error with a
-  non-zero exit — a silently skipped file would be precisely the partial sweep this step
-  exists to remove. Two companions pin the behaviour itself:
-  `MusicDtoFromRowCoercionTest` covers the value space the predicate has to survive
-  (non-strings → `null`; `'0'` and `'123'` unchanged, asserted with `assertSame` so
-  neither an `!empty()` rewrite nor a re-added `(int)` cast survives; plus
-  `parseDateTime()`'s four outcomes), and `MusicDtoMediaItemIdIntegrationTest` reads a
-  minted UUID back out of all three tables against real MySQL in **both** pooled and
-  unpooled connection modes. 62 tests across the three files.
-
-  **Not fixed, documented instead** (each recorded in the DTO docblocks):
-  - **Two of the five copies of this coercion predicate are pinned by no test.** The
-    same predicate is inlined as a *local variable* in `MusicLibraryScanner`'s
-    `upsertArtist()` and `upsertAlbum()` — `grep -rn "media_item_id'\] !== ''" src/`
-    finds exactly those two and none of the DTOs — and a guard that reflects
-    *properties* structurally cannot see a local. Filed as **S127**; deferred rather
-    than bodged because S96 rewrites that file, so any source-text guard written now
-    would be rework.
-  - **Whitespace is not normalised.** There is no `trim()`, so `' '` returns `' '` and
-    a padded UUID keeps its padding; the two mutants that would add one leave both unit
-    test files green. It is the one input where the "make 'no id' detectable" goal
-    fails, and it is disclosed rather than closed because the driver cannot produce it —
-    MySQL strips a `CHAR` value's trailing pad spaces, so an all-space column reads back
-    as `''`.
-  - **`parseDateTime()` still fabricates a timestamp from `''`** (it returns *now*) and
-    returns `null` for a `DateTimeImmutable`, because its guard is `instanceof
-    \DateTime`. Pre-existing, byte-untouched by this change, filed as **S143**.
-  - **The TypeScript contract still disagrees.** `phlix-contracts`' `src/Music.ts`
-    types `mediaItemId` as a `number`. No client reads the field today; filed as
-    **S123** rather than edited from a `phlix-server` branch.
-
-- **An auth-provider settings save no longer WIPES the keys it did not send**
-  (updates.md #54 / S48). A provider settings save is a wholesale replace of the
-  stored document, and both admin controllers built that document from the request
-  body alone — so a client that did not know about a field silently deleted it. This
-  is the exact shape that **wiped live Trakt OAuth tokens on production** during a
-  plugin update, and it was live, not theoretical: the admin SPA's OIDC form posts
-  `provider_url`/`client_id`/`client_secret`/`scopes` and knows nothing about
-  `redirect_uri`, so one click on Save would have erased a `redirect_uri` configured
-  through the API — which, with the change above, hard-`503`s every OIDC login.
-
-  The invariant is now explicit in `GithubAdminController` and `OidcAdminController`,
-  for every optional key (`scopes`, `redirect_uri`): **a key ABSENT from the request
-  body is PRESERVED; only an explicitly empty value clears it.** Absent is never a
-  deletion. (`client_secret` already behaved this way — blank keeps the stored
-  secret.) A rejected save (`invalid_redirect_uri`, `missing_client_id`, …) mutates
-  nothing, and repeated partial saves do not erode the row. Guarded by
-  `AuthProviderSettingsPreservationRealDbIntegrationTest`, which drives both real
-  controllers through the real repository against real MySQL and reads
-  `plugin_settings.settings_json` straight back out of the table; reverting either
-  key on either controller to a wholesale replace fails it with a message naming the
-  incident.
-
-  **Not fixed, documented instead:** `LdapAdminController::saveSettings()` still
-  rebuilds its document from the request body alone (only `bind_pw` is kept on
-  blank), so a *scripted* partial save resets an omitted `port`/`ssl`/`bind_dn`/
-  `user_filter`/`admin_group` to its default. The admin console's LDAP form always
-  posts the complete set, so no shipped client is affected; API callers must send the
-  full map. Noted in the class docblock and in the SSO guide.
-
-- **Every episode / track / photo play threw an uncaught `PDOException` in the HTTP
-  worker** (S102). `PlaybackController::dispatchPlaybackStarted()` passes the RAW
-  `media_items.type` value into `StatsCollector::recordPlaybackStart()` — correct, and the
-  entire point of S31 — but migration 019 had declared
-  `stats_playback_events.media_type` as `ENUM('movie','series','music','photo')`: **four**
-  of the column's **thirteen** members. Under `STRICT_TRANS_TABLES` every other value is
-  MySQL error **1265 "Data truncated for column 'media_type'"**, which the driver raises as
-  a `PDOException` that nothing on the path caught. Production corroborates exactly that:
-  **all 235** stored rows were `movie`, and every non-movie play since S31 threw instead of
-  recording.
-  - **Migration 094 widens the column to the full 13-member vocabulary**, in
-    `media_items.type` column order so both share one ordinal numbering. Widening (rather
-    than folding the 13 types down to 4) is safe *and* correct here because the column has
-    **no readers** — every query over `stats_playback_events`
-    (`getPlaybackStats`/`getTopUsers`/`getTopMedia`, `NewsletterGenerator`,
-    `DashboardService::getRecentPlaybackEvents`) aggregates by date / user / media item and
-    never selects or groups by `media_type` — so no consumer's output shape changes, while
-    folding would have permanently destroyed the per-type resolution S31 exists to capture
-    (`episode`→`series`, `track`→`music`, `audiobook`→`book` are all one-way). The new
-    member list is a strict superset of the old one, so no stored value can be truncated;
-    verified against real MySQL 8.0 with 235 seeded `movie` rows.
-  - **`stats_storage.media_type` deliberately stays coarse** and is fixed the *other* way.
-    It is the one such column with a real reader — `DashboardService::getStorageSummary()`
-    groups by it into a fixed `{movie,series,music,photo,book}_bytes` shape — so widening it
-    would have dropped bytes into that `match`'s `default` arm and quietly broken the admin
-    dashboard. Instead the snapshot writer folds whatever it is handed through
-    `StorageSnapshotHelper::TYPE_TO_BUCKET` (exhaustive, and idempotent because every bucket
-    maps to itself), so a caller passing a raw `episode` gets a correct `series` row rather
-    than error 1265. Both existing callers already passed bucket names and are unaffected.
-  - **Statistics can no longer break playback at all.** Every `StatsCollector` *write* now
-    runs behind a containment boundary that logs the failure at `error` level (so it lands
-    in `.logs/error-YYYY-MM-DD.log` — the `error` handler is a `rotating_file`, so the
-    configured `error.log` path is date-stamped on disk) and swallows it — telemetry is
-    strictly less important than the action that triggered it, and
-    `dispatchPlaybackStarted()` has no try/catch of its own. Repeated failures are counted
-    per operation and the log is throttled to one line per operation **per exception class**
-    per minute, with `failures_total` / `suppressed_since_last_log` /
-    `operation_failures_total` in the context and the running totals (still keyed per
-    operation) readable via `StatsCollector::writeFailureCounters()`. The exception class is
-    part of the window key because keying on the operation alone suppressed a *new kind* of
-    failure for an already-failing operation: once `library_change` had logged a
-    `RuntimeException`, a `PDOException "MySQL server has gone away"` in the same 60 s window
-    was counted but its message never reached the log. A repeat is noise; a different class
-    is news. `ItemRepository::recordChange()`
-    records one library change per scanned item, so an un-throttled boundary would have
-    written ~29,000 identical error lines during one music scan of the production library.
-    *Reads* are deliberately left unguarded: they serve the admin dashboard, where a broken
-    query must surface as a visible error rather than a silently empty chart.
-  - **The dashboard's five storage roll-ups now equal the bytes that were written.** Folding
-    raw types onto five buckets means several types share a bucket, and every row of one
-    snapshot run carries the same `NOW()` second — so `getStorageSummary()`'s
-    `MAX(recorded_at)` join legitimately returns *several* rows per bucket (also one per
-    `library_id`). It used to **assign** (`=`) each bucket's bytes while ordering by
-    `total_bytes DESC`, so the smallest colliding row won and the rest disappeared: 13 folded
-    types worth 91,000 bytes produced five totals summing to **31,000**. Both sides are now
-    additive — `SUM(…) GROUP BY media_type` in SQL and `+=` in PHP — and a snapshot run is
-    written as ONE batch (`StatsCollector::recordStorageSnapshots()`), which sums per bucket
-    before inserting so a run cannot produce two rows for the same bucket. Verified on real
-    MySQL: 13 types / 91,000 bytes in, 91,000 across the five roll-ups out.
-    `StorageSnapshotHelper::bootstrapSnapshot()` also finally honours its documented "if data
-    is stale or missing" contract (it was called on *every* PHP-FPM request, re-running
-    `du -sb` over both vault roots each time), because summing same-second rows would
-    otherwise double the totals when two snapshot runs land in one second. That staleness
-    check compares the age by ABSOLUTE distance, so a newest row dated in the *future* (a
-    clock that stepped backwards, or one stray row) reads as stale rather than as "fresh
-    forever" — measured pre-fix: one row dated +1 day and the fallback never refreshed again.
-  - **A snapshot run now carries ONE `recorded_at`, so a looping caller cannot lose bytes to
-    a wall-clock second boundary.** `recorded_at` is a second-precision `DATETIME` and the
-    dashboard joins on `MAX(recorded_at)` *per `media_type`*, so a run whose rows straddle two
-    seconds silently loses every bucket that received rows in more than one of them. With a
-    fresh `NOW()` per INSERT that was decided by luck: measured on a loaded box, 13
-    `recordStorageSnapshot()` calls spread over three seconds and the dashboard reported
-    **44,000 of the 91,000 bytes handed in**. The run's second is now computed once and bound
-    through `FROM_UNIXTIME(?)` — a bound unix second rather than a PHP-formatted string, so
-    the value is exactly what `NOW()` would have produced in the MySQL session's own time
-    zone. What ends a run is a *stall* between two snapshot writes — a gap of **5 s or more**
-    (the comparison is `<`, so exactly 5.000000000 s already starts a new generation) — and
-    not an elapsed duration, so a run cannot be split into generations by its own length: 13
-    calls a full second apart (13 s end to end) round-trip all 91,000 bytes and 13 of 13 item
-    counts, where the same run on the old write path reported 48,000 and 5. The batch form was
-    already immune by accident (one row per bucket makes the per-type `MAX` a no-op); the
-    guarantee is now structural for both forms, pinned by an integration test that crosses a
-    second boundary on purpose and stamps nothing, and — since a stall boundary that no test
-    could see would be deleted by the next cleanup — by a unit test that discriminates
-    "continued" from "recomputed" with a sentinel stamp and brackets the window at 4.9 s / 5.0 s
-    with no database. Note what the gap window does *not* buy: it cannot tell a stalled run
-    from a busy one, because all it sees is the interval between two *writes*. For a
-    hypothetical per-library writer that interval **is** the next library's `du -sb` (measured
-    warm on the dev box at 151–257 k inodes/s depending on load, so 5 s buys only ~0.75–1.3 M
-    inodes — and a six-hourly snapshot always meets a *cold* cache), so such a writer must hand
-    its whole run to one `recordStorageSnapshots()` call — which is exactly what both current
-    callers do, taking the stamp once before the write loop, so the window is never consulted
-    between one run's own rows.
-  - **Each half of the reader's aggregation is pinned on its own.** `SUM(…) GROUP BY
-    media_type` and the PHP `+=` arms hide each other — the `GROUP BY` collapses the result
-    set so `+=` never sees a second row, and with `+=` present the `SUM` is invisible — so the
-    whole suite stayed green with *either* reverted, and only the simultaneous revert failed.
-    That matters because per-library snapshots will legitimately produce several rows per
-    bucket and "the SQL already groups" is a plausible reason to simplify the arms back to
-    `=`, which would render three 1 TB libraries as 1 TB. The `+=` half now has a
-    database-free test (two `movie` rows, 1,000 + 2,000, must be 3,000) and the SQL half a
-    real-MySQL one (two rows per bucket in one second must come back as five `items` rows).
-  - **An unrecognised media type is now dropped from the storage snapshot, loudly.** It used
-    to fall back to `movie`, i.e. unknown bytes were added to a real bucket with only a
-    warning in `app.log`. `migrations/086_stats_storage_book_bucket.sql` already wrote the
-    rule down — *"a wrong number that looks right is worse than a visibly missing one"* — so
-    the writer now logs at `error` and writes no row. `MediaItemType::FALLBACK` remains
-    correct for *labels* (`normalize()`, `shape()`, `lookupMediaType()`) and is no longer
-    used for a byte accumulator.
-  - **Root cause was a duplicated type vocabulary, so that is what got fixed.** The
-    13-member list had been re-typed by hand in four places, each carrying a comment asking
-    the next author to keep it "in lockstep" — a convention that had already failed three
-    times (this bug; `book`/`audiobook` bytes missing from the dashboard, migration 086;
-    `track` missing from the Music totals). New `Phlix\Media\MediaItemType` holds the list
-    **once**, `MediaItemShaper::VALID_TYPES` is now an alias of it, and a new drift test
-    **parses the migration SQL** and fails the build when the constant, any consumer map
-    (`TYPE_TO_BUCKET`, `UpnpClassMap::TYPE_TO_CLASS`, `VALID_TYPES`) or any of the
-    type-carrying columns disagree. The previous cross-checks compared the PHP copies only
-    to each other, which is why all of them could agree while the actual column did not.
-    The parser reads `CREATE TABLE` column definitions and `ALTER TABLE … MODIFY [COLUMN]` /
-    `CHANGE [COLUMN] <old> <new>` / `ADD [COLUMN]` clauses — backticked or bare,
-    schema-qualified or not, in any position of a multi-clause `ALTER`, any case, any
-    whitespace — i.e. every style this repo's migrations actually use, each pinned by its own
-    test case. `ADD [COLUMN]` is included because it was the one style that could redefine a
-    tracked column while leaving the alarm green (as `DROP COLUMN` + `ADD COLUMN`), and
-    because `users.status` — defined that way by `migrations/037` — was the single ENUM column
-    of the 29 in a fully migrated schema the parser could not read. Three blind spots are
-    deliberate and now documented on `MediaItemType`: DDL assembled at runtime inside a
-    `PREPARE`/`EXECUTE` string (as `migrations/011` does) is **skipped** rather than
-    half-parsed, so a widening must be written as a plain statement to be seen (parsing it
-    naively yielded 24 empty-string "members" that the first version of the guard accepted as
-    success); a bare `DROP COLUMN` with no re-`ADD` cannot widen an ENUM; and
-    `migrations/*.php` files are not read at all — which is safe because `MigrationRunner`
-    likewise globs `*.sql` only, and a test now reddens if any `.php` migration ever contains
-    an `ENUM(` definition.
-  - Proven against real MySQL 8.0 under `STRICT_TRANS_TABLES` (a mocked connection accepts
-    any string for any column and cannot reproduce an ENUM rejection — the same class of
-    miss as the LiveTv `RowQuery` and metrics `ONLY_FULL_GROUP_BY` defects): all 13 members
-    round-trip verbatim, an unknown playback type is coerced instead of rejected, an unknown
-    storage type writes no row at all, a failing write is contained, the storage roll-ups
-    equal the bytes written, and a first progress report on an `episode` records
-    `media_type=episode` without throwing.
-
-- **A `HEAD` on a media route put TWO conflicting `Content-Length` headers on the
-  wire** (updates.md #44 / S52 review). Workerman's response encoder
-  (`Protocols/Http/Response::__toString()`) appends its own
-  `Content-Length: strlen($body)` **unconditionally** and **last**, so a handler that
-  correctly set the real size on a bodyless `HEAD` reply emitted
-  `Content-Length: <size>` followed by `Content-Length: 0`. RFC 9110 §8.6 makes such a
-  message invalid — recipients must reject it, hardened proxies (HAProxy) drop it as a
-  request-smuggling defence, and clients disagree about which value wins. DLNA
-  renderers probe a resource with `HEAD` *before* they open it, so the reply meant to
-  advertise the size was the one that broke. New `Phlix\Server\Workerman\BodylessResponse`
-  narrows `__toString()` to leave a caller-supplied `Content-Length` alone on an empty
-  body (and delegates to Workerman untouched for everything else). It is reached two
-  different ways, because the two affected routes are dispatched by different code:
-  `Response::toWorkermanResponse()` selects it for `HEAD` replies **only** — never for
-  a GET that merely came out empty, whose stale length would be a keep-alive framing
-  desync rather than a fix — which is what fixes `HEAD /dlna/stream/{id}`; the
-  pre-existing twin on `HEAD /media/{id}/stream` is fixed by **naming the class
-  directly** in `HttpHandler::serveMediaStream()`, which runs *before*
-  `Application::dispatch()` and returns Workerman responses, so it never builds a
-  Phlix `Response` and has no `headOnly` flag to select on. Every other reply,
-  204/304/redirect/416 included, is byte-identical to before. Pinned by assertions on
-  the **encoded bytes**, with the expected bytes *derived from* Workerman's own encoder
-  so a future dependency bump cannot make the narrowed copy diverge silently — the
-  previous tests inspected the header *array*, which cannot observe this defect at all.
-
-- **A route registered for `HEAD` in its own right relied on its handler remembering
-  to flag the reply** (S52 post-merge review, finding 1). `Response::$headOnly` is what
-  selects the narrowed encoder above, and it was set **only** by
-  `Router::dispatchAsHead()` — the GET→HEAD *fallback*. A route registered as
-  `match(['GET', 'HEAD'], …)` (which is how the DLNA stream route is registered, so
-  that a file-backed body is not suppressed to `Content-Length: 0`) never reaches that
-  method, so the router set nothing and correctness depended on each controller setting
-  the flag by hand. The one such route today does, but the next one to declare a
-  `Content-Length` on its HEAD arm and forget the flag would have shipped
-  `Content-Length: 123456789` followed by `Content-Length: 0` again with the whole
-  suite green. `Router::dispatch()` now flags **every** response it returns for a
-  `HEAD` request (`markHeadOnly()`, the single writer of the flag in the class: both
-  route maps, both middleware short-circuits, and the fallback), so the framing is a
-  property of the framework rather than a convention. It cannot flag a GET — the method
-  test is the whole body — and it is idempotent, so the DLNA controller keeps its own
-  explicit set as defence in depth for callers that are not `Router::dispatch()`.
-  **One live reply does change on the wire, for the better:** the DLNA stream route is
-  registered inside a group carrying `DlnaAllowlistMiddleware`, and that gate's refusal
-  is now flagged too, so an off-LAN `HEAD /dlna/stream/{id}` answers
-  `403 … Content-Length: 0` with **no** body (101 B) where it previously shipped its
-  104-byte `{"code":"dlna.forbidden"}` JSON alongside `Content-Length: 104` (207 B).
-  RFC 9110 §9.3.2 forbids content in a `HEAD` response, so the new bytes are the
-  conforming ones — but a `HEAD` probe can no longer read *why* it was refused (use a
-  `GET`), and the `Content-Length: 0` under-reports what the equivalent `GET` would
-  return, exactly as the pre-existing `withFile()`-on-a-HEAD case does. The
-  HEAD-registered stream route's own 200 reply is unchanged (its controller already set
-  the flag), as is every 204/304/redirect/416. Pinned by `RouterTest` tests that
-  register a HEAD route which does **not** set the flag and assert on the **encoded
-  bytes** that exactly one `Content-Length` reaches the wire, with a control showing
-  the framework encoder emits two for the same shape — including all three arms r1
-  found unpinned (`dispatch()`'s static short-circuit and both halves of the parametric
-  GET→HEAD fallback, the live path for `/api/v1/media/{id}`, `/hls/{job}/{seg}` and
-  `/stream/theme-media/{libraryId}/audio`, where an unflagged reply measured
-  4,377 B with two lengths against 113 B with one).
-  **Bounded, not covered:** a *global* middleware registered on `Application` runs
-  before the router, so a `HEAD` it short-circuits is never flagged and still ships its
-  body. Today only `AccessScheduleMiddleware` can do that and its refusals declare no
-  `Content-Length` of their own, so the reply is the recoverable "body on a HEAD" shape
-  rather than the unrecoverable two-length one — the same shape as `Router::notFound()`
-  and `HttpHandler`'s SPA/static/404 replies, all of which move together in a separate
-  change. `ApplicationHeadOnlyBoundaryTest` pins that boundary from both sides so it
-  cannot drift, and `Application::dispatch()`'s docblock states it.
-
-- **`Router::group()` could leak its middleware onto every later route** if the group
-  callback threw. The prefix/middleware restore had no `finally`, and `addRoute()`
-  copies the current group middleware onto every route registered afterwards — so one
-  throw inside `loadCdsRoutes()` would have silently attached the DLNA **IP
-  allowlist** to the ~15 route loaders that run after it, and those endpoints would
-  have begun refusing every non-LAN caller. Low probability, wide blast radius; the
-  restore is now unconditional and the log call inside that catch is itself guarded.
-  Pinned by tests that register a throwing group (flat and nested) and assert both
-  that a route registered afterwards carries no leaked middleware and that a nested
-  group restores the *outer* prefix and middleware rather than clearing them.
-
-- **"Original" quality was silently unavailable for every HEVC / non-AAC title**
-  (updates.md #30 / S49). The v7 ABR ladder FOLDED the `original` rendition out of
-  `LadderResult::streamVariants()` whenever a re-encoded (non-copy) Original was the
-  same frame at effectively the same BANDWIDTH as the top ladder rung — which is the
-  normal outcome for a low-bitrate source, since the ladder caps every rung at the
-  source bitrate. `TranscodeManager::writeVodPlaylists()` iterates exactly that list,
-  so a folded Original never got a media playlist written at all: `media_voriginal.m3u8`
-  simply did not exist, and "Original" was either missing from the quality menu or a
-  404 (masked only by a serve-time alias that quietly served the top rung's playlist
-  instead). Every job now always publishes a real Original variant:
-  - `LadderResult::streamVariants()` always returns `[original, ...renditions]`; the
-    fold is gone from the variant list.
-  - `TranscodeManager::getJobVariants()` no longer mirrors that fold (its private
-    `originalDuplicatesTopRung()` helper is removed), so the client `variants[]`
-    payload always advertises `{id: 'original', …}` with its own media-playlist url.
-  - The duplicate-BANDWIDTH problem the fold existed to prevent is now solved where
-    it belongs — in the master playlist. `writeVodPlaylists()`'s SV-4.6 switchable
-    filter (`TranscodeManager::switchableVariants()`, still using
-    `Rendition::duplicatesForAbr()`) withholds a variant from the ABR-switchable
-    `#EXT-X-STREAM-INF` set in exactly two cases: a stream-COPY variant, always (its
-    segment boundaries can drift off the uniform timeline), and a TRANSCODE `original`
-    that duplicates the top rung's frame + BANDWIDTH, which is the low-bitrate
-    collapse a player would merge into one level. Both still get their own media
-    playlist, which is what makes "Original" explicitly selectable.
-    **The master's advertised level set is therefore unchanged from v8**: a transcode
-    `original` that is NOT such a duplicate stays the master's top level, exactly as
-    before — including the large class of sources whose original height matches no
-    canonical rung (2.39:1 crops, DCI-2K). An interim revision of this change excluded
-    every `original` from the switchable set; that dropped the master's top level for
-    those sources (e.g. a 1920×1080 HEVC @8 Mbps master went from `original` at
-    10.0 Mbps down to `1080p` at 5.478 Mbps, halving the auto-ABR ceiling) and is NOT
-    what shipped. Four tests now pin the full level set — ids + BANDWIDTH +
-    RESOLUTION — per source shape (copy / distinct transcode / anamorphic / duplicate).
-  - `TranscodeManager::ensurePlaylistRegenerated()` rebuilt its variant list from the
-    persisted `renditions` **only**, so an LRU cache eviction destroyed
-    `media_voriginal.m3u8` permanently — even for a never-folded stream-COPY Original
-    that had been written correctly. It now reproduces the same `original`-first set
-    `ensureHlsJob()` wrote. The same method also read audio tracks from a
-    `transcode_jobs.audio_tracks` column that has never existed in any migration
-    (`JOB_ROW_COLUMNS` cannot select it), so multi-audio jobs regenerated with no
-    `#EXT-X-MEDIA` audio group and no `media_a{N}.m3u8` playlists; they are read from
-    the persisted ladder JSON now.
-  - `TranscodeManager::ensurePlaylistRegenerated()` also now validates each persisted
-    rendition id against the same `^[a-z0-9]+$` allowlist the segment serve path uses
-    (the id is interpolated into `media_v{id}.m3u8` and into the master's URI), and
-    returns `false` instead of writing a master with zero `#EXT-X-STREAM-INF` levels
-    when nothing in a corrupt ladder survives that check — such a file would otherwise
-    short-circuit every later regeneration attempt and permanently break the job.
-  - `JOB_KEY_VERSION` **v8 → v9** so pre-existing jobs (whose directories lack the
-    Original playlist) are not reused and age out via the cache sweep. `HlsController`'s
-    folded-original serve-time alias is retained for pre-v9 job directories still on
-    disk (bounded by the cache sweep's idle TTL, 3 h by default) so already-issued
-    signed URLs keep playing; its removal is tracked as part of **S59**.
-  - **No client change was required, because the master's advertised level set is
-    unchanged** (see above): `quality.ts`/`QualityMenu.vue` resolve "Original" by
-    matching a master level of the same height and then load `media_voriginal.m3u8`
-    directly, which is precisely the file that now exists. That client gate does have a
-    pre-existing blind spot this change neither introduces nor fixes — a stream-COPY
-    Original is (as before) never a master level, so when its height matches no level
-    and exceeds them all (e.g. a 1920×800 H.264/AAC source against a 720p top rung)
-    the menu still hides "Original" even though the playlist is now guaranteed to
-    exist. Hardening that gate to key off the server's `variants[]` entry rather than
-    level height-matching is tracked as a `phlix-ui` follow-up.
-
-- **External identities were stored with a hardcoded `provider='external'`**
-  (updates.md #37 / S44). `UserRepository::findOrCreateByExternalId()` ignored which
-  provider actually authenticated, so an OIDC `sub` and an LDAP DN could collide onto
-  the same account. It now takes a `$provider` argument (threaded from the
-  `AuthResult`), scopes the lookup by `(provider, external_id)`, and stores the real
-  provider (`oidc` / `ldap`) — two providers presenting the same identifier map to
-  distinct users. This is the foundation S45–S47 (account-linking / multi-identity)
-  build on.
-
-- **First OIDC/LDAP login 500'd because `users.password_hash` was `NOT NULL`**
-  (updates.md #37 / S44). External (passwordless) users are created with
-  `password_hash = NULL`, but the column had never been relaxed since migration 001.
-  New migration `091_users_password_hash_nullable.sql` (`ALTER TABLE users MODIFY
-  password_hash VARCHAR(255) NULL`) fixes it; it applies automatically via the
-  migration runner on upgrade (no manual step). External users with no email/username
-  from the IdP are still created — they get a deterministic placeholder derived from
-  `(provider, external_id)` so two email-less accounts can't collide on the unique
-  `email` / `username` columns.
-
-- **Relay tunnel forced TLS regardless of scheme → silent hang against a plaintext
-  hub relay port** (updates.md #38 / S38). `openHubConnection()` previously set
-  `transport='ssl'` and attached an SSL context unconditionally, and `RelayConfig`
-  derived a `wss://` relay URL for any `https://` hub — so a default deploy tried to
-  do a TLS handshake against the hub's plaintext relay listener (`:8802`), which
-  produced no `onError`/`onClose` and simply deadlocked. The transport now keys off
-  the *resolved URL scheme*: a new pure `RelayConsumer::resolveHubTransport()` helper
-  derives `useTls = (scheme === 'wss')`, rewrites `wss://` → `ws://` for the Workerman
-  address (wss is not a registered transport), and only `openHubConnection()` when
-  `useTls` sets `transport='ssl'` + the SSL context. **The default derived relay
-  scheme is now plaintext `ws://`**, matching the hub's plaintext-by-default relay
-  listener — a change from the old always-`wss://` behavior. A TLS relay tunnel now
-  requires `PHLIX_RELAY_TLS=1` on the server together with `HUB_RELAY_TLS=true` on
-  the hub (see the new keys under Added). At boot, if the resolved relay URL is
-  `wss://` while `relay_tls` is off, a clear once-per-process `logger.hub` warning
-  explains the likely hang and the envs to set.
-
-- **Admin Relay Tunnel Enable/Disable/Ping/Status now reflect the REAL tunnel
-  instead of a never-started in-worker object** (updates.md #39 / S39). The four
-  `AdminHubController` relay endpoints (`GET /api/v1/admin/remote/relay/status`,
-  `POST …/relay/enable`, `…/relay/disable`, `…/relay/ping`) were operating on a
-  container-local `RelayConsumer`/`RelayApplication` copy that never runs (the real
-  tunnel is the forked `phlix-relay-tunnel` process) and probed liveness with a
-  blocking `exec('pgrep -f phlix-relay-tunnel')` + log-scrape inside the event loop.
-  That blocking subprocess I/O is **removed entirely** (the endpoints now read the
-  cross-process state files `RelayStateStore` maintains — `relay-tunnel.state.json`,
-  `hub-heartbeat.state.json`, `relay-control.json`), and the fake `{"success":true}`
-  no-ops are gone:
-  - **Enable/Disable are an honest, persisted kill-switch, effective on next server
-    reload** — not an instant in-process start/stop. Disable writes `disabled:true`
-    to `relay-control.json` (which the relay fork honors at boot in addition to the
-    `PHLIX_RELAY_DISABLED` env var); Enable clears it. Both return
-    `{success, disabled, enrolled, takesEffectOnReload:true, message}`. Enable
-    **cannot unset the `PHLIX_RELAY_DISABLED` env var**, so when the env kill-switch
-    is set the response stays `disabled:true` with an honest message; a persist
-    failure returns `500`.
-  - **Status** returns the real persisted `connected`/`active`/`enrolled` plus
-    `reconnectAttempts`, `activeSessions`, `lastDisconnectTime`, the last
-    `lastConnectError`/`lastConnectErrorAt` reason, the effective `disabled`
-    kill-switch, and `updatedAt` (fork-write staleness signal). Back-compat keys
-    `endpoint`/`establishedAt` are retained for the current UI.
-  - **Ping** reports the persisted latency: `{success, connected, active, latencyMs,
-    lastHeartbeatAt, latencySource:"persisted"}`, with `latencyMs:null` = "not
-    measured yet" (never a fabricated timing), and returns **`409`** (with
-    `lastConnectError`/`lastConnectErrorAt`) when the tunnel is not connected rather
-    than pretending to ping.
-
-  Kill-switch single-writer discipline is preserved: `relay-control.json` is written
-  only by the HTTP worker, read by the relay fork at boot; the fork writes the two
-  state files, the HTTP worker only reads them. Consumed by the reframed
-  `@phlix/ui` admin Remote Access panel (v0.98.29).
-
-- **Network Health now reflects real cross-process tunnel/heartbeat state; the
-  `/health/network` probe no longer side-effects a heartbeat** (updates.md #40 / S40).
-  `Admin\HealthController::relayHealth()` (`GET /api/v1/health/relay`) and
-  `networkHealth()` (`GET /api/v1/health/network`) previously read a never-started,
-  container-local `RelayConsumer`/`HubClient` copy — so the admin Network Health
-  panel always showed offline/0/null even on a healthy, enrolled, connected box.
-  Both endpoints now read the persisted cross-process snapshots via `RelayStateStore`
-  (`relay-tunnel.state.json` + `hub-heartbeat.state.json`, written by the
-  `phlix-relay-tunnel` and `phlix-hub-heartbeat` forks); `relayHealth` adds
-  additive `relay.lastConnectError`/`lastConnectErrorAt` and `hub.lastLatencyMs`
-  fields, and the heartbeat fork now records real round-trip latency each tick via
-  monotonic `hrtime(true)` in `HubClient::performHeartbeatTick()` (lighting up the
-  S39 Ping latency). Critically, **`/health/network` is now a cheap, side-effect-free
-  reachability probe**: the previous implementation fired a REAL
-  `POST /api/v1/servers/{id}/heartbeat` to the hub on **every** poll of the admin
-  network-health indicator (mutating hub state and hammering the hub as the poller
-  ran); it now just reads the latency/health snapshot the heartbeat fork already
-  persists. Status classification is unchanged (`healthy` <100ms, `degraded`
-  ≤500ms, otherwise `offline`; `offline` when not enrolled, no successful heartbeat
-  yet, or the heartbeat is currently failing). Single-writer discipline preserved —
-  only the heartbeat fork arms `HubClient::startHeartbeatLoop()` and writes
-  `hub-heartbeat.state.json`. Known follow-up: no `updatedAt`-staleness guard, so a
-  stale "healthy" snapshot could persist if the heartbeat fork itself hangs.
-
-- **`CollectionService` empty-TMDB-key smell** (S33). `getOrCreateCollection()` and
-  `syncCollectionForMovie()` took a `$tmdbApiKey` argument the bodies never used —
-  the scanner passed an empty string (`syncCollectionForMovie($id, '')`). The TMDB
-  key is actually resolved by the injected `TmdbProvider` (constructed with the
-  configured key), so the dead parameter is removed from both methods.
-  `syncCollectionForMovie()` now also skips cleanly (no HTTP, no DB writes, returns
-  a no-op success) when `TmdbProvider::hasApiKey()` is false, instead of issuing
-  requests that would just fail. TMDB calls continue to flow through the async
-  `MetadataHttpClient` — never a new inline/blocking call in the scan path.
-
+- **§6 dead-code removals (user-approved).** Removed confirmed-dead code paths with zero runtime callers (verified by repo-wide `grep`/`git grep` before deletion):
+  - *Run A:* `FfmpegRunner::killSegmentProcess()`; the `HwaccelCommandBuilder` class and `HwaccelProfileFactory::createCommandBuilder()`; the never-wired webhook async island `WebhookDispatcher::dispatchAsync()` + `sendToWebhookWithBackoff()`; the dead duplicate `src/Server/Http/Controllers/ArtworkController.php` (the live artwork path is `HttpHandler::serveArtwork`); and unused `RequestContext` members (`clearUserId()`, `hasProfileId()`, `clearProfileId()`). The live Hwaccel registry/profile/probe system and `WebhookDispatcher`'s live `dispatch()`/`sendToWebhook()` path are untouched.
+  - *Run B:* the dead server gapless/crossfade subsystem — `FfmpegRunner::buildGaplessSegmentCommand()`, `GaplessTranscoder`, `CrossfadeGenerator`, `GaplessPlayer`, and the now-orphaned members of `GaplessPlaybackManager` (`getPlayer()`, `getCrossfadeGenerator()`, `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()`, and later the caller-less `clearCache()`). Gapless/crossfade playback is implemented **100% client-side** in `@phlix/ui` (`useMusicPlayer.ts`), which superseded the reserved server path. `GaplessPlaybackManager` itself is kept — its live `getPreferences()` surface is still used by `MediaItemController`.
 ### Security
+
+- **`/api/v1/health/relay` and `/api/v1/health/network` are now authenticated (S437).**
+  Both routes were registered with `$router->get(path, closure)` and no middleware, while
+  every sibling `/api/v1/*` telemetry route is `AuthMiddleware`-gated. `relayHealth()`
+  returns `relay.lastConnectError` / `lastConnectErrorAt`, whose raw text is recorded by
+  `RelayConsumer::recordConnectError()` as `': ' . $e->getMessage()` — a socket-error string
+  that embeds the hub host:port. Any anonymous caller could therefore read internal relay
+  connection failures and hub network topology; S40 widened the surface by adding the
+  latency snapshot. Both registrations now sit inside a nested `''`-prefix group carrying
+  `[new AuthMiddleware()]`, so the METHOD+PATH tuples are byte-for-byte unchanged (only the
+  route-level middleware column moves — the wire-path manifest records `[]` → `[AuthMiddleware]`
+  for the two lines and nothing else). The sole consumer is the authenticated admin UI, so
+  parity is preserved. Deliberate open liveness is untouched: the separate bare `/health`
+  route (status/timestamp/version only) — the target of the Docker `HEALTHCHECK`, k8s probes
+  and `scripts/docker-boot-smoke.sh` — stays unauthenticated, so no infra probe breaks. Pinned
+  by `tests/Unit/Server/Core/HealthRoutesAuthGuardTest.php`: the production route table shows
+  both gated, anonymous dispatch to each returns 401 `auth.required` with the health payload
+  keys absent and the hub host/port/socket-error substrings absent, `/health` still answers 200,
+  and the controller still returns the documented shapes when reached. (Census re-pinned
+  1771→1772 files and 949→952 declared Request writes in the same commit — the guard test names
+  `Request` directly.)
+
+- **The last nullable admin middleware is gone — the family is closed (S338).**
+  `MaintenanceController` was the S323-phase-2 note's "one instance survives",
+  the sixth controller holding `private readonly ?AdminMiddleware $adminGuard = null`
+  whose `requireAdmin()` returned "authorised" when the guard was absent. Its
+  eight `/api/v1/admin/maintenance/*` handlers (three reads; five actions, two
+  of them destructive: `cleanup-orphaned-stats` deletes rows and
+  `dedupe-paths --apply` merges media items) are now all behind a **required,
+  non-nullable, `readonly`** `AdminMiddleware` constructor parameter; the
+  `=== null → return null` fail-open inside `requireAdmin()` is deleted and
+  `checkAccess()` is called unconditionally. Constructing the controller
+  without a gate is now an `ArgumentCountError` at the `new` — demonstrated in
+  both the rewritten wiring test and the new structural pin, each with a
+  three-argument positive control.
+
+  **The exposure class is the logged-in NON-ADMIN, not the anonymous caller.**
+  `requireAdmin()` refuses a null/empty `$request->userId` with a 401
+  `auth.required` BEFORE consulting the guard, so a gate-less construction
+  would have degraded these routes to "any authenticated user" — the same class
+  as S323 phase 2, lower than phase 1's anonymous exposure. Latent, as in every
+  prior phase: production wiring always supplied the guard, and no exploitation
+  is claimed.
+
+  **Wiring simplified because the trap is structurally impossible.** The explicit
+  `constructorParameter('adminGuard', get(AdminMiddleware::class))` binding in
+  `AdminServicesProvider` is now a plain `autowire()` — PHP-DI skips OPTIONAL
+  parameters, and there is no optional parameter left to skip. The two
+  construction sites are enumerated: the provider's autowire and
+  `AdminRoutes::register()`'s `$container->get()` (which resolves eagerly at
+  bind time, so an un-suppliable gate fails loudly at boot, not silently per
+  request). There was no live `$container->has()` guard for this controller.
+
+  **The fail-open pin is inverted.** `MaintenanceContainerWiringTest`'s
+  `test_an_unwired_controller_really_does_lose_the_in_body_admin_check()`
+  demonstrated the old hazard (2-arg construction → null guard → non-admin gets
+  200). That construction path no longer exists; the test now proves the new
+  contract — reflective two-argument construction throws `ArgumentCountError`
+  (positive control included), and a wired controller refuses a non-admin with
+  403 `auth.not_admin`.
+
+  **The seventh structural pin lands where the walker can see it.**
+  `MaintenanceControllerAdminGateIsStructuralTest.php` lives at
+  `tests/Unit/Server/Http/Controllers/Admin/` — inside the recursively-walked
+  `PIN_DIRECTORY`, NOT beside the controller's other tests in
+  `tests/Unit/Admin/Maintenance/` (which the S323-phase-2 recursion fix
+  deliberately does not reach) — and `RouterDispatchableHandlersTest`'s pin
+  count is bumped 6 → 7 in the same change. The pin uses the shared
+  `RouterDispatchableHandlers` trait (never a copied helper), asserts its
+  denominator (8 handlers, all gated — `UNGATED_REQUEST_HANDLERS` is empty),
+  drives every handler anon/non-admin/admin, and carries two secondary nets: a
+  per-handler source check that each gated handler reaches `requireAdmin()`
+  (directly or via `runTask()`) and a global call-site count of 4 (`tasks`,
+  `jobs`, `job`, and the single `runTask()` call that gates all five actions).
+  All three regression shapes were demonstrated to fail it on scratch copies:
+  a restored nullable/defaulted gate, a re-added `setAdminGuard()` setter, and
+  newly added ungated handlers in BOTH escaping spellings (`mixed $request`
+  native, and `Request|Response` union) — the drift detector enumerates 10 vs
+  the asserted 8. A tokenized `?AdminMiddleware` scan over all of `src/`
+  (comments stripped) now returns **zero** hits; the other eight raw hits are
+  the S282/S323 conversion-comment docblock prose, which the tokenizer
+  correctly ignores.
+
+- **The LDAP operation-timeout bound is now asserted to FIRE, not just declared (S328).** The
+  `LDAP_OPT_TIMEOUT` option in `LdapConnection::connectionConfig()` had only config-presence
+  coverage — no test opened a real LDAP socket, so a regression that kept the config literal
+  present but rendered the bound ineffective at runtime passed silently. `LdapConnectionTimeoutTest`
+  now carries two real-timing cases against a controlled dead dependency on loopback: a peer that
+  accepts the TCP handshake and never answers consumes the 5-second operation bound (measured
+  ~5.0 s, asserted `>= 0.5` and `< 8.0`), while a refused peer fails fast (measured < 0.5 s) —
+  both fail with the identical `success:false, error:'ldap_error'` shape, so elapsed time is the
+  only discriminator. Mutations prove the guard: removing the option turns the config assertions
+  red and makes the real-timing case hang; bloating `OPERATION_TIMEOUT_SECONDS` to 15 turns the
+  upper-bound assertion red at ~15.0 s.
+
+- **The admin gate on four more controllers is now a construction-time requirement, not an optional
+  one (S323, phase 2 of 2 — S323 is complete).** `WebhookAdminController`, `MediaMatchController`,
+  `MediaPosterController` and the TRaSH-Guides `Arr\SyncController` each held their `AdminMiddleware`
+  in a **nullable property filled by an optional `setAdminMiddleware()` setter**, with
+  `requireAdmin()` wrapping its decision in `if ($this->adminMiddleware !== null)` — the identical
+  shape phase 1 removed from `ThemeMediaController`. A controller built without the setter returned
+  "authorised" from `requireAdmin()` **without any admin decision having been taken**, across twelve
+  endpoints:
+
+  | Verb | Path | Controller |
+  |------|------|------------|
+  | GET    | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
+  | POST   | `/api/v1/admin/webhooks`            | `WebhookAdminController` |
+  | PUT    | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
+  | DELETE | `/api/v1/admin/webhooks/{id}`       | `WebhookAdminController` |
+  | POST   | `/api/v1/admin/webhooks/{id}/test`  | `WebhookAdminController` |
+  | GET    | `/api/v1/media/{id}/match/search`   | `MediaMatchController` |
+  | POST   | `/api/v1/media/{id}/match/apply`    | `MediaMatchController` |
+  | GET    | `/api/v1/media/{id}/posters`        | `MediaPosterController` |
+  | PUT    | `/api/v1/media/{id}/poster`         | `MediaPosterController` |
+  | POST   | `/api/v1/admin/sync/trash-guides`   | `Arr\SyncController` |
+  | GET    | `/api/v1/admin/sync/status`         | `Arr\SyncController` |
+  | PUT    | `/api/v1/admin/sync/enable`         | `Arr\SyncController` |
+
+  **The severity here is LOWER than phase 1's, and the difference is stated rather than implied.**
+  All four refuse an unauthenticated caller BEFORE consulting the middleware (`requireAuth()`, or the
+  equivalent empty-`$request->userId` check), so the missing decision would have degraded these
+  routes to **any authenticated user** — never, as in phase 1, to an anonymous one. As in phase 1 it
+  was **latent and no exploitation is claimed**: every production wiring site called the setter. The
+  change removes the possibility structurally rather than closing an observed bypass, because "the
+  wiring calls the setter" is a property of today's wiring and not of the class, and PHP-DI's
+  `autowire()` skips optional parameters.
+
+  The null state is now unrepresentable on all four: `AdminMiddleware` is a **required, non-nullable,
+  `readonly`** constructor parameter, `setAdminMiddleware()` is deleted, and `checkAccess()` is called
+  unconditionally. Constructing one without a gate is an `ArgumentCountError` at the `new`. Every
+  `if ($container->has(AdminMiddleware::class))` escape hatch is deleted — **four** of them, one each
+  in `Application::getWebhookAdminController()`, `getMediaMatchController()`, `getArrSyncController()`
+  and `getMediaPosterController()`. `MediaPosterController`'s second construction site,
+  `WebPortalRouter`'s admin group, never had a `has()` guard: it called `setAdminMiddleware()` inside
+  an `if ($this->userRepository !== null && $this->auditLogger !== null)` wiring guard that is
+  fail-CLOSED (without those dependencies the poster routes are not registered at all — verified by
+  exercise: 404 on every call), and that call is now a constructor argument. The dead container-less
+  fallback in `getWebhookAdminController()` / `getArrSyncController()` is replaced by a loud
+  `?? throw` at boot. A container that cannot supply the middleware now fails at route-registration
+  time instead of yielding a working-but-ungated controller.
+
+  **S282's `LibraryController` pin is re-based on the population that can actually regress.** It
+  counted `requireAdmin()` CALL SITES and asserted 14 — a number that only rises when a handler is
+  added WITH a gate, so it was structurally blind to a fifteenth handler added WITHOUT one. It now
+  enumerates every handler the router can dispatch and requires each to be listed as either
+  admin-gated or explicitly exempt; the call-site count survives as a secondary net, so nothing it
+  caught was traded away.
+
+  **The enumeration itself had a hole, found in review and closed in ONE place.** The
+  "does this method take a `Request`" helper was six verbatim private copies matching a native type
+  spelled `Request` or an `@param` mentioning `Request` — and asserting in its own docblock that the
+  population was closed. It was not: `public function purge(mixed $request, array $params)` and
+  `public function purge(Request|Response $request, array $params)` were each measured passing all
+  six pins **and** `phpstan analyse -c phpstan.neon.dist` (src/, level 9), while being fully
+  dispatchable. The predicate is now a single shared trait
+  (`tests/Support/Http/RouterDispatchableHandlers.php`) that derives the answer from the dispatcher —
+  "would PHP let `$instance->$method($request, $params)` reach this body?" — rather than from a list
+  of type spellings, and it carries its own pin over a fixture of every shape, both escaping
+  spellings included. The secondary call-site counts now run over tokenised source with comments
+  stripped — as do the per-method source slices the null-guard checks read — so a comment quoting
+  the counted literal can no longer inflate a count or stand in for the real call. (Tokenising
+  removes the COMMENT class of that trap and only that class: a string literal or heredoc holding
+  the same text still counts. Stated rather than glossed, and no controller does it.)
+
+  **The pins that share the predicate are discovered recursively**, so the enforcement cannot be
+  side-stepped by filing the next pin in a subdirectory. `RouterDispatchableHandlersTest` walks
+  `tests/Unit/Server/Http/Controllers/` (all depths) for `*AdminGateIsStructuralTest.php`, derives
+  each class name from its path, and asserts the pin count — 6 today, re-measured rather than
+  assumed — plus that every pin found uses the trait. The previous flat `glob()` could not see a
+  pin under `Controllers/Admin/`, which is where the next one would naturally land.
+
+  **Existing tests that pinned the fail-open in EFFECT now run through a real gate.**
+  `SyncControllerTest`, `WebhookAdminControllerTest`, `MediaMatchControllerTest`,
+  `MediaPosterControllerTest` and `WebhookTestDeliveryTest` built these controllers with no
+  middleware at all while sending an admin user id and asserting a handler outcome — so they
+  depended on the null branch without ever saying so. Each now constructs a real `AdminMiddleware`
+  admitting exactly the user id it sends (not a permissive stub), with every existing assertion
+  unchanged.
+
+  ⚠ **"S323 is complete" means its five named controllers, not that this shape is gone from the
+  tree.** One instance survives, out of S323's scope and owned by **S338**:
+  `src/Server/Http/Controllers/Admin/MaintenanceController.php` holds
+  `private readonly ?AdminMiddleware $adminGuard = null` and its `requireAdmin()` returns
+  "authorised" when that dependency is absent. Its exposure is lower — the eight `/maintenance/*`
+  routes sit inside `AdminRoutes`' `[$adminMiddleware]` group, so the in-body check is a second gate
+  rather than the only one — but that is a property of the current route registration and not of the
+  class, which is the argument this change exists to reject. Recorded here rather than left in a
+  worklog.
+
+- **The admin gate on the two theme-media mutation endpoints is now a construction-time
+  requirement, not an optional one (S323, phase 1 of 2).**
+  `POST /api/v1/libraries/{id}/theme-media/scan` and `DELETE /api/v1/libraries/{id}/theme-media`
+  are admin-only. Until now `ThemeMediaController` held its `AdminMiddleware` in a **nullable
+  property filled by an optional `setAdminMiddleware()` setter**, and each of the two handlers
+  wrapped its decision in `if ($this->adminMiddleware !== null)`. A controller constructed
+  without that setter therefore ran both handler bodies with **no admin decision having been
+  taken at all**.
+
+  **What that would have meant, stated precisely.** These two routes are registered bare in
+  `Application::loadLibraryRoutes()` — there is no `AuthMiddleware` group and no `requireAuth()`
+  ahead of the inline check — so the missing decision would not merely have degraded the routes
+  to "any logged-in user": they would have been reachable by an **anonymous** caller. That is a
+  more severe class than the same shape S282 removed from `LibraryController`, where an auth
+  layer still stood in front.
+
+  **This was latent, and no exploitation is claimed.** `ThemeMediaController` has exactly one
+  production construction site (`Application::getThemeMediaController()`), and it always wired
+  the middleware, so every controller this server has actually served requests from carried its
+  gate. The defect was in what the class *permitted*, not in what the shipped wiring *produced*;
+  the change removes the possibility structurally rather than closing an observed bypass. It
+  matters because "the wiring calls the setter" is a property of today's wiring and not of the
+  class, and because PHP-DI's `autowire()` skips optional parameters — the mechanism by which
+  this codebase has produced silently-null dependencies before.
+
+  The null state is now unrepresentable:
+
+  - `AdminMiddleware` is a **required, non-nullable, promoted `readonly`** fourth constructor
+    parameter; `setAdminMiddleware()` is deleted; `checkAccess()` is called unconditionally in
+    both `scanThemeMedia()` and `deleteThemeMedia()` — there is no null branch left to take.
+    Constructing the controller without a gate is an `ArgumentCountError` at the `new`
+    (demonstrated, not asserted from reading), rather than a silent authorization downgrade at
+    request time.
+  - `Application::getThemeMediaController()` loses **both** escape hatches: the dead
+    container-less fallback (`$this->container` is written exactly once, from a non-nullable
+    constructor parameter, so that branch was unreachable — and it hardcoded a
+    `127.0.0.1`/`root`/`password` connection) and the `if ($container->has(AdminMiddleware::class))`
+    wiring guard. A container that cannot supply the middleware now fails loudly at
+    route-registration time instead of yielding a working-but-ungated controller.
+
+  `GET /api/v1/libraries/{id}/theme-media` is a genuine read path and is deliberately **not**
+  admin-gated; that is unchanged, and is pinned as an explicit exemption rather than left
+  implicit.
+
+  **Why a structural test and not only behavioural ones.** A re-added setter that nobody calls
+  changes no behaviour, so no behavioural test can see it: re-introducing an empty
+  `setAdminMiddleware()` was measured to redden exactly one test — the structural pin — with the
+  whole behavioural suite still green. `ThemeMediaControllerAdminGateIsStructuralTest` therefore
+  rejects a nullable type, a default value, a re-added setter, and a re-added
+  `if ($this->adminMiddleware !== null)` guard, and enumerates every public `Request`-taking
+  handler on the controller so that a **new** handler added without a gate — including a `static`
+  one, or one whose `Request` parameter is declared only in a docblock — fails the suite until it
+  is classified as either admin-gated or explicitly exempt. Behavioural coverage pins all three
+  arms (anonymous → `401 auth.required`, authenticated non-admin → `403 auth.not_admin`, admin →
+  reaches the handler body) on both mutations, with the admin arm acting as the succeeding
+  control so a blanket-deny regression cannot read as a pass.
+
+  **This was phase 1 of 2, and it is superseded — read the phase-2 entry above for the current
+  state.** When this shipped, the identical optional-`setAdminMiddleware()` shape was still present
+  on `WebhookAdminController`, `MediaMatchController`, `MediaPosterController` and
+  `Arr\SyncController`, and S282's `LibraryController` pin still enumerated `requireAdmin()` call
+  sites rather than handlers. Both statements are now **historical**: phase 2 removed the shape from
+  all four controllers, assessed their exposure (auth-only degradation, not anonymous), and re-based
+  S282's pin on the wider enumeration. S323 is complete.
 
 - **OIDC callback hardened against open-redirect / token exfiltration**
   (updates.md #37 / S44). Wiring the previously-dead OIDC flow activated an unchecked
@@ -7091,657 +7699,7 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   leaving the stored value untouched — without that guard, fixing the GET alone would have made the
   first Save overwrite all three secrets with the literal `***`.
 
-### Fixed
-
-- **Playback stats now record each item's real `media_items.type` instead of hardcoding `movie`**
-  (updates.md #31 / S31). `PlaybackController::dispatchPlaybackStarted()` previously wrote a
-  literal `'movie'` type for every playback-start stats event, so Most Watched / Top Media and
-  every other type-partitioned stat mis-attributed episodes, tracks, etc. as movies. A new
-  private `lookupMediaType()` runs `SELECT type FROM media_items WHERE id = ? LIMIT 1` and records
-  the raw stored ENUM value verbatim (no remap — `photo` stays `photo`, honoring the 13-member
-  type ENUM), falling back to `'movie'` only when the row is missing/empty (the same default
-  `MediaItemShaper::shape()` coerces unknown types to). The lookup runs only on the stats path
-  (`statsCollector !== null && userId !== ''`), so a non-stats deployment pays no extra query.
-
-- **`playback_state` progress upserts now update in place instead of inserting a new row every ~15s**
-  (updates.md #29 / S29). Every progress tick from `PlaybackController::reportProgress()` (and
-  `StreamManager::persistStreamState()`) writes via `INSERT ... ON DUPLICATE KEY UPDATE`, but the
-  `playback_state` table only carried its `id` PRIMARY KEY — a fresh random UUID per call — and had no
-  key on the upsert's real conflict target, so `ON DUPLICATE KEY` could never fire and each ~15s tick
-  inserted a brand-new row, bloating the table and undermining resume / Continue Watching. Adds
-  `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` so the existing upserts
-  finally update the matching row. No controller change was needed — both upserts already INSERT
-  `(id, session_id, media_item_id, ...)` and touch only `position_ticks`/`duration_ticks`/
-  `playback_status`/`updated_at` in their `ON DUPLICATE KEY UPDATE`, i.e. they already target exactly
-  the new key's columns. Mirrors the migration-072 `path_hash` dedupe-then-constrain precedent:
-  `migrations/090_playback_state_session_media_unique.sql` is documentation-only (it splits to zero
-  executable statements, reserving the number in the ledger), and the unique key is added out-of-band
-  by the new one-time `migrations/cleanup_090.php`, which first merges any pre-existing duplicate
-  `(session_id, media_item_id)` groups — keeps the max `updated_at`, tie-break max `id`, batched via
-  the new `Phlix\Session\PlaybackStateDeduper` so a large production table drains safely across
-  multiple bounded passes — so the `ADD UNIQUE KEY` cannot fail 1062.
-  **⚠️ Post-deploy one-time step (like `cleanup_072.php`): after migration `090` is applied, run
-  `php migrations/cleanup_090.php` ONCE.** `scripts/install.sh` and the Docker entrypoint do NOT run it
-  automatically; until it runs, the unique key does not exist and progress writes keep duplicating.
-  The script is idempotent and re-run-safe (the dedupe is a no-op once clean and `addUniqueKey()`
-  swallows a duplicate-key-name; re-run it if it reports lingering duplicates).
-
-- **Top Media / Top Users leaderboards no longer show blank rows for deleted items/users**
-  (updates.md #14 / S14). The admin dashboard's Top Media list previously rendered play-count
-  rows with no title/poster (and Top Users rows with no username) whenever a media item or user
-  that had recorded plays was later deleted — the aggregate queries counted the surviving
-  `stats_playback_events` rows while the per-row hydrate found nothing to render.
-  `StatsCollector::getTopMedia()` / `getTopUsers()` now `INNER JOIN media_items` / `users`
-  (`mi ON e.media_item_id = mi.id` / `u ON e.user_id = u.id`), so events whose item or user no
-  longer exists are excluded at the query level, mirroring `WatchHistoryService`. A
-  defense-in-depth null-skip in `DashboardService::getTopMedia()` / `getTopUsers()`
-  (`continue` when `findById()` / `getUsernameById()` returns null) closes the narrow TOCTOU
-  window if a row is deleted between the aggregate query and the hydrate. **Decision: orphaned
-  rows are hidden**, not shown as a "(deleted item)" placeholder carrying the historical
-  play-count. The joins are 1:1 on the PKs, so watch-time / play-count / ordering semantics for
-  surviving items and users are unchanged, and the underlying `stats_playback_events` rows are
-  retained (purging orphaned stats is a separate maintenance task, S77). New positive coverage in
-  `DashboardServiceTest` (null-skip) and `StatsCollectorTest` (INNER JOIN present).
-
-- **DLNA Start/Stop toggle now genuinely enables/disables the ContentDirectory service**
-  (updates.md #28 / S28). The admin `POST /api/v1/admin/dlna/start` and `/stop` endpoints
-  previously only flipped an in-memory boolean on the single request-worker's `CdsServer` (the SSDP
-  announce), which neither registered the browse routes, reached the other worker processes, nor
-  survived the next reload — the ContentDirectory routes are registered once per worker at boot in
-  `Application::loadCdsRoutes()`, gated on the effective `dlna.cds_enabled` setting. `start()`/
-  `stop()` now **persist** `dlna.cds_enabled` via the shared `SettingsRepository`
-  (`set(..., 'bool')`, the same store the generic admin settings page writes) and schedule a
-  **graceful SIGUSR2 reload** via a new reusable `AdminRestartController::scheduleGracefulReload()`,
-  so every worker re-reads the setting at its next `onWorkerStart` and registers or drops the CDS
-  routes accordingly. Idempotent — `409` when already in the desired state (no write, no reload);
-  `503` when the settings store is unwired; `500` if the persist throws.
-  `GET /api/v1/admin/dlna/status` now reports truthfully: `enabled` (persisted intent, read live
-  from the store), `running` (whether THIS worker is actually serving the routes right now, frozen
-  at its boot), and a new transient `reloadPending` (`enabled !== running`) the SPA can surface as
-  "applying…". The reload is a Workerman one-shot timer + `posix_kill` probe — no blocking I/O,
-  exit, or static request state in the request path. New `AdminDlnaServerControllerTest` (11 tests)
-  and first-ever coverage of `scheduleGracefulReload()` in `AdminRestartControllerTest`.
-
-- **DLNA ContentDirectory SOAP control parsing hardened against DIDL-Lite argument bleed**
-  (updates.md #28 / S28). The live control parser `DlnaContentDirectoryController::parseSoapBody`
-  (the `POST /dlna/content_directory` path) walked the whole document with `XMLReader`, taking the
-  first text value for each localName found at ANY depth — so a same-named element nested inside
-  embedded DIDL-Lite metadata (e.g. `<Filter><ObjectID>injected</ObjectID></Filter>`) could bleed
-  into a top-level argument. A new namespace-aware, XXE-safe `Phlix\Dlna\SoapArgumentExtractor`
-  reads arguments ONLY from the SOAP action element's DIRECT children (XPath `*`, so a wrapper
-  element carrying nested metadata contributes no text and is skipped), parsing with `LIBXML_NONET`
-  and never `LIBXML_NOENT`/`LIBXML_DTDLOAD` so external entities are never substituted.
-  `DlnaServer::parseSoapBody` was de-duplicated onto the same helper (single source of truth, so the
-  two parsers cannot diverge). The legacy `/cds/control` handler
-  (`CdsControlHandler::parseSoapEnvelope`) was already direct-child scoped and is left unchanged.
-  Real Browse/Search envelopes are unaffected; the empty-body `400` and the unknown-action UPnP
-  fault are preserved. New `SoapArgumentExtractorTest` (18 tests) plus a regression test asserting a
-  nested same-named element does not bleed into the extracted arguments (mutation-verified against
-  the old any-descendant walk).
-
-  **S218 follow-up — `u:Search` now has LIVE-path coverage, and the dead pointer is labelled.**
-  Before this, `grep -F 'u:Search' tests/` hit a docblock and `DlnaServerTest.php` only. Those cases
-  drive `DlnaServer::processSoapRequest()`, which has **no production caller**: a repo-wide search
-  (src/, tests/, `vendor/`, and the sibling repos under `/home/sites/phlix`) finds its definition,
-  one docblock mention, and seven callers — every one of them inside `DlnaServerTest.php` — and
-  `DlnaServer` performs no dynamic dispatch. The container builds the class only for
-  `getContentDirectory()`, `getScpdXml()` and the device description. So Search was covered only on
-  code no renderer can reach, while Browse alone was covered on the served path.
-
-  New `tests/Unit/Server/Http/Controllers/Dlna/DlnaContentDirectorySearchLivePathTest.php` (6 tests)
-  drives real namespaced `u:Search` envelopes with a real `SOAPACTION` header through
-  `DlnaContentDirectoryController::handle()` — the `POST /dlna/content_directory` route registered in
-  `Application::loadCdsRoutes()`. It pins: the arguments reaching `ContentDirectory::search()`
-  verbatim; a Browse **control** on the same driver taking the other `dispatchAction()` arm (so the
-  Search assertion is discriminating, not just "200 OK"); an end-to-end filter through a REAL
-  `ContentDirectory` (two rows in, one out — a Search that degraded to a Browse returns both); the
-  DIDL-bleed hardening in a Search-shaped variant (nested `<SearchCriteria>` inside `<Filter>`, no
-  top-level one); and UPnP error 800 surfacing as a fault rather than an empty 200. An
-  anti-vacuity floor asserts the fixture really is a namespaced `<u:Search>` first child of
-  `<Body>`, so the coverage cannot silently weaken below its own description.
-
-  `DlnaServer::processSoapRequest()`, `SoapArgumentExtractor`'s class docblock and `DlnaServerTest`'s
-  class docblock now each say, in place, that this path is not served and where live coverage
-  belongs. No behaviour changed.
-
-- **CSP `img-src` allowlists the TMDB image CDN so remote poster/backdrop/cast artwork renders**
-  (updates.md #1). `SecurityHeaders::contentSecurityPolicy()` previously served artwork loaded
-  directly from TMDB only under the default `'self'` policy, so any image not yet cached on our
-  origin was blocked by the browser. `img-src` now explicitly names the two TMDB hosts —
-  `https://image.tmdb.org` and `https://tmdb.org` (no wildcard) — alongside `'self' data: blob:`.
-  This is a **stopgap**: an inline `// TODO(updates.md #47 / S71-S73)` marks it for removal once the
-  generic image caching/loader work proxies all remote artwork through our own origin. Single source
-  of truth in `SecurityHeaders`, also consumed by the `/app` shell's nonce'd variant; covered by an
-  extended `SecurityHeadersTest` asserting both hosts are present and no wildcard is used.
-
-- **The last two dishonest `restart: true` settings are now honest** (closes out the item below,
-  which fixed 14 of 16 keys). Bumps `detain/phlix-shared` to **v0.26.0** (43 → 42 settings keys).
-
-  **`hwaccel.probe_timeout` — DELETED, not wired.** It resolved to a config default, so it passed
-  every resolvability test, but **no code ever read the effective value** — while the admin UI still
-  rendered "requires a server restart to take effect" beside it. Two independent causes, both
-  re-verified: `HwaccelRegistry` is built via `getInstance()` with no config
-  (`FfmpegRunner.php:1359`) and its `initialize()` hands `HwaccelProbe` only a binary path
-  (`HwaccelProbe.php:51`); and `HwAccelConfig::get()` resolved
-  `$transcodingConfig['probe_timeout'] ?? $hwaccelBase['probe_timeout']` (`HwAccelConfig.php:103`)
-  while `config/transcoding.php:33` always declares the key, so the `hwaccel.*` side could never win.
-  Deleted rather than wired (plan §4 rule 10) because wiring is neither cheap nor safe: the real
-  timeouts are **two different** hardcoded constants (`ShellTimeout::FFMPEG_TIMEOUT = 10`,
-  `::GPU_TOOL_TIMEOUT = 5`) reached through 22 static call sites across seven `VendorProbe` classes;
-  the schema permitted `minimum: 0` and coreutils `timeout 0 CMD` means **no timeout**, which would
-  let an admin hang a resident worker at boot — precisely what `ShellTimeout` exists to prevent; and
-  the shipped `helpText` described a per-file pre-transcode probe that does not exist (the real one
-  is a one-time process-wide capability scan). `config/hwaccel_base.php` and `config/transcoding.php`
-  keep their `probe_timeout` literals, so the merged array shape is unchanged — it is simply no
-  longer an admin setting. Flipping `restart` to `false` was rejected: that would claim the key is
-  *live*, which is even less true.
-
-  **`process.<worker>.enabled` (5 keys) — the half-live asymmetry is now disclosed in the UI.** The
-  old `helpText` claimed the worker "is not spawned", which is **false**: `start.php` spawns it
-  regardless and the gate lives in each worker's `onWorkerStart`, which logs and skips arming the
-  poll timer. Since the admin only ever sees `helpText`, all five now state that turning a worker
-  OFF applies after a restart; that turning one back ON also applies after a restart *unless* it is
-  disabled in the on-disk `config/process.php`, in which case the in-app Restart button (SIGUSR2, a
-  graceful reload of the already-executed master) cannot help and the service itself must be
-  restarted; and that a worker switched off here still occupies an idle process. No behaviour
-  change — the gate is unchanged and correct; only the promise made to the admin was wrong.
-
-  Server-side: the hand-written allow-list lock-in and key-count assertions in
-  `tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php` go 43 → 42 (the list is
-  deliberately **not** derived from the schema — mutation-verified: re-adding the deleted key to it
-  turns the test red). Two tests that used `hwaccel.probe_timeout` merely as a convenient int-typed
-  key now use `marker_detection.intro_max_duration`.
-  `tests/Unit/Admin/SettingsDefaultResolvabilityTest` still passes with **every** key resolving.
-  `docs/dev/settings-restart-gap.md`'s per-key table updated to final reality.
-
-- **`restart: true` settings now actually take effect on restart.** The shared settings schema marks
-  16 boot-only keys `"restart": true` and the admin SPA renders "requires a server restart to take
-  effect" beside each one — a promise nothing kept. `SettingsRepository::getEffective()` resolves
-  `override ?? default`, but almost nothing called it: every other consumer read the boot `$config`
-  array (which `start.php` `include`s ONCE in the master and closes over) or `include`d a
-  `config/*.php` file straight from disk, and **nothing merged the `server_settings` table into
-  either**. Changing one of these settings and restarting — even a full `systemctl restart` — did
-  nothing. New `Phlix\Config\EffectiveConfig` loads the persisted overrides once per process and
-  overlays them onto the config defaults using the same dotted-key semantics as
-  `SettingsRepository` (leading segment = config *file*, remainder = path inside it). It is called
-  as `bootstrapAndOverlay($config)` at the top of every `onWorkerStart` in `start.php` (HTTP,
-  WebSocket, hub-heartbeat, relay-tunnel, managed workers) **and** in `public/index.php`, before
-  `ContainerFactory::create()`, so every DI provider that reads boot config observes the effective
-  value with no per-provider wiring; consumers that bypass `$config` by `include`ing a config file
-  directly (`HwAccelConfig::get()`, `FfmpegRunner::getTranscodeTimeout()`,
-  `Recorder::getTranscodeTimeout()`) now read `EffectiveConfig::file()` instead.
-  **Note the recommended design was wrong and was corrected:** overlaying only the boot `$config`
-  array covers just 4 of the 16 keys, because dotted keys name config *files* and only
-  `server.hls.*` lives in `config/server.php`.
-  **15 of 16 keys are now live after a restart or the in-app graceful reload.** Two honest
-  exceptions, documented rather than hidden: `hwaccel.probe_timeout` has **no consumer at all**
-  (`HwaccelRegistry` is constructed without this config) and is additionally shadowed by
-  `config/transcoding.php`'s own always-present `probe_timeout` — it needs a `phlix-shared`
-  follow-up to either wire it up or drop the key; and `process.<worker>.enabled` can *disable* a
-  worker on reload (the gate moved into the worker's own `onWorkerStart`, which skips arming the
-  poll timer and logs) but cannot *enable* one that `config/process.php` disables on disk, because
-  the master's spawn loop runs before `Worker::runAll()` and Workerman cannot fork a Worker group
-  afterwards. A settings-store failure — DB down, `server_settings` missing on a fresh install —
-  degrades to the shipped file defaults rather than crash-looping the worker, and an override is
-  applied only where the default already exists, so a malformed or unknown persisted row cannot
-  inject a config key. Per-key status table and the reasoning behind both exceptions live in
-  `docs/dev/settings-restart-gap.md`, rewritten from "known gap" to reflect the fix.
-
-### Removed
-
-- **`dash_url` dropped from the transcode/status response payloads** (updates.md #11 / S11).
-  `POST /api/v1/media/{id}/transcode` and `GET /api/v1/transcode/{jobId}/status` (via
-  `TranscodeController::start()` / `::status()`), plus both `TranscodeManager::ensureHlsJob()`
-  return arrays (reused-job and fresh-job), previously advertised a
-  `dash_url` → `/dash/{job}/manifest.mpd`. Real DASH is **not** produced by the on-demand
-  pipeline: `ensureHlsJob()` emits a multi-variant HLS `.ts` ladder and never invokes the CMAF
-  DASH muxer (`FfmpegRunner::buildCmafCommand()` / `startCmafTranscode()` exist but are not wired
-  into the on-demand flow), so that manifest never exists on disk and every request to the
-  advertised URL 404'd. The field is now removed — and the `ensureHlsJob()` `@return` docblock
-  narrowed to match — so clients are no longer handed an unresolvable URL. The DASH library
-  (`DashStreamer`, `StreamManager`, and the CMAF muxer path) is left untouched, reserved for real
-  DASH support tracked as **S56-S60** (updates.md #57). Repo-wide grep confirmed no `dash_url`
-  reader remained in `src/`, `tests/`, phlix-ui, or web-ui — no known client depended on the key's
-  presence; tests dropped their `dash_url` assertions in lockstep and added absence guards.
-
-- **Dead `Router::dashStreaming()` route removed** (updates.md #28 / S28). The helper wired `/dash/*`
-  to `DashController::getMasterManifest`/`getAdaptationSetManifest`/`getSegment` — methods that do
-  not exist — and had ZERO callers (grep-clean across `src/`, `tests/`, `public/`). It is deleted.
-  The real DASH routes registered in `Application::loadStreamingRoutes()`
-  (`GET /dash/{job}/manifest` → `getManifest`, `GET /dash/{job}/{file}` → `serveFile`) and the
-  `DashStreamer`/`DashController` library are untouched, reserved for real DASH support tracked as
-  **S56-S60** (updates.md #57). An incidental genuinely-dead `$scpdUrls` property + `setupScpdUrls()`
-  in `DlnaServer` (surfaced by the SOAP-parser rewrite; `getScpdXml()` reads the services directly
-  and never the map) was removed in the same step. A `DashRouteRemovalTest` guards that the dead
-  route and phantom controller methods stay gone while the real `getManifest`/`serveFile` remain.
-
-### Added
-
-- **`enum` / `minimum` / `maximum` are now enforced on `PUT /api/v1/admin/settings`.** The endpoint
-  previously validated the internal *type* only; the schema's 4 `enum`, 21 `minimum` and 18
-  `maximum` constraints were emitted to the UI for display and never checked on write, so every
-  bound was cosmetic and trivially bypassed with a direct PUT (`auth.signup_mode` could be set to
-  any string, `transcoding.max_concurrent_transcodes` to `0` or `999999`). Coerced values are now
-  validated against their own JSON-Schema property sub-schema using `justinrainbow/json-schema`
-  (already a dependency, previously unused here), reported through the same `errors{}` map the SPA
-  renders as inline per-field errors. The UI's "Auto-detect" accelerator option is the schema's
-  empty-string enum member and validates directly — the narrow shim that briefly translated the
-  SPA's `"null"` string against a JSON `null` enum member was removed once `phlix-shared` v0.24.0
-  swapped that member for `""` (see *Changed* below).
-- **`SettingsRepository::hasDefault()`**, distinguishing "the config declares this key and its value
-  is null" from "no such config path exists" — which `getDefault()` cannot express. Backs a new
-  regression test asserting every schema key resolves to a real config default. That test ran
-  quarantined behind a 25-key `PENDING_SHARED_REVENDOR` list while the schema still declared
-  unresolvable keys; the v0.24.0 re-vendor removed them all, so the constant and its companion
-  staleness test were deleted and the assertion now runs unconditionally over all 40 keys —
-  **43 as of the v0.25.0 re-vendor below**, still unconditionally, still with no quarantine.
-
-### Changed
-
-- **Bumped `detain/phlix-shared` to `^0.27.0`; the server-settings schema went 42 keys → 41.**
-  `transcoding.include_software_fallback` was deleted upstream as a **consumerless** key —
-  the same defect shape as `hwaccel.probe_timeout` in v0.26.0, and the reason
-  `SettingsDefaultResolvabilityTest` did not catch either: **resolvable ≠ consumed.** The
-  key resolved cleanly to `config/transcoding.php:44` and `HwAccelConfig::get()` copied it
-  into the merged hwaccel array, but nothing read the merged value. That array reaches
-  exactly two consumers, and neither reads this key: `FfmpegRunner::setConfig()`
-  (`Application.php:2971`, `TranscodeServicesProvider.php:149`), which reads precisely
-  `tone_mapping_mode` / `prefer_hdr_output` / `preferred_accelerator` / `enabled` /
-  `prefer_hardware` and whose `getConfig()` accessor has no caller in `src/`; and
-  `HwaccelRegistry`, whose software-fallback branch (`HwaccelRegistry.php:160,206`) reads
-  the **separate** `hwaccel.fallback_to_software` key out of `config/hwaccel_base.php`. So
-  the toggle was inert in both directions — turning it off never disabled software
-  fallback, turning it on never enabled anything.
-
-  Deleted rather than wired (plan §4 rule 10) because the working equivalent already
-  exists: `hwaccel.fallback_to_software` is genuinely consumed and is the key to expose if
-  a software-fallback toggle is wanted. The `config/transcoding.php` default and the
-  `HwAccelConfig::get()` merge line are **retained**, now carrying a "NOT AN ADMIN SETTING"
-  comment, so the merged array shape is unchanged for any caller reading it defensively —
-  mirroring exactly what v0.26.0 did for `probe_timeout`. The `assertCount` lock-in and its
-  dotted-key → internal-type map in `AdminSettingsControllerTest` were updated to 41 and
-  remain **deliberately hand-written**: deriving them from the vendored schema would make
-  the assertion tautological. Mutation-verified by re-adding the key to the hand-written
-  list and confirming the test goes red against the 41-key vendored schema.
-
-- **Bumped `detain/phlix-shared` to `^0.25.0`; the server-settings schema went 53 keys → 40 → 43.**
-  The v0.24.0 re-vendor deleted every key that resolved to no config path and had no runtime
-  consumer — the `trakt.*` trio, the `subsystem.*`, `database.*` and `hls.*` families, the duplicated
-  `transcoding.*` tunables (the surviving equivalents live under `ffmpeg.*`, `server.hls.*` and
-  `process.*`), and the unimplemented `metadata.preferred_*` / `metadata.fanart_api_key` / `auth.*`
-  extras. Those keys rendered in the admin Settings page, accepted a `PUT`, and reported `null`
-  forever; they are now simply absent. The controller derives its allow-list from the schema, so no
-  server-side key list needed editing — but the `assertCount(53)` lock-in test and its explicit
-  dotted-key → internal-type map were updated to the real count, deliberately kept hand-written so an
-  unreviewed schema addition still fails loudly rather than being auto-derived into a no-op.
-
-  **Correction — the `trakt.*` trio should not have been in that sweep, and is restored in
-  v0.25.0 (see *Fixed* below).** Unlike the other deletions, those three keys always had a real
-  runtime consumer; only their *config default* was unreachable. Deleting them cost a genuine
-  admin capability, and the earlier suggestion here to re-add them as `scrobblers.trakt.*` was
-  wrong: that prefix does resolve, but renaming would orphan `trakt.*` rows already persisted in
-  `server_settings` on live installs.
-- **`transcoding.preferred_accelerator`'s "auto-detect" sentinel is now the empty string, not
-  `null`.** `config/transcoding.php` defaulted to `getenv('PREFERRED_ACCELERATOR') ?: null` against a
-  schema whose auto-detect enum member is `""`, so `GET /api/v1/admin/settings` returned `null`, the
-  SPA's `<select>` matched no option and rendered blank, and saving that blank value back failed the
-  new enum enforcement. The config default is now `''`. The consumer in `FfmpegRunner` was already
-  correct (`is_string($x) && $x !== ''`), so no transcoding behaviour changes. The schema's enum was
-  also corrected upstream for accuracy: `nvenc` was dropped (it is an FFmpeg *encoder*, not an
-  hwaccel name) and `v4l2` became `v4l2m2m`; `d3d11va` and `dxva2` were added. A new test asserts
-  every `enum`-constrained key's config default is one of its declared members, which covers this
-  whole class of drift rather than just the one key.
-
-### Fixed
-
-- **Trakt operator credentials are settable from the admin Settings page again.** The v0.24.0
-  schema sweep (above) deleted `trakt.client_id`, `trakt.client_secret` and `trakt.redirect_uri`
-  because `SettingsRepository::getDefault()` resolves a two-segment key like `trakt.client_id`
-  against a FLAT `config/trakt.php`, and the real config lives at `config/scrobblers/trakt.php`.
-  The *read* path never broke — `TraktOAuthController::SETTING_KEY_MAP`
-  (`src/Server/Http/Controllers/TraktOAuthController.php:63-67`) maps those keys itself, so
-  installs with existing overrides kept working — but the admin `PUT` allow-list is derived from
-  the schema, so saving any of the three started failing with
-  `{"errors":{"trakt.client_id":"Unknown setting key."}}`. Operators were left with env vars and a
-  file edit.
-
-  **Fix:** new `config/trakt.php`, a one-line re-export
-  (`return require __DIR__ . '/scrobblers/trakt.php';`) using the same idiom `config/hwaccel.php`
-  already uses for `config/hwaccel_base.php`. The three keys resolve again under their **original
-  flat names** — no rename, no orphaned `server_settings` rows, no read-path change, no migration.
-  `config/scrobblers/trakt.php` remains the canonical file; the shim holds no values of its own and
-  is asserted to return the identical array.
-
-  They were deliberately **not** renamed to `scrobblers.trakt.*`, even though `getDefault()` now
-  walks nested config paths and would resolve that form: `trakt.*` overrides are already persisted
-  on live installs and are what the controller reads, so a rename would silently drop working Trakt
-  credentials on upgrade.
-
-  Both credential halves are masked (`"secret": true` upstream), matching this schema's existing
-  treatment of `lastfm.api_key` — the exact analogue, since Phlix sends the Trakt client_id as the
-  `trakt-api-key` header on every request. `trakt.redirect_uri` is a public URL and is not masked.
-  The documented secret set grows from a trio to a quintet.
-
-  `"restart": false` on all three is verified rather than assumed:
-  `TraktOAuthController::applySettingsOverrides()` (`:414-429`) calls
-  `SettingsRepository::getOverride()` at `:421` on every request via `loadConfig()` (`:402`), reached
-  from `authorize()` (`:158`), `callback()` (`:226`) and `status()` (`:511`). A saved credential is
-  live on the very next request. These are among the few settings for which `restart: false` is
-  literally true — the general boot-only override gap remains open and is tracked in
-  `docs/dev/settings-restart-gap.md`.
-
-  New `tests/Unit/Server/Http/Controllers/Admin/TraktSettingsEndToEndTest.php` asserts the
-  **consequence, not the shape**: that a `PUT` is accepted and persisted, that the saved client_id
-  is the one that actually ends up in the Trakt authorize redirect (`status()` flips to
-  `configured: true` and `authorize()` goes 503 → 302 with no restart), that the secret never
-  appears in a GET or PUT body, and that re-submitting the mask sentinel leaves the *stored*
-  credential intact and Trakt still working. Mutation-verified: deleting the shim, removing the keys
-  from the vendored schema, and disabling the PUT mask guard each fail it.
-- **`POST /api/v1/admin/restart` could not work on any real box.** Three separate defects:
-  1. **The PID file nothing wrote.** The controller read `config/server.php`'s
-     `worker.pid_file` (`/var/run/phlix/pid`), but `Worker::$pidFile` was never assigned anywhere in
-     the repo, so Workerman used its own default (`dirname(start.php)/workerman.start.php.pid`).
-     Every call returned HTTP 500 "PID file not found". New `Phlix\Server\Runtime\PidFile` is
-     applied from `start.php` before `Worker::runAll()` so the writer and the reader agree; it
-     creates the directory when needed and degrades to Workerman's default (with a stderr warning)
-     rather than aborting boot if the location is unusable.
-  2. **The signal was inverted.** In Workerman, `SIGUSR2` is the *graceful* reload and `SIGUSR1` is
-     the *non-graceful* one (`Worker::reload()`: `$sig = getGracefulStop() ? SIGUSR2 : SIGUSR1;`);
-     SIGUSR1 stops children immediately and arms a `SIGKILL`. The endpoint sent SIGUSR1 while both
-     docblocks asserted the exact opposite. It now sends `SIGUSR2`, and the docblocks are corrected.
-  3. **The signal fired mid-request.** `posix_kill()` ran before the `Response` was even built, so
-     the caller could get a connection reset instead of the ack — which the SPA renders as "Failed
-     to restart server" for a restart that did happen. The handler now pre-flights the target with
-     `posix_kill($pid, 0)` (a probe that sends no signal, so a stale PID is still a real 500) and
-     defers the actual `SIGUSR2` to a Workerman one-shot timer, so the JSON ack flushes first.
-
-  The response body is `{"success":true,"message":"Restart signal sent"}`. The tests were rewritten
-  to exercise the pid-path agreement between `start.php`, `config/server.php` and the DI provider,
-  and to assert which signal is sent and that it is deferred — none of which the previous
-  `sendSignal()`-stubbing suite covered.
-- **`ffmpeg.max_concurrent_transcodes` is no longer a fake setting.**
-  `TranscodeManager::__construct()` assigned a bare literal `$this->maxConcurrentTranscodes = 4;` —
-  not a constructor parameter, not a config read — so `config/ffmpeg.php`'s value and its admin-UI
-  setting (min 1 / max 64 / default 4, whose help text advises "a 16-core CPU with an NVIDIA GPU can
-  typically handle 6–8") were both inert. An admin who set 8 still got 4. The ceiling is now a
-  constructor parameter resolved by `TranscodeServicesProvider` from the **effective** value (config
-  default merged with any `server_settings` override), with `DEFAULT_MAX_CONCURRENT_TRANSCODES` as
-  the fallback. A settings-store failure degrades to the config default rather than breaking
-  transcoding.
-- **`SettingsRepository::getDefault()` can now resolve nested config paths.** The dotted-key rule
-  treated the first segment as the entire filename, so `config/scrobblers/trakt.php` — a real,
-  shipped config file — was unreachable by any key, and anything pointing at it resolved to a `null`
-  default. The file part may now span subdirectories (longest match wins:
-  `scrobblers.trakt.client_id` → `config/scrobblers/trakt.php`'s `client_id`). Purely additive — a
-  multi-segment file path never resolved before — and the path jail is tightened to validate every
-  segment, so no key can escape `config/`.
-
-### Known gaps (documented, NOT fixed)
-
-- **`restart: true` settings still do not take effect on restart.** The restart endpoint now works,
-  but a reload cannot apply boot-only settings, because `start.php` `include`s `config/server.php`
-  once in the master and nothing ever merges `server_settings` DB overrides into that array — and a
-  full `systemctl restart` does not either. This affects every `restart: true` schema key. The fix
-  is an architectural change (rewire each consumer to `getEffective()`, or overlay the overrides
-  onto `$config` inside `onWorkerStart`) and is deliberately out of scope here. Full write-up,
-  including the two candidate designs: **`docs/dev/settings-restart-gap.md`**. Until it lands, do
-  not describe a `restart: true` key as taking effect after a restart.
-- The restart endpoint has no rate limit and emits no audit-log entry; a reload also cycles the
-  SyncPlay WebSocket and DLNA SSDP workers, dropping live sessions, with no warning in the UI.
-
-### Changed
-
-- **Legacy Smarty page UI retired — the `/app` Vue SPA is now the ONLY web UI.** All legacy
-  server-rendered (Smarty) portal page routes now issue a **302 redirect** to their `/app` equivalent
-  (dispatched in `public/index.php`), and the SPA shell is served for `/app` + `/app/*`. High-level
-  redirect map: `/` → `/app`; `/login` → `/app/login`; `/register` → `/app/signup`; `/library` → `/app`;
-  `/library/{id}` → `/app/library/{id}`; `/media/{id}` → `/app/media/{id}`; `/player/{id}` →
-  `/app/player/{id}`; `/search` → `/app/search`; `/settings` → `/app/settings`; `/admin` →
-  `/app/admin/dashboard`; `/admin/plugins` → `/app/admin/plugins`; the **Music** pages
-  (`/music`, `/music/album/*`, `/music/artists`, `/music/artist/*`, `/music/tracks`, `/music/player`)
-  → `/app/music/*`; **Books** (`/books`, `/books/{id}`, `/books/{id}/read`) → `/app/books/*`;
-  **Audiobooks** (`/audiobooks`, `/audiobooks/{id}`, `/audiobooks/{id}/read`) → `/app/audiobooks/*`;
-  and **Photos** (`/photo/albums`, `/photo/album/{id}`, `/photo/photo/{id}`, `/photo/slideshow`,
-  preserving the `library_id` query string) → `/app/photo/*`. The redirects stay auth-gated where the
-  legacy page was, so an unauthenticated browser is bounced to `/app/login` first.
-
-### Removed
-
-- **Deleted the migrated Smarty page-rendering stack.** `PageRenderer`, the media/admin page
-  controllers, all `public/templates/**/*.tpl` page templates (auth, home, library, player, music,
-  books, audiobooks, photo, search, settings, admin dashboard/plugins/music/lastfm, layouts, partials),
-  and the legacy per-page JS/CSS were removed now that the `/app` SPA supersedes them.
-  **Retained on the server (still live):** `smarty/smarty` (composer) + `src/Admin/NewsletterGenerator.php`
-  + `public/templates/emails/newsletter.tpl` — the **newsletter email** still renders via Smarty;
-  `ThemeMiddleware`; `WebPortalRouter` (serves the portal JSON under `/api/v1/*`);
-  `SharedUiController` + `ViteAssets` (serve the SPA shell + built bundle); and the legacy **binary**
-  API routes (artwork, book cover/download, photo thumbnail/full, media stream). This supersedes the
-  earlier "Smarty retirement pending owner verification" note in this changelog.
-
-### Fixed (live production batch)
-
-- **Continue-Watching rail 500 on both clients (MySQL error 1060).** `PlaybackController::getContinueWatching()`
-  emitted a duplicate `mi.id AS id` column in its derived table, which MySQL rejected with
-  `ERROR 1060 (Duplicate column name 'id')`, 500-ing the CW rail on the SPA and console. The duplicate
-  projection was removed.
-- **Continue-Watching poster/progress shape for authless clients.** CW rows are shaped via
-  `MediaItemShaper` so each carries top-level `id` / `poster_url` / `runtime` (episodes resolve the
-  **series** poster); additionally the nested `metadata.poster_url` is **re-minted** at response time so
-  the console (which reads the nested metadata) gets a fresh signed artwork URL rather than an expired one.
-- **Signed artwork URLs expiring for authless clients (console 401s).** `poster_url`, `poster_srcset`,
-  `backdrop_url`, `backdrop_srcset`, and `logo_url` are now **re-signed at response time**
-  (`SignedUrl::refreshArtworkUrl()` / `SignedUrl::refreshArtworkSrcset()`), so clients that cannot
-  re-authenticate a request (e.g. the console) no longer receive `401`s on artwork whose signature had
-  aged out.
-- **PHP 8.5 — logging + PDO hardening under coroutines.** The MySQL buffered-query attribute now uses the
-  `\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY` class constant (the global `PDO::` alias is deprecated on 8.5),
-  `connect()` suppresses the PDO `E_DEPRECATED`, and every Monolog handler is wrapped in
-  `WhatFailureGroupHandler` so a concurrent-coroutine `E_DEPRECATED` raised mid-write can no longer crash
-  the log write (which had surfaced as fatal request failures during metadata matching).
-- **Spurious "circular dependency" 500 from a php-di coroutine race.** `WebPortalRouter` is now **warmed
-  once at worker start** (`start.php`), so concurrent coroutines no longer collide on php-di's in-progress
-  resolution guard and mis-report a circular dependency.
-- **RelayConsumer `connect()` debug logging TypeError.** The connect-path debug log is now null-safe, so a
-  synchronous disconnect (null connection) no longer throws `spl_object_id(null)`.
-- **Transcode — undecodable 10-bit H.264 on the hwaccel software-fallback path.** When hardware accel is
-  enabled but only a software encoder is registered, segments were re-encoded to **10-bit** H.264
-  ("High 10") from 10-bit HEVC sources — which no browser can decode. That path now forces browser-safe
-  **8-bit** output (`-pix_fmt yuv420p -profile:v high -level 4.1`), matching the pure-software path; true
-  hardware encoders keep their own `nv12` 8-bit output. `TranscodeManager::JOB_KEY_VERSION` was bumped
-  **v3 → v4** so any cached 10-bit segments are invalidated and regenerated as 8-bit.
-- **Transcode — HLS audio now downmixed to stereo AAC for browser compatibility.** A re-encoded HLS
-  audio stream from an **AC-3 5.1(side)** source (side channels SL/SR) produced AAC that FFmpeg's native
-  encoder tagged with `channel_configuration=0` (a PCE) in the ADTS header, which **hls.js cannot parse** —
-  it failed to build the audio MSE `SourceBuffer` and the whole player load errored **even with valid
-  8-bit H.264 video**. Re-encoded audio is now forced to **stereo** (`-ac 2`, `channel_configuration=2`,
-  universally browser-safe) via the new `FfmpegRunner::browserSafeAudioChannels()` helper, applied on every
-  re-encode path (direct-play `audio_codec === 'copy'` passthrough is untouched). `TranscodeManager::JOB_KEY_VERSION`
-  was bumped again so any cached surround-AAC segments are invalidated and regenerated as stereo. Together
-  with the 8-bit video fix above and the CSP `blob:` allowances below, this made a **10-bit HEVC + AC-3
-  5.1** episode actually play in a normal browser (confirmed via headless Chrome under enforced CSP) — browser
-  HLS playback requires **all three layers**: 8-bit video **+** stereo AAC audio **+** CSP `blob:` allowances.
-- **CSP — SPA now allows `media-src`/`worker-src 'self' blob:` so browser HLS playback works.** The SPA
-  Content-Security-Policy (`SecurityHeaders::contentSecurityPolicy()`) added `media-src 'self' blob:` and
-  `worker-src 'self' blob:`, required so hls.js can attach its MSE `blob:` object URL to the `<video>`
-  element and spawn its `blob:`-sourced transmux Web Worker. Without them a strict browser rejected the
-  load with `MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check`, blocking **all**
-  HLS/transcoded playback.
-- **CSP — `/app` shell inline bootstrap now runs under a per-request script nonce (no `'unsafe-inline'`).**
-  The `/app` SPA shell's inline `window.__PHLIX__` bootstrap `<script>` now carries a per-request
-  cryptographically-random **nonce**: `SharedUiController` emits `<script nonce="…">` and sets a matching
-  CSP built via `SecurityHeaders::contentSecurityPolicy($nonce)` (adds `'nonce-…'` to `script-src`), so the
-  inline block executes **without** weakening `script-src` to `'unsafe-inline'`. Non-`/app` responses keep
-  the strict default policy (no nonce).
-- **Transcode — 480p rung no longer 404s on a 16:9 source (odd-width reject).** A 480p HLS rung scaled
-  from a 1920×1080 source computed **853×480** — an **odd width** that libx264 rejects, so the rung 404'd.
-  The transcode scale filter now appends `:force_divisible_by=2` so widths round to an even value.
-  `TranscodeManager::JOB_KEY_VERSION` was bumped **v5 → v6** to invalidate any cached/failed rungs.
-
-### Fixed
-
-- **WS-A — Continue-Watching now shows poster images and a progress bar in the `/app` SPA.**
-  `PlaybackController::getContinueWatching()` (which backs both `GET /api/v1/me/continue-watching` and `GET /api/v1/users/me/continue-watching`) now runs every row through `MediaItemShaper::shape()`, so each entry gains the same top-level fields the SPA `MediaCard` renders: `id` (= **media item id**, so cards navigate to the correct detail page — previously the playback-state id), `poster_url`, `poster_srcset`, `runtime` (minutes), `year`, and `rating`. For **episodes** a two-level `LEFT JOIN` (season → series) resolves the **series** poster (falling back to the season poster, then the episode's own poster) *before* shaping, replacing the TMDB still/screengrab that previously showed. The playback-progress fields `position_ticks` and `duration_ticks` are re-attached at the top level (the SPA `useResumeSync` reads `position_ticks` for the progress bar), and `parent_id`, `media_item_id`, and the full `metadata` map are preserved so the console `fromContinueWatching` mapper and the profile rating-gate (`media_item_id` filter) keep working. `ROW_NUMBER()` de-dup (one row per media item, newest first) is retained. Tests: strengthened unit assertions on the top-level `poster_url`/`runtime`/`id` in `tests/Unit/Session/PlaybackControllerTest.php`, plus a new real-MySQL integration test `tests/Integration/Session/ContinueWatchingIntegrationTest.php` that seeds series/season/episode + movie + duplicate playback rows and asserts the shaped output including the dedup.
-- **WS-C — Logging no longer triple-writes to app.log, events.log, plugins.log.**
-  Previously every handler attached to every per-channel logger, so each debug/info record was written to `app.log`, `events.log`, and `plugins.log` at once (identical firehoses) and the two subsystem logs were polluted with unrelated records. Handlers in `config/logger.php` are now routed by two optional gates that `StructuredLogger::setupHandlers()` evaluates per channel: `channels` (absent/empty = attach to ALL channels) and `env` (attach only when the named env var is truthy). Resulting routing: `app.log` is the **master firehose** — the untagged `file` handler still captures every channel at debug+ (nothing is lost); `error.log` is the **severity mirror** — untagged too, so all channels at error+ aggregate there; `plugins.log` is scoped to the `PLUGINS` channel only (plugin lifecycle); `events.log` is scoped to the `EVENTS` channel **and** gated behind `PHLIX_DEBUG_EVENTS`, so it stays **empty by default** — event-dispatch records still land in `app.log`, so no diagnostic coverage is lost when the switch is off (this is why an operator sees an empty `events.log` without `PHLIX_DEBUG_EVENTS=1`). Also removed a dead `'default' => 'file'` key from `config/logger.php` that `setupHandlers()` never read (the catch-all comes from the untagged handler, not that key). Routing helpers `handlerAppliesToChannel()` / `handlerEnvEnabled()`; tests in `tests/Unit/Common/Logger/StructuredLoggerTest.php`.
-
-### Security
-
 - **SV-4.15 — per-surface auth rate limiting.** The previously-unlimited auth surfaces are now rate-limited: `register`, `refresh`, WebAuthn login `start`+`finish`, the public JWKS endpoint (`/.well-known/jwks.json`), and WS-connect on `:8097` (only `login` had a limiter before). HTTP surfaces reply **`429 Too Many Requests`** with a `Retry-After` header and body `{"error":"Too Many Requests","code":"rate_limited"}`; WS-connect rejects the handshake in-place (no throw out of the connect hook). Also **fixes a latent bug** where the existing DB-backed `login` limiter tripped with a **500** (uncaught `RateLimitException`) instead of a **429** — both dispatch entrypoints and `public/index.php` now map `RateLimitException` centrally. New operator config: a `rate_limit` block in `config/server.php` with per-surface env overrides `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW`; a `trusted_proxies` setting (env `TRUSTED_PROXIES`, comma-separated IP/CIDR, default loopback-only) used to derive the real client IP from `X-Forwarded-For`/`X-Real-IP` for limiter keys — **it must list your reverse-proxy hops (nginx/HAProxy) or IP-keyed limits will bucket every request under the proxy address**; and a new migration **`085_rate_limit_buckets.sql`** (the shared DB-backed bucket table for the credential-enumeration surfaces — **run migrations on deploy**). Register/refresh/WebAuthn are DB-backed (true-global across all HTTP workers); JWKS and WS-connect are worker-local in-memory (JWKS is cache-frontable; the `:8097` WS worker runs `count=1` so per-worker == global there). `login` keeps its own IP-keyed DB-backed store (migration 074), untouched.
-
-### Added
-
-- **Phase 1 — `AdminSettingsController` now emits `meta` block in GET `/api/v1/admin/settings`.**
-  Each key in `data.meta` carries per-setting metadata: `label`, `helpText`, `helpLinks`, `tier`, `group`,
-  `enum`, `enumLabels`, `optionHelp`, `minimum`, `maximum`, `default`, `secret`, and `restart`. As
-  defensive defaults `helpLinks` resolves to `[]` (empty array) and `tier` resolves to `'standard'` when
-  not explicitly set in the schema.
-- **Phase 2 — 28 new server settings added to `schemas/server-settings.schema.json` and `config/*.php`.**
-  Schema extended with Phase 2A–2C settings: `transcoding.preferred_accelerator`,
-  `transcoding.include_software_fallback`, `transcoding.tone_mapping_mode`,
-  `transcoding.prefer_hdr_output`, `transcoding.max_concurrent_transcodes`,
-  `transcoding.transcode_timeout`, `transcoding.max_concurrent_scan_probes` (Phase 2A);
-  `metadata.preferred_language`, `metadata.preferred_country`, `metadata.fanart_api_key`
-  (Phase 2B); `database.pool_size`, `database.timeout`, `relay.reconnect_delay`,
-  `relay.ping_interval`, `hls.segment_seconds`, `hls.max_concurrent_segments` (Phase 2C).
-  All keys are optional with defensive defaults in `config/*.php`.
-- **Phase 3 — server tunables added to schema: segment cache limits, stale-job age, global inflight cap.**
-  New keys: `transcoding.segment_max_inflight_global`, `transcoding.segment_cache_max_age`,
-  `transcoding.segment_cache_max_bytes`, `transcoding.stale_job_max_age`.
-- **Phase 4 — subsystem killswitches: scan, plugin auto-update, marker detection, asset jobs, similarity.**
-  New keys: `subsystem.library_scan_enabled`, `subsystem.plugin_auto_update_enabled`,
-  `subsystem.marker_detection_enabled`, `subsystem.media_asset_jobs_enabled`,
-  `subsystem.similarity_enabled` — each a boolean kill-switch to disable heavy background
-  subsystems independently.
-- **Phase 5 — auth settings: enabled flag, rate limit override, session lifetime.**
-  New keys: `auth.enabled`, `auth.rate_limit`, `auth.session_lifetime`. Consumed by
-  `AuthManager` to gate auth surfaces and override per-surface rate limits.
-- **WS-D — media SPA pages are now reachable under `/app` (Smarty retirement pending owner verification).**
-  `web-ui/src/main.ts` now registers routes **and** top-bar nav entries for SPA pages that shipped in
-  `@phlix/ui` but were previously unreachable on the server: **Books** (`/app/books`, `/app/books/:id`,
-  `/app/books/:id/read`), **Audiobooks** (`/app/audiobooks`, `/app/audiobooks/:id`, `/app/audiobooks/:id/play`),
-  **Photos** (`/app/photo/albums`, `/app/photo/album/:id`, `/app/photo/photo/:id`, `/app/photo/slideshow`),
-  **Search** (`/app/search`), and the **Music** sub-pages (`/app/music/artists`, `/app/music/artist/:name`,
-  `/app/music/album/:name`, `/app/music/tracks`, `/app/music/player`), plus nav links (Music, Books,
-  Audiobooks, Photos, Search). The passkey/WebAuthn surface is now a **Security** tab on the SPA Settings
-  page (`/app/settings/security`) rather than a standalone page. **Update:** these `/app` pages are now
-  verified live and the equivalent Smarty SSR templates + routes have since been **deleted** (see the
-  Smarty-retirement entries under *Changed* / *Removed* above); the legacy page paths now 302-redirect to
-  `/app`.
-- **SV-3.3 — loudness normalization + client capability negotiation.**
-  - `config/ffmpeg.php` gains a `loudness` block (`enabled` defaults to **false**) that, when enabled, applies an EBU R128 `loudnorm` audio filter (`I`/`LRA`/`TP`) to **re-encoded** audio on every segment-assembly path (software, hwaccel, and audio-only). **Copy-audio rungs** (e.g. the `original` variant, `-c:a copy`) and **direct-play sessions bypass loudness normalization by design** — you cannot filter a stream that is copied rather than decoded (documented in the config block).
-  - The `X-Phlix-Client-Capabilities` request header (a JSON codec-support map, e.g. `{"eac3":false}`) is now honored on the `/playback-info` `direct_play` verdict: a client that declares it cannot decode the item's audio codec is steered to transcode instead of direct play. Absent/empty/invalid header → `direct_play` stays `true` (backward compatible). The verdict keys on the same first (lowest-`stream_index`) audio stream the transcode copy-vs-encode decision uses, so the two agree.
-- **SV-1.9 — configurable segment-cache disk-space threshold.** New `hls.min_disk_space_bytes` config key (env `HLS_MIN_DISK_SPACE_BYTES`, default **500 MiB**). When free space on the segment-cache directory falls below the threshold, the server sweeps the cache and returns **`503`** with `Retry-After: 3` instead of failing an encode with `ENOSPC`.
-
-### Fixed
-
-- **WS-D — phpstan cast in `WebPortalRouter::getMusicTracks()`.** The music-tracks row mapper cast a
-  `mixed` id straight to `string`; it now guards with `is_string`/`is_scalar` before casting (empty string
-  otherwise). Behavior is unchanged for the real (string) rows; the fix clears the level-9 error surfaced
-  when wiring up the newly-reachable `/app/music/tracks` page.
-- **PHP 8.5 compatibility — removed deprecated no-op `curl_close()` / `imagedestroy()` calls.** Both have been no-ops since PHP 8.0 and emit `E_DEPRECATED` under PHP 8.5, which surfaced as fatal log-write failures during TV-series metadata matching (16 `curl_close()` sites across 13 files; 19 `imagedestroy()` sites in `ArtworkStorage`/`AvatarStorage`/`PhotoController`). Behavior is unchanged — the calls did nothing. (`finfo_close()` was already removed previously.)
-- **Admin Logs page — removed a redundant `[LEVEL] <datetime>` prefix** that ~37 Monolog call sites (across 6 worker/handler files) hand-built into their message strings. Monolog's `LineFormatter` already emits `[<iso8601>] <channel>.<LEVEL>: <message>`, so the hand-built prefix doubled the level and timestamp on every rendered line; each record is now a single, clean level/timestamp. (`error_log()` sites are untouched — there the prefix is the only metadata.) The client-side Logs renderer overhaul ships in `@phlix/ui` v0.82.0.
-- **Router `HEAD` fallback for static-only `GET` routes.** A `HEAD` request now correctly falls back to a purely-static `GET` route even when no parametric `GET` routes are registered (previously the fallback could 404 or warn on a null iteration).
-- **SV-4.16 — JWKS endpoint 500 on operator-supplied Ed25519 keys.** `GET /.well-known/jwks.json` returned an unhandled **500** whenever `config/hub-server-key.pem` was a standard PKCS#8 Ed25519 key (`-----BEGIN PRIVATE KEY-----`, as produced by `openssl genpkey -algorithm Ed25519`) — `Ed25519KeyManager::parsePem()` only accepted the app's custom `-----BEGIN ED25519 PRIVATE KEY-----` label wrapping a raw libsodium secret. The reader now accepts **both** formats: for PKCS#8 it validates the Ed25519 OID (`1.3.101.112`), extracts the 32-byte seed, and expands it via `sodium_crypto_sign_seed_keypair()` to the 64-byte secret the rest of the code expects (non-Ed25519 PKCS#8 keys are rejected at the OID gate; the native format parses exactly as before). The writer (`buildPem()`) still emits the native format — no key rotation or identity change. As defense-in-depth, `HubClient::getPublicKeysJwk()` now catches any key-load failure, logs it at **ERROR**, and serves a valid RFC 7517 `{"keys":[]}` at HTTP **200** instead of letting the exception escape as a 500 (the `429` rate-limit path is thrown before this and is unaffected).
-- **item-5+ — WebSocket connection metrics recorded the loopback proxy IP and invented phantom rows.** The `:8097` S2 connection metrics now record the resolved **real** client IP (derived like the auth surfaces, not the loopback HAProxy peer). Additionally, connections that fire a bare-TCP `onConnect` but never complete the WebSocket handshake (health checks, port scanners, aborted upgrades) no longer produce a phantom `metrics_connections` row mislabeled `kind=http` with a null IP: the server now only touches (via `onClose` and the periodic touch timer) connections it actually opened after the handshake.
-- **item-5a — noisy per-segment hardware-accel diagnostics.** The per-segment `[HWACCEL_DEBUG]` transcode logs were emitted at **ERROR** and carried a per-call `debug_backtrace()`; they are now logged at **debug** with the backtrace dropped, so normal hardware-accelerated playback no longer floods `error.log`.
-- **item-5c3 — enabled plugins do not re-attach their event listeners after a restart (still OPEN — a first fix was reverted).** `PluginLoader::bootstrapEnabled()` exists but is never called in any resident boot path, so PSR-14 event listeners (e.g. Trakt PUSH scrobbling on `PlaybackStarted`/`PlaybackStopped`) go dead after every restart until a manual re-enable. A first attempt wired `bootstrapEnabled()` into the HTTP + relay `onWorkerStart` (commit `f645edbc`); it was **reverted** (`f3c57fd8`) because several plugins' `onEnable()` perform **blocking network I/O at boot** (e.g. an anidb titles fetch), which stalled worker startup and, combined with a logger-write cascade, left workers half-initialized (surfacing as intermittent request failures on deploy). The correct fix must run plugin bootstrap **without blocking worker startup** (deferred/async, or making `onEnable()` non-blocking) — tracked as a follow-up. The single-shot CGI/FPM `public/index.php` path is unaffected (throwaway per-request container).
-
-### Removed
-
-- **§6 dead-code removals (user-approved).** Removed confirmed-dead code paths with zero runtime callers (verified by repo-wide `grep`/`git grep` before deletion):
-  - *Run A:* `FfmpegRunner::killSegmentProcess()`; the `HwaccelCommandBuilder` class and `HwaccelProfileFactory::createCommandBuilder()`; the never-wired webhook async island `WebhookDispatcher::dispatchAsync()` + `sendToWebhookWithBackoff()`; the dead duplicate `src/Server/Http/Controllers/ArtworkController.php` (the live artwork path is `HttpHandler::serveArtwork`); and unused `RequestContext` members (`clearUserId()`, `hasProfileId()`, `clearProfileId()`). The live Hwaccel registry/profile/probe system and `WebhookDispatcher`'s live `dispatch()`/`sendToWebhook()` path are untouched.
-  - *Run B:* the dead server gapless/crossfade subsystem — `FfmpegRunner::buildGaplessSegmentCommand()`, `GaplessTranscoder`, `CrossfadeGenerator`, `GaplessPlayer`, and the now-orphaned members of `GaplessPlaybackManager` (`getPlayer()`, `getCrossfadeGenerator()`, `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()`, and later the caller-less `clearCache()`). Gapless/crossfade playback is implemented **100% client-side** in `@phlix/ui` (`useMusicPlayer.ts`), which superseded the reserved server path. `GaplessPlaybackManager` itself is kept — its live `getPreferences()` surface is still used by `MediaItemController`.
-
-### Changed
-
-- **Test-coverage hardening.** Added missing behavioral tests across SV-0.6 (TMDB collections UUID handling), SV-0.7 (marker/intro-detection worker supervision), SV-1.8 (CSRF Origin exact-match), SV-1.9 (ENOSPC guard), SV-4.8 (Router static-map fast path + DI string-handler resolution), and SV-4.12 (stale-job reaper glob), plus the SV-3.3 and SV-4.15 features above — closing "green-but-untested" gaps found during re-audit. No behavior change beyond the fixes listed above.
-- **Plugin catalog pinned to v2.1.8.** Bumped `OFFICIAL_PINNED_REF` (the tag of `detain/phlix-plugins` the admin **Plugins** catalog resolves against) to **v2.1.8**, shipping the trakt/musicbrainz/anilist PHP-8.5 `curl_close()` fixes to the catalog listing.
-
-- **The mDNS multicast join in `MdnsSocket` was a silent no-op; it now joins 224.0.0.251 with the
-  `MCAST_JOIN_GROUP` spelling and logs failure (S296).** The join used the BSD `IP_ADD_MEMBERSHIP`
-  spelling, a constant PHP 8.3 does not define (measured `defined()` === false), so the call fell
-  back to raw option 12 with `inet_pton($group)` (a 4-byte binary string) as optval;
-  `socket_set_option()` returned `TRUE` and joined NOTHING — zero multicast datagrams reached
-  mDNS/Bonjour discovery while every caller believed the join succeeded (a `TRUE` return is
-  exactly why it went unnoticed). The join now uses `MCAST_JOIN_GROUP` + array optval
-  (`['group' => '224.0.0.251', 'interface' => 0]`) — the exact spelling S51 shipped and measured
-  in `Dlna\SsdpAdvertiser` — extracted into `joinMulticastGroup()`, with failure now logged
-  (fail-loud: this hazard class is silent failure). The Swoole coroutine-runtime socket variance
-  is guarded: the parameter is deliberately untyped because `SWOOLE_HOOK_SOCKETS` hands
-  `socket_create()` back a `Swoole\Coroutine\Socket`, not a `\Socket`, and the call is wrapped in
-  `try/catch(\Throwable)` so the daemon can never TypeError/fatal on this path. Proven by
-  `tests/Unit/Discovery/Mdns/MdnsMulticastJoinTest.php`, a three-arm experiment on real sockets:
-  (A) no join receives nothing (control); (B) the pre-fix spelling replayed verbatim returns
-  `TRUE` and receives NOTHING (failing control, measured on PHP 8.3.6); (C) the production join
-  method receives the datagram; both mutations (join line deleted, spelling regressed) redden the
-  test. KNOWN LIMIT: this box/dev-VM loops IPv4 multicast back only on `lo`, so `interface => 0`
-  kernel route selection is NOT validated — the option spelling is what is proven, not the
-  interface pick. No migration (next-free server migration stays 103).
-
-### Fixed
-
-- **The backup `label` option and the schedule body parameters are LIVE (S271).**
-  `BackupController::create()` and `::updateSchedule()` read `$request->jsonBody` — a property
-  that does not exist on `Phlix\Server\Http\Request` (the decoded body is `Request::$body`) —
-  and the `?? []` swallowed the undefined-property null, so those handlers silently ignored
-  every parameter a client sent: created backups always carried an empty `label`, and
-  `auto_backup_interval_days` / `retention_count` never reached the config file they rewrite.
-  A repo-wide sweep (git grep over `src/`+`scripts/` AND a filesystem sweep of the gitignored
-  vendor tree — 10k+ files, with a `function __get` positive control so the zero is a measured
-  zero, not an unsearched one) confirmed exactly these two sites read the name and nothing ever
-  defined it. Both now read `->body`. Pinned by `BackupControllerBodyPersistenceTest`: a label
-  driven through the real `BackupManager` write path is read back from the persisted `backups`
-  row (plus the on-disk archive name), and schedule values are read back from the rewritten
-  config file; reverting either property name reddens exactly one named test (mutation-verified).
-  `MaintenanceController::runTask()`'s warning comment — which documented this defect as present
-  and misattributed it to `::restore()` (which never read a body) — moved in the same commit.
-  No migration.
-
-### Added
-
-- **colors.css ⇄ the server transcription are now diffed mechanically, and the legacy-alias
-  justification is a measured census (S228).** `@phlix/tokens/src/css/colors.css` — the canonical
-  stylesheet behind `BuiltInThemes::PAYLOADS` and `ThemeTokenAllowlist` — lived in another repo
-  that nothing in CI could read, so both were pinned against hand transcriptions (the test file
-  restated 159 values; the allowlist test restated 53 names) and a hex edit upstream was invisible
-  estate-wide. The fix: a dev-only composer package `detain/phlix-tokens`, fetched by the `composer
-  install` CI already runs, delivered from the immutable commit SHA `5500d70b…` (tag v0.2.0; its
-  `colors.css` is byte-identical to master tip today), plus a guard that pins the delivered bytes
-  by sha256, parses the stylesheet, resolves its `var()` chains, and diffs name set + order +
-  every value against the allowlist and the transcription. Both hand transcriptions are deleted —
-  the expectation now comes from the delivered artifact. Mutating one hex on either side reddens
-  a named test (both directions mutation-proven in this run: transcription-side edit → 1 red;
-  vendor-stylesheet hex edit → 2 reds incl. the byte pin; one-block rename → 3 reds). The 13
-  legacy `--color-*` aliases S228 measured dead stay, and `LEGACY_ALIAS`'s docblock now states
-  why with a 2026-09-05 estate-wide reader census (12 of 13 have zero `var()` consumers across
-  server `src/`+`web-ui/`, ui, windows, tizen, mobile, roku, console and hub at their origin tips;
-  `--color-primary`'s only reader is the ui's dev-only swatch page; phlix-website's same-named
-  vars are its own per-site palettes, a disjoint namespace): removal is a coordinated cross-repo
-  deprecation — it would fight the new name-parity guard, make `ThemeSourceRegistry::register()`
-  reject the published sample plugin (which sets all 13 today), byte-change the
-  `GET /api/v1/themes` body that is md5-pinned against a copy in phlix-ui, and desync phlix-ui's
-  mirrored `THEME_TOKEN_ALLOWLIST`. The S84 "un-migrated components" folklore is gone. Collateral,
-  disclosed: `scripts/release.sh`'s root-`version`-field detector matched `"version"` at ANY
-  indentation, so the legitimate nested one inside the new inline composer `repositories` entry
-  false-reddened 11 `ReleaseScriptTest` cases; both the script and one test now ask the decoded
-  JSON root instead of the raw text. No migration.
-
-### Fixed
-
-- **Two doc/comment corrections — zero behavior change.** The `AGENTS.md` S508 entry claimed
-  `MediaItemController::getPlaybackInfo()` "honors" `?forceTranscode`/`?excludeHevc` through
-  `QualitySelector::selectQuality()`; it does not — the pre-flight endpoint only **acknowledges**
-  the parsed values (the add-only `playback_constraints` echo, exactly as its own docblock says),
-  and no HTTP caller threads the options into `selectQuality()` yet. The `AGENTS.md` sentence now
-  matches the code. Separately, the READS re-pin note in
-  `tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php` attributed the census
-  scanner's blind spot to `functionScopes()`; the actual mechanism is the dead final-parameter
-  branch in `rootsDeclaredInParams()` (`$depth--` runs before the `$depth !== 1` segment-boundary
-  check), which unregisters EVERY last parameter — any arity, any type or return shape. The
-  corrected comment names the real mechanism so future re-pinners don't misjudge counts; all
-  census pins (1877 files / 391 reads / 973 writes) are unchanged.
-
-### Security
 
 - **Trakt OAuth binds the SERVER-WIDE account, so only an admin may complete it, and the
   completing admin must be the one who started the flow (M-4).** Both `/api/v1/oauth/trakt`
@@ -7828,43 +7786,18 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   probes, boot-smoke). Gated in the nested `''`-prefix group so the METHOD+PATH tuple is
   byte-identical and only the middleware column moves (`[]` → `[AuthMiddleware]` in the
   wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
+### Known gaps (documented, NOT fixed)
 
-### Fixed
-
-- **F7 rework (CRITICAL): `AuthMethodPolicy` no longer memoizes its settings snapshot.**
-  The class shipped in 1f8a09cc carried a per-instance `stateCache` whose docblock premise —
-  "instances are request-scoped through the container" — is FALSE in production: PHP-DI memoizes
-  built instances and each Workerman worker builds ONE container for its lifetime (the same
-  resident-worker fact `AuthManager` admits for its in-memory rate-limit buckets and that forces
-  the `AuthProviderBootstrapper` request-path self-heal). Consequences pinned by the reviewer:
-  the write guards' base (`assertSafeTransition(currentState() + change)`) ran stale, enabling a
-  live R2 bypass via any external/legacy DB write, and enforcement on warm workers kept honoring
-  a method after it was disabled — contradicting the "applies immediately" help text.
-  Design: the per-instance memo is deleted; every public decision (`isEnabled`, `currentState`)
-  now takes exactly ONE fresh `getAllOverrides()` snapshot per call — fresh ACROSS decisions,
-  single-SELECT WITHIN one (the ≤1-read-per-decision law is re-pinned, honestly re-counted).
-  Cost: one small settings SELECT per login attempt (which already pays a user SELECT, an
-  Argon2ID verify, and the bootstrapper's own per-call `getOverride`) and per admin toggle write —
-  noise against the I/O around it; no request-lifecycle machinery invented.
-  Regression pins: resident-instance liveness (build ONCE, flip the row through the same repo
-  seam, both directions) and the production call-shape R2-bypass test
-  (`array_merge(currentState(), touched)` → must now reject); self-mutation proof: re-planting
-  the memo reddens exactly these three law pins. Docblocks corrected in the same commit (truth
-  law), incl. the bounded once-per-worker-life fallback alarm and the accepted residual that
-  password-off + open `auth.signup_mode` still mints fresh-account sessions (signup_mode is the
-  account-creation control; the quintet governs sign-in factors only).
-- **W3 rework (P2): the two metadata settings policies now have a production-DI binding guard.**
-  The adversarial review dropped BOTH `constructorParameter` lines (`confidencePolicy` on
-  `MovieMetadataResolver`, `cachePolicy` on `MetadataManager`) and the full suite stayed green —
-  each consumer silently falls back to a STORE-LESS `new MatchConfidencePolicy()` /
-  `new MetadataCachePolicy()`, freezing `metadata.min_match_confidence` at gate-off and
-  `metadata.cache_ttl_hours` at 24 h while every hand-built test passes the policy positionally.
-  New `tests/Unit/Media/Metadata/MetadataPoliciesWiringGuardTest.php` copies the
-  DiscoveryPolicyWiringGuardTest (W2) / SecurityHeadersPolicyWiringGuardTest (W4) shape: the
-  production container must yield both policies store-backed AND thread them (store-intact) into
-  both consumers. Mutation-proven: each single drop reddens exactly its consumer pin, the double
-  drop reddens both, restore is byte-identical green. Test-only; census rotated 1972→1973 from
-  the measured red.
+- **`restart: true` settings still do not take effect on restart.** The restart endpoint now works,
+  but a reload cannot apply boot-only settings, because `start.php` `include`s `config/server.php`
+  once in the master and nothing ever merges `server_settings` DB overrides into that array — and a
+  full `systemctl restart` does not either. This affects every `restart: true` schema key. The fix
+  is an architectural change (rewire each consumer to `getEffective()`, or overlay the overrides
+  onto `$config` inside `onWorkerStart`) and is deliberately out of scope here. Full write-up,
+  including the two candidate designs: **`docs/dev/settings-restart-gap.md`**. Until it lands, do
+  not describe a `restart: true` key as taking effect after a restart.
+- The restart endpoint has no rate limit and emits no audit-log entry; a reload also cycles the
+  SyncPlay WebSocket and DLNA SSDP workers, dropping live sessions, with no warning in the UI.
 
 ## [1.2.3] — 2026-07-12
 
@@ -7878,6 +7811,8 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 - **Plugin `redirect_url` support.** `PluginLoader` now reads and validates the optional `redirect_url` field from plugin manifests, enabling OAuth-style callback URLs in first-party plugins.
 
 ## [SV-0.2] — 2026-07-10
+
+*Not a SemVer release: `SV-<n>` labels are internal track-milestone numbers (SV-0.x … SV-4.x recur as step IDs in later entries). This block sits in chronological position between the releases it shipped alongside; its content is preserved verbatim.*
 
 **Reconciled hardware acceleration config sources.** Consolidates conflicting hwaccel settings from multiple config files into a single source of truth.
 
@@ -7922,6 +7857,8 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
 - Version bumped `1.1.0`→`1.2.0` (MINOR — new backward-compatible functionality; no server↔hub wire-compatibility impact).
 
 ## [1.1.0] — 2026-07-08
+
+*First 1.x section in this file. The 1.0.0 release exists as git tag `v1.0.0` (`43138f05`, 2026-05-19) but has no changelog section — it predates the Keep-a-Changelog discipline declared at the top of this file, and history is not retro-authored (a `0.11.0` section immediately precedes this one).*
 
 **Stream Quality + Adaptive Bitrate (ABR) release.** Ships the full server-side pipeline built across this program's Tracks A, S, and D: a source-clamped multi-variant HLS ladder with on-demand per-variant segment encoding and genuine stream-copy passthrough for compatible sources (A1-A7), a client-facing `variants[]`/`quality_ladder` API surface, a batch of performance work spanning job-row/facet caching, streamed segment serving, non-blocking/parallel scan probing, materialized sort/genre indexes, and a validated coroutine DB connection pool (S1-S10), a genre-index risk redesign after a real InnoDB issue surfaced under stress (S7b), and hub proxy improvements for streaming paths (D1-D4). See the sections below for the full accumulated detail. Version bumped `1.0.0`→`1.1.0` (MINOR — entirely new, backward-compatible functionality; no server↔hub wire-compatibility impact). Also fixes a real drift bug found while preparing this release: the `/health` and `/system/info` endpoints hardcoded a stale `'1.0.0'` literal independently of `Phlix\Common\Version::STRING` (the documented single source of truth) — both now reference the constant directly, so a future version bump can no longer silently miss these two endpoints.
 

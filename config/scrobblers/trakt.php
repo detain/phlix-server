@@ -20,31 +20,32 @@ declare(strict_types=1);
  * @since 0.14.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /**
      * Trakt application client ID. Required.
      * Set TRAKT_CLIENT_ID. Get yours at: https://app.trakt.tv/settings/apps/api/new
      */
-    'client_id' => getenv('TRAKT_CLIENT_ID') ?: '',
+    'client_id' => EnvConfig::text('TRAKT_CLIENT_ID', ''),
 
     /**
      * Trakt application client secret. Required.
      * Set TRAKT_CLIENT_SECRET. Get yours at: https://app.trakt.tv/settings/apps/api/new
      */
-    'client_secret' => getenv('TRAKT_CLIENT_SECRET') ?: '',
+    'client_secret' => EnvConfig::text('TRAKT_CLIENT_SECRET', ''),
 
     /**
      * OAuth2 redirect URI. Must match exactly what is registered in your
      * Trakt app. Set TRAKT_REDIRECT_URI.
      */
-    'redirect_uri' => getenv('TRAKT_REDIRECT_URI')
-        ?: 'https://your-server.com/api/v1/oauth/trakt/callback',
+    'redirect_uri' => EnvConfig::text('TRAKT_REDIRECT_URI', 'https://your-server.com/api/v1/oauth/trakt/callback'),
 
     /**
      * Sync interval for Trakt → Phlix history sync (in minutes).
      * Set TRAKT_SYNC_INTERVAL. Default 30; min 5, max 1440.
      */
-    'sync_interval' => (int) (getenv('TRAKT_SYNC_INTERVAL') ?: '30'),
+    'sync_interval' => EnvConfig::integer('TRAKT_SYNC_INTERVAL', 30),
 
     /**
      * Token-at-rest encryption key for the OAuth tokens stored in
@@ -55,5 +56,5 @@ return [
      * an unusable value degrades to plaintext BY DESIGN (see fromConfig).
      * Set TRAKT_TOKEN_ENCRYPTION_KEY; empty = encryption off (legacy behaviour).
      */
-    'token_encryption_key' => getenv('TRAKT_TOKEN_ENCRYPTION_KEY') ?: '',
+    'token_encryption_key' => EnvConfig::text('TRAKT_TOKEN_ENCRYPTION_KEY', ''),
 ];

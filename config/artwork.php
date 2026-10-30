@@ -17,6 +17,8 @@
 
 declare(strict_types=1);
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /*
      * Root directory for the local artwork cache. Each cache key gets a flat
@@ -30,7 +32,7 @@ return [
      *
      * Example env: ARTWORK_STORAGE_PATH=/data/phlix/artwork
      */
-    'storage_path' => getenv('ARTWORK_STORAGE_PATH') ?: '/var/artwork',
+    'storage_path' => EnvConfig::text('ARTWORK_STORAGE_PATH', '/var/artwork'),
 
     /*
      * Master switch for FETCHING new artwork from the metadata provider.

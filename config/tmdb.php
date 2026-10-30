@@ -18,9 +18,11 @@ declare(strict_types=1);
  * @since 0.20.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /**
      * TMDB API v3 key. Obtain from https://www.themoviedb.org/settings/api.
      */
-    'api_key' => getenv('TMDB_API_KEY') ?: '',
+    'api_key' => EnvConfig::text('TMDB_API_KEY', ''),
 ];

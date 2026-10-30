@@ -71,7 +71,8 @@ scripts/docker-boot-smoke.sh docker/Dockerfile.nvidia phlix-boot:nvidia
 
 That script builds the image (rebuilding the shared base first, because the
 pipeline is two-stage), runs it against a throwaway MySQL on a private network,
-and makes 11 assertions: `/health` 200s; the migration step reported success;
+and makes 20 assertions (the authoritative per-check list is `EXPECTED_CHECKS`
+in `scripts/docker-boot-smoke.sh` — the prose below narrates it): `/health` 200s; the migration step reported success;
 the schema really is there when reached with the application's own credentials;
 every supervisord program is `RUNNING`; the application, its Workerman workers
 AND the `exit-on-fatal` event listener hold their pids across a 90 s window

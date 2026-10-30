@@ -759,8 +759,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * itself moved into the shared LibraryController helper — a method
      * extraction inside one file, zero new src files. Measured from the
      * phpunit red (2001) on the rebased tree, not predicted.
+     * Re-pinned 2001→2003 by the W-min97 / M-SERVER-34 env-parsing lane
+     * (2026-10-30): +2 — src/Common/Env/EnvConfig.php (the shared typed env
+     * reader curing the `getenv(X) ?:` "0"-swallow trap on the numeric/string
+     * config knobs) and tests/Unit/Common/Env/EnvConfigTest.php (13 pins, the
+     * "0"-survival cure first). Reads/writes no Request property (pure getenv
+     * wrapper + unit test), so every other census denominator is unchanged.
+     * Measured from the phpunit red (2003), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 2001;
+    private const EXPECTED_PHP_FILES = 2003;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

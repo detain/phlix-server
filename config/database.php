@@ -7,15 +7,17 @@ declare(strict_types=1);
 // on localhost). CI test runs override these via phpunit.xml's <env>
 // block (root / phlix_test against the GitHub Actions MySQL service).
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     'default' => 'mysql',
     'connections' => [
         'mysql' => [
-            'host'      => getenv('DB_HOST')     ?: '127.0.0.1',
-            'port'      => (int) (getenv('DB_PORT') ?: 3306),
-            'database'  => getenv('DB_DATABASE') ?: (getenv('DB_NAME') ?: 'phlix'),
-            'username'  => getenv('DB_USER')     ?: (getenv('DB_USERNAME') ?: 'phlix'),
-            'password'  => getenv('DB_PASSWORD') ?: '',
+            'host'      => EnvConfig::text('DB_HOST', '127.0.0.1'),
+            'port'      => EnvConfig::integer('DB_PORT', 3306),
+            'database'  => EnvConfig::text('DB_DATABASE', EnvConfig::text('DB_NAME', 'phlix')),
+            'username'  => EnvConfig::text('DB_USER', EnvConfig::text('DB_USERNAME', 'phlix')),
+            'password'  => EnvConfig::text('DB_PASSWORD', ''),
             'charset'   => 'utf8mb4',
             // Coroutine connection pool. ON by default (Track S / S9): each
             // coroutine leases its OWN connection from a bounded pool, so
@@ -50,7 +52,7 @@ return [
             // by another 18 connections. Do NOT size max_connections to the pool
             // alone; check `SHOW VARIABLES LIKE 'max_connections'` against the sum of
             // ALL clients of the server before lowering it.
-            'pool_size' => (int) (getenv('DB_POOL_SIZE') ?: 8),
+            'pool_size' => EnvConfig::integer('DB_POOL_SIZE', 8),
             'timeout'   => 5,
         ],
     ],

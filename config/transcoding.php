@@ -6,6 +6,8 @@
  * @since 0.36.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /**
      * Preferred hardware accelerator to use for transcoding.
@@ -25,7 +27,7 @@ return [
      *
      * Example env: PREFERRED_ACCELERATOR=cuda
      */
-    'preferred_accelerator' => getenv('PREFERRED_ACCELERATOR') ?: '',
+    'preferred_accelerator' => EnvConfig::text('PREFERRED_ACCELERATOR', ''),
 
     /**
      * Timeout for hardware accelerator probing in seconds.
@@ -54,7 +56,7 @@ return [
      *
      * Example env: TONE_MAPPING_MODE=zscale
      */
-    'tone_mapping_mode' => getenv('TONE_MAPPING_MODE') ?: 'none',
+    'tone_mapping_mode' => EnvConfig::text('TONE_MAPPING_MODE', 'none'),
 
     /**
      * Whether to prefer HDR output over SDR tone mapping.

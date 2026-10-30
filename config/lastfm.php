@@ -13,6 +13,8 @@ declare(strict_types=1);
  * @since 0.15.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /**
      * Whether the Last.fm scrobbler is active.
@@ -24,7 +26,7 @@ return [
      * Last.fm API key. Required.
      * Obtain from https://www.last.fm/api/account/create
      */
-    'api_key' => getenv('LASTFM_API_KEY') ?: '',
+    'api_key' => EnvConfig::text('LASTFM_API_KEY', ''),
 
     /**
      * Shared secret used to sign authenticated calls (`api_sig`).
@@ -34,8 +36,8 @@ return [
      * config readers (the legacy `Phlix\Plugins\Lastfm\Plugin` consumer that
      * once read this key has been removed).
      */
-    'shared_secret' => getenv('LASTFM_SHARED_SECRET') ?: '',
-    'api_secret'    => getenv('LASTFM_SHARED_SECRET') ?: '',
+    'shared_secret' => EnvConfig::text('LASTFM_SHARED_SECRET', ''),
+    'api_secret'    => EnvConfig::text('LASTFM_SHARED_SECRET', ''),
 
     /**
      * URL the user lands on after authorising the request token on the
@@ -43,19 +45,19 @@ return [
      * calls `LastfmApi::getSession()` to obtain the long-lived
      * session key.
      */
-    'callback_url' => getenv('LASTFM_CALLBACK_URL') ?: '',
+    'callback_url' => EnvConfig::text('LASTFM_CALLBACK_URL', ''),
 
     /**
      * Session key for the removed legacy single-user Plugin. The per-user
      * `LastfmScrobbler` reads its keys from the `lastfm_sessions` table
      * instead, so this can stay empty when using the new flow.
      */
-    'session_key' => getenv('LASTFM_SESSION_KEY') ?: '',
+    'session_key' => EnvConfig::text('LASTFM_SESSION_KEY', ''),
 
     /**
      * Last.fm username used for scrobble attribution (display only).
      */
-    'username' => getenv('LASTFM_USERNAME') ?: '',
+    'username' => EnvConfig::text('LASTFM_USERNAME', ''),
 
     /**
      * Whether to send `track.updateNowPlaying` on playback start in

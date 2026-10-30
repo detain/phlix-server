@@ -1,5 +1,7 @@
 <?php
 
+use Phlix\Common\Env\EnvConfig;
+
 // R14-06 (SRV-OPS, 2026-10-14): server.host/port, websocket.host/port,
 // worker.count and process.reloadable/reuse_port are now HONORED by
 // start.php through \Phlix\Server\Runtime\ListenEndpoints (env > config >
@@ -152,15 +154,15 @@ return [
         // past the client's fragment timeout and playback fails. Requests over the
         // ceiling get a fast 503 + Retry-After so the client backs off. Tune toward
         // the box's core count. Env override: HLS_MAX_CONCURRENT_SEGMENTS.
-        'max_concurrent_segments' => (int) (getenv('HLS_MAX_CONCURRENT_SEGMENTS') ?: 8),
+        'max_concurrent_segments' => EnvConfig::integer('HLS_MAX_CONCURRENT_SEGMENTS', 8),
         // Size budget (bytes) for the on-demand segment cache. `segment_dir` is
         // often a RAM-backed tmpfs, and on-demand jobs never self-clean, so without
         // a ceiling the cache grows until the filesystem fills and encodes fail with
         // ENOSPC. Over budget, least-recently-used sessions are evicted. Default 8 GiB.
-        'cache_max_bytes' => (int) (getenv('HLS_CACHE_MAX_BYTES') ?: 8 * 1024 * 1024 * 1024),
+        'cache_max_bytes' => EnvConfig::integer('HLS_CACHE_MAX_BYTES', 8 * 1024 * 1024 * 1024),
         // Age (seconds) after which an idle segment session is reclaimed regardless
         // of the size budget — an abandoned watch. Default 3 hours.
-        'cache_max_age' => (int) (getenv('HLS_CACHE_MAX_AGE') ?: 10800),
+        'cache_max_age' => EnvConfig::integer('HLS_CACHE_MAX_AGE', 10800),
         // SV-1.9: minimum free bytes required on the segment-cache filesystem before
         // an on-demand encode is attempted. `segment_dir` is often a small RAM-backed
         // tmpfs; when free space falls below this floor the encode is rejected with a
@@ -171,7 +173,7 @@ return [
         // Env override: HLS_MIN_DISK_SPACE_BYTES (mirrors the config key, like
         // cache_max_bytes↔HLS_CACHE_MAX_BYTES and max_concurrent_segments↔
         // HLS_MAX_CONCURRENT_SEGMENTS).
-        'min_disk_space_bytes' => (int) (getenv('HLS_MIN_DISK_SPACE_BYTES') ?: 500 * 1024 * 1024),
+        'min_disk_space_bytes' => EnvConfig::integer('HLS_MIN_DISK_SPACE_BYTES', 500 * 1024 * 1024),
     ],
 
     // WebSocket server settings for SyncPlay realtime communication.
@@ -196,7 +198,7 @@ return [
         // unset — a bare dev box), connections are allowed anonymously. In
         // production JWT_SECRET is always present (the boot guard refuses to
         // start otherwise), so WS auth is enforced there.
-        'jwt_secret' => getenv('JWT_SECRET') ?: '',
+        'jwt_secret' => EnvConfig::text('JWT_SECRET', ''),
     ],
 
     // S445 write-through publish bridge: private unix socket the 14 HTTP
@@ -216,15 +218,15 @@ return [
         // listens nowhere) - rail then stays persist-only.
         'enabled' => getenv('SYNCPLAY_BRIDGE') !== '0',
         // SYNCPLAY_BRIDGE_SOCKET overrides the bind path (multi-instance boxes).
-        'socket_path' => getenv('SYNCPLAY_BRIDGE_SOCKET') ?: dirname(__DIR__) . '/var/syncplay-bridge.sock',
+        'socket_path' => EnvConfig::text('SYNCPLAY_BRIDGE_SOCKET', dirname(__DIR__) . '/var/syncplay-bridge.sock'),
         // MED-1(1): the bridge's per-boot shared secret. Optional. start.php
         // pins it pre-fork (config value -> env -> random) so all forked
         // workers inherit one secret without it ever hitting disk; an explicit
         // value is REQUIRED only for split topologies (separate masters
         // reaching one socket). Mismatched tokens fail CLOSED (frames dropped).
-        'token' => getenv('PHLIX_SYNCPLAY_BRIDGE_TOKEN') ?: null,
+        'token' => EnvConfig::nullableText('PHLIX_SYNCPLAY_BRIDGE_TOKEN'),
         // Hard budget for one frame's connect+full-write in an HTTP worker.
-        'publish_timeout_ms' => (int) (getenv('SYNCPLAY_BRIDGE_TIMEOUT_MS') ?: 250),
+        'publish_timeout_ms' => EnvConfig::integer('SYNCPLAY_BRIDGE_TIMEOUT_MS', 250),
     ],
 
     // SV-4.15: per-surface rate limiting for the server's previously-UNLIMITED
@@ -255,8 +257,8 @@ return [
         foreach (\Phlix\Common\RateLimit\RateLimitProfiles::defaults() as $spec) {
             $envPrefix = 'RATE_LIMIT_' . strtoupper($spec['key']);
             $limits[$spec['key']] = [
-                'max'    => (int) (getenv($envPrefix . '_MAX') ?: $spec['max']),
-                'window' => (int) (getenv($envPrefix . '_WINDOW') ?: $spec['window']),
+                'max'    => EnvConfig::integer($envPrefix . '_MAX', (int) $spec['max']),
+                'window' => EnvConfig::integer($envPrefix . '_WINDOW', (int) $spec['window']),
             ];
         }
         return $limits;

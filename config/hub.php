@@ -18,18 +18,20 @@ $tlsEnabled     = $tlsEnabledEnv === false
     ? true
     : filter_var($tlsEnabledEnv, FILTER_VALIDATE_BOOLEAN);
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
-    'hub_url' => getenv('PHLIX_HUB_URL') ?: null,
+    'hub_url' => EnvConfig::nullableText('PHLIX_HUB_URL'),
 
-    'hub_jwks_url' => getenv('PHLIX_HUB_JWKS_URL') ?: null,
+    'hub_jwks_url' => EnvConfig::nullableText('PHLIX_HUB_JWKS_URL'),
 
-    'heartbeat_interval' => (int)(getenv('PHLIX_HUB_HEARTBEAT_INTERVAL') ?: 60),
+    'heartbeat_interval' => EnvConfig::integer('PHLIX_HUB_HEARTBEAT_INTERVAL', 60),
 
     'enrollment_token_ttl' => 7 * 86400,
 
     'jwks_cache_ttl' => 900,
 
-    'enrollment_renewal_threshold' => (int)(getenv('PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD') ?: 86400),  // renew if expiring within 24h
+    'enrollment_renewal_threshold' => EnvConfig::integer('PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD', 86400),  // renew if expiring within 24h
 
     'key_path' => __DIR__ . '/hub-server-key.pem',
 

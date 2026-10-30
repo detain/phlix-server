@@ -11,6 +11,8 @@
  * @since 0.12.0
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     'enabled' => true,
 
@@ -45,7 +47,7 @@ return [
     'relay_tls_verify' => filter_var(getenv('PHLIX_RELAY_TLS_VERIFY') ?: 'true', FILTER_VALIDATE_BOOLEAN),
 
     // CA bundle used to verify the hub's relay TLS certificate (default = system).
-    'relay_tls_cafile' => getenv('PHLIX_RELAY_TLS_CAFILE') ?: '/etc/ssl/certs/ca-certificates.crt',
+    'relay_tls_cafile' => EnvConfig::text('PHLIX_RELAY_TLS_CAFILE', '/etc/ssl/certs/ca-certificates.crt'),
 
     // Fail-closed plaintext refusal (R17-01). When true (PHLIX_RELAY_REQUIRE_TLS=1),
     // RelayConsumer REFUSES any hub dial whose resolved scheme is not wss:// instead

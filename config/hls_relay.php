@@ -11,6 +11,8 @@
  * @since Wave 2 (post-O.7)
  */
 
+use Phlix\Common\Env\EnvConfig;
+
 return [
     /*
      * Maximum number of segments retained per session.
@@ -19,7 +21,7 @@ return [
      * served to a downstream client is evicted (LRU by insertion
      * timestamp).
      */
-    'max_segments' => (int) (getenv('PHLIX_HLS_RELAY_MAX_SEGMENTS') ?: 6),
+    'max_segments' => EnvConfig::integer('PHLIX_HLS_RELAY_MAX_SEGMENTS', 6),
 
     /*
      * Maximum cumulative segment duration (in seconds) retained per
@@ -27,5 +29,5 @@ return [
      * count and this duration cap, so short segments cannot blow past
      * the time budget and long segments cannot starve the count budget.
      */
-    'max_buffer_seconds' => (int) (getenv('PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS') ?: 30),
+    'max_buffer_seconds' => EnvConfig::integer('PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS', 30),
 ];

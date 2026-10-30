@@ -24,8 +24,14 @@ use Phlix\Server\Http\Request;
  * worker plus a green-badge, zero-item "completed" scan — after the endpoint
  * had already answered 201 with "Library created; initial scan started".
  *
- * The cure is synchronous path validation at the create choke (the only
- * production caller of createLibrary(), and update() never writes `paths`):
+ * The cure is synchronous path validation in the SHARED gate
+ * ({@see LibraryController::validateLibraryPaths()}, extracted from the r1
+ * inline loop): this file pins the create leg — the r1 text here claimed
+ * create was "the create choke" because "update() never writes `paths`",
+ * which r1 review disproved (a PUT may carry `paths` and updateLibrary()
+ * persists the key whenever present); create() and update() are the TWO
+ * validated entry points into the column and both route through the one
+ * helper — the update leg is pinned by LibraryUpdatePathValidationTest.php:
  * every entry of the multi-path field must be a string that exists, is a
  * directory, and is readable — rejected with the canonical
  * `{error, code: 'invalid_request', invalid_paths: [...]}` envelope

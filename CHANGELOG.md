@@ -9,6 +9,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **M-SERVER-41 r2 — the update-PUT leg gets the SAME path validation; the
+  "single choke" claim cured to truth (review server__dba major):** r1 gated
+  only `LibraryController::create()` and its prose claimed "`update()` never
+  writes `paths`", so "this single choke covers every HTTP path into the
+  column." False on disk: `update()` forwarded its raw body to
+  `LibraryManager::updateLibrary()`, which JSON-persists `paths` whenever the
+  key is present — a bogus-path PUT answered 200 "Library updated
+  successfully" and stored the bogus list verbatim. Cure: the stat-check loop
+  and the canonical `{error, code: 'invalid_request', invalid_paths:
+  [{path, reason}]}` reject are extracted into ONE shared helper
+  (`LibraryController::validateLibraryPaths()` + its envelope builder) called
+  by both entry points. create()'s behavior is byte-identical across the
+  extraction (its 5-test suite, the 78-test controller suite, and the
+  contracts pair held green unchanged); update() now gates
+  `isset($data['paths'])` — mirroring the manager's own persist condition, so
+  an absent/null `paths` keeps the column untouched exactly as before —
+  BEFORE anything is forwarded. Two update-only shape arms join the
+  payload-reason vocabulary: `not_a_list` (non-array value) and `empty_list`
+  (`[]` — the column-zeroing sibling of the create silent-drop hole); reasons
+  are data, not wire codes — the @phlix/contracts registry stays byte-frozen
+  (md5 40c1da48, zero new codes, no OpenAPI member moves). Prose currency
+  (review issue 2): every "create choke"/"update() never writes `paths`"
+  claim — the create() call-site comment, the r1 test's class docblock, the
+  r1 CHANGELOG entry (corrected in place below, disclosed as a correction,
+  history elsewhere verbatim), and the census staircase's "create choke"
+  wording — is restated to the truth: create() and update() are the TWO
+  validated HTTP entry points into the `libraries.paths` column, sharing one
+  helper, grep-verified the sole production callers of their manager methods.
+  Red-first by `tests/Unit/Server/Http/Controllers/
+  LibraryUpdatePathValidationTest.php` (8 tests, 48 assertions:
+  bogus/file/non-string/mixed/empty-list/non-array all 400 with
+  `updateLibrary()` pinned `never()`; valid-list 200 forwarding the validated
+  list; paths-absent 200 untouched — the last two green both sides as
+  regression guards; measured 8/12/6 red at 63ac756b). Census re-pinned from
+  measured red on the rebased tree (landed atop the sibling M-SERVER-39f
+  watcher lane's 1999→2000 pin): PHP files 2000→2001, declared writes
+  1078→1094 (+8 tests × userId+body stamps; the watcher entry added zero
+  Request sites; zero src writes added).
+
 - **The directory checksum materialized the whole watched tree twice per poll — the hash now
   streams, and the entry list is bounded (review server__srphp M3):**
   `FolderWatcher::calculateDirectoryChecksum()` collected one `path:mtime` string per file into
@@ -39,8 +78,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   from the measured phpunit red.
 
 - **"Add library" answered 201 for paths that do not exist — every path is now
-  stat-checked synchronously at the create choke (review server__webux
-  M-SERVER-41):** `LibraryController::create()` validated presence and type but
+  stat-checked synchronously at the shared controller gate (review server__webux
+  M-SERVER-41; the update-PUT leg of the same gate landed in the r2 entry
+  above):** `LibraryController::create()` validated presence and type but
   never touched the filesystem; `LibraryManager::createLibrary()` inserted the
   row and the background scan was enqueued blind. The bogus path surfaced only
   later as a `Scan path does not exist` warning in the server log plus a
@@ -56,11 +96,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `invalid_request` is the already-registered @phlix/contracts code this repo
   already REST-emits (QuickConnectController), so the registry stays byte-frozen
   and no OpenAPI enum member moves. `create()` is the sole `createLibrary()`
-  caller and `update()` never writes `paths`, so this single choke covers every
-  HTTP path into the column; the DVR registrar's internal find-or-create seeds
-  its path from a file it just wrote and is out of that surface. The
-  `not_readable` arm is defense-in-depth for non-root deployments and cannot be
-  pinned venue-independently (root reads chmod-000 dirs). Proved red-first by
+  caller; this r1 entry's further claim that "`update()` never writes
+  `paths`, so this single choke covers every HTTP path into the column" was
+  FALSE — the r2 review (server__dba major, entry above) found PUT-`paths`
+  persisted unvalidated behind a 200, and the r2 cure gates BOTH entry
+  points through the one shared helper. The DVR registrar's internal
+  find-or-create seeds its path from a file it just wrote and is out of that
+  surface. The `not_readable` arm is defense-in-depth for non-root deployments
+  and cannot be pinned venue-independently (root reads chmod-000 dirs). Proved
+  red-first by
   `tests/Unit/Server/Http/Controllers/LibraryCreatePathValidationTest.php`
   (5 tests, 42 assertions: bogus/file/non-string/mixed all 400 with the manager
   and job queue pinned `never()`, and two real dirs still 201); the 13 formerly

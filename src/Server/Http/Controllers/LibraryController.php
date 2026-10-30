@@ -269,6 +269,117 @@ class LibraryController
     }
 
     /**
+     * M-SERVER-41 (review server__webux major 2) + r2 (review server__dba):
+     * THE shared filesystem gate for a request body's `paths` field. Both
+     * HTTP entry points into the `libraries.paths` column call it —
+     * {@see create()} before `createLibrary()`, and {@see update()} before
+     * forwarding to `updateLibrary()` — two validated entry points, one
+     * helper; grep-verified there is no other production caller of either
+     * manager method.
+     *
+     * Before the cure, a bogus path was persisted verbatim: the row saved, a
+     * scan was enqueued blind, and the request answered 200/201 claiming
+     * success — the failure surfaced only later as a `Scan path does not
+     * exist` log warning plus a green-badge, zero-item completed scan. Each
+     * entry must now be a non-empty string that exists, is a directory, and
+     * is readable; the WHOLE request is rejected listing every offending
+     * entry (machine `invalid_paths` mirrors the `valid_types` echo idiom).
+     * `invalid_request` is the already-registered @phlix/contracts wire code
+     * already REST-emitted by QuickConnectController — no new code, no
+     * registry move. The pre-fix loop silently DROPPED non-string entries,
+     * so `{"paths":[123]}` created a zero-path library; non-strings are now
+     * reported, not discarded. The `not_readable` arm is defense-in-depth
+     * for non-root deployments: under root every directory reads, so it
+     * cannot be pinned venue-independently. The r2 update-leg arms join the
+     * same payload-reason vocabulary (reasons are data, not wire codes):
+     * `not_a_list` (the value is not an array at all) and `empty_list`
+     * (`[]` — the same zero-path library the create cure refuses).
+     *
+     * @param mixed $rawPaths the raw `paths` value from the request body
+     * @return array{valid: list<string>, rejection: Response|null} `rejection`
+     *         is the canonical whole-request 400 when any check fails; on a
+     *         clean list `valid` carries every entry verbatim.
+     */
+    private function validateLibraryPaths(mixed $rawPaths): array
+    {
+        if (!is_array($rawPaths)) {
+            return [
+                'valid' => [],
+                'rejection' => $this->invalidLibraryPathsResponse([
+                    ['path' => null, 'reason' => 'not_a_list'],
+                ]),
+            ];
+        }
+
+        if ($rawPaths === []) {
+            return [
+                'valid' => [],
+                'rejection' => $this->invalidLibraryPathsResponse([
+                    ['path' => null, 'reason' => 'empty_list'],
+                ]),
+            ];
+        }
+
+        /** @var list<string> $valid */
+        $valid = [];
+        /** @var list<array{path: string|null, reason: string}> $invalid */
+        $invalid = [];
+        foreach ($rawPaths as $path) {
+            if (!is_string($path)) {
+                $invalid[] = ['path' => null, 'reason' => 'not_a_string'];
+            } elseif ($path === '') {
+                $invalid[] = ['path' => '', 'reason' => 'empty'];
+            } elseif (!file_exists($path)) {
+                $invalid[] = ['path' => $path, 'reason' => 'does_not_exist'];
+            } elseif (!is_dir($path)) {
+                $invalid[] = ['path' => $path, 'reason' => 'not_a_directory'];
+            } elseif (!is_readable($path)) {
+                $invalid[] = ['path' => $path, 'reason' => 'not_readable'];
+            } else {
+                $valid[] = $path;
+            }
+        }
+
+        if ($invalid !== []) {
+            return [
+                'valid' => [],
+                'rejection' => $this->invalidLibraryPathsResponse($invalid),
+            ];
+        }
+
+        return ['valid' => $valid, 'rejection' => null];
+    }
+
+    /**
+     * The canonical whole-request 400 for offending `paths` entries
+     * ({@see self::validateLibraryPaths()}): the repo's `Response::error`
+     * envelope `{error, code, invalid_paths}` plus a human sentence naming
+     * every offender. Built in exactly one place so both entry points emit
+     * byte-identical rejections.
+     *
+     * @param list<array{path: string|null, reason: string}> $invalidPaths
+     */
+    private function invalidLibraryPathsResponse(array $invalidPaths): Response
+    {
+        $described = array_map(
+            static fn (array $entry): string => is_string($entry['path']) && $entry['path'] !== ''
+                ? $entry['path'] . ' (' . $entry['reason'] . ')'
+                : $entry['reason'],
+            $invalidPaths
+        );
+
+        $pathsMessage = 'Invalid library paths: ' . implode('; ', $described)
+            . '. Paths must exist and be readable directories.';
+
+        return (new Response())->error(
+            400,
+            'invalid_request',
+            $pathsMessage,
+            ['invalid_paths' => $invalidPaths]
+        );
+    }
+
+    /**
      * Require authentication for the request.
      */
     private function requireAuth(Request $request): ?Response
@@ -427,60 +538,20 @@ class LibraryController
             ]);
         }
 
-        // M-SERVER-41 (review server__webux major 2): the admin "Add library"
-        // form used to accept any path the operator typed. Presence and type
-        // were validated, but nothing ever touched the filesystem, so a bogus
-        // path persisted, enqueued a scan, answered 201 ("initial scan
-        // started"), and only failed later as a log warning + a green-badge,
-        // zero-item completed scan. Paths are now stat-checked SYNCHRONOUSLY
-        // at this choke — the sole production caller of createLibrary(), and
-        // update() never writes `paths` — before anything reaches the DB or
-        // the job queue: each entry must be a non-empty string that exists, is
-        // a directory, and is readable. The whole request is rejected listing
-        // every offending entry (machine `invalid_paths` mirrors the
-        // `valid_types` echo idiom above). `invalid_request` is the
-        // already-registered @phlix/contracts wire code already REST-emitted
-        // by QuickConnectController — no new code, no registry move. The old
-        // loop silently DROPPED non-string entries, so `{"paths":[123]}`
-        // created a zero-path library; non-strings are now reported, not
-        // discarded. The `not_readable` arm is defense-in-depth for non-root
-        // deployments: under root every directory reads, so it cannot be
-        // pinned venue-independently.
-        $stringPaths = [];
-        $invalidPaths = [];
-        foreach ($paths as $path) {
-            if (!is_string($path)) {
-                $invalidPaths[] = ['path' => null, 'reason' => 'not_a_string'];
-            } elseif ($path === '') {
-                $invalidPaths[] = ['path' => '', 'reason' => 'empty'];
-            } elseif (!file_exists($path)) {
-                $invalidPaths[] = ['path' => $path, 'reason' => 'does_not_exist'];
-            } elseif (!is_dir($path)) {
-                $invalidPaths[] = ['path' => $path, 'reason' => 'not_a_directory'];
-            } elseif (!is_readable($path)) {
-                $invalidPaths[] = ['path' => $path, 'reason' => 'not_readable'];
-            } else {
-                $stringPaths[] = $path;
-            }
+        // M-SERVER-41 (review server__webux major 2): paths are stat-checked
+        // SYNCHRONOUSLY here, before anything reaches the DB or the job
+        // queue. The rationale, the per-entry checks, and the canonical
+        // reject envelope live in the shared gate
+        // {@see self::validateLibraryPaths()} — which {@see update()} also
+        // calls: create() and update() are the TWO validated entry points
+        // into the `libraries.paths` column, one helper behind both (r1's
+        // "this choke / update() never writes paths" claim was false —
+        // corrected by r2, review server__dba major 1).
+        $pathsGate = $this->validateLibraryPaths($paths);
+        if ($pathsGate['rejection'] !== null) {
+            return $pathsGate['rejection'];
         }
-        if ($invalidPaths !== []) {
-            $described = array_map(
-                static fn (array $entry): string => is_string($entry['path']) && $entry['path'] !== ''
-                    ? $entry['path'] . ' (' . $entry['reason'] . ')'
-                    : $entry['reason'],
-                $invalidPaths
-            );
-
-            $pathsMessage = 'Invalid library paths: ' . implode('; ', $described)
-                . '. Paths must exist and be readable directories.';
-
-            return (new Response())->error(
-                400,
-                'invalid_request',
-                $pathsMessage,
-                ['invalid_paths' => $invalidPaths]
-            );
-        }
+        $stringPaths = $pathsGate['valid'];
 
         $optionsRaw = $data['options'] ?? [];
         $options = [];
@@ -599,6 +670,28 @@ class LibraryController
 
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        // M-SERVER-41r2 (review server__dba major, riding server__webux
+        // major 2): a PUT body may carry `paths`, and LibraryManager::
+        // updateLibrary() JSON-persists that key whenever it is present —
+        // r1's "update() never writes `paths`" claim was FALSE (the raw
+        // `$data` pass-through carries it), and bogus-path PUTs persisted
+        // verbatim behind a 200. The SAME shared gate as create() now runs
+        // here, BEFORE anything is forwarded: the isset() mirrors the
+        // manager's own persist condition, so an absent or null `paths`
+        // keeps the column untouched exactly as before, while a present
+        // list must pass every fs check or the WHOLE request is rejected
+        // with the canonical envelope and updateLibrary() is never reached.
+        // This is the second — and grep-verified last — HTTP entry point
+        // into the column; both entry points share the one helper
+        // (validateLibraryPaths()).
+        if (isset($data['paths'])) {
+            $pathsGate = $this->validateLibraryPaths($data['paths']);
+            if ($pathsGate['rejection'] !== null) {
+                return $pathsGate['rejection'];
+            }
+            $data['paths'] = $pathsGate['valid'];
         }
 
         // Surface `series_per_directory` on update too, SYMMETRICALLY with

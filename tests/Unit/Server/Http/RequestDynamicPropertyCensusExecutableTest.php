@@ -736,10 +736,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * red (1997), not predicted.
      * Re-pinned 1998→1999 by the M-SERVER-41 library-path stat-check lane
      * (2026-10-29): +1 — tests/Unit/Server/Http/Controllers/
-     * LibraryCreatePathValidationTest.php, pinning the create choke's reject-
-     * before-any-write envelope (bogus/non-string/mixed paths → 400
+     * LibraryCreatePathValidationTest.php, pinning the create entry point's
+     * reject-before-any-write envelope (bogus/non-string/mixed paths → 400
      * invalid_request, manager and job queue never()) and the valid-directory
-     * 201. Measured from the phpunit red (1999), not predicted.
+     * 201. Measured from the phpunit red (1999), not predicted. (The line's
+     * original "create choke" wording was cured to truth by the M-SERVER-41r2
+     * lane — r1 review proved the sole-choke claim false; see below.)
      * Re-pinned 1999→2000 by the M-SERVER-39f folder-watcher single-
      * materialization lane (2026-10-29): +1 — tests/Unit/Media/Library/
      * FolderWatcherChecksumTest.php (the byte-preserved-digest pin, the
@@ -748,8 +750,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * property (tmp-dir filesystem fixtures + reflection on FolderWatcher
      * only), so every other census denominator is unchanged. Measured from
      * the phpunit red (2000), not predicted.
+     * Re-pinned 2000→2001 by the M-SERVER-41r2 update-PUT path-validation
+     * lane (2026-10-30): +1 — tests/Unit/Server/Http/Controllers/
+     * LibraryUpdatePathValidationTest.php, pinning the update entry point's
+     * same reject-before-any-write envelope (bogus/file/non-string/empty-
+     * list/non-array paths → 400 invalid_request, updateLibrary never()) and
+     * the valid-list 200 + paths-absent 200 behavior guards. The validation
+     * itself moved into the shared LibraryController helper — a method
+     * extraction inside one file, zero new src files. Measured from the
+     * phpunit red (2001) on the rebased tree, not predicted.
      */
-    private const EXPECTED_PHP_FILES = 2000;
+    private const EXPECTED_PHP_FILES = 2001;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -996,8 +1007,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * src/ writes added (the validating loop reads the body array only; the
      * converted fixtures replaced path literals, not property stamps).
      * Measured from the phpunit red (1078), not predicted.
+     * Re-pinned 1078→1094 by the M-SERVER-41r2 update-PUT path-validation
+     * lane (2026-10-30): +16 declared-member WRITES — the new
+     * LibraryUpdatePathValidationTest stamps $request->userId and
+     * $request->body once each in its eight tests. Zero src/ writes added
+     * (the gate reads the body array only; the create-side loop extraction
+     * moved no Request site). Measured from the phpunit red (1094), not
+     * predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1078;
+    private const EXPECTED_DECLARED_WRITES = 1094;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

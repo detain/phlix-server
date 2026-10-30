@@ -38,7 +38,19 @@ use SplFileInfo;
  *   is digest-identical, so no stored baseline changes meaning);
  * - P2 the method streams `hash_init`/`hash_update`/`hash_final` and contains
  *   no whole-tree accumulator (structural pin — behavior tests cannot see the
- *   absent second copy, the source can);
+ *   absent second copy, the source can). LIMIT noted [review server__srphp
+ *   m-b, riders R-SERVER-08]: the negatives are STRING-SHAPE pins — they
+ *   convict the shipped idiom family (`.=` accumulation, `md5()` over a
+ *   concatenation), which is what a realistic regression re-grows. An
+ *   imaginative re-materialization (plain `.`-concatenation accumulated and
+ *   fed as one string to `hash_update`) would evade both greps while staying
+ *   P1-green, because it preserves the digest. The memory law itself lives in
+ *   prose in the method's own docblock (src/Media/Library/FolderWatcher.php —
+ *   "the duplicated megabyte copy is never built"); the greps are its
+ *   string-shape proxy. Tightening the greps into a general shape-law is
+ *   deliberately NOT done here — string-shape pins end where prose begins,
+ *   and the review named this as the accepted boundary,
+ *   not a hole to fill by escalation.
  * - P3/P4 the walk fails loud past the per-path watch cap and is exact at the
  *   cap boundary (kills off-by-one in both directions);
  * - P5 the shipped default ceiling stays at or above 2x the review's cited
@@ -88,6 +100,10 @@ class FolderWatcherChecksumTest extends TestCase
      * P2 — structural pin: the method body streams the digest and never
      * materializes a concatenated copy. Red on the defective parent, which
      * accumulates `$checksum .= ...` and hashes the string with md5().
+     * STRING-SHAPE limit [R-SERVER-08]: these two greps catch that shipped
+     * idiom family; a plain `.`-concatenation accumulated and passed whole to
+     * hash_update() would sail through both while P1 stays green. See the
+     * class header for why no stricter law is armed here.
      */
     public function testTheChecksumStreamsInsteadOfConcatenatingTheWholeTree(): void
     {

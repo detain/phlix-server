@@ -474,6 +474,14 @@ class BackupManager
 
     /**
      * Cleanup old backups beyond retention count.
+     *
+     * Single bounded pass: the `LIMIT 1000 OFFSET ?` is a hard internal batch
+     * ceiling (an unbounded load is the resident-worker OOM hazard
+     * {@see \Phlix\Common\Http\PageLimit} exists for — but this is not a
+     * caller-facing page: 1000 rows per tick is the delete budget, and any
+     * backlog past retention+1000 is collected by the next cleanup run, not
+     * silently dropped). Not routed through PageLimit: its MAX (100) is an
+     * HTTP page-size contract, and this number is a worker-side I/O budget.
      */
     public function cleanupOldBackups(): void
     {

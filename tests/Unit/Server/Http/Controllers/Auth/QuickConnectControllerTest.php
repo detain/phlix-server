@@ -385,6 +385,39 @@ final class QuickConnectControllerTest extends TestCase
         self::assertSame(200, $controller->adminClients($request, [])->statusCode);
     }
 
+    /**
+     * minors M-SERVER-84 (W-min100): the limit parse is the shared
+     * PageLimit::coerce rule and the handler deliberately does NOT clamp —
+     * the 1..1000 ceiling belongs to ClientHeartbeatStore::recent() itself,
+     * so an oversized census request must reach the store unclamped (where
+     * the SQL bind, not the handler, applies the cap).
+     */
+    public function testAdminClientsPassesOversizedLimitThroughToTheStoreOwnedCeiling(): void
+    {
+        $store = $this->createMock(ClientHeartbeatStoreInterface::class);
+        $store->expects(self::once())->method('recent')->with(777777)->willReturn([]);
+        $store->method('countInstances')->willReturn(0);
+        $controller = $this->controller(heartbeats: $store);
+
+        $request = $this->request();
+        $request->query = ['limit' => '777777'];
+
+        self::assertSame(200, $controller->adminClients($request, [])->statusCode);
+    }
+
+    public function testAdminClientsJunkLimitFallsBackToTheTwoHundredCensusDefault(): void
+    {
+        $store = $this->createMock(ClientHeartbeatStoreInterface::class);
+        $store->expects(self::once())->method('recent')->with(200)->willReturn([]);
+        $store->method('countInstances')->willReturn(0);
+        $controller = $this->controller(heartbeats: $store);
+
+        $request = $this->request();
+        $request->query = ['limit' => 'abc'];
+
+        self::assertSame(200, $controller->adminClients($request, [])->statusCode);
+    }
+
     // -----------------------------------------------------------------
     // serverUrl resolution
     // -----------------------------------------------------------------

@@ -16,6 +16,7 @@ use Phlix\Auth\QuickConnectPair;
 use Phlix\Auth\QuickConnectStateStore;
 use Phlix\Auth\QuickConnectStateStoreInterface;
 use Phlix\Auth\RateLimitException;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Plugins\OAuth2\CallbackUrl;
 use Phlix\Server\Http\Request;
@@ -427,13 +428,19 @@ final class QuickConnectController
      * survey-c requirement that telemetry gets "a data landing + admin read
      * surface", bounded page + total so the census is comparable across pages.
      *
+     * minors M-SERVER-84 (W-min100): the `?limit=` parse rides the shared
+     * {@see PageLimit::coerce()} rule (this ceiling — 1..1000 — is wider than
+     * the HTTP page-size MAX on purpose), but clamping stays the callee's
+     * deliberate override: `ClientHeartbeatStore::recent()` floors at 1 and
+     * caps at 1000 at the SQL bind (pinned in ClientHeartbeatStoreTest), so an
+     * oversized census request pages the census, never the whole table.
+     *
      * @param Request               $request Route request.
      * @param array<string, string> $params  Path params (unused).
      */
     public function adminClients(Request $request, array $params): Response
     {
-        $limitRaw = $request->queryString('limit');
-        $limit = $limitRaw !== null && is_numeric($limitRaw) ? (int) $limitRaw : 200;
+        $limit = PageLimit::coerce($request->queryString('limit'), 200);
 
         if ($this->heartbeats === null) {
             return $this->unavailable();

@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
 use Phlix\Common\Fs\LibraryRootGuard;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Media\Library\BookProgress;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
@@ -197,8 +198,8 @@ class BookController
 
         $offsetParam = $request->query['offset'] ?? null;
         $limitParam = $request->query['limit'] ?? null;
-        $offset = max(0, is_numeric($offsetParam) ? (int) $offsetParam : 0);
-        $limit = min(100, max(1, is_numeric($limitParam) ? (int) $limitParam : 50));
+        $offset = PageLimit::clampOffset($offsetParam);
+        $limit = PageLimit::clamp($limitParam, 50);
 
         // Get total count for pagination (use COUNT query instead of loading 10K items)
         $total = $this->itemRepo->countByType($libraryId, 'book');
@@ -247,8 +248,8 @@ class BookController
         $limitParam = $request->query['limit'] ?? null;
         $offsetParam = $request->query['offset'] ?? null;
         $libraryId = is_string($libraryIdParam) ? $libraryIdParam : null;
-        $limit = min(100, max(1, is_numeric($limitParam) ? (int) $limitParam : 50));
-        $offset = max(0, is_numeric($offsetParam) ? (int) $offsetParam : 0);
+        $limit = PageLimit::clamp($limitParam, 50);
+        $offset = PageLimit::clampOffset($offsetParam);
 
         if ($libraryId !== null) {
             $items = $this->itemRepo->getByLibrary($libraryId, $limit, $offset);

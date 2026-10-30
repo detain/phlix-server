@@ -788,9 +788,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * assertion). Reads/writes no Request property, so every other census
      * denominator is unchanged. Measured from the phpunit red (2007), not
      * predicted.
+     * Re-pinned 2007→2008 by the W-min100 / M-SERVER-84 PageLimit-consolida-
+     * tion lane (2026-10-30): +1 — tests/Unit/Common/Http/PageLimitSitesTest
+     * .php (the three book/audiobook listing endpoints' limit/offset coercion
+     * riding PageLimit::clamp/clampOffset byte-identically + the coerce-is-
+     * the-parse-half-of-clamp table). Request-side: it and the two new
+     * QuickConnect pins seed $request->query → see EXPECTED_DECLARED_WRITES
+     * (+3) in the same commit. Measured from the phpunit red (2008), not
+     * predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2007;
+    private const EXPECTED_PHP_FILES = 2008;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1056,7 +1064,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      */
     // M-SERVER-05 (+1 write = the new law test's makeRequest() seeding
     // $request->body, the same sanctioned pattern every sibling pin uses).
-    private const EXPECTED_DECLARED_WRITES = 1097;
+    // W-min100 / M-SERVER-84 (+3 writes = PageLimitSitesTest::queryRequest()
+    // and the two new QuickConnect adminClients pins seeding $request->query
+    // on a bare `new Request()` — same sanctioned harness-seed pattern).
+    private const EXPECTED_DECLARED_WRITES = 1100;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

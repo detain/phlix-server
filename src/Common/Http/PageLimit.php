@@ -69,7 +69,7 @@ final class PageLimit
      */
     public static function clamp(mixed $limit, int $default = self::DEFAULT): int
     {
-        $value = is_numeric($limit) ? (int) $limit : $default;
+        $value = self::coerce($limit, $default);
 
         if ($value < self::MIN) {
             return self::MIN;
@@ -79,6 +79,29 @@ final class PageLimit
         }
 
         return $value;
+    }
+
+    /**
+     * The parse half of {@see self::clamp()} — no bounds.
+     *
+     * For the rare surface whose ceiling is deliberately owned DOWNSTREAM,
+     * where only the `is_numeric ? (int) $raw : $default` coercion rule may be
+     * shared (the one rule the hand-inlined ladders all repeated). Doubling a
+     * parse rule here is how a ceiling and its coercion drift apart; clamping
+     * stays the job of {@see self::clamp()} or — where the ceiling is wider
+     * than MAX by documented decision — of the enforcing callee itself
+     * (e.g. `ClientHeartbeatStore::recent()`'s 1..1000 census clamp).
+     *
+     * @param mixed $limit   Raw request value (string, int, null, anything).
+     * @param int   $default Fallback when `$limit` is not numeric.
+     *
+     * @return int The integer value, or the default — never bounded.
+     *
+     * @since 1.3.0
+     */
+    public static function coerce(mixed $limit, int $default = self::DEFAULT): int
+    {
+        return is_numeric($limit) ? (int) $limit : $default;
     }
 
     /**

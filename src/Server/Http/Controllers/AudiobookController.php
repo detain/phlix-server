@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
 use Phlix\Common\Fs\LibraryRootGuard;
+use Phlix\Common\Http\PageLimit;
 use Phlix\Media\Library\AudiobookLibraryManager;
 use Phlix\Media\Library\AudiobookProgress;
 use Phlix\Media\Library\ItemRepository;
@@ -81,8 +82,8 @@ class AudiobookController
         $limitParam = $request->query['limit'] ?? null;
         $offsetParam = $request->query['offset'] ?? null;
         $libraryId = is_string($libraryIdParam) ? $libraryIdParam : null;
-        $limit = min(100, max(1, is_numeric($limitParam) ? (int) $limitParam : 50));
-        $offset = max(0, is_numeric($offsetParam) ? (int) $offsetParam : 0);
+        $limit = PageLimit::clamp($limitParam, 50);
+        $offset = PageLimit::clampOffset($offsetParam);
 
         if ($libraryId !== null) {
             $items = $this->itemRepo->getByLibrary($libraryId, $limit, $offset);

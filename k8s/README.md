@@ -176,4 +176,12 @@ helm install hub k8s/helm/phlix-hub \
 
 ## Database Migration
 
-Database migrations run automatically on first startup via the docker-entrypoint.sh script.
+Database migrations run automatically on **every** container start: the
+`docker-entrypoint.sh` script invokes `scripts/run-migrations.php`, which keeps
+the `schema_migrations` ledger and applies only files it has not recorded yet —
+so a new release's new migrations land on the first boot of the new image, and
+later boots are ledger no-ops. Because the replay happens at boot, take a
+database backup BEFORE upgrading an instance
+(`php bin/phlix backup:create --label=pre-vX.Y.Z`); the backup/restore and
+rollback semantics are documented in [`RELEASE_PROCESS.md`](../RELEASE_PROCESS.md)
+("Restore from a backup", including what a restore does and does not re-import).

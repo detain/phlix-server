@@ -1,5 +1,12 @@
 # Worklog — phlix-server
 
+> **Frozen recon document.** The tooling figures below are a point-in-time
+> survey from the original recon pass and are kept verbatim as history — they
+> contradict today's reality in places (e.g. line 8's "Unit + Integration +
+> E2E" default run and line 18's "(level 2)" tests gate). `AGENTS.md` is the
+> authority for the current gates; read this file as provenance, not
+> instructions. (minors M-SERVER-99, W-min100)
+
 ## Tooling (from Recon)
 
 ### Tooling Discovery

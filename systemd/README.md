@@ -146,8 +146,15 @@ The unit applies several sandbox directives:
 - `PrivateTmp=true` — private `/tmp`
 - `ProtectSystem=strict` — read-only filesystem outside `ReadWritePaths`
 - `ProtectHome=true` — hide `/home`, `/root`, `/run/user`
-- `ReadWritePaths` — only `/var/phlix`, `/var/log/phlix`, `/var/run/phlix`,
-  and the install dir's `.logs/` + `templates_c/` are writable. Note that
+- `ReadWritePaths` — nine writable locations, exactly as declared in the unit:
+  `/var/phlix` (data), `/var/log/phlix`, `/var/run/phlix` (PID file), the
+  install dir's `.logs/` (application log files), `templates_c/` (Smarty
+  compile cache) and `var/` (runtime plugin installs in `var/plugins` +
+  ui-theme extraction in `var/themes`), plus `/var/artwork` (local poster
+  cache), `/var/subtitles` (downloaded external-subtitle store), and
+  `/var/cache/phlix/anidb` (the anidb plugin's title-dump cache). Without
+  the last three under `ProtectSystem=strict` their writes fail read-only —
+  the `/var/artwork` lesson, repeated by each store since. Note that
   `/var/log/phlix` is a provisioned operator/placed-log location (the
   installer creates it); the server's own log files live in the install
   dir's `.logs/` and its stdout goes to the journal.

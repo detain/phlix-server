@@ -124,12 +124,15 @@ Every environment variable the server process reads is inventoried in the defini
   and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
 
 ### Web Portal
-- **Vue SPA (`/app`) — the ONLY web UI**: The web UI is the shared `@phlix/ui` Vue SPA, served at `/app`
-  (SPA shell via `SharedUiController` + `ViteAssets`; built bundle under `public/assets/app/`). Routes +
+- **Web portal (`/app`) — the only web UI**: The web portal is the shared `@phlix/ui` Vue SPA, served
+  at `/app` (SPA shell via `SharedUiController` + `ViteAssets`; built bundle under
+  `public/assets/app/`). Admins work in the **admin section (`/app/admin`)**, an
+  admin-gated route family of the same SPA — "web portal (`/app`)" and "admin section
+  (`/app/admin`)" are this README's canonical pair for the browser surfaces. Routes +
   nav are registered in `web-ui/src/main.ts`, covering **Browse/Library**, **Player**, **Music** sub-pages
   (`/app/music/*`), **Books** (`/app/books/*`), **Audiobooks** (`/app/audiobooks/*`), **Photos**
   (`/app/photo/*`), **Search** (`/app/search`), **Settings** (incl. the **Security**/passkey tab at
-  `/app/settings/security`), and **Admin** (`/app/admin/*`).
+  `/app/settings/security`), and the admin section (`/app/admin/*`).
 - **Legacy Smarty page rendering removed**: The old server-rendered (Smarty) portal pages —
   `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
   **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
@@ -185,7 +188,7 @@ admin **Integrations → Auth providers** page (persisted as the `auth.oidc.enab
 `auth.ldap.enabled` / `auth.github.enabled` server settings). An external identity always
 resolves to an existing account — it never silently creates a duplicate — and the auth provider
 registry supports multiple instances of the same family (e.g. two OIDC issuers; configuring
-named instances from the admin console is a later step).
+named instances from the admin section is a later step).
 
 - **OIDC** — authorization-code flow with PKCE + `state` + `nonce` and id-token validation:
   `GET /auth/oidc/authorize` → `GET /auth/oidc/callback`.
@@ -226,7 +229,7 @@ Config pointers:
   configured, `/auth/{provider}/authorize` **fails closed** with `503
   callback_url_not_configured`. See [Environment variables](#environment-variables) and the
   SSO/external-auth guide in phlix-docs for the full setup, including the GitHub provider
-  (which has admin **API** endpoints but no admin-SPA card yet).
+  (which has admin **API** endpoints but no admin-section page yet).
 
 ### Auth-method lock-out guards
 
@@ -598,7 +601,7 @@ sudo bash /var/www/phlix/scripts/install.sh --update -y
 
 Or via the one-liner, which works regardless of where the server was installed because
 `--update` discovers the install path from the systemd unit. **This is the exact string the
-admin console's update banner offers for copy-to-clipboard** (`config/updates.php`'s
+admin section's update banner offers for copy-to-clipboard** (`config/updates.php`'s
 `update_command`, surfaced by `GET /api/v1/admin/updates/status`) — the server never runs it
 for you:
 
@@ -1505,10 +1508,10 @@ command without a machine-readable mode.
 
 #### Bad days: recovery from the CLI
 
-These are the scenarios where the admin UI itself is the thing you cannot reach. The CLI
+These are the scenarios where the admin section itself is the thing you cannot reach. The CLI
 talks to the database directly, so it works when web login does not.
 
-**Forgotten admin password / locked out of the web UI.**
+**Forgotten admin password / locked out of the web portal.**
 
 ```bash
 php bin/phlix user:reset-password admin            # generates and prints a new password
@@ -1521,7 +1524,7 @@ account's live sessions are revoked with the reset. One honest caveat: it resets
 password **hash** — auth-method enablement is separate server settings (the `auth.*.enabled`
 toggles behind the admin Auth providers page; see "External SSO" above). If the password login
 method itself was disabled, a fresh hash alone will not open the door, and the CLI exposes no
-settings toggle — reach the setting via the admin UI whenever any admin can still sign in, or a
+settings toggle — reach the setting via the admin section whenever any admin can still sign in, or a
 direct database write when none can.
 
 **Locked by the admin `reset-password` endpoint.** `POST /api/v1/admin/users/{id}/reset-password`
@@ -1571,7 +1574,7 @@ decision, no restart needed. And if the forced state ever reads as all-five-off,
 server self-helps to password-only sign-in and logs the loud event
 `auth.methods_all_disabled_fallback` (once per worker) without rewriting your data — grep
 the audit log for it to confirm how the state arrived. Once inside, fix the toggles from
-the admin UI; the guards will keep the corrected state safe from then on.
+the admin section; the guards will keep the corrected state safe from then on.
 
 **No admin exists yet (from-source install).** There is no bootstrap flag; create, then
 promote:
@@ -1601,7 +1604,7 @@ is the usual answer (reversible); reserve `user:delete` for hard removal.
 `backup:list` shows what is on disk. Configured schedules and retention live in
 `config/backup.php`.
 
-### Admin UI (part of the `/app` SPA)
+### Admin Section (`/app/admin`)
 
 There is **no separate admin app**. An earlier React + Vite admin console (`admin-ui/`, served at
 `/admin` by `AdminAppController`, built into `public/assets/admin/`, gated by an `admin-ui.yml`
@@ -1610,7 +1613,7 @@ workflow) was **decommissioned in this repo**: the app was removed in `6d1f43fe`
 workflow (`7caad461`, now `.github/workflows/web-ui.yml`, building `web-ui/`). Nothing named
 `admin-ui/` ships in this repository today.
 
-The admin console is the `/app/admin/*` section of the same `@phlix/ui` Vue SPA described under
+The admin section (`/app/admin`) is part of the same `@phlix/ui` Vue SPA described under
 [Web Portal](#web-portal) — source in `web-ui/`, bundle served from `public/assets/app/`, routes
 registered in `web-ui/src/main.ts` (the shell's **Admin** entry renders only for
 `useAuthStore().isAdmin`; the admin API itself is gated server-side regardless). The surviving
@@ -1673,8 +1676,8 @@ Groups are host-managed over the SyncPlay WebSocket on port `8097` (the
 A member that silently stops following usually lost its socket and did not
 re-join. Have the member leave and re-join: on a successful join the server
 sends the current group state (`syncplay_group_state`) directly to the joiner,
-so a healthy re-join re-synchronizes it. The admin area of the web portal
-(`/app`) shows live group state, and `.logs/events.log` (with
+so a healthy re-join re-synchronizes it. The admin section (`/app/admin`)
+shows live group state, and `.logs/events.log` (with
 `PHLIX_DEBUG_EVENTS` on) records the command flow.
 
 ### A Live TV recording is missing

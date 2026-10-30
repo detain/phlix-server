@@ -12,7 +12,7 @@
  * `WHERE a.name = ?`. The `%2520` fixture test reddens on DOUBLE-decoding.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

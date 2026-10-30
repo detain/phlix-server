@@ -62,7 +62,7 @@
  * polyfill is a fallback, not the intent.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  *
  * @return array<string, array{symbol: string, source: string, why: string}>
  *         Keyed by extension name (the `ext-` prefix is NOT included).

@@ -4,7 +4,7 @@
  * Phlix media server component: SyncPlay Protocol.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -54,8 +54,6 @@ use Phlix\Session\SyncPlay\Messages;
  * - **playback_rate**: 4 bytes (uint32) - Playback rate (e.g., 1000 = 1.0x)
  *
  * @author Phlix Development Team
- * @copyright 2024 Phlix Media Server
- * @license Proprietary
  *
  * @see Messages For JSON message type definitions
  * @see \Phlix\Session\SyncPlay\SyncPlayManager For room broadcasting (the live

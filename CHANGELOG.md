@@ -9,6 +9,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- **License metadata contradicted itself inside single files; every carrier now
+  tells the one truth the repo ships — MPL-2.0 (review server__writer
+  M-SERVER-44):** `composer.json:5` declares `MPL-2.0`, `LICENSE` carries the
+  verbatim Mozilla Public License 2.0 text, the README license section explains
+  the per-file weak-copyleft posture, and `TRADEMARK.md` is built on it — yet
+  881 PHP file/class header lines claimed `@license MIT` (boilerplate emitted
+  by `scripts/add-headers.php`, whose template still seeded the false tag) and
+  8 of those same files additionally carried a third, mutually exclusive
+  `@license Proprietary` + `@copyright 2024 Phlix Media Server` class-docblock
+  block with no supporting evidence anywhere. Metadata-only cure: the header
+  sweep rewrites all 881 claims to the canonical ` * @license   MPL-2.0`
+  (also folding the 14 non-canonical single-space variants into it), the 8
+  false `Proprietary`/6 stale 2024-copyright lines are deleted from the second
+  docblocks (informative `@author`/`@see`/`@package` members kept), and
+  `scripts/add-headers.php`'s template now seeds `MPL-2.0` so the false claim
+  cannot regrow. Deliberately untouched as truthful self-consistent claims of
+  *other* works: the vendored `examples/plugins/phlix-plugin-sample-theme/**`
+  (MIT, matching the plugin/theme estate family), the
+  `tests/Fixtures/Plugins/fixture-plugin/composer.json` `"proprietary"` value
+  (installer-parser test input, not a license statement about this code), and
+  npm dependency licenses in `web-ui/package-lock.json`/built assets.
+  `@copyright 2026 Joe Huss <detain@interserver.net>` attribution held
+  (matches estate authorship). Zero behavior change: 881 header lines flipped,
+  14 lines deleted, one script template string; census `EXPECTED_PHP_FILES`
+  untouched (no files added or removed).
+
 - **The admin reset-password recovery story is told as shipped truth (review
   server__seceng M-SERVER-33):** the README documented
   `POST /api/v1/admin/users/{id}/reset-password` as "(returns new password)"

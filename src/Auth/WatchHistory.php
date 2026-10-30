@@ -4,7 +4,7 @@
  * Phlix media server component: Auth.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -45,7 +45,6 @@ use Workerman\MySQL\Connection;
  *
  * @package Phlix\Auth
  * @author Phlix Development Team
- * @license Proprietary
  *
  * @see UserProfileManager For profile-based access control and restrictions
  * @see PlaybackController For session-based playback state management

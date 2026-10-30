@@ -4,7 +4,7 @@
  * Phlix media server component: SyncPlay.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -54,8 +54,6 @@ use Phlix\Server\WebSocket\SyncPlay\JoinPasswordThrottle;
  * Model, ordering and loss posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
  *
  * @author Phlix Development Team
- * @copyright 2024 Phlix Media Server
- * @license Proprietary
  *
  * @see GroupState For individual group state management
  * @see TimeSync For time synchronization logic

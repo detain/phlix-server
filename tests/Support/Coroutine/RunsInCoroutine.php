@@ -4,7 +4,7 @@
  * Phlix media server test support: running a test body inside a Swoole coroutine.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

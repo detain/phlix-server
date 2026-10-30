@@ -4,7 +4,7 @@
  * Phlix media server component: SyncPlay.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -39,8 +39,6 @@ namespace Phlix\Session\SyncPlay;
  * - The variance of recent offset samples is less than 50ms
  *
  * @author Phlix Development Team
- * @copyright 2024 Phlix Media Server
- * @license Proprietary
  *
  * @see SyncPlayManager For how TimeSync is used in group sync
  * @see https://en.wikipedia.org/wiki/Network_Time_Protocol For NTP protocol details

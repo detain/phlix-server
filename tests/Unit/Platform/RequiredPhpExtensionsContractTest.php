@@ -36,7 +36,7 @@ use PHPUnit\Framework\TestCase;
  * exactly `exif` while `composer install` stays clean.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 final class RequiredPhpExtensionsContractTest extends TestCase
 {

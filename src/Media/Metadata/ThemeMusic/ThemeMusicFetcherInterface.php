@@ -4,7 +4,7 @@
  * Phlix media server component: ThemeMusic.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

@@ -4,7 +4,7 @@
  * Phlix media server test: listen endpoint resolution (R14-06).
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

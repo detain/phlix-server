@@ -4,7 +4,7 @@
  * Phlix media server component: Tests.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -65,7 +65,7 @@ use Workerman\MySQL\Connection;
  * read-only.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 final class StatsStorageUniqueKeyUpsertGuardTest extends TestCase
 {

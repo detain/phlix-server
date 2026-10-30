@@ -4,7 +4,7 @@
  * Phlix media server component: Auth.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -46,7 +46,6 @@ use Workerman\MySQL\Connection;
  *
  * @package Phlix\Auth
  * @author Phlix Development Team
- * @license Proprietary
  *
  * @see WatchHistory For watch history tracking per profile
  * @see AuthManager For authentication and token management

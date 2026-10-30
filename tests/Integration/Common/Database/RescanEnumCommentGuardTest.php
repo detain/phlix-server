@@ -34,7 +34,7 @@ use Workerman\MySQL\Connection;
  * change. The suite runs serially.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 final class RescanEnumCommentGuardTest extends TestCase
 {

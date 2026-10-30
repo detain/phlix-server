@@ -15,7 +15,7 @@ use Workerman\MySQL\Connection;
  * stores the top-K recommendations in user_recommendations.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 final class RecommendationService
 {

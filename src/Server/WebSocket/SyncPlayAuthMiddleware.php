@@ -4,7 +4,7 @@
  * Phlix media server component: SyncPlay Authentication Middleware.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -48,8 +48,6 @@ use Phlix\Common\Logger\LogChannels;
  * ```
  *
  * @author Phlix Development Team
- * @copyright 2024 Phlix Media Server
- * @license Proprietary
  *
  * @see JwtHandler For JWT validation
  * @see Connection For connection representation

@@ -20,8 +20,9 @@ use Phlix\Common\Logger\LogChannels;
 /**
  * SyncPlay Authentication Middleware for WebSocket connections.
  *
- * This middleware validates session tokens from the WebSocket handshake
- * `?token=...` query parameter and enforces authentication for SyncPlay rooms.
+ * Validates the handshake JWT (bearer subprotocol preferred, legacy
+ * `?token=` accepted — see docs/dev/WEBSOCKET_AUTH_CARRIERS.md) and enforces
+ * authentication for SyncPlay rooms.
  *
  * ## Authentication Flow
  *

@@ -79,6 +79,7 @@ use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Subtitles\EmbeddedSubtitleCache;
 use Phlix\Media\Subtitles\Quota\SubtitleProviderQuotaRepository;
 use Phlix\Media\Subtitles\SubtitleFetchService;
 use Phlix\Media\Subtitles\SubtitleSourceRegistry;
@@ -1393,6 +1394,18 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // (named because PHP-DI skips defaulted optional ctor params).
             SubtitleStorage::class => autowire()
                 ->constructorParameter('baseDir', get('subtitles.storage_path')),
+
+            // minors M-SERVER-54(a): the embedded-extraction cache lives on the
+            // SAME configured volume but in its own `embedded/` namespace, so
+            // downloaded `<lang>.vtt` files and `embedded-*.vtt` derivations
+            // never share a directory. Factory (not autowire-named) because the
+            // root is a computed suffix of the config string.
+            EmbeddedSubtitleCache::class => factory(static function (ContainerInterface $c): EmbeddedSubtitleCache {
+                $root = $c->get('subtitles.storage_path');
+                $root = is_string($root) && $root !== '' ? $root : '/var/subtitles';
+
+                return new EmbeddedSubtitleCache(rtrim($root, '/') . '/embedded');
+            }),
 
             // F3: per-provider download-quota persistence (Workerman MySQL
             // Connection is globally bound by CoreServicesProvider).

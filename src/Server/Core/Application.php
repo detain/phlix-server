@@ -4218,7 +4218,8 @@ class Application
     }
 
     /**
-     * Returns a SubtitleController instance (item repo + ffmpeg + extractor).
+     * Returns a SubtitleController instance (item repo + ffmpeg + extractor +
+     * persisted embedded-VTT cache).
      *
      * @return \Phlix\Server\Http\Controllers\SubtitleController The controller instance.
      */
@@ -4249,12 +4250,18 @@ class Application
                 'password'
             );
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            // minors M-SERVER-54(a): container-less fallback uses the default
+            // storage root (mirrors getRemoteSubtitleController()'s
+            // `new SubtitleStorage()` posture).
+            $subtitleCache = new \Phlix\Media\Subtitles\EmbeddedSubtitleCache();
         } else {
             /** @var \Phlix\Media\Library\ItemRepository */
             $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+            /** @var \Phlix\Media\Subtitles\EmbeddedSubtitleCache */
+            $subtitleCache = $this->container->get(\Phlix\Media\Subtitles\EmbeddedSubtitleCache::class);
         }
 
-        return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor);
+        return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor, $subtitleCache);
     }
 
     /**

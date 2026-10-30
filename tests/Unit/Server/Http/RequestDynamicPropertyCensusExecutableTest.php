@@ -813,9 +813,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * requests through __invoke(); writes no Request property directly, so
      * every other census denominator is unchanged. Measured from the
      * phpunit red (2010), not predicted.
+     * Re-pinned 2010→2013 by the W-min101 / M-SERVER-54(a) embedded-VTT-
+     * cache lane (2026-10-30): +3 — src/Media/Subtitles/EmbeddedSubtitleCache
+     * .php (persisted extraction store, fingerprint-keyed layout mirroring
+     * SubtitleStorage's per-item jail), tests/Unit/Media/Subtitles/
+     * EmbeddedSubtitleCacheTest.php (layout/sanitisation/jail/best-effort
+     * arms) and tests/Unit/Common/Container/Providers/EmbeddedSubtitleCache
+     * WiringTest.php (container-root + singleton-identity pins). The
+     * controller gains a required collaborator but reads/writes no Request
+     * property, so every other census denominator is unchanged. Measured
+     * from the phpunit red (2013), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2010;
+    private const EXPECTED_PHP_FILES = 2013;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

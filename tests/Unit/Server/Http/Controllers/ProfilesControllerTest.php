@@ -465,6 +465,31 @@ final class ProfilesControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
+    public function testUploadAvatarFormSizeErrorUsesCanonicalSharedWording(): void
+    {
+        // minors M-SERVER-08 (W-min103): the Profiles copy used to merge
+        // INI/FORM size into 'File exceeds size limit'; both surfaces now
+        // render the single UploadErrorMessages wording.
+        $request = $this->authedRequest();
+        $request->files = [
+            'avatar' => [
+                'error' => UPLOAD_ERR_FORM_SIZE,
+                'tmp_name' => '',
+                'name' => 'avatar.png',
+                'size' => 0,
+                'type' => '',
+            ],
+        ];
+
+        $response = $this->controller()->uploadAvatar($request, ['profileId' => 'p-1']);
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame(
+            'Upload error: File exceeds form upload limit',
+            $this->payload($response)['error']
+        );
+    }
+
     // ---- response payload accessor ---------------------------------------------
 
     public function testParseProfileIdRejectsEmptyAndNonString(): void

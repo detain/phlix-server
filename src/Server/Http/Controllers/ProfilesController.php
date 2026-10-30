@@ -15,6 +15,7 @@ use Phlix\Access\ProfileAccessPolicy;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\UserProfileManager;
+use Phlix\Common\Http\UploadErrorMessages;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\RateLimit\RateLimiterInterface;
@@ -493,7 +494,7 @@ final class ProfilesController
             : UPLOAD_ERR_NO_FILE;
         if ($error !== UPLOAD_ERR_OK) {
             return (new Response())->status(400)->json([
-                'error' => 'Upload error: ' . $this->uploadErrorMessage($error),
+                'error' => 'Upload error: ' . UploadErrorMessages::describe($error),
             ]);
         }
 
@@ -563,23 +564,5 @@ final class ProfilesController
         }
 
         return null;
-    }
-
-    /**
-     * Human-readable upload error message, mirroring UserAvatarController.
-     *
-     * @param int $errorCode The PHP upload error constant.
-     */
-    private function uploadErrorMessage(int $errorCode): string
-    {
-        return match ($errorCode) {
-            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'File exceeds size limit',
-            UPLOAD_ERR_PARTIAL => 'File was only partially uploaded',
-            UPLOAD_ERR_NO_FILE => 'No file was uploaded',
-            UPLOAD_ERR_NO_TMP_DIR => 'Server is missing a temporary folder',
-            UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk',
-            UPLOAD_ERR_EXTENSION => 'A PHP extension stopped the upload',
-            default => 'Unknown upload error',
-        };
     }
 }

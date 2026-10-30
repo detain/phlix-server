@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Http\UploadErrorMessages;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Storage\AvatarStorage;
@@ -82,7 +83,7 @@ class UserAvatarController
             : UPLOAD_ERR_NO_FILE;
         if ($error !== UPLOAD_ERR_OK) {
             return (new Response())->status(400)->json([
-                'error' => 'Upload error: ' . $this->uploadErrorMessage($error),
+                'error' => 'Upload error: ' . UploadErrorMessages::describe($error),
             ]);
         }
 
@@ -141,26 +142,5 @@ class UserAvatarController
         $this->userRepository->clearAvatar($userId);
 
         return (new Response())->json(['message' => 'Avatar removed']);
-    }
-
-    /**
-     * Convert a PHP upload error constant to a human-readable message.
-     *
-     * @param int $error PHP UPLOAD_ERR_* constant
-     *
-     * @return string Human-readable error message
-     */
-    private function uploadErrorMessage(int $error): string
-    {
-        return match ($error) {
-            UPLOAD_ERR_INI_SIZE => 'File exceeds server upload limit',
-            UPLOAD_ERR_FORM_SIZE => 'File exceeds form upload limit',
-            UPLOAD_ERR_PARTIAL => 'File was only partially uploaded',
-            UPLOAD_ERR_NO_FILE => 'No file was uploaded',
-            UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder',
-            UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk',
-            UPLOAD_ERR_EXTENSION => 'Upload blocked by extension',
-            default => 'Unknown upload error',
-        };
     }
 }

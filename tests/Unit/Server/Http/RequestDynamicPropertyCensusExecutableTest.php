@@ -836,9 +836,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * cascade-delivery, 1452-rejection and replay-no-op proofs over migration
      * 122; the .sql file itself is inert to the PHP census). Measured from
      * the phpunit red (2015), not predicted.
+     * Re-pinned 2015→2017 by the W-min103 / M-SERVER-08 upload-wording SSOT
+     * lane (2026-10-30): +2 — src/Common/Http/UploadErrorMessages.php (the
+     * SSOT itself) and tests/Unit/Common/Http/UploadErrorMessagesTest.php
+     * (arm table + UPLOAD_ERR_OK defensive pin). The two controllers only
+     * swap private tables for the shared call; no new Request sites.
+     * Measured from the phpunit red (2017), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2015;
+    private const EXPECTED_PHP_FILES = 2017;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1107,7 +1113,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // W-min100 / M-SERVER-84 (+3 writes = PageLimitSitesTest::queryRequest()
     // and the two new QuickConnect adminClients pins seeding $request->query
     // on a bare `new Request()` — same sanctioned harness-seed pattern).
-    private const EXPECTED_DECLARED_WRITES = 1100;
+    // W-min103 / M-SERVER-08 (+1 write = the new ProfilesControllerTest
+    // form-size pin seeding $request->files — same sanctioned pattern; zero
+    // src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1101;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

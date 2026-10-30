@@ -98,7 +98,11 @@ Every environment variable the server process reads is inventoried in the defini
   manifests, and PSR-14 event subscription via
   `Phlix\Shared\Plugin\LifecycleInterface` (the
   `Phlix\Plugins\Contract\LifecycleInterface` FQCN remains a
-  deprecated bridge through 0.11.x). **Plugin developer guide:**
+  deprecated bridge through 0.11.x). Installing is not enabling: install
+  only stages the plugin (files + sandboxed autoload), **enable** is what
+  activates its registration (routes, event subscriptions, settings), and
+  disabling is the first troubleshooting step when a plugin misbehaves.
+  **Plugin developer guide:**
   [phlix-docs / plugins / developer-guide](https://detain.github.io/phlix-docs/plugins/developer-guide).
   Server-internals reference for contributors extending the loader:
   [phlix-docs / dev / plugin-sdk](https://detain.github.io/phlix-docs/dev/plugin-sdk). Reference
@@ -903,7 +907,7 @@ maintainers, not resolvable from this repo alone.
 | `PHLIX_RELAY_LOCAL_HTTP_ADDRESS` | _unset_ | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_PING_INTERVAL` / `PHLIX_RELAY_PING_TIMEOUT` | `30` / `10` s | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_RECONNECT_DELAY` / `PHLIX_RELAY_RECONNECT_MAX_DELAY` / `PHLIX_RELAY_RECONNECT_JITTER_FACTOR` | `5` / `300` s / `0.3` | no | yes | `RelayConfig.php` |
-| `PHLIX_RELAY_REQUIRE_TLS` | off (`false`) | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_REQUIRE_TLS` | off (`false`) | no | yes | `RelayConfig.php` — when on, refuses non-`wss://` relay dials outright (fail-closed); off (the default) is warn-only — a plaintext tunnel still dials, with a connect-time impersonation warning — so production installs should set `1` |
 | `PHLIX_RELAY_ALLOW_PLAINTEXT` | off (`false`) | no | yes | `RelayConfig.php` — opt-in ACK (M5) that silences the connect-time plaintext-tunnel impersonation warning; it changes no behavior, and `PHLIX_RELAY_REQUIRE_TLS` still refuses non-`wss://` dials regardless |
 | `PHLIX_RELAY_TLS` | off | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_TLS_CAFILE` / `PHLIX_RELAY_TLS_VERIFY` | system CA / on (verify) | CA path | yes | `RelayConfig.php`, `src/Hub/HttpClient.php` |
@@ -1633,6 +1637,23 @@ application log files under `<install>/.logs/` (`app.log`, `error.log`,
 `plugins.log`, and `events.log` when `PHLIX_DEBUG_EVENTS` is on — see
 [Environment variables](#environment-variables)), and stdout/stderr, which on
 a systemd install goes to the journal (`journalctl -u phlix-server`).
+
+### Diagnostic endpoints
+
+Before digging through logs, read the machine's own reports. The two
+`health` rails answer for any authenticated member (`AuthMiddleware`); the
+admin pair requires an admin (`AdminMiddleware`):
+
+| Method | Path | What it shows |
+|--------|------|---------------|
+| GET | `/api/v1/health/relay` | hub relay tunnel state — `connected`/`active`, reconnect attempts, active sessions, last disconnect and connect error; reads are staleness-gated, so a frozen state file from a dead worker never reads as healthy (S40) |
+| GET | `/api/v1/health/network` | hub heartbeat latency snapshot — `latencyMs` plus `status` (`healthy` < 100 ms, `degraded` 100–500 ms, `offline` above 500 ms or when the snapshot is stale, the heartbeat is failing, or the server is unenrolled) |
+| GET | `/api/v1/admin/logs` · `/api/v1/admin/logs/tail?file=app.log&lines=N` · `/api/v1/admin/logs/tail-all?lines=N` | list the `*.log` files in the configured log dir, tail one, or tail every file merged into one stream with each line tagged by its source — `file` is reduced to its basename, so it cannot traverse |
+| POST | `/api/v1/admin/maintenance/reap-transcode-jobs` | run the transcode reaper by hand (S77) — body `{older_than_seconds: int}`; fails wedged running jobs so the queue drains |
+
+The bare `/health` route stays open (no auth) for infrastructure probes —
+Docker `HEALTHCHECK`, k8s liveness and `scripts/docker-boot-smoke.sh`
+target it, never the gated `/api/v1/health/*` rails.
 
 ### Web playback buffers or fails to start
 

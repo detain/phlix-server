@@ -29,12 +29,12 @@ use PHPUnit\Framework\TestCase;
  *   oracle). The gate is the ProfileAccessPolicy result; a denied caller
  *   never reaches the manager.
  * - **The two-active-profiles hole**: `update()` refuses `is_active` with
- *   400 `profile.use_switch` — activation is switch-only.
- * - **The last-profile guard**: deleting the final profile is 409
+ *   400 code `profile.use_switch` — activation is switch-only.
+ * - **The last-profile guard**: deleting the final profile is 409 code
  *   `profile.last_profile`.
  * - **The PIN oracle closure**: verify is throttled by the injected limiter
- *   (RateLimitException → central 429), answers 409 `profile.no_pin` for a
- *   PIN-less profile and 403 `profile.pin_mismatch` for a wrong PIN.
+ *   (RateLimitException → central 429), answers 409 code `profile.no_pin` for
+ *   a PIN-less profile and 403 code `profile.pin_mismatch` for a wrong PIN.
  * - **Switch re-mints tokens**: the endpoint returns AuthManager's
  *   buildAuthResponse() envelope for the NEW profile.
  *
@@ -210,7 +210,9 @@ final class ProfilesControllerTest extends TestCase
         $response = $this->controller()->update($request, ['profileId' => 'p-1']);
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('profile.use_switch', $this->payload($response)['error']);
+        $payload = $this->payload($response);
+        $this->assertSame('profile.use_switch', $payload['code']);
+        $this->assertSame('To change the active profile, switch to it', $payload['error']);
     }
 
     public function testUpdateDelegatesAllowedFieldsOnly(): void
@@ -260,7 +262,9 @@ final class ProfilesControllerTest extends TestCase
         $response = $this->controller()->delete($this->authedRequest(), ['profileId' => 'p-1']);
 
         $this->assertSame(409, $response->statusCode);
-        $this->assertSame('profile.last_profile', $this->payload($response)['error']);
+        $payload = $this->payload($response);
+        $this->assertSame('profile.last_profile', $payload['code']);
+        $this->assertSame('This is your last profile, so it cannot be deleted', $payload['error']);
     }
 
     public function testDeleteAllowsNonLastProfile(): void
@@ -321,7 +325,9 @@ final class ProfilesControllerTest extends TestCase
 
         $response = $this->controller()->verifyPin($request, ['profileId' => 'p-1']);
         $this->assertSame(409, $response->statusCode);
-        $this->assertSame('profile.no_pin', $this->payload($response)['error']);
+        $payload = $this->payload($response);
+        $this->assertSame('profile.no_pin', $payload['code']);
+        $this->assertSame('This profile has no PIN configured to verify', $payload['error']);
     }
 
     public function testVerifyPinAnswersMismatchWith403(): void
@@ -335,7 +341,9 @@ final class ProfilesControllerTest extends TestCase
 
         $response = $this->controller()->verifyPin($request, ['profileId' => 'p-1']);
         $this->assertSame(403, $response->statusCode);
-        $this->assertSame('profile.pin_mismatch', $this->payload($response)['error']);
+        $payload = $this->payload($response);
+        $this->assertSame('profile.pin_mismatch', $payload['code']);
+        $this->assertSame('That PIN is not correct', $payload['error']);
     }
 
     public function testVerifyPinAnswersMatchWith200(): void

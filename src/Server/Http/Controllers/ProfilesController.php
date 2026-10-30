@@ -49,11 +49,11 @@ use Phlix\Server\Http\Response;
  *   `is_active` here: it would re-open the two-active-profiles hole
  *   (`update()` sets one row without clearing its siblings; there is no
  *   unique index on `(user_id, is_active)`). A request carrying `is_active`
- *   is refused with 400 `profile.use_switch`.
+ *   is refused with 400 code `profile.use_switch`.
  * - **PIN verify is throttled and fails closed.** The endpoint sits behind
  *   the `rate_limiter.pin_verify` profile (DB-backed, 5 / 300s, keyed per
  *   profile — only the profile's owner can burn its own budget); a profile
- *   with NO PIN answers 409 `profile.no_pin` instead of a pass.
+ *   with NO PIN answers 409 code `profile.no_pin` instead of a pass.
  * - **Deleting the LAST profile is refused** — an account with zero profiles
  *   has no active profile and every profile-scoped session breaks. Deleting
  *   an ACTIVE (non-last) profile is allowed; `resolveProfileIdForUser()`
@@ -213,10 +213,7 @@ final class ProfilesController
         $data = is_array($request->body) ? $request->body : [];
 
         if (array_key_exists('is_active', $data)) {
-            return (new Response())->status(400)->json([
-                'error' => 'profile.use_switch',
-                'message' => 'Activation is switch-only: use POST /api/v1/profiles/{id}/switch',
-            ]);
+            return (new Response())->error(400, 'profile.use_switch', 'To change the active profile, switch to it');
         }
 
         $payload = [];
@@ -272,10 +269,11 @@ final class ProfilesController
 
         $own = $this->profiles->findByUserId($request->userId ?? '');
         if (count($own) <= 1) {
-            return (new Response())->status(409)->json([
-                'error' => 'profile.last_profile',
-                'message' => 'Cannot delete the last profile',
-            ]);
+            return (new Response())->error(
+                409,
+                'profile.last_profile',
+                'This is your last profile, so it cannot be deleted'
+            );
         }
 
         $this->profiles->delete($profileId);
@@ -372,8 +370,8 @@ final class ProfilesController
      * "unlimited-attempt PIN oracle" closure. Outcomes:
      *
      *   - 200 { verified: true } — PIN matches
-     *   - 403 { error: 'profile.pin_mismatch' } — PIN wrong
-     *   - 409 { error: 'profile.no_pin' } — profile has NO PIN configured
+     *   - 403 { error, code: 'profile.pin_mismatch' } — PIN wrong
+     *   - 409 { error, code: 'profile.no_pin' } — profile has NO PIN configured
      *   - 429 — rate limit tripped (central mapping)
      *
      * @param Request               $request The HTTP request (userId set from auth).
@@ -402,11 +400,11 @@ final class ProfilesController
         }
 
         if (!$this->profiles->hasPin($profileId)) {
-            return (new Response())->status(409)->json(['error' => 'profile.no_pin']);
+            return (new Response())->error(409, 'profile.no_pin', 'This profile has no PIN configured to verify');
         }
 
         if (!$this->profiles->verifyPin($profileId, $pin)) {
-            return (new Response())->status(403)->json(['error' => 'profile.pin_mismatch']);
+            return (new Response())->error(403, 'profile.pin_mismatch', 'That PIN is not correct');
         }
 
         return (new Response())->json(['verified' => true]);

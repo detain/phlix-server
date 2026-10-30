@@ -721,8 +721,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * the eviction/cap/bounded-wait/takeover pins plus the two single-flight
      * invariant pins for TraktApi::refreshAfterAuthFailure()'s registry.
      * Measured from the phpunit red (1996), not predicted.
+     * Re-pinned 1996→1997 by the M-SERVER-40 legacy-redirect query-carry lane
+     * (2026-10-29): +1 — tests/Unit/Server/Workerman/HttpHandlerLegacyRedirectTest.php,
+     * pinning the auth error/notice chain (and every sibling legacy page redirect)
+     * to carry its incoming query into the /app target. Measured from the phpunit
+     * red (1997), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1996;
+    private const EXPECTED_PHP_FILES = 1997;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -789,8 +794,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * stamped body into rawBody via one `json_encode($request->body)` read,
      * the same fixture shape as its siblings above. Zero src/ reads added.
      * Measured from the phpunit red (452), not predicted.
+     * Re-pinned 452→449 by the M-SERVER-40 legacy-redirect query-carry lane
+     * (2026-10-29): −3 src/ declared-member READS — dispatchPhoto's four inline
+     * `$request->query` reads collapse into the one inside the new
+     * HttpHandler::legacyRedirect() helper (the photo targets keep carrying
+     * byte-identical queries; the test file reads no Request members).
+     * Measured from the phpunit red (449), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 452;
+    private const EXPECTED_DECLARED_READS = 449;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -953,8 +964,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * R18-07 deletions, which remove zero Request sites (1066 → 1066 across
      * the sweep, verified both sides). S427 license intact. Measured from the
      * phpunit red (1066), not predicted.
+     * Re-pinned 1066→1068 by the M-SERVER-40 legacy-redirect query-carry lane
+     * (2026-10-29): +2 declared-member WRITES — the new test fixture stamps
+     * $request->path and $request->query before invoking dispatch(). Zero src/
+     * writes added. Measured from the phpunit red (1068), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1066;
+    private const EXPECTED_DECLARED_WRITES = 1068;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

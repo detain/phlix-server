@@ -979,46 +979,46 @@ final class HttpHandler
             // The redesigned Vue SPA is the front door — send the bare root to
             // /app. Old SSR pages (/login, /library, /player/{id}, …) stay
             // reachable at their own paths.
-            return (new Response())->redirect('/app');
+            return $this->legacyRedirect($request, '/app');
         }
         // D-SRV-DEL: the former Smarty SSR pages are fully replaced by the Vue
         // SPA under /app — redirect the legacy paths to their /app equivalents.
         if ($path === '/login') {
-            return (new Response())->redirect('/app/login');
+            return $this->legacyRedirect($request, '/app/login');
         }
         if ($path === '/register' || $path === '/auth/register') {
-            return (new Response())->redirect('/app/signup');
+            return $this->legacyRedirect($request, '/app/signup');
         }
         if ($path === '/library' || $path === '/library/') {
-            return (new Response())->redirect('/app');
+            return $this->legacyRedirect($request, '/app');
         }
         // Single media-item detail (legacy link target). MUST be matched before
         // the single-segment library route below.
         if (preg_match('#^/library/item/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return (new Response())->redirect('/app/media/' . $m['id']);
+            return $this->legacyRedirect($request, '/app/media/' . $m['id']);
         }
         if (preg_match('#^/player/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return (new Response())->redirect('/app/player/' . $m['id']);
+            return $this->legacyRedirect($request, '/app/player/' . $m['id']);
         }
         if (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            return (new Response())->redirect('/app/library/' . $m['id']);
+            return $this->legacyRedirect($request, '/app/library/' . $m['id']);
         }
         if ($path === '/search') {
             // D-SRV-1: Search is now a Vue SPA — redirect legacy Smarty route
-            return (new Response())->redirect('/app/search');
+            return $this->legacyRedirect($request, '/app/search');
         }
         if ($path === '/settings') {
-            return (new Response())->redirect('/app/settings');
+            return $this->legacyRedirect($request, '/app/settings');
         }
         if ($path === '/settings/security') {
             // D-SRV-2: Security settings are now a Vue SPA — redirect legacy Smarty route
-            return (new Response())->redirect('/app/settings/security');
+            return $this->legacyRedirect($request, '/app/settings/security');
         }
         if (str_starts_with($path, '/admin/plugins')) {
-            return (new Response())->redirect('/app/admin/plugins');
+            return $this->legacyRedirect($request, '/app/admin/plugins');
         }
         if ($path === '/admin/dashboard') {
-            return (new Response())->redirect('/app/admin/dashboard');
+            return $this->legacyRedirect($request, '/app/admin/dashboard');
         }
         if (str_starts_with($path, '/music')) {
             return $this->dispatchMusic($request, $path);
@@ -1039,6 +1039,31 @@ final class HttpHandler
     }
 
     /**
+     * Redirect a legacy page path to its `/app` SPA equivalent, carrying the
+     * incoming query string through.
+     *
+     * The browser auth flow 302s failures to the legacy aliases with the
+     * message in the query (`/login?error=…`, `/login?notice=…`,
+     * `/auth/register?error=…` — AuthController); this dispatcher then maps the
+     * legacy path onto the SPA route. Answering with a literal target destroyed
+     * the message — a wrong password, a disabled signup and the
+     * pending-approval notice all rendered as "nothing happened"
+     * (review server__webux M1). The re-encode via `http_build_query()` matches
+     * the pre-existing photo-redirect idiom and keeps the Location header
+     * percent-clean; the separator is `&` only when the target already carries
+     * a `?` (an urldecoded path segment can).
+     */
+    private function legacyRedirect(Request $request, string $target): Response
+    {
+        $query = $request->query;
+        if (count($query) > 0) {
+            $target .= (str_contains($target, '?') ? '&' : '?') . http_build_query($query);
+        }
+
+        return (new Response())->redirect($target);
+    }
+
+    /**
      * Serve the shared Vue 3 SPA shell for `/app` + `/app/*` (Phase C).
      *
      * Reached after all specific page routes. The SPA has no auth gate here —
@@ -1055,27 +1080,27 @@ final class HttpHandler
     {
         if ($path === '/music' || $path === '/music/albums') {
             // D-SRV-DEL: music landing is now a Vue SPA page
-            return (new Response())->redirect('/app/music');
+            return $this->legacyRedirect($request, '/app/music');
         }
         if (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
             // Redirect to the Vue SPA album detail page
-            return (new Response())->redirect('/app/music/album/' . urldecode($m['name']));
+            return $this->legacyRedirect($request, '/app/music/album/' . urldecode($m['name']));
         }
         if ($path === '/music/artists') {
             // Redirect to the Vue SPA artists listing
-            return (new Response())->redirect('/app/music/artists');
+            return $this->legacyRedirect($request, '/app/music/artists');
         }
         if (preg_match('#^/music/artists/(?P<name>.+)$#', $path, $m) === 1) {
             // Redirect to the Vue SPA artist detail page
-            return (new Response())->redirect('/app/music/artist/' . urldecode($m['name']));
+            return $this->legacyRedirect($request, '/app/music/artist/' . urldecode($m['name']));
         }
         if ($path === '/music/tracks') {
             // Redirect to the Vue SPA tracks listing
-            return (new Response())->redirect('/app/music/tracks');
+            return $this->legacyRedirect($request, '/app/music/tracks');
         }
         if ($path === '/music/player') {
             // Redirect to the Vue SPA player page
-            return (new Response())->redirect('/app/music/player');
+            return $this->legacyRedirect($request, '/app/music/player');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
@@ -1094,15 +1119,15 @@ final class HttpHandler
         }
         if (preg_match('#^/books/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
             // Redirect to the Vue SPA reader page
-            return (new Response())->redirect('/app/books/' . $m['id'] . '/read');
+            return $this->legacyRedirect($request, '/app/books/' . $m['id'] . '/read');
         }
         if (preg_match('#^/books/(?P<id>[^/]+)$#', $path, $m) === 1) {
             // Redirect to the Vue SPA book detail page
-            return (new Response())->redirect('/app/books/' . $m['id']);
+            return $this->legacyRedirect($request, '/app/books/' . $m['id']);
         }
         if ($path === '/books') {
             // Redirect to the Vue SPA books listing
-            return (new Response())->redirect('/app/books');
+            return $this->legacyRedirect($request, '/app/books');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
@@ -1111,15 +1136,15 @@ final class HttpHandler
     {
         if (preg_match('#^/audiobooks/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
             // Redirect to the Vue SPA player page
-            return (new Response())->redirect('/app/audiobooks/' . $m['id'] . '/read');
+            return $this->legacyRedirect($request, '/app/audiobooks/' . $m['id'] . '/read');
         }
         if (preg_match('#^/audiobooks/(?P<id>[^/]+)$#', $path, $m) === 1) {
             // Redirect to the Vue SPA audiobook detail page
-            return (new Response())->redirect('/app/audiobooks/' . $m['id']);
+            return $this->legacyRedirect($request, '/app/audiobooks/' . $m['id']);
         }
         if ($path === '/audiobooks') {
             // Redirect to the Vue SPA audiobooks listing
-            return (new Response())->redirect('/app/audiobooks');
+            return $this->legacyRedirect($request, '/app/audiobooks');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
@@ -1138,24 +1163,16 @@ final class HttpHandler
         }
         // D-SRV-10: Photo pages are now Vue SPA — redirect to /app/photo/*
         if ($path === '/photo/albums') {
-            $query = $request->query;
-            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
-            return (new Response())->redirect('/app/photo/albums' . $qs);
+            return $this->legacyRedirect($request, '/app/photo/albums');
         }
         if (preg_match('#^/photo/album/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            $query = $request->query;
-            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
-            return (new Response())->redirect('/app/photo/album/' . $m['id'] . $qs);
+            return $this->legacyRedirect($request, '/app/photo/album/' . $m['id']);
         }
         if (preg_match('#^/photo/photo/(?P<id>[^/]+)$#', $path, $m) === 1) {
-            $query = $request->query;
-            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
-            return (new Response())->redirect('/app/photo/photo/' . $m['id'] . $qs);
+            return $this->legacyRedirect($request, '/app/photo/photo/' . $m['id']);
         }
         if ($path === '/photo/slideshow') {
-            $query = $request->query;
-            $qs = count($query) > 0 ? '?' . http_build_query($query) : '';
-            return (new Response())->redirect('/app/photo/slideshow' . $qs);
+            return $this->legacyRedirect($request, '/app/photo/slideshow');
         }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }

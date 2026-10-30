@@ -158,6 +158,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   bounded-wait throw was itself mutation-proven (replacing it with a takeover
   `break` reddens exactly that test). Census `EXPECTED_PHP_FILES` 1995→1996,
   measured from the phpunit red. Zero wire changes, zero new files in src/.
+- **Browser auth errors/notices no longer vanish in the legacy redirect chain
+  (review server__webux M1; M-SERVER-40):** the form flow 302s failures to the
+  legacy aliases with the message in the query (`/login?error=…`,
+  `/login?notice=…`, `/auth/register?error=…`), and `HttpHandler::dispatch()`
+  then mapped those paths onto their `/app` SPA routes with literal targets —
+  `Response::redirect()` sets `Location` verbatim, so the second hop dropped the
+  query and wrong passwords, disabled signups and the pending-approval notice
+  all rendered as "nothing happened". All 28 legacy page redirects (root,
+  login/signup, library, media/player, search, settings, admin, music, books,
+  audiobooks, photo) now go through one `HttpHandler::legacyRedirect()` helper
+  that carries the incoming query — the re-encode via `http_build_query()`
+  promotes dispatchPhoto's pre-existing inline idiom to estate law (the photo
+  targets keep byte-identical carries; four duplicated locals collapse into the
+  helper). A `&` separator guards the one reachable target that can already
+  carry a `?` (the urldecoded music-name segments). The same death as the auth
+  chain — `/search?q=` bookmarks, library filters — is cured identically; the
+  vendored SPA does not yet *render* `?error=` on `/app/login`, which is a ui-repo
+  seam, not a server drop. `HttpHandlerLegacyRedirectTest` (9 cases) pins the
+  chain — 7 of them red on the parent; the Application `/auth/*` alias docblock
+  that justified the routes via the long-retired `public/templates/auth/` Smarty
+  templates is re-anchored to the live truth. Zero new wire codes (registry md5
+  40c1da48 held); census re-pinned from measured reds (PHP files 1995→1996 atop
+  the M38 rung, declared reads 452→449 — four photo sites collapse to one —
+  declared writes 1066→1068 — the new fixture's two stamps).
 
 - **The plugin artifact fetch now streams under named byte and time bounds (review
   server__srphp M-SERVER-38):** `HttpInstaller::downloadToTemp()` pulled the entire

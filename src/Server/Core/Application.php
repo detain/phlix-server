@@ -516,12 +516,13 @@ class Application
         $this->router->get('/api/v1/auth/me', [$authController, 'me']);
 
         // Browser-form aliases for the login / register / refresh
-        // endpoints. The Smarty templates under public/templates/auth/
-        // post form-encoded data to `/auth/login` and `/auth/register`
-        // without the `/api/v1` prefix — without these aliases the
-        // browser flow 404s. AuthController detects these path-prefixed
-        // hits via isBrowserRequest() and replies with a 302 + session
-        // cookies instead of a JSON token blob.
+        // endpoints. A browser page submits form-encoded data to
+        // `/auth/login` and `/auth/register` without the `/api/v1` prefix —
+        // without these aliases the browser flow 404s. AuthController detects
+        // these path-prefixed hits via isBrowserRequest() and replies with a
+        // 302 + session cookies instead of a JSON token blob; the failure
+        // redirects target the legacy `/login`/`/auth/register` pages, whose
+        // query-carrying mapping to the SPA lives in HttpHandler::legacyRedirect().
         $this->router->post('/auth/register', [$authController, 'register']);
         $this->router->post('/auth/login', [$authController, 'login']);
         $this->router->post('/auth/refresh', [$authController, 'refresh']);

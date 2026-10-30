@@ -107,7 +107,7 @@ class SessionController
         $deviceId = $data['device_id'] ?? null;
         if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json([
-                'error' => 'Missing required field: device_id',
+                'error' => 'Device ID is required',
             ]);
         }
 
@@ -143,7 +143,9 @@ class SessionController
 
         // Verify ownership
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
+            return (new Response())->status(403)->json([
+                'error' => 'You do not have permission to access this session',
+            ]);
         }
 
         $this->sessionManager->endSession($sessionId, (string) ($request->userId ?? ''));
@@ -170,7 +172,9 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
+            return (new Response())->status(403)->json([
+                'error' => 'You do not have permission to access this session',
+            ]);
         }
 
         $data = $request->body;
@@ -179,7 +183,7 @@ class SessionController
         $positionTicks = $data['position_ticks'] ?? null;
         if (!is_string($mediaItemId) || $mediaItemId === '' || !is_numeric($positionTicks)) {
             return (new Response())->status(400)->json([
-                'error' => 'Missing required fields: media_item_id, position_ticks',
+                'error' => 'Media item ID and position ticks are required',
             ]);
         }
 
@@ -236,7 +240,9 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
+            return (new Response())->status(403)->json([
+                'error' => 'You do not have permission to access this session',
+            ]);
         }
 
         $data = $request->body;
@@ -244,7 +250,7 @@ class SessionController
         $mediaItemId = $data['media_item_id'] ?? null;
         if (!is_string($mediaItemId) || $mediaItemId === '') {
             return (new Response())->status(400)->json([
-                'error' => 'Missing required field: media_item_id',
+                'error' => 'Media item ID is required',
             ]);
         }
 
@@ -283,7 +289,9 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
+            return (new Response())->status(403)->json([
+                'error' => 'You do not have permission to access this session',
+            ]);
         }
 
         $state = $this->playbackController->getPlaybackState($sessionId);

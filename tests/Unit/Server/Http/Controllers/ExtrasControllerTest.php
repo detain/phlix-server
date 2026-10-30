@@ -94,7 +94,7 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Missing media item ID', $body['error']);
+        $this->assertSame('Media item ID is required', $body['error']);
     }
 
     /**
@@ -154,7 +154,7 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Missing media item ID', $body['error']);
+        $this->assertSame('Media item ID is required', $body['error']);
     }
 
     /**
@@ -214,7 +214,7 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Missing media item ID', $body['error']);
+        $this->assertSame('Media item ID is required', $body['error']);
     }
 
     /**

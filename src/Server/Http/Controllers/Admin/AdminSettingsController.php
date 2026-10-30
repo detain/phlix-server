@@ -702,7 +702,7 @@ final class AdminSettingsController
 
                 return (new Response())->json([
                     'success' => true,
-                    'message' => 'Settings updated.',
+                    'message' => 'Settings updated',
                     'data'    => [
                         'settings'   => self::maskSecrets($merged['values']),
                         'overridden' => $merged['overridden'],
@@ -743,7 +743,7 @@ final class AdminSettingsController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Settings updated.',
+                'message' => 'Settings updated',
                 'data'    => [
                     'settings'   => self::maskSecrets($merged['values']),
                     'overridden' => $merged['overridden'],
@@ -860,7 +860,7 @@ final class AdminSettingsController
 
         return (new Response())->json([
             'success' => true,
-            'message' => 'Settings updated.',
+            'message' => 'Settings updated',
             'data'    => [
                 'settings'   => self::maskSecrets($merged['values']),
                 'overridden' => $merged['overridden'],

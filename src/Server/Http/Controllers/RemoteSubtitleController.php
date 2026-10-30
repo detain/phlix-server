@@ -57,7 +57,7 @@ class RemoteSubtitleController
     {
         $itemId = $params['id'] ?? '';
         if ($itemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Missing media id']);
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
         }
 
         $languages = $this->parseLanguages($request->queryString('lang'));
@@ -77,7 +77,7 @@ class RemoteSubtitleController
     {
         $itemId = $params['id'] ?? '';
         if ($itemId === '') {
-            return (new Response())->status(400)->json(['error' => 'Missing media id']);
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
         }
 
         $provider = $this->stringInput($request, 'provider');

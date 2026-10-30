@@ -191,7 +191,9 @@ final class AdminUpdatesRoutesTest extends TestCase
         );
 
         self::assertSame(200, $response->statusCode);
-        self::assertStringContainsString('Settings updated.', (string) $response->body);
+        self::assertStringContainsString('Settings updated', (string) $response->body);
+        // minors M-SERVER-04: single-sentence envelope copy carries no terminal period.
+        self::assertStringNotContainsString('Settings updated.', (string) $response->body);
         self::assertFalse($this->service()->isCheckEnabled());
         self::assertFalse($this->statusData(self::ADMIN_ID)['checkEnabled']);
     }

@@ -638,7 +638,7 @@ class SessionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Missing required field: media_item_id', $body['error']);
+        $this->assertSame('Media item ID is required', $body['error']);
     }
 
     public function testCompletePlaybackRejectsMissingMediaItemId(): void

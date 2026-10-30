@@ -840,7 +840,7 @@ class LibraryControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Missing required fields: name, type, paths', $body['error']);
+        $this->assertSame('Name, type and paths are required', $body['error']);
     }
 
     /**

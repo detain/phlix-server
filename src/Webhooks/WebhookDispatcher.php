@@ -200,7 +200,7 @@ class WebhookDispatcher
             return new DispatchResult(0, 1, [[
                 'webhook_id' => $webhookId,
                 'url' => '',
-                'error' => 'Webhook delivery is disabled (webhooks.enabled is false).',
+                'error' => 'Webhook delivery is disabled (webhooks.enabled is false)',
             ]]);
         }
 
@@ -210,7 +210,7 @@ class WebhookDispatcher
             return new DispatchResult(0, 1, [[
                 'webhook_id' => $webhookId,
                 'url' => '',
-                'error' => 'Webhook not found.',
+                'error' => 'Webhook not found',
             ]]);
         }
 
@@ -220,7 +220,7 @@ class WebhookDispatcher
             return new DispatchResult(0, 1, [[
                 'webhook_id' => $webhookId,
                 'url' => $url,
-                'error' => 'Webhook is inactive.',
+                'error' => 'Webhook is inactive',
             ]]);
         }
 

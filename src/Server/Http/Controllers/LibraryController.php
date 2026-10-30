@@ -526,7 +526,7 @@ class LibraryController
             && is_array($paths) && $paths !== [];
         if (!$isValidRequest) {
             return (new Response())->status(400)->json([
-                'error' => 'Missing required fields: name, type, paths',
+                'error' => 'Name, type and paths are required',
             ]);
         }
 

@@ -53,7 +53,7 @@ class ExtrasController
         if ($mediaItemId === '') {
             return (new Response())
                 ->status(400)
-                ->json(['error' => 'Missing media item ID']);
+                ->json(['error' => 'Media item ID is required']);
         }
 
         try {
@@ -89,7 +89,7 @@ class ExtrasController
         if ($mediaItemId === '') {
             return (new Response())
                 ->status(400)
-                ->json(['error' => 'Missing media item ID']);
+                ->json(['error' => 'Media item ID is required']);
         }
 
         try {
@@ -125,7 +125,7 @@ class ExtrasController
         if ($mediaItemId === '') {
             return (new Response())
                 ->status(400)
-                ->json(['error' => 'Missing media item ID']);
+                ->json(['error' => 'Media item ID is required']);
         }
 
         try {

@@ -142,7 +142,10 @@ final class RelayRequestDispatcher
         // the requested method (GET /api/v1/media/{id} is the live example). Only
         // when the portal ALSO misses does the Application's 405 (path proven to
         // exist, wrong verb) become the response.
-        if (($response->statusCode === 404 || $response->statusCode === 405) && str_starts_with($request->path, '/api/')) {
+        if (
+            ($response->statusCode === 404 || $response->statusCode === 405)
+            && str_starts_with($request->path, '/api/')
+        ) {
             $webPortalRouter = $this->container->get(WebPortalRouter::class);
             if ($webPortalRouter instanceof WebPortalRouter) {
                 $portalResponse = $webPortalRouter->dispatch($request);

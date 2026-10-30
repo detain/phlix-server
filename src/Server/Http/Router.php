@@ -1095,7 +1095,8 @@ class Router
             ->header('Allow', $allow)
             ->json([
                 'error' => 'Method Not Allowed',
-                'message' => 'The requested resource does not support ' . $request->method . ' (allowed: ' . $allow . ')',
+                'message' => 'The requested resource does not support ' . $request->method
+                    . ' (allowed: ' . $allow . ')',
             ]));
     }
 

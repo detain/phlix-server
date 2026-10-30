@@ -56,6 +56,7 @@ Two unrelated families share a noun:
 | `smart_playlists` | 004 | Rule documents powering smart collections (`collections.smart_playlist_id`). |
 | `collections` | 005 | User-owned collection headers (`created_by` visibility model). |
 | `collection_items` | 005 | Membership join between `collections` and `media_items` (+ ordering). |
+| `media_extras` | 007 | Cached trailers/extras per item (`source=local\|tmdb`, local `Trailers/` folders) — read by `ExtrasRepository`/`TrailerResolver`. |
 | `theme_media` | 008 | Per-library theme media (audio + backdrop video) scanned from disk. |
 | `webauthn_credentials` | 010 | Passkey credentials per user (credential id, public key, counters). |
 | `livetv_recordings` | 012a | DVR recording schedule/entries (predecessor of the 028 livetv family). |
@@ -70,7 +71,11 @@ Two unrelated families share a noun:
 | `stats_user_activity` | 019 | User activity aggregates. |
 | `stats_library_changes` | 019 | Library change events (added/removed items). |
 | `stats_storage` | 019 | Storage-size snapshots. |
+| `newsletter_queue` | 020 | Per-user weekly newsletter delivery queue (status, attempts, error) — drained by `NewsletterSender`. |
+| `backups` | 021 | Backup archive registry (path, size, SHA-256 checksum, S3 flag, expiry) — written by `BackupManager`. |
 | `lastfm_sessions` | 023 | Last.fm scrobbler session/link per user. |
+| `server_settings` | 026 | Typed dotted-key overrides backing the admin settings subsystem (`SettingsRepository::getEffective()` = config default + row override). |
+| `library_scan_jobs` | 027 | Scan/rescan lifecycle + progress counters for the library scan pipeline; the table *is* the queue (no Redis in the stack). |
 | `livetv_channels` | 028 | Channel catalog (guide-derived). |
 | `livetv_lineups` | 028 | Tuner lineups (wireguide-style). |
 | `livetv_lineup_channels` | 028 | Lineup ↔ channel mapping. |
@@ -113,12 +118,18 @@ Two unrelated families share a noun:
 | `subtitle_provider_quota` | 088 | External subtitle-provider daily quota accounting (external-tracks era). |
 | `user_identities` | 092 | Linked external identities per user (oidc/github/ldap/hub). |
 | `plugin_settings` | 093 | DB-backed per-plugin settings documents (provider configs live here). |
+| `maintenance_jobs` | 098 | One-off admin maintenance task queue (S77: storage snapshots, path dedup) — sibling of `library_scan_jobs`, drained by `MaintenanceQueueWorker` on a timer in the background-timers worker. |
 | `first_admin_election` | 108 | Single-row sentinel serialising first-admin bootstrap (L-3). |
 | `client_heartbeats` | 106 | Consent-gated client telemetry heartbeats (AD-27/S518), one UPSERTed row per client. |
 | `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers (Device-M1). |
 
 ## Reading notes
 
+- **Completeness:** the header claim is kept honest by measurement — as of
+  this writing the distinct `CREATE TABLE` targets across `migrations/*.sql`
+  number 82, `migrations/` contains no `DROP TABLE`, and the catalog above is
+  exactly those 82 rows one-for-one. New migration → new row, or the claim
+  goes stale the way it once did (76 rows against 82 tables).
 - "Created by" names the **first** migration whose `CREATE TABLE` reaches the
   table; later migrations may `ALTER` it (and a couple replay-guard their
   creation with `IF NOT EXISTS`). Follow the number in `migrations/` for

@@ -7391,6 +7391,39 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   - *Run B:* the dead server gapless/crossfade subsystem — `FfmpegRunner::buildGaplessSegmentCommand()`, `GaplessTranscoder`, `CrossfadeGenerator`, `GaplessPlayer`, and the now-orphaned members of `GaplessPlaybackManager` (`getPlayer()`, `getCrossfadeGenerator()`, `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()`, and later the caller-less `clearCache()`). Gapless/crossfade playback is implemented **100% client-side** in `@phlix/ui` (`useMusicPlayer.ts`), which superseded the reserved server path. `GaplessPlaybackManager` itself is kept — its live `getPreferences()` surface is still used by `MediaItemController`.
 ### Security
 
+- **The admin-settings 500 envelopes no longer echo raw exception text onto the wire — for a DB failure that text was the FULL SQL statement (review server__copywriter M5, M-SERVER-05).**
+  `GET/PUT /api/v1/admin/settings` answered every unexpected failure with
+  `'message' => $e->getMessage()`, and a settings-store blow-up surfaces as the
+  `PDOException` re-thrown by `PhlixMySQLConnection::query()`, whose message is
+  `'SQL:' . <the full statement> . <driver text>` — so any admin-authenticated client
+  that tripped a DB error received table names, column names and statement literals in
+  the response body. All four 500 arms (`index()`, `update()`, and the two
+  auth-guard fail-closed arms of `updateAuthGuarded()`) now carry one generic
+  operator message (`GENERIC_FAILURE_MESSAGE`) and hand the exception's class,
+  message, file and line to the `http` log channel via a `logFailure()` seam — the
+  estate's cured idiom (the Workerman router's last-resort catch and the Chromecast
+  controller's L-6 sites already log detail this way). The envelope SHAPE is
+  byte-identical (`{success:false, error:<same per-arm string>, message:<string>}`),
+  status codes are unchanged, no wire error codes were added and `openapi.yaml` is
+  untouched (contract law). The F7/B2 422 lock-out envelope deliberately KEEPS its
+  curated `REASON_*`-derived contract message — it is validation payload, never
+  infrastructure exception text, and is pinned byte-identically by the B2 law tests,
+  which passed UNMODIFIED. `PhlixMySQLConnection::query()`'s SQL-embedding rethrow is
+  server-side by design and load-bearing: `MigrationRunner::errorSegment()` classifies
+  idempotent migration notes against the exact `'SQL:' . $statement . ' '` prefix
+  (S159 direction-5, pinned by `MigrationFailureVisibilityTest`), so the format stays
+  while the wire boundary is closed. `ChromecastController` was re-checked at tip: its
+  evidence-named catch regions are the ALREADY-CURED L-6 sites (constant client
+  message + logged detail), not a live leak. New
+  `tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerErrorEnvelopeTest.php`
+  plants a SQL-shaped unique marker in each thrown message and asserts BOTH
+  directions per arm (marker absent from the raw body AND present in the captured
+  log); pre-cure it reddened exactly the four cured arms with the marker visible on
+  the wire, and both mutation strips (restore raw echo / delete the log call)
+  redden their pins. The one existing pin that encoded the leak
+  (`testUpdateReturns500WhenRepositorySetThrows`, `assertSame('db down', …)`) was
+  flipped to the new law. Census rows rotated from the measured red (2004→2005
+  files, 1096→1097 declared writes — both the new law file).
 - **`/api/v1/health/relay` and `/api/v1/health/network` are now authenticated (S437).**
   Both routes were registered with `$router->get(path, closure)` and no middleware, while
   every sibling `/api/v1/*` telemetry route is `AuthMiddleware`-gated. `relayHealth()`

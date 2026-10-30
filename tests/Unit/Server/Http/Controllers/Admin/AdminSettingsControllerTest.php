@@ -1325,7 +1325,16 @@ final class AdminSettingsControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertFalse($body['success']);
         $this->assertSame('Failed to update settings', $body['error']);
-        $this->assertSame('db down', $body['message']);
+        // M-SERVER-05 (flips the pin that encoded the leak): a production
+        // 500 carries the generic operator message — the exception text
+        // ('db down', or in production a PDOException embedding the full
+        // SQL statement) is logged server-side and never reaches the wire.
+        $this->assertSame(
+            'An internal error occurred while handling the settings request. '
+            . 'The details were logged server-side.',
+            $body['message'],
+        );
+        $this->assertStringNotContainsString('db down', $response->body);
     }
 
     public function testUpdateAcceptsFloatKeyAndCoercesIt(): void

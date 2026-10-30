@@ -772,7 +772,8 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * 404-boundary pins for never-registered paths, and the head-framing arm).
      * Measured from the phpunit red (2004), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 2004;
+    // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
+    private const EXPECTED_PHP_FILES = 2005;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1036,7 +1037,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * makeRequest helper stamps $request->method and $request->path. Zero src/
      * writes added. Measured from the phpunit red (1096), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1096;
+    // M-SERVER-05 (+1 write = the new law test's makeRequest() seeding
+    // $request->body, the same sanctioned pattern every sibling pin uses).
+    private const EXPECTED_DECLARED_WRITES = 1097;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -17,6 +17,8 @@ use Phlix\Auth\AuthMethodGuardCheckFailedException;
 use Phlix\Auth\AuthMethodGuardUnwiredException;
 use Phlix\Auth\AuthMethodLockoutException;
 use Phlix\Auth\AuthMethodPolicy;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -84,6 +86,25 @@ use Throwable;
  */
 final class AdminSettingsController
 {
+    /**
+     * M-SERVER-05: the operator-facing `message` carried by every 500
+     * envelope this class emits. A production 500 must never echo raw
+     * exception text onto the wire — a `SettingsRepository`/store failure
+     * is a re-thrown `PDOException` whose message begins
+     * `'SQL:' . <the full statement>` (see
+     * {@see \Phlix\Common\Database\PhlixMySQLConnection::query()}), so the
+     * prior `'message' => $e->getMessage()` shipped the whole statement to
+     * any client that tripped the arm. The exception's class, message and
+     * origin are logged server-side instead ({@see logFailure()}); the wire
+     * carries this constant. The envelope SHAPE is unchanged
+     * (`{success:false, error:<per-arm constant>, message:<this constant>}`)
+     * and no wire error codes are added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while handling the settings request. '
+        . 'The details were logged server-side.';
+
     /**
      * Lazily-loaded cache of the schema-derived allow-list: dotted key →
      * internal type. Populated once by {@see loadAllowedKeysFromSchema()} on
@@ -588,10 +609,13 @@ final class AdminSettingsController
                 ],
             ]);
         } catch (Throwable $e) {
+            // M-SERVER-05: detail to the log, generic constant on the wire.
+            self::logFailure('Admin settings load failed', $e);
+
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Failed to load settings',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -726,10 +750,13 @@ final class AdminSettingsController
                 ],
             ]);
         } catch (Throwable $e) {
+            // M-SERVER-05: detail to the log, generic constant on the wire.
+            self::logFailure('Admin settings update failed', $e);
+
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Failed to update settings',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -805,20 +832,29 @@ final class AdminSettingsController
         } catch (AuthMethodGuardUnwiredException $e) {
             // Fail closed: an unwired guard never persists. The wiring test
             // keeps this unreachable in the container; it exists for the
-            // nullable constructor default.
+            // nullable constructor default. M-SERVER-05: the exception text
+            // (a wiring invariant, and in principle any re-raised detail)
+            // stays server-side; the wire carries the generic constant.
+            self::logFailure('Admin settings auth guard unwired', $e);
+
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Auth-method lock-out guard unavailable',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         } catch (AuthMethodGuardCheckFailedException $e) {
             // Fail closed on any guard-window blow-up (unreadable store,
-            // malformed state): the write is refused, nothing persisted,
-            // and the original message is preserved verbatim by the wrapper.
+            // malformed state): the write is refused, nothing persisted.
+            // M-SERVER-05: the wrapper preserves the original message
+            // verbatim — which for a store blow-up is a PDOException
+            // carrying the full SQL statement — so that text is logged
+            // server-side ONLY and never echoed onto the wire.
+            self::logFailure('Admin settings auth guard check failed', $e);
+
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Auth-method policy check failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
 
@@ -829,6 +865,32 @@ final class AdminSettingsController
                 'settings'   => self::maskSecrets($merged['values']),
                 'overridden' => $merged['overridden'],
             ],
+        ]);
+    }
+
+    /**
+     * Log a caught 500-path failure server-side, M-SERVER-05.
+     *
+     * The wire envelope carries {@see self::GENERIC_FAILURE_MESSAGE}; the
+     * exception's class, message, file and line go to the `http` log
+     * channel — the same channel the Workerman router's last-resort catch
+     * uses ({@see \Phlix\Server\Workerman\HttpHandler}), and the estate's
+     * cured idiom for refused-on-the-wire detail (see the Chromecast
+     * controller's L-6 constant-client-message sites). Detail NEVER
+     * returns on the response: a settings-store failure surfaces as a
+     * `PDOException` whose message embeds the full SQL statement
+     * ({@see \Phlix\Common\Database\PhlixMySQLConnection::query()}), which
+     * is exactly what this seam keeps server-side.
+     *
+     * @param array<string, mixed> $context Extra key/value pairs to log.
+     */
+    private static function logFailure(string $event, Throwable $e, array $context = []): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, $context + [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
         ]);
     }
 

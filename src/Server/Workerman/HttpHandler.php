@@ -262,11 +262,21 @@ final class HttpHandler
             //    auth aliases (/auth/login, /auth/register, /auth/refresh).
             $httpLogger->debug("HttpHandler.__invoke Application::dispatch [uid={$requestUid}]");
             $appResponse = $this->application->dispatch($request);
+            $appStatus = $appResponse->statusCode;
             $httpLogger->debug(
                 "HttpHandler.__invoke Application::dispatch done"
-                . " [uid={$requestUid}] [status={$appResponse->statusCode}]"
+                . " [uid={$requestUid}] [status={$appStatus}]"
             );
-            if ($appResponse->statusCode !== 404) {
+            // M-SERVER-52: the router answers an existing path hit with the wrong
+            // method with 405 instead of 404. The portal table (1b) and the page
+            // routes (2) are SEPARATE route spaces, so a 405 from THIS table must
+            // not preempt a route one of them really has — GET /auth/register (a
+            // page redirect while the Application router owns POST there) and
+            // GET /api/v1/media/{id} (a portal route while the Application router
+            // owns its DELETE) are the live examples. 405 therefore joins 404 as a
+            // "fall through" signal; the two branches below re-prefer it when the
+            // other table also misses.
+            if ($appStatus !== 404 && $appStatus !== 405) {
                 $responseStatus = $appResponse->statusCode;
                 $decorated = $cors->decorate($request, $appResponse);
                 $decorated = $securityHeaders->decorate($decorated);
@@ -295,6 +305,13 @@ final class HttpHandler
                     "HttpHandler.__invoke WebPortalRouter::dispatch done"
                     . " [uid={$requestUid}] [status={$apiResponse->statusCode}]"
                 );
+                if ($appStatus === 405 && ($apiResponse->statusCode === 404 || $apiResponse->statusCode === 405)) {
+                    // Both tables miss this method; the Application table has
+                    // PROVEN the path exists, and its Allow header lists what it
+                    // registers. Its 405 is the more informative answer. (A portal
+                    // 200/401/etc. above — a real portal route — never gets here.)
+                    $apiResponse = $appResponse;
+                }
                 $responseStatus = $apiResponse->statusCode;
                 $decorated = $cors->decorate($request, $apiResponse);
                 $decorated = $securityHeaders->decorate($decorated);
@@ -316,6 +333,13 @@ final class HttpHandler
             //    the middleware rather than left running.
             $httpLogger->debug("HttpHandler.__invoke page rendering [uid={$requestUid}]");
             $response = $this->dispatch($request);
+            if ($appStatus === 405 && $response->statusCode === 404) {
+                // The page routes did not claim this path either (they answer
+                // anything, so a 404 here means "no page for it") — restore the
+                // Application router's 405: the path exists, the method does not,
+                // and the generic `<h1>404</h1>` would erase that fact.
+                $response = $appResponse;
+            }
             $httpLogger->debug(
                 "HttpHandler.__invoke page rendering done [uid={$requestUid}] [status={$response->statusCode}]"
             );

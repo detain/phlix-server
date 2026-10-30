@@ -12,8 +12,9 @@
 -- stateless-per-command: DLNA SOAP POST, Roku ECP HTTP, Cast HTTP JSON, RAOP
 -- fresh-socket-per-command), plus the owning user for authorization.
 --
--- Schema notes (MySQL 5.7-compatible house style, cf. 106_client_heartbeats.sql):
--- - `state` is JSON WITHOUT a DEFAULT (5.7 forbids JSON defaults); the store
+-- Schema notes (house style, cf. 106_client_heartbeats.sql):
+-- - `state` is JSON WITHOUT a DEFAULT (a JSON column takes no literal default in
+--   this project's dialect house rules); the store
 --   always writes it. It holds only what re-attach needs — device endpoint
 --   fields and the media URL — never tokens or secrets.
 -- - DATETIME columns default to the database clock (`CURRENT_TIMESTAMP`); the

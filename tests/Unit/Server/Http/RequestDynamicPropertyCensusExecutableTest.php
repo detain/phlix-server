@@ -766,8 +766,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * "0"-survival cure first). Reads/writes no Request property (pure getenv
      * wrapper + unit test), so every other census denominator is unchanged.
      * Measured from the phpunit red (2003), not predicted.
+     * Re-pinned 2003→2004 by the W-min98 / M-SERVER-52 router-405 lane
+     * (2026-10-30): +1 — tests/Unit/Server/Http/RouterMethodNotAllowedTest.php
+     * (the 405/Allow semantics for existing-path wrong-method misses, the
+     * 404-boundary pins for never-registered paths, and the head-framing arm).
+     * Measured from the phpunit red (2004), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 2003;
+    private const EXPECTED_PHP_FILES = 2004;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -840,8 +845,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * HttpHandler::legacyRedirect() helper (the photo targets keep carrying
      * byte-identical queries; the test file reads no Request members).
      * Measured from the phpunit red (449), not predicted.
+     * Re-pinned 449→450 by the W-min98 / M-SERVER-52 router-405 lane
+     * (2026-10-30): +1 src/ declared-member READ — Router::notFoundOrMethodNotAllowed
+     * names the attempted method in the 405 envelope (`'does not support ' .
+     * $request->method`). The new test file reads no Request members. Measured
+     * from the phpunit red (450), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 449;
+    private const EXPECTED_DECLARED_READS = 450;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1021,8 +1031,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (the gate reads the body array only; the create-side loop extraction
      * moved no Request site). Measured from the phpunit red (1094), not
      * predicted.
+     * Re-pinned 1094→1096 by the W-min98 / M-SERVER-52 router-405 lane
+     * (2026-10-30): +2 declared-member WRITES — the new RouterMethodNotAllowedTest
+     * makeRequest helper stamps $request->method and $request->path. Zero src/
+     * writes added. Measured from the phpunit red (1096), not predicted.
      */
-    private const EXPECTED_DECLARED_WRITES = 1094;
+    private const EXPECTED_DECLARED_WRITES = 1096;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

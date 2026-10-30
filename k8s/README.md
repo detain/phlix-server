@@ -11,20 +11,33 @@ This directory contains a Helm chart for deploying Phlix Media Server on Kuberne
 
 ## Installing the Chart
 
-```bash
-# Add the repository (when published)
-helm repo add phlix https://charts.phlix.media
-helm repo update
+The chart is **not published to a Helm repository** — `https://charts.phlix.media`
+does not exist (yet). It ships in two forms only: inside this repository
+(`k8s/helm/phlix/`), and as a packaged `.tgz` attached to each GitHub release
+("Phlix Server <tag>" under [detain/phlix-server/releases](https://github.com/detain/phlix-server/releases);
+see `RELEASE_PROCESS.md` — nothing pushes a chart to any chart repository).
 
-# Install the chart — image.tag is REQUIRED and must be an immutable tag; a mutable `latest`
-# exists on the registry but drifts with every push, while the <full-sha>-… forms are published per run
-helm install phlix phlix/phlix \
+Install from a checkout of this repo, or after downloading the release `.tgz`:
+
+```bash
+# From a repo checkout (chart sources in ./k8s/helm/phlix):
+helm install phlix ./k8s/helm/phlix \
   --set image.tag=<full-sha>-latest \
   --set config.database_password=your_password \
   --set config.secret_key=your_secret \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=phlix.example.com
+
+# Or from a release asset:
+helm install phlix ./phlix-<version>.tgz --set image.tag=... (flags as above)
 ```
+
+`image.tag` is REQUIRED and must be an immutable tag; a mutable `latest`
+exists on the registry but drifts with every push, while the `<full-sha>-…`
+forms are published per run.
+
+*(`helm repo add phlix https://charts.phlix.media` is a disabled future idea,
+not an install path — do not script against it.)*
 
 ## Using Values
 

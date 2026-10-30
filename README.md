@@ -69,7 +69,10 @@ public/                 # no front controller — start.php serves everything (s
 ## Requirements
 
 - **PHP**: 8.3 or higher
-- **MySQL**: 8.0+ or MariaDB 10.6+
+- **MySQL**: 8.0.13 or higher (latest 8.0 patch release recommended), or MariaDB 10.6+
+  (The 8.0.13 floor is real, not conservatism: migrations such as 012 use expression
+  defaults (`DEFAULT ('[]')`), which MySQL only accepts from 8.0.13 — MariaDB has
+  allowed expression defaults since 10.2.)
   (On MariaDB — and on MySQL below 8.0.13/8.0.17 — the MySQL-only functional /
   multi-valued index statements in migrations 011 and 050 are skipped with an
   operator-visible note via the `@phlix-require-mysql` dialect gate in
@@ -304,7 +307,7 @@ slips into a fresh server just because it is reachable.
 - **Host-Controlled Playback**: Only the host can control play/pause/seek; all members receive synchronized commands
 - **NTP-Style Time Sync**: Network time synchronization with latency compensation and drift correction
 - **In-Group Chat**: Real-time messaging with typing indicators and message history
-- **Playback Queue**: Host-managed queue with media info (title, thumbnail)
+- **Playback Queue**: Host-managed queue with media info (title, thumbnail), capped at 1000 items per group (`GroupState::MAX_QUEUE_SIZE`); an add past the cap is refused with the `syncplay.queue_limit_exceeded` error code
 - **Host Election**: Automatic host election when current host leaves (oldest member becomes host)
 - **Password Protection**: Optional password protection for private watch parties
 - **Position Tolerance**: Configurable sync tolerance (default 2s) to prevent excessive seeking
@@ -895,6 +898,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_RELAY_PING_INTERVAL` / `PHLIX_RELAY_PING_TIMEOUT` | `30` / `10` s | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_RECONNECT_DELAY` / `PHLIX_RELAY_RECONNECT_MAX_DELAY` / `PHLIX_RELAY_RECONNECT_JITTER_FACTOR` | `5` / `300` s / `0.3` | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_REQUIRE_TLS` | off (`false`) | no | yes | `RelayConfig.php` |
+| `PHLIX_RELAY_ALLOW_PLAINTEXT` | off (`false`) | no | yes | `RelayConfig.php` — opt-in ACK (M5) that silences the connect-time plaintext-tunnel impersonation warning; it changes no behavior, and `PHLIX_RELAY_REQUIRE_TLS` still refuses non-`wss://` dials regardless |
 | `PHLIX_RELAY_TLS` | off | no | yes | `RelayConfig.php` |
 | `PHLIX_RELAY_TLS_CAFILE` / `PHLIX_RELAY_TLS_VERIFY` | system CA / on (verify) | CA path | yes | `RelayConfig.php`, `src/Hub/HttpClient.php` |
 | `PHLIX_RELAY_TUNNEL_HOSTNAME` | _unset_ | no | yes | `RelayConfig.php` |
@@ -936,6 +940,9 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `ARTWORK_STORAGE_PATH` | `/var/artwork` | no | yes | `config/artwork.php` (config load at boot) |
 | `SUBTITLE_STORAGE_PATH` | `/var/subtitles` | no | yes | `config/subtitles.php` (config load at boot) |
 | `IMDB_CACHE_DIR` | see `config/imdb.php` | no | yes | `config/imdb.php` |
+| `PHLIX_THEME_MUSIC_ENABLED` | on (`true`) | no | yes | `config/theme_music.php` — master switch for theme-music resolution (`metadata_json.theme_audio_url` at match time) |
+| `PHLIX_THEME_MUSIC_SOURCE` | `local_then_plex` | no | yes | `config/theme_music.php` — `local_then_plex` \| `local_only` \| `off`; unrecognized value falls back to the default |
+| `PHLIX_THEME_MUSIC_TIMEOUT` | `8` s | no | yes | `config/theme_music.php` — Plex-archive fetch timeout (positive integer; anything else keeps the default) |
 | `PHLIX_THEME_MUSIC_CACHE_DIR` | see `config/theme_music.php` | no | yes | `config/theme_music.php` |
 
 #### Metadata providers & scrobblers
@@ -965,6 +972,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_PLUGINS_CATALOG_REF` | branch/tag per `CatalogSourceResolver` | no | live | catalog pin override |
 | `PHLIX_PLUGINS_ALLOW_HTTP` | off | no | live | `HttpInstaller` — allow http:// plugin download URLs (dev only) |
 | `PHLIX_GITHUB_TOKEN` (fallback `GITHUB_TOKEN`, `GH_TOKEN`) | _unset_ | **yes** | live | `ComposerRunner` — private-repo plugin fetches |
+| `USER` | — | no | live | `PluginLoader::currentProcessUser()` — permission-aware enable-diagnostics only, and only when ext-posix is absent (posix uid/pwuid wins when available); `unknown` if unset |
 
 #### HTTP surface, limits & misc
 

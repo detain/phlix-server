@@ -8,7 +8,11 @@ data:
   # Non-secret runtime configuration mirrored into the container as env vars.
   # config/*.php in the image still reads its own defaults; values here override
   # them for the running pod.
-  PHLIX_APP_ENV: "production"
+  # PHLIX_ENV is the name the PHP runtime actually reads (production-mode auth
+  # hardening in AuthServicesProvider; matches the systemd unit's
+  # Environment= and the installer template). The former `PHLIX_APP_ENV` key
+  # here had zero readers and silently did nothing.
+  PHLIX_ENV: "production"
   PHLIX_LOG_LEVEL: {{ .Values.config.log_level | quote }}
   {{- if .Values.config.hub_url }}
   PHLIX_HUB_URL: {{ .Values.config.hub_url | quote }}

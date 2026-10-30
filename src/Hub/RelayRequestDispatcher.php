@@ -38,8 +38,12 @@ use function str_starts_with;
  *      crossed the tunnel).
  *   1. The fully-populated {@see Application} router (owns every `/api/*`,
  *      `/health`, `/.well-known`, streaming, and auth routes).
- *   1b. {@see WebPortalRouter} for any `/api/` path the Application router 404s
- *       on (`/api/v1/libraries`, `/api/v1/media/{id}`, `/api/v1/users/me/*`).
+ *   1b. {@see WebPortalRouter} for any `/api/` path the Application router misses
+ *       on — 404, or 405 since the M-SERVER-52 router-405 lane (the Application
+ *       table owning only `DELETE /api/v1/media/{id}` must not preempt the
+ *       portal's real GET route for it; the portal's answer wins when it routes,
+ *       the Application's 405 wins when the portal misses too) — covering
+ *       `/api/v1/libraries`, `/api/v1/media/{id}`, `/api/v1/users/me/*`.
  *
  * Static-file serving and the SSR page-rendering fall-through are intentionally
  * NOT mirrored here: the hub proxy carries JSON/browse traffic, the small
@@ -132,10 +136,22 @@ final class RelayRequestDispatcher
 
         $response = $this->application->dispatch($request);
 
-        if ($response->statusCode === 404 && str_starts_with($request->path, '/api/')) {
+        // M-SERVER-52 mirror of the HttpHandler chain: a 405 from the Application
+        // router is a routing-table miss for THIS method, not a final answer —
+        // the portal table is a separate route space that may own the path under
+        // the requested method (GET /api/v1/media/{id} is the live example). Only
+        // when the portal ALSO misses does the Application's 405 (path proven to
+        // exist, wrong verb) become the response.
+        if (($response->statusCode === 404 || $response->statusCode === 405) && str_starts_with($request->path, '/api/')) {
             $webPortalRouter = $this->container->get(WebPortalRouter::class);
             if ($webPortalRouter instanceof WebPortalRouter) {
-                return $webPortalRouter->dispatch($request);
+                $portalResponse = $webPortalRouter->dispatch($request);
+                $portalMiss = $portalResponse->statusCode === 404 || $portalResponse->statusCode === 405;
+                if ($response->statusCode === 405 && $portalMiss) {
+                    return $response;
+                }
+
+                return $portalResponse;
             }
         }
 

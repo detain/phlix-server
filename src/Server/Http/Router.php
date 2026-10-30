@@ -337,7 +337,7 @@ class Router
             if ($method === 'HEAD' && (isset($this->routes['GET']) || isset($this->staticRoutes['GET']))) {
                 return $this->dispatchAsHead($request, $path);
             }
-            return $this->notFound($request);
+            return $this->notFoundOrMethodNotAllowed($request, $path);
         }
 
         foreach ($this->routes[$method] as $pattern => $route) {
@@ -366,7 +366,7 @@ class Router
             return $this->dispatchAsHead($request, $path);
         }
 
-        return $this->notFound($request);
+        return $this->notFoundOrMethodNotAllowed($request, $path);
     }
 
     /**
@@ -412,7 +412,7 @@ class Router
             }
         }
 
-        return $this->notFound($request);
+        return $this->notFoundOrMethodNotAllowed($request, $path);
     }
 
     /**
@@ -1023,6 +1023,79 @@ class Router
             ->json([
                 'error' => 'Not Found',
                 'message' => 'The requested resource was not found',
+            ]));
+    }
+
+    /**
+     * Answers a routing miss: 405 Method Not Allowed when the PATH exists under
+     * some other method, 404 Not Found when it exists under none (RFC 9110
+     * §12.4.6 — 405 is for "known resource, wrong verb"; unknown stays 404).
+     *
+     * Before this, every dispatch miss answered 404, so a `DELETE` to a
+     * GET-only path was indistinguishable from a typo'd path. The `Allow`
+     * header enumerates the methods actually registered for the path, across
+     * BOTH route maps (static and parametric), in canonical verb order so the
+     * header is deterministic.
+     *
+     * Two deliberate asymmetries:
+     *  - `HEAD` joins `Allow` whenever `GET` is allowed even if no HEAD route
+     *    is registered, because {@see self::dispatchAsHead()} genuinely serves
+     *    HEAD off the GET handler — the list states what works, not what was
+     *    typed into a registrar.
+     *  - `OPTIONS` is NOT auto-added. CORS preflight is answered upstream of
+     *    this router (`Workerman/HttpHandler` → `CorsManager::preflightResponse`)
+     *    and only appears in `Allow` when a route registers it explicitly
+     *    (`any()` does). A bare OPTIONS reaching dispatch therefore becomes a
+     *    405 on an existing path — previously a 404 — which is the RFC-correct
+     *    shape for a path that simply does not handle OPTIONS.
+     *
+     * @param Request $request The request being answered (only `method` is read;
+     *                          the reply is routed through {@see self::markHeadOnly()}
+     *                          exactly like the 404's envelope).
+     * @param string  $path     The request path that missed every method's map.
+     * @return Response 405 with Allow, or 404 when no method claims the path.
+     */
+    private function notFoundOrMethodNotAllowed(Request $request, string $path): Response
+    {
+        $allowed = [];
+
+        foreach ($this->staticRoutes as $registeredMethod => $paths) {
+            if (isset($paths[$path])) {
+                $allowed[$registeredMethod] = true;
+            }
+        }
+
+        foreach ($this->routes as $registeredMethod => $patterns) {
+            if (isset($allowed[$registeredMethod])) {
+                continue;
+            }
+            foreach (array_keys($patterns) as $pattern) {
+                if (preg_match($pattern, $path) === 1) {
+                    $allowed[$registeredMethod] = true;
+                    break;
+                }
+            }
+        }
+
+        if ($allowed === []) {
+            return $this->notFound($request);
+        }
+
+        if (isset($allowed['GET'])) {
+            $allowed['HEAD'] = true;
+        }
+
+        $allow = implode(', ', array_values(array_filter(
+            ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT'],
+            static fn (string $verb): bool => isset($allowed[$verb]),
+        )));
+
+        return $this->markHeadOnly($request, (new Response())
+            ->status(405)
+            ->header('Allow', $allow)
+            ->json([
+                'error' => 'Method Not Allowed',
+                'message' => 'The requested resource does not support ' . $request->method . ' (allowed: ' . $allow . ')',
             ]));
     }
 

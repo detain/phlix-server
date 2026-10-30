@@ -1050,11 +1050,16 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
 
     /**
      * Dispatch-level, with the control that makes the 401 readable: the real path
-     * reaches the auth gate (401) while its strict SUPERSTRING reaches nothing
-     * (404). A `str_contains` assertion cannot distinguish those two paths at all;
-     * these two status codes do.
+     * reaches the auth gate (401) while its strict SUPERSTRING never resolves as
+     * this rail. The superstring's honest miss-code is 405 Method Not Allowed,
+     * not 404: since the M-SERVER-52 router-405 lane, the path is claimed by the
+     * `DELETE /api/v1/media/{id}` parametric pattern (`most-watched-MUTATED` is a
+     * legal {id}), which `Allow` truthfully lists. Either way the discrimination
+     * this control exists for holds — a `str_contains` assertion cannot tell the
+     * two apart, the status codes do: 401-with-auth.required is the rail's unique
+     * signature and the mutation has it not.
      */
-    public function testDispatchingTheMostWatchedRailReachesTheAuthGateWhileTheMutatedSpellingIs404(): void
+    public function testDispatchingTheMostWatchedRailReachesTheAuthGateWhileTheMutatedSpellingIs405(): void
     {
         $application = $this->application();
 
@@ -1069,11 +1074,17 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
 
         $mutated = $application->dispatch($this->request(self::MOST_WATCHED_MUTATED_PATH));
         $this->assertSame(
-            404,
+            405,
             $mutated->statusCode,
-            self::MOST_WATCHED_MUTATED_PATH . ' must not resolve. It is a strict superstring of the '
-            . 'real path, which is exactly why a str_contains/includes assertion cannot tell the '
-            . 'two apart.'
+            self::MOST_WATCHED_MUTATED_PATH . ' must not resolve AS THE RAIL. It is a strict superstring of '
+            . 'the real path, which is exactly why a str_contains/includes assertion cannot tell the two '
+            . 'apart; its 405 (Allow: DELETE, via the /api/v1/media/{id} pattern claiming it) proves it '
+            . 'reached no GET handler and no auth gate.'
+        );
+        $this->assertStringNotContainsString(
+            'auth.required',
+            (string) $mutated->body,
+            'the rail signature must be absent',
         );
     }
 

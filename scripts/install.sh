@@ -1746,8 +1746,11 @@ fi
 # Public domain for the env file.
 PUBLIC_DOMAIN="${DOMAIN:-$(hostname -f 2>/dev/null || hostname)}"
 
-# Generate a secret key for HMAC-signed cookies / future use. Read by the
-# code via getenv('PHLIX_SECRET_KEY') where applicable.
+# Generate the install-wide signing secret. NOTE: the PHP runtime never reads
+# a PHLIX_SECRET_KEY environment variable (zero getenv() call sites in src/);
+# docker/docker-entrypoint.sh maps this name onto JWT_SECRET, and the native
+# env file below carries JWT_SECRET directly. Truth pinned by the definitive
+# census in README.md ("Environment variables").
 SECRET_KEY="$(rand_hex 32)"
 
 # JWT signing secret. REQUIRED: src/Common/Container/Providers/AuthServicesProvider.php
@@ -1985,7 +1988,10 @@ PHLIX_DOMAIN=${PUBLIC_DOMAIN}
 # scheme of the public URL advertised to the hub during pairing.
 PHLIX_TLS_ENABLED=$([ "$TLS_ENABLED" = "yes" ] && echo 1 || echo 0)
 
-# 32-byte hex secret for HMAC-signed cookies / future use.
+# 32-byte hex signing secret. Not read by the PHP runtime under this name:
+# docker/docker-entrypoint.sh maps it onto JWT_SECRET for containers; on a
+# native install the JWT_SECRET line below is the real key, and this row is a
+# container-parity alias kept so the same env file works under both supervisors.
 PHLIX_SECRET_KEY=${SECRET_KEY}
 
 # JWT signing secret (REQUIRED). The server refuses to boot without a unique,

@@ -823,9 +823,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * controller gains a required collaborator but reads/writes no Request
      * property, so every other census denominator is unchanged. Measured
      * from the phpunit red (2013), not predicted.
+     * Re-pinned 2013→2014 by the W-min102 / M-SERVER-21 create()-atomicity
+     * lane (2026-10-30): +1 — tests/Integration/Media/Library/
+     * MediaItemCreateAtomicityRealDbTest.php (real-MySQL rollback-propagation,
+     * duplicate-path race-reuse and non-duplicate-surfacing proofs). The
+     * txn wrap and 1062 narrowing add no files to src and touch no Request
+     * property, so every other census denominator is unchanged. Measured
+     * from the phpunit red (2014), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2013;
+    private const EXPECTED_PHP_FILES = 2014;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

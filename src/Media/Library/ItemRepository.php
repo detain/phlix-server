@@ -433,7 +433,10 @@ class ItemRepository
      *  3. If create()'s INSERT fails because a concurrent worker inserted the
      *     same path first (MySQL 1062 against the `(library_id, path_hash)`
      *     unique index from migration 072), swallow the error and return the
-     *     row that now exists. Any other failure is re-thrown unchanged.
+     *     row that now exists. Any other failure is re-thrown unchanged —
+     *     narrowly, by driver error, not by "did a row for this path happen to
+     *     exist afterwards" (the old loose test made a half-failed create read
+     *     back as a silent success).
      *
      * NB: the 1062 branch can only fire once migration 072's unique index is in
      * place; before that there is no path constraint to violate, so step 1 is the
@@ -469,15 +472,52 @@ class ItemRepository
         try {
             return $this->create($data);
         } catch (Throwable $e) {
+            // Only a duplicate-key violation is a lost race. Anything else —
+            // a broken connection, an FK rejection, a value error — surfaces
+            // EVEN when a row for this path happens to exist: the old
+            // catch-anything-and-re-check turned half-failed creates into
+            // silent successes (a row inserted by leg one of a multi-leg
+            // failure read back as "the race winner").
+            if (!self::isDuplicateKeyError($e)) {
+                throw $e;
+            }
             // A concurrent worker inserted the same path between our existence
             // check and the INSERT (unique-index violation). Reuse their row.
             $raced = $this->findByPath($path, $libraryId);
             if (is_array($raced) && isset($raced['id']) && is_string($raced['id'])) {
                 return $raced['id'];
             }
-            // The insert failed for some other reason — surface it.
+            // A duplicate on some OTHER key (e.g. a generated id colliding
+            // with PRIMARY) and no row for this path: not our race — surface.
             throw $e;
         }
+    }
+
+    /**
+     * Is this failure the database's duplicate-key error (MySQL 1062)?
+     *
+     * `Workerman\MySQL\Connection::execute()` raises two shapes of it: the raw
+     * `PDOException` (the retry-after-disconnect path, driver code intact in
+     * `errorInfo[1]`) and a re-wrapped one ("SQL:<sql> <message>", SQLSTATE in
+     * getCode(), errorInfo lost). Both are recognised. SQLSTATE siblings are
+     * not: 1451/1452 FK rejections share 23000, so the duplicate is told apart
+     * by the driver message text once the vendor re-wrap has dropped the code.
+     */
+    private static function isDuplicateKeyError(Throwable $e): bool
+    {
+        if (!$e instanceof \PDOException) {
+            return false;
+        }
+
+        // Raw shape: errorInfo = [SQLSTATE, driver-code, driver-message].
+        $errorInfo = $e->errorInfo;
+        if (is_array($errorInfo) && (int)($errorInfo[1] ?? 0) === 1062) {
+            return true;
+        }
+
+        // Vendor re-wrap: errorInfo dropped, code is SQLSTATE 23000.
+        return (int)$e->getCode() === 23000
+            && str_contains($e->getMessage(), 'Duplicate entry');
     }
 
     /**
@@ -1326,6 +1366,25 @@ class ItemRepository
     /**
      * Creates a new media item in the database.
      *
+     * The `media_items` INSERT and the `media_item_genres` population run as
+     * ONE transaction (the house `beginTrans`/`commitTrans`/`rollBackTrans`
+     * template of {@see replaceStreams()}): a failure on the second leg rolls
+     * the first back, so a half-created item — a row whose genre set silently
+     * never landed — cannot exist. Side effects that must observe the write
+     * (the stats record and the genre-facet cache invalidation) run only
+     * AFTER the commit; the stats call deliberately stays outside the
+     * transaction because it swallows every failure of its own, and
+     * `Workerman\MySQL\Connection::execute()` rolls the active transaction
+     * back before it even raises — inside the txn a stats write error would
+     * silently undo the item row while create() still reported success.
+     *
+     * Not re-entrant: like {@see replaceStreams()}, a call made while a
+     * transaction is already open on this connection throws
+     * `PDOException: There is already an active transaction` BEFORE the
+     * INSERT. No caller nests today ({@see batchCreate()} loops this method
+     * with no outer transaction; the scanner and registrar flows are all
+     * autocommit), but keep new call sites transaction-free.
+     *
      * Also invalidates the affected library's cached genre facet set (and the
      * all-libraries scope) via {@see invalidateGenreFacets()}, since the new
      * item's `metadata_json.$.genres` may introduce a genre not previously
@@ -1335,6 +1394,8 @@ class ItemRepository
      * metadata_json
      * @return string The unique identifier of the created media item
      * @throws \InvalidArgumentException If required fields are missing
+     * @throws Throwable From any leg of the write; the transaction is rolled
+     *         back first, so no partial row survives.
      */
     public function create(array $data): string
     {
@@ -1364,32 +1425,44 @@ class ItemRepository
         // hit the indexed `content_rating` column instead of a JSON extraction.
         $contentRating = self::extractContentRating($data['metadata_json'] ?? null);
 
-        $this->db->query(
-            "INSERT INTO media_items
-             (id, library_id, parent_id, name, type, path, canonical_key, sort_title, content_rating, metadata_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                $id,
-                $data['library_id'],
-                $data['parent_id'] ?? null,
-                $scrubbedName,
-                $data['type'],
-                self::toValidUtf8($data['path'] ?? null),
-                $canonicalKey,
-                $sortTitle,
-                $contentRating,
-                $metadataJson,
-            ]
-        );
+        $this->db->beginTrans();
+        try {
+            $this->db->query(
+                "INSERT INTO media_items
+                 (id, library_id, parent_id, name, type, path, canonical_key, sort_title, content_rating, metadata_json)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $id,
+                    $data['library_id'],
+                    $data['parent_id'] ?? null,
+                    $scrubbedName,
+                    $data['type'],
+                    self::toValidUtf8($data['path'] ?? null),
+                    $canonicalKey,
+                    $sortTitle,
+                    $contentRating,
+                    $metadataJson,
+                ]
+            );
 
-        // Populate the `media_item_genres` join table (migration 051) with the
-        // metadata_json.$.genres this row was just created with. Uses
-        // insertGenreRows() (no preceding DELETE) rather than syncGenreRows() —
-        // a freshly-created item can never have pre-existing join-table rows,
-        // so the DELETE syncGenreRows() always issues would be a guaranteed
-        // no-op here (see insertGenreRows()'s docblock).
-        $this->insertGenreRows($id, self::extractGenres($data['metadata_json'] ?? null));
+            // Populate the `media_item_genres` join table (migration 051) with the
+            // metadata_json.$.genres this row was just created with. Uses
+            // insertGenreRows() (no preceding DELETE) rather than syncGenreRows() —
+            // a freshly-created item can never have pre-existing join-table rows,
+            // so the DELETE syncGenreRows() always issues would be a guaranteed
+            // no-op here (see insertGenreRows()'s docblock).
+            $this->insertGenreRows($id, self::extractGenres($data['metadata_json'] ?? null));
 
+            $this->db->commitTrans();
+        } catch (Throwable $e) {
+            // rollBackTrans() is idempotent even though the vendor's execute()
+            // already rolls the txn back before re-raising (see replaceStreams()).
+            $this->db->rollBackTrans();
+            throw $e;
+        }
+
+        // Post-commit observability only — see the docblock: never move these
+        // legs inside the transaction.
         $libraryId = isset($data['library_id']) && is_string($data['library_id'])
             ? $data['library_id']
             : null;

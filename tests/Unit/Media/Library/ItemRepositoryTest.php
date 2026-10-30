@@ -822,6 +822,95 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals('movie', $result[0]['type']);
     }
 
+    public function testCreateWrapsItemAndGenreWritesInOneTransaction(): void
+    {
+        // M-SERVER-21 law: the media_items INSERT and the genre join INSERT run
+        // inside ONE transaction; the stats record (and facet invalidation)
+        // happen only after the commit.
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('beginTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'BEGIN';
+            return true;
+        });
+        $db->method('commitTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'COMMIT';
+            return true;
+        });
+        $db->method('rollBackTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'ROLLBACK';
+            return true;
+        });
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$calls) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $calls[] = 'INSERT-ITEM';
+            } elseif (str_starts_with(trim($sql), 'INSERT IGNORE INTO media_item_genres')) {
+                $calls[] = 'INSERT-GENRES';
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id'    => 'lib-1',
+            'name'          => 'Movie',
+            'type'          => 'movie',
+            'path'          => '/m/movie.mkv',
+            'metadata_json' => ['genres' => ['Drama']],
+        ]);
+
+        $this->assertSame(['BEGIN', 'INSERT-ITEM', 'INSERT-GENRES', 'COMMIT'], $calls);
+    }
+
+    public function testCreateRollsBackAndSkipsCommitWhenGenreLegFails(): void
+    {
+        // A failure on the SECOND leg rolls the first back and propagates —
+        // no half-created item (row without its genre set) can survive, and no
+        // COMMIT is ever attempted.
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('beginTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'BEGIN';
+            return true;
+        });
+        $db->method('commitTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'COMMIT';
+            return true;
+        });
+        $db->method('rollBackTrans')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'ROLLBACK';
+            return true;
+        });
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$calls) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $calls[] = 'INSERT-ITEM';
+                return 1;
+            }
+            if (str_starts_with(trim($sql), 'INSERT IGNORE INTO media_item_genres')) {
+                $calls[] = 'INSERT-GENRES';
+                throw new \RuntimeException('socket closed mid-write');
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+
+        try {
+            $repo->create([
+                'library_id'    => 'lib-1',
+                'name'          => 'Movie',
+                'type'          => 'movie',
+                'path'          => '/m/movie.mkv',
+                'metadata_json' => ['genres' => ['Drama']],
+            ]);
+            $this->fail('the genre-leg failure must propagate');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('socket closed mid-write', $e->getMessage());
+        }
+
+        $this->assertSame(['BEGIN', 'INSERT-ITEM', 'INSERT-GENRES', 'ROLLBACK'], $calls);
+    }
+
     public function testCreateGeneratesUuidAndInsertsItem(): void
     {
         $captured = null;
@@ -3865,8 +3954,10 @@ class ItemRepositoryTest extends TestCase
     public function testUpsertByPathReusesRacedRowWhenInsertViolatesUnique(): void
     {
         // Pre-check finds nothing; a concurrent worker inserts the same path, so
-        // create()'s INSERT raises a unique violation; the re-fetch then finds
-        // the winner's row and upsertByPath returns its id (no exception).
+        // create()'s INSERT raises a duplicate-key violation in the shape the
+        // vendor ACTUALLY throws (re-wrapped PDOException: SQLSTATE code,
+        // driver text in the message); the re-fetch then finds the winner's row
+        // and upsertByPath returns its id (no exception).
         //
         // Note: with the path_hash optimization, the findByPath query now uses
         // "WHERE path_hash = ? AND path = ?" which the mock matches via path_hash.
@@ -3880,7 +3971,11 @@ class ItemRepositoryTest extends TestCase
                 return $pathSelects === 1 ? [] : [['id' => 'winner-1', 'metadata_json' => '{}']];
             }
             if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
-                throw new \RuntimeException("Duplicate entry for key 'idx_media_items_library_path_hash'");
+                throw new \PDOException(
+                    "SQL:INSERT INTO media_items ... Duplicate entry '/m/race.mkv' "
+                    . "for key 'media_items.idx_media_items_library_path_hash'",
+                    23000
+                );
             }
             return [];
         });
@@ -3895,6 +3990,106 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertSame('winner-1', $id);
         $this->assertSame(2, $pathSelects, 'pre-check + one post-race re-fetch');
+    }
+
+    public function testUpsertByPathReusesRacedRowOnRawDriverErrorInfoShape(): void
+    {
+        // The vendor's retry-after-disconnect path re-throws the raw
+        // PDOException: errorInfo carries [SQLSTATE, 1062, message] and the
+        // driver message may be anything. The detector must accept that shape
+        // by DRIVER CODE, not only by message text.
+        $db = $this->createMock(Connection::class);
+        $selects = 0;
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$selects) {
+            if (str_contains($sql, 'path_hash')) {
+                $selects++;
+                return $selects === 1 ? [] : [['id' => 'winner-2', 'metadata_json' => '{}']];
+            }
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $e = new \PDOException('SQL:INSERT INTO media_items ... dup (driver-localised)', 23000);
+                $e->errorInfo = ['23000', 1062, 'dup (driver-localised)'];
+                throw $e;
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $id = $repo->upsertByPath([
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/race2.mkv',
+        ]);
+
+        $this->assertSame('winner-2', $id);
+    }
+
+    public function testUpsertByPathRethrowsForeignKeyViolationEvenWhenRowExists(): void
+    {
+        // The W-min102 law: a NON-duplicate failure must surface even when a
+        // row for the path exists. An FK rejection shares SQLSTATE 23000 with
+        // 1062 — if the catch still swallowed anything, the existing row would
+        // be returned and the half-failed create would read as success.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) {
+            if (str_contains($sql, 'path_hash')) {
+                // A row for this path exists (e.g. an earlier partial era).
+                return [['id' => 'existing-1', 'metadata_json' => '{}']];
+            }
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $e = new \PDOException(
+                    "SQL:INSERT INTO media_items ... Cannot add or update a child row: "
+                    . "a foreign key constraint fails",
+                    23000
+                );
+                $e->errorInfo = ['23000', 1452, 'Cannot add or update a child row: a foreign key constraint fails'];
+                throw $e;
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+
+        $this->expectException(\PDOException::class);
+        $this->expectExceptionMessage('foreign key constraint fails');
+        $repo->upsertByPath([
+            'library_id' => 'lib-ghost',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/partial.mkv',
+        ], true);
+    }
+
+    public function testUpsertByPathRethrowsDuplicateOnOtherKeyWhenPathMissing(): void
+    {
+        // A genuine 1062 but NOT on this path's unique index (e.g. the
+        // generated id colliding with PRIMARY): the post-race re-fetch finds
+        // nothing, and the error must surface instead of being laundered.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) {
+            if (str_contains($sql, 'path_hash')) {
+                return [];
+            }
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                throw new \PDOException(
+                    "SQL:INSERT INTO media_items ... Duplicate entry 'fixed-id' for key 'media_items.PRIMARY'",
+                    23000
+                );
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+
+        $this->expectException(\PDOException::class);
+        $this->expectExceptionMessage("for key 'media_items.PRIMARY'");
+        $repo->upsertByPath([
+            'id'         => 'fixed-id',
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/ghost.mkv',
+        ], true);
     }
 
     public function testUpsertByPathRethrowsWhenInsertFailsAndRowStillMissing(): void

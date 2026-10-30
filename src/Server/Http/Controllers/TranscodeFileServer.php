@@ -57,12 +57,12 @@ trait TranscodeFileServer
     private function serveJobFile(Request $request, string $dir, string $file): Response
     {
         if ($dir === '' || !$this->isSafeFilename($file)) {
-            return (new Response())->status(400)->json(['error' => 'invalid request']);
+            return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
         $path = $dir . '/' . $file;
         if (!is_file($path)) {
-            return (new Response())->status(404)->json(['error' => 'Not found']);
+            return (new Response())->status(404)->json(['error' => 'Segment not found']);
         }
 
         $contentType = self::contentTypeFor($file);

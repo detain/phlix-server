@@ -227,9 +227,9 @@ final class AuthProviderController
                 return (new Response())->status(422)->json([
                     'success' => false,
                     'error' => 'Validation failed',
-                    'errors' => [AuthProviderBootstrapper::flagKey($name) => $e->getMessage()],
+                    'errors' => [AuthProviderBootstrapper::flagKey($name) => $e->publicMessage()],
                     'reason' => $e->reason(),
-                    'message' => $e->getMessage(),
+                    'message' => $e->publicMessage(),
                 ]);
             } catch (AuthMethodGuardCheckFailedException $e) {
                 // Fail closed: an unreadable/broken policy must not wave an

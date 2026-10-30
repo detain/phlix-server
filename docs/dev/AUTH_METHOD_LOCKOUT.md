@@ -30,8 +30,14 @@ The SSOT for both is `AuthMethodPolicy::assertSafeTransition()`, which throws
 
 | Rule | Prevents | `reason` token | Human message (`message` / per-key `errors` value) |
 |---|---|---|---|
-| **R1** | a proposed state switching ALL five methods off | `all_methods_disabled` | `auth.method_lockout: at least one sign-in method must stay enabled` |
-| **R2 / R2-bis** | an ACTIVE administrator (`is_admin = 1 AND status = 'active'`) losing their last usable factor — a password while `password` stays on, a registered passkey while `webauthn` stays on, or a stored identity for an external provider that stays on AND is configured | `admin_lockout` | `auth.method_lockout: disabling these auth methods would leave <N> active administrator(s) with no usable sign-in factor` |
+| **R1** | a proposed state switching ALL five methods off | `all_methods_disabled` | `At least one sign-in method must remain enabled` |
+| **R2 / R2-bis** | an ACTIVE administrator (`is_admin = 1 AND status = 'active'`) losing their last usable factor — a password while `password` stays on, a registered passkey while `webauthn` stays on, or a stored identity for an external provider that stays on AND is configured | `admin_lockout` | `Disabling these auth methods would leave <N> active administrator[s] with no usable sign-in factor` (spelled singular for one, plural for more) |
+
+Both arms are produced by `AuthMethodLockoutException::publicMessage()`. The
+`auth.method_lockout:`-prefixed variant of these sentences is the LOG line
+(`getMessage()`); its machine-token prefix and the `(s)` count squeeze never
+ride the wire — discriminate with the `reason` token, not the prose
+(minors M-SERVER-05, W-min100).
 
 What to do on each refusal: see the README table ("Auth-method lock-out guards") — in
 short, R1 means "keep one door open"; R2 means "give that admin a factor before you

@@ -671,7 +671,7 @@ class MediaItemController
         // Validate chapter index
         if (!isset($chapters[$index])) {
             return (new Response())->status(404)->json([
-                'error' => 'Not Found',
+                'error' => 'Chapter not found',
                 'message' => 'Chapter at index ' . $index . ' does not exist',
             ]);
         }
@@ -685,7 +685,7 @@ class MediaItemController
 
         if ($startSeconds === null) {
             return (new Response())->status(404)->json([
-                'error' => 'Not Found',
+                'error' => 'Chapter not found',
                 'message' => 'Chapter start time is invalid',
             ]);
         }
@@ -703,7 +703,7 @@ class MediaItemController
 
         if ($chapterMarker === null || $chapterMarker->thumbnailPath === null || $chapterMarker->thumbnailPath === '') {
             return (new Response())->status(404)->json([
-                'error' => 'Not Found',
+                'error' => 'Chapter not found',
                 'message' => 'Chapter thumbnail not found',
             ]);
         }
@@ -713,7 +713,7 @@ class MediaItemController
         // Check if file exists
         if (!file_exists($thumbnailPath)) {
             return (new Response())->status(404)->json([
-                'error' => 'Not Found',
+                'error' => 'Chapter not found',
                 'message' => 'Chapter thumbnail file not found on disk',
             ]);
         }

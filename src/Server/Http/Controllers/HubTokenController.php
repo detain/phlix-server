@@ -63,7 +63,7 @@ final class HubTokenController
             return (new Response())
                 ->status(503)
                 ->json([
-                    'error' => 'Service Unavailable',
+                    'error' => 'Service unavailable',
                     'code' => 'hub.not_enrolled',
                     'message' => 'Server is not enrolled with a hub',
                 ]);

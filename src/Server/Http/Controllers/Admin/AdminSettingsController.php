@@ -819,7 +819,7 @@ final class AdminSettingsController
         } catch (AuthMethodLockoutException $e) {
             $errors = [];
             foreach (array_keys($touched) as $method) {
-                $errors[AuthMethodPolicy::settingsKey($method)] = $e->getMessage();
+                $errors[AuthMethodPolicy::settingsKey($method)] = $e->publicMessage();
             }
 
             return (new Response())->status(422)->json([
@@ -827,7 +827,7 @@ final class AdminSettingsController
                 'error'   => 'Validation failed',
                 'errors'  => $errors,
                 'reason'  => $e->reason(),
-                'message' => $e->getMessage(),
+                'message' => $e->publicMessage(),
             ]);
         } catch (AuthMethodGuardUnwiredException $e) {
             // Fail closed: an unwired guard never persists. The wiring test

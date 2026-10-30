@@ -73,7 +73,7 @@ class SessionController
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
         $sessions = $this->sessionManager->getUserSessions($userId);
@@ -100,7 +100,7 @@ class SessionController
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
         $data = $request->body;
@@ -143,7 +143,7 @@ class SessionController
 
         // Verify ownership
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
         }
 
         $this->sessionManager->endSession($sessionId, (string) ($request->userId ?? ''));
@@ -170,7 +170,7 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
         }
 
         $data = $request->body;
@@ -236,7 +236,7 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
         }
 
         $data = $request->body;
@@ -283,7 +283,7 @@ class SessionController
         }
 
         if ($session['user_id'] !== ($request->userId ?? '')) {
-            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+            return (new Response())->status(403)->json(['error' => 'You do not have permission to access this session']);
         }
 
         $state = $this->playbackController->getPlaybackState($sessionId);
@@ -391,7 +391,7 @@ class SessionController
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
         $items = $this->playbackController->getContinueWatching($userId);
@@ -411,7 +411,7 @@ class SessionController
     {
         $userId = $request->userId ?? '';
         if (!$userId) {
-            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
         $items = $this->playbackController->getRecentlyWatched($userId);

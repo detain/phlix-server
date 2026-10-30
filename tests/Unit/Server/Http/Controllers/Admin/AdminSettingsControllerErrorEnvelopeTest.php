@@ -205,10 +205,51 @@ final class AdminSettingsControllerErrorEnvelopeTest extends TestCase
         $this->assertSame(422, $response->statusCode);
         $this->assertSame('Validation failed', $body['error']);
         $this->assertSame('all_methods_disabled', $body['reason']);
-        // The contract message is the curated REASON-derived domain text —
-        // NOT the generic 500 string (this arm was deliberately not cured).
+        // minors M-SERVER-05 (W-min100; NOT the closed majors SRV-05): the HTTP surface carries the curated PUBLIC
+        // copy — the `auth.method_lockout:` log line stays server-side (its
+        // machine-token prefix and `(s)` squeeze never ride the wire).
         $this->assertSame(
-            'auth.method_lockout: at least one sign-in method must stay enabled',
+            'At least one sign-in method must remain enabled',
+            $body['message'],
+        );
+        $this->assertStringNotContainsString('auth.method_lockout', (string) $response->body);
+        $this->assertSame($body['message'], $body['errors']['auth.password.enabled']);
+    }
+
+    public function testAdminLockoutArmSaysPlainSingularCount(): void
+    {
+        $controller = new AdminSettingsController($this->settingsStore(), $this->zeroFactorPolicy(1));
+
+        $response = $controller->update(
+            $this->makeRequest(['auth.password.enabled' => false]),
+            [],
+        );
+
+        $body = json_decode($response->body, true);
+        $this->assertSame(422, $response->statusCode);
+        $this->assertSame('admin_lockout', $body['reason']);
+        $this->assertSame(
+            'Disabling these auth methods would leave 1 active administrator with no usable sign-in factor',
+            $body['message'],
+        );
+        $this->assertStringNotContainsString('(s)', (string) $response->body);
+        $this->assertStringNotContainsString('auth.method_lockout', (string) $response->body);
+        $this->assertStringNotContainsString('admin-1', (string) $response->body);
+    }
+
+    public function testAdminLockoutArmSaysPlainPluralCount(): void
+    {
+        $controller = new AdminSettingsController($this->settingsStore(), $this->zeroFactorPolicy(2));
+
+        $response = $controller->update(
+            $this->makeRequest(['auth.password.enabled' => false]),
+            [],
+        );
+
+        $body = json_decode($response->body, true);
+        $this->assertSame(422, $response->statusCode);
+        $this->assertSame(
+            'Disabling these auth methods would leave 2 active administrators with no usable sign-in factor',
             $body['message'],
         );
     }
@@ -289,6 +330,37 @@ final class AdminSettingsControllerErrorEnvelopeTest extends TestCase
             $users,
             new WebAuthnCredentialRepository($this->createMock(Connection::class)),
             $this->createMock(UserIdentityRepository::class),
+            $this->createMock(AuthProviderBootstrapper::class),
+        );
+    }
+
+    /**
+     * A policy whose R2 probe finds N active admins with zero usable factors
+     * (no password hash under the proposed state, no passkeys, no identities),
+     * so a password-off write-set — webauthn still enabled, R1 passes — is
+     * refused with the admin_lockout reason.
+     */
+    private function zeroFactorPolicy(int $admins): AuthMethodPolicy
+    {
+        $rows = [];
+        for ($i = 1; $i <= $admins; $i++) {
+            $rows[] = ['id' => 'admin-' . $i, 'has_password' => false];
+        }
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findActiveAdminsForLockoutProbe')->willReturn($rows);
+
+        $waDb = $this->createMock(Connection::class);
+        $waDb->method('query')->willReturn([]);
+
+        $identityRepo = $this->createMock(UserIdentityRepository::class);
+        $identityRepo->method('findByUserId')->willReturn([]);
+
+        return new AuthMethodPolicy(
+            $this->settingsStore(),
+            $users,
+            new WebAuthnCredentialRepository($waDb),
+            $identityRepo,
             $this->createMock(AuthProviderBootstrapper::class),
         );
     }

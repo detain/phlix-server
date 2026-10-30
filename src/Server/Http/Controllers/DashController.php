@@ -126,7 +126,7 @@ class DashController
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
         if ($jobId === '' || !$this->isSafeFilename($file)) {
-            return (new Response())->status(400)->json(['error' => 'invalid request']);
+            return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
         // Serve-time parental re-check (Finding 1b): deny a capped profile any
@@ -135,7 +135,7 @@ class DashController
         // profile, and (S235, deliberately) for a signature-only request that
         // carries no session userId — see TranscodeFileServer::transcodeJobOverCap().
         if ($this->transcodeJobOverCap($request, $jobId, $this->transcodeManager, $this->ratingGate)) {
-            return (new Response())->status(404)->json(['error' => 'Not found']);
+            return (new Response())->status(404)->json(['error' => 'Segment not found']);
         }
 
         $dir = "{$this->segmentDir}/{$jobId}";

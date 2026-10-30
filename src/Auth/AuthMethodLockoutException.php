@@ -74,6 +74,29 @@ final class AuthMethodLockoutException extends \RuntimeException
     }
 
     /**
+     * The copy the HTTP surface may show (minors M-SERVER-05, W-min100): the same
+     * domain truth as {@see self::describeReason()} but WITHOUT the
+     * `auth.method_lockout:` machine-token prefix (log-only) and with the
+     * administrator count grammatically spelled out — no `(s)` squeeze in a
+     * client-rendered message. The machine-readable discriminator stays
+     * `reason()`.
+     */
+    public function publicMessage(): string
+    {
+        if ($this->reason === self::REASON_ADMIN_LOCKOUT) {
+            $count = count($this->blockedAdminIds);
+
+            return sprintf(
+                'Disabling these auth methods would leave %d active %s with no usable sign-in factor',
+                $count,
+                $count === 1 ? 'administrator' : 'administrators',
+            );
+        }
+
+        return 'At least one sign-in method must remain enabled';
+    }
+
+    /**
      * Human-readable message for logs, derived from the parsed reason so the
      * two can never disagree.
      */

@@ -397,7 +397,7 @@ class SessionControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
-        $this->assertEquals('Forbidden', $body['error']);
+        $this->assertEquals('You do not have permission to access this session', $body['error']);
     }
 
     public function testCreateSessionDelegatesToManagerAndReturns201WithSessionId(): void

@@ -144,7 +144,12 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
         /** @var array<int|string, array<mixed>|string> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
         self::assertSame('profile_not_found', $body['denial_type']);
-        self::assertSame('Profile not found; access denied', $body['message']);
+        self::assertSame('Profile not found', $body['error']);
+        self::assertSame('profile.not_found', $body['code']);
+        self::assertSame(
+            'No active profile for this session. Pick or create a profile, then retry.',
+            $body['message']
+        );
     }
 
     /** A profile row whose id cannot resolve is the same named refusal. */

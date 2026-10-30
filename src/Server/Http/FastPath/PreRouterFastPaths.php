@@ -608,10 +608,10 @@ final class PreRouterFastPaths
             ->status(403)
             ->header('Content-Type', 'application/json; charset=utf-8')
             ->body(json_encode([
-                'error' => 'StreamLimitExceeded',
+                'error' => 'Profile not found',
                 'code' => 'profile.not_found',
                 'denial_type' => 'profile_not_found',
-                'message' => 'Profile not found; access denied',
+                'message' => 'No active profile for this session. Pick or create a profile, then retry.',
             ], JSON_THROW_ON_ERROR));
     }
 

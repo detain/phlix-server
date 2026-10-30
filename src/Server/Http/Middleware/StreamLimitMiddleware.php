@@ -90,16 +90,16 @@ final class StreamLimitMiddleware
             // unauthenticated or unprofiled users through the stream limit check.
             $profile = $this->profileManager->getActiveProfile($userId);
             if ($profile === null) {
-                return (new Response())->error(403, 'profile.not_found', 'StreamLimitExceeded', [
+                return (new Response())->error(403, 'profile.not_found', 'Profile not found', [
                     'denial_type' => 'profile_not_found',
-                    'message' => 'Profile not found; access denied',
+                    'message' => 'No active profile for this session. Pick or create a profile, then retry.',
                 ]);
             }
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
-                return (new Response())->error(403, 'profile.not_found', 'StreamLimitExceeded', [
+                return (new Response())->error(403, 'profile.not_found', 'Profile not found', [
                     'denial_type' => 'profile_not_found',
-                    'message' => 'Profile not found; access denied',
+                    'message' => 'No active profile for this session. Pick or create a profile, then retry.',
                 ]);
             }
         }

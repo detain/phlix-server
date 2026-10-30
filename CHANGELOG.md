@@ -98,6 +98,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- **The plugin artifact fetch now streams under named byte and time bounds (review
+  server__srphp M-SERVER-38):** `HttpInstaller::downloadToTemp()` pulled the entire
+  remote artifact into memory with one `@file_get_contents()` — no size cap and no
+  named timeout (it silently inherited `default_socket_timeout`) — then made a
+  second copy via `file_put_contents()`; a hostile/compromised release host
+  answering with a multi-hundred-MB stream made that size resident on an
+  admin-request worker (`install()` runs synchronously in the
+  PluginAdminController path, ~1/14 of HTTP capacity per the blocking-I/O
+  register), and the digest gate could only reject the content AFTER the full body
+  was already buffered. The cure adopts the register's own Exception-4 idiom
+  (`SsdpDiscovery::fetchOnceBounded()`): the fetch opens with an explicit
+  `timeout` (`FETCH_TIMEOUT_SECONDS`, 30 s inactivity — named, not inherited), a
+  declared `Content-Length` above `MAX_PACKAGE_BYTES` (64 MiB) is rejected BEFORE
+  any body read, and undeclared (chunked) bodies are bounded by pumping
+  `stream_copy_to_stream()` with a `MAX_PACKAGE_BYTES + 1` budget; every rejection
+  releases the tempnam (S439 zero-residue discipline) and the pre-existing
+  redirect/error exception messages stay byte-identical so the R20-02 sibling
+  suite holds UNMODIFIED. New
+  `tests/Unit/Plugins/Installer/HttpInstallerBoundedDownloadTest.php` (7 tests,
+  live loopback `php -S` fixture mirroring the sibling venue): three rejection
+  arms red-on-parent — the parent literally "successfully downloaded" the forged
+  100 GB-declaration as a 3-byte artifact and returned the 72 MiB unbounded stream
+  as a stored file — plus the inclusive at-cap boundary, a
+  `streamFetchOptions()` shape pin (deleting `timeout` reddens), a source-equality
+  pin on the pump budget argument (unbounding it reddens), and a zero-residue
+  ledger assert per rejection arm (dropping the overflow unlink reddens).
+  Mutations M1 timeout-strip, M2 pre-check-strip, M3 uncapped-pump, M4
+  unlink-strip, M5 `>`→`>=` each killed by exactly one test. Zero new wire codes
+  (registry md5 40c1da48 held). Census `EXPECTED_PHP_FILES` rotated from the
+  measured phpunit red.
+
 - **The webhook signing law is reconciled to shipped truth — the production subscription
   path is now honestly documented as unsigned (docs-only; review server__seceng M34):**
   `WebhookEvent`'s canonical docblock declared "Every delivery carries TWO signature

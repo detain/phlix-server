@@ -711,8 +711,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * CLI latch caveat and the two-step recovery story to the enforcing code
      * (exception class + latch column derived at runtime). Measured from the
      * phpunit red (1994), not predicted.
+     * Re-pinned 1994→1995 by the M-SERVER-38 bounded-artifact-fetch lane
+     * (2026-10-29): +1 — tests/Unit/Plugins/Installer/HttpInstallerBoundedDownloadTest.php,
+     * the live `php -S` fixture suite pinning the installer's 64 MiB byte budget,
+     * the declared-length pre-check and the named 30 s fetch timeout. Measured
+     * from the phpunit red (1995), not predicted.
      */
-    private const EXPECTED_PHP_FILES = 1994;
+    private const EXPECTED_PHP_FILES = 1995;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

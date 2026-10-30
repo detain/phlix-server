@@ -45,6 +45,33 @@ use Phlix\Plugins\Util\RecursiveDelete;
 class HttpInstaller
 {
     /**
+     * Hard ceiling on ONE fetched plugin artifact (M-SRV-38, review campaign
+     * 2026-10-28, server__srphp M2). A plugin package is a composer-style
+     * archive — legitimate artifacts in this estate are single-digit MB, while
+     * the measured attack was a hostile/compromised release host streaming
+     * HUNDREDS of MB into the admin-request worker (`install()` runs
+     * synchronously in the PluginAdminController request path, and per
+     * docs/dev/BLOCKING_IO_EXCEPTIONS.md one worker is ~1/14 of HTTP
+     * capacity). Declared sizes are gated on the header BEFORE any body read;
+     * undeclared (chunked) streams are gated by the pump budget. Either way
+     * the oversized artifact never becomes a PHP string and the temp file is
+     * released. Byte-pinned by HttpInstallerBoundedDownloadTest.
+     */
+    private const MAX_PACKAGE_BYTES = 67108864; // 64 MiB
+
+    /**
+     * Explicit inactivity timeout, in seconds, for the artifact fetch
+     * (M-SRV-38). The previous fetch named no bound at all and silently
+     * inherited `default_socket_timeout` (60 s on stock builds) — "neither
+     * named nor measured" is exactly the shape the blocking-I/O register
+     * refuses. The http wrapper's `timeout` option is a per-read socket
+     * timeout, so a large-but-steadily-progressing download is unaffected; a
+     * stalled server trips the bound here instead of at whatever the ambient
+     * php.ini happens to say. Byte-pinned by HttpInstallerBoundedDownloadTest.
+     */
+    private const FETCH_TIMEOUT_SECONDS = 30;
+
+    /**
      * @param string $pluginsBaseDir Absolute path to the directory under
      *        which `<plugin-name>/` install subdirs are created.
      * @param StructuredLogger|null $logger Plugins-channel logger.
@@ -381,7 +408,9 @@ class HttpInstaller
     }
 
     /**
-     * Stream `$sourceUrl` into a temp file. Returns the local path.
+     * Stream `$sourceUrl` into a temp file under the M-SRV-38 byte budget
+     * ({@see self::MAX_PACKAGE_BYTES}) with the named fetch timeout. Returns
+     * the local path.
      *
      * @param string $sourceUrl Remote or local URL to download.
      * @param string $extension Optional suffix to preserve on the local
@@ -405,30 +434,32 @@ class HttpInstaller
             $localFile = $renamed;
         }
 
-        // R20-02 (SSRF): PHP's HTTP stream wrapper follows up to 20 redirects
-        // by default, and every hop is fetched WITHOUT any re-check of the
-        // SsrfGuard that gated the entry URL — a public host answering
-        // 3xx -> http://169.254.169.254/... turns the installer into a blind
-        // internal port-probe (the digest gate still guards artifact CONTENT,
-        // but the request itself leaves the public-host jail). max_redirects=1
-        // stops the wrapper at the first 3xx; ignore_errors=true lets the 3xx/
-        // 4xx/5xx response surface for inspection instead of a bare false.
-        // Belt-and-suspenders, assertNoRedirectResponses() rejects ANY 3xx seen
-        // anywhere in the chain, so the wrapper's exact follow-count cannot
-        // weaken the guarantee. The 'http' section is inert for file:// and the
-        // other schemes guardScheme() admits, so local installs are untouched.
-        $context = stream_context_create([
-            'http' => [
-                'max_redirects' => 1,
-                'ignore_errors' => true,
-            ],
-        ]);
+        // R20-02 (SSRF): the 'http' options keep the wrapper from following
+        // redirect hops the SsrfGuard never vetted; the full rationale and the
+        // belt-and-suspenders chain rejection live in
+        // {@see self::streamFetchOptions()} and
+        // {@see self::assertNoRedirectResponses()}.
+        $context = stream_context_create(self::streamFetchOptions());
 
+        // M-SRV-38 (server__srphp M2): the artifact is STREAMED into the temp
+        // file under a byte budget — never materialized as one giant PHP
+        // string. The previous `file_get_contents()` + `file_put_contents()`
+        // pair buffered a hostile host's entire body (twice: string, then
+        // write) in a resident worker, and the digest gate could only reject
+        // the content AFTER it was already resident. This is the estate's own
+        // bounded-fetch idiom — the register's Exception 4 shape,
+        // SsdpDiscovery::fetchOnceBounded(): open with a NAMED timeout, gate a
+        // declared Content-Length before reading, pump at most
+        // MAX_PACKAGE_BYTES + 1 so an oversized undeclared body is detectable
+        // AND bounded, release the tempnam on every rejection (the tempnam
+        // discipline the redirect path learned the hard way).
         // Pre-initialised so the magic variable is defined on non-HTTP
-        // transports too; the HTTP wrapper overwrites it on fetch (house
-        // precedent: Media/Metadata/ThemeMusic/StreamThemeMusicFetcher).
+        // transports too; the HTTP wrapper overwrites it on open (house
+        // precedent: Media/Metadata/ThemeMusic/StreamThemeMusicFetcher, and
+        // the SsdpDiscovery fetchOnceBounded it mirrors).
         $http_response_header = [];
-        $bytes = @file_get_contents($sourceUrl, false, $context);
+
+        $handle = @fopen($sourceUrl, 'rb', false, $context);
         try {
             $this->assertNoRedirectResponses($http_response_header, $sourceUrl);
         } catch (PluginInstallException $e) {
@@ -436,18 +467,117 @@ class HttpInstaller
             // tempnam above — every refused install left a 0-byte
             // /tmp/phlix_plugin_* file (the S439 zero-residue census caught it
             // the moment the e2e suite started taking this path). Release the
-            // handle, keep the exception byte-identical.
+            // response handle too (M-SRV-38 opened one this path never had),
+            // keep the exception byte-identical.
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
             @unlink($localFile);
             throw $e;
         }
 
-        if ($bytes === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
+        if ($handle === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
             @unlink($localFile);
             throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $sourceUrl));
         }
-        file_put_contents($localFile, $bytes);
+
+        // Header pre-check: a DECLARED size over cap is refused before a
+        // single body byte is pumped (the cheap refusal for well-formed
+        // liars). `>` not `>=`: exactly AT cap is within the law.
+        $declared = $this->declaredContentLength($http_response_header);
+        if ($declared !== null && $declared > self::MAX_PACKAGE_BYTES) {
+            fclose($handle);
+            @unlink($localFile);
+            throw new PluginInstallException(sprintf(
+                'Plugin source at %s declares %d bytes, which exceeds the %d-byte package size limit.',
+                $sourceUrl,
+                $declared,
+                self::MAX_PACKAGE_BYTES,
+            ));
+        }
+
+        $out = @fopen($localFile, 'wb');
+        if ($out === false) {
+            fclose($handle);
+            @unlink($localFile);
+            throw new PluginInstallException(sprintf('Cannot write temporary file for plugin download of %s.', $sourceUrl));
+        }
+
+        $copied = @stream_copy_to_stream($handle, $out, self::MAX_PACKAGE_BYTES + 1);
+        fclose($handle);
+        fclose($out);
+
+        if ($copied === false) {
+            @unlink($localFile);
+            throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $sourceUrl));
+        }
+        if ($copied > self::MAX_PACKAGE_BYTES) {
+            // The pump read one byte PAST the budget and stopped — the body is
+            // oversized (or lied by omission). The staged partial file dies.
+            @unlink($localFile);
+            throw new PluginInstallException(sprintf(
+                'Plugin source at %s exceeds the %d-byte package size limit.',
+                $sourceUrl,
+                self::MAX_PACKAGE_BYTES,
+            ));
+        }
 
         return $localFile;
+    }
+
+    /**
+     * Stream options for a remote artifact fetch, single-sourced so the shape
+     * is pinnable without a live socket.
+     *
+     * R20-02 (SSRF): PHP's HTTP stream wrapper follows up to 20 redirects by
+     * default, and every hop is fetched WITHOUT any re-check of the SsrfGuard
+     * that gated the entry URL — a public host answering
+     * 3xx -> http://169.254.169.254/... turns the installer into a blind
+     * internal port-probe (the digest gate still guards artifact CONTENT,
+     * but the request itself leaves the public-host jail). max_redirects=1
+     * stops the wrapper at the first 3xx; ignore_errors=true lets the 3xx/
+     * 4xx/5xx response surface for inspection instead of a bare false.
+     * Belt-and-suspenders, assertNoRedirectResponses() rejects ANY 3xx seen
+     * anywhere in the chain, so the wrapper's exact follow-count cannot
+     * weaken the guarantee. The 'http' section is inert for file:// and the
+     * other schemes guardScheme() admits, so local installs are untouched.
+     * M-SRV-38 adds the named 'timeout' ({@see self::FETCH_TIMEOUT_SECONDS}).
+     *
+     * @return array{http: array{max_redirects: int, ignore_errors: bool, timeout: int}}
+     */
+    private static function streamFetchOptions(): array
+    {
+        return [
+            'http' => [
+                'max_redirects' => 1,
+                'ignore_errors' => true,
+                'timeout' => self::FETCH_TIMEOUT_SECONDS,
+            ],
+        ];
+    }
+
+    /**
+     * The terminal response's declared body size, or null when the transport
+     * carried no parseable Content-Length (non-HTTP schemes, chunked bodies).
+     * `$http_response_header` carries the whole fetch chain IN ORDER, so the
+     * LAST match belongs to the terminal response — matching how
+     * {@see self::terminalResponseStatus()} already reads the chain.
+     *
+     * @param array<int, string> $responseHeaders
+     */
+    private function declaredContentLength(array $responseHeaders): ?int
+    {
+        $declared = null;
+        foreach ($responseHeaders as $headerLine) {
+            if (preg_match('#^Content-Length:\s*(\d+)\s*$#i', $headerLine, $matches) === 1) {
+                $declared = (int) $matches[1];
+            }
+        }
+
+        return $declared;
     }
 
     /**

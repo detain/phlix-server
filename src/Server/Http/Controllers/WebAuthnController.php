@@ -22,6 +22,45 @@ use Phlix\Server\Http\Router;
 
 final class WebAuthnController
 {
+    /**
+     * User-safe copy for the four ceremony failure arms (minors M-SERVER-06,
+     * W-min108). The manager's raw diagnostics — CBOR/COSE parser jargon
+     * ('rpId hash mismatch'-class) and account-state oracles ('User not
+     * found', 'No credentials registered for user') — are logged for the
+     * operator, never rendered to the wire. Multi-sentence copy keeps its
+     * periods per the house law (single-status copies are period-free).
+     */
+    private const FAILURE_COPY = [
+        'registration_start' =>
+            'The security key registration could not be started. '
+            . 'Try again, or use another sign-in method.',
+        'registration_finish' =>
+            'The security key registration could not be completed. '
+            . 'Try again, or use another sign-in method.',
+        'authentication_start' =>
+            'The security key request could not be started. '
+            . 'Try again, or use another sign-in method.',
+        'authentication_finish' =>
+            "The security key's response could not be verified. "
+            . 'Try again, or use another key.',
+    ];
+
+    /**
+     * Render a ceremony failure: status + bare {error} envelope keep their
+     * historical shapes byte-identically (auth-adjacent contract law); only
+     * the message VALUE changes, and the detail moves to the error log.
+     */
+    private static function ceremonyFailure(
+        int $status,
+        string $phase,
+        \InvalidArgumentException $e
+    ): Response {
+        error_log('webauthn: ' . $phase . ' failed: ' . $e->getMessage());
+
+        return (new Response())->status($status)->json([
+            'error' => self::FAILURE_COPY[$phase],
+        ]);
+    }
     private WebAuthnManager $webauthnManager;
     private AuthManager $authManager;
 
@@ -208,7 +247,7 @@ final class WebAuthnController
             $options = $this->webauthnManager->startRegistration($userId, is_string($username) ? $username : 'user');
             return (new Response())->json($options);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return self::ceremonyFailure(400, 'registration_start', $e);
         }
     }
 
@@ -254,7 +293,7 @@ final class WebAuthnController
                 'message' => 'Passkey registered successfully'
             ]);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return self::ceremonyFailure(400, 'registration_finish', $e);
         }
     }
 
@@ -291,7 +330,7 @@ final class WebAuthnController
             $options = $this->webauthnManager->startAuthentication($username);
             return (new Response())->json($options);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+            return self::ceremonyFailure(400, 'authentication_start', $e);
         }
     }
 
@@ -339,7 +378,7 @@ final class WebAuthnController
 
             return (new Response())->status(401)->json(['error' => $result->error ?? 'Authentication failed']);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(401)->json(['error' => $e->getMessage()]);
+            return self::ceremonyFailure(401, 'authentication_finish', $e);
         }
     }
 

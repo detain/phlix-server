@@ -899,9 +899,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * AuthManager.php and LibraryController.php were already inside the scan;
      * the guards read no new Request properties. Measured from the phpunit
      * red (2030), not predicted.
+     * Re-pinned 2030→2031 by the W-min108 cluster (M-SERVER-06, 2026-11-01):
+     * +1 — tests/Unit/Auth/WebAuthn/WebAuthnControllerFailureCopyTest.php
+     * (the four ceremony arms' user-safe copy + error_log pins; measured red
+     * 5 arms at the parent). The edited WebAuthnController.php was already
+     * inside the scan; the cure adds no Request reads. Measured from the
+     * phpunit red (2031), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2030;
+    private const EXPECTED_PHP_FILES = 2031;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1189,7 +1195,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // $request->method + $request->path — same sanctioned harness-seed pattern).
     // W-min107 / M-SERVER-86 (+4 writes = the two new LibraryControllerTest
     // create() pins each seeding $request->userId + $request->body).
-    private const EXPECTED_DECLARED_WRITES = 1107;
+    // W-min108 / M-SERVER-06 (+8 writes = the five new
+    // WebAuthnControllerFailureCopyTest arms each seeding $request->body,
+    // plus the two registration-phase arms that also need $request->userId
+    // — same sanctioned harness-seed pattern; zero src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1115;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

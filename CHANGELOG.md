@@ -17,12 +17,26 @@ House discipline this file maintains (established by review W-min90/91/92):
 - Within a type, entries are newest-first. Dated release sections below are
   verbatim history: corrections are disclosed in a newer entry (or an italic note
   like the `SV-*` / missing-`1.0.0` ones in place), never by rewriting content.
+- Each dated release section opens with an **`### Upgrade notes`** subsection: the
+  breaking changes and the operator actions a deploy must take for that release
+  (migrations needing a rescan or a manual step, env vars that became required,
+  defaults whose meaning changed), or a single line `None.` when the release is
+  drop-in. The convention is FORWARD-ONLY: notes are written at release-cut time
+  and older dated sections stay verbatim history — pre-convention releases keep
+  their inline bold callouts (the `MIGRATION ANSWER` shape, e.g. the S152/S156/S331
+  entries) instead of being retro-moved. Operators upgrading across several
+  releases read the notes of every release crossed.
 - Sections whose heading is an internal track-milestone label (`## [SV-<n>]`) are
   not SemVer releases; they sit in date position and are annotated, not relabeled.
 
 ## [Unreleased]
 
 ### Fixed
+
+- **The CHANGELOG gains an Upgrade-notes convention and the upgrade story routes operators to it (server minors batch W-min105, part 3 — M-SERVER-46 cured, partially by design).**
+  - **M-SERVER-46 (cured):** the house-discipline preamble gained a bullet: every dated release section opens with `### Upgrade notes` — breaking changes plus the operator actions a deploy must take (rescan-bearing migrations, newly required env vars, changed default semantics), or `None.` when drop-in — written at release-cut time. The ask's second half, "move the S152/S156/S331 callouts under it," is deliberately NOT done: those live inside dated sections, and the preamble's own verbatim-history law (the
+  bullet directly above this one) forbids rewriting history — moving them would
+  rewrite shipped releases. The convention is forward-only; the pre-convention warnings stay where operators already find them — inside their entries (S331's bold `MIGRATION ANSWER` line is the strongest greppable example). README's "Updating an existing install" now routes to the CHANGELOG with the read-every-release-crossed instruction, closing the "deploy-critical notes hide inside the env-var census prose" half from the operator's side. Docs-only: zero PHP delta, census/S180/adopters inert by design; `ParallelTestWiringTest`'s prose-ban tokens kept out of both files.
 
 - **"Running Tests" now describes the CI that actually ships (server minors batch W-min105, part 2 — M-SERVER-58 cured).**
   - **M-SERVER-58 (cured):** the README's test section listed only the `Unit` and `Integration` suites and implied CI ran one serial `phpunit` against a provisioned MySQL. Both halves were stale: `phpunit.xml` carries a third `E2E` suite (`tests/E2E/` — browser + hardware-encoder playback rails, serial-only by measured law), and the `phpunit.yml` job drives Unit/Integration through paraunit with per-worker isolation (`scripts/parallel/run-suite.sh` at parallel 8; Integration against eight `scripts/parallel-test-db.sh` clone schemas — two workers on one schema corrupt each other's counts) with E2E as a serial tail. The section now states the real shape, names the E2E suite and its serial law, and documents both scripts as the supported local seam (previously zero README mentions — the seam was undiscoverable outside the workflow file itself). `SkippedTestNameReportingTest`'s README-consumer pin (the section documents the skip-name-set contract) re-ran green over the edited file: 47/362. Docs-only — zero PHP delta, census/S180/adopters inert by design; no `ParallelTestWiringTest` sentinel tokens entered prose.

@@ -622,6 +622,13 @@ runs `composer install --no-dev --optimize-autoloader`, clears `templates_c/`, r
 `scripts/run-migrations.php`, restarts `phlix-server`, and curl-checks `/health`. It
 deliberately leaves the env file, MySQL grants, HAProxy config, and Let's Encrypt cert alone.
 
+Before upgrading across several versions, skim [`CHANGELOG.md`](CHANGELOG.md) for every release
+you cross: each release section opens with **Upgrade notes** — breaking changes and the
+operator actions the deploy must take, or `None.` when the release is drop-in — and
+pre-convention releases carry their deploy-critical warnings inline instead
+(S331's bold `MIGRATION ANSWER` line shows that older shape). Anything that needs doing beyond the automatic
+`scripts/run-migrations.php` step above (a rescan, a new required env var) is named there.
+
 ### Uninstalling
 
 `scripts/install.sh --uninstall` removes an existing install. It is **interactive by default**

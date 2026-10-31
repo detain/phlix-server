@@ -185,7 +185,7 @@ final class HealthController
                     'latencyMs' => null,
                     'status' => 'offline',
                     'measuredAt' => date('c'),
-                    'error' => 'Not enrolled in hub',
+                    'error' => 'This server isn\'t enrolled with a Phlix Hub yet. Enrol it from Admin → Hub.',
                 ]);
             }
 

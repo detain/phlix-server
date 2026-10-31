@@ -65,7 +65,7 @@ final class HubTokenController
                 ->json([
                     'error' => 'Service unavailable',
                     'code' => 'hub.not_enrolled',
-                    'message' => 'Server is not enrolled with a hub',
+                    'message' => 'This server isn\'t enrolled with a Phlix Hub yet. Enrol it from Admin → Hub.',
                 ]);
         }
 

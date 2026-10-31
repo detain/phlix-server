@@ -70,7 +70,7 @@ class PhotoController
 
         if ($libraryId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'library_id is required',
+                'error' => 'Library ID is required',
             ]);
         }
 
@@ -115,7 +115,7 @@ class PhotoController
 
         if ($albumId === null || $libraryId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'album id and library_id are required',
+                'error' => 'Album ID and Library ID are required',
             ]);
         }
 
@@ -168,7 +168,7 @@ class PhotoController
 
         if ($libraryId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'library_id is required',
+                'error' => 'Library ID is required',
             ]);
         }
 
@@ -481,7 +481,7 @@ class PhotoController
 
         if ($libraryId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'library_id is required',
+                'error' => 'Library ID is required',
             ]);
         }
 

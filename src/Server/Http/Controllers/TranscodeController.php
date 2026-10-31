@@ -85,7 +85,7 @@ class TranscodeController
     {
         $mediaId = $params['id'] ?? '';
         if ($mediaId === '') {
-            return (new Response())->status(400)->json(['error' => 'media id is required']);
+            return (new Response())->status(400)->json(['error' => 'Media ID is required']);
         }
 
         // Parental cap (Finding 1a): a capped profile requesting an over-cap item
@@ -202,7 +202,7 @@ class TranscodeController
     {
         $jobId = $params['jobId'] ?? ($params['job_id'] ?? '');
         if ($jobId === '') {
-            return (new Response())->status(400)->json(['error' => 'job id is required']);
+            return (new Response())->status(400)->json(['error' => 'Job ID is required']);
         }
 
         // Parental cap (Finding 1a): re-resolve the job's media item and deny a

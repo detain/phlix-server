@@ -410,7 +410,7 @@ final class AccountLinkController
             return (new Response())->status(503)->json([
                 'error' => 'hub_not_enrolled',
                 'code' => 'hub.not_enrolled',
-                'message' => 'Server is not enrolled with a hub',
+                'message' => 'This server isn\'t enrolled with a Phlix Hub yet. Enrol it from Admin → Hub.',
             ]);
         }
 

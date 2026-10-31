@@ -30,6 +30,9 @@ use Psr\Container\ContainerInterface;
  */
 final class HealthControllerTest extends TestCase
 {
+    /** minors M-SERVER-09 (W-min109): canonical hub-enrolment refusal copy. */
+    private const ENROLLED_COPY = 'This server isn\'t enrolled with a Phlix Hub yet. Enrol it from Admin → Hub.';
+
     private string $dir;
 
     protected function setUp(): void
@@ -209,7 +212,7 @@ final class HealthControllerTest extends TestCase
         $body = $this->decode($response->body);
         self::assertNull($body['latencyMs']);
         self::assertSame('offline', $body['status']);
-        self::assertSame('Not enrolled in hub', $body['error']);
+        self::assertSame(self::ENROLLED_COPY, $body['error']);
     }
 
     public function testNetworkHealthHealthyFromPersistedState(): void
@@ -302,7 +305,7 @@ final class HealthControllerTest extends TestCase
 
         $body = $this->decode($response->body);
         self::assertSame('offline', $body['status']);
-        self::assertSame('Not enrolled in hub', $body['error']);
+        self::assertSame(self::ENROLLED_COPY, $body['error']);
     }
 
     /**

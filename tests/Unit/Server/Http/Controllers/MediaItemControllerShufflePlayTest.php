@@ -183,7 +183,7 @@ class MediaItemControllerShufflePlayTest extends TestCase
 
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('media_id is required', $body['error']);
+        $this->assertSame('Media ID is required', $body['error']);
     }
 
     public function testUnknownItemReturns404(): void

@@ -129,7 +129,7 @@ final class CollectionController
 
         $libraryId = $body['library_id'] ?? null;
         if (!is_string($libraryId) || trim($libraryId) === '') {
-            return (new Response())->status(400)->json(['error' => 'library_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
         }
 
         $smartPlaylistId = null;
@@ -328,7 +328,7 @@ final class CollectionController
         $mediaItemId = $params['mediaItemId'] ?? null;
 
         if ($collectionId === null) {
-            return (new Response())->status(400)->json(['error' => 'collection id is required']);
+            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
         if ($mediaItemId === null) {
             return (new Response())->status(400)->json(['error' => 'media item id is required']);
@@ -368,7 +368,7 @@ final class CollectionController
         $mediaItemId = $params['mediaItemId'] ?? null;
 
         if ($collectionId === null) {
-            return (new Response())->status(400)->json(['error' => 'collection id is required']);
+            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
         if ($mediaItemId === null) {
             return (new Response())->status(400)->json(['error' => 'media item id is required']);
@@ -406,7 +406,7 @@ final class CollectionController
 
         $collectionId = $params['id'] ?? null;
         if ($collectionId === null) {
-            return (new Response())->status(400)->json(['error' => 'collection id is required']);
+            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
 
         $collection = $this->manager->findById($collectionId);
@@ -466,7 +466,7 @@ final class CollectionController
 
         $id = $params['id'] ?? null;
         if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'collection id is required']);
+            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
 
         $collection = $this->manager->findById($id);
@@ -509,7 +509,7 @@ final class CollectionController
 
         $libraryId = $params['libraryId'] ?? null;
         if ($libraryId === null) {
-            return (new Response())->status(400)->json(['error' => 'library_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
         }
 
         $collections = $this->isAdminUser($actor)

@@ -278,7 +278,7 @@ class MediaItemController
         $limit = $request->queryPageSize('limit', 20);
 
         if (!$libraryId) {
-            return (new Response())->status(400)->json(['error' => 'library_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
         }
 
         $items = $this->itemRepository->getRecentlyAdded($libraryId, $limit);
@@ -890,7 +890,7 @@ class MediaItemController
         $mediaId = is_string($body['media_id'] ?? null) ? $body['media_id'] : null;
 
         if ($mediaId === null) {
-            return (new Response())->status(400)->json(['error' => 'media_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Media ID is required']);
         }
 
         $item = $this->itemRepository->findById($mediaId);

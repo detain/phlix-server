@@ -189,7 +189,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('library_id is required', $body['error']);
+        $this->assertSame('Library ID is required', $body['error']);
     }
 
     // ─── show ─────────────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('collection id is required', $body['error']);
+        $this->assertSame('Collection ID is required', $body['error']);
     }
 
     // ─── removeItem ────────────────────────────────────────────────────────────
@@ -623,6 +623,6 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('library_id is required', $body['error']);
+        $this->assertSame('Library ID is required', $body['error']);
     }
 }

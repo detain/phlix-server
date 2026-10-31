@@ -82,7 +82,7 @@ final class AdminMergeController
     {
         $libraryId = is_string($params['id'] ?? null) ? $params['id'] : '';
         if ($libraryId === '') {
-            return (new Response())->status(400)->json(['error' => 'Library id is required']);
+            return (new Response())->status(400)->json(['error' => 'Library ID is required']);
         }
 
         $groups = $this->finder->findForLibrary($libraryId);
@@ -125,7 +125,7 @@ final class AdminMergeController
         $primaryIdRaw = $request->input('primary_id');
         $primaryId = is_string($primaryIdRaw) ? trim($primaryIdRaw) : '';
         if ($primaryId === '') {
-            return (new Response())->status(400)->json(['error' => 'primary_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Primary ID is required']);
         }
 
         $duplicateIds = $this->normalizeDuplicateIds($request->input('duplicate_ids'));

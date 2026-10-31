@@ -58,7 +58,7 @@ final class ErrorPagesTest extends TestCase
 
         self::assertDocumentLaws($html);
         $visitorAt = strpos($html, 'web portal is not ready yet');
-        $recipeAt = strpos($html, 'npm install');
+        $recipeAt = strpos($html, 'npm ci');
         self::assertIsInt($visitorAt, 'the visitor-facing headline must exist');
         self::assertIsInt($recipeAt, 'the operator recipe must still be present');
         self::assertLessThan($recipeAt, $visitorAt, 'a visitor must meet copy before any command line');

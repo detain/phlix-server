@@ -79,6 +79,16 @@ public/                 # no front controller — start.php serves everything (s
   `src/Common/Database/MigrationRunner.php`. They are performance-only, and 051
   supersedes the multi-valued one with a join table MariaDB builds natively, so
   no query or feature is lost — only those specific index scans stay slower.)
+- **PHP extensions**: the mandatory set lives in one place —
+  [`scripts/required-php-extensions.php`](scripts/required-php-extensions.php) — the derived
+  contract that `composer.json`'s 24 `ext-*` requires and its `config.platform` pins are held
+  identical to by `RequiredPhpExtensionsContractTest` (an entry whose symbol stops existing in
+  the cited file goes RED, so the list cannot rot silently).
+- **Swoole**: strongly recommended (the installer compiles it; the Docker images bundle it).
+  The server boots without it — Workerman falls back to its plain loop and the curated
+  coroutine hooks in `start.php` are skipped — but the per-worker database coroutine pool
+  (`DB_POOL_ENABLED`) has no coroutines to lease connections to, so in-worker queries run
+  sequentially instead of in parallel (`config/database.php`).
 - **Workerman**: 5.0+ (bundled via Composer)
 - **FFmpeg**: For transcoding (optional)
 
@@ -548,6 +558,12 @@ auto-renewing Let's Encrypt certificate.
 > runtime Workerman uses), idempotently skipping the build when they already load, and runs a
 > `disable_functions` preflight — see
 > [Swoole & php-uv on Linux](https://detain.github.io/phlix-docs/install/linux#swoole-php-uv-coroutine-runtime).
+
+> It also installs the **Xdebug** package and writes a `zz-xdebug.ini` that ships **disabled**
+> (`xdebug.mode` follows the `XDEBUG_MODE` env, default `off`, with a random per-install debug
+> trigger): nothing ever runs in a debug/trace mode unless you enable it explicitly, and on
+> production hosts the file should be removed outright — recipe and rotation law live in
+> [`systemd/README.md`](systemd/README.md).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash

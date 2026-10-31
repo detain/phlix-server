@@ -135,7 +135,7 @@ HTML;
     </li>
     <li>
       Or build it from source in a development checkout:
-      <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>, then
+      <code>cd web-ui &amp;&amp; npm ci &amp;&amp; npm run build</code>, then
       commit or deploy the generated <code>public/assets/app/</code> output.
     </li>
   </ol>

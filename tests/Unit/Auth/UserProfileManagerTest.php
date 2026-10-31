@@ -717,4 +717,144 @@ class UserProfileManagerTest extends TestCase
                 return [];
             });
     }
+
+    // ------------------------------------------------------------------
+    // M-SERVER-83 — create() transaction + users-row lock protocol.
+    // ------------------------------------------------------------------
+
+    public function testCreateRunsTheFullProtocolInsideOneTransactionInOrder(): void
+    {
+        $trace = [];
+        $this->stubTrans($trace);
+        $this->db->method('query')->willReturnCallback(
+            /** @param mixed $sql */
+            function ($sql, $params = []) use (&$trace) {
+                $key = $this->createSqlKey((string) $sql);
+                $trace[] = $key;
+                return $key === 'COUNT' ? [['count' => 0]] : [];
+            }
+        );
+
+        $id = $this->manager->create('user-1', ['name' => 'Kid']);
+
+        self::assertNotSame('', $id);
+        self::assertSame(
+            ['BEGIN', 'LOCK', 'COUNT', 'INSERT-PROFILE', 'INSERT-SETTINGS', 'COMMIT'],
+            $trace,
+            'M-SERVER-83 law: the lock precedes the count, both legs ride one transaction',
+        );
+    }
+
+    public function testCreateRollsBackAndNeverCommitsWhenTheCapIsReached(): void
+    {
+        $trace = [];
+        $this->stubTrans($trace);
+        $this->db->method('query')->willReturnCallback(
+            /** @param mixed $sql */
+            function ($sql, $params = []) use (&$trace) {
+                $key = $this->createSqlKey((string) $sql);
+                $trace[] = $key;
+                return $key === 'COUNT' ? [['count' => UserProfileManager::MAX_PROFILES_PER_USER]] : [];
+            }
+        );
+
+        try {
+            $this->manager->create('user-1', ['name' => 'One Too Many']);
+            self::fail('expected the cap guard to throw');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('Maximum number of profiles', $e->getMessage());
+        }
+
+        self::assertSame(['BEGIN', 'LOCK', 'COUNT', 'ROLLBACK'], $trace);
+    }
+
+    public function testCreateWithinTransactionTakesTheLockButNeverOwnsTheTransaction(): void
+    {
+        $trace = [];
+        $this->stubTrans($trace);
+        $this->db->method('query')->willReturnCallback(
+            /** @param mixed $sql */
+            function ($sql, $params = []) use (&$trace) {
+                $key = $this->createSqlKey((string) $sql);
+                $trace[] = $key;
+                return $key === 'COUNT' ? [['count' => 0]] : [];
+            }
+        );
+
+        $id = $this->manager->createWithinTransaction('user-1', ['name' => 'Main']);
+
+        self::assertNotSame('', $id);
+        self::assertNotContains('BEGIN', $trace, 'the S81 signup caller owns BEGIN/COMMIT');
+        self::assertNotContains('COMMIT', $trace);
+        self::assertNotContains('ROLLBACK', $trace);
+        self::assertSame(['LOCK', 'COUNT', 'INSERT-PROFILE', 'INSERT-SETTINGS'], $trace);
+    }
+
+    public function testFirstProfileAutoActivatesAndLaterOnesDoNot(): void
+    {
+        foreach ([0 => true, 2 => false] as $count => $expectActive) {
+            $captured = null;
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                /** @param mixed $params */
+                function ($sql, $params = []) use (&$captured, $count) {
+                    $sql = (string) $sql;
+                    if (str_contains($sql, 'INSERT INTO user_profiles')) {
+                        $captured = is_array($params) ? $params : [];
+                    }
+                    return str_contains($sql, 'COUNT(*)') ? [['count' => $count]] : [];
+                }
+            );
+            $manager = new UserProfileManager($db);
+
+            $manager->create('user-1', ['name' => 'P' . $count]);
+
+            self::assertIsArray($captured, 'the profile INSERT must have been issued');
+            // column order: id, user_id, name, avatar_url, is_active, is_admin
+            self::assertSame(
+                $expectActive,
+                (bool) $captured[4],
+                $count === 0
+                    ? 'the first profile auto-activates (docblock contract)'
+                    : 'a later profile must NOT claim is_active implicitly (one-active law)'
+            );
+        }
+    }
+
+    private function stubTrans(array &$trace): void
+    {
+        $this->db->method('beginTrans')->willReturnCallback(
+            function () use (&$trace) {
+                $trace[] = 'BEGIN';
+            }
+        );
+        $this->db->method('commitTrans')->willReturnCallback(
+            function () use (&$trace) {
+                $trace[] = 'COMMIT';
+            }
+        );
+        $this->db->method('rollBackTrans')->willReturnCallback(
+            function () use (&$trace) {
+                $trace[] = 'ROLLBACK';
+            }
+        );
+    }
+
+    private function createSqlKey(string $sql): string
+    {
+        if (str_contains($sql, 'FOR UPDATE')) {
+            return 'LOCK';
+        }
+        if (str_contains($sql, 'COUNT(*)')) {
+            return 'COUNT';
+        }
+        if (str_contains($sql, 'INSERT INTO user_profiles')) {
+            return 'INSERT-PROFILE';
+        }
+        if (str_contains($sql, 'INSERT INTO profile_settings')) {
+            return 'INSERT-SETTINGS';
+        }
+
+        return 'OTHER';
+    }
 }

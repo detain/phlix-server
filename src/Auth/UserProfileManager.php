@@ -582,7 +582,127 @@ class UserProfileManager
      */
     public function create(string $userId, array $data): string
     {
-        // Check max profiles limit
+        $name = self::validatedName($data);
+
+        // M-SERVER-83: the decide-and-write body runs inside ONE transaction
+        // guarded by the users-row FOR UPDATE lock — see
+        // {@see createUnderUserLock()} for why the lock is on the user row.
+        // Same begin/try/rollBack-then-rethrow/commit shape as switchProfile()
+        // below (S81) and the B2 auth-lock protocol.
+        $this->db->beginTrans();
+        try {
+            $id = $this->createUnderUserLock($userId, $data, $name);
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
+        $this->db->commitTrans();
+
+        return $id;
+    }
+
+    /**
+     * Create a profile WHILE THE CALLER HOLDS THE TRANSACTION.
+     *
+     * The signup path (`AuthManager::signupUser`) opens one transaction that
+     * spans the user-row insert + this first profile insert, because the S81
+     * law is structural: "no user can exist profile-less by construction" —
+     * a failure between the two must roll BOTH back. A self-managed
+     * {@see create()} cannot run inside that open transaction (PDO refuses a
+     * nested BEGIN), so the signup leg calls this variant instead and keeps
+     * BEGIN/COMMIT/ROLLBACK ownership at the caller. Mirrors the estate's
+     * B2 split (`AuthMethodPolicy::guardAndPersist()` vs
+     * `guardAndPersistThrough()`).
+     *
+     * The users-row FOR UPDATE lock is still taken here (it is the whole
+     * serialization point), so the cap and first-profile invariants hold
+     * exactly as under {@see create()}.
+     *
+     * @param string $userId Owning user id (the row must exist, or the FK
+     *                       rejects the insert, exactly as before).
+     * @param array{name: string, avatar_url?: string|null, is_active?: bool,
+     *     is_admin?: bool, content_rating?: string, pin?: string,
+     *     pin_required_for_admin?: bool, max_daily_watch_time?: int,
+     *     allowed_genres?: array<string>, blocked_genres?: array<string>,
+     *     allow_unrated?: bool} $data Same shape as {@see create()}.
+     */
+    public function createWithinTransaction(string $userId, array $data): string
+    {
+        return $this->createUnderUserLock($userId, $data, self::validatedName($data));
+    }
+
+    /**
+     * Name validation shared by both create entries — runs BEFORE any lock is
+     * taken so a bad payload never queues behind the per-user serialization.
+     *
+     * strlen semantics (bytes, not codepoints) are deliberately unchanged
+     * (disclosed M-SERVER-83 nit): an over-long multibyte name fails closed
+     * here rather than silently truncating against the VARCHAR(100) column
+     * in utf8mb4.
+     *
+     * @param array{name: string, avatar_url?: string|null, is_active?: bool,
+     *     is_admin?: bool, content_rating?: string, pin?: string,
+     *     pin_required_for_admin?: bool, max_daily_watch_time?: int,
+     *     allowed_genres?: array<string>, blocked_genres?: array<string>,
+     *     allow_unrated?: bool} $data
+     */
+    private static function validatedName(array $data): string
+    {
+        // A non-string name folds into the same 1-100 refusal below
+        // (fail closed) — pre-refactor it died deeper as a strict_types
+        // TypeError; every HTTP caller pre-validates strings, this only
+        // hardens the internal seam.
+        $raw = $data['name'] ?? '';
+        $name = is_string($raw) ? trim($raw) : '';
+        if (strlen($name) < self::MIN_NAME_LENGTH || strlen($name) > self::MAX_NAME_LENGTH) {
+            throw new \InvalidArgumentException(
+                sprintf('Profile name must be %d-%d characters', self::MIN_NAME_LENGTH, self::MAX_NAME_LENGTH)
+            );
+        }
+
+        return $name;
+    }
+
+    /**
+     * The serialized decide-and-write body of profile creation.
+     *
+     * Pre-M-SERVER-83 this was the whole of create(), lock-free: a COUNT
+     * probe, the app-side cap test, the first-profile derivation and the two
+     * INSERTs. Two concurrent create() calls for one user could both read
+     * count=N (under the cap) and both write — landing N+1 and N+2 profiles,
+     * or (worse for the invariant) both deriving `is_first = true` and both
+     * writing is_active, defeating the exactly-one-active-profile law S81
+     * established for switchProfile(). And with no transaction at all, a
+     * failure between the profile INSERT and its settings INSERT left a
+     * settings-less profile row behind.
+     *
+     * The cure locks the PARENT users row FOR UPDATE first. One lock point
+     * serializes everything the per-user invariants depend on (the cap COUNT
+     * and the first-active derivation) without gap-lock subtleties on the
+     * child table's secondary index. A missing user row is NOT turned into a
+     * new exception: the lock probe simply finds nothing (gap-locking the
+     * ghost, which serializes would-be racers just the same) and the FK on
+     * user_profiles.user_id rejects the INSERT exactly as it always did —
+     * same exception class, same message surface, no wire change.
+     *
+     * @param array{name: string, avatar_url?: string|null, is_active?: bool,
+     *     is_admin?: bool, content_rating?: string, pin?: string,
+     *     pin_required_for_admin?: bool, max_daily_watch_time?: int,
+     *     allowed_genres?: array<string>, blocked_genres?: array<string>,
+     *     allow_unrated?: bool} $data
+     * @param string $name Pre-validated display name (see validatedName()).
+     */
+    private function createUnderUserLock(string $userId, array $data, string $name): string
+    {
+        // Serialization point: X-lock the owning user row for the remainder
+        // of this transaction. Result content is intentionally unused.
+        $this->db->query(
+            "SELECT id FROM users WHERE id = ? FOR UPDATE",
+            [$userId]
+        );
+
+        // Re-count UNDER the lock — this value is now stable through the
+        // INSERTs, which is what makes both invariants below race-free.
         $countRow = UserRow::firstFromMixed($this->db->query(
             "SELECT COUNT(*) as count FROM user_profiles WHERE user_id = ?",
             [$userId]
@@ -595,18 +715,12 @@ class UserProfileManager
             );
         }
 
-        // Validate name
-        $name = trim($data['name'] ?? '');
-        if (strlen($name) < self::MIN_NAME_LENGTH || strlen($name) > self::MAX_NAME_LENGTH) {
-            throw new \InvalidArgumentException(
-                sprintf('Profile name must be %d-%d characters', self::MIN_NAME_LENGTH, self::MAX_NAME_LENGTH)
-            );
-        }
-
         $id = $this->generateUuid();
         $isAdmin = $data['is_admin'] ?? false;
         // The first profile for a user auto-becomes active (per docblock contract).
         // is_active = true only if: explicitly set, OR it's the user's first profile.
+        // Under the users-row lock "first" is read from the post-serialization
+        // count, so concurrent creators cannot both claim it.
         $isFirstProfile = UserRow::int($countRow, 'count', 0) === 0;
         $isActive = $data['is_active'] ?? $isFirstProfile;
 
@@ -623,7 +737,9 @@ class UserProfileManager
             ]
         );
 
-        // Create default settings for the profile
+        // Create default settings for the profile — inside the same
+        // transaction now: a profile without its settings row can no longer
+        // survive a partial failure (M-SERVER-83 second leg).
         $this->createProfileSettings($id, [
             'content_rating' => $data['content_rating'] ?? self::DEFAULT_CONTENT_RATING,
             'pin_hash' => isset($data['pin']) ? password_hash($data['pin'], PASSWORD_ARGON2ID) : null,

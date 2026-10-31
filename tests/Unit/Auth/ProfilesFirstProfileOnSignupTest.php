@@ -118,7 +118,7 @@ final class ProfilesFirstProfileOnSignupTest extends TestCase
     {
         $profiles = $this->createMock(UserProfileManager::class);
         $profiles->expects($this->once())
-            ->method('create')
+            ->method('createWithinTransaction')
             ->with('user-1', ['name' => AuthManager::FIRST_PROFILE_NAME]);
 
         $result = $this->manager($this->signupRepo(), $profiles)
@@ -136,7 +136,11 @@ final class ProfilesFirstProfileOnSignupTest extends TestCase
         $settings->method('getEffective')->with('auth.signup_mode')->willReturn('approval');
 
         $profiles = $this->createMock(UserProfileManager::class);
+        // Both create entries must stay silent for a pending account — the
+        // signup leg (M-SERVER-83) runs createWithinTransaction(), the plain
+        // entry is what the external path uses.
         $profiles->expects($this->never())->method('create');
+        $profiles->expects($this->never())->method('createWithinTransaction');
 
         $result = $this->manager($this->signupRepo(), $profiles, $settings)
             ->register('alice', 'alice@example.com', 'topsecret123');

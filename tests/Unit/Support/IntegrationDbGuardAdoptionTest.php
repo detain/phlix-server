@@ -509,7 +509,12 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // rail filesorts pre-123 and answers index-only post-123, over a
     // throwaway phlix_srv104_* database).
     // Measured from the phpunit red (77), not predicted.
-    private const EXPECTED_ADOPTERS = 77;
+    // 77→78 by the W-min106 cluster (2026-10-31):
+    // +tests/Integration/Auth/UserProfileCreateLockRace83RealDbTest.php
+    // (M-SERVER-83: real InnoDB users-row FOR UPDATE blocking proof and the
+    // two-leg rollback witness over throwaway phlix_srv83_* databases, S345).
+    // Measured from the phpunit red (78), not predicted.
+    private const EXPECTED_ADOPTERS = 78;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -878,9 +878,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * src/Server/Workerman/HttpHandler.php was already inside the scan; the
      * moves are whole-file only. Zero Request-property writes; the writes
      * denominator holds. Measured from the phpunit red (2027), not predicted.
+     * Re-pinned 2027→2028 by the W-min106 cluster (M-SERVER-83, 2026-10-31):
+     * +1 — tests/Integration/Auth/UserProfileCreateLockRace83RealDbTest.php
+     * (the real-MySQL users-row FOR UPDATE blocking proof, the cap and
+     * first-active serialization re-checks, and the settings-leg rollback
+     * witness). The edited src/Auth/UserProfileManager.php and src/Auth/
+     * AuthManager.php were already inside the scan; no new Request-property
+     * reads or writes. Measured from the phpunit red (2028), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2027;
+    private const EXPECTED_PHP_FILES = 2028;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

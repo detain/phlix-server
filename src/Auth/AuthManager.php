@@ -924,7 +924,13 @@ class AuthManager
             // resolveProfileIdForUser() heals lazily on their first
             // profile-scoped write after approval).
             if ($this->profileManager !== null && $status === 'active') {
-                $this->profileManager->create($userId, [
+                // M-SERVER-83: runs in THIS transaction (S81 atomicity above —
+                // a failed profile insert must roll back the user row too), so
+                // the self-managed create() is not usable here (PDO refuses a
+                // nested BEGIN). The within-transaction variant still takes
+                // the users-row FOR UPDATE lock that serializes the cap and
+                // first-active invariants.
+                $this->profileManager->createWithinTransaction($userId, [
                     'name' => self::FIRST_PROFILE_NAME,
                 ]);
             }

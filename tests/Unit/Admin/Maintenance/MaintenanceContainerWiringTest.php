@@ -288,7 +288,7 @@ final class MaintenanceContainerWiringTest extends TestCase
 
         // THE EXPERIMENT — the two-argument construction must be fatal.
         // Reflection rather than a literal `new MaintenanceController($a, $b)`:
-        // that spelling is a STATIC arity error under phpstan-tests (level 2)
+        // that spelling is a STATIC arity error under phpstan-tests (level 4)
         // once the parameter is required, so the runtime-equivalent reflective
         // call is used — same ArgumentCountError, same place.
         $this->expectException(ArgumentCountError::class);

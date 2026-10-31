@@ -43,7 +43,10 @@ use Symfony\Component\Yaml\Yaml;
  * | PHPCS PSR-12                |   2155 -> 25 fixed + 2 carved out, 0 |
  *
  * One uniform level was never available. `src/` keeps level 9 with no baseline, no
- * `ignoreErrors` and an empty `excludePaths`; `tests/` gets its own config at level 2.
+ * `ignoreErrors` and an empty `excludePaths`; `tests/` gets its own config — the level
+ * 2 above was S128's rung for the ladder's own era; S186 raised it to level 4 after
+ * re-deriving the delta (85 findings, all closed at source). The 532-error level-9
+ * fallout stands as measured.
  * S128's test asserted only part of the src/ invariant (level, paths, no baseline file,
  * no `includes:`) while its name and docblock claimed the whole conjunction; S343
  * deleted the three stale suppressions in `phpstan.neon` (two excludePaths entries and

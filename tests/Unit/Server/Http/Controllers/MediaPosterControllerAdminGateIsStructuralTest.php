@@ -275,7 +275,7 @@ final class MediaPosterControllerAdminGateIsStructuralTest extends TestCase
      * ## Why this goes through reflection rather than writing `new`
      *
      * A literal `new MediaPosterController($items, $tmdb)` is a STATIC arity
-     * error, so `phpstan analyse -c phpstan-tests.neon` (tests/, level 2) rejects
+     * error, so `phpstan analyse -c phpstan-tests.neon` (tests/, level 4) rejects
      * the file outright with `arguments.count` — and that config forbids inline
      * ignore comments, baselines, `assert()`, inline type overrides and casts, all
      * for good reasons. (Nor can this docblock spell the ignore annotation out: the

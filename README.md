@@ -923,6 +923,21 @@ maintainers, not resolvable from this repo alone.
 | `PHLIX_COOKIE_INSECURE` | off | no | live | `AuthController` + OIDC/GitHub callback controllers — drops `Secure` on session cookies for plain-HTTP dev (never in production) |
 | `PHLIX_TLS_ENABLED` | off | no | yes | `config/hub.php` — https vs wss scheme composition |
 
+#### Docker-entrypoint shell seams
+
+Five more knobs live in `docker/docker-entrypoint.sh` — shell-layer, never read
+by the PHP runtime (same class as `PHLIX_SECRET_KEY` / `PHLIX_MIGRATIONS_STRICT`
+above); they join this census because the comparable ones were already listed
+while these were invisible:
+
+| Variable | Default | Secret? | Restart | Consumed by |
+|----------|---------|---------|---------|-------------|
+| `PHLIX_JWT_SECRET_FILE` | `/var/phlix/config/jwt_secret` | **yes** (key material path) | n/a (boot) | **docker-entrypoint shell only** — where the entrypoint reads a persisted JWT signing key when `JWT_SECRET`/`PHLIX_SECRET_KEY` are unset (and persists one after generating it, mode 0700-umask). Relocate it when `/var/phlix/config` is a read-only mount |
+| `PHLIX_APP_ROOT` | `/var/www/html` | no | n/a (shell) | **docker-entrypoint shell only** — app-root seam so the script can be smoke-tested end to end without an image build (CI runs it directly); the default is the image's real path |
+| `PHLIX_SUPERVISORD` | `/usr/bin/supervisord` | no | n/a (shell) | **docker-entrypoint shell only** — supervisord binary path, same smoke-test seam |
+| `PHLIX_SUPERVISORD_CONF` | `/etc/supervisor/conf.d/supervisord.conf` | no | n/a (shell) | **docker-entrypoint shell only** — supervisor config path, same smoke-test seam |
+| `PHLIX_SUPERVISOR_FATAL_MARKER` | `/var/run/phlix-supervisor-fatal` | no | n/a (shell) | **docker-entrypoint shell only** — file supervisor's exit listener touches before signalling PID 1; marker present ⇒ the entrypoint exits 70 (container-death law). `rm -f`'d at every boot so an in-place restart isn't poisoned by the previous life's marker |
+
 #### Hub relay (server → hub tunnels)
 
 | Variable | Default | Secret? | Restart | Consumed by |

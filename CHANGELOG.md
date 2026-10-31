@@ -33,6 +33,37 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **README static-analysis runbook, the SyncPlay edge-transport notes and the
+  docker port-table caption lagged their shipped reality (server rider wave A,
+  rows R-SERVER-13/23/29/31).**
+  - **R-SERVER-13:** the README "Run static analysis" block prescribed
+    `./vendor/bin/phpstan analyze src/ --level=9` — the exact CLI-override
+    prescription AGENTS.md forbids (a command-line path overrides
+    `parameters.paths` whole; since S256-residual the production step carries
+    NO path and NO level). It now shows the canonical pair
+    `./vendor/bin/phpstan analyse` + `./vendor/bin/phpstan analyse
+    -c phpstan-tests.neon`. `StaticAnalysisScopeTest` pins the WORKFLOW and the
+    configs — no README assertion exists, so the runbook was the last carrier
+    of the forbidden shape.
+  - **R-SERVER-23:** reverse-proxy/README.md's "Future note" (and its sibling
+    comment inside `docker/examples/full-stack/docker-compose.yml` — disclosed
+    same-commit edit, same stale sentence) described the `@phlix/ui` `wsUrl`
+    seam as "being designed (sibling lane)". That seam shipped: `wsUrl`/
+    `wsPath` in `@phlix/ui` and `HUB_WS_URL`/`HUB_WS_PATH` on the hub are live.
+    What still has NOT shipped is same-origin `/ws` upgrade routing against
+    :8096 — both notes now say the shipped truth and KEEP the do-not-add-`/ws`
+    warning, which remains correct.
+  - **R-SERVER-29:** tracked `phpunit.xml.bak` (1,847 bytes, added by
+    `59bc76c3`, zero references repo-wide) is removed.
+  - **R-SERVER-31:** docker/README.md's port table claimed "exactly what
+    `start.php` binds" — `PHLIX_LISTEN_ENDPOINTS` overrides exist; the caption
+    reads "what `start.php` binds by default".
+  - Docs/hygiene only: zero behavior change, zero new wire codes (registry md5
+    40c1da48 held); census inert (no PHP-file movement — a `.bak` is not PHP).
+    `DockerEntrypointTest`, `ImagePinDriftGuardTest` and
+    `StaticAnalysisScopeTest` — the suites that read the touched files — re-run
+    green at this commit.
+
 - **Three CHANGELOG provenance lines told their lane-base truth and went stale
   at landing; disclosed forward, histories left verbatim (server rider wave A,
   rows R-SERVER-03/09/27).**

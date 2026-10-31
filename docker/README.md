@@ -33,7 +33,7 @@ Workerman serves the `/app` SPA shell and all static assets itself
 (`HttpHandler::serveStatic()`). TLS and host routing belong to whatever fronts
 the container.
 
-Ports — exactly what `start.php` binds:
+Ports — what `start.php` binds by default:
 
 | Port | Worker | Traffic |
 |---|---|---|

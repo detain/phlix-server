@@ -101,10 +101,13 @@ Use long read/write timeouts (WS connections are idle-long by design; the
 templates use 24h) and no path routing (the worker speaks the WS handshake
 at any path; auth rides the `?token=` query parameter).
 
-> **Future note:** a same-origin `wss://` path is being designed alongside a
-> client-side `wsUrl` seam in `@phlix/ui` (sibling lane). When that ships,
-> these templates will gain the real upgrade routing. Until then, do not add
-> `/ws` blocks against :8096 — they cannot work.
+> **Shipped state:** the client-side `wsUrl` seam this note once promised as a
+> future has since landed — `@phlix/ui` exposes `wsUrl`/`wsPath` (and the hub
+> honors `HUB_WS_URL`/`HUB_WS_PATH`), so clients can be pointed at an explicit
+> `wss://` endpoint fronted by the TCP route shown above. What has NOT shipped
+> is same-origin `/ws` upgrade routing on :8096 — the HTTP worker still has zero
+> upgrade logic — so do not add `/ws` path blocks against :8096; they cannot
+> work.
 
 ### HLS Streaming
 `.m3u8` and `.ts` files have optimized caching and CORS headers.

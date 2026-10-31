@@ -1441,7 +1441,8 @@ This project follows PSR-12 coding standards and uses static analysis tools:
 ./vendor/bin/phpcs --standard=PSR12 src/
 
 # Run static analysis
-./vendor/bin/phpstan analyze src/ --level=9
+./vendor/bin/phpstan analyse
+./vendor/bin/phpstan analyse -c phpstan-tests.neon
 ./vendor/bin/psalm --show-info=false
 ```
 

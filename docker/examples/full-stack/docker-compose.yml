@@ -116,9 +116,10 @@ services:
       # 'wss via 8096' story was fiction). To serve SyncPlay through this
       # edge, mirror the relay pattern from traefik/dynamic.yml: a tcp router
       # on a public entrypoint forwarding to phlix-server:8097, or publish
-      # the port and accept trusted-LAN plaintext. A same-origin wss path is
-      # being designed alongside the @phlix/ui wsUrl seam (sibling lane);
-      # until it lands, do not add an HTTP path router for it against :8096.
+      # the port and accept trusted-LAN plaintext. The @phlix/ui wsUrl seam
+      # named here as future has since shipped (clients can point at an
+      # explicit wss endpoint); same-origin wss path routing against :8096 has
+      # not, so do not add an HTTP path router for it there.
     environment:
       - PHLIX_DATABASE_HOST=mysql-server
       - PHLIX_DATABASE_PORT=3306

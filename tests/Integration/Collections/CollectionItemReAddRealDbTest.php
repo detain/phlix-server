@@ -166,6 +166,42 @@ final class CollectionItemReAddRealDbTest extends TestCase
     }
 
     /**
+     * Rider R-SERVER-17 no-resurrection pin: after a pair is REMOVED, a
+     * re-add lands a genuinely NEW row — the cure is INSERT(+ODKU), never an
+     * UPDATE of a soft-deleted survivor. Seeds the sealed 2001 member, hard-
+     * deletes it, re-adds at sort 7, and asserts exactly one row whose
+     * added_at is NOT the sealed stamp. Should collection_items ever grow a
+     * soft-delete (deleted_at + resurrect-on-re-add), the stale 2001 stamp
+     * would come back and this reddens — such a semantics change must then
+     * be made deliberately, with this pin rewritten in the open.
+     */
+    public function testRemovedPairReAddsAsFreshRowNotAResurrectedStamp(): void
+    {
+        $this->seedSealedMember();
+
+        $this->db->query(
+            'DELETE FROM collection_items WHERE collection_id = ? AND media_item_id = ?',
+            [self::COLLECTION_ID, self::EXISTING_ITEM]
+        );
+        $this->assertSame(0, $this->scalar('SELECT COUNT(*) FROM collection_items'));
+
+        $repo = new CollectionItemRepository($this->db);
+        $repo->insert(self::COLLECTION_ID, self::EXISTING_ITEM, 7);
+
+        $rows = $this->rows(
+            'SELECT sort_order, added_at FROM collection_items WHERE media_item_id = ?',
+            [self::EXISTING_ITEM]
+        );
+        $this->assertCount(1, $rows, self::LANE_TOKEN . ': the re-add must land exactly one row');
+        $this->assertSame(7, (int) $rows[0]['sort_order']);
+        $this->assertNotSame(
+            self::SEADED_ADDED_AT,
+            (string) $rows[0]['added_at'],
+            "a re-add after removal is a NEW membership — the deleted row's sealed stamp must not resurrect"
+        );
+    }
+
+    /**
      * The exact user path from the finding: CollectionManager::addItem() twice
      * for the same item (double-click / retry / two tabs) lands one row and
      * keeps the FIRST sort position (no move-to-end).

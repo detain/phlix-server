@@ -115,10 +115,27 @@ final class BackupSubsystemReadmeTest extends TestCase
      */
     public function testEveryDocumentedBackupRouteIsReallyRegistered(string $readmePath, string $sourceMarker): void
     {
-        $this->assertStringContainsString(
-            $readmePath,
+        // R-SERVER-25: a bare substring check could not tell sibling rows
+        // apart. `…/backup/{id}` was satisfied by the `…/backup/{id}/restore`
+        // row (deleting the DELETE row kept the pin green), one shared
+        // `/schedule` path satisfied BOTH schedule datasets, and the verb was
+        // never cross-checked at all. The pin is now a full endpoint-table
+        // row match — the VERB parsed from the registration marker itself, the
+        // exact backticked path, line-anchored: every dataset dimension (verb,
+        // path) must be present as its own row for the pin to hold.
+        $this->assertSame(
+            1,
+            preg_match('/\$r->(post|get|put|delete)\(/', $sourceMarker, $verbMatch),
+            "provider shape: the source marker must carry the verb call: {$sourceMarker}"
+        );
+        $verb = strtoupper($verbMatch[1]);
+
+        $rowPattern = '/^' . '\| ' . $verb . ' \| `' . preg_quote($readmePath, '/') . '` \|/m';
+        $this->assertMatchesRegularExpression(
+            $rowPattern,
             self::readme(),
-            "README must document {$readmePath}"
+            "README must document {$verb} {$readmePath} as its own endpoint-table row"
+                . ' (R-SERVER-25: substring presence is not documentation of THIS endpoint)'
         );
         $this->assertStringContainsString(
             $sourceMarker,
@@ -157,6 +174,39 @@ final class BackupSubsystemReadmeTest extends TestCase
             '`auto_backup_interval_days` | `' . (string) $config['auto_backup_interval_days'] . '`',
             $readme,
             'the documented default interval must equal the shipped config/backup.php value'
+        );
+    }
+
+    /**
+     * Rider R-SERVER-26: the schedule row claimed next_scheduled_backup is
+     * null "when scheduling is off", but BackupManager::getNextScheduledBackup()
+     * nulls ONLY on a non-positive interval — the separate `enabled` toggle
+     * gates the automatic timer at registration, not this value. The README
+     * must state the reader's actual law.
+     */
+    public function testDocumentedScheduleNullLawMatchesTheReader(): void
+    {
+        $readme = self::readme();
+        $this->assertStringContainsString(
+            '`null` when the interval is <= 0 days',
+            $readme,
+            'the schedule GET row must name the interval as the null condition (rider R-SERVER-26)'
+        );
+        $this->assertStringContainsString(
+            'the `enabled` toggle gates the automatic timer separately',
+            $readme,
+            'the row must keep the enabled toggle distinct from the null law'
+        );
+        $this->assertStringNotContainsString(
+            'when scheduling is off',
+            $readme,
+            'the imprecise null condition must not return'
+        );
+        $source = (string) file_get_contents(self::repoRoot() . '/src/Admin/BackupManager.php');
+        $this->assertMatchesRegularExpression(
+            '/function getNextScheduledBackup\(.*?\n    \}/s',
+            $source,
+            'the reader the row describes must still exist (parser teeth)'
         );
     }
 }

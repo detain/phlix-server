@@ -9,6 +9,52 @@ declare(strict_types=1);
 
 use Phlix\Common\Env\EnvConfig;
 
+// Boot-time DB-credential law (minors M-SERVER-38, W-min107). The container
+// path fail-closes on placeholder passwords in docker/docker-entrypoint.sh;
+// systemd/bare-metal installs previously booted happily with NO DB_PASSWORD
+// env at all against an empty-cred MySQL user. Now: in the production tier
+// (PHLIX_ENV=production — the shipped unit's default), an UNSET DB_PASSWORD
+// raises a loud one-time E_USER_WARNING, and an operator who wants a hard
+// boot refusal sets PHLIX_REQUIRE_DB_CREDENTIALS=1 (mirroring
+// PHLIX_MIGRATIONS_STRICT's opt-in strictness). Dev tiers and CI (phpunit.xml
+// seeds DB_PASSWORD) are untouched — the silent empty default stays legal
+// where it is a deliberate local choice, never a production surprise.
+//
+// The $GLOBALS latch makes both effects fire ONCE per process: config files
+// are cached per worker by Phlix\Config\EffectiveConfig, but direct consumers
+// (BackupManager, SsdpAdvertiser) `include` this file again at runtime, and
+// the warning is a boot-time statement, not a per-operation one. The latch
+// key is also the documented test seam (the guard-suite resets it).
+if (!isset($GLOBALS['__phlix_db_credentials_guard'])) {
+    $GLOBALS['__phlix_db_credentials_guard'] = true;
+    if (getenv('PHLIX_ENV') === 'production') {
+        $dbPasswordEnv = getenv('DB_PASSWORD');
+        $requireCredentials = filter_var(
+            getenv('PHLIX_REQUIRE_DB_CREDENTIALS') === false ? '0' : getenv('PHLIX_REQUIRE_DB_CREDENTIALS'),
+            FILTER_VALIDATE_BOOLEAN
+        );
+        if ($dbPasswordEnv === false || $dbPasswordEnv === '') {
+            if ($requireCredentials) {
+                // Strict mode: missing OR explicitly-empty credentials refuse
+                // the boot — the point of the knob is no silent empty-auth.
+                throw new RuntimeException(
+                    'DB_PASSWORD is unset or empty while PHLIX_REQUIRE_DB_CREDENTIALS is enabled;'
+                        . ' provide the MySQL password via the environment (or stop requiring credentials)'
+                );
+            }
+        }
+        if ($dbPasswordEnv === false) {
+            trigger_error(
+                'config/database.php: DB_PASSWORD is unset while PHLIX_ENV=production — the server '
+                    . 'connects with an EMPTY password; if MySQL accepts it, this install has no '
+                    . 'database credential at all. Set DB_PASSWORD, or set '
+                    . 'PHLIX_REQUIRE_DB_CREDENTIALS=1 to refuse such boots.',
+                E_USER_WARNING
+            );
+        }
+    }
+}
+
 return [
     'default' => 'mysql',
     'connections' => [

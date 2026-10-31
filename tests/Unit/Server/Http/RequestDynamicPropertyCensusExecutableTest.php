@@ -885,9 +885,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * witness). The edited src/Auth/UserProfileManager.php and src/Auth/
      * AuthManager.php were already inside the scan; no new Request-property
      * reads or writes. Measured from the phpunit red (2028), not predicted.
+     *
+     * Re-pinned 2028→2029 by the W-min107 cluster (M-SERVER-38, 2026-10-31):
+     * +1 — tests/Unit/Config/DatabaseConfigCredentialGuardTest.php (the
+     * boot-time production DB-credential warn/gate law of config/database.php,
+     * measured red 4 arms at the parent). The edited config/database.php was
+     * already inside the scan; the guard reads getenv only — no new
+     * Request-property reads or writes. Measured from the phpunit red (2029),
+     * not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2028;
+    private const EXPECTED_PHP_FILES = 2029;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

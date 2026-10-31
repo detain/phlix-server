@@ -906,11 +906,12 @@ maintainers, not resolvable from this repo alone.
 | `DB_PORT` | `3306` | no | yes | `config/database.php` |
 | `DB_DATABASE` (alias `DB_NAME`) | `phlix` | no | yes | `config/database.php` (`DB_DATABASE` wins) |
 | `DB_USER` (alias `DB_USERNAME`) | `phlix` | no | yes | `config/database.php` (`DB_USER` wins) |
-| `DB_PASSWORD` | `` (empty) | **yes** | yes | `config/database.php` |
+| `DB_PASSWORD` | `` (empty) | **yes** | yes | `config/database.php` (production tier: an UNSET value now logs one boot-time warning — see `PHLIX_REQUIRE_DB_CREDENTIALS`) |
 | `DB_POOL_ENABLED` | `1` (on) | no | yes | `config/database.php` → `PooledMySQLConnection` fleet |
 | `DB_POOL_SIZE` | `8` | no | yes | `config/database.php` |
 | `PHLIX_MIGRATIONS_DIR` | `migrations/` | no | n/a (CLI) | `bin/phlix`, `scripts/run-migrations.php` |
 | `PHLIX_MIGRATIONS_STRICT` | off | no | n/a (boot) | **docker-entrypoint shell only** — truthy inverts the migration-failure boot-continue into refuse-to-start; the PHP runtime never reads it |
+| `PHLIX_REQUIRE_DB_CREDENTIALS` | `0` | no | yes | **PHP boot guard** — `config/database.php`, production tier only (`PHLIX_ENV=production`): truthy turns missing-OR-empty `DB_PASSWORD` into a refused boot; unset/`0` keeps the warn-once behavior and the silent empty default for dev/test |
 
 #### Auth & secrets
 
@@ -1038,7 +1039,7 @@ while these were invisible:
 | `PHLIX_METRICS_FLUSH_INTERVAL` / `PHLIX_METRICS_BUCKET_SECONDS` / `PHLIX_METRICS_RETENTION_DAYS` / `PHLIX_METRICS_CONNECTION_TTL` / `PHLIX_METRICS_ROUTE_CAP` | `5` / `10` s / `7` d / `15` s / `200` | no | yes | `config/metrics.php` |
 | `PHLIX_UPDATES_CHECK_ENABLED` / `PHLIX_UPDATES_MARKER_URL` / `PHLIX_UPDATES_COMMAND` / `PHLIX_UPDATES_POLL_SECONDS` / `PHLIX_UPDATES_TIMEOUT_SECONDS` | see `config/updates.php` | no | yes | `config/updates.php` (update-check timer) |
 | `PHLIX_CONTAINER_COMPILE` | off | no | yes | `ContainerFactory` (pre-fork compile) + `EventServicesProvider` (per-worker warm) — compile the PHP-DI container to `var/cache/` |
-| `PHLIX_ENV` | `production` | no | yes | `AuthServicesProvider` dev-shape acceptance, `scripts/bootstrap_env.php` |
+| `PHLIX_ENV` | `production` | no | yes | `AuthServicesProvider` dev-shape acceptance, `scripts/bootstrap_env.php`, `config/database.php` DB-credential guard (production tier) |
 | `PHLIX_ENV_FILE` | `/etc/phlix/env` | no | n/a (CLI) | `scripts/bootstrap_env.php` |
 
 #### Read via `$_ENV` only — caveat

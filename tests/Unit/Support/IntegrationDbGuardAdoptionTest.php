@@ -503,7 +503,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // (M-SERVER-22: prune-convergence, the three named CASCADE edges, the 1452
     // rejection and the ledger-stripped replay).
     // Measured from the phpunit red (CI run 41090174908).
-    private const EXPECTED_ADOPTERS = 76;
+    // 76→77 by the W-min104 cluster (2026-10-31):
+    // +tests/Integration/Collections/CollectionItemsSortIndexMigration123
+    // RealDbTest.php (M-SERVER-23: EXPLAIN proof that the collection read
+    // rail filesorts pre-123 and answers index-only post-123, over a
+    // throwaway phlix_srv104_* database).
+    // Measured from the phpunit red (77), not predicted.
+    private const EXPECTED_ADOPTERS = 77;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

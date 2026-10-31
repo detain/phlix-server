@@ -858,9 +858,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * SyncPlay/PositionToleranceReadmeTruthTest.php. Zero src/ files added
      * (every cure edits an existing file), so no other denominator moves for
      * that reason. Measured from the phpunit red (2024), not predicted.
+     * Re-pinned 2024→2025 by the W-min104 cluster (M-SERVER-23, 2026-10-31):
+     * +1 — tests/Integration/Collections/CollectionItemsSortIndexMigration
+     * 123RealDbTest.php (the real-MySQL filesort-before/index-only-after
+     * proof for the collection read rail). The cure itself is a .sql file —
+     * inert to this PHP census — and no src/ PHP file or Request-property
+     * write changed. Measured from the phpunit red (2025), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2024;
+    private const EXPECTED_PHP_FILES = 2025;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

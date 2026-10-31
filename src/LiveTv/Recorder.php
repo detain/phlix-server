@@ -20,6 +20,7 @@ use Phlix\LiveTv\Dto\RowQuery;
 use Phlix\LiveTv\Recording\ComskipLifecycleManager;
 use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\LiveTv\TimeShift\TimeShiftSession;
+use Phlix\LiveTv\Tuners\Iptv\StreamUrlGuard;
 use Workerman\MySQL\Connection;
 
 /**
@@ -99,6 +100,15 @@ class Recorder
 
     /** @var \Phlix\LiveTv\LiveTvManager|null LiveTV manager for tuner stream URL resolution */
     private ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null;
+
+    /**
+     * minors M-SERVER-81 (W-min108): when true the recording-start stream
+     * guard additionally demands a DNS-resolved PUBLIC target (the
+     * StreamUrlGuard strict posture — the same flag the IPTV tuner driver
+     * honors); the always-on jail (scheme, metadata endpoint, loopback/
+     * link-local literals) applies either way.
+     */
+    private bool $strictStreamPolicy = false;
 
     /**
      * Recording is scheduled but not yet started.
@@ -209,6 +219,7 @@ class Recorder
      * @param ComskipLifecycleManager|null $comskipManager Optional comskip lifecycle manager
      * @param string $ffmpegPath Path to FFmpeg binary for recording spawns
      * @param LiveTvManager|null $liveTvManager Optional LiveTV manager for tuner stream URL resolution
+     * @param bool $strictStreamPolicy minors M-SERVER-81: recording-start guard strictness
      */
     public function __construct(
         Connection $db,
@@ -218,7 +229,8 @@ class Recorder
         ?StructuredLogger $logger = null,
         ?ComskipLifecycleManager $comskipManager = null,
         string $ffmpegPath = '/usr/bin/ffmpeg',
-        ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null
+        ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null,
+        bool $strictStreamPolicy = false
     ) {
         $this->db = $db;
         $this->timeShiftStore = $timeShiftStore;
@@ -227,6 +239,7 @@ class Recorder
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
         $this->ffmpegPath = $ffmpegPath;
         $this->liveTvManager = $liveTvManager;
+        $this->strictStreamPolicy = $strictStreamPolicy;
 
         // Register ComskipLifecycleManager::enqueue as an onComplete callback
         if ($comskipManager !== null) {
@@ -586,6 +599,29 @@ class Recorder
                 'channel_id' => $channelId,
             ]);
             $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'No tuner available');
+            return false;
+        }
+
+        // minors M-SERVER-81 (W-min108): validate AT THE MOMENT OF USE. The
+        // guard vetted this URL at playlist-parse and tune time, but DNS can
+        // rebind between that pass and this spawn, and the explicit-URL entry
+        // above bypasses tuning entirely — a stored or stale URL would
+        // otherwise reach ffmpeg unchecked (the SSRF TOCTOU). refusalReason
+        // never throws: the always-on jail plus the optional strict leg return
+        // a refusal string, so this file gains zero new throw sites; a refused
+        // recording takes the SV-3.1a no-fake-PID shape exactly.
+        $refusal = StreamUrlGuard::refusalReason($streamUrl, $this->strictStreamPolicy);
+        if ($refusal !== null) {
+            $this->logger->warning(
+                'Stream URL refused at recording start',
+                ['recording_id' => $recordingId, 'reason' => $refusal]
+            );
+            $this->updateRecordingStatus(
+                $recordingId,
+                self::STATUS_FAILED,
+                'Stream URL refused at recording start'
+            );
+
             return false;
         }
 

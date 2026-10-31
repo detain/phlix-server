@@ -224,6 +224,9 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 /** @var DbTimeShiftSessionStore $timeShiftStore */
                 $timeShiftStore = $c->get(DbTimeShiftSessionStore::class);
 
+                // minors M-SERVER-81 (W-min108): the tuner driver's own
+                // narrowing shape (IptvTunerDriverFactory) for the strict flag.
+                $iptvCfg = is_array($livetv['iptv'] ?? null) ? $livetv['iptv'] : [];
                 $recorder = new Recorder(
                     self::db($c),
                     $timeShiftStore,
@@ -233,6 +236,9 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                     $comskip,
                     self::ffmpegPath($c, $livetv),
                     null,
+                    // minors M-SERVER-81 (W-min108): same strictness the IPTV
+                    // tuner driver honors (config/livetv.php iptv.strict_stream_policy).
+                    (bool) ($iptvCfg['strict_stream_policy'] ?? false),
                 );
 
                 // SV-3.1d: register the completed .ts as a media_items row on the

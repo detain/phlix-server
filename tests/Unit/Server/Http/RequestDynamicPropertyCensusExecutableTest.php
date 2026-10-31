@@ -918,9 +918,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * and writes denominators unchanged (the harness drives the OIDC HTTP
      * client seam, never Request members). Measured from the phpunit red
      * (2033), not predicted.
+     * Re-pinned 2033→2034 by the W-min108 cluster (M-SERVER-81, 2026-11-01):
+     * +1 — tests/Unit/LiveTv/RecorderStartGuardTest.php (recording-start
+     * stream-guard pins: file-scheme / metadata / loopback refusals under
+     * both modes, the strict-only private-literal refusal, two spawn
+     * controls). Zero Request-member reads or writes — the harness drives
+     * Connection/Logger mocks plus the launchDetached seam. Measured from
+     * the phpunit red (2034), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2033;
+    private const EXPECTED_PHP_FILES = 2034;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

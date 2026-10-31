@@ -294,8 +294,8 @@ final class AdminUserController
         // Check email uniqueness
         if ($this->userRepository->emailExists($email)) {
             return (new Response())->status(400)->json([
-                'error' => 'Email already exists',
-                'field_errors' => ['email' => 'This email is already registered'],
+                'error' => 'That email address is already in use',
+                'field_errors' => ['email' => 'That email address is already in use'],
             ]);
         }
 
@@ -363,8 +363,8 @@ final class AdminUserController
             // Check email uniqueness (excluding current user)
             if ($this->userRepository->emailExists($email, $id)) {
                 return (new Response())->status(400)->json([
-                    'error' => 'Email already in use',
-                    'field_errors' => ['email' => 'This email is already registered'],
+                    'error' => 'That email address is already in use',
+                    'field_errors' => ['email' => 'That email address is already in use'],
                 ]);
             }
         }

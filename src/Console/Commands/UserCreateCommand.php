@@ -117,7 +117,12 @@ final class UserCreateCommand extends Command
                 return $this->fail($input, $output, 'Username already exists: ' . $username, Command::INVALID);
             }
             if ($repository->emailExists($email)) {
-                return $this->fail($input, $output, 'Email already registered: ' . $email, Command::INVALID);
+                return $this->fail(
+                    $input,
+                    $output,
+                    'That email address is already in use: ' . $email,
+                    Command::INVALID
+                );
             }
 
             $data = [

@@ -812,7 +812,7 @@ class AuthManager
      *         - Email must be valid format
      *         - Password must be at least 8 characters
      *         - Username already taken
-     *         - Email already registered
+     *         - That email address is already in use
      * @throws SignupDisabledException When `auth.signup_mode` is 'disabled' and
      *         this is not the first user (no account is created).
      *
@@ -858,7 +858,7 @@ class AuthManager
         }
 
         if ($this->userRepository->emailExists($email)) {
-            throw new \InvalidArgumentException('Email already registered');
+            throw new \InvalidArgumentException('That email address is already in use');
         }
 
         // L-3 (security audit 2026-09-29): the first-user election used to be

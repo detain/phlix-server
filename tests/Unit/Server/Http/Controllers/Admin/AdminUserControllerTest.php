@@ -231,7 +231,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Email already exists', $body['error']);
+        $this->assertSame('That email address is already in use', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
         $this->assertArrayHasKey('email', $body['field_errors']);
     }
@@ -323,7 +323,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('Email already in use', $body['error']);
+        $this->assertSame('That email address is already in use', $body['error']);
     }
 
     public function testUpdatePasswordUpdated(): void

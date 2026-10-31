@@ -155,7 +155,7 @@ class UserCreateCommandTest extends TestCase
         ]);
 
         $this->assertSame(Command::INVALID, $exitCode);
-        $this->assertStringContainsString('Email already registered', $tester->getDisplay());
+        $this->assertStringContainsString('That email address is already in use', $tester->getDisplay());
     }
 
     public function testRepositoryExceptionExitsOne(): void

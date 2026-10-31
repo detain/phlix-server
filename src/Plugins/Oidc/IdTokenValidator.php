@@ -42,7 +42,19 @@ final class IdTokenValidator
      */
     private const ALLOWED_ALGORITHMS = ['RS256', 'RS384', 'RS512'];
 
+    /**
+     * minors M-SERVER-39 (W-min108): forced (kid-miss) refetches are throttled
+     * to one NETWORK ATTEMPT per provider per this window. An IdP key rotation
+     * must recover in minutes, not in up to 24 h of stale-cache serves; a
+     * flood of unknown-kid tokens must not become a refetch amplification
+     * lever against the IdP. Inside the window a forced call degrades to the
+     * cached behavior — the awaited kid can only have arrived via the
+     * window's earlier attempt anyway.
+     */
+    private const KID_MISS_REFETCH_MIN_SECONDS = 60;
+
     private DiscoveryDocument $discovery;
+    private ?OidcHttpClient $httpClient;
     private JWKSet $jwkSet;
     private ?JWSVerifier $verifier = null;
     private ?JWSSerializerManager $serializerManager = null;
@@ -51,10 +63,17 @@ final class IdTokenValidator
     /** @var array<string, mixed> Cached JWKS by provider URL hash */
     private static array $jwksCache = [];
 
-    public function __construct(DiscoveryDocument $discovery, JWKSet $jwkSet)
-    {
+    public function __construct(
+        DiscoveryDocument $discovery,
+        JWKSet $jwkSet,
+        ?OidcHttpClient $httpClient = null
+    ) {
         $this->discovery = $discovery;
         $this->jwkSet = $jwkSet;
+        // Kept so the kid-miss refetch (M-SERVER-39) rides the SAME client
+        // (and its test seam) the provider bootstrapped with; null lets
+        // fetchJwks() mint a fresh real client, exactly as before.
+        $this->httpClient = $httpClient;
     }
 
     /**
@@ -101,6 +120,35 @@ final class IdTokenValidator
             $this->getHeaderCheckerManager()->check($jws, $signatureIndex, ['alg']);
         } catch (\Throwable $e) {
             throw new OidcValidationException('Token header rejected: ' . $e->getMessage(), 0, $e);
+        }
+
+        // minors M-SERVER-39 (W-min108): a token naming a kid the loaded set
+        // lacks is the IdP key-ROTATION signal — the 24 h freshness serve used
+        // to strand exactly this case. One throttled refetch; adopt the fresh
+        // set ONLY when it actually carries the awaited kid. Every failure
+        // degrades to the historical path below: the same generic
+        // 'Token signature verification failed' copy, zero new wire states.
+        // An absent/empty kid is NOT a rotation signal (no lookup is possible)
+        // and never triggers a refetch.
+        $kid = null;
+        try {
+            $candidate = $jws->getSignature($signatureIndex)->getProtectedHeaderParameter('kid');
+            if (is_string($candidate) && $candidate !== '') {
+                $kid = $candidate;
+            }
+        } catch (\Throwable $e) {
+            $kid = null;
+        }
+
+        if ($kid !== null && !$this->jwkSet->has($kid)) {
+            try {
+                $fresh = self::fetchJwks($this->discovery, $this->httpClient, true);
+                if ($fresh->has($kid)) {
+                    $this->jwkSet = $fresh;
+                }
+            } catch (\Throwable $e) {
+                error_log('oidc: kid-miss JWKS refetch failed: ' . $e->getMessage());
+            }
         }
 
         $verified = $this->getVerifier()->verifyWithKeySet(
@@ -273,14 +321,34 @@ final class IdTokenValidator
      * @param DiscoveryDocument   $discovery
      * @param OidcHttpClient|null $httpClient Injected client (tests supply a double).
      * @return JWKSet
+     * @param bool $force minors M-SERVER-39: bypass the freshness serve for a
+     *                      rotation-recovery (kid-miss) fetch, throttled to
+     *                      one network attempt per KID_MISS_REFETCH_MIN_SECONDS.
      * @throws RuntimeException
      */
-    public static function fetchJwks(DiscoveryDocument $discovery, ?OidcHttpClient $httpClient = null): JWKSet
-    {
+    public static function fetchJwks(
+        DiscoveryDocument $discovery,
+        ?OidcHttpClient $httpClient = null,
+        bool $force = false
+    ): JWKSet {
         $providerUrl = $discovery->getProviderUrl();
         $cacheKey = md5($providerUrl);
+        $now = time();
 
-        if (isset(self::$jwksCache[$cacheKey])) {
+        $forced = $force;
+        if ($forced) {
+            $slot = self::$jwksCache[$cacheKey] ?? null;
+            $lastRefetch = is_array($slot) ? ($slot['_last_refetch_at'] ?? 0) : 0;
+            if (
+                (is_int($lastRefetch) || is_numeric($lastRefetch))
+                && (int) $lastRefetch !== 0
+                && ($now - (int) $lastRefetch) < self::KID_MISS_REFETCH_MIN_SECONDS
+            ) {
+                $forced = false;
+            }
+        }
+
+        if (isset(self::$jwksCache[$cacheKey]) && !$forced) {
             $cached = self::$jwksCache[$cacheKey];
             if (!is_array($cached)) {
                 unset(self::$jwksCache[$cacheKey]);
@@ -302,6 +370,17 @@ final class IdTokenValidator
             throw new RuntimeException('JWKS URI is empty');
         }
 
+        if ($force) {
+            // Stamp BEFORE the request: a failing IdP costs one retry per
+            // window, not one per token — and a successful-but-empty round
+            // trip still consumed network, so the window owns it either way.
+            $stamped = self::$jwksCache[$cacheKey] ?? [];
+            if (is_array($stamped)) {
+                $stamped['_last_refetch_at'] = $now;
+                self::$jwksCache[$cacheKey] = $stamped;
+            }
+        }
+
         $client = $httpClient ?? new OidcHttpClient();
         $response = $client->get($jwksUri, [
             'User-Agent' => 'PhlixMediaServer/1.0',
@@ -319,9 +398,14 @@ final class IdTokenValidator
         }
 
         $jwks = JWKSet::createFromKeyData($jwksData);
+        $finalSlot = self::$jwksCache[$cacheKey] ?? [];
+        $priorRefetch = is_array($finalSlot) ? ($finalSlot['_last_refetch_at'] ?? 0) : 0;
         self::$jwksCache[$cacheKey] = [
             'jwks' => $jwks,
             '_fetched_at' => time(),
+            '_last_refetch_at' => $force
+                ? $now
+                : ((is_int($priorRefetch) || is_numeric($priorRefetch)) ? (int) $priorRefetch : 0),
         ];
 
         return $jwks;

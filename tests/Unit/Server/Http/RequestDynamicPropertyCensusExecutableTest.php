@@ -911,9 +911,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * anonymous host; measured red 3 stale arms at the parent). The edited
      * TranscodeFileServer.php + PreRouterFastPaths.php were already inside the
      * scan. Measured from the phpunit red (2032), not predicted.
+     * Re-pinned 2032→2033 by the W-min108 cluster (M-SERVER-39, 2026-11-01):
+     * +1 — tests/Unit/Plugins/Oidc/IdTokenValidatorKidRefetchTest.php (the
+     * kid-miss throttled-refetch pins: forced bypass, throttle window,
+     * adopt-only-when-present rotation recovery, absent-kid control). Reads
+     * and writes denominators unchanged (the harness drives the OIDC HTTP
+     * client seam, never Request members). Measured from the phpunit red
+     * (2033), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2032;
+    private const EXPECTED_PHP_FILES = 2033;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -333,7 +333,7 @@ final class OidcProvider implements ProviderInterface
     {
         $jwks = $this->getJwks();
 
-        return new IdTokenValidator($this->discovery, $jwks);
+        return new IdTokenValidator($this->discovery, $jwks, $this->httpClient);
     }
 
     /**

@@ -39,13 +39,15 @@ class TraktApi
 
     // Bounded single-flight refresh registry (M-SERVER-37). Shape follows
     // AuthManager::$rateLimitStore: TTL-on-read expiry, hard cap,
-    // sweep-then-evict-oldest before insert. Eviction is age-ordered across
-    // entry kinds: exceeding the cap means 256 distinct rotated tokens held
-    // flights within ~the grace window — in that pathological flood the oldest
-    // entry (possibly a live pending marker) yields its slot and that token's
-    // flight may POST twice; the cap protecting every resident worker beats
-    // the flood-window dedupe, and flock() Phase 2 still serializes the
-    // actual cross-process POSTs.
+    // sweep-then-evict before insert. Eviction SPARES live pending
+    // markers: the oldest finished-result entry is the preferred victim, and
+    // only when every resident entry is pending does the oldest pending
+    // marker yield its slot. Exceeding the cap means 256 distinct rotated
+    // tokens held flights within ~the grace window; in that pathological
+    // flood the all-pending fallback lets one live flight's marker die and
+    // that token's flight may POST twice — the cap protecting every resident
+    // worker still beats the flood-window dedupe, and flock() Phase 2
+    // serializes the actual cross-process POSTs.
     private const REFRESH_RESULT_GRACE_SECONDS = 10;
     private const REFRESH_PENDING_STALE_SECONDS = 30;
     private const REFRESH_CACHE_MAX_ENTRIES = 256;
@@ -351,7 +353,10 @@ class TraktApi
      *
      * AuthManager::boundFallbackStore() shape: under the cap it returns
      * immediately; at the cap it first lets the expiry sweep free what it can,
-     * then evicts the oldest entry until a slot is guaranteed.
+     * then evicts until a slot is guaranteed — preferring the oldest finished
+     * result and only falling back to the oldest live pending marker when no
+     * result entry remains to spare (rider R-SERVER-06: a still-coalescing
+     * flight must not be the first thing the cap kills).
      */
     private static function boundRefreshRegistry(int $now): void
     {
@@ -362,18 +367,28 @@ class TraktApi
         self::pruneRefreshRegistry($now);
 
         while (count(self::$inFlightRefresh) >= self::REFRESH_CACHE_MAX_ENTRIES) {
-            $oldestKey = null;
-            $oldestAt = null;
+            $oldestResultKey = null;
+            $oldestResultAt = null;
+            $oldestPendingKey = null;
+            $oldestPendingAt = null;
             foreach (self::$inFlightRefresh as $key => $entry) {
-                if ($oldestAt === null || $entry['at'] < $oldestAt) {
-                    $oldestAt = $entry['at'];
-                    $oldestKey = $key;
+                if ($entry['pending']) {
+                    if ($oldestPendingAt === null || $entry['at'] < $oldestPendingAt) {
+                        $oldestPendingAt = $entry['at'];
+                        $oldestPendingKey = $key;
+                    }
+                    continue;
+                }
+                if ($oldestResultAt === null || $entry['at'] < $oldestResultAt) {
+                    $oldestResultAt = $entry['at'];
+                    $oldestResultKey = $key;
                 }
             }
-            if ($oldestKey === null) {
+            $victimKey = $oldestResultKey ?? $oldestPendingKey;
+            if ($victimKey === null) {
                 break; // empty store: headroom is already guaranteed
             }
-            unset(self::$inFlightRefresh[$oldestKey]);
+            unset(self::$inFlightRefresh[$victimKey]);
         }
     }
 

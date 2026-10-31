@@ -266,6 +266,15 @@ class CollectionItemRepository
     /**
      * Get the maximum sort order for a collection.
      *
+     * KNOWN LIMIT (rider R-SERVER-18): this is a read-then-mint helper — two
+     * concurrent adds can observe the same MAX and both stamp max+1, leaving
+     * a sort_order tie. The review accepted this as benign-by-comparison,
+     * and the listing reader keeps it display-safe: the sole ordered listing
+     * query (findMediaItemIdsForCollection, which getCollectionWithItems
+     * builds the detail page from) sorts by `sort_order, added_at`, so a tie
+     * falls back to insertion time deterministically instead of arbitrary
+     * row order.
+     *
      * @param string $collectionId Collection UUID
      * @return int Maximum sort order, or 0 if empty
      *

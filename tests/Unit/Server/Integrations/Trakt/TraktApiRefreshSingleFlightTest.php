@@ -175,6 +175,68 @@ final class TraktApiRefreshSingleFlightTest extends TestCase
     }
 
     /**
+     * RED on the old shape (rider R-SERVER-06): eviction was age-ordered
+     * ACROSS entry kinds, so a live pending marker older than every finished
+     * result died first and its coalescing token could POST twice. Pending-
+     * sparing eviction takes the oldest RESULT entry instead.
+     */
+    public function testEvictionSparesPendingEntriesWhenResultsAreAvailable(): void
+    {
+        $cap = $this->constant('REFRESH_CACHE_MAX_ENTRIES');
+        $this->assertIsInt($cap);
+
+        $now = time();
+        $store = ['live-pending' => ['pending' => true, 'at' => $now - 2, 'result' => null]];
+        for ($i = 0; $i < $cap - 1; $i++) {
+            $store['seed_' . $i] = [
+                'pending' => false,
+                'at' => $i === 0 ? $now - 1 : $now,
+                'result' => ['access_token' => "a$i", 'refresh_token' => "r$i", 'expires_in' => 1],
+            ];
+        }
+        $this->setRegistry($store);
+
+        $http = new RefreshCountingHttpClient();
+        $this->api($http)->refreshAfterAuthFailure('spare-cap-token');
+
+        $after = $this->registry();
+        $this->assertArrayHasKey(md5('spare-cap-token'), $after, 'the completing refresh must be registered');
+        $this->assertCount($cap, $after, 'the registry must never exceed its hard cap');
+        $this->assertArrayHasKey('live-pending', $after, 'a live pending marker must be spared while results exist');
+        $this->assertArrayNotHasKey('seed_0', $after, 'the oldest finished result must be the eviction victim');
+    }
+
+    /**
+     * The cap law survives the sparing: when every resident entry is a live
+     * pending marker, the oldest one still yields its slot (pathological
+     * 256-distinct-rotations flood; flock Phase 2 serializes the real POSTs).
+     */
+    public function testEvictionFallsBackToOldestPendingWhenAllPending(): void
+    {
+        $cap = $this->constant('REFRESH_CACHE_MAX_ENTRIES');
+        $this->assertIsInt($cap);
+
+        $now = time();
+        $store = [];
+        for ($i = 0; $i < $cap; $i++) {
+            $store['pend_' . $i] = [
+                'pending' => true,
+                'at' => $i === 0 ? $now - 3 : $now - 1,
+                'result' => null,
+            ];
+        }
+        $this->setRegistry($store);
+
+        $http = new RefreshCountingHttpClient();
+        $this->api($http)->refreshAfterAuthFailure('all-pending-token');
+
+        $after = $this->registry();
+        $this->assertArrayHasKey(md5('all-pending-token'), $after, 'the completing refresh must be registered');
+        $this->assertCount($cap, $after, 'all-pending fallback must still honor the hard cap');
+        $this->assertArrayNotHasKey('pend_0', $after, 'the oldest pending marker must fall back as the victim');
+    }
+
+    /**
      * RED on the old shape: the pending spin loop had no attempt ceiling
      * (unlike the flock loop right beside it). A live-but-slow holder must
      * have waiters terminate with a loud error after the bounded wait,

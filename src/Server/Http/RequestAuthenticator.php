@@ -170,6 +170,19 @@ final class RequestAuthenticator
             return false;
         }
 
+        // minors M-SERVER-76 (W-min109): a literal 'null' Origin is the
+        // opaque-origin marker (sandboxed iframes and a few privacy contexts)
+        // — a state-changing cookie-authenticated request that cannot name
+        // its origin is refused outright. The old law SKIPPED the Origin leg
+        // for 'null', which meant 'Origin: null' arriving WITHOUT a Referer
+        // reached the accept tail unopposed; same-site protection then rested
+        // entirely on a header the client never sent. Refusing here is the
+        // fail-closed tightening the review asked for; the consequence (such
+        // iframe-nested writes stop working) is disclosed in the changelog.
+        if ($origin === 'null') {
+            return false;
+        }
+
         // Parse the server's host header into host and port components.
         $serverHost = $request->getHeader('Host') ?? '';
         $serverHostParts = self::parseHostHeader($serverHost);
@@ -189,8 +202,10 @@ final class RequestAuthenticator
             }
         }
 
-        // Validate the Origin header if present.
-        if ($origin !== null && $origin !== '' && $origin !== 'null') {
+        // Validate the Origin header if present. ('null' was already refused
+        // above; the empty string keeps its skip — M-SERVER-76 names only the
+        // literal 'null'.)
+        if ($origin !== null && $origin !== '') {
             $originParts = parse_url($origin);
             if (!is_array($originParts)) {
                 return false;

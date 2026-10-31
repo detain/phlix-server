@@ -275,25 +275,37 @@ final class RequestAuthenticatorTest extends TestCase
         self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
     }
 
-    // --- Case 9: Origin 'null'/'' skipped, but Referer still enforced --------
+    // --- Case 9: Origin 'null' refused outright (M-SERVER-76) ----------------
 
-    public function testOriginNullSkippedButRefererEnforcedAccepts(): void
+    public function testOriginNullIsRefusedEvenWithMatchingReferer(): void
     {
-        // Origin: null (privacy-sensitive contexts / redirects) is skipped, so
-        // the Referer becomes authoritative — a matching Referer passes.
+        // minors M-SERVER-76 (W-min109): the literal 'null' Origin is the
+        // opaque-origin marker (sandboxed iframes); a state-changing request
+        // that cannot name its origin is refused outright instead of skipping
+        // the Origin leg — the old skip meant 'Origin: null' with NO Referer
+        // reached the accept tail unopposed.
         $request = $this->request('POST', [
             'Host' => 'example.com',
             'Origin' => 'null',
             'Referer' => 'https://example.com/x',
         ]);
 
-        self::assertTrue($this->authenticator()->validateCsrfOrigin($request));
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
     }
 
-    public function testOriginNullSkippedButRefererEnforcedRejects(): void
+    public function testOriginNullWithoutRefererIsRefused(): void
     {
-        // Origin: null is skipped but the Referer is still validated — a
-        // mismatched Referer must still be rejected (no free pass from 'null').
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Origin' => 'null',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    public function testOriginNullWithMismatchedRefererStaysRefused(): void
+    {
+        // Mismatched Referer was already fatal under the old law; it stays so.
         $request = $this->request('POST', [
             'Host' => 'example.com',
             'Origin' => 'null',

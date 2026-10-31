@@ -871,9 +871,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * and node_modules) at 2025 — an edit, not a new file — so the
      * denominator moves by exactly the one test). Zero Request-property writes; the writes
      * denominator holds. Measured from the phpunit red (2026), not predicted.
+     * Re-pinned 2026→2027 by the W-min105 cluster (M-SERVER-51, 2026-10-31):
+     * +1 — tests/Unit/Server/Workerman/HttpHandlerStaticGzipTest.php (the
+     * gzip-variant pins for serveStatic: negotiated GET body/Vary/immutable
+     * survival, HEAD length-parity, and the five decline paths). The edited
+     * src/Server/Workerman/HttpHandler.php was already inside the scan; the
+     * moves are whole-file only. Zero Request-property writes; the writes
+     * denominator holds. Measured from the phpunit red (2027), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2026;
+    private const EXPECTED_PHP_FILES = 2027;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

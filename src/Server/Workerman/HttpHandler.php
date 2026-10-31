@@ -72,6 +72,19 @@ final class HttpHandler
     private const GZIP_MIN_BYTES = 1024;
 
     /**
+     * Ceiling (bytes) for the gzip variant {@see serveStatic()} may BUFFER.
+     *
+     * The floor above protects tiny bodies from pointless CPU; this one protects
+     * the resident worker from it: a large static file must stay a zero-copy
+     * `withFile()` stream, never a per-request read + gzip in a single-threaded
+     * event loop. The ask's corpus — the whole Vite bundle at 2,222,920 bytes
+     * across every file, largest single member ~1.3 MB — sits far inside it, so
+     * the honest answer to "direct docker deploy serves the SPA bundle
+     * uncompressed" is this constant, not a proxy mandate. (minors M-SERVER-51)
+     */
+    private const GZIP_MAX_STATIC_BYTES = 4 * 1024 * 1024;
+
+    /**
      * Prefix for the per-request direct-LAN cancel id (SV-4.2-disconnect).
      *
      * A distinct prefix from any relay channel id (those are bare integer
@@ -679,6 +692,39 @@ final class HttpHandler
             $headers['Cache-Control'] = 'public, max-age=31536000, immutable';
         }
 
+        // minors M-SERVER-51 (W-min105): the docker images run the worker bare on
+        // :8096 with no edge proxy, so the static Vite bundle — measured corpus
+        // 2,222,920 bytes raw vs 697,478 gzipped — used to cross the wire plain
+        // `text/javascript` with no `Content-Encoding` whenever nobody in front
+        // compressed it. When this request negotiates the gzip variant, the reply
+        // is a BUFFERED encoded one; the decision keys only on (method, request
+        // headers, file), so a GET and a HEAD of the same request shape always
+        // agree — the S113 parity law (a HEAD advertises exactly the
+        // Content-Length its GET would ship) holds per negotiating client.
+        $gzipped = self::staticGzipVariant($real, $wr, $headers['Content-Type']);
+        if ($gzipped !== null) {
+            // The variant's entity-headers, set for BOTH verbs so the HEAD
+            // describes exactly what the negotiating GET ships (the dispatch
+            // arms do the same: compressResponse decorates the HEAD before
+            // headAware strips its body — HttpHandlerHeadNoBodyTest pins it).
+            $headers['Content-Encoding'] = 'gzip';
+            $headers['Vary'] = self::mergeVaryAcceptEncoding(
+                self::headerLookup($headers, 'Vary'),
+            );
+            $headers['Content-Length'] = (string) strlen($gzipped);
+            if ($wr->method() === 'HEAD') {
+                $headers['Accept-Ranges'] = 'bytes';
+                $mtime = filemtime($real);
+                if ($mtime !== false) {
+                    $headers['Last-Modified'] = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+                }
+
+                return new BodylessResponse(200, $headers);
+            }
+
+            return new WorkermanResponse(200, $headers, $gzipped);
+        }
+
         // S113 (site 1): this method had NO method check of any kind, so a
         // `HEAD /assets/app/index-*.js` went through withFile() and Workerman
         // streamed the entire file — RFC 9110 §9.3.2 forbids that body, and a
@@ -691,7 +737,9 @@ final class HttpHandler
         // inside `createHeadForFile()`, and BOTH of those are reached only by
         // actually sending the file. Naming the values here keeps the reply
         // truthful about the entity — Content-Length is the file's real size, never
-        // 0 — while opening nothing.
+        // 0 (for the gzip-negotiated client the variant branch above already
+        // returned the compressed length, so each reader gets the length the
+        // matching GET would ship) — while opening nothing.
         if ($wr->method() === 'HEAD') {
             $headers['Content-Length'] = (string) filesize($real);
             $headers['Accept-Ranges'] = 'bytes';
@@ -851,6 +899,58 @@ final class HttpHandler
             self::headerLookup($response->headers, 'Vary'),
         );
         $response->headers['Content-Length'] = (string) strlen($gzipped);
+    }
+
+    /**
+     * The gzip variant of a static file for THIS request, or null when the plain
+     * streamed reply is the right answer (minors M-SERVER-51, W-min105).
+     *
+     * Deliberate symmetry with {@see self::compressResponse()} — same encoder
+     * level, same floor, same "only if it actually shrinks" rule, same
+     * `Accept-Encoding: gzip` substring check — plus one guard that path does
+     * not need: an upper size ceiling ({@see self::GZIP_MAX_STATIC_BYTES}),
+     * because here the bytes must be read into memory while the dispatched-arm
+     * bodies were already buffered by their producer. File-backed dispatch
+     * streams still decline compression upstream (guard 1 there), so this is the
+     * ONLY place a file-backed reply may be encoded, and it replaces the stream
+     * with an explicit body + Content-Length instead of `withFile()`.
+     *
+     * The decision reads only (method, request headers, file path/size/type), so
+     * it is deterministic per request shape: a HEAD and a GET from the same
+     * client compute the same variant and the same length — the S113 parity law
+     * the docblock of {@see self::headAware()} states for the dispatch arms
+     * holds here too.
+     */
+    private static function staticGzipVariant(string $real, WorkermanRequest $wr, string $contentType): ?string
+    {
+        // Only these two verbs have a variant-parity contract to keep honest;
+        // anything else falls through to the pre-existing stream behaviour.
+        $method = $wr->method();
+        if ($method !== 'GET' && $method !== 'HEAD') {
+            return null;
+        }
+        $accept = $wr->header('accept-encoding');
+        if (!is_string($accept) || stripos($accept, 'gzip') === false) {
+            return null;
+        }
+        if (!self::isCompressibleType($contentType)) {
+            return null;
+        }
+        $size = filesize($real);
+        if ($size === false || $size < self::GZIP_MIN_BYTES || $size > self::GZIP_MAX_STATIC_BYTES) {
+            return null;
+        }
+        $raw = @file_get_contents($real);
+        if ($raw === false) {
+            return null;
+        }
+        $gzipped = gzencode($raw, 6);
+        if ($gzipped === false || strlen($gzipped) >= strlen($raw)) {
+            // Compression failed or did not help — the plain stream stays.
+            return null;
+        }
+
+        return $gzipped;
     }
 
     /**

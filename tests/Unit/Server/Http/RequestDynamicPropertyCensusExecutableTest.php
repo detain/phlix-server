@@ -930,9 +930,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (the plaintext-save warn pins: two measured refusals of silence +
      * three envelope/store controls). Measured from the phpunit red (2035),
      * not predicted.
+     * Re-pinned 2035→2036 by the W-min109 cluster (M-SERVER-85, 2026-11-01):
+     * +1 — tests/Unit/Session/SessionManagerCleanupCountTest.php (the sweep
+     * two-phase pins: the DELETE rides the harvested ids, the DB-clock cutoff
+     * is evaluated once, an empty harvest issues no DELETE). The harness
+     * mocks the Connection and touches no Request members — reads and writes
+     * denominators held. Measured from the phpunit red (2036), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2035;
+    private const EXPECTED_PHP_FILES = 2036;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

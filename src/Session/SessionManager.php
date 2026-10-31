@@ -368,7 +368,8 @@ class SessionManager
      *
      * @param int $maxIdleSeconds Maximum idle time in seconds (default: 86400 = 24 hours)
      *
-     * @return int Number of sessions cleaned up
+     * @return int Number of sessions cleaned up — exactly the set the sweep
+     *         harvested under its single cutoff evaluation (minors M-SERVER-85)
      *
      * @example
      * ```php
@@ -393,12 +394,36 @@ class SessionManager
         );
 
         $rows = RowMap::listFromMixed($result);
-        $count = count($rows);
+
+        // minors M-SERVER-85 (W-min109): the DELETE used to RE-EVALUATE the
+        // same NOW()-based predicate a second later. Seconds ticking between
+        // the two statements silently widened the window, so the returned
+        // count understated what actually left the table — every time rows
+        // crossed the line in between. The sweep now rides the house
+        // two-phase law (StatsCollector R19-10 / hub ServerReaper): harvest
+        // ids under ONE NOW(), then `DELETE ... WHERE id IN (...)` — never a
+        // DELETE with an unbounded range predicate (that form also holds gap
+        // locks across the whole expired window). The count is, by
+        // construction, exactly the set removed.
+        $ids = [];
+        foreach ($rows as $row) {
+            $id = $row['id'] ?? null;
+            // Session ids are CHAR(36) UUIDs, but depending on driver mode
+            // SELECT can hand back ints or numeric strings. Accept any
+            // non-empty scalar and bind it through placeholders — the id
+            // never interpolates into SQL.
+            if ((is_int($id) && $id >= 0) || (is_string($id) && $id !== '')) {
+                $ids[] = $id;
+            }
+        }
+
+        $count = count($ids);
 
         if ($count > 0) {
+            $placeholders = implode(',', array_fill(0, $count, '?'));
             $this->db->query(
-                'DELETE FROM sessions WHERE last_activity < DATE_SUB(NOW(), INTERVAL ? SECOND)',
-                [$maxIdleSeconds]
+                "DELETE FROM sessions WHERE id IN ({$placeholders})",
+                $ids
             );
 
             $this->logger->info('Cleaned up stale sessions', ['count' => $count]);

@@ -33,6 +33,35 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Three CHANGELOG provenance lines told their lane-base truth and went stale
+  at landing; disclosed forward, histories left verbatim (server rider wave A,
+  rows R-SERVER-03/09/27).**
+  - **R-SERVER-03 (in "The reset-password recovery story is now fully
+    shipped-truth per leg", landed `849f1d1c`):** the entry asserts census
+    `EXPECTED_PHP_FILES` "stays 1995 unmodified". True at the lane base
+    (`3282386e`, pin 1995); stale at landing — three sibling rungs advanced the
+    pin while the branch queued: `c4c9bbd8` →1996, `45a69943` →1997,
+    `b0fd54cf` →1998, every figure ancestor-measured
+    (`git show <sha>:tests/Unit/Server/Http/RequestDynamicPropertyCensusExecutableTest.php`)
+    in this correction's own window. The zero-PHP-delta claim itself holds
+    (parent `b0fd54cf` 1998 == landing 1998); only the "stays 1995" figure
+    described the base rather than the landed tip.
+  - **R-SERVER-09 (in "Browser auth errors/notices no longer vanish in the
+    legacy redirect chain", landed `45a69943`):** the entry claims "PHP files
+    1995→1996 atop the M38 rung" — a pre-rebase figure. Measured at landing:
+    parent `c4c9bbd8` (M37) pin 1996, landing pin **1997**; the rung rotated
+    1996→1997 atop the M37 rung. The in-code census staircase docblock already
+    carried the corrected ladder; only this CHANGELOG line lagged.
+  - **R-SERVER-27 (in "README documents the backup subsystem to
+    shipped-code truth", landed `82d9f029`):** the entry closes "green at this
+    tip." The new backup suite was green; the full suite was not — the S431
+    census rung missed its rotation at that commit (pin 1987 against 1988 real
+    PHP files), forward-fixed one commit later by `894ede3e` ("census pin
+    forward-fix (1987->1988 missed at 82d9f029)"). The qualifier the line never
+    carried: "green" named the section's own suite, not the whole battery.
+  - Docs-only correction: zero behavior change, zero new wire codes (registry
+    md5 40c1da48 held), census/S180/adopters inert.
+
 - **A literal `null` Origin can no longer coast through the CSRF gate (server minors batch W-min109, part 6 — M-SERVER-76 cured).**
   - **M-SERVER-76 (cured):** `RequestAuthenticator::validateCsrfOrigin()` exempted `$origin === 'null'` from its origin leg — disk truth first: the Referer leg still ran, so the ask's "skips the check entirely" overstates, but the real hole was exactly one shape wide: `Origin: null` with NO Referer reached the accept tail UNOPPOSED for POST/PUT/DELETE/PATCH. Literal `null` is the opaque-origin marker some browsers send (sandboxed iframes); it cannot name an origin, so it now refuses outright, before either leg, for state-changing methods — closing both the no-Referer bypass and the matching-Referer pass-through. Envelope byte-ident: the bool feeds the unchanged 403 `csrf.invalid_origin` gate, zero new wire codes. Disclosed: sandboxed-iframe same-site writes now fail closed (the honest tightening the ask named — `prefer ldaps…or at minimum warn`-class minimum was NOT the shape here; this is the named cure); EMPTY-string Origin deliberately keeps its skip (ask names only `null`). `RequestAuthenticatorTest` case-9 rewritten to three new-law pins (null+matching-Referer refused, null-no-Referer refused, null+mismatched-Referer stays refused) — measured parent red 30/40/2F, green 30/40 post-cure; AuthController/SessionController consumers + full tests/Unit/Server/Workerman/ 13-file sweep (the real-gate CSRF arm rides evil-https origins, unaffected) all OK; census/S180/adopters inert (2038/455/1118 held — helper seeds untouched, `return false` arms are not throws).
 

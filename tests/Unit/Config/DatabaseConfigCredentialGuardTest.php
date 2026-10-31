@@ -150,7 +150,7 @@ final class DatabaseConfigCredentialGuardTest extends TestCase
         [, $warnings, $thrown] = $this->boot();
 
         self::assertNotNull($thrown, 'the opt-in gate must refuse the boot');
-        self::assertStringContainsString('PHLIX_REQUIRE_DB_CREDENTIALS', $thrown ?? '');
+        self::assertStringContainsString('PHLIX_REQUIRE_DB_CREDENTIALS', $thrown);
         self::assertSame([], $warnings, 'a refused boot never also warns');
     }
 
@@ -163,7 +163,7 @@ final class DatabaseConfigCredentialGuardTest extends TestCase
         [, $warnings, $thrown] = $this->boot();
 
         self::assertNotNull($thrown);
-        self::assertStringContainsString('unset or empty', $thrown ?? '');
+        self::assertStringContainsString('unset or empty', $thrown);
     }
 
     public function test_strict_knob_zero_does_not_enable_the_gate(): void

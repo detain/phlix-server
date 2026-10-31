@@ -2152,6 +2152,65 @@ class ItemRepositoryTest extends TestCase
         );
     }
 
+    /**
+     * R-SERVER-20 (M-SERVER-08 minor-2) — the merge slice must obey the class's
+     * OWN `ABSOLUTE_ROW_CEILING`, the same backstop every caller-fed SQL
+     * `LIMIT ?` of the search trio already applies. Both halves arrive capped at
+     * the ceiling, but the helper used to cut the combined list at the RAW caller
+     * `$limit`, so a caller asking for more than the ceiling could be handed past
+     * it — breaking the documented `[1, ABSOLUTE_ROW_CEILING]` page contract for
+     * oversized requests while every legitimate page stayed unaffected.
+     *
+     * The two halves together hold exactly one row more than the ceiling — just
+     * enough to prove the clamp bites and nothing more.
+     *
+     * Anti-tautology: against the pre-fix `mergeSearchResults()` this fails — the
+     * oversized request hands back one row over the ceiling.
+     */
+    public function testTheMergeSliceIsClampedAtTheAbsoluteRowCeiling(): void
+    {
+        $ceilingConst = (new \ReflectionClassConstant(
+            ItemRepository::class,
+            'ABSOLUTE_ROW_CEILING'
+        ))->getValue();
+        $ceiling = is_int($ceilingConst) ? $ceilingConst : 0;
+        $this->assertGreaterThan(0, $ceiling);
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use ($ceiling): array {
+            if (str_contains($sql, 'IN BOOLEAN MODE')) {
+                $rows = [];
+                for ($i = 1; $i <= intdiv($ceiling, 2) + 1; $i++) {
+                    $rows[] = [
+                        'id' => 'movie-' . $i, 'name' => 'Eminem Documentary ' . $i, 'type' => 'movie',
+                        'library_id' => 'lib-1', 'path' => '/movies/' . $i . '.mkv', 'metadata_json' => '{}',
+                    ];
+                }
+                return $rows;
+            }
+            if (str_contains($sql, 'JOIN music_artists ar ON ar.media_item_id = mi.id')) {
+                $rows = [];
+                for ($i = 1; $i <= intdiv($ceiling, 2); $i++) {
+                    $rows[] = [
+                        'id' => 'artist-' . $i, 'name' => 'Eminem Variant ' . $i, 'type' => 'artist',
+                        'library_id' => 'lib-1', 'path' => '', 'metadata_json' => '{}',
+                    ];
+                }
+                return $rows;
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->search('Eminem', $ceiling + 1);
+
+        $this->assertLessThanOrEqual(
+            $ceiling,
+            count($result),
+            'a merged search response must never exceed the absolute row ceiling'
+        );
+    }
+
     public function testCountByTypeReturnsCorrectCount(): void
     {
         $db = $this->createMock(Connection::class);

@@ -1288,7 +1288,11 @@ class ItemRepository
      * @param array<int, array<string, mixed>> $primary Ranked first half.
      * @param array<int, array<string, mixed>> $secondary Half that must not be
      *        starved by a full `$primary`.
-     * @param int $limit Maximum size of the combined list.
+     * @param int $limit Maximum size of the combined list, clamped to
+     *        `[1, self::ABSOLUTE_ROW_CEILING]` (S99 backstop, M-SERVER-08
+     *        minor-2) — the SQL halves are already capped at the ceiling, and
+     *        slicing the merge at the raw caller limit would let an oversized
+     *        request walk back more than one page's worth of hydrated rows.
      * @return array<int, array<string, mixed>>
      */
     private function mergeSearchResults(array $primary, array $secondary, int $limit): array
@@ -1296,6 +1300,8 @@ class ItemRepository
         if ($limit <= 0) {
             return [];
         }
+
+        $limit = min($limit, self::ABSOLUTE_ROW_CEILING);
 
         if ($secondary === []) {
             return array_slice($primary, 0, $limit);

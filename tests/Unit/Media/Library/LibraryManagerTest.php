@@ -68,6 +68,46 @@ class LibraryManagerTest extends TestCase
     }
 
     /**
+     * Rider R-SERVER-07 law: the creation-time `watch()` kick runs an INLINE
+     * initial checksum walk, so an over-cap (1M+ files) or unreadable tree
+     * throws AFTER the libraries row was already inserted. The insert is not
+     * rolled back by anything, so a propagating throw 500s a creation that
+     * actually succeeded and leaves an orphan unwatched row behind a
+     * misleading error. createLibrary() must swallow the watch failure with a
+     * warning — FolderWatchScheduler::syncLibraries() re-registers any
+     * library absent from the watcher on a later tick, so the library self-
+     * heals without ever being silently dropped. Red on the parent (throw
+     * escapes), green with the guard.
+     */
+    public function testCreateLibrarySurvivesARefusedInitialWatch(): void
+    {
+        $queries = [];
+        $db = $this->makeDb($queries, []);
+
+        $scanner = $this->createMock(MediaScanner::class);
+        $watcher = $this->createMock(FolderWatcher::class);
+        $watcher->method('watch')->willThrowException(
+            new RuntimeException('simulated over-cap watch walk (M-SERVER-07 shape)')
+        );
+        $musicLibraryService = $this->createMock(MusicLibraryService::class);
+
+        $manager = new LibraryManager($db, $scanner, $watcher, $musicLibraryService);
+
+        // No throw is the whole assertion; the row must also be on record.
+        $id = $manager->createLibrary('Giant', 'video', ['/mnt/giant']);
+
+        $this->assertNotSame('', $id);
+
+        $insertSeen = false;
+        foreach ($queries as $recorded) {
+            if (str_starts_with($recorded[0], 'INSERT INTO libraries')) {
+                $insertSeen = true;
+            }
+        }
+        $this->assertTrue($insertSeen, 'the libraries row must be inserted before the watch kick');
+    }
+
+    /**
      * Regression: rescanLibrary() must NEVER issue the destructive
      * `DELETE FROM media_items WHERE library_id = ?`. That statement used to wipe
      * every user's watch progress / favorites / ratings for the library because

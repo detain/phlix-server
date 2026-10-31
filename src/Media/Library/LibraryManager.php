@@ -275,7 +275,24 @@ class LibraryManager
 
         // Start watching for changes. (The initial scan is enqueued as a
         // background job by the caller — NOT run inline — see the docblock.)
-        $this->watcher->watch($id, $paths);
+        // watch() performs one initial checksum walk per path INLINE, so an
+        // over-cap or unreadable tree throws right here — after the row was
+        // already inserted, and no rollback unwinds it. Failing the request
+        // would 500 a creation that actually succeeded, leaving an orphan
+        // unwatched row behind a misleading error. The honest shape: creation
+        // is durable, watching simply has not started yet —
+        // FolderWatchScheduler::syncLibraries() notices every tick that this
+        // library is absent from the watcher and re-registers it with its own
+        // doubling backoff, so a transiently bad path costs a warning, not the
+        // library.
+        try {
+            $this->watcher->watch($id, $paths);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Library created but initial watch refused; the watch scheduler will retry', [
+                'library_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return $id;
     }

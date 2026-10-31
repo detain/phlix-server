@@ -942,9 +942,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * per-worker memoization pins: fingerprint hold/bust + reset seam; env-key
      * identity reuse, cold-parse-on-change, reset seam). Measured from the
      * phpunit red (2038), not predicted.
+     * Re-pinned 2038→2039 by server rider wave A (R-SERVER-19, 2026-10-31):
+     * +1 — tests/Integration/Media/SmartRulesRatingRangeRealDbTest.php (the
+     * real-MySQL proof that a rating_range rule RUNS: aggregate predicates
+     * moved from WHERE (MySQL 1111 at the parent, measured) to HAVING after
+     * the per-item GROUP BY, bindings in clause order). Measured from the
+     * phpunit red (2039), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2038;
+    private const EXPECTED_PHP_FILES = 2039;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

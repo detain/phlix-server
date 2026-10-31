@@ -3919,6 +3919,11 @@ class ItemRepository
 
         $wheres = ['1=1'];
         $bindings = [];
+        // Aggregate predicates (rating_range) may not join the WHERE list —
+        // MySQL rejects aggregates there (error 1111). They travel under
+        // their own keys and are appended after GROUP BY (R-SERVER-19).
+        $havings = [];
+        $havingBindings = [];
         $needsRatingJoin = false;
 
         foreach ($rules as $rule) {
@@ -3939,6 +3944,12 @@ class ItemRepository
             }
             foreach ($result['bindings'] as $binding) {
                 $bindings[] = $binding;
+            }
+            foreach ($result['havings'] ?? [] as $having) {
+                $havings[] = $having;
+            }
+            foreach ($result['havingBindings'] ?? [] as $havingBinding) {
+                $havingBindings[] = $havingBinding;
             }
 
             if (isset($result['needsRatingJoin']) && $result['needsRatingJoin'] === true) {
@@ -3963,10 +3974,22 @@ class ItemRepository
 
         if ($needsRatingJoin) {
             $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
+            $havingClause = $havings === [] ? '' : ' HAVING ' . implode(' AND ', $havings);
 
-            $countSql = "SELECT COUNT(DISTINCT media_items.id) as count"
-                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}";
-            $countResult = $this->db->query($countSql, $bindings);
+            if ($havingClause === '') {
+                $countSql = "SELECT COUNT(DISTINCT media_items.id) as count"
+                    . " FROM media_items {$ratingJoin} WHERE {$baseWhere}";
+                $countResult = $this->db->query($countSql, $bindings);
+            } else {
+                // The aggregate predicate collapses the joined rows per item —
+                // the honest count is the number of GROUP BY survivors, so it
+                // runs over the same grouped shape the select does (COUNT over
+                // a derived table; COUNT(DISTINCT) could not carry a HAVING).
+                $countSql = "SELECT COUNT(*) as count FROM (SELECT media_items.id"
+                    . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
+                    . " GROUP BY media_items.id{$havingClause}) AS rating_matched";
+                $countResult = $this->db->query($countSql, array_merge($bindings, $havingBindings));
+            }
             $total = $this->extractCount($countResult);
 
             // Rating sort: ORDER BY average numeric score from metadata_ratings.
@@ -3980,11 +4003,14 @@ class ItemRepository
             // GROUP BY already collapses to one row per media_items.id, so the
             // tail is a legal TOTAL-order key ({@see getAllByType()} law,
             // M-SERVER-08).
+            // HAVING rides immediately after GROUP BY, its bindings after the
+            // WHERE bindings and before the paging pair (SQL clause order is
+            // the binding order — R-SERVER-19).
             $selectSql = "SELECT media_items.*, AVG(r.score) AS avg_rating"
                 . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
-                . " GROUP BY media_items.id"
+                . " GROUP BY media_items.id" . $havingClause
                 . " ORDER BY {$orderClause}, media_items.id ASC LIMIT ? OFFSET ?";
-            $fetchBindings = array_merge($bindings, [$limit, $offset]);
+            $fetchBindings = array_merge($bindings, $havingBindings, [$limit, $offset]);
             $results = $this->db->query($selectSql, $fetchBindings);
         } else {
             $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . $baseWhere;

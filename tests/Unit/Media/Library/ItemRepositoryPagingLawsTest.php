@@ -32,10 +32,13 @@ use Workerman\MySQL\Connection;
  *    question — and the tail text is the pin.
  *  - the smart-rules JOIN arm: its ORDER BY must carry the QUALIFIED
  *    `media_items.id` (a bare `id` is ambiguous against `metadata_ratings.id`
- *    — MySQL error 1052). That arm additionally dies today on a real MySQL
- *    for an unrelated, pre-existing reason (`rating_range` puts
- *    `COALESCE(AVG(r.score), 0)` in WHERE — error 1111, reported separately),
- *    so a text pin is the only honest teeth available until that is cured.
+ *    — MySQL error 1052). That arm once died on a real MySQL for an
+ *    unrelated defect — `rating_range` put `COALESCE(AVG(r.score), 0)` in
+ *    WHERE (error 1111) — cured by rider R-SERVER-19: aggregate predicates
+ *    are emitted under HAVING after the GROUP BY. The clause-placement pins
+ *    below keep that cure from regressing, and
+ *    {@see \Phlix\Tests\Integration\Media\SmartRulesRatingRangeRealDbTest}
+ *    proves the whole arm end-to-end against a real server.
  *
  * Ceiling bindings are asserted through the class's OWN constant (reflection,
  * never a re-typed number) so the pins track the declared value, plus one
@@ -76,6 +79,18 @@ final class ItemRepositoryPagingLawsTest extends TestCase
     {
         $this->assertNotEmpty($this->log, 'the repository must have issued a query');
         return $this->log[count($this->log) - 1];
+    }
+
+    /**
+     * The whole recorded log under its declared shape (the narrowing phpstan
+     * keeps across the closure write-backs makes in-test offset access a
+     * dead end — the drain helper is the typed window).
+     *
+     * @return list<array{sql: string, bindings: list<mixed>}>
+     */
+    private function drainLog(): array
+    {
+        return $this->log;
     }
 
     public function testTheDeclaredCeilingIsStillTheS99TenThousand(): void
@@ -241,5 +256,59 @@ final class ItemRepositoryPagingLawsTest extends TestCase
         $q = $this->lastQuery();
         $this->assertStringContainsString('LEFT JOIN metadata_ratings r', $q['sql'], 'the join arm must be under test');
         $this->assertStringContainsString(', media_items.id ASC LIMIT ? OFFSET ?', $q['sql']);
+    }
+
+    /**
+     * R-SERVER-19 law: an aggregate predicate may never join the WHERE list
+     * (MySQL 1111) — rating_range clauses travel under HAVING, placed
+     * immediately after the per-item GROUP BY, and their bindings follow the
+     * WHERE bindings ahead of the paging pair. Red on the parent (AVG in
+     * WHERE, count as COUNT(DISTINCT)), green at the cure.
+     */
+    public function testRatingRangeAggregatePredicateRidesHavingNotWhere(): void
+    {
+        // Clause-builder half: the vocabulary itself emits nothing into wheres.
+        $clause = \Phlix\Collections\SmartRuleVocabulary::buildRatingRangeClause(['value' => '7-10']);
+        $this->assertSame([], $clause['wheres'], 'no aggregate may be a WHERE clause');
+        $this->assertCount(2, $clause['havings']);
+        $this->assertSame([7.0, 10.0], $clause['havingBindings']);
+
+        $this->log = [];
+        $this->repo()->queryWithSmartRules([['type' => 'rating_range', 'value' => '7-10']], [], 'lib-1');
+        $log = $this->drainLog();
+        $this->assertCount(2, $log, 'the join arm issues count + select');
+        [$count, $select] = $log;
+
+        // The WHERE leg of BOTH queries is aggregate-free.
+        foreach (['count' => $count, 'select' => $select] as $label => $q) {
+            $this->assertSame(
+                1,
+                preg_match('/WHERE (.*?)(GROUP BY|ORDER BY|LIMIT|\z)/s', $q['sql'], $m),
+                $label . ': WHERE leg extractable'
+            );
+            $this->assertStringNotContainsString(
+                'AVG(',
+                $m[1],
+                $label . ': no aggregate inside WHERE (MySQL 1111 law)'
+            );
+        }
+
+        // Select arm: HAVING sits exactly between GROUP BY and ORDER BY.
+        $havingSql = 'HAVING COALESCE\(AVG\(r\.score\), 0\) >= \? AND COALESCE\(AVG\(r\.score\), 0\) <= \?';
+        $this->assertMatchesRegularExpression(
+            '/GROUP BY media_items\.id ' . $havingSql . ' ORDER BY/s',
+            $select['sql']
+        );
+        // Binding order mirrors clause order: where, having, limit, offset.
+        $this->assertSame(['lib-1', 7.0, 10.0, 50, 0], $select['bindings']);
+
+        // Count arm: aggregate filtering counts GROUP BY survivors over a
+        // derived table — COUNT(DISTINCT) could not carry the HAVING.
+        $this->assertStringStartsWith('SELECT COUNT(*) as count FROM (SELECT media_items.id', $count['sql']);
+        $this->assertMatchesRegularExpression(
+            '/GROUP BY media_items\.id ' . $havingSql . '\) AS rating_matched$/',
+            $count['sql']
+        );
+        $this->assertSame(['lib-1', 7.0, 10.0], $count['bindings']);
     }
 }

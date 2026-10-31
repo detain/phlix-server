@@ -57,8 +57,11 @@ class FolderWatcher
      * at 300-500k files); this ceiling is 2x above that cited scale and turns
      * a runaway walk into a loud, contained failure instead of an OOM in the
      * resident library-scan worker. {@see FolderWatchScheduler} catches
-     * Throwable around both entry points, so an over-cap directory is logged
-     * and backed off — never silently watched with a truncated checksum.
+     * Throwable around both entry points, and (since rider R-SERVER-07)
+     * {@see LibraryManager::createLibrary()} catches it around the creation-
+     * time kick, so an over-cap directory is logged and backed off — never
+     * silently watched with a truncated checksum, and never a 500 over an
+     * INSERT that already landed.
      */
     private const MAX_WATCHED_FILES_PER_PATH = 1000000;
 

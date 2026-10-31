@@ -168,9 +168,25 @@ final class SmartRuleVocabulary
      * Expects $params['value'] to be an array with 'min' and/or 'max' keys,
      * or a string like "7-10" or "7".
      *
+     * The range predicates compare an AGGREGATE — `COALESCE(AVG(r.score), 0)`
+     * — and MySQL rejects aggregates in WHERE (error 1111, "Grouping
+     * operation is used incorrectly"). They are therefore emitted under a
+     * separate `havings` key with their own `havingBindings`, to be appended
+     * AFTER the per-item GROUP BY by the consumer
+     * ({@see \Phlix\Media\Library\ItemRepository::queryWithSmartRules()});
+     * binding order is where-bindings, then having-bindings, then paging.
+     * Rider R-SERVER-19 cured the pre-`havings` shape that put them in
+     * `wheres` and made every rating_range smart rule die at runtime.
+     *
      * @param array{value: mixed} $params Rule parameters
      *
-     * @return array{wheres: list<string>, bindings: list<mixed>, needsRatingJoin: bool}
+     * @return array{
+     *     wheres: list<string>,
+     *     bindings: list<mixed>,
+     *     havings: list<string>,
+     *     havingBindings: list<mixed>,
+     *     needsRatingJoin: bool
+     * }
      */
     public static function buildRatingRangeClause(array $params): array
     {
@@ -193,25 +209,33 @@ final class SmartRuleVocabulary
         }
 
         if ($min === null && $max === null) {
-            return ['wheres' => [], 'bindings' => [], 'needsRatingJoin' => false];
+            return [
+                'wheres' => [],
+                'bindings' => [],
+                'havings' => [],
+                'havingBindings' => [],
+                'needsRatingJoin' => false,
+            ];
         }
 
-        $wheres = [];
-        $bindings = [];
+        $havings = [];
+        $havingBindings = [];
 
         if ($min !== null) {
-            $wheres[] = 'COALESCE(AVG(r.score), 0) >= ?';
-            $bindings[] = $min;
+            $havings[] = 'COALESCE(AVG(r.score), 0) >= ?';
+            $havingBindings[] = $min;
         }
 
         if ($max !== null) {
-            $wheres[] = 'COALESCE(AVG(r.score), 0) <= ?';
-            $bindings[] = $max;
+            $havings[] = 'COALESCE(AVG(r.score), 0) <= ?';
+            $havingBindings[] = $max;
         }
 
         return [
-            'wheres' => $wheres,
-            'bindings' => $bindings,
+            'wheres' => [],
+            'bindings' => [],
+            'havings' => $havings,
+            'havingBindings' => $havingBindings,
             'needsRatingJoin' => true,
         ];
     }

@@ -63,6 +63,10 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
 
     /** Marker of the last-resort document the `catch (Throwable)` arm builds. */
     private const ERROR_500_HTML = '<h1>Something went wrong</h1>';
+    // minors M-SERVER-53 (W-min109): /api/* crashes answer the generic JSON
+    // envelope (parseable by every API client); every other surface keeps the
+    // full HTML document. Both are the same hand-built raw response shape.
+    private const ERROR_500_JSON = '{"error":"Internal server error"}';
 
     private string $publicRoot = '';
 
@@ -426,17 +430,30 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
 
         self::assertStringStartsWith("HTTP/1.1 500 Internal Server Error\r\n", $headWire);
         self::assertStringContainsString(
-            self::ERROR_500_HTML,
+            self::ERROR_500_JSON,
             self::bodyBytes($getWire),
-            'premise: the GET carries the 500 document',
+            'premise: the API GET carries the JSON envelope (minors M-SERVER-53)',
         );
-        $this->assertHeadOf($headWire, $getWire, 'the 500');
-        self::assertStringNotContainsString(self::ERROR_500_HTML, $headWire);
+        $this->assertHeadOf($headWire, $getWire, 'the API 500');
+        self::assertStringNotContainsString(self::ERROR_500_JSON, $headWire);
         self::assertStringContainsString(
             'Content-Length: ' . strlen(self::bodyBytes($getWire)) . "\r\n",
             $headWire,
             'the 500 must still declare the length its GET body carries',
         );
+
+        // Non-API crash keeps the full HTML document (M-SERVER-87's surface);
+        // the same HEAD/Content-Length laws ride the doc shape.
+        $docGet = (string) $this->invoke('GET', '/crash-page', $exploding);
+        $docHead = (string) $this->invoke('HEAD', '/crash-page', $exploding);
+
+        self::assertStringContainsString(
+            self::ERROR_500_HTML,
+            self::bodyBytes($docGet),
+            'premise: the browser-facing GET carries the 500 document',
+        );
+        $this->assertHeadOf($docHead, $docGet, 'the HTML 500');
+        self::assertStringNotContainsString(self::ERROR_500_HTML, $docHead);
     }
 
     // --- site 5: dispatch()'s 404 page ----------------------------------------
@@ -531,6 +548,9 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
             'serveStatic()'  => self::bodyBytes($this->wireBytes($this->invoke('GET', '/assets/app/index-DaB12cd3.js'))),
             'the SPA shell'  => self::bodyBytes((string) $this->invoke('GET', '/app')),
             'the 500'        => self::bodyBytes((string) $this->invoke('GET', '/api/v1/anything', $exploding)),
+            'the 500 doc'    => self::bodyBytes(
+                (string) $this->invoke('GET', '/crash-page', $exploding)
+            ),
             'the 404 page'   => self::bodyBytes((string) $this->invoke('GET', '/no-such-page')),
         ];
 
@@ -538,7 +558,8 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
             self::assertNotSame('', $body, $site . ': a GET must still ship its entity');
         }
         self::assertSame(3622, strlen($bodies['serveStatic()']));
-        self::assertStringContainsString(self::ERROR_500_HTML, $bodies['the 500']);
+        self::assertStringContainsString(self::ERROR_500_JSON, $bodies['the 500']);
+        self::assertStringContainsString(self::ERROR_500_HTML, $bodies['the 500 doc']);
         self::assertStringContainsString(self::PAGE_404_HTML, $bodies['the 404 page']);
     }
 }

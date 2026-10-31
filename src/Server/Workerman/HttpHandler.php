@@ -100,6 +100,9 @@ final class HttpHandler
      * tpl = Smarty email template sources under public/templates/emails/
      * (server-side reads use the filesystem path, never this HTTP route).
      */
+    /** minors M-SERVER-53 (W-min109): the /api/* last-resort 500 entity. */
+    private const API_FALLBACK_BODY = '{"error":"Internal server error"}';
+
     private const DENIED_STATIC_EXTENSIONS = ['php', 'map', 'tpl'];
 
     /**
@@ -431,8 +434,18 @@ final class HttpHandler
             // welcome, so it is fixed here rather than excused as an edge case.
             // M-SERVER-87: the body is the shared full 500 document; only its bytes
             // changed — the HEAD arm below still derives Content-Length from strlen.
-            $errorBody = ErrorPages::serverErrorHtml();
-            $errorHeaders = ['Content-Type' => 'text/html; charset=utf-8'];
+            // M-SERVER-53 (W-min109): an /api/* crash is read by a JSON client
+            // that cannot parse HTML — those paths answer the generic
+            // machine-readable envelope ({'error': ...}, the router's own 500
+            // family; zero new wire codes). Browsers on every other surface
+            // keep the full document. Both shapes ride the identical HEAD /
+            // Content-Length / decoration laws below — the branch picks only
+            // the entity, never the protocol behavior.
+            $isApiPath = str_starts_with((string) $wr->path(), '/api/');
+            $errorBody = $isApiPath ? self::API_FALLBACK_BODY : ErrorPages::serverErrorHtml();
+            $errorHeaders = ['Content-Type' => $isApiPath
+                ? 'application/json; charset=utf-8'
+                : 'text/html; charset=utf-8'];
             if ($wr->method() === 'HEAD') {
                 $errorHeaders['Content-Length'] = (string) strlen($errorBody);
                 $connection->send(new BodylessResponse(500, $errorHeaders));

@@ -994,7 +994,7 @@ maintainers, not resolvable from this repo alone.
 | `PHLIX_CORS_ALLOWED_ORIGINS` | _unset_ | no | live | `CorsManager` — comma-separated origin allowlist |
 | `PHLIX_DOMAIN` | _unset_ | no | live | `config/hub.php` composition + the OAuth2/OIDC `redirect_uri` Host allowlist: `/auth/{oidc,github}/authorize` derives `<scheme>://<Host><path>` only when `Host` equals this value; unset/malformed ⇒ fail-closed `503 callback_url_not_configured` (absolute per-provider `redirect_uri` is the escape hatch) |
 | `TRUSTED_PROXIES` | loopback (`127.0.0.1`, `::1`) | no | live | `TrustedProxyResolver` — CIDR list of proxy hops allowed to assert `X-Forwarded-For`; unlisted non-loopback proxies bucket every request under the proxy address. REST reads it on every request (a fresh resolver per `Request::getTrustedClientIp()`); the WS-connect path memoizes one resolver per worker (`WebSocketServer`), so there a changed value applies at the next worker boot |
-| `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface | no | yes | `config/server.php` → `rate_limit`; `<SURFACE>` ∈ `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `JWKS`, `WS_CONNECT` |
+| `RATE_LIMIT_<SURFACE>_MAX` / `RATE_LIMIT_<SURFACE>_WINDOW` | per-surface | no | yes | `config/server.php` → `rate_limit`; `<SURFACE>` ∈ `REGISTER`, `REFRESH`, `WEBAUTHN_START`, `WEBAUTHN_FINISH`, `PIN_VERIFY`, `JWKS`, `WS_CONNECT`, `QUICK_CONNECT_INITIATE`, `QUICK_CONNECT_STATUS`, `QUICK_CONNECT_APPROVE`, `TELEMETRY_HEARTBEAT` (the full set is `RateLimitProfiles`' profile map — a new surface there without a row here is a doc gap) |
 | `PHLIX_SSRF_ALLOW_CIDRS` | _unset_ (deny-all private) | no | per-proc | `src/Common/Net/SsrfGuard.php` — extra trusted CIDRs for outbound fetches (e.g. LAN metadata hosts); read on first guard use per worker process, then memoized |
 | `PHLIX_METRICS_ENABLED` | `1` | no | yes | `config/metrics.php` (per-worker boot gate) |
 | `PHLIX_METRICS_FLUSH_INTERVAL` / `PHLIX_METRICS_BUCKET_SECONDS` / `PHLIX_METRICS_RETENTION_DAYS` / `PHLIX_METRICS_CONNECTION_TTL` / `PHLIX_METRICS_ROUTE_CAP` | `5` / `10` s / `7` d / `15` s / `200` | no | yes | `config/metrics.php` |
@@ -1031,7 +1031,14 @@ them to do anything: `PHLIX_HUB_ENROLLMENT_TOKEN`, `PHLIX_PUBLIC_URL`,
 
 R14-20. Every knob above marked "Restart" is read **once** and changing it in
 the process environment has no effect until the unit/container restarts. The
-short list of why, grouped by the mechanism that reads it early:
+mechanism itself — the graceful SIGUSR2 reload, and exactly what a reload can
+and cannot re-read — is written up in
+[docs/dev/settings-restart-gap.md](docs/dev/settings-restart-gap.md); read it
+before promising that restarting makes a specific setting take effect. An
+operator with UI access can trigger that same graceful reload without a shell:
+`POST /api/v1/admin/restart` (admin-only) answers with a JSON ack first and
+cycles the workers after the response flushes. The short list of why, grouped
+by the mechanism that reads it early:
 
 - **Bound before the first fork (`start.php` master):** `PHLIX_HTTP_*`,
   `PHLIX_WS_*` (listen URIs + counts), `PHLIX_CONTAINER_COMPILE` (the compiled
@@ -1436,7 +1443,7 @@ catalogued in [docs/data-model.md](docs/data-model.md).
 **Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 
 - `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
-- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead. It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
+- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead — note the **shipped images already set this to 1** (`docker/Dockerfile`, `Dockerfile.intel`), so a deploy from the published images refuses to boot on a failed migration unless you explicitly override it; see [docker/README.md](docker/README.md). It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
 - `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honoured by **both** commands.
 
 ⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text. The driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` would grep the migration's own SQL — an earlier version did, and it reclassified hard failures as successes. The idempotent set is exactly four errors:

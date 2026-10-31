@@ -159,6 +159,21 @@ final class LdapAdminController
 
         $this->plugin->saveSettings($settings);
 
+        // minors M-SERVER-78 (W-min108): the review's stated minimum — 'or at
+        // minimum warn on save' — shipped as a server-side notice on the
+        // SUCCESS path only. ssl=false means the bind rides unencrypted
+        // (start_tls in this stack is diagnostic-only), which until now was
+        // operator-silent. The response envelope stays byte-ident and no
+        // connection semantics change: auto-TLS is the ask's ALTERNATIVE and
+        // is consumer-visible breaking, so it is deliberately unshipped.
+        $savedPort = $settings['port'] ?? 0;
+        if (($settings['ssl'] ?? false) === false) {
+            error_log('ldap: settings saved with an UNENCRYPTED bind posture'
+                . ' (ssl=false, port=' . (is_numeric($savedPort) ? (int) $savedPort : 0) . ')'
+                . ' — enable ldaps (ssl=true, typically port 636) or confirm'
+                . ' the network is trusted (minors M-SERVER-78)');
+        }
+
         return (new Response())->json([
             'message' => 'Settings saved successfully',
             'configured' => true,

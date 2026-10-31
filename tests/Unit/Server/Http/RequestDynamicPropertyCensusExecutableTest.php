@@ -925,9 +925,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * controls). Zero Request-member reads or writes — the harness drives
      * Connection/Logger mocks plus the launchDetached seam. Measured from
      * the phpunit red (2034), not predicted.
+     * Re-pinned 2034→2035 by the W-min108 cluster (M-SERVER-78, 2026-11-01):
+     * +1 — tests/Unit/Plugins/Ldap/LdapAdminControllerPlaintextWarnTest.php
+     * (the plaintext-save warn pins: two measured refusals of silence +
+     * three envelope/store controls). Measured from the phpunit red (2035),
+     * not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2034;
+    private const EXPECTED_PHP_FILES = 2035;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1229,7 +1234,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // W-min108 / M-SERVER-48 (+1 write = the IfRange test's $request->userId
     // seed; its $request->headers[...] seeds are offset-writes counted on the
     // READS denominator above — zero src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1116;
+    // W-min108 / M-SERVER-78 (+1 write = the single '$request->body = $body;'
+    // seed in the Ldap warn test's post() helper — one site, five call
+    // invocations; the census counts sites. Zero src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1117;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

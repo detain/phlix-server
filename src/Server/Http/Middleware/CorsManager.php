@@ -59,6 +59,14 @@ final class CorsManager
     /** Preflight cache lifetime (seconds). 600 = 10 minutes, a safe default. */
     private const MAX_AGE = '600';
 
+    /** Steady state is one value per worker; 8 bounds pathological churn (M-SERVER-40). */
+    private const FROM_ENV_MEMO_CAP = 8;
+
+    /**
+     * @var array<string, self> raw env value => parsed manager (per worker).
+     */
+    private static array $fromEnvMemo = [];
+
     /**
      * @var list<string> Exact origins allowed to make credentialed requests.
      *                   Empty = CORS disabled (no headers ever emitted).
@@ -82,8 +90,34 @@ final class CorsManager
     public static function fromEnv(): self
     {
         $raw = getenv(self::ENV_ALLOWED_ORIGINS);
+        $key = is_string($raw) ? $raw : '';
 
-        return new self(self::parseOrigins(is_string($raw) ? $raw : ''));
+        // minors M-SERVER-40 (W-min109): this ran per request (twice, counting
+        // the rate-limit arm). The parsed manager is now memoized PER WORKER,
+        // keyed by the raw env value rather than a blind singleton: the steady
+        // state is one getenv + one array read per request, and a CHANGED
+        // value (tests, or a future live-reload path) cold-parses exactly
+        // once instead of being served a stale allowlist. The instance is
+        // immutable, so sharing it across requests is safe. Bounded so an
+        // odd-value churn cannot grow it; reset seam for tests.
+        $memo = self::$fromEnvMemo;
+        if (isset($memo[$key]) && $memo[$key] instanceof self) {
+            return $memo[$key];
+        }
+
+        if (count($memo) >= self::FROM_ENV_MEMO_CAP) {
+            $memo = [];
+        }
+        $memo[$key] = new self(self::parseOrigins($key));
+        self::$fromEnvMemo = $memo;
+
+        return $memo[$key];
+    }
+
+    /** Drops the per-worker fromEnv() memo (test seam, minors M-SERVER-40). */
+    public static function resetFromEnvMemoForTesting(): void
+    {
+        self::$fromEnvMemo = [];
     }
 
     /**

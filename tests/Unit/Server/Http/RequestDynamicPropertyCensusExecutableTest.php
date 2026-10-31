@@ -936,9 +936,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * is evaluated once, an empty harvest issues no DELETE). The harness
      * mocks the Connection and touches no Request members — reads and writes
      * denominators held. Measured from the phpunit red (2036), not predicted.
+     * Re-pinned 2036→2038 by the W-min109 cluster (M-SERVER-33 + M-SERVER-40,
+     * 2026-11-01): +2 — tests/Unit/Server/WebPortal/ViteAssetsMemoTest.php and
+     * tests/Unit/Server/Http/Middleware/CorsManagerFromEnvMemoTest.php (the
+     * per-worker memoization pins: fingerprint hold/bust + reset seam; env-key
+     * identity reuse, cold-parse-on-change, reset seam). Measured from the
+     * phpunit red (2038), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2036;
+    private const EXPECTED_PHP_FILES = 2038;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1023,8 +1029,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * own src reads go through getHeader() (a method call, not a property
      * read) and are inert to this denominator. Measured from the phpunit red
      * (453), not predicted.
+     * Re-pinned 453→455 by the W-min109 cluster (M-SERVER-40, 2026-11-01):
+     * +2 bracket-write seed sites in the memo test's preflight helper
+     * ($request->headers['Origin'] + ['Access-Control-Request-Method']) —
+     * offset writes count here per the M-SERVER-48 law above. The memo cures'
+     * own reads stay getHeader()-only, inert. Measured from the phpunit red
+     * (455), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 453;
+    private const EXPECTED_DECLARED_READS = 455;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1243,7 +1255,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // W-min108 / M-SERVER-78 (+1 write = the single '$request->body = $body;'
     // seed in the Ldap warn test's post() helper — one site, five call
     // invocations; the census counts sites. Zero src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1117;
+    // W-min109 / M-SERVER-40 (+1 write = the memo test's preflight helper
+    // assigning $request->method — one site, three invocations; the headers
+    // bracket-writes land on the READS denominator; zero src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1118;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

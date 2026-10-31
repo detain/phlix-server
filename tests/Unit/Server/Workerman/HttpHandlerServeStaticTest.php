@@ -18,6 +18,9 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * Pins the S4 immutable-cache behaviour of {@see HttpHandler::serveStatic()}: the
  * content-hashed Vite bundle under `/assets/app/**` gets a long-lived immutable
  * `Cache-Control`, while other static files (favicon, robots) do not.
+ * Since minors M-SERVER-49 the tag additionally requires the Vite hash naming
+ * law — unhashed residents of the same tree (index.html, .vite/manifest.json)
+ * fall closed to `no-cache` instead of being pinned for a year.
  */
 final class HttpHandlerServeStaticTest extends TestCase
 {
@@ -28,6 +31,17 @@ final class HttpHandlerServeStaticTest extends TestCase
         $root = sys_get_temp_dir() . '/phlix-servestatic-' . bin2hex(random_bytes(6));
         mkdir($root . '/assets/app', 0o777, true);
         file_put_contents($root . '/assets/app/index-DaB12cd3.js', "console.log('hi');\n");
+        // Unhashed residents of the same tree (minors M-SERVER-49): the SPA shell
+        // reachable via the side-door URL, the Vite manifest, and a publicDir-style
+        // copy whose suffix is too short to be a content hash.
+        file_put_contents($root . '/assets/app/index.html', "<!doctype html><html><body></body></html>\n");
+        mkdir($root . '/assets/app/.vite', 0o777, true);
+        file_put_contents($root . '/assets/app/.vite/manifest.json', "{}\n");
+        file_put_contents($root . '/assets/app/legacy-Ab12.js', "console.log('legacy');\n");
+        // Pattern edges: a hashed font (immutable by law, extension-agnostic) and a
+        // doubled extension whose final segment is NOT hash-shaped (fails closed).
+        file_put_contents($root . '/assets/app/fa-Db12cd34.woff2', "f\n");
+        file_put_contents($root . '/assets/app/i18n-DaB12cd3.index.js', "i\n");
         file_put_contents($root . '/robots.txt', "User-agent: *\n");
         // Sibling of assets/app/ (under assets/ but NOT under assets/app/) — the
         // traversal-escape target for the regression test below.
@@ -47,6 +61,12 @@ final class HttpHandlerServeStaticTest extends TestCase
             return;
         }
         @unlink($this->publicRoot . '/assets/app/index-DaB12cd3.js');
+        @unlink($this->publicRoot . '/assets/app/index.html');
+        @unlink($this->publicRoot . '/assets/app/.vite/manifest.json');
+        @rmdir($this->publicRoot . '/assets/app/.vite');
+        @unlink($this->publicRoot . '/assets/app/legacy-Ab12.js');
+        @unlink($this->publicRoot . '/assets/app/fa-Db12cd34.woff2');
+        @unlink($this->publicRoot . '/assets/app/i18n-DaB12cd3.index.js');
         @unlink($this->publicRoot . '/robots.txt');
         @unlink($this->publicRoot . '/assets/foo.js');
         @unlink($this->publicRoot . '/assets/appendix/x-DeadBeef1.js');
@@ -87,6 +107,67 @@ final class HttpHandlerServeStaticTest extends TestCase
         self::assertIsString($cacheControl);
         self::assertStringContainsString('immutable', $cacheControl);
         self::assertStringContainsString('max-age=31536000', $cacheControl);
+    }
+
+    /**
+     * Pattern edge (minors M-SERVER-49): the hash law is extension-agnostic — a
+     * hashed font inside the tree keeps the immutable tag exactly like a chunk.
+     */
+    public function testHashedFontInsideTheTreeKeepsImmutableHeader(): void
+    {
+        $resp = $this->invokeServeStatic('/assets/app/fa-Db12cd34.woff2');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        $cacheControl = $resp->getHeader('Cache-Control');
+        self::assertIsString($cacheControl);
+        self::assertStringContainsString('immutable', $cacheControl);
+    }
+
+    /**
+     * The side-door shell (minors M-SERVER-49): GET /assets/app/index.html is
+     * reachable and carries the RAW pre-injection document — a year of
+     * `immutable` there is a stale-bundle boot trap on the next upgrade. The
+     * gate must fall closed to revalidation for anything not hash-named.
+     */
+    public function testUnhashedShellInsideTheTreeNeverGetsImmutableHeader(): void
+    {
+        $resp = $this->invokeServeStatic('/assets/app/index.html');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        $cacheControl = $resp->getHeader('Cache-Control');
+        self::assertIsString($cacheControl);
+        self::assertStringNotContainsString('immutable', $cacheControl);
+        self::assertStringContainsString('no-cache', $cacheControl);
+    }
+
+    /** The Vite manifest is likewise unhashed — same revalidation law (M-SERVER-49). */
+    public function testViteManifestInsideTheTreeNeverGetsImmutableHeader(): void
+    {
+        $resp = $this->invokeServeStatic('/assets/app/.vite/manifest.json');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        $cacheControl = $resp->getHeader('Cache-Control');
+        self::assertIsString($cacheControl);
+        self::assertStringNotContainsString('immutable', $cacheControl);
+        self::assertStringContainsString('no-cache', $cacheControl);
+    }
+
+    /**
+     * Fail-closed edges (minors M-SERVER-49): a suffix too short to be a Vite
+     * content hash, and a doubled extension whose final segment is not
+     * hash-shaped, both revalidate — never the year tag on changing bytes.
+     */
+    public function testNonHashShapedNamesInsideTheTreeFailClosedToRevalidation(): void
+    {
+        foreach (['/assets/app/legacy-Ab12.js', '/assets/app/i18n-DaB12cd3.index.js'] as $path) {
+            $resp = $this->invokeServeStatic($path);
+
+            self::assertInstanceOf(WorkermanResponse::class, $resp, $path);
+            $cacheControl = $resp->getHeader('Cache-Control');
+            self::assertIsString($cacheControl, $path);
+            self::assertStringNotContainsString('immutable', $cacheControl, $path);
+            self::assertStringContainsString('no-cache', $cacheControl, $path);
+        }
     }
 
     public function testNonAssetFileHasNoImmutableCacheControl(): void

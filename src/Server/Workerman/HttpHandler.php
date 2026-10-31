@@ -686,10 +686,24 @@ final class HttpHandler
         // but resolves outside that directory (e.g. `/assets/app/../foo.js`) cannot
         // get tagged immutable — mirrors the jail check two lines above this method
         // already performs on `$real`.
+        //
+        // The directory gate alone was not enough (minors M-SERVER-49): the same
+        // tree also carries UNHASHED residents whose bytes DO change across
+        // releases — the raw SPA shell `index.html` (reachable via the side-door
+        // URL `GET /assets/app/index.html`; a year of `immutable` there pins a
+        // pre-`window.__PHLIX__`-injection document and is a stale-bundle boot
+        // trap on the next upgrade), `.vite/manifest.json`, and any publicDir
+        // copy. The tag now rides the Vite naming law itself: exactly one
+        // `-<8-char url-safe hash>` segment before the final extension. Anything
+        // else in the tree fails CLOSED to the house revalidating default
+        // (`no-cache`, same value Response::html seeds) — freshness is never the
+        // casualty of an unknown name.
         $assetsAppRoot = $this->publicRoot . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'app'
             . DIRECTORY_SEPARATOR;
         if (str_starts_with($real, $assetsAppRoot)) {
-            $headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+            $headers['Cache-Control'] = preg_match('/-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/', basename($real)) === 1
+                ? 'public, max-age=31536000, immutable'
+                : 'no-cache';
         }
 
         // minors M-SERVER-51 (W-min105): the docker images run the worker bare on

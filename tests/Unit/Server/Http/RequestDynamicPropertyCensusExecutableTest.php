@@ -864,9 +864,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * proof for the collection read rail). The cure itself is a .sql file —
      * inert to this PHP census — and no src/ PHP file or Request-property
      * write changed. Measured from the phpunit red (2025), not predicted.
+     * Re-pinned 2025→2026 by the W-min105 cluster (M-SERVER-72, 2026-10-31):
+     * +1 — tests/Unit/Config/HubSubdomainAutoClaimTest.php (the env-parsing
+     * guard for the stuck-on PHLIX_SUBDOMAIN_AUTO_CLAIM opt-out. The edited
+     * config/hub.php was already inside the scan (whole tree minus vendor/
+     * and node_modules) at 2025 — an edit, not a new file — so the
+     * denominator moves by exactly the one test). Zero Request-property writes; the writes
+     * denominator holds. Measured from the phpunit red (2026), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2025;
+    private const EXPECTED_PHP_FILES = 2026;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

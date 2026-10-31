@@ -927,7 +927,7 @@ maintainers, not resolvable from this repo alone.
 | `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` |
-| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | `1` (on) | no | yes | `config/hub.php` |
+| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognised value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; before minors M-SERVER-72 an explicit `0` was silently treated as unset) |
 
 #### SyncPlay write-through bridge
 

@@ -17,6 +17,15 @@ $tlsEnabledEnv  = getenv('PHLIX_TLS_ENABLED');
 $tlsEnabled     = $tlsEnabledEnv === false
     ? true
     : filter_var($tlsEnabledEnv, FILTER_VALIDATE_BOOLEAN);
+// Subdomain claiming is on unless the operator explicitly says off — SAME
+// tolerant rule as PHLIX_TLS_ENABLED above (0/off/false/no/'' disable, an
+// unrecognised value fails toward off). This line previously read
+// `(bool)(getenv('PHLIX_SUBDOMAIN_AUTO_CLAIM') ?: true)`, which re-enabled the
+// flag for every explicit value — the string '0' is PHP-falsy, so `?:` mapped
+// the deliberate opt-out right back onto the default (minors M-SERVER-72,
+// batch W-min105; the trap config/database.php's DB_POOL_ENABLED comment
+// names). Enforcement point: scripts/claim-subdomain.php refuses to claim.
+$subdomainClaimEnv = getenv('PHLIX_SUBDOMAIN_AUTO_CLAIM');
 
 use Phlix\Common\Env\EnvConfig;
 
@@ -37,7 +46,9 @@ return [
 
     'config_dir' => __DIR__,
 
-    'subdomain_auto_claim' => (bool)(getenv('PHLIX_SUBDOMAIN_AUTO_CLAIM') ?: true),
+    'subdomain_auto_claim' => $subdomainClaimEnv === false
+        ? true
+        : filter_var($subdomainClaimEnv, FILTER_VALIDATE_BOOLEAN),
 
     'tls_enabled' => $tlsEnabled,
 

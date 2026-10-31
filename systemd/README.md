@@ -162,6 +162,16 @@ The unit applies several sandbox directives:
 - `RuntimeDirectory=phlix` — systemd creates and chowns `/run/phlix` on
   each start (for the PID file at `config/server.php` `pid_file`)
 
+PHP Xdebug (host installs): `scripts/install.sh` drops a
+`/etc/php/*/fpm/conf.d/zz-xdebug.ini` on every host deploy — mode is off by
+default and the request trigger is now random per install (never the
+publicly-known `devdebug`; minors M-SERVER-73). On production hosts remove
+the file (`sudo rm /etc/php/*/fpm/conf.d/zz-xdebug.ini`) or keep `XDEBUG_MODE`
+off and never export it; when you do debug, rotate the trigger
+(`XDEBUG_TRIGGER=$(openssl rand -hex 12)`, re-run) when finished — the trigger
+is shared host-wide, and a known value plus a reachable PHP turns any request
+into a trace into the shared `/tmp/xdebug`.
+
 ## Troubleshooting
 
 ```bash

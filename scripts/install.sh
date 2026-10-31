@@ -1828,18 +1828,42 @@ phlix_install_swoole_uv
 log "Installing and configuring Xdebug"
 mkdir -p /tmp/xdebug
 XDEBUG_INI="$(phlix_php_confd_dir)/zz-xdebug.ini"
-cat >"$XDEBUG_INI" <<'XDEBUG_EOF'
+# The trigger value gates every debug/trace session (xdebug.start_with_request
+# = trigger). It used to ship the publicly-known `devdebug` default, so anyone
+# who knew it — and could reach PHP at all — could start host-wide traces into
+# the shared /tmp/xdebug (disk-filling DoS + request-flow disclosure). Like the
+# docker examples (docker/examples/.env.example), the trigger is now random per
+# install unless the operator exports XDEBUG_TRIGGER.
+if [ -n "${XDEBUG_TRIGGER:-}" ]; then
+	XDEBUG_TRIGGER_RESOLVED="$XDEBUG_TRIGGER"
+else
+	# openssl preferred, /dev/urandom fallback; a failing producer yields an
+	# empty string which the guard below turns into a loud abort (never a
+	# half-written ini, never a disabled gate). `|| true` keeps set -e out of
+	# the way so the guard, not errexit, owns the message.
+	XDEBUG_TRIGGER_RESOLVED="$({ openssl rand -hex 12 2>/dev/null || od -An -tx1 -N12 /dev/urandom 2>/dev/null; } | tr -d ' \n' || true)"
+fi
+# An empty trigger_value DISABLES the gate (every request would start a
+# session) — fail loudly rather than write a file with a hole in it.
+if [ -z "$XDEBUG_TRIGGER_RESOLVED" ]; then
+	die "Could not derive an Xdebug trigger value (neither XDEBUG_TRIGGER, openssl, nor /dev/urandom worked)"
+fi
+cat >"$XDEBUG_INI" <<XDEBUG_EOF
 ; Default mode is OFF - use XDEBUG_MODE env var to enable
 ; Options: off, develop, trace, debug (can combine with comma: "develop,trace")
-xdebug.mode = ${XDEBUG_MODE:-off}
+xdebug.mode = \${XDEBUG_MODE:-off}
 xdebug.start_with_request = trigger
-xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
+; Random per install (minors M-SERVER-73, W-min104): read it back from this
+; file when enabling the debugger, or set XDEBUG_TRIGGER=<openssl rand -hex 12>
+; and re-run to choose/rotate your own. Never printed to stdout on purpose.
+xdebug.trigger_value = "$XDEBUG_TRIGGER_RESOLVED"
 xdebug.trace_output_dir = /tmp/xdebug
 xdebug.max_nesting_level = 512
 xdebug.collect_assignments = 1
 xdebug.collect_return_value = 1
 XDEBUG_EOF
-info "Xdebug installed: mode=\${XDEBUG_MODE:-off}, trigger_value=\${XDEBUG_TRIGGER:-devdebug}"
+info "Xdebug installed: mode=\${XDEBUG_MODE:-off}; trigger value is random per install (root-only in $XDEBUG_INI — deliberately not echoed)"
+info "Xdebug trigger is shared host-wide: to debug, read the value from the ini (or set XDEBUG_TRIGGER=\$(openssl rand -hex 12) and re-run); rotate/remove it when done. On production hosts prefer deleting the file entirely: rm /etc/php/*/fpm/conf.d/zz-xdebug.ini"
 
 # Xdebug toggle helpers — call these to enable/disable xdebug at runtime
 # Usage: source /path/to/install.sh && phlix_xdebug_enable

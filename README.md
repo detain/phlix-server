@@ -1330,7 +1330,14 @@ file is a name-building helper, not an event).
 # Run specific test suite
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
+./vendor/bin/phpunit --testsuite E2E
 ```
+
+The `E2E` suite is the browser / hardware-encoder tail (`tests/E2E/`):
+playback through the real controller stack, HLS/fMP4 fixtures, hwaccel
+probes. It is serial-only by design — under load `HwaccelE2ETest` contends
+for the encoder and the multicast-receive classes misfire — so run it
+plainly, never under the parallel seam below.
 
 **Real-database integration tests self-skip.** Tests under `tests/Integration/`
 that need a live MySQL probe the configured host first and skip when it is
@@ -1349,6 +1356,19 @@ decorative. Note that the network-dependent group is excluded by `phpunit.xml`
 on purpose: `Phlix\Plugins\OAuth2\OAuth2HttpClient` (the live OAuth2 transport)
 is driven by a fake in every provider test and is effectively uncovered — closing
 that gap needs a live HTTP fixture.
+
+**CI does not run a single `phpunit` invocation, and neither should you for a
+full local pass.** The `phpunit.yml` job drives the two fast suites through
+paraunit with per-worker isolation: `bash scripts/parallel/run-suite.sh
+<Unit|Integration> <workers> [shards]` (Unit at parallel 8 — it touches no
+database; Integration at parallel 8 against eight clone schemas, because two
+workers sharing one schema corrupt each other's row counts). The clones come
+from `PHLIX_TEST_DB_SHARDS=8 ./scripts/parallel-test-db.sh create|drop`, whose
+template is the `$DB_DATABASE` schema migrated exactly as CI migrates it. Both
+scripts work locally and are the supported parallel seam; `run-suite.sh`
+deliberately refuses `E2E` (serial-tail law above, and its `Serialized`
+multicast group lives in `phpunit-parallel.xml`). The serial commands above
+remain correct for single files and small slices — the seams are opt-in.
 
 #### Comparing skip sets between two runs — never compare the COUNT
 

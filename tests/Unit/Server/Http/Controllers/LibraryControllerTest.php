@@ -348,6 +348,70 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * Whitespace-only names are ghost rows in every picker (minors
+     * M-SERVER-86): `'   '` passed the old `$name !== ''` conjunction and
+     * persisted a blank-titled library. The gate must 400 with the SAME
+     * canonical sentence the other malformed shapes get (no new wire copy).
+     */
+    public function testCreateRejectsWhitespaceOnlyLibraryName(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('createLibrary');
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = $this->makeController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => '   ',
+            'type' => 'movie',
+            'paths' => [self::libDir()],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array{error: string} $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Name, type and paths are required', $body['error']);
+    }
+
+    /**
+     * Names are trimmed before persistence (M-SERVER-86, same law as
+     * AuthManager::register and CollectionController): `' Movies '` must
+     * reach the manager as `'Movies'` — a leading/trailing-space title
+     * renders as misaligned everywhere and breaks exact-match re-creation.
+     */
+    public function testCreateTrimsNameBeforePersisting(): void
+    {
+        $seen = null;
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->willReturnCallback(static function (string $name) use (&$seen): string {
+                $seen = $name;
+
+                return 'new-lib-id';
+            });
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = $this->makeController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => ' Movies ',
+            'type' => 'movie',
+            'paths' => [self::libDir()],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame('Movies', $seen, 'the law trims BEFORE the manager sees the name');
+    }
+
+    /**
      * create() on a series library persists series_per_directory into options
      * (coerced to a real bool from the body top level).
      */

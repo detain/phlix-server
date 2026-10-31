@@ -893,9 +893,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * already inside the scan; the guard reads getenv only — no new
      * Request-property reads or writes. Measured from the phpunit red (2029),
      * not predicted.
+     * Re-pinned 2029→2030 by the W-min107 cluster (M-SERVER-86, 2026-10-31):
+     * +1 — tests/Unit/Auth/RegisterUsernameLawsTest.php (the character-count +
+     * trim register gate; measured red 4 arms at the parent). The edited
+     * AuthManager.php and LibraryController.php were already inside the scan;
+     * the guards read no new Request properties. Measured from the phpunit
+     * red (2030), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2029;
+    private const EXPECTED_PHP_FILES = 2030;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1164,6 +1170,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * $request->path on a bare `new Request()` — same sanctioned harness-seed
      * pattern. Zero src/ writes added (the envelope cures only swap label
      * strings). Measured from the phpunit red (1103), not predicted.
+     * Re-pinned 1103→1107 by the W-min107 cluster (M-SERVER-86, 2026-10-31):
+     * +4 declared-member WRITES — the two new LibraryControllerTest create()
+     * pins each stamp $request->userId and $request->body on a bare
+     * `new Request()` — the same sanctioned harness-seed pattern. Zero src/
+     * writes added (trim() moves happen on locals/params only). Measured from
+     * the phpunit red (1107), not predicted.
      */
     // M-SERVER-05 (+1 write = the new law test's makeRequest() seeding
     // $request->body, the same sanctioned pattern every sibling pin uses).
@@ -1175,7 +1187,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // src/ writes added).
     // srv-majors M-SERVER-04 (+2 writes = the new envelope law test seeding
     // $request->method + $request->path — same sanctioned harness-seed pattern).
-    private const EXPECTED_DECLARED_WRITES = 1103;
+    // W-min107 / M-SERVER-86 (+4 writes = the two new LibraryControllerTest
+    // create() pins each seeding $request->userId + $request->body).
+    private const EXPECTED_DECLARED_WRITES = 1107;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

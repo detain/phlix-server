@@ -518,6 +518,13 @@ class LibraryController
         $data = $request->body;
 
         $name = $data['name'] ?? null;
+        // minors M-SERVER-86 (W-min107): names are TRIMMED before the gate and
+        // persistence — the CollectionController blank-name law ('   ' is not a
+        // name, it is a ghost row rendering blank in every picker) applied
+        // uniformly with the username guard in AuthManager::register. The
+        // non-string arm collapses to null so the existing conjunction below
+        // still owns the single canonical 400 sentence (no new wire copy).
+        $name = is_string($name) ? trim($name) : null;
         $type = $data['type'] ?? null;
         $paths = $data['paths'] ?? null;
 

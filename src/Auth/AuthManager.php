@@ -791,7 +791,11 @@ class AuthManager
      * Creates a new user with the provided credentials and returns
      * authentication tokens for immediate login.
      *
-     * @param string $username Unique username (3-50 characters)
+     * @param string $username Unique username, 3-50 CHARACTERS (mb_strlen, minors
+     *        M-SERVER-86). Trimmed by this method before validation and storage;
+     *        documented charset rule: any Unicode content survives trimming, the
+     *        only shape law is trim-stability plus the character floor (which makes
+     *        whitespace-only names impossible). Login matches the trimmed form.
      * @param string $email User's email address (must be valid format)
      * @param string $password User's password (minimum 8 characters)
      *
@@ -820,8 +824,22 @@ class AuthManager
      */
     public function register(string $username, string $email, string $password): array
     {
+        // minors M-SERVER-86 (W-min107): names are measured in CHARACTERS and
+        // trimmed at the gate — strlen() counted bytes while the message
+        // promised "characters" (a 17-character CJK username is 51 bytes and
+        // was refused), and whitespace-only input sailed through both this
+        // guard and the controller's `!== ''` pre-gate to become a ghost
+        // account rendering blank in every user list. Law mirrors
+        // CollectionController's blank-name rejection: trim() first — never
+        // strip-all (internal spaces stay; 'John Smith' vs 'JohnSmith' are
+        // distinct accounts), and NO additional charset whitelist is applied
+        // here (Unicode names are legitimate; a charset rule would be a
+        // broader behavior change than the named defects). The @param docblock
+        // carries the same rule.
+        $username = trim($username);
+
         // Validate
-        if (strlen($username) < 3 || strlen($username) > 50) {
+        if (mb_strlen($username) < 3 || mb_strlen($username) > 50) {
             throw new \InvalidArgumentException('Username must be 3-50 characters');
         }
 

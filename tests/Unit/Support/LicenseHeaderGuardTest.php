@@ -157,6 +157,59 @@ final class LicenseHeaderGuardTest extends TestCase
     }
 
     /**
+     * The prune list is subtree law: a directory named in PRUNED_DIRECTORIES must
+     * leave the walk at every depth, not only at the repo root. Pin built on the
+     * rework venue where npm ci materialized web-ui/node_modules and the guard
+     * walked third-party minified headers into the violation list.
+     */
+    public function testVendoredSubtreesArePrunedAtEveryDepth(): void
+    {
+        $root = (string) realpath(sys_get_temp_dir()) . '/phlix-lhg-' . bin2hex(random_bytes(6));
+
+        try {
+            mkdir($root . '/web-ui/node_modules/pkg', 0777, true);
+            mkdir($root . '/deep/nested/build', 0777, true);
+            file_put_contents($root . '/composer.json', '{"license":"MPL-2.0"}');
+            file_put_contents($root . '/web-ui/a.ts', "/* @license   MPL-2.0 */\n");
+            file_put_contents($root . '/web-ui/node_modules/pkg/i.min.js', "/*! @license BSD */\n");
+            file_put_contents($root . '/deep/nested/build/generated.js', "/*! @license MIT */\n");
+
+            $found = [];
+
+            foreach (self::walkCarriers($root) as $entry) {
+                $found[] = substr($entry->getPathname(), strlen($root) + 1);
+            }
+
+            sort($found);
+
+            $this->assertSame(['web-ui/a.ts'], $found);
+        } finally {
+            $scratchFiles = [
+                $root . '/composer.json',
+                $root . '/web-ui/a.ts',
+                $root . '/web-ui/node_modules/pkg/i.min.js',
+                $root . '/deep/nested/build/generated.js',
+            ];
+            foreach ($scratchFiles as $file) {
+                @unlink($file);
+            }
+
+            $scratchDirs = [
+                $root . '/web-ui/node_modules/pkg',
+                $root . '/web-ui/node_modules',
+                $root . '/web-ui',
+                $root . '/deep/nested/build',
+                $root . '/deep/nested',
+                $root . '/deep',
+                $root,
+            ];
+            foreach ($scratchDirs as $dir) {
+                @rmdir($dir);
+            }
+        }
+    }
+
+    /**
      * Walk the first-party carrier set: the extension list M44 promoted across,
      * minus built and vendored trees (their headers are generated or third-party
      * and outside this law).
@@ -169,18 +222,50 @@ final class LicenseHeaderGuardTest extends TestCase
             $repoRoot,
             RecursiveDirectoryIterator::SKIP_DOTS
         );
-        $filter = new RecursiveCallbackFilterIterator($directory, static function (\SplFileInfo $current) use ($repoRoot): bool {
-            if ($current->isDir()) {
-                $relativeFromRoot = substr($current->getPathname(), strlen($repoRoot) + 1);
+        // mixed + instanceof guard (repo `/** @var mixed */` idiom family):
+        // Psalm models the callback parameter of RecursiveCallbackFilterIterator
+        // as the wrapped iterator's current()/key()/self union —
+        // RecursiveDirectoryIterator|SplFileInfo|string — so a narrowing
+        // `SplFileInfo $current` signature is an InvalidArgument (CI
+        // psalm-tests corpus, review D2). At runtime the value is always the
+        // SplFileInfo from RecursiveDirectoryIterator::current() (SKIP_DOTS
+        // prunes the dot entries), so the guard arm is unreachable and the walk
+        // is byte-identical in behavior to the old narrowing signature.
+        $keepCarrier = static function (mixed $current) use ($repoRoot): bool {
+            if (!$current instanceof \SplFileInfo) {
+                return false;
+            }
 
-                return !in_array($relativeFromRoot, self::PRUNED_DIRECTORIES, true);
+            if ($current->isDir()) {
+                $relativeFromRoot = '/' . str_replace(
+                    DIRECTORY_SEPARATOR,
+                    '/',
+                    substr($current->getPathname(), strlen($repoRoot) + 1)
+                ) . '/';
+
+                // Subtree law, not top-level law: the header above says built and
+                // vendored trees are outside this law, so a pruned name must hold
+                // at every depth. The old exact-relative-path match left
+                // web-ui/node_modules/... in the walk — an npm ci (the bundle
+                // re-vendor venue) turned the guard red on third-party minified
+                // headers (review-rework finding, fixlog/W-rWSRVA-rework__report.md).
+                // Slash-padded containment prunes the named subtree wherever it
+                // sits and keeps every first-party path (proven set-equal).
+                foreach (self::PRUNED_DIRECTORIES as $pruned) {
+                    if (str_contains($relativeFromRoot, '/' . $pruned . '/')) {
+                        return false;
+                    }
+                }
+
+                return true;
             }
 
             $extension = strtolower($current->getExtension());
 
             return in_array($extension, self::CARRIER_EXTENSIONS, true)
                 && $current->getFilename() !== 'package-lock.json';
-        });
+        };
+        $filter = new RecursiveCallbackFilterIterator($directory, $keepCarrier);
 
         yield from new RecursiveIteratorIterator(
             $filter,

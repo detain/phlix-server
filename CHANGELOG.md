@@ -36,6 +36,40 @@ House discipline this file maintains (established by review W-min90/91/92):
 - **The player-facing HLS/DASH pointer endpoints no longer echo the raw `job_id` parameter name (S-01 ask-named residue — W-min109 review MAJOR-1 cure).**
   - The W-min109 S-01 sweep moved the required-field copy of eight controllers onto the canonical `'<Field> ID is required'` human family, but two ask-named survivors were left undisclosed: `HlsController::getPlaylist()` and `DashController::getManifest()` still answered the empty-ID 400 with `'job_id is required'` — the exact same-field competing-shapes pathology the ask's own evidence cites, on the player-facing manifest-fetch path the admin-surface carve-out does not cover. Both now say `'Job ID is required'`; status codes, JSON keys and envelopes byte-identical — only the human string moved, and the repo-wide grep for the old shape is zero. Forward-correction (this file's own law): the sweep's entry below claimed "All 19 sites now ride the canonical human family" — that universalized over a self-selected site set; these two required-field sites joined the family only now. The reviewer-catalogued wider snake survivors (`media_url`, `hub_token`, and friends) were never ask-evidence sites and stay honest queue-fodder, unchanged by this entry. Estate-wide consumer grep for BOTH string shapes (all clients, ui, hub, contracts, docs, web-ui, openapi) measured zero hits — server-internal envelope prose, no client cascade owed. The two empty-ID 400 tests gained exact-envelope pins (`['error' => 'Job ID is required']` asserted as the whole decoded body): red first measured 2F against the old copy at the parent, green after; the two controller files run 75/281, and the adjacent Transcode/wiring/route-removal sweep holds 36/140 unchanged. Zero new wire codes; the contracts registry md5 stays `40c1da48`.
 
+- **Server rider wave A rework — three gate cures from the independent review (D1–D3, forward-fix on the wave).**
+  - **D1 (S126 floor rotation):** wave commit 89d56876 added `SmartRulesRatingRangeRealDbTest`
+    — the 79th real-DB adopter — without rotating
+    `IntegrationDbGuardAdoptionTest::EXPECTED_ADOPTERS`, the same law the guard's own error
+    text states. The rotation 78→79 lands in this forward-fix commit, measured from the
+    phpunit red (failing at 89d56876 through the wave tip and at 4190b62d; the S305
+    browser-E2E leg failure in the same job was its cascade — junit.xml never produced).
+  - **D2 (psalm-tests corpus):** `LicenseHeaderGuardTest::walkCarriers()` declared a narrowing
+    `\SplFileInfo $current` callback parameter; Psalm models the
+    `RecursiveCallbackFilterIterator` callback's first parameter as the wrapped iterator's
+    union (`RecursiveDirectoryIterator|SplFileInfo|string`) and rejected it with an
+    InvalidArgument — the Coding-Standards red at the wave tip and at 4190b62d. The callback
+    now takes `mixed` behind an `instanceof \SplFileInfo` guard (repo mixed-idiom family);
+    behavior is byte-identical (`SKIP_DOTS` means the value is always the `SplFileInfo` from
+    `RecursiveDirectoryIterator::current()`, so the guard arm is unreachable), proven by the
+    guard suite's 4/10 held and the psalm-tests corpus losing exactly that one error.
+  - **D3 (stale SPA bundle, S253):** the wave flipped the license header in
+    `web-ui/src/i18n/index.ts` but never rebuilt the committed `public/assets/app`, so the
+    Web UI gate diffed the map's embedded source (`index-CPkn_XJ-.js.map`) against the stale
+    committed bytes. The bundle is re-vendored from a clean `npm ci` (npm 11.19.0) on the
+    exact CI-pinned node 24.20.0, determinism proven ×2 (consecutive builds aggregate
+    `7c3055d3d4ff8b71b1511daf9b3052a2`); the tracked delta is exactly one line — the
+    `sourcesContent` header `MIT`→`MPL-2.0`, zero code change.
+  - **Found by the re-vendor venue (nested prune defect in the new guard itself):** with
+    `web-ui/node_modules` on disk — which any bundle-rebuild dev box now has —
+    `walkCarriers()` walked 3,268 vendored paths past the prune list: the original matcher
+    compared the exact repo-relative path, so only top-level `node_modules`/`dist`/`build`
+    sat out of the law, while its header prose claims built and vendored trees are outside
+    it at every depth. Third-party minified headers (`speakingurl.min.js`: `BSD` vs its
+    manifest's `BSD-3-Clause`) then reddened the guard. Pruning is now slash-padded
+    containment per path component, pinned by `testVendoredSubtreesArePrunedAtEveryDepth`;
+    the first-party carrier set is proven unchanged on this tree (removed set = vendored
+    names only, added set empty; walk 2180 first-party carriers before and after).
+
 - **Server rider wave A — thirteen silent MIT relapses cured, and M44's "one truth" claim made executable (R-SERVER-11).**
   - M-SERVER-44's entry stated that after its sweep "every carrier now tells the one truth" (`MPL-2.0`, the license the root `composer.json` has always declared). Thirteen carriers kept declaring MIT: migrations `064, 065, 066, 070, 103, 104, 105` (the tag rides their `--` header banner), `TraktApiRefreshSingleFlightTest.php`, and five web-ui TypeScript files (`src/i18n/index.ts`, `tests/helpers/browser-globals.ts`, `tests/{i18n,i18n-seam,library-scan-route}.test.ts`). They slipped through because M44's promotion touched only PHP under `src/`, `scripts/` and `config/` — and nothing re-checked the claim afterwards. All thirteen now carry `MPL-2.0`; the web-ui edits are comment-header lines only, zero code change. The sample-theme plugin subtree is NOT relabeled: its own `composer.json` declares `MIT`, and honoring nearest-manifest declarations is the law, not overruling them.
   - The claim is no longer prose: `tests/Unit/Support/LicenseHeaderGuardTest.php` walks every first-party carrier (`php, ts, js, mjs, cjs, vue, sql`; built/vendored trees pruned) and fails if any `@license` tag contradicts the license declared by its nearest ancestor manifest — with a vacuity floor on the walk itself (a matcher that finds nothing cannot pass silently) and a pin that the root manifest says `MPL-2.0`. Mutation tooth proven: planting MIT back into migration `064` reddens the guard naming exactly that file; restored, green. The census gained one PHP file: `EXPECTED_PHP_FILES` re-pinned 2039→2040 from the measured red.

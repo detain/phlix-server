@@ -514,7 +514,15 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // (M-SERVER-83: real InnoDB users-row FOR UPDATE blocking proof and the
     // two-leg rollback witness over throwaway phlix_srv83_* databases, S345).
     // Measured from the phpunit red (78), not predicted.
-    private const EXPECTED_ADOPTERS = 78;
+    // 78→79 by the rider wave A R-SERVER-19 commit (89d56876, 2026-10-31):
+    // +tests/Integration/Media/SmartRulesRatingRangeRealDbTest.php
+    // (R-SERVER-19: real-MySQL proof that rating-range smart rules answer with
+    // their AVG predicates in HAVING — the SQLSTATE 1111 "Invalid use of group
+    // function" repro on the parent tree, clean read path at the cure; the
+    // rotation rides this rework commit, not the wave commit that added the
+    // test — see review fixlog/W-rWSRV-A__r1.md D1).
+    // Measured from the phpunit red (79), not predicted.
+    private const EXPECTED_ADOPTERS = 79;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

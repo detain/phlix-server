@@ -487,8 +487,26 @@ final class PreRouterFastPaths
                 ->asHeadReply();
         }
 
+        // RFC 7233 §3.2 (minors M-SERVER-48, W-min108): same law as the
+        // transcode-file leg — an If-Range that no longer matches this file's
+        // Last-Modified (or an unverifiable mtime) marks the client's window
+        // stale, and a stale window is IGNORED: the request falls through to
+        // the whole-file 200 below. Absent/empty If-Range keeps the historical
+        // 206/416 behavior byte-identically.
+        $ifRange = $request->getHeader('If-Range');
+        $rangeStale = false;
+        if (is_string($ifRange) && $ifRange !== '') {
+            $rangeMtime = filemtime($path);
+            $rangeValidator = $rangeMtime === false
+                ? null
+                : gmdate('D, d M Y H:i:s', $rangeMtime) . ' GMT';
+            $rangeStale = $rangeValidator === null || trim($ifRange) !== $rangeValidator;
+        }
+
         $rangeHeader = $request->getHeader('range');
-        $range = ByteRangeParser::parse(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
+        $range = $rangeStale
+            ? null
+            : ByteRangeParser::parse(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
         if ($range !== null) {
             if (!$range['satisfiable']) {
                 return (new Response())

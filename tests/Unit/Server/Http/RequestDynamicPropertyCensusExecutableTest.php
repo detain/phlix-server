@@ -905,9 +905,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * 5 arms at the parent). The edited WebAuthnController.php was already
      * inside the scan; the cure adds no Request reads. Measured from the
      * phpunit red (2031), not predicted.
+     * Re-pinned 2031→2032 by the W-min108 cluster (M-SERVER-48, 2026-11-01):
+     * +1 — tests/Unit/Server/Http/Controllers/TranscodeFileServerIfRangeTest.php
+     * (the RFC 7233 §3.2 pins driving the trait's serveJobFile through an
+     * anonymous host; measured red 3 stale arms at the parent). The edited
+     * TranscodeFileServer.php + PreRouterFastPaths.php were already inside the
+     * scan. Measured from the phpunit red (2032), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2031;
+    private const EXPECTED_PHP_FILES = 2032;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -985,8 +991,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * names the attempted method in the 405 envelope (`'does not support ' .
      * $request->method`). The new test file reads no Request members. Measured
      * from the phpunit red (450), not predicted.
+     * Re-pinned 450→453 by the W-min108 cluster (M-SERVER-48, 2026-11-01):
+     * +3 test-harness declared-member READS on Request roots — the three new
+     * `$request->headers[...]` seed sites (the IfRange test's header-copy loop
+     * + the two PreRouterFastPathsMediaStreamTest If-Range pins). The cure's
+     * own src reads go through getHeader() (a method call, not a property
+     * read) and are inert to this denominator. Measured from the phpunit red
+     * (453), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 450;
+    private const EXPECTED_DECLARED_READS = 453;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1199,7 +1212,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // WebAuthnControllerFailureCopyTest arms each seeding $request->body,
     // plus the two registration-phase arms that also need $request->userId
     // — same sanctioned harness-seed pattern; zero src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1115;
+    // W-min108 / M-SERVER-48 (+1 write = the IfRange test's $request->userId
+    // seed; its $request->headers[...] seeds are offset-writes counted on the
+    // READS denominator above — zero src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1116;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

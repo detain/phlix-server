@@ -87,13 +87,33 @@ trait TranscodeFileServer
             }
         }
 
+        // RFC 7233 §3.2 (minors M-SERVER-48, W-min108): a Range is only
+        // honorable while it refers to the SAME bytes the client saw. When
+        // If-Range is present, it must match this file's current validator —
+        // the very Last-Modified string the conditional-GET arm above compares
+        // and Workerman emits at send. A mismatch (or an unverifiable mtime)
+        // means the file changed since the client's window was negotiated:
+        // the Range is then IGNORED entirely — even an unsatisfiable one
+        // answers the full 200, never a 416 — and never spliced into changed
+        // bytes. Absent/empty If-Range keeps the historical behavior exactly.
+        $ifRange = $request->getHeader('If-Range');
+        $rangeStale = false;
+        if (is_string($ifRange) && $ifRange !== '') {
+            $rangeMtime = filemtime($path);
+            $rangeValidator = $rangeMtime === false
+                ? null
+                : gmdate('D, d M Y H:i:s', $rangeMtime) . ' GMT';
+            $rangeStale = $rangeValidator === null || trim($ifRange) !== $rangeValidator;
+        }
+
         // Single byte-range (either `bytes=A-B`/`bytes=A-` or a suffix `bytes=-N`,
         // "last N bytes") lets the player seek within a segment and lets a browser
         // probe (`Range: bytes=0-`) get a proper 206. Workerman emits Content-Range +
         // 206 from the offset/length window passed to withFile(). Multi-range or
         // malformed values fall through to a whole-file 200 — an RFC 7233-permitted
-        // fallback for a range the server won't otherwise satisfy.
-        $range = self::parseRange($request->getHeader('Range'), $fileSize);
+        // fallback for a range the server won't otherwise satisfy. A stale
+        // If-Range validator suppresses the whole branch above (§3.2).
+        $range = $rangeStale ? null : self::parseRange($request->getHeader('Range'), $fileSize);
         if ($range !== null) {
             if (!$range['satisfiable']) {
                 return (new Response())

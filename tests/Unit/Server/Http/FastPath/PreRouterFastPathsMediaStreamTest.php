@@ -179,6 +179,49 @@ final class PreRouterFastPathsMediaStreamTest extends TestCase
         self::assertSame('bytes */16', $response->headers['Content-Range'] ?? null);
     }
 
+    public function testStaleIfRangeIgnoresTheWindowAndShipsWholeFile(): void
+    {
+        $fastPaths = $this->makeFastPaths([
+            'id' => 'track-1',
+            'type' => 'track',
+            'path' => $this->mediaPath,
+        ], ['id' => 'p1']);
+
+        // minors M-SERVER-48 (W-min108) / RFC 7233 §3.2: the window was
+        // negotiated against bytes this file no longer has — the Range is
+        // IGNORED (full 200), never spliced into a 206 of changed content.
+        $request = $this->signedRequest('track-1', 'bytes=0-3');
+        $request->headers['If-Range'] = 'Wed, 21 Oct 2015 07:28:00 GMT';
+
+        $response = $fastPaths->dispatch($request);
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->statusCode);
+        self::assertArrayNotHasKey('Content-Range', $response->headers);
+        self::assertSame(self::BODY, $response->materializeFileWindow()->body);
+    }
+
+    public function testMatchingIfRangeStillHonorsTheMediaWindow(): void
+    {
+        $fastPaths = $this->makeFastPaths([
+            'id' => 'track-1',
+            'type' => 'track',
+            'path' => $this->mediaPath,
+        ], ['id' => 'p1']);
+
+        $mtime = filemtime($this->mediaPath);
+        self::assertIsInt($mtime);
+
+        $request = $this->signedRequest('track-1', 'bytes=0-3');
+        $request->headers['If-Range'] = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+
+        $response = $fastPaths->dispatch($request);
+
+        self::assertNotNull($response);
+        self::assertSame(206, $response->statusCode);
+        self::assertSame('ABCD', $response->materializeFileWindow()->body);
+    }
+
     public function testAnonymousRequestWithoutSignatureIsUnauthorized(): void
     {
         $fastPaths = $this->makeFastPaths(null, ['id' => 'p1']);

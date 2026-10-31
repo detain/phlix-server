@@ -277,6 +277,29 @@ final class SystemdInstallerEnvTest extends TestCase
     }
 
     /**
+     * Rider R-SERVER-22: scripts/install.sh threads --http-port into the
+     * HAProxy backend and its healthcheck, but the env heredoc never wrote
+     * PHLIX_HTTP_PORT — so the daemon (ListenEndpoints.php) bound the built-in
+     * 8096 behind a proxy dialing the custom port. The row must pin the SAME
+     * shell variable the proxy block uses, not a second literal.
+     */
+    public function testFullInstallerEnvHeredocPinsTheHttpPort(): void
+    {
+        $installer = (string) @file_get_contents(self::repoRoot() . '/scripts/install.sh');
+        self::assertNotSame('', $installer, 'scripts/install.sh must exist');
+        self::assertSame(
+            1,
+            preg_match('/cat >"\$ENV_FILE" <<EOF\n(.*?)\nEOF\n/s', $installer, $m),
+            'parser teeth: the installer must still write the env file through an unquoted heredoc'
+        );
+        self::assertSame(
+            1,
+            preg_match('/^PHLIX_HTTP_PORT=\$\{HTTP_PORT\}$/m', $m[1]),
+            'the generated env file must carry PHLIX_HTTP_PORT=\${HTTP_PORT} — one source of truth with the proxy backend (rider R-SERVER-22)'
+        );
+    }
+
+    /**
      * The finding in one line: pre-M11, this value BOOTED on systemd (31 bytes
      * only tripped the length floor outside dev, and dev never refused it).
      * Post-M11 the carrier-agnostic boot guard in start.php itself must refuse

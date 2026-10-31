@@ -1269,7 +1269,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | DELETE | `/api/v1/admin/backup/{id}` | Delete one backup (local file or S3 object plus its row); `404` unknown id — admin-only |
 | POST | `/api/v1/admin/backup/{id}/restore` | Synchronous restore — SHA-256 verified before anything is touched; re-imports the DB dump and the config files (not `data/`/SSL); failure incl. unknown id → `500` with the reason — admin-only |
 | POST | `/api/v1/admin/backup/{id}/upload-s3` | Push a still-local archive to S3 and mark the row `is_s3` (local file is left on disk, untracked); `500` when S3 is not configured or the upload fails — admin-only |
-| GET | `/api/v1/admin/backup/schedule` | Effective schedule — `auto_backup_interval_days` + `retention_count` re-read from `config/backup.php` per request, plus `next_scheduled_backup` (unix, `null` when scheduling is off) and its ISO form — admin-only |
+| GET | `/api/v1/admin/backup/schedule` | Effective schedule — `auto_backup_interval_days` + `retention_count` re-read from `config/backup.php` per request, plus `next_scheduled_backup` (unix, `null` when the interval is <= 0 days; the `enabled` toggle gates the automatic timer separately) and its ISO form — admin-only |
 | PUT | `/api/v1/admin/backup/schedule` | Update schedule — body `{auto_backup_interval_days?: int ≥ 0, retention_count?: int ≥ 1}` (non-numeric/negative/`<1` → `400`); rewrites `config/backup.php` (comments are lost); the running auto-backup timer adopts the new values at its next restart — admin-only |
 
 **Rate limiting.** `POST /auth/register`, `POST /auth/refresh`, the WebAuthn

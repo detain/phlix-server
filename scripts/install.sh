@@ -2012,6 +2012,13 @@ PHLIX_DOMAIN=${PUBLIC_DOMAIN}
 # scheme of the public URL advertised to the hub during pairing.
 PHLIX_TLS_ENABLED=$([ "$TLS_ENABLED" = "yes" ] && echo 1 || echo 0)
 
+# The port the daemon binds (rider R-SERVER-22). Pinned to HTTP_PORT above on
+# purpose: HAProxy's backend and the installer healthcheck dial HTTP_PORT,
+# while the Workerman listener binds whatever ListenEndpoints.php reads from
+# this file (EnvironmentFile= in the unit). Without this row a --http-port
+# install leaves the daemon on 8096 behind a proxy pointed at the custom port.
+PHLIX_HTTP_PORT=${HTTP_PORT}
+
 # 32-byte hex signing secret. Not read by the PHP runtime under this name:
 # docker/docker-entrypoint.sh maps it onto JWT_SECRET for containers; on a
 # native install the JWT_SECRET line below is the real key, and this row is a

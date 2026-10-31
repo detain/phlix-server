@@ -26,9 +26,9 @@ use Workerman\MySQL\Connection;
  * The defect this suite guards is "the handler exists but nothing ever calls
  * it": `SmartPlaylistRefreshHandler::register()` had NO caller in the repo, so
  * the collections linked to a smart playlist never re-evaluated their stored
- * membership after a scan. (Smart PLAYLISTS have no stored membership — they are
- * evaluated on request — so smart-COLLECTION refresh is the whole of the
- * production behaviour at stake here.)
+ * membership after a scan. (Smart PLAYLISTS have no stored membership; their
+ * rules are evaluated when a linked collection refreshes — so smart-COLLECTION
+ * refresh is the whole of the production behaviour at stake here.)
  *
  * The second half of the guard is just as important — the refresh is heavy and
  * blocking, so the event handler must NOT perform it inline on the dispatch

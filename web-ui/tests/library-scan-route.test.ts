@@ -17,7 +17,7 @@
  * the guard reads, in the same shape the admin siblings use.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

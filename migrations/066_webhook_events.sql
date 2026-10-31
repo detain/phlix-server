@@ -6,7 +6,7 @@
 -- - webhook_subscriptions: Stores webhook endpoint subscriptions
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @author    Phlix Development Team
 -- @version   0.38.0
 -- @since     0.38.0

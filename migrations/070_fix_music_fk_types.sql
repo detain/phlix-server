@@ -8,7 +8,7 @@
 -- the correct INT UNSIGNED (AUTO_INCREMENT) types to match their referenced tables.
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @author    Phlix Development Team
 -- @version   0.37.1
 -- @since     0.37.1

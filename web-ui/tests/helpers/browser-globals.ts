@@ -18,7 +18,7 @@
  * auth fetch is fired and the probe renders synchronously.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 const storage = new Map<string, string>();

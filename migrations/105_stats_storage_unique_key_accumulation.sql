@@ -99,7 +99,7 @@
 --     exists after a clean apply; 019/086 checksums unmoved.
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @since     S114
 
 -- ---------------------------------------------------------------------------

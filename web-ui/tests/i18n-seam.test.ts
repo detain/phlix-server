@@ -22,7 +22,7 @@
  * Mirrors the proven phlix-tizen-client tests/unit/i18n.test.ts doctrine.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 import './helpers/browser-globals.ts';
 import { describe, it } from 'node:test';

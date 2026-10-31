@@ -40,7 +40,7 @@
 --   * migration 084's own ledger checksum is still c948944dfc1bbb4e82b0675efdb341e2.
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @since     S154
 
 ALTER TABLE `library_scan_jobs`

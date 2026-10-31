@@ -6,7 +6,7 @@
 -- - music_tracks: Track metadata linked to albums with audio file paths
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @author    Phlix Development Team
 -- @version   0.37.0
 -- @since     0.37.0

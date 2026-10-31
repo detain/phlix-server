@@ -106,7 +106,7 @@
 -- unique 1062 after collapse, imposter + duplicates refusal).
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @since     S155
 
 -- Duplicate names reach `media_item_id_24` on the dirtiest measured install;

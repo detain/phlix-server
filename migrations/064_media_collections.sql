@@ -5,7 +5,7 @@
 -- items in a collection.
 --
 -- @copyright 2026 Joe Huss <detain@interserver.net>
--- @license   MIT
+-- @license   MPL-2.0
 -- @author    Phlix Development Team
 -- @version   0.36.0
 -- @since     0.36.0

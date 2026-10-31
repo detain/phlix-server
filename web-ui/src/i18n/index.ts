@@ -61,7 +61,7 @@
  *    until both halves agree, so a ui-side addition cannot drift unseen here.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 import { LOCALE_MESSAGES } from '@phlix/ui';
 import type { PhlixLocaleCode, PhlixMessages, PhlixMessagesConfig } from '@phlix/ui';

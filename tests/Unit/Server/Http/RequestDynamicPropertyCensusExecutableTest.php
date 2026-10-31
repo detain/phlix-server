@@ -948,9 +948,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * moved from WHERE (MySQL 1111 at the parent, measured) to HAVING after
      * the per-item GROUP BY, bindings in clause order). Measured from the
      * phpunit red (2039), not predicted.
+     * Re-pinned 2039→2040 by server rider wave A (R-SERVER-11, 2026-10-31):
+     * +1 — tests/Unit/Support/LicenseHeaderGuardTest.php (the executable
+     * form of M44's "one truth" claim: every @license tag must equal the
+     * license of its nearest ancestor manifest; the 13 surviving MIT
+     * carriers are flipped in the same commit and the guard is
+     * mutation-proven red on a planted relapse). Measured from the phpunit
+     * red (2040), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2039;
+    private const EXPECTED_PHP_FILES = 2040;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -87,7 +87,12 @@ class RegisterUsernameLawsTest extends TestCase
             $repo->method('usernameExists')->willReturnCallback($usernameProbe);
         } else {
             $repo->method('usernameExists')->willReturnCallback(
-                static fn (string $name): bool => throw new \RuntimeException(self::GATE_PASSED),
+                // `never` not `bool`: the closure cannot return, and Psalm's
+                // tests corpus reads a `: bool` throw-body arrow as an
+                // unreachable return value (NoValue) — bottom type is the
+                // honest signature (still valid for the `bool`-returning
+                // callable shape PHPUnit expects).
+                static fn (string $name): never => throw new \RuntimeException(self::GATE_PASSED),
             );
         }
 

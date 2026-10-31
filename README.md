@@ -1557,7 +1557,7 @@ User commands accept a username or an email wherever `<user>` appears.
 | `user:list` | `--status=pending\|active\|disabled`, `--json` | List accounts, optionally one status cohort |
 | `user:create` | `<username>`; `--email=`, `--password=` (required), `--display-name=`, `--json` | Create an account (username 3–50 chars; password Argon2ID-hashed at rest). There is no admin flag — promote afterwards |
 | `user:promote` | `<user>`; `--revoke`, `--json` | Toggle the admin flag (`--revoke` demotes; the last admin cannot be demoted) |
-| `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted. Writes the password **hash** and stamps `tokens_not_valid_after` (every live session's tokens are revoked with the write) — but it does not clear `must_change_password` (see *Locked by the admin `reset-password` endpoint* below) |
+| `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted. Writes the password **hash**, stamps `tokens_not_valid_after` (every live session's tokens are revoked with the write), and clears `must_change_password` (riders R-SERVER-02) — one run is the full escape hatch from the admin force-change (see *Locked by the admin `reset-password` endpoint* below) |
 | `user:approve` | `<user>`; `--json` | Move a pending account to `active` |
 | `user:reject` | `<user>`; `--json` | Reject a still-pending signup (hard delete) |
 | `user:disable` | `<user>`; `--json` | Disable an account (last admin is protected) |
@@ -1606,17 +1606,13 @@ distinct `403`-with-code envelope the exception was written for is NOT shipped. 
 catches and answers `401` + `{error}` (no code field). Neither passkey nor provider sign-in is
 gated by the latch: `WebAuthnController::finishAuthentication` mints a full session without
 consulting `must_change_password` (WebAuthn ships **enabled** by default in `config/auth.php`),
-and `AuthManager::loginWithProvider` never checks it either. Full recovery is two steps: set a
-new password, then clear the latch — which has no CLI or API clear path (the completion flow
-never shipped), so it is a direct database write, the same last resort as the auth-toggle
-recovery below:
+and `AuthManager::loginWithProvider` never checks it either. Full recovery is ONE CLI step:
+`user:reset-password` sets a new password AND — since the R-SERVER-02 rider cure — clears
+`must_change_password` itself (live-session revocation rides the same
+`tokens_not_valid_after` stamp):
 
 ```bash
-php bin/phlix user:reset-password alice --password='pick-one'   # new password hash
-```
-
-```sql
-UPDATE users SET must_change_password = 0 WHERE id = '<uuid>';  -- re-open sign-in
+php bin/phlix user:reset-password alice --password='pick-one'   # new hash + latch cleared
 ```
 
 **Auth-method lock-out (`422`) — nothing to undo, and the true last resort.** A write the

@@ -489,8 +489,9 @@ final class AdminUserController
      * M-SERVER-33 (docs truth): no shipped surface delivers or consumes this
      * token — there is no mailer leg and no reset-completion endpoint. The
      * endpoint is therefore a force-change-and-revoke action, NOT a user-
-     * completable reset; recovery is the CLI plus a direct write clearing the
-     * flag (README, "Bad days: recovery from the CLI").
+     * completable reset; recovery is the single CLI step: `bin/phlix user:reset-
+     * password` re-hashes the password and — since rider R-SERVER-02 — lifts
+     * the flag itself (README, "Bad days: recovery from the CLI").
      *
      * @param Request               $request The HTTP request (unused body).
      * @param array<string, string> $params  Path parameters ({id} — a UUID string).
@@ -524,8 +525,9 @@ final class AdminUserController
         // NOTE (M-SERVER-33 truth pass): the plaintext $token is never sent
         // anywhere — no email/notification leg ships, and no endpoint consumes
         // the hashed token. It is recorded, and nothing more: the account
-        // stays force-changed until an operator resets the password and clears
-        // the flag (README, "Bad days: recovery from the CLI").
+        // stays force-changed until an operator runs the CLI reset, which —
+        // since rider R-SERVER-02 — lifts the flag alongside the new hash
+        // (README, "Bad days: recovery from the CLI").
 
         return (new Response())->json([
             'message' => 'Password reset token issued. The user must change their password before accessing content.',

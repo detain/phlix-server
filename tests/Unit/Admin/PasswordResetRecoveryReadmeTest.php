@@ -45,6 +45,11 @@ use ReflectionMethod;
  * token-revocation clause (UserRepository::update stamps
  * tokens_not_valid_after on every password write) are pinned likewise.
  *
+ * Riders R-SERVER-02/04 (wave B) rotated this file to the single-leg CLI
+ * recovery law (a reset now LIFTS the latch; the direct-SQL leg is retired
+ * and pinned OUT) and closed the r5 MINOR-2 hole: the anti-fiction loop
+ * scans the flattened source, so line-wrapped fiction re-entries bite.
+ *
  * @package Phlix\Tests\Unit\Admin
  */
 final class PasswordResetRecoveryReadmeTest extends TestCase
@@ -69,7 +74,7 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         return (string) preg_replace(
             '/\s+/',
             ' ',
-            str_replace(['**', '`'], '', $text)
+            str_replace(['**', '`', '//'], '', $text)
         );
     }
 
@@ -147,11 +152,16 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         ));
         $flatSource = self::flatten($methodSource);
 
+        // Rider R-SERVER-04: the anti-fiction loop must scan the FLATTENED
+        // source, exactly like the truth-pins below. Checking the raw
+        // $methodSource let a line-wrapped re-entry ("sent to the user via\n//
+        // email") slip through while every truth-pin stayed green — the exact
+        // pin-blindness family this file's r4 round was about.
         foreach (['reset-password form', 'sent to the user via email', 'generate a new password'] as $fiction) {
             $this->assertStringNotContainsString(
                 $fiction,
-                $methodSource,
-                "the handler's live docblock+body source must not carry the fiction '{$fiction}'"
+                $flatSource,
+                "the handler's flattened docblock+body source must not carry the fiction '{$fiction}' (any wrapping)"
             );
         }
 
@@ -306,11 +316,35 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
     }
 
     /**
-     * Both recovery legs must stay documented, and the SQL leg's column
-     * name is scraped live from UserRepository's setMustChangePassword()
-     * UPDATE — rename the column in code and the docs go red.
+     * Rider R-SERVER-04 self-arm: the fiction loop only bites if flatten()
+     * truly collapses source wrapping. This pins the helper's teeth directly
+     * — a future flatten() that stops collapsing whitespace would redden HERE
+     * before the fiction loop silently degrades back to raw-shape matching.
      */
-    public function testRecoveryStoryCarriesBothLegsWithTheRealLatchColumn(): void
+    public function testTheFlattenHelperCollapsesWrappedPhrases(): void
+    {
+        $this->assertSame(
+            'a b c',
+            self::flatten("a\n     // b\n    c"),
+            'flatten must collapse newlines, comment debris runs and indent to single spaces'
+        );
+        $this->assertStringContainsString(
+            'sent to the user via email',
+            self::flatten("sent to the user via\n        // email"),
+            'a line-wrapped phrase must be convictable after flattening'
+        );
+    }
+
+    /**
+     * R-SERVER-02 (riders) rotated this from the "both legs" law: a CLI reset
+     * NOW LIFTS THE LATCH ITSELF, so the direct-SQL second leg is retired —
+     * and the README must not re-grow it. Teeth on both planes: the code side
+     * must keep calling setMustChangePassword($id, false) ordered after the
+     * password write, and the docs side must state the clear while the retired
+     * two-step's SQL sentence stays OUT. The latch column name is still
+     * scraped live from UserRepository's setMustChangePassword() UPDATE.
+     */
+    public function testRecoveryStoryIsTheSingleCliLegThatClearsTheLatch(): void
     {
         $method = new ReflectionMethod(UserRepository::class, 'setMustChangePassword');
         $sourceFile = (string) $method->getFileName();
@@ -328,43 +362,67 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         );
         $latchColumn = $matches[1];
 
+        // Code plane: the CLI command must lift the latch with a literal
+        // false — drop the call or invert it and the docs lie again.
+        $cli = new ReflectionMethod(\Phlix\Console\Commands\UserResetPasswordCommand::class, 'execute');
+        $cliLines = file((string) $cli->getFileName()) ?: [];
+        $cliBody = implode('', array_slice(
+            $cliLines,
+            (int) $cli->getStartLine() - 1,
+            (int) $cli->getEndLine() - (int) $cli->getStartLine() + 1
+        ));
+        $this->assertSame(
+            1,
+            preg_match('/setMustChangePassword\(\s*\$id\s*,\s*false\s*\)/', $cliBody),
+            'user:reset-password must keep lifting the force-change latch (R-SERVER-02)'
+        );
+
         $readme = self::readme();
         $this->assertStringContainsString(
             'php bin/phlix user:reset-password',
             $readme,
-            'the recovery story must keep the CLI password leg'
+            'the recovery story must keep the CLI leg'
         );
         $this->assertStringContainsString(
-            'SET ' . $latchColumn . ' = 0',
+            $latchColumn,
             $readme,
-            "the recovery story must keep the direct-write flag leg naming the real column '{$latchColumn}'"
+            'the named latch column must stay visible in the shipped recovery story'
+        );
+        $this->assertStringNotContainsString(
+            'UPDATE users SET ' . $latchColumn . ' = 0',
+            $readme,
+            'the retired direct-SQL second leg must never return to the README (R-SERVER-02)'
         );
     }
 
     /**
-     * The CLI table row must stay honest about its own limits: the command
-     * writes the password hash but never lifts the latch (r1 finding), and —
-     * r4, review M-SERVER-33__r2 MINOR-1 carry-over remedy 4 — a password
-     * write is NOT hash-only: the UserRepository::update choke point stamps
-     * tokens_not_valid_after = NOW() on every password write, so the CLI
-     * reset also revokes the account's live sessions. The row must name that
-     * column (the "hash only" understatement reddens).
+     * The CLI table row must state the FULL shipped effects of the command:
+     * it writes the password hash, stamps tokens_not_valid_after (live
+     * sessions die with the write) and — since rider R-SERVER-02 — clears the
+     * force-change latch in the same run. RED on the parent row, which
+     * disclosed the latch limitation instead of the clear.
      */
-    public function testCliTableRowDisclosesTheLatchLimitation(): void
+    public function testCliTableRowDisclosesTheFullResetEffects(): void
     {
         $readme = self::readme();
 
         foreach (explode("\n", $readme) as $line) {
             if (str_starts_with($line, '| `user:reset-password`')) {
+                $flat = self::flatten($line);
                 $this->assertStringContainsString(
-                    'must_change_password',
-                    $line,
-                    'the CLI row must disclose that the command does not clear the force-change flag'
+                    'clears must_change_password',
+                    $flat,
+                    'the CLI row must state the R-SERVER-02 law: the reset clears the force-change latch'
                 );
                 $this->assertStringContainsString(
                     'tokens_not_valid_after',
-                    $line,
+                    $flat,
                     'the CLI row must disclose that the password write also revokes live sessions'
+                );
+                $this->assertStringNotContainsString(
+                    'does not clear must_change_password',
+                    $flat,
+                    'the retired latch-limitation sentence must not re-enter the CLI row'
                 );
 
                 return;

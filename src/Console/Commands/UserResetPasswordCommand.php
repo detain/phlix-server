@@ -27,7 +27,13 @@ use Throwable;
  * to {@see UserRepository::findByEmail()}. When `--password` is supplied it is
  * used verbatim; otherwise a strong random password is generated and printed.
  * The password is then stored via {@see UserRepository::update()}, which
- * Argon2ID-hashes it. The backing {@see UserRepository} is resolved lazily
+ * Argon2ID-hashes it and stamps `tokens_not_valid_after` (revoking every live
+ * session), and the force-change latch is lifted via
+ * {@see UserRepository::setMustChangePassword()} — riders R-SERVER-02: the
+ * operator issuing this command HOLDS the new password, so the latch must not
+ * survive the reset; this is the single documented escape hatch out of the
+ * admin reset-password lockout (the old two-step "CLI + direct SQL write"
+ * story is retired). The backing {@see UserRepository} is resolved lazily
  * through the injected factory so constructing this command never builds the
  * DI container.
  */
@@ -105,6 +111,13 @@ final class UserResetPasswordCommand extends Command
             }
 
             $repository->update($id, ['password' => $password]);
+            // R-SERVER-02: a CLI reset is the shipped escape hatch — the
+            // operator holds the new password, so the force-change latch
+            // (set by the admin reset-password endpoint, or ever stamped)
+            // must not survive the write it was waiting on. Lifting it HERE
+            // turns the old two-step (CLI + direct SQL) recovery into one
+            // documented command.
+            $repository->setMustChangePassword($id, false);
         } catch (Throwable $e) {
             $output->writeln('<error>Password reset failed: ' . $e->getMessage() . '</error>');
 

@@ -32,6 +32,10 @@ class UserResetPasswordCommandTest extends TestCase
         $repository->expects($this->once())
             ->method('update')
             ->with('user-1', ['password' => 'Sup3rSecret!']);
+        // R-SERVER-02: a CLI reset lifts the force-change latch.
+        $repository->expects($this->once())
+            ->method('setMustChangePassword')
+            ->with('user-1', false);
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'alice', '--password' => 'Sup3rSecret!']);
@@ -59,6 +63,9 @@ class UserResetPasswordCommandTest extends TestCase
                     return is_string($captured) && $captured !== '';
                 })
             );
+        $repository->expects($this->once())
+            ->method('setMustChangePassword')
+            ->with('user-1', false);
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'alice']);
@@ -85,6 +92,9 @@ class UserResetPasswordCommandTest extends TestCase
         $repository->expects($this->once())
             ->method('update')
             ->with('user-7', ['password' => 'hunter2hunter2']);
+        $repository->expects($this->once())
+            ->method('setMustChangePassword')
+            ->with('user-7', false);
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'alice@example.com', '--password' => 'hunter2hunter2']);
@@ -99,6 +109,7 @@ class UserResetPasswordCommandTest extends TestCase
         $repository->method('findByUsername')->willReturn(null);
         $repository->method('findByEmail')->willReturn(null);
         $repository->expects($this->never())->method('update');
+        $repository->expects($this->never())->method('setMustChangePassword');
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'ghost']);
@@ -112,6 +123,7 @@ class UserResetPasswordCommandTest extends TestCase
         $repository = $this->createMock(UserRepository::class);
         $repository->method('findByUsername')->willReturn(['username' => 'alice']);
         $repository->expects($this->never())->method('update');
+        $repository->expects($this->never())->method('setMustChangePassword');
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'alice']);
@@ -120,12 +132,52 @@ class UserResetPasswordCommandTest extends TestCase
         $this->assertStringContainsString('missing a valid id', $tester->getDisplay());
     }
 
+    /**
+     * R-SERVER-02 (riders): the shipped two-step recovery ("CLI reset, then a
+     * direct SQL write clearing must_change_password") locked operators into
+     * hand-editing the users table — and an account that went through the
+     * admin reset endpoint stayed login/refresh-blocked even after the CLI
+     * "reset" that printed a working password. The cure: the CLI reset lifts
+     * the latch itself, in ONE command, ordered strictly AFTER the password
+     * write succeeds (a failed write must not clear the latch). RED on the
+     * parent, which never touched the flag.
+     */
+    public function testResetLiftsTheForceChangeLatchAfterThePasswordWrite(): void
+    {
+        $order = [];
+
+        $repository = $this->createMock(UserRepository::class);
+        $repository->method('findByUsername')->willReturn(['id' => 'user-9']);
+        $repository->method('update')->willReturnCallback(
+            static function () use (&$order): void {
+                $order[] = 'update';
+            }
+        );
+        $repository->method('setMustChangePassword')->willReturnCallback(
+            static function () use (&$order): void {
+                $order[] = 'lift-latch';
+            }
+        );
+
+        $tester = $this->tester($repository);
+        $this->assertSame(Command::SUCCESS, $tester->execute(['user' => 'user-9', '--password' => 'x']));
+
+        $this->assertSame(
+            ['update', 'lift-latch'],
+            $order,
+            'the CLI reset must write the password first, then lift the latch'
+        );
+    }
+
     public function testRepositoryExceptionExitsOne(): void
     {
         $repository = $this->createMock(UserRepository::class);
         $repository->method('findByUsername')->willReturn(['id' => 'user-1']);
         $repository->method('update')
             ->willThrowException(new \RuntimeException('database is down'));
+        // A failed write must NOT lift the latch (R-SERVER-02 clear is ordered
+        // after the write precisely so a half-reset cannot open the door).
+        $repository->expects($this->never())->method('setMustChangePassword');
 
         $tester = $this->tester($repository);
         $exitCode = $tester->execute(['user' => 'alice', '--password' => 'Sup3rSecret!']);

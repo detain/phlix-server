@@ -34,7 +34,7 @@ class MdnsDiscovery
     public const SERVICE_RAOP = '_raop._tcp.local.';
 
     /** Roku Entertainment Control Protocol */
-    public const SERVICE_ROKU = '_ roku-ecnp._tcp.local.';
+    public const SERVICE_ROKU = '_roku-ecnp._tcp.local.';
 
     /** @var MdnsSocket */
     private MdnsSocket $socket;

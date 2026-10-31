@@ -19,7 +19,8 @@ use Phlix\Discovery\Mdns\MdnsService;
  * Discovers Roku devices on the network via mDNS.
  *
  * Uses MdnsDiscovery::discoverRoku() which queries the
- * `_ roku-ecnp._tcp.local.` service type (note leading space).
+ * `_roku-ecnp._tcp.local.` service type (minors M-SERVER-82: the stray
+ * space in this family's spelling was the defect; corrected).
  *
  * @since 0.12.0
  */
@@ -49,7 +50,7 @@ class RokuDiscovery
      * Discover all Roku devices on the network.
      *
      * Uses mDNS to discover devices advertising the Roku ECP service
-     * (` roku-ecnp._tcp.local.` with leading space).
+     * (`_roku-ecnp._tcp.local.` — real Roku advertisement shape).
      *
      * @return RokuDevice[] Array of discovered Roku devices
      *
@@ -110,7 +111,7 @@ class RokuDiscovery
         $deviceId = $service->deviceId ?: $service->name;
 
         // Clean up the name - remove service type suffix
-        $name = preg_replace('/\._ roku-ecnp\._tcp\.local\.$/', '', $service->name);
+        $name = preg_replace('/\._roku-ecnp\._tcp\.local\.$/', '', $service->name);
         if ($name === '' || $name === null) {
             $name = 'Roku Device';
         }

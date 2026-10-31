@@ -16,8 +16,8 @@ class RokuDiscoveryTest extends TestCase
     {
         // Create mock mDNS service
         $mdnsService = new MdnsService(
-            name: 'Living Room Roku._ roku-ecnp._tcp.local.',
-            type: ' roku-ecnp._tcp.local.',
+            name: 'Living Room Roku._roku-ecnp._tcp.local.',
+            type: '_roku-ecnp._tcp.local.',
             port: 8060,
             host: '192.168.1.100',
             txtRecords: [],
@@ -38,6 +38,29 @@ class RokuDiscoveryTest extends TestCase
         $this->assertEquals(8060, $devices[0]->port);
     }
 
+    public function testRealAdvertisementShapeStripsToTheFriendlyName(): void
+    {
+        // minors M-SERVER-82: the strip law had never been pinned — with the
+        // old stray-space regex this very suffix rode into the device name.
+        $mdnsService = new MdnsService(
+            name: 'Family Room._roku-ecnp._tcp.local.',
+            type: '_roku-ecnp._tcp.local.',
+            port: 8060,
+            host: '192.168.1.102',
+            txtRecords: [],
+            deviceId: 'roku-def123'
+        );
+
+        $mockMdns = $this->createMock(MdnsDiscovery::class);
+        $mockMdns->method('discoverRoku')->willReturn([$mdnsService]);
+
+        $discovery = new RokuDiscovery($mockMdns);
+        $devices = $discovery->discoverDevices();
+
+        $this->assertCount(1, $devices);
+        $this->assertEquals('Family Room', $devices[0]->name);
+    }
+
     public function testDiscoverReturnsEmptyOnNetworkError(): void
     {
         $mockMdns = $this->createMock(MdnsDiscovery::class);
@@ -54,16 +77,16 @@ class RokuDiscoveryTest extends TestCase
     {
         $services = [
             new MdnsService(
-                name: 'Living Room._ roku-ecnp._tcp.local.',
-                type: ' roku-ecnp._tcp.local.',
+                name: 'Living Room._roku-ecnp._tcp.local.',
+                type: '_roku-ecnp._tcp.local.',
                 port: 8060,
                 host: '192.168.1.100',
                 txtRecords: [],
                 deviceId: 'roku-100'
             ),
             new MdnsService(
-                name: 'Bedroom._ roku-ecnp._tcp.local.',
-                type: ' roku-ecnp._tcp.local.',
+                name: 'Bedroom._roku-ecnp._tcp.local.',
+                type: '_roku-ecnp._tcp.local.',
                 port: 8060,
                 host: '192.168.1.101',
                 txtRecords: [],

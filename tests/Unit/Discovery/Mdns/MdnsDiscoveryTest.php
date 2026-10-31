@@ -52,7 +52,7 @@ class MdnsDiscoveryTest extends TestCase
         $this->assertEquals('_googlecast._tcp.local.', MdnsDiscovery::SERVICE_CHROMECAST);
         $this->assertEquals('_airplay._tcp.local.', MdnsDiscovery::SERVICE_AIRPLAY);
         $this->assertEquals('_raop._tcp.local.', MdnsDiscovery::SERVICE_RAOP);
-        $this->assertEquals('_ roku-ecnp._tcp.local.', MdnsDiscovery::SERVICE_ROKU);
+        $this->assertEquals('_roku-ecnp._tcp.local.', MdnsDiscovery::SERVICE_ROKU);
     }
 
     public function testMdnsServiceGetAddress(): void

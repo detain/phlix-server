@@ -85,6 +85,12 @@ class DashControllerTest extends TestCase
     {
         $res = $this->controller()->getManifest(new Request(), ['job_id' => '']);
         $this->assertSame(400, $res->statusCode);
+        // S-01 residue cure [W-min109 review MAJOR-1]: the player-facing DASH pointer
+        // endpoint rides the canonical '<Field> ID is required' human family — the raw
+        // snake_case parameter name must never reach an end user.
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'Job ID is required'], $body);
     }
 
     public function testServesMpdWithDashContentType(): void

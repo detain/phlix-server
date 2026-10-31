@@ -82,7 +82,7 @@ class DashController
     {
         $jobId = $params['job_id'] ?? '';
         if ($jobId === '') {
-            return (new Response())->status(400)->json(['error' => 'job_id is required']);
+            return (new Response())->status(400)->json(['error' => 'Job ID is required']);
         }
 
         return (new Response())->json([

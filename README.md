@@ -151,7 +151,7 @@ Every environment variable the server process reads is inventoried in the defini
   server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
   `public/templates/emails/newsletter.tpl`).
 - **REST API Endpoints**: library browsing, media info, user data, collections, casting, SyncPlay and
-  admin surfaces. The [HTTP Endpoints](#http-endpoints) table below is the curated operator view;
+  admin surfaces. The [HTTP endpoints](#http-endpoints) table below is the curated operator view;
   **`openapi.yaml` is the exhaustive list** — a machine-checked bijection with the composed route
   registry, CI-enforced by `OpenapiSpecCurrencyTest`
 - **JWT Authentication**: Integrated token-based auth with refresh support
@@ -303,7 +303,7 @@ slips into a fresh server just because it is reachable.
 - **The admin acts** — approve, disable or reject from the **Users** page of the `/app`
   admin SPA, over REST (`POST /api/v1/admin/users/{id}/approve|disable|reject`;
   `GET /api/v1/admin/users?status=pending` is the queue — see the table under
-  [HTTP Endpoints](#http-endpoints)), or — with no web session at all — from the CLI
+  [HTTP endpoints](#http-endpoints)), or — with no web session at all — from the CLI
   (`user:list --status=pending`, `user:approve`, `user:reject`; see
   [Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)). Approving flips
   the account to `active` so the member can sign in; disabling or rejecting revokes any
@@ -319,7 +319,7 @@ slips into a fresh server just because it is reachable.
   form of open signup — set that toggle with the household policy in mind, not as a
   substitute for `signup_mode`.
 
-### SyncPlay - Group Watching
+### SyncPlay — Group Watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy
 - **Host-Controlled Playback**: Only the host can control play/pause/seek; all members receive synchronized commands
 - **NTP-Style Time Sync**: Network time synchronization with latency compensation and drift correction
@@ -354,7 +354,7 @@ the `created_by` ownership model and the OpenAPI paths all shipped before this p
 everything below is read from the code at this tip. Routes are registered in
 `Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2190-2218`) under
 `[AuthMiddleware]`, served by `src/Server/Http/Controllers/CollectionController.php`; each registration's
-exact line is cited in the [HTTP Endpoints](#http-endpoints) table rows below.
+exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
 
 - **CRUD loop**: `POST /api/v1/collections` creates — body `{name, library_id}` are both required
   non-empty strings (`400` otherwise), with optional `smart_playlist_id`/`parent_id`/`sort_order` —
@@ -1159,7 +1159,7 @@ the next worker boot rather than the next request.
 
 ## API Reference
 
-### HTTP Endpoints
+### HTTP endpoints
 
 Curated operator view of the main surfaces. **`openapi.yaml` is the exhaustive
 list** — its `paths` are a machine-checked bijection with the composed route
@@ -1341,7 +1341,7 @@ file is a name-building helper, not an event).
 
 ## Development
 
-### Running Tests
+### Running tests
 
 ```bash
 # Run all tests
@@ -1416,7 +1416,7 @@ unset. Running the whole suite with and without `PHLIX_DOMAIN` exported yields
 identical per-test assertion counts; if you add a test that reads an env var,
 restore it.
 
-### Code Standards
+### Code standards
 
 This project follows PSR-12 coding standards and uses static analysis tools:
 
@@ -1675,7 +1675,7 @@ Full operator + contributor docs live on the
 [admin/server-settings](https://detain.github.io/phlix-docs/admin/server-settings) and
 [admin/library-management](https://detain.github.io/phlix-docs/admin/library-management).
 
-### Git Workflow
+### Git workflow
 
 1. Create a feature branch: `git checkout -b feature/my-feature`
 2. Make changes and commit: `git commit -am 'Add new feature'`
@@ -1722,7 +1722,7 @@ buffers while others do not, suspect its capability negotiation
 ### A SyncPlay / watch group gets stuck
 
 Groups are host-managed over the SyncPlay WebSocket on port `8097` (the
-`:8097` + token endpoint law; see [SyncPlay - Group Watching](#syncplay---group-watching)).
+`:8097` + token endpoint law; see [SyncPlay — Group Watching](#syncplay--group-watching)).
 A member that silently stops following usually lost its socket and did not
 re-join. Have the member leave and re-join: on a successful join the server
 sends the current group state (`syncplay_group_state`) directly to the joiner,

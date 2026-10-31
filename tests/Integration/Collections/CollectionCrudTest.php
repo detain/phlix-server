@@ -138,7 +138,8 @@ class CollectionCrudTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         // Test: Create collection

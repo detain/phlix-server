@@ -30,7 +30,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $this->assertInstanceOf(CollectionManager::class, $manager);
@@ -60,7 +61,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->addItem('col-1', 'media-1');
@@ -85,7 +87,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->removeItem('col-1', 'media-1');
@@ -126,7 +129,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->bulkAddFromSearch('col-1', ['media-1', 'media-2', 'media-3']);
@@ -163,7 +167,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->bulkAddFromSearch('col-1', ['media-1', 'media-2', 'media-3']);
@@ -209,7 +214,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $result = $manager->getCollectionWithItems('col-1');
@@ -239,7 +245,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $result = $manager->getCollectionWithItems('non-existent');
@@ -274,7 +281,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $this->expectNotToPerformAssertions();
@@ -339,7 +347,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->refreshSmartCollection('col-1');
@@ -380,7 +389,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $result = $manager->findAll();
@@ -418,7 +428,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $result = $manager->getCollectionsForLibrary('lib-1');
@@ -445,7 +456,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $collection = new Collection(
@@ -477,7 +489,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $collection = new Collection(
@@ -514,10 +527,112 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $manager->delete('col-1');
+    }
+
+    /**
+     * minors M-SERVER-19 (W-min108): the two delete legs are ONE transaction
+     * — order pinned: BEGIN -> items -> collection -> COMMIT.
+     */
+    public function testDeleteWrapsBothLegsInOneTransactionInOrder(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $collectionRepo = $this->createMock(CollectionRepository::class);
+        $itemRepo = $this->createMock(CollectionItemRepository::class);
+        $engine = new SmartPlaylistEngine($this->createMock(ItemRepository::class));
+        $playlistRepo = new SmartPlaylistRepository($db);
+
+        $calls = [];
+        $db->method('beginTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'BEGIN';
+        });
+        $db->method('commitTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'COMMIT';
+        });
+        $db->method('rollBackTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'ROLLBACK';
+        });
+        $itemRepo->method('deleteAllForCollection')->willReturnCallback(
+            function () use (&$calls): void {
+                $calls[] = 'DELETE-ITEMS';
+            }
+        );
+        $collectionRepo->method('delete')->willReturnCallback(
+            function () use (&$calls): void {
+                $calls[] = 'DELETE-COLLECTION';
+            }
+        );
+
+        $manager = new CollectionManager(
+            $collectionRepo,
+            $itemRepo,
+            $engine,
+            $playlistRepo,
+            $this->createMock(ItemRepository::class),
+            $db
+        );
+
+        $manager->delete('col-1');
+
+        self::assertSame(
+            ['BEGIN', 'DELETE-ITEMS', 'DELETE-COLLECTION', 'COMMIT'],
+            $calls
+        );
+    }
+
+    /**
+     * minors M-SERVER-19 (W-min108): a failing second leg ROLLS BACK the pair
+     * and re-raises the original failure unchanged — never a half-deleted
+     * collection, never a swallowed error.
+     */
+    public function testDeleteRollsBackAndRethrowsWhenCollectionLegFails(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $collectionRepo = $this->createMock(CollectionRepository::class);
+        $itemRepo = $this->createMock(CollectionItemRepository::class);
+        $engine = new SmartPlaylistEngine($this->createMock(ItemRepository::class));
+        $playlistRepo = new SmartPlaylistRepository($db);
+
+        $calls = [];
+        $db->method('beginTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'BEGIN';
+        });
+        $db->method('commitTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'COMMIT';
+        });
+        $db->method('rollBackTrans')->willReturnCallback(function () use (&$calls): void {
+            $calls[] = 'ROLLBACK';
+        });
+        $itemRepo->method('deleteAllForCollection')->willReturnCallback(
+            function () use (&$calls): void {
+                $calls[] = 'DELETE-ITEMS';
+            }
+        );
+        $collectionRepo->method('delete')->willThrowException(
+            new \RuntimeException('delete-leg-failed')
+        );
+
+        $manager = new CollectionManager(
+            $collectionRepo,
+            $itemRepo,
+            $engine,
+            $playlistRepo,
+            $this->createMock(ItemRepository::class),
+            $db
+        );
+
+        try {
+            $manager->delete('col-1');
+            self::fail('the original failure must propagate unchanged');
+        } catch (\RuntimeException $e) {
+            self::assertSame('delete-leg-failed', $e->getMessage());
+        }
+
+        self::assertSame(['BEGIN', 'DELETE-ITEMS', 'ROLLBACK'], $calls);
     }
 
     public function testFindByIdReturnsCollection(): void
@@ -547,7 +662,8 @@ class CollectionManagerTest extends TestCase
             $itemRepo,
             $engine,
             $playlistRepo,
-            $mediaItemRepo
+            $mediaItemRepo,
+            $db
         );
 
         $result = $manager->findById('col-1');

@@ -4810,7 +4810,8 @@ class Application
                 $collectionItemRepo,
                 $smartPlaylistEngine,
                 $smartPlaylistRepo,
-                $itemRepository
+                $itemRepository,
+                $db
             );
             return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager);
         }

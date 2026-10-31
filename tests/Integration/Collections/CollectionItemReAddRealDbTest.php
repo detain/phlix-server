@@ -298,6 +298,7 @@ final class CollectionItemReAddRealDbTest extends TestCase
             new SmartPlaylistEngine($this->createMock(ItemRepository::class)),
             new SmartPlaylistRepository($this->db),
             $this->createMock(ItemRepository::class),
+            $this->db,
         );
     }
 

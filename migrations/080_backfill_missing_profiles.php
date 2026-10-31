@@ -1,10 +1,19 @@
 <?php
 
 /**
- * Migration 080: Backfill missing user profiles.
+ * Migration 080: Backfill missing user profiles — SUPERSEDED twin.
  *
- * Run this ONCE after migration 079 to fix users who have NO profiles at all
- * (user_profiles table is empty).
+ * SUPERSEDED (minors M-SERVER-17, W-min108): the runner-discovered artifact is
+ * the chain-applied migration/080_backfill_missing_profiles.sql — MigrationRunner
+ * discovers *.sql ONLY (see its header glob law), and the checksum ledger
+ * forbids editing that file. This PHP script is retained SOLELY as the manual
+ * merge-duplicates DIAGNOSTIC for the pre-096 duplicate-profile error path;
+ * executing it by hand is NOT part of any deploy, upgrade or recovery runbook
+ * (the old 'Run this ONCE after migration 079' instruction was superseded by
+ * the chain — every install already ran the .sql twin).
+ *
+ * (Historical context) Once after migration 079, this fixed users who had NO
+ * profiles at all (user_profiles table empty).
  *
  * Problem: AuthManager::register() never created a UserProfile, and the
  * original migration 079 only activated existing profiles — it was a no-op
@@ -19,7 +28,8 @@
  * Safe to re-run: the INSERT uses IGNORE so already-present profiles are
  * skipped.
  *
- *     php migrations/080_backfill_missing_profiles.php
+ *   (diagnostic-only invocation — the deploy artifact is the
+ *    chain-applied .sql twin; see the SUPERSEDED note above.)
  */
 
 declare(strict_types=1);

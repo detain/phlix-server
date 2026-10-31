@@ -15,6 +15,8 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Playlists\RuleNode;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRepository;
+use Throwable;
+use Workerman\MySQL\Connection;
 
 /**
  * Orchestrator for collection operations.
@@ -22,6 +24,11 @@ use Phlix\Playlists\SmartPlaylistRepository;
  * Handles create/update/delete of collections and their items,
  * including smart collection refresh which re-evaluates the
  * underlying smart playlist rules and syncs items via diff.
+ *
+ * delete() runs its two legs inside ONE transaction on the shared
+ * Connection: the container hands this manager and both collection repos the
+ * SAME cached Workerman\MySQL\Connection instance, and the Application
+ * fallback mints one $db for all — identity law (minors M-SERVER-19).
  *
  * @since 0.14.0
  */
@@ -33,6 +40,7 @@ class CollectionManager
         private readonly SmartPlaylistEngine $engine,
         private readonly SmartPlaylistRepository $playlistRepo,
         private readonly ItemRepository $items,
+        private readonly Connection $db,
     ) {
     }
 
@@ -63,7 +71,7 @@ class CollectionManager
     }
 
     /**
-     * Delete a collection and all its items.
+     * Delete a collection and all its items — atomically.
      *
      * @param string $id Collection ID to delete
      * @return void
@@ -72,9 +80,24 @@ class CollectionManager
      */
     public function delete(string $id): void
     {
-        // Delete all items first (FK constraint would prevent this otherwise)
-        $this->itemRepo->deleteAllForCollection($id);
-        $this->repo->delete($id);
+        // minors M-SERVER-19 (W-min108): the two legs are ONE transaction —
+        // a crash between them used to leave an item-stripped collection row
+        // (or, order-reversed thinking, an orphaned pair). Migration 122's FK
+        // CASCADE (landed @9af73642) makes the ORDER forgiving and backstops
+        // pre-FK restores; the explicit ordered deletes stay for determinism.
+        // The transaction is what makes ATOMICITY. rollBackTrans mirrors the
+        // vendor's own pre-reaise rollback (ItemRepository::create note).
+        $this->db->beginTrans();
+
+        try {
+            $this->itemRepo->deleteAllForCollection($id);
+            $this->repo->delete($id);
+            $this->db->commitTrans();
+        } catch (Throwable $e) {
+            $this->db->rollBackTrans();
+
+            throw $e;
+        }
     }
 
     /**

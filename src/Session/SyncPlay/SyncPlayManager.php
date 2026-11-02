@@ -1469,6 +1469,16 @@ class SyncPlayManager
      * of drift, and legacy position-less sync requests keep their exact
      * pre-S446 behaviour (pure state echo).
      *
+     * INCIDENT playjump (2026-11-02) — the echoed `position` VALUE is now the
+     * ANCHOR-ADVANCED expected position while the group plays (whole-second
+     * quantized, clamped to the known duration); paused/stopped echoes keep
+     * the raw anchor verbatim. No payload keys changed, no new wire codes:
+     * the frozen-anchor echo was the rubber-band (clients seek to whatever
+     * position arrives, and the anchor moved only on explicit host commands),
+     * so the value SEMANTICS are the cure. Host play/pause/seek still refresh
+     * anchor+stamp exactly as before; the S446 predicate/drift maths still
+     * judge the raw anchor (S291-verbatim law, deliberately unchanged).
+     *
      * @param ConnectionInterface $connection The WebSocket connection
      * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289;
      *                                       `position` ms is INGESTED — S446)
@@ -1499,13 +1509,21 @@ class SyncPlayManager
 
         $hostId = $group->getHostId();
         $currentMediaId = $group->getCurrentMediaId();
-        $position = $group->getPlaybackPosition();
         $isPlaying = $group->isPlaying();
         $serverTime = time();
 
         // S446 — ingest the reporter's own position before echoing state, so the
         // predicate evaluates the freshest truth on the same injected clock tick.
         $nowMs = Messages::nowMs();
+
+        // INCIDENT playjump — the echoed position is the ANCHOR-ADVANCED one:
+        // while playing, the group's authoritative position tracks wall clock,
+        // so an echo can never drag a drift-correcting client back to the last
+        // explicit command's stale second (semantics: GroupState::
+        // expectedPlaybackPosition(); payload keys are unchanged — the VALUE
+        // law is what moved).
+        $position = $group->expectedPlaybackPosition($nowMs);
+
         $reportedPosition = self::reportedPositionMs($payload);
         if ($reportedPosition !== null) {
             $group->recordMemberPosition($memberId, $reportedPosition, $nowMs);
@@ -1568,7 +1586,10 @@ class SyncPlayManager
             'member_id' => $memberId,
             'group_id' => $groupId,
             'current_media_id' => $group->getCurrentMediaId(),
-            'position' => $group->getPlaybackPosition(),
+            // INCIDENT playjump — same anchor-advanced position as the plain
+            // group echo of this tick (clients seek on ANY playback_sync
+            // frame); drift_ms above keeps its verbatim RAW-anchor maths.
+            'position' => $group->expectedPlaybackPosition($nowMs),
             'is_playing' => $group->isPlaying(),
             'server_time' => time(),
             'nudge' => [

@@ -63,6 +63,22 @@ namespace Phlix\Session\SyncPlay;
  * - guidance rate step: {@see NUDGE_RATE_STEP} (0.1) — the same 0.1 factor
  *   TimeSync already uses for drift correction (DRIFT_CORRECTION_FACTOR).
  *
+ * ## INCIDENT playjump — the anchor advances at read time, never at write time
+ *
+ * The stored playback position is an ANCHOR: host play/pause/seek writes it,
+ * nothing else moves it. Before the cure, playback_sync echoes answered with
+ * that raw value while state=playing, so every ~5s echo dragged
+ * drift-correcting clients backward to a stale second — the "jump back a few
+ * seconds" incident. Canonical semantics now (the hub twin adopts these
+ * verbatim): while playing, consumers needing the group's CURRENT position
+ * read {@see expectedPlaybackPosition()} — anchor + elapsed×rate, whole-second
+ * quantized, clamped [0, duration] when known; paused/stopped answer the raw
+ * anchor; every anchor mutation point (setCurrentMedia, updatePlayback,
+ * setPlaybackPosition, deserialize) stamps {@see $playbackPositionAtMs} in
+ * the same store. The predicate S446 built (isInSync) and its drift maths
+ * keep judging against the RAW anchor — S291-verbatim semantics, untouched;
+ * only the echoed VALUE advanced.
+ *
  * Position storage is LIVE-ONLY worker state (mirrored in nothing): it is
  * absent from getState(), serialize()/deserialize() and the bridge merge,
  * so a write-through mirror frame (S445) can replace membership/host facets
@@ -188,6 +204,22 @@ class GroupState
     /** @var int Current playback position in milliseconds */
     private int $playbackPosition = 0;
 
+    /**
+     * INCIDENT playjump — wall-clock millisecond stamp of the last anchor
+     * write ({@see $playbackPosition}). The anchor itself moves only on
+     * explicit host play/pause/seek; this stamp is what makes the group's
+     * authoritative position ADVANCEABLE between those events: while
+     * state=playing, {@see expectedPlaybackPosition()} reports
+     * anchor + elapsed×rate instead of the frozen raw value — the cure for
+     * playback_sync echoes dragging drift-correcting clients backward.
+     *
+     * A facet OF THE ANCHOR (unlike the live-only S446 member positions): it
+     * rides serialize()/deserialize() so a bridge adopt or worker restart
+     * keeps advancing the echo instead of re-freezing it at the restore
+     * instant; blobs predating this field self-heal to restore-time-now.
+     */
+    private int $playbackPositionAtMs;
+
     /** @var string Current playback state (one of STATE_*) */
     private string $playbackState = self::STATE_STOPPED;
 
@@ -238,6 +270,7 @@ class GroupState
         $this->positionTolerance = $positionTolerance;
         $this->createdAt = time();
         $this->lastActivityAt = time();
+        $this->playbackPositionAtMs = Messages::nowMs();
     }
 
     /**
@@ -576,13 +609,72 @@ class GroupState
     }
 
     /**
-     * Get the current playback position.
+     * Get the current playback position — the RAW stored anchor.
+     *
+     * INCIDENT playjump: this is the anchor as of the last explicit host
+     * play/pause/seek. It intentionally does NOT extrapolate; consumers that
+     * need the group's authoritative CURRENT position (the playback_sync
+     * echo chain) use {@see expectedPlaybackPosition()} instead.
      *
      * @return int Position in milliseconds
+     *
+     * @see expectedPlaybackPosition() For the anchor-advanced reading
      */
     public function getPlaybackPosition(): int
     {
         return $this->playbackPosition;
+    }
+
+    /**
+     * The anchor-ADVANCED authoritative playback position (canonical law,
+     * owner incident directive 2026-11-02 — the hub twin adopts this
+     * semantics verbatim):
+     *
+     *     while playing:  pos = anchor + floor(elapsedMs / 1000) · 1000 · rate
+     *     otherwise:      pos = raw anchor (unchanged)
+     *
+     * with elapsedMs = max(0, nowMs − anchorUpdatedAtMs) — a clock that
+     * predates the anchor stamp can never rewind the anchor — and the result
+     * clamped to [0, duration] when a duration is known.
+     *
+     * Whole-second quantization is deliberate: the rubber-band operates at
+     * the POSITION_TOLERANCE (2000ms) scale, so sub-second advance precision
+     * changes nothing for clients while raw-millisecond advance would move
+     * every same-tick echo/nudge assertion by test-run jitter (a flake
+     * class). The stored anchor is never mutated by this reading.
+     *
+     * `rate` is a formula parameter only: no server state or wire payload
+     * carries a group playback rate today (the cure changes no payload keys),
+     * so every production call site advances at 1.0.
+     *
+     * @param int   $nowMs Wall-clock milliseconds (Messages::nowMs() scale, injected for determinism)
+     * @param float $rate  Playback-rate multiplier; must be finite and >= 0
+     * @return int Position in milliseconds
+     *
+     * @throws \InvalidArgumentException When $rate is negative or non-finite
+     *
+     * @see getPlaybackPosition() For the raw anchor
+     */
+    public function expectedPlaybackPosition(int $nowMs, float $rate = 1.0): int
+    {
+        if (!is_finite($rate) || $rate < 0.0) {
+            throw new \InvalidArgumentException(
+                'GroupState::expectedPlaybackPosition requires a finite, non-negative rate, got: ' . $rate
+            );
+        }
+
+        if ($this->playbackState !== self::STATE_PLAYING) {
+            return $this->playbackPosition;
+        }
+
+        $elapsedMs = max(0, $nowMs - $this->playbackPositionAtMs);
+        $advanced = $this->playbackPosition + (int) (intdiv($elapsedMs, 1000) * 1000 * $rate);
+
+        if ($this->currentMediaDuration > 0 && $advanced > $this->currentMediaDuration) {
+            return $this->currentMediaDuration;
+        }
+
+        return max(0, $advanced);
     }
 
     /**
@@ -610,13 +702,15 @@ class GroupState
      *
      * @param string|null $mediaId The media item ID, or null to clear
      * @param int $duration Duration in milliseconds (default: 0)
+     * @param int|null $anchorAtMs Anchor stamp (default: now; injected-clock seam)
      * @return void
      */
-    public function setCurrentMedia(?string $mediaId, int $duration = 0): void
+    public function setCurrentMedia(?string $mediaId, int $duration = 0, ?int $anchorAtMs = null): void
     {
         $this->currentMediaId = $mediaId;
         $this->currentMediaDuration = $duration;
         $this->playbackPosition = 0;
+        $this->playbackPositionAtMs = $anchorAtMs ?? Messages::nowMs();
         $this->playbackState = self::STATE_STOPPED;
         // S446 — reported positions are meaningless across a media change
         // (they measure a different timeline); drop them with the position
@@ -629,28 +723,37 @@ class GroupState
     /**
      * Update the playback state and position.
      *
+     * A fresh anchor write: the stamp moves with the position so
+     * {@see expectedPlaybackPosition()} advances from exactly this instant
+     * (INCIDENT playjump; same law for every anchor mutation point).
+     *
      * @param string $state One of STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING, STATE_STOPPED
      * @param int $position Current position in milliseconds
+     * @param int|null $anchorAtMs Anchor stamp (default: now; injected-clock seam)
      * @return void
      */
-    public function updatePlayback(string $state, int $position): void
+    public function updatePlayback(string $state, int $position, ?int $anchorAtMs = null): void
     {
         $this->playbackState = $state;
         $this->playbackPosition = $position;
+        $this->playbackPositionAtMs = $anchorAtMs ?? Messages::nowMs();
         $this->lastActivityAt = time();
     }
 
     /**
      * Set the playback position without changing state.
      *
-     * Used during synchronization when receiving seek commands.
+     * Used during synchronization when receiving seek commands. A fresh
+     * anchor write — the stamp moves with it (see {@see updatePlayback()}).
      *
      * @param int $position New position in milliseconds
+     * @param int|null $anchorAtMs Anchor stamp (default: now; injected-clock seam)
      * @return void
      */
-    public function setPlaybackPosition(int $position): void
+    public function setPlaybackPosition(int $position, ?int $anchorAtMs = null): void
     {
         $this->playbackPosition = $position;
+        $this->playbackPositionAtMs = $anchorAtMs ?? Messages::nowMs();
         $this->lastActivityAt = time();
     }
 
@@ -992,6 +1095,7 @@ class GroupState
             'current_media_id' => $this->currentMediaId,
             'current_media_duration' => $this->currentMediaDuration,
             'playback_position' => $this->playbackPosition,
+            'playback_position_at_ms' => $this->playbackPositionAtMs,
             'playback_state' => $this->playbackState,
             'playback_queue' => $this->playbackQueue,
             'chat_messages' => $this->chatMessages,
@@ -1072,6 +1176,15 @@ class GroupState
 
         $playbackPositionRaw = $data['playback_position'] ?? 0;
         $group->playbackPosition = is_int($playbackPositionRaw) ? $playbackPositionRaw : 0;
+
+        // INCIDENT playjump — the anchor stamp is a facet of the anchor and rides
+        // the blob. A pre-cure (or hand-built) blob without it self-heals to the
+        // restore instant: the group then behaves as if freshly re-anchored,
+        // never as if it anchored at epoch 0 (which would fling echoes forward).
+        $playbackPositionAtRaw = $data['playback_position_at_ms'] ?? null;
+        $group->playbackPositionAtMs = is_int($playbackPositionAtRaw) && $playbackPositionAtRaw >= 0
+            ? $playbackPositionAtRaw
+            : Messages::nowMs();
 
         $playbackStateRaw = $data['playback_state'] ?? self::STATE_STOPPED;
         $group->playbackState = is_string($playbackStateRaw) ? $playbackStateRaw : self::STATE_STOPPED;

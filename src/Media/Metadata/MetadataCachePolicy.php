@@ -59,8 +59,10 @@ use Phlix\Admin\SettingsRepository;
  *
  * `detain/phlix-shared` declares this key in server-settings.schema.json
  * (5c4b59f) with the SAME bounds this class clamps to (1..8760 hours). Admin-API admission
- * is LIVE: the owner-gated re-vendor shipped the 84-key v0.51.0 schema into
- * `vendor/`, and AdminSettingsController::allowedKeys() derives from that
+ * is LIVE: the owner-gated re-vendor shipped the 84-key schema into
+ * `vendor/` (v0.53.0 as of the 2026-11-02 wave-2 re-pin; the 84-key set and
+ * this key's bounds are unchanged since the v0.51.0 seam that made it live),
+ * and AdminSettingsController::allowedKeys() derives from that
  * VENDORED schema — the key is PUT-able now, bounds and all (proven against
  * the real vendored schema in
  * tests/Integration/Admin/AdminSettingsRealSchemaPutTest). The effective-value

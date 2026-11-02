@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "24a5ea8143032d63273ac17dfc707bfd",
+    "content-hash": "76641269aad6576394c1fa2713d0ec2d",
     "packages": [
         {
             "name": "brick/math",
@@ -418,16 +418,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.51.0",
+            "version": "v0.53.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "01bd2a9054ec17e2f58bb2ab72802eb5de348464"
+                "reference": "9e784c60ce3db5b000630a855460bb6f73fea544"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/01bd2a9054ec17e2f58bb2ab72802eb5de348464",
-                "reference": "01bd2a9054ec17e2f58bb2ab72802eb5de348464",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/9e784c60ce3db5b000630a855460bb6f73fea544",
+                "reference": "9e784c60ce3db5b000630a855460bb6f73fea544",
                 "shasum": ""
             },
             "require": {
@@ -458,12 +458,12 @@
             "license": [
                 "MIT"
             ],
-            "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
+            "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — bundled I/O is confined to the Arr/ namespace: the blocking CurlArrTransport default (CLI/test posture) and TrashGuidesProvider's own blocking stream fetches (no transport seam there); event-loop consumers should inject an async ArrTransportInterface unless their runtime hooks curl (phlix-hub's S425 position).",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.51.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.53.0"
             },
-            "time": "2026-10-05T16:35:23+00:00"
+            "time": "2026-11-02T14:37:18+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

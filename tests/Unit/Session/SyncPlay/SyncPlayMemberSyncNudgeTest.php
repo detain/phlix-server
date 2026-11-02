@@ -90,11 +90,23 @@ final class SyncPlayMemberSyncNudgeTest extends TestCase
         $nudge = $nudges[0];
         $this->assertSame('syncplay_playback_sync', $nudge['type']);
         $this->assertSame('user-b', $nudge['member_id'] ?? null, 'the nudge is aimed at the reporter');
-        $this->assertSame(5000, $nudge['position'] ?? null, 'and carries the authoritative group position');
+        // INCIDENT playjump — position is now the anchor-ADVANCED reading on
+        // the ingest tick, so between this test's seed command and its echo
+        // a real-clock sliver of elapsed time rides along. The exact value
+        // is no longer the law; the bounds and the frame-internal identity
+        // (drift_ms === position − report) are — and they are strictly
+        // stronger than two frozen numbers: they pin that position and drift
+        // share ONE reference instant.
+        $position = $nudge['position'] ?? null;
+        $this->assertIsInt($position, 'and carries the authoritative group position');
+        $this->assertGreaterThanOrEqual(5000, $position, 'never behind the anchor while playing');
+        $this->assertLessThanOrEqual(5000 + 60_000, $position, 'within a sane sliver of the seed');
 
         /** @var array<string, mixed> $directive */
         $directive = $nudge['nudge'];
-        $this->assertSame(4000, $directive['drift_ms']);
+        $this->assertSame($position - 1000, $directive['drift_ms'], 'drift and position share one tick');
+        $this->assertGreaterThanOrEqual(4000, $directive['drift_ms']);
+        $this->assertLessThanOrEqual(4000 + 60_000, $directive['drift_ms']);
         $this->assertSame('behind', $directive['direction']);
         $this->assertSame(1 + GroupState::NUDGE_RATE_STEP, $directive['suggested_rate']);
         $this->assertSame(GroupState::POSITION_TOLERANCE, $directive['tolerance_ms']);

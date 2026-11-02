@@ -582,11 +582,14 @@ class SyncPlayE2ETest extends TestCase
             $syncFrames[0]['member_id'] ?? null,
             'member_id must be the host id — in a solo room the host is the only member'
         );
-        $this->assertSame(
-            5000,
-            $syncFrames[0]['position'] ?? null,
-            'the broadcast must carry the authoritative group playback position (ms) the host re-anchors to'
-        );
+        // INCIDENT playjump — the echo now carries the anchor-ADVANCED
+        // position: on the real clock this run's seed→echo sliver rides
+        // along, so exact equality would smuggle a timing assumption. The
+        // law: an int at or past the anchor, within a sane bound.
+        $position = $syncFrames[0]['position'] ?? null;
+        $this->assertIsInt($position, 'the broadcast carries a playback position (ms)');
+        $this->assertGreaterThanOrEqual(5000, $position, 'never behind the anchor while playing');
+        $this->assertLessThanOrEqual(5000 + 60_000, $position, 'within a sane sliver of the seed');
         $this->assertTrue($syncFrames[0]['is_playing'] ?? false, 'is_playing must reflect the group playback state');
         $this->assertSame($groupId, $syncFrames[0]['group_id'] ?? null, 'the broadcast must carry the group id');
     }
@@ -630,11 +633,12 @@ class SyncPlayE2ETest extends TestCase
             $memberFrames[0]['member_id'] ?? null,
             'member_id must be server-stamped with the HOST id, not the requester-supplied value'
         );
-        $this->assertSame(
-            5000,
-            $memberFrames[0]['position'] ?? null,
-            'the broadcast carries the host-authoritative position (ms)'
-        );
+        // INCIDENT playjump — anchor-advanced echo (see Test 12): bounded,
+        // never behind the anchor while the group plays.
+        $memberPosition = $memberFrames[0]['position'] ?? null;
+        $this->assertIsInt($memberPosition, 'the broadcast carries the host-authoritative position (ms)');
+        $this->assertGreaterThanOrEqual(5000, $memberPosition, 'never behind the anchor while playing');
+        $this->assertLessThanOrEqual(5000 + 60_000, $memberPosition, 'within a sane sliver of the seed');
     }
 
     /**

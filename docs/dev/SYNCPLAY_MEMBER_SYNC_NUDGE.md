@@ -107,6 +107,11 @@ Additive keys only, on the existing `playback_sync` family, through the S417
 ```
 
 - `drift_ms = group.position − reported` (>0 ⇒ the member trails the group).
+  Since the INCIDENT playjump cure, `group.position` here is the
+  anchor-ADVANCED reading (`GroupState::getAdvancedPlaybackPosition()`) taken
+  on the SAME ingest tick that produced the echoed `position` and the
+  in-sync judgement — one reference instant per `playback_sync` handling, so
+  a frame can never carry a position and a drift that disagree.
 - `direction` is the human-readable sign of the drift; `suggested_rate` is
   `1 ± NUDGE_RATE_STEP` (1.1 speed-up when behind, 0.9 slow-down when ahead).
 - It is **guidance**: a client may play it as a gentle rate adjust, an
@@ -131,7 +136,11 @@ slot rate-limits the *reaction channel*, not a confirmed delivery.
 
 `$memberPositions` / `$lastNudgeAtMs` are **WS-worker-local live state**. The
 write-through bridge mirror (`applyBridgeFrame`) carries `GroupState::serialize()`
-output, which contains neither map. Rules:
+output, which contains neither map (since the INCIDENT playjump cure the
+mirror DOES carry one more key — `playback_position_at_ms`, the anchor's
+stamp: unlike the member maps it is group truth that must keep advancing
+across a worker handoff; blobs predating it self-heal to restore-time-now).
+Rules:
 
 - A bridge **upsert** (merge path) replaces membership and host facets only —
   it cannot fabricate a position for a member who never reported, and cannot

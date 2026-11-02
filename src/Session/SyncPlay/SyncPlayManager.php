@@ -1469,16 +1469,6 @@ class SyncPlayManager
      * of drift, and legacy position-less sync requests keep their exact
      * pre-S446 behaviour (pure state echo).
      *
-     * INCIDENT playjump (2026-11-02) — the echoed `position` VALUE is now the
-     * ANCHOR-ADVANCED expected position while the group plays (whole-second
-     * quantized, clamped to the known duration); paused/stopped echoes keep
-     * the raw anchor verbatim. No payload keys changed, no new wire codes:
-     * the frozen-anchor echo was the rubber-band (clients seek to whatever
-     * position arrives, and the anchor moved only on explicit host commands),
-     * so the value SEMANTICS are the cure. Host play/pause/seek still refresh
-     * anchor+stamp exactly as before; the S446 predicate/drift maths still
-     * judge the raw anchor (S291-verbatim law, deliberately unchanged).
-     *
      * @param ConnectionInterface $connection The WebSocket connection
      * @param array<string, mixed> $payload Payload (member_id is IGNORED — S289;
      *                                       `position` ms is INGESTED — S446)
@@ -1514,15 +1504,16 @@ class SyncPlayManager
 
         // S446 — ingest the reporter's own position before echoing state, so the
         // predicate evaluates the freshest truth on the same injected clock tick.
-        $nowMs = Messages::nowMs();
+        $nowMs = $this->syncNowMs();
 
         // INCIDENT playjump — the echoed position is the ANCHOR-ADVANCED one:
-        // while playing, the group's authoritative position tracks wall clock,
-        // so an echo can never drag a drift-correcting client back to the last
-        // explicit command's stale second (semantics: GroupState::
-        // expectedPlaybackPosition(); payload keys are unchanged — the VALUE
-        // law is what moved).
-        $position = $group->expectedPlaybackPosition($nowMs);
+        // while playing, the group's authoritative position tracks the wall
+        // clock, so an echo can never drag a drift-correcting client back to
+        // the last explicit command's stale second. Payload keys are
+        // unchanged — the VALUE law is what moved (GroupState::
+        // getAdvancedPlaybackPosition()). Echo, ingest, predicate and nudge
+        // below all hang off this ONE tick.
+        $position = $group->getAdvancedPlaybackPosition($nowMs);
 
         $reportedPosition = self::reportedPositionMs($payload);
         if ($reportedPosition !== null) {
@@ -1579,17 +1570,20 @@ class SyncPlayManager
             return;
         }
 
-        $driftMs = $group->getPlaybackPosition() - $reportedPositionMs;
+        // INCIDENT playjump — one reference instant: the nudge's position and
+        // drift both derive from the SAME anchor-advanced reading the group
+        // echo of this tick carried (and that isMemberInSync judged before
+        // the slot claim), so a frame can never carry a position and a
+        // drift_ms that disagree.
+        $authoritative = $group->getAdvancedPlaybackPosition($nowMs);
+        $driftMs = $authoritative - $reportedPositionMs;
         $behind = $driftMs > 0;
 
         $connection->send(Messages::frame(Messages::TYPE_PLAYBACK_SYNC, [
             'member_id' => $memberId,
             'group_id' => $groupId,
             'current_media_id' => $group->getCurrentMediaId(),
-            // INCIDENT playjump — same anchor-advanced position as the plain
-            // group echo of this tick (clients seek on ANY playback_sync
-            // frame); drift_ms above keeps its verbatim RAW-anchor maths.
-            'position' => $group->expectedPlaybackPosition($nowMs),
+            'position' => $authoritative,
             'is_playing' => $group->isPlaying(),
             'server_time' => time(),
             'nudge' => [
@@ -1635,6 +1629,21 @@ class SyncPlayManager
         }
 
         return ($value !== null && $value >= 0) ? $value : null;
+    }
+
+    /**
+     * Clock seam for the playback_sync ingest tick (INCIDENT playjump).
+     *
+     * Production reads the uniform Messages::nowMs() millisecond clock — the
+     * group-anchor stamp's scale; never time(), which would reintroduce the
+     * two-scale class this incident is about. The test harness overrides it
+     * (TestableSyncPlayManager) to drive the anchor advance deterministically.
+     * Called ONCE per handlePlaybackSync invocation so echo, ingest,
+     * predicate and nudge share a single instant.
+     */
+    protected function syncNowMs(): int
+    {
+        return Messages::nowMs();
     }
 
     /**

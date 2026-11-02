@@ -961,9 +961,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * while playing, raw anchor paused/stopped, [0, duration] clamp, rate
      * respected, anchor stamp rides serialize/deserialize). Measured from the
      * phpunit red (2041), not predicted.
+     * Re-pinned 2041→2042 by the INCIDENT playjump arbitration cure
+     * (2026-11-02): +2 — tests/Unit/Session/SyncPlay/
+     * GroupStateAnchorAdvanceTest.php and tests/Unit/Session/SyncPlay/
+     * SyncPlayEchoAdvanceTest.php (pure projection units + the clock-seam
+     * manager rail asserting the echo delta advances exactly with the
+     * injected tick — the rubber-band red-pin); −1 — the superseded
+     * duplicate-lane tests/Unit/Session/SyncPlay/
+     * SyncPlayAnchorAdvanceEchoTest.php (whole-second quantization rejected
+     * by arbitration; forensics archived outside the tree). Measured from
+     * the phpunit red (2042), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2041;
+    private const EXPECTED_PHP_FILES = 2042;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -12,7 +12,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Session\SyncPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Session\SyncPlay\Messages;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
@@ -252,7 +251,11 @@ final class SyncPlayEchoAdvanceTest extends TestCase
         $echoes = $this->plainEchoFrames();
         $this->assertCount($before + 1, $echoes, 'each report answers with exactly one plain group echo');
 
-        $position = $echoes[count($echoes) - 1]['position'] ?? null;
+        if ($echoes === []) {
+            $this->fail('unreachable guard: the assert above already condemned the empty list');
+        }
+
+        $position = $echoes[array_key_last($echoes)]['position'] ?? null;
         $this->assertIsInt($position, 'the echo must carry an int ms position');
 
         return $position;

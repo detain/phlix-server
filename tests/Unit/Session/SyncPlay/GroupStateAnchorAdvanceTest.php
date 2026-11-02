@@ -23,9 +23,13 @@ use Phlix\Session\SyncPlay\Messages;
  * [0, duration] when the duration is known. Paused/stopped/buffering groups
  * answer the raw anchor. The clock is uniform Messages::nowMs() milliseconds
  * (NOT time() seconds — the R-SYNCPLAY-05 two-scale class stays out of the
- * advance math). The stamp is LIVE-ONLY state: never serialized, never
- * mirrored, never restorable from a blob — a restore re-stamps at ingest so a
- * restored playing group continues from its anchor without leaping.
+ * advance math). The stamp is an ANCHOR FACET: unlike the live-only S446
+ * member positions it rides serialize()/deserialize(), so a worker handoff
+ * keeps advancing the echo instead of re-freezing it at the restore instant
+ * (the live-only draft was measured insufficient — a restore silently
+ * discarded 90s of advancement). Blobs predating the field — and forged ones
+ * (negative, non-int) — self-heal to restore-time-now: they can under-claim
+ * elapsed, never inject a forward leap.
  *
  * @see GroupState::getAdvancedPlaybackPosition() For the projection under test
  * @see SyncPlayEchoAdvanceTest                  For the echo-path incident pin

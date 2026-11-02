@@ -1,0 +1,2 @@
+import{c as e,w as t}from"./Icon-55iG1rR7-rKvgrcbQ.js";function n(e){return typeof e==`string`?e:e?.value??``}function r(){let r=t(`apiBase`,``);return e(()=>n(r))}function i(){let r=t(`mediaApiBase`,void 0),i=t(`apiBase`,``);return e(()=>n(r)||n(i))}function a(){let r=t(`mediaDirectBase`,void 0);return e(()=>n(r))}export{i as n,r,a as t};
+//# sourceMappingURL=useApiBase-DXTBY90j-BncEZEUz.js.map

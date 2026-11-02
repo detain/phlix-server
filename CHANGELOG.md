@@ -5954,6 +5954,43 @@ _Folded in from the former `### Fixed (live production batch)` heading (W-min90 
   JSON root instead of the raw text. No migration.
 ### Changed
 
+- **The served web SPA bundle re-pins to `@phlix/ui` v0.99.13 and is regenerated (IDs: tag-wave C1 follow, 2026-11-02).**
+  - `web-ui` tarball pin moves `v0.99.12.tar.gz` → `v0.99.13.tar.gz` (tag object
+    `ff9c1f91cf7b08a425e654a0717ec73b9a14cc41`, peel `e30bae9f096708dc43e863c2b4f4171d25d7c8e3`,
+    both ls-remote-verified). v0.99.13 is a small follow-up release: the Select dropdown's
+    internal open-state ref renames `open` → `isOpen` so it no longer collides with the `v-open`
+    model prop under the refreshed eslint-plugin-vue era (public API unchanged), plus a
+    toolchain-era dist rebuild from the owner's dep-refresh.
+  - Lock diff surgical 4+/4-: the root dependency echo plus the `node_modules/@phlix/ui`
+    version/resolved/integrity lines. Transitive shas deliberately held: v0.99.13 pins the same
+    tags as v0.99.12, and the lock's `@phlix/contracts` `0.5.4@c491985317…` and
+    `@phlix/syncplay` `0.1.6@081687742…` resolutions equal the live tag peels (ls-remote-checked).
+    The toolchain era stays put too — a blanket `npm update` would rotate dev deps (vite 8.2.0 →
+    8.3.5 and friends), which the era law refuses; the lock was moved by a scoped
+    `npm install` at the CI-pinned toolchain (node 24.20.0 per `web-ui.yml` + bundled npm 11.19.0,
+    `NPM_CONFIG_USERCONFIG=/dev/null`).
+  - `public/assets/app/` regenerated after a clean `npm ci`: `vue-tsc --noEmit && vite build`
+    run twice → aggregate md5 over the tree (`find public/assets/app \( -type f -o -type l \)
+    | sort | xargs md5sum | md5sum`) = `2d71b86991798d24aeb3adfdd8c8f3d1` on BOTH builds
+    (deterministic). Prior committed tree measured `e1b0ac6f8462aaee86ddcb29d0277bb0` with the
+    same recipe. Tree shape: 200 tracked → 200 on disk; 167 chunk renames, 2 in-place updates
+    (`index.html`, `.vite/manifest.json`).
+  - Proofs: installed `node_modules/@phlix/ui/dist` byte-identical (diff -r) to the v0.99.13 tag
+    tarball fetched via curl into scratch; the served bundle opens WebSockets with the "bearer"
+    subprotocol array (backtick-quoted literal in this toolchain era's minified output), ZERO
+    `[?&]token=` query-string leaks, and the PlaylistsPage/PlaylistDetailPage chunks still emit.
+    The v0.99.13 Select cure is an internal-ref rename the minifier does not preserve as a runtime
+    string — the served-bundle law is met by the tarball→dist→build identity chain instead.
+    Gates: web-ui `node --test` 33 pass / 0 fail (baseline exact); the bundle-aware PHP files
+    (WebUiBundleGateTest, ViteAssetsMemoTest, SharedUiControllerCspNonceTest,
+    NginxAssetLocationTest, PublicFrontControllerRemovalGuardTest, HttpHandlerServeStaticTest)
+    green — 41 tests / 359 assertions. Zero era-pin rotations: no test or script in this repo
+    cites the pinned ui version (pin-skew grep measured empty).
+  - Disclosed, NOT chased (era law): `npm audit` in web-ui reports one dev-scope high — the vite
+    8.2.0–8.2.2 GHSA family (launch-editor escaping + Vite dev-server classes). Pre-existing at
+    the v0.99.12 lock (which pinned the same vite 8.2.0), build-time-only (vite is a devDependency,
+    never in the served bundle), and no web-ui CI step gates on audit.
+
 - **Wave-2 tag-wave re-pin: `detain/phlix-shared` and the `@phlix/ui` pins move to the released tags and the served `/app` bundle is regenerated (IDs: tag-wave C1, 2026-11-02).**
   - `composer.json` gains `detain/phlix-shared: ^0.53.0` (lock re-resolves v0.51.0 → v0.53.0
     only; source ref `9e784c60`). The 84-key server settings schema is key-set-identical to

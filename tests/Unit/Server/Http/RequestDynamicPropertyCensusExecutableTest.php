@@ -955,9 +955,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * carriers are flipped in the same commit and the guard is
      * mutation-proven red on a planted relapse). Measured from the phpunit
      * red (2040), not predicted.
+     * Re-pinned 2040→2041 by the playjump anchor-advance cure (2026-11-02):
+     * +1 — tests/Unit/Session/SyncPlay/SyncPlayAnchorAdvanceEchoTest.php (the
+     * red-first rubber-band pin: echoes carry anchor + whole-second advance
+     * while playing, raw anchor paused/stopped, [0, duration] clamp, rate
+     * respected, anchor stamp rides serialize/deserialize). Measured from the
+     * phpunit red (2041), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2040;
+    private const EXPECTED_PHP_FILES = 2041;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

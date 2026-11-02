@@ -5954,6 +5954,24 @@ _Folded in from the former `### Fixed (live production batch)` heading (W-min90 
   JSON root instead of the raw text. No migration.
 ### Changed
 
+- **Wave-2 tag-wave re-pin: `detain/phlix-shared` and the `@phlix/ui` pins move to the released tags and the served `/app` bundle is regenerated (IDs: tag-wave C1, 2026-11-02).**
+  - `composer.json` gains `detain/phlix-shared: ^0.53.0` (lock re-resolves v0.51.0 → v0.53.0
+    only; source ref `9e784c60`). The 84-key server settings schema is key-set-identical to
+    v0.51.0, so no server-side admission allow-list moves; the two substantive (non-prose)
+    schema deltas are `subtitles.default_language` default `"eng"` → `"en"` — aligning the
+    schema with the ISO 639-1 consumer the router already has — and `trakt.redirect_uri`
+    gaining `format: "uri"` + `pattern: "^https://"`, the law PUT validation already enforced
+    through the full property subschema and already honored by every existing test value.
+    `detain/phlix-tokens` stays exact `v0.2.1` (owner defer).
+  - The `web-ui/package.json` tarball pin moves `@phlix/ui#v0.99.10` → `#v0.99.12` (tag object
+    `93b6d186`, peel `1f0046c5`); the lock rotates the transitive pins to
+    `@phlix/contracts#v0.5.4` + `@phlix/syncplay#v0.1.6`, the installed `dist/` is byte-identical
+    to the tag tarball, and the web-ui gate suite passes 33/33. The served `public/assets/app`
+    SPA is rebuilt with npm 11.19.0 / node 24.20.0 (two-build aggregate md5
+    `eb31af09bffa88d5aa81496ec56fdbad`, identical), so the member `/app/playlists` pages and the
+    playlist-manageability gating are now live in the hosted bundle — the README "UI truth at
+    this tip" line flips accordingly (supersedes the v0.99.10-era statements forward-only).
+
 - **Hygiene sweep makes `src/` 100% strict-typed, deletes fifteen verified-dead classes, and retires two more dead subsystems (IDs: SRV-HYGIENE micro-lane, 2026-10-14 review family — R18-03/07/09/10/16/17, R15-23/29, and three dead-code retirements):**
   - R18-03: `declare(strict_types=1)` added to the last seven files missing it
     (`AuditLogger` + the six `src/Dlna/` classes); `src/` is now 100% strict.

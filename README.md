@@ -389,10 +389,10 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper sits
   uncalled in `Router.php` (never invoked; pinned by `SmartPlaylistRegistrationGuardTest`), so a
   `smart_playlist_id` must reference a pre-existing `smart_playlists` row created out-of-band.
-- **UI truth at this tip**: the served web SPA bundle (pinned `@phlix/ui` v0.99.10 in
-  `web-ui/package.json:15`) exposes the **admin** Collections page (`/app/admin/collections`); the
-  member-facing `/app/playlists` page lives in `@phlix/ui` master and lands in this server's bundle
-  only at the next web-ui re-pin. Either way clients code against the REST contract above —
+- **UI truth at this tip**: the served web SPA bundle (pinned `@phlix/ui` v0.99.12 in
+  `web-ui/package.json:15`) exposes both the **admin** Collections page (`/app/admin/collections`)
+  and the member-facing `/app/playlists` pages (the v0.99.12 re-pin landed them; playlist
+  manageability gating per `@phlix/ui` v0.99.11/v0.99.12). Either way clients code against the REST contract above —
   `openapi.yaml` carries all paths (`/api/v1/collections*` from `:5738`) and
   `OpenapiSpecCurrencyTest` machine-checks the route↔spec bijection.
 

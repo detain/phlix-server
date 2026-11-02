@@ -1,0 +1,2 @@
+import{L as e,Ot as t,P as n,f as r,n as i,y as a}from"./Icon-CIbfiPrs-B24kEEdN.js";var o=i(a({__name:`Card`,props:{padding:{type:Boolean,default:!0}},setup(i){return(a,o)=>(n(),r(`div`,{class:t([`phlix-card`,{"phlix-card--no-padding":!i.padding}])},[e(a.$slots,`default`,{},void 0,!0)],2))}}),[[`__scopeId`,`data-v-0e99c3b2`]]);export{o as t};
+//# sourceMappingURL=Card-C8ekyPJB-7z0Iy-G2.js.map

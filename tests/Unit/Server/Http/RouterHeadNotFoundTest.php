@@ -210,7 +210,16 @@ final class RouterHeadNotFoundTest extends TestCase
 
         self::assertFalse($response->headOnly, 'a GET must never be flagged head-only');
         self::assertSame(
-            (string) new WorkermanResponse(404, ['Content-Type' => 'application/json'], self::envelope()),
+            // Deferred #2 (a69560b5): the 404 envelope is a json() reply, so the
+            // live wire now carries its Cache-Control: no-store seed. Rotated from
+            // the measured red; the byte-identity law (encoder-derived expectation,
+            // never transcription) and the whole-body/83-byte assertions stand —
+            // the sibling pre-fix controls above intentionally stay seed-less
+            // because they encode their own bytes, not the live path.
+            (string) new WorkermanResponse(404, [
+                'Content-Type'  => 'application/json',
+                'Cache-Control' => 'no-store',
+            ], self::envelope()),
             $wire,
             "a GET 404 must be byte-identical to the framework encoder, body included. Encoded bytes were:\n" . $wire,
         );

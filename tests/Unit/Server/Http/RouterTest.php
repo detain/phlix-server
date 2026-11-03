@@ -545,6 +545,12 @@ class RouterTest extends TestCase
         $this->assertSame(
             (string) new BodylessResponse(403, [
                 'Content-Type'   => 'application/json',
+                // Deferred #2 (a69560b5): json() now seeds Cache-Control:
+                // no-store, and the refusal this gate short-circuits to IS a
+                // json() reply — the head-only wire carries the seed. Rotated
+                // from the measured red; the head-only/one-Content-Length laws
+                // below are the real subject of this pin and are untouched.
+                'Cache-Control'  => 'no-store',
                 'Content-Length' => (string) strlen($json),
             ]),
             $wire,
@@ -594,6 +600,12 @@ class RouterTest extends TestCase
         $this->assertSame(
             (string) new BodylessResponse(403, [
                 'Content-Type'   => 'application/json',
+                // Deferred #2 (a69560b5): json() now seeds Cache-Control:
+                // no-store, and the refusal this gate short-circuits to IS a
+                // json() reply — the head-only wire carries the seed. Rotated
+                // from the measured red; the head-only/one-Content-Length laws
+                // below are the real subject of this pin and are untouched.
+                'Cache-Control'  => 'no-store',
                 'Content-Length' => (string) strlen($refusalJson),
             ]),
             $wire,
@@ -610,7 +622,14 @@ class RouterTest extends TestCase
         $json = $refusalJson;
         $this->assertFalse($get->headOnly, 'a gated GET must never be flagged head-only');
         $this->assertSame(
-            (string) new WorkermanResponse(403, ['Content-Type' => 'application/json'], $json),
+            // Deferred #2 (a69560b5): the refusal is a json() reply, so the GET
+            // wire carries the no-store seed too — the encoder-derived expectation
+            // moves with it (rotated from the measured red). This control still
+            // proves the GET ships its body, which is its actual subject.
+            (string) new WorkermanResponse(403, [
+                'Content-Type'  => 'application/json',
+                'Cache-Control' => 'no-store',
+            ], $json),
             (string) $get->toWorkermanResponse(),
             'a gated GET must be byte-identical to the framework encoder, body included',
         );

@@ -33,6 +33,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #2 follow-through — three byte-exact wire pins rotated for the
+  no-store seed.** The CI full-suite runs caught what the #2 targeted battery
+  missed: `RouterTest`'s gated-HEAD refusal pins and
+  `RouterHeadNotFoundTest::testAGetToAnUnregisteredPathStillShipsTheWholeEnvelope`
+  compare the live reply against the framework encoder's bytes, and every
+  refusal they capture is a `json()` reply — so the intentional `Cache-Control:
+  no-store` seed moves their expectations. Rotated from the measured reds (head
+  41728289156, three named failures reproduced locally before the edit); the
+  head-only, single-Content-Length, 83-byte-body and encoder-derivation laws are
+  the tests' real subjects and stand untouched — including the pre-fix CONTROL
+  sites, which encode their own bytes and therefore stay seed-less honestly.
 - **Deferred #68 — internal tracker shorthand is out of the user-facing docs.**
   `(R14-05)`, `(S152)`, `SV-4.15`, `updates.md #47`-style review-tracker IDs
   sprinkled through README.md (env-knob table, deploy notes, CLI exit-code

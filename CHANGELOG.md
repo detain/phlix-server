@@ -33,6 +33,21 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #29 — one heading capitalization convention across primary docs.**
+  Sentence case was already the dominant style and the house voice; the
+  remaining Title-Case outliers (`### Web portal` et al. in README.md,
+  `## Installing the chart`/`## Configuration options` in k8s/README.md, and
+  the whole `## Release Steps`/`### 1. Create release branch` family in
+  RELEASE_PROCESS.md) now follow it. Proper nouns, brands and acronyms keep
+  their canonical spelling (SyncPlay, WebSocket, MySQL, Docker, API, HLS);
+  semantic status caps are content, not style, and stay (`NOT SHIPPED`,
+  `NOT implemented here`). In-prose heading cross-references and link display
+  text were carried along; GitHub anchor slugs are case-folded, so every
+  `#section-anchor` link resolves unchanged. README-referrer guard battery
+  (Backup/AuthMethodLockout/TrustedProxies/PositionTolerance/PasswordReset/
+  InstallerFirstRun/LogEnvironmentKnobs + the S431 census, whose
+  write-denominator rotation 1118→1119 belongs to deferred #73's router pin)
+  green at 374 tests.
 - **Deferred #73 — the library drill-down listing now serves a total.**
   `GET /api/v1/libraries/{id}/items` was the estate's only paged listing
   returning `{items, limit, offset}` without `total`, so web-UI clients could

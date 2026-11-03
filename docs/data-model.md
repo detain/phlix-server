@@ -41,7 +41,7 @@ Two unrelated families share a noun:
 - `collections` / `collection_items` (**005**) are the **user-owned**
   collections-and-playlists feature (member media lists, `created_by`
   visibility, smart-playlist linkage — see README
-  [Collections and Playlists](../README.md#collections-and-playlists-member-owned-lists)).
+  [Collections and playlists](../README.md#collections-and-playlists-member-owned-lists)).
 - `media_collections` / `media_collection_members` (**064**) are **TMDB
   box-sets**: server-side catalog data synced from TMDB so the UI can show
   "Part of a Collection" (e.g. "The Lord of the Rings Films"). No user owns

@@ -100,6 +100,6 @@ reverse-proxy question, covered by
 
 ## Where to go next
 
-- SyncPlay mechanics & wire details: README → [SyncPlay — Group Watching](../../README.md#syncplay--group-watching)
+- SyncPlay mechanics & wire details: README → [SyncPlay — group watching](../../README.md#syncplay--group-watching)
 - Backups, themes, integrations, troubleshooting: README's feature sections and [Troubleshooting](../../README.md#troubleshooting)
 - Deeper guides live on the external [phlix-docs](https://detain.github.io/phlix-docs/) site the README links out to.

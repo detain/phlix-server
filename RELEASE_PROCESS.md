@@ -1,6 +1,6 @@
 # Phlix Release Process
 
-## Versioning Strategy
+## Versioning strategy
 
 Phlix follows [Semantic Versioning (SemVer)](https://semver.org/):
 
@@ -13,7 +13,7 @@ Example: `v1.2.3` where:
 - `2` = minor version
 - `3` = patch version
 
-## Server-Hub Compatibility
+## Server-hub compatibility
 
 > ⚠ **The matrix previously printed here ("server and hub must have
 > matching major versions") was never real and is falsified by the live
@@ -48,7 +48,7 @@ What actually governs interop today:
    `composer.json`'s `extra.phlix.minHubVersion` is a declared floor with
    no read sites — a statement of intent, not an enforcement point.
 
-## Release Channels
+## Release channels
 
 ### Stable
 - Production-ready releases
@@ -73,7 +73,7 @@ What actually governs interop today:
   date-stamped nightly tagging awaits the owner's S274 release-authority
   decision and should not be relied on until it ships.
 
-## Release Schedule
+## Release schedule
 
 | Release Type | Frequency | Example |
 |--------------|-----------|---------|
@@ -81,7 +81,7 @@ What actually governs interop today:
 | Minor | Monthly | v1.3.0 on 3rd Thursday |
 | Major | 6-12 months | v2.0.0 with breaking changes |
 
-## Pre-Release Checklist
+## Pre-release checklist
 
 - [ ] All tests pass on `master`
 - [ ] Coverage >= 80%
@@ -93,9 +93,9 @@ What actually governs interop today:
 - [ ] Draft release created and reviewed
 - [ ] Release notes reviewed
 
-## Release Steps
+## Release steps
 
-### 1. Create Release Branch
+### 1. Create release branch
 
 ```bash
 git checkout master
@@ -103,7 +103,7 @@ git pull
 git checkout -b release/v1.2.0
 ```
 
-### 2. Update Version
+### 2. Update version
 
 **Never edit the version by hand.** Run:
 
@@ -135,14 +135,14 @@ The script refuses to release from a tree where those sources disagree, and
 version of this package — bump it only when the server actually starts
 requiring a newer hub.
 
-### 3. Update Changelog
+### 3. Update changelog
 
 Generate changelog:
 ```bash
 git log --pretty=format:"- %s" v1.1.0..HEAD
 ```
 
-### 4. Create Pull Request
+### 4. Create pull request
 
 ```bash
 git add .
@@ -151,7 +151,7 @@ git push -u origin release/v1.2.0
 gh pr create --title "Release v1.2.0" --body "Release notes..."
 ```
 
-### 5. Tag and Release
+### 5. Tag and release
 
 After PR merge:
 ```bash
@@ -199,7 +199,7 @@ zero semver image tags — see the tag table below), and nothing "pushes" a
 Helm chart to any repository — charts ship only as release assets. Steps 3–4
 as previously worded here described an intended flow that has never run.
 
-## Docker Image Tagging
+## Docker image tagging
 
 Published today (S474 regime — measured against the live registry, see the
 recipe below):
@@ -231,9 +231,9 @@ curl -s -H "Authorization: Bearer $(cat /tmp/ghcr.token)" \
 Never bake a `<full-sha>` into docs or manifests by hand — query the list and
 pick the commit you want.
 
-## Feature Compatibility and API Versioning
+## Feature compatibility and API versioning
 
-### Feature Compatibility
+### Feature compatibility
 
 > ⚠ **The per-feature "1.x.0+ / 1.x.0+" floor table that used to sit here
 > never matched shipped versions:** pairing, relay tunnels, delegated auth
@@ -241,22 +241,22 @@ pick the commit you want.
 > line (hub `0.5.0` today) against a 1.x server. There is no per-feature
 > version floor recorded in either repo. What these features actually
 > negotiate is the pinned `@phlix/contracts` wire contract and the
-> documented relay envelope — see "Server-Hub Compatibility" above.
+> documented relay envelope — see "Server-hub compatibility" above.
 
-### API Versioning
+### API versioning
 
 - Server API: `/api/v1/*`
 - Hub API: `/api/v1/*`
 - Breaking changes increment major version
 
-## Rollback Procedures
+## Rollback procedures
 
-### Docker Image Rollback
+### Docker image rollback
 
 Rollback targets the immutable `<full-sha>-<variant>` tag of the previous
 known-good commit — precise because the S474 regime publishes one per build
 (never `latest`: it is mutable and may already be the broken build). Find the
-current tag list with the anonymous recipe in "Docker Image Tagging" above,
+current tag list with the anonymous recipe in "Docker image tagging" above,
 pick the previous run's full SHA, then:
 
 ```bash
@@ -274,7 +274,7 @@ with this exact immutable form named in the error; the chart does not
 mechanically reject a hand-set mutable `latest`, but pinning one defeats
 rollback, so don't.)
 
-### Database Migration Rollback
+### Database migration rollback
 
 **There is no automated migration rollback.** The commands this section used
 to list — `php scripts/run-migrations.php rollback` and
@@ -331,7 +331,7 @@ Real recovery, in the order an incident should reach for it:
    These are best-effort, human-audited escape hatches to run only against a
    verified backup, not a command surface.
 
-## Security Releases
+## Security releases
 
 For critical security issues:
 1. Release patch version within 48 hours
@@ -340,7 +340,7 @@ For critical security issues:
 4. Immediate Docker image push
 5. Security advisory published
 
-## Hotfix Process
+## Hotfix process
 
 For critical bugs in production:
 
@@ -365,7 +365,7 @@ For critical bugs in production:
    git push origin --delete hotfix/v1.2.1
    ```
 
-## Release Integrity (Signing: NOT SHIPPED)
+## Release integrity (signing: NOT SHIPPED)
 
 > **Correction first.** This section used to open with "All release tags and
 > Docker images are GPG signed for security" and offered operator commands
@@ -382,7 +382,7 @@ For critical bugs in production:
 >   (probe recipe below) returns `MANIFEST_UNKNOWN`: zero signature or
 >   attestation manifests exist beside any pushed image.
 > * *The example itself* — `ghcr.io/detain/phlix-server:v1.2.0` is a tag the
->   registry has never served ("Docker Image Tagging" above); `cosign
+>   registry has never served ("Docker image tagging" above); `cosign
 >   verify` as written could not have resolved anything to verify.
 > Publishing signed artifacts is a deliberate owner-gated gap (S274 line),
 > not an oversight the docs may pretend away.
@@ -393,7 +393,7 @@ What IS true today, and what it is actually worth:
 |-----------|-------|---------------|----------------------|
 | TLS transport + registry digest verification when pinning by `@sha256:…` | GHCR, every pull | content integrity of the pulled bytes | publisher identity |
 | Per-run base-digest equality gate | `docker.yml` "Verify the base image is the one built from this commit" (hard error, empty/mismatched digest) | runtime image was built against the base image published in the same run | anything about who ran the build |
-| Immutable `<full-sha>-<variant>` image tags, derived from the commit | docker.yml tag table ("Docker Image Tagging" above) | the image bytes trace to a specific commit on this repo's master | the commit was never signed; the GHCR write token does not carry `id-token` |
+| Immutable `<full-sha>-<variant>` image tags, derived from the commit | docker.yml tag table ("Docker image tagging" above) | the image bytes trace to a specific commit on this repo's master | the commit was never signed; the GHCR write token does not carry `id-token` |
 | GitHub release with the packaged Helm `.tgz` files attached | `release.yml` "Create Release" | assets are served by GitHub over TLS, at the release URL | no published checksum file, no detached signature — hash each download yourself if this matters |
 
 Integrity checks that work right now:

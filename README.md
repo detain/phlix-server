@@ -26,7 +26,7 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Transcoding**: On-the-fly media conversion via FFmpeg with automatic quality selection
 - **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists, normalized
   for browser playback — encoder-level detail under [HLS & transcoding](#hls--transcoding)
-- **WebSocket Events**: Real-time progress and notification delivery
+- **WebSocket events**: Real-time progress and notification delivery
 - **Household quality-of-life**: watched status scrobbles to Trakt and Last.fm, trickplay scrub-preview
   thumbnails and box-set collection sync are produced by background asset jobs
   (`PHLIX_MEDIA_ASSET_JOBS_DIR`, `PHLIX_COLLECTION_JOBS_DIR`), and intro/outro skip markers are exposed
@@ -163,7 +163,7 @@ Every environment variable the server process reads is inventoried in the defini
   [phlix-docs / admin / library-management](https://detain.github.io/phlix-docs/admin/library-management)
   and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings)..
 
-### Web Portal
+### Web portal
 - **Web portal (`/app`) — the only web UI**: The web portal is the shared `@phlix/ui` Vue SPA, served
   at `/app` (SPA shell via `SharedUiController` + `ViteAssets`; built bundle under
   `public/assets/app/`). Admins work in the **admin section (`/app/admin`)**, an
@@ -190,9 +190,9 @@ Every environment variable the server process reads is inventoried in the defini
 - **Continue Watching**: Track and display in-progress media
 - **Library Browser**: Browse media by library with item counts
 - **Collections & Playlists**: Member-owned media lists with a `created_by` visibility model — see
-  [Collections and Playlists](#collections-and-playlists-member-owned-lists)
+  [Collections and playlists](#collections-and-playlists-member-owned-lists)
 
-### Authentication & Security
+### Authentication & security
 - **JWT-based Authentication**: Stateless auth with access tokens (1 hour TTL) and refresh tokens (7 days TTL)
 - **Signup Approval Queue**: new self-service registrations wait for an admin by default — see [Signup approval gate (adding household users)](#signup-approval-gate-adding-household-users)
 - **External SSO — OIDC, LDAP & GitHub**: Optional external login backends, toggled per-provider from the admin **Integrations → Auth providers** page. Flows, endpoints and config pointers: [External SSO](#external-sso).
@@ -352,7 +352,7 @@ slips into a fresh server just because it is reachable.
   form of open signup — set that toggle with the household policy in mind, not as a
   substitute for `signup_mode`.
 
-### SyncPlay — Group Watching
+### SyncPlay — group watching
 - **Synchronized Playback**: Watch content together with friends across devices with sub-second sync accuracy
 - **Host-Controlled Playback**: Only the host can control play/pause/seek; all members receive synchronized commands
 - **NTP-Style Time Sync**: Network time synchronization with latency compensation and drift correction
@@ -429,7 +429,7 @@ The surface is the `/api/v1/media/{id}/subtitles*` endpoint family (rows in
 the REST table below); signed subtitle URLs ride the HLS pipeline the same way
 segment URLs do.
 
-### Session Management
+### Session management
 - **Device Sessions**: Track authenticated devices with activity timestamps
 - **Playback Progress**: Resume where you left off across sessions
 - **Continue Watching**: Track items in progress per profile
@@ -440,7 +440,7 @@ segment URLs do.
   progress reporting — the server applies no automatic progress-threshold completion detection and
   keeps no per-profile watch-time statistics
 
-### Collections and Playlists (member-owned lists)
+### Collections and playlists (member-owned lists)
 
 Collections are user-curated media lists — the feature clients call **Playlists**. The HTTP surface,
 the `created_by` ownership model and the OpenAPI paths all shipped before this paragraph existed;
@@ -1327,7 +1327,7 @@ the next worker boot rather than the next request.
 > The scan summary key `skipped_no_artist` is renamed `placeholder_artist_files`
 > (untagged albums are now indexed, not skipped).
 
-## API Reference
+## API reference
 
 ### HTTP endpoints
 
@@ -1371,7 +1371,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |
 | GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
 | PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
-| GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application::loadCollectionRoutes()`) — see [Collections and Playlists](#collections-and-playlists-member-owned-lists) |
+| GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application::loadCollectionRoutes()`) — see [Collections and playlists](#collections-and-playlists-member-owned-lists) |
 | GET | `/api/v1/collections/{id}` | One collection with its items → `{collection, items, total}`; unknown **or** not visible to the actor → byte-identical `404 {error:"Collection not found"}` (`:2197`) |
 | GET | `/api/v1/libraries/{libraryId}/collections` | Collections scoped to one library, same visibility law → `{collections:[...]}` (`:2200`) |
 | POST | `/api/v1/collections` | Create a collection — body `{name: string (required non-empty), library_id: string (required non-empty), smart_playlist_id?, parent_id?, sort_order?}` → `201 {collection}` with `created_by` stamped to the actor server-side; `400` on a missing/invalid `name`/`library_id` (`:2203`). **`POST /api/v1/playlists` (`:2210`) is an alias to this same handler** — no separate playlist table |
@@ -1472,7 +1472,7 @@ requests. When present, the `direct_play` verdict is set from whether the client
 can decode the item's audio codec; absent/empty header keeps the previous
 always-`true` behavior.
 
-### WebSocket Events
+### WebSocket events
 
 Event names are defined as constants in `src/Server/WebSocket/WebSocketEvents.php`
 (the full catalogue — 27 wire events — is below; `SYNCPLAY_PREFIX` in the same
@@ -1839,7 +1839,7 @@ workflow (`7caad461`, now `.github/workflows/web-ui.yml`, building `web-ui/`). N
 `admin-ui/` ships in this repository today.
 
 The admin section (`/app/admin`) is part of the same `@phlix/ui` Vue SPA described under
-[Web Portal](#web-portal) — source in `web-ui/`, bundle served from `public/assets/app/`, routes
+[Web portal](#web-portal) — source in `web-ui/`, bundle served from `public/assets/app/`, routes
 registered in `web-ui/src/main.ts` (the shell's **Admin** entry renders only for
 `useAuthStore().isAdmin`; the admin API itself is gated server-side regardless). The surviving
 legacy page paths `/admin/plugins*` and `/admin/dashboard` 302-redirect to their `/app/admin/*`
@@ -1917,7 +1917,7 @@ buffers while others do not, suspect its capability negotiation
 ### A SyncPlay / watch group gets stuck
 
 Groups are host-managed over the SyncPlay WebSocket on port `8097` (the
-`:8097` + token endpoint law; see [SyncPlay — Group Watching](#syncplay--group-watching)).
+`:8097` + token endpoint law; see [SyncPlay — group watching](#syncplay--group-watching)).
 A member that silently stops following usually lost its socket and did not
 re-join. Have the member leave and re-join: on a successful join the server
 sends the current group state (`syncplay_group_state`) directly to the joiner,

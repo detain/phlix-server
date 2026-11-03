@@ -9,7 +9,7 @@ This directory contains a Helm chart for deploying Phlix Media Server on Kuberne
 - An ingress controller (nginx-ingress recommended)
 - cert-manager for TLS certificates (optional)
 
-## Installing the Chart
+## Installing the chart
 
 The chart is **not published to a Helm repository** — `https://charts.phlix.media`
 does not exist (yet). It ships in two forms only: inside this repository
@@ -39,9 +39,9 @@ forms are published per run.
 *(`helm repo add phlix https://charts.phlix.media` is a disabled future idea,
 not an install path — do not script against it.)*
 
-## Using Values
+## Using values
 
-### Basic Configuration
+### Basic configuration
 
 ```yaml
 replicaCount: 1
@@ -119,7 +119,7 @@ config:
   database_port: 3306
 ```
 
-## Configuration Options
+## Configuration options
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -174,7 +174,7 @@ helm install hub k8s/helm/phlix-hub \
   -n phlix-hub --create-namespace
 ```
 
-## Database Migration
+## Database migration
 
 Database migrations run automatically on **every** container start: the
 `docker-entrypoint.sh` script invokes `scripts/run-migrations.php`, which keeps

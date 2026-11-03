@@ -52,6 +52,24 @@ final class RequiredPhpExtensionsContractTest extends TestCase
     private const POLYFILL_PROVIDED = ['ctype', 'mbstring'];
 
     /**
+     * The other legitimate direction of drift: extensions Composer's generated
+     * check enforces that our call-site-derived contract does NOT list, because
+     * a LOCKED package declares them while `src/` never calls into them
+     * directly. Each entry names what pulls it in. A new extension appearing
+     * in `platform_check.php` beyond contract ∪ this list reddens the test and
+     * must be recorded here before green returns — the addition is then honest
+     * information (the install-time floor really moved), never silent.
+     *
+     * 'reflection' — marc-mabe/php-enum v4.7.2, newly transitive via
+     * justinrainbow/json-schema ^6.0 (deferred #9, 2026-11-04), requires
+     * ext-reflection. The contract header's own reasoning says it is never
+     * ours to list: PHP cannot be built without it.
+     *
+     * @var list<string>
+     */
+    private const VENDOR_DECLARED_ADDITIONS = ['reflection'];
+
+    /**
      * The lowest PHP the project supports, and therefore the version
      * `config.platform.php` must pin. Derived from `require.php` (">=8.3") by
      * {@see testPlatformPinsTheLowestSupportedPhp}, not asserted independently.
@@ -291,10 +309,12 @@ final class RequiredPhpExtensionsContractTest extends TestCase
     }
 
     /**
-     * Guards the one place the generated check is legitimately narrower than the
-     * contract, so that gap is a recorded decision instead of a surprise.
+     * Guards the two places the generated check legitimately differs from the
+     * contract — narrower for the polyfilled pair, broader for recorded
+     * vendor-declared extensions — so each gap is a recorded decision instead
+     * of a surprise.
      */
-    public function testGeneratedPlatformCheckCoversEveryContractExtensionExceptThePolyfilledPair(): void
+    public function testGeneratedPlatformCheckMatchesContractExceptRecordedExemptions(): void
     {
         $generated = self::$repoRoot . '/vendor/composer/platform_check.php';
         if (!is_file($generated)) {
@@ -317,18 +337,33 @@ final class RequiredPhpExtensionsContractTest extends TestCase
         );
 
         $expected = array_values(array_diff(array_keys($this->contract()), self::POLYFILL_PROVIDED));
-        sort($expected);
+
+        // A stale exemption must not be able to mask contract drift: every
+        // recorded vendor addition must be ABSENT from the contract, or the
+        // union below double-counts what the contract already enforces.
+        self::assertSame(
+            [],
+            array_intersect($expected, self::VENDOR_DECLARED_ADDITIONS),
+            'A VENDOR_DECLARED_ADDITIONS entry is already in the contract minus the polyfill pair; '
+            . 'remove the exemption — it belongs to the contract side, not the recorded gap.'
+        );
+
+        $wanted = array_merge($expected, self::VENDOR_DECLARED_ADDITIONS);
+        sort($wanted);
         sort($checked);
 
         self::assertSame(
-            $expected,
+            $wanted,
             $checked,
             sprintf(
-                'The generated platform check no longer matches the contract. Only %s may be '
-                . 'absent from it (symfony/polyfill-* declares "provide" for them, so Composer '
-                . 'omits them by design). Anything else missing means an extension is declared '
-                . 'but not enforced at runtime.',
+                'The generated platform check no longer matches contract ∪ recorded vendor '
+                . 'additions. Only %s may be absent (symfony/polyfill-* declares "provide" for '
+                . 'them, so Composer omits them by design) and only %s may be extra (locked '
+                . 'packages declare them; see the constant). A missing contract entry means an '
+                . 'extension is declared but not enforced at runtime; an unrecorded extra means '
+                . 'the install floor moved and the gap needs recording before it can pass.',
                 implode(' and ', self::POLYFILL_PROVIDED),
+                implode(' and ', self::VENDOR_DECLARED_ADDITIONS),
             ),
         );
     }

@@ -21,7 +21,7 @@ Example: `v1.2.3` where:
 > (`src/Common/Version.php::STRING`) × hub `0.5.0` (hub `VERSION` marker),
 > and they interoperate. The two products do not share a version space and
 > are not released in lockstep, so matching majors is neither required nor
-> meaningful until a coordinated 1.0 (pending the owner's S274
+> meaningful until a coordinated 1.0 (pending the owner's
 > release-authority decision, same caveat class as the tag table below).
 
 What actually governs interop today:
@@ -70,7 +70,7 @@ What actually governs interop today:
   workflow exists and the registry serves none (S483DOCTRUTHX9P2,
   measured against `ghcr.io/v2/detain/phlix-server/tags/list` 2026-09-11).
   The `master`-push regime above is the real continuous-build channel;
-  date-stamped nightly tagging awaits the owner's S274 release-authority
+  date-stamped nightly tagging awaits the owner's release-authority
   decision and should not be relied on until it ships.
 
 ## Release schedule
@@ -113,7 +113,7 @@ git checkout -b release/v1.2.0
 
 `src/Common/Version.php::STRING` is the **authoritative** version source — it is
 what the API reports, what `PluginLoader` enforces `phlix_min_server_version`
-against, and what the S74 core-update check compares the published marker to.
+against, and what the core-update check compares the published marker to.
 The script reads it and writes the bumped value to every mirror in one commit:
 
 | Source | Role |
@@ -181,7 +181,7 @@ GitHub Actions will:
      "Assert Chart.yaml appVersion matches tag": the hub chart sat, and
      still sits, at `appVersion: "1.0.0"` under a stale comment that no
      tooling ever honored. A green end-to-end `Release` run requires a real
-     tag push, which is owner release authority (S274) — the step logic is
+     tag push, which is owner release authority — the step logic is
      verified by dry-run replay, not by a published run (same disclosure
      precedent as the windows WIN-05 upload leg).
    * It likewise no longer asserts `composer.json`'s `version` equals the
@@ -193,7 +193,7 @@ GitHub Actions will:
    three runtime image legs with mutable `latest`/`intel`/`nvidia` tags
    plus the immutable `<full-sha>-<variant>` tags for that commit
 
-**Not yet true (S483, pending the owner's S274 release-authority decision):**
+**Not yet true (pending the owner's release-authority decision):**
 no workflow pushes GHCR tags named `v1.2.0` or `v1.2` (the registry serves
 zero semver image tags — see the tag table below), and nothing "pushes" a
 Helm chart to any repository — charts ship only as release assets. Steps 3–4
@@ -201,7 +201,7 @@ as previously worded here described an intended flow that has never run.
 
 ## Docker image tagging
 
-Published today (S474 regime — measured against the live registry, see the
+Published today (current regime — measured against the live registry, see the
 recipe below):
 
 | Tag | Description | Example |
@@ -215,7 +215,7 @@ these; re-check with the recipe below before trusting any change here):
 
 | Tag | Status |
 |-----|--------|
-| `v1.2.3` (semver image tags) | NOT-YET-PUBLISHED — pending the owner's S274 release-authority decision |
+| `v1.2.3` (semver image tags) | NOT-YET-PUBLISHED — pending the owner's release-authority decision |
 | `v1.2` (minor alias) | NOT-YET-PUBLISHED — same |
 | `nightly-YYYYMMDD` | NOT-YET-PUBLISHED — no nightly workflow exists |
 
@@ -254,7 +254,7 @@ pick the commit you want.
 ### Docker image rollback
 
 Rollback targets the immutable `<full-sha>-<variant>` tag of the previous
-known-good commit — precise because the S474 regime publishes one per build
+known-good commit — precise because the current regime publishes one per build
 (never `latest`: it is mutable and may already be the broken build). Find the
 current tag list with the anonymous recipe in "Docker image tagging" above,
 pick the previous run's full SHA, then:
@@ -384,7 +384,7 @@ For critical bugs in production:
 > * *The example itself* — `ghcr.io/detain/phlix-server:v1.2.0` is a tag the
 >   registry has never served ("Docker image tagging" above); `cosign
 >   verify` as written could not have resolved anything to verify.
-> Publishing signed artifacts is a deliberate owner-gated gap (S274 line),
+> Publishing signed artifacts is a deliberate owner-gated gap,
 > not an oversight the docs may pretend away.
 
 What IS true today, and what it is actually worth:
@@ -424,7 +424,7 @@ curl -s -H "Authorization: Bearer $TOK" \
 Do not advertise tags or images as "signed" until the workflows themselves
 change. The prerequisites, whichever route the owner picks:
 
-* **Signed tags** — the tagging operator (owner, S274) needs a configured
+* **Signed tags** — the tagging operator (owner) needs a configured
   GPG identity, `git tag -s` at release time, and consumers need the public
   key out of band. Retagging published versions is history rewriting; the
   cure is forward-only (new tags signed, old ones stay as they are).

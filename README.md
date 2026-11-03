@@ -177,7 +177,7 @@ Every environment variable the server process reads is inventoried in the defini
   `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
   **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
   `/app/login`, `/library` → `/app`, `/player/{id}` → `/app/player/{id}`, `/music`, `/books`, `/audiobooks`, `/photo`
-  → their `/app` pages), dispatched in `src/Server/Workerman/HttpHandler.php` (the served daemon; the pre-S171 `public/index.php` copy of that logic was unserved and deleted). Smarty (`smarty/smarty`) is retained on the
+  → their `/app` pages), dispatched in `src/Server/Workerman/HttpHandler.php` (the served daemon; an older `public/index.php` copy of that logic was unserved and deleted). Smarty (`smarty/smarty`) is retained on the
   server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
   `public/templates/emails/newsletter.tpl`).
 - **REST API Endpoints**: library browsing, media info, user data, collections, casting, SyncPlay and
@@ -221,7 +221,7 @@ Every environment variable the server process reads is inventoried in the defini
   `img-src` additionally allowlists the two TMDB image CDN hosts (`https://image.tmdb.org` and
   `https://tmdb.org`, no wildcard) so poster/backdrop/cast artwork served directly from TMDB renders
   rather than being blocked. This is a **stopgap** until the generic image caching/loader work
-  (updates.md #47 / S71-S73) proxies all remote artwork through our own origin, at which point the
+  proxies all remote artwork through our own origin, at which point the
   explicit TMDB hosts are removed.
 
 ### External SSO
@@ -610,7 +610,7 @@ the plugin themes *currently registered* on this server (`src/Auth/UserRepositor
 `validateThemeId()`). It fails loud and fails **before** any write: an unknown id, an empty string,
 or any non-string (including `null`) throws ahead of the query, so a rejected payload changes zero
 rows, and the endpoint answers `400` with the flat `{"error": …}` envelope naming the valid themes.
-The pre-S85 names (`phlix-light` / `phlix-dark` / `phlix-amoled` / `phlix-contrast`) are fossils of
+The historical names (`phlix-light` / `phlix-dark` / `phlix-amoled` / `phlix-contrast`) are fossils of
 the deleted stylesheet-URL theme system: they are not themes any more, and submitting one 400s like
 any unknown id.
 
@@ -739,7 +739,7 @@ Before upgrading across several versions, skim [`CHANGELOG.md`](CHANGELOG.md) fo
 you cross: each release section opens with **Upgrade notes** — breaking changes and the
 operator actions the deploy must take, or `None.` when the release is drop-in — and
 pre-convention releases carry their deploy-critical warnings inline instead
-(S331's bold `MIGRATION ANSWER` line shows that older shape). Anything that needs doing beyond the automatic
+(the bold `MIGRATION ANSWER` line shows that older shape). Anything that needs doing beyond the automatic
 `scripts/run-migrations.php` step above (a rescan, a new required env var) is named there.
 
 ### Updating a clone of the old repo
@@ -982,25 +982,19 @@ which reads every parameter — `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER
 
 ### Environment variables
 
-This is the **definitive census** (R14-05): every environment variable the
+This is the **definitive census**: every environment variable the
 server process reads, grouped by subsystem. The list was built by grepping
 every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
 `start.php`, `bin/` and `scripts/` — if a knob is not here, no in-repo PHP code reads
 it. (Externally vendored plugins may resolve additional knobs inside this process —
 the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is itself a row below.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
 everything else has a safe default. "Secret?" marks values that must never be
-logged or committed. The "Restart" column (R14-20) uses four values: **yes** =
+logged or committed. The "Restart" column uses four values: **yes** =
 read once at boot (bind, container/config construction) — a new value applies
 only after restart; **per-proc** = read on first use inside each worker
 process then memoized — effectively restart-scoped; **live** = `getenv()` on
 every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 [What requires a restart](#what-requires-a-restart) below.
-
-*Where these ticket-style IDs come from:* shorthand like `(R14-05)`, `(S152)`,
-`SV-4.15` or `updates.md #47` sprinkled through this README and the code
-comments references internal Phlix estate review/fix tracker tickets (numbered
-audit waves and the phlix-docs updates log) — provenance annotations for
-maintainers, not resolvable from this repo alone.
 
 #### Database
 
@@ -1012,7 +1006,7 @@ maintainers, not resolvable from this repo alone.
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
-| `PHLIX_HTTP_HOST` | `0.0.0.0` (`server.host`) | no | yes | `start.php` via `ListenEndpoints` (R14-06) |
+| `PHLIX_HTTP_HOST` | `0.0.0.0` (`server.host`) | no | yes | `start.php` via `ListenEndpoints` |
 | `PHLIX_HTTP_PORT` | `8096` (`server.port`) | no | yes | same; also feeds the DLNA-advertised port |
 | `PHLIX_HTTP_WORKER_COUNT` | `14` (`worker.count`; `auto` → 14) | no | yes | same |
 | `PHLIX_WS_HOST` | `0.0.0.0` (`websocket.host`) | no | yes | same (WebSocket worker bind) |
@@ -1022,15 +1016,15 @@ maintainers, not resolvable from this repo alone.
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
-| `PHLIX_LOG_STDOUT` | off (`0`) | no | yes | `config/logger.php` — truthy (`1`/`true`/`yes`/`on`) ADDS a `php://stdout` sink for `docker logs`/`journalctl`; file handlers keep working (R14-09) |
-| `PHLIX_LOG_LEVEL` | per-handler (`file` info / `error` error / `events`+`plugins` debug) | no | yes | `StructuredLogger::createHandler()` lowers/raises every handler's floor; PSR-3 names, case-insensitive, `warn` accepted; unknown value fails SOFT to shipped defaults (R3-08) |
+| `PHLIX_LOG_STDOUT` | off (`0`) | no | yes | `config/logger.php` — truthy (`1`/`true`/`yes`/`on`) ADDS a `php://stdout` sink for `docker logs`/`journalctl`; file handlers keep working |
+| `PHLIX_LOG_LEVEL` | per-handler (`file` info / `error` error / `events`+`plugins` debug) | no | yes | `StructuredLogger::createHandler()` lowers/raises every handler's floor; PSR-3 names, case-insensitive, `warn` accepted; unknown value fails SOFT to shipped defaults |
 | `PHLIX_DEBUG_EVENTS` | `0` (off) | no | yes | truthy wraps the PSR-14 dispatcher in a debug decorator AND enables the `events` log handler (`.logs/events.log`). Leave off in production; see `config/logger.php` |
 
 #### File-backed job queues
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
-| `PHLIX_JOB_QUEUE_ROOT` | `<repo>/var/jobs` | no | yes | `JobQueuePaths` — one root for all five queues (R14-14); deliberately **not** `/tmp`, which `PrivateTmp=true` sandboxes per-service |
+| `PHLIX_JOB_QUEUE_ROOT` | `<repo>/var/jobs` | no | yes | `JobQueuePaths` — one root for all five queues; deliberately **not** `/tmp`, which `PrivateTmp=true` sandboxes per-service |
 | `PHLIX_MARKER_JOBS_DIR` | `<root>/marker` | no | yes | marker-detection queue dir (beats `PHLIX_JOB_QUEUE_ROOT`) |
 | `PHLIX_MEDIA_ASSET_JOBS_DIR` | `<root>/media_asset` | no | yes | chapter-thumbnail/trickplay queue dir |
 | `PHLIX_COLLECTION_JOBS_DIR` | `<root>/collection` | no | yes | TMDB box-set sync queue dir |
@@ -1098,7 +1092,7 @@ while these were invisible:
 | `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` |
-| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognised value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; before minors M-SERVER-72 an explicit `0` was silently treated as unset) |
+| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognised value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; previously an explicit `0` was silently treated as unset) |
 
 #### SyncPlay write-through bridge
 
@@ -1222,7 +1216,7 @@ them to do anything: `PHLIX_HUB_ENROLLMENT_TOKEN`, `PHLIX_PUBLIC_URL`,
 
 ### What requires a restart
 
-R14-20. Every knob above marked "Restart" is read **once** and changing it in
+Every knob above marked "Restart" is read **once** and changing it in
 the process environment has no effect until the unit/container restarts. The
 mechanism itself — the graceful SIGUSR2 reload, and exactly what a reload can
 and cannot re-read — is written up in
@@ -1276,12 +1270,11 @@ the next worker boot rather than the next request.
 > enabled. Copy-audio rungs (the `original` variant) and direct-play sessions
 > are not normalized — you cannot filter a copied (non-decoded) stream.
 
-> **Migration required on deploy.** SV-4.15 adds
-> `migrations/085_rate_limit_buckets.sql` (the shared DB-backed rate-limit bucket
-> table). Run `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after
+> **Migration required on deploy.** `migrations/085_rate_limit_buckets.sql` adds the
+> shared DB-backed rate-limit bucket table. Run `php bin/phlix migrate` (or `php scripts/run-migrations.php`) after
 > pulling — migrations are idempotent, so re-running is safe.
 
-> **No one-time cleanup needed for `media_items` any more (S152).**
+> **No one-time cleanup needed for `media_items` any more.**
 > `migrations/096_path_hash_unique_index.sql` adds
 > `UNIQUE KEY idx_media_items_library_path_hash (library_id, path_hash)` as part of the
 > ordinary migration chain, so a fresh install gets the path-dedupe constraint from
@@ -1293,12 +1286,12 @@ the next worker boot rather than the next request.
 > `php migrations/cleanup_072.php` once to merge them, then re-run migrations. That
 > script now owns **de-duplication only**.
 
-> **No one-time cleanup needed for `playback_state` any more (S156).**
+> **No one-time cleanup needed for `playback_state` any more.**
 > `migrations/097_playback_state_unique_key.sql` adds
 > `UNIQUE KEY uq_playback_state_session_media (session_id, media_item_id)` as part of the
 > ordinary migration chain, so a fresh install gets the progress-upsert constraint from
 > `php bin/phlix migrate` (or `php scripts/run-migrations.php`) alone. Before it,
-> migration 090 (S29, updates.md #29) reserved the number but carried **no executable
+> migration 090 reserved the number but carried **no executable
 > statement at all** and deferred the key to the manual `migrations/cleanup_090.php`,
 > which neither `scripts/install.sh` nor the Docker entrypoint nor either migrate command
 > ever calls — so an install nobody hand-finalized had **no**
@@ -1312,7 +1305,7 @@ the next worker boot rather than the next request.
 > script now owns **de-duplication only** — it is needed only on an existing install that
 > accumulated duplicate rows while the key was missing, never on a fresh one.
 
-> **Migration AND rescan required on deploy (S331).** Music albums with no artist
+> **Migration AND rescan required on deploy.** Music albums with no artist
 > tag are no longer discarded whole — they are ingested under a structural
 > placeholder artist whose display label is `[Unknown Artist]`.
 > `migrations/102_music_artists_placeholder_flag.sql` adds
@@ -1582,7 +1575,7 @@ and after your change, then `comm -3 /tmp/before.txt /tmp/after.txt` (left colum
 tests that dropped out of the skip set; right column: tests that joined it). The
 script never hands over an empty set silently — each non-zero exit names its cause,
 and denominators go to stderr. The deep contract (exit-code table, the `--testdox`
-and probe-job exceptions, the S352 re-derived KNOWN LIMITS) lives in
+and probe-job exceptions, the re-derived KNOWN LIMITS) lives in
 [docs/dev/skipped-test-names.md](docs/dev/skipped-test-names.md).
 
 **Keep the suite hermetic w.r.t. the environment.** `PHLIX_DOMAIN` changes real
@@ -1662,7 +1655,7 @@ and `013`. The `cleanup_NNN.php` files are one-shot data cleanups, not schema
 migrations. What every shipped table is for, and which migration creates it, is
 catalogued in [docs/data-model.md](docs/data-model.md).
 
-**Exit codes (S159).** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
+**Exit codes.** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 
 - `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
 - `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead — note the **shipped images already set this to 1** (`docker/Dockerfile`, `Dockerfile.intel`), so a deploy from the published images refuses to boot on a failed migration unless you explicitly override it; see [docker/README.md](docker/README.md). It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
@@ -1690,7 +1683,7 @@ Everything else fails the run, **including several shapes a re-run can legitimat
 
 `1826`/`3822` were **considered for the idempotent set and rejected** — do not add them. Foreign-key and CHECK-constraint names are unique **per schema**, not per table, so the object that already holds the name can belong to a *completely different* table, and the statement that failed can be a `CREATE TABLE` that consequently created **nothing**. Squelching them let such a file exit 0 *and* enter `schema_migrations`, so it was never retried — worse than no squelch at all.
 
-**Exit codes: `library:scan` (S347).** `php bin/phlix library:scan <libraryId>` (with or
+**Exit codes: `library:scan`.** `php bin/phlix library:scan <libraryId>` (with or
 without `--rescan`) returns one of:
 
 | exit | meaning |
@@ -1894,10 +1887,10 @@ admin pair requires an admin (`AdminMiddleware`):
 
 | Method | Path | What it shows |
 |--------|------|---------------|
-| GET | `/api/v1/health/relay` | hub relay tunnel state — `connected`/`active`, reconnect attempts, active sessions, last disconnect and connect error; reads are staleness-gated, so a frozen state file from a dead worker never reads as healthy (S40) |
+| GET | `/api/v1/health/relay` | hub relay tunnel state — `connected`/`active`, reconnect attempts, active sessions, last disconnect and connect error; reads are staleness-gated, so a frozen state file from a dead worker never reads as healthy |
 | GET | `/api/v1/health/network` | hub heartbeat latency snapshot — `latencyMs` plus `status` (`healthy` < 100 ms, `degraded` 100–500 ms, `offline` above 500 ms or when the snapshot is stale, the heartbeat is failing, or the server is unenrolled) |
 | GET | `/api/v1/admin/logs` · `/api/v1/admin/logs/tail?file=app.log&lines=N` · `/api/v1/admin/logs/tail-all?lines=N` | list the `*.log` files in the configured log dir, tail one, or tail every file merged into one stream with each line tagged by its source — `file` is reduced to its basename, so it cannot traverse |
-| POST | `/api/v1/admin/maintenance/reap-transcode-jobs` | run the transcode reaper by hand (S77) — body `{older_than_seconds: int}`; fails wedged running jobs so the queue drains |
+| POST | `/api/v1/admin/maintenance/reap-transcode-jobs` | run the transcode reaper by hand — body `{older_than_seconds: int}`; fails wedged running jobs so the queue drains |
 
 The bare `/health` route stays open (no auth) for infrastructure probes —
 Docker `HEALTHCHECK`, k8s liveness and `scripts/docker-boot-smoke.sh`

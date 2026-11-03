@@ -33,6 +33,18 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #68 — internal tracker shorthand is out of the user-facing docs.**
+  `(R14-05)`, `(S152)`, `SV-4.15`, `updates.md #47`-style review-tracker IDs
+  sprinkled through README.md (env-knob table, deploy notes, CLI exit-code
+  sections, API table) and RELEASE_PROCESS.md (the release-authority and
+  tagging lines) are meaningless to readers outside the estate's review
+  process and were flagged by the end-user review. Each sentence now carries
+  its meaning on its own ("pre-S85 names" → "historical names", "before
+  minors M-SERVER-72" → "previously", "the S474 regime" → "the current
+  regime"); the README paragraph that apologized for the annotations is gone
+  with them. Code comments and test provenance keep their ticket IDs —
+  those are maintainer surfaces and out of scope. README/RELEASE_PROCESS
+  referrer battery green at 380 tests.
 - **Deferred #44 — ALL-CAPS prose emphasis no longer double-doubles bold.**
   Nine sentence-level caps (`ALWAYS`, `ONLY` ×4, `NOT` ×4) in README.md and
   RELEASE_PROCESS.md moved to bold, joining the bold emphasis already used in

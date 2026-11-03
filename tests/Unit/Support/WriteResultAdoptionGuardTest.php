@@ -212,8 +212,12 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * try arm and replace-race retry arm both feed the single
      * `WriteResult::wroteNothing()` verdict — the same 2-tokens/1-site shape
      * the two ScanJobRepository arms contribute. Measured 20 from the red.
+     * Re-pinned 20→21 by deferred #54 (2026-11-04): `NewsletterSender::queueAll`
+     * now consumes its INSERT IGNORE verdict through `WriteResult::wroteNothing()`
+     * (S342 adoption of the site the guard itself flagged) — measured 21 of the
+     * 101 from the CI red (run 41731180402) and the local reproduction.
      */
-    private const EXPECTED_CONSUMED_INSERT_RESULTS = 20;
+    private const EXPECTED_CONSUMED_INSERT_RESULTS = 21;
 
     /**
      * Helper call names whose first argument is the consumed result, plus the

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Admin;
 
 use DateTimeInterface;
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Uuid;
 use Workerman\MySQL\Connection;
@@ -72,10 +73,13 @@ class NewsletterSender
      * already-queued recipient is a no-op at the storage layer rather than a
      * second email. Workerman's `Connection::query()` returns
      * `lastInsertId()` for an INSERT that changed rows and NULL when
-     * rowCount() came back 0 (vendor Connection.php:1859-1863), so a
-     * non-null result is exactly "this call created a row" — the return
-     * count stays honest under IGNORE (IGNORE can only hide duplicate-key
-     * 1062 here: id is a random UUID PK, and every column the loop binds is
+     * rowCount() came back 0 (vendor Connection.php:1859-1863), so
+     * `!WriteResult::wroteNothing()` is exactly "this call created a row" —
+     * the S342 single-idiom for a consumed INSERT result (the string '0'
+     * that lastInsertId returns for this non-auto-increment PK is a REAL
+     * write, which is precisely the hand-rolled-falsy-trap the helper
+     * exists to end). The return count stays honest under IGNORE (IGNORE can
+     * only hide duplicate-key 1062 here: id is a random UUID PK, and every column the loop binds is
      * pre-validated or generated, so no other coercible-violation class
      * reaches the statement).
      *
@@ -107,7 +111,7 @@ class NewsletterSender
                  VALUES (?, ?, ?, 'pending', 0, NOW())",
                 [$id, $userId, $weekStartStr]
             );
-            if ($created !== null) {
+            if (!WriteResult::wroteNothing($created)) {
                 $count++;
             }
         }

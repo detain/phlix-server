@@ -53,6 +53,10 @@ use Workerman\MySQL\Connection;
  */
 final class ApplicationHeadOnlyBoundaryTest extends TestCase
 {
+    // M25 (copywriter major 5): the schedule-window refusal copy asserted
+    // below; kept as one constant so the head-no-body probes cannot drift
+    // from the middleware's wording.
+    private const WINDOW_COPY = "This profile can't be used right now. Allowed hours are set by your account.";
     /**
      * `AccessScheduleMiddleware` publishes into the coroutine context; clear both
      * keys so nothing leaks into another test in this (resident-memory) process.
@@ -113,7 +117,7 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
         $payload = [
             'error' => 'AccessScheduled',
             'code' => 'access.scheduled',
-            'message' => 'Access denied during scheduled window',
+            'message' => self::WINDOW_COPY,
         ];
         $json = (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
@@ -121,7 +125,7 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
             $result = (new Response())->status(403)->json([
                 'error' => 'AccessScheduled',
                 'code' => 'access.scheduled',
-                'message' => 'Access denied during scheduled window',
+                'message' => self::WINDOW_COPY,
             ]);
 
             return $this->flagHeadShortCircuitReply($request, $result);
@@ -143,7 +147,7 @@ final class ApplicationHeadOnlyBoundaryTest extends TestCase
         );
         $this->assertStringContainsString('Content-Length: ' . strlen($json) . "\r\n", $headWire);
         $this->assertSame('', explode("\r\n\r\n", $headWire, 2)[1] ?? 'TERMINATOR MISSING', 'a HEAD carries no body');
-        $this->assertStringNotContainsString('Access denied during scheduled window', $headWire);
+        $this->assertStringNotContainsString(self::WINDOW_COPY, $headWire);
 
         // The discriminating control: the same short-circuit on a GET must still
         // ship the refusal body, byte for byte.

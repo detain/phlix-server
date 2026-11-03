@@ -43,6 +43,19 @@ use Phlix\Server\Http\Response;
 final class AccessScheduleMiddleware
 {
     /**
+     * M25 (copywriter major 5): the schedule-area refusals are child-facing
+     * device copy, not syslog lines. One remedy-bearing sentence per state,
+     * hoisted so the two no-profile arms cannot drift apart (the historic
+     * 'No profile found; access denied' / 'Profile not found; access denied'
+     * near-duplicate pair), and named to disambiguate the household member
+     * profile from device quality profiles. Envelope keys/codes unchanged.
+     */
+    private const NO_PROFILE_MESSAGE = 'No member profile is active on this device.'
+        . ' An adult needs to set one up before this device can stream.';
+
+    private const WINDOW_MESSAGE = "This profile can't be used right now. Allowed hours are set by your account.";
+
+    /**
      * Create a new AccessScheduleMiddleware instance.
      *
      * @param AccessScheduleService $accessScheduleService Service for checking schedules.
@@ -97,7 +110,7 @@ final class AccessScheduleMiddleware
                 // access) rather than allowing an unprofiled user through. The user
                 // should set up a profile before access schedules apply.
                 return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => 'No profile found; access denied',
+                    'message' => self::NO_PROFILE_MESSAGE,
                 ]);
             }
 
@@ -107,7 +120,7 @@ final class AccessScheduleMiddleware
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
                 return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => 'Profile not found; access denied',
+                    'message' => self::NO_PROFILE_MESSAGE,
                 ]);
             }
         }
@@ -115,7 +128,7 @@ final class AccessScheduleMiddleware
         // Check if access is allowed
         if (!$this->accessScheduleService->isAccessAllowed($profileId)) {
             return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                'message' => 'Access denied during scheduled window',
+                'message' => self::WINDOW_MESSAGE,
             ]);
         }
 

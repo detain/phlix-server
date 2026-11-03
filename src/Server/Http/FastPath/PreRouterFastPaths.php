@@ -601,7 +601,7 @@ final class PreRouterFastPaths
                     'error' => 'StreamLimitExceeded',
                     'code' => 'stream.limit_exceeded',
                     'denial_type' => 'stream_limit_exceeded',
-                    'message' => 'Maximum concurrent streams reached for this profile',
+                    'message' => 'This member profile is already streaming on the maximum number of devices',
                     'profile_id' => $profileId,
                 ], JSON_THROW_ON_ERROR));
         }
@@ -629,7 +629,7 @@ final class PreRouterFastPaths
                 'error' => 'Profile not found',
                 'code' => 'profile.not_found',
                 'denial_type' => 'profile_not_found',
-                'message' => 'No active profile for this session. Pick or create a profile, then retry.',
+                'message' => 'No member profile is active on this device. Choose or create one, then try again.',
             ], JSON_THROW_ON_ERROR));
     }
 

@@ -33,6 +33,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Profile refusals stop reading like syslog and start reading like help (review M25, copywriter).**
+  - The access-deny family that a child's device can be the only reader of —
+    'No profile found; access denied', 'Profile not found; access denied',
+    'Access denied during scheduled window' — now names the household member
+    profile (not the quality-profile sense of the word), tells the reader the
+    hours are set by the account, and points at the adult remedy. The
+    stream-side 'No active profile …' triplicate and the concurrency-cap
+    message joined the same noun. Statuses, `error`/`code`/`denial_type`
+    keys and envelope shapes are byte-identical (copy-only per the C2 model);
+    the two schedule refusals are one shared constant so they can never
+    drift apart again, and the head-no-body wire probes single-source the
+    copy too.
+
 - **Error labels in account-link, OIDC and admin restart/settings responses now follow one punctuation law (review M24, copywriter).**
   - Eight single-clause `message` strings across four controllers shed their
     trailing periods to match their period-free siblings ('Invalid

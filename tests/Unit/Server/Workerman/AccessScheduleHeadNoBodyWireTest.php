@@ -55,10 +55,14 @@ use PHPUnit\Framework\TestCase;
 final class AccessScheduleHeadNoBodyWireTest extends TestCase
 {
     /** The one refusal this proof needs: the blocked-schedule-window branch. */
+    // M25 (copywriter major 5): the window refusal copy, single-sourced so
+    // the expected envelope and the head-no-body probes cannot drift.
+    private const WINDOW_COPY = "This profile can't be used right now. Allowed hours are set by your account.";
+
     private const ERROR = [
         'error' => 'AccessScheduled',
         'code' => 'access.scheduled',
-        'message' => 'Access denied during scheduled window',
+        'message' => self::WINDOW_COPY,
     ];
 
     private const PROFILE_ID = '11111111-2222-3333-4444-555555555555';
@@ -150,7 +154,7 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
             'a HEAD refused by the global middleware must carry NO body — the bytes below are the '
             . "leaked 403 envelope:\n" . $headWire,
         );
-        self::assertStringNotContainsString('Access denied during scheduled window', $headWire);
+        self::assertStringNotContainsString(self::WINDOW_COPY, $headWire);
 
         // ── the server-side corroboration: the flag is set, the entity is intact ──
         // (the wire assertions above are the "no body on the socket" proof; the log
@@ -187,7 +191,7 @@ final class AccessScheduleHeadNoBodyWireTest extends TestCase
             self::assertStringStartsWith("HTTP/1.1 403 Forbidden\r\n", $head);
             self::assertSame(1, substr_count($head, 'Content-Length:'), "exactly one length:\n" . $head);
             self::assertStringContainsString('Content-Length: ' . strlen($expectedEntity) . "\r\n", $head);
-            self::assertStringNotContainsString('Access denied during scheduled window', $head);
+            self::assertStringNotContainsString(self::WINDOW_COPY, $head);
 
             // 2) GET on the SAME connection — the read offset must not have drifted.
             fwrite($sock, "GET /api/v1/anything HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n");

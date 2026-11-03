@@ -103,7 +103,7 @@ final class StreamLimitProfileNotFoundEnvelopeTest extends TestCase
             'the client-rendered error field must name the actual cause, never StreamLimitExceeded.'
         );
         self::assertSame(
-            'No active profile for this session. Pick or create a profile, then retry.',
+            'No member profile is active on this device. Choose or create one, then try again.',
             $body['message'],
             'the message must tell the member the actionable step.'
         );

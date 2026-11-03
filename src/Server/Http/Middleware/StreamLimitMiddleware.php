@@ -92,14 +92,14 @@ final class StreamLimitMiddleware
             if ($profile === null) {
                 return (new Response())->error(403, 'profile.not_found', 'Profile not found', [
                     'denial_type' => 'profile_not_found',
-                    'message' => 'No active profile for this session. Pick or create a profile, then retry.',
+                    'message' => 'No member profile is active on this device. Choose or create one, then try again.',
                 ]);
             }
             $profileId = $this->resolveProfileId($profile);
             if ($profileId === null) {
                 return (new Response())->error(403, 'profile.not_found', 'Profile not found', [
                     'denial_type' => 'profile_not_found',
-                    'message' => 'No active profile for this session. Pick or create a profile, then retry.',
+                    'message' => 'No member profile is active on this device. Choose or create one, then try again.',
                 ]);
             }
         }
@@ -138,7 +138,7 @@ final class StreamLimitMiddleware
         if (!$registered) {
             return (new Response())->error(429, 'stream.limit_exceeded', 'StreamLimitExceeded', [
                 'denial_type' => 'stream_limit_exceeded',
-                'message' => 'Maximum concurrent streams reached for this profile',
+                'message' => 'This member profile is already streaming on the maximum number of devices',
                 'profile_id' => $profileId,
             ]);
         }

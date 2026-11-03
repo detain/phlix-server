@@ -147,7 +147,7 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
         self::assertSame('Profile not found', $body['error']);
         self::assertSame('profile.not_found', $body['code']);
         self::assertSame(
-            'No active profile for this session. Pick or create a profile, then retry.',
+            'No member profile is active on this device. Choose or create one, then try again.',
             $body['message']
         );
     }

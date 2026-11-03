@@ -26,13 +26,15 @@ use PHPUnit\Framework\TestCase;
  * edit to colors.css was invisible estate-wide.
  *
  * This test closes the gap the venue itself can close: the stylesheet ships
- * into the test checkout as the dev-only, commit-pinned composer package
+ * into the test checkout as the dev-only, tag-pinned composer package
  * `detain/phlix-tokens` (see the `repositories` block in composer.json), and
  * every check here parses THAT FILE. The chain of custody is
  *
- *   colors.css @ 5500d70b (tag v0.2.0, phlix-tokens)
- *     -> codeload tarball over that immutable commit SHA, fetched by
- *        `composer install` and recorded in composer.lock
+ *   colors.css @ 1a1ee0a8 (tag v0.2.2, phlix-tokens)
+ *     -> tag-archive tarball (archive/refs/tags/v0.2.2.tar.gz since the v0.2.1
+ *        pin idiom), fetched by `composer install` and recorded in composer.lock
+ *        (the stylesheet bytes are identical v0.2.0 == v0.2.1 == v0.2.2 — the
+ *        sha below has held across both bumps)
  *     -> vendor/detain/phlix-tokens/src/css/colors.css
  *     -> sha256 asserted equal to {@see self::COLORS_CSS_SHA256} right here
  *     -> parsed and diffed, name-for-name and value-for-value, against the
@@ -47,11 +49,11 @@ use PHPUnit\Framework\TestCase;
  */
 final class ColorsCssParityTest extends TestCase
 {
-    /** phlix-tokens commit the vendored tarball is fetched at (immutable pin). */
-    private const TOKENS_COMMIT = '5500d70b142d46ed8d382087ea542b1047cc803f';
+    /** Commit the pinned tag peels to; the tarball's bytes are that commit's tree. */
+    private const TOKENS_COMMIT = '1a1ee0a8741ed61e84347a76479f135e5ae460cd';
 
-    /** The tag that names {@see TOKENS_COMMIT}; recorded for the human reader. */
-    private const TOKENS_TAG = 'v0.2.0';
+    /** The tag composer.json/composer.lock pin; recorded for the human reader. */
+    private const TOKENS_TAG = 'v0.2.2';
 
     /**
      * sha256 of src/css/colors.css AT {@see TOKENS_COMMIT}.

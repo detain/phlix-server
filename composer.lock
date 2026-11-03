@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "4db96ab4c291a7eeb37a0c2f13ea7ee7",
+    "content-hash": "97e5c2e64e46d38ad776eb75d5fbb9e1",
     "packages": [
         {
             "name": "brick/math",
@@ -7491,10 +7491,10 @@
         },
         {
             "name": "detain/phlix-tokens",
-            "version": "v0.2.1",
+            "version": "v0.2.2",
             "dist": {
                 "type": "tar",
-                "url": "https://github.com/detain/phlix-tokens/archive/refs/tags/v0.2.1.tar.gz"
+                "url": "https://github.com/detain/phlix-tokens/archive/refs/tags/v0.2.2.tar.gz"
             },
             "type": "library",
             "description": "Phlix design tokens (@phlix/tokens) — vendored ONLY so tests can diff BuiltInThemes against the real colors.css (S228)."

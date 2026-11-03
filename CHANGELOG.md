@@ -33,6 +33,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **DVR recordings that merely aren't ready yet stop lying that they don't exist (review M15, webux).**
+  - `LiveTvStreamController::streamRecording()` answered three different
+    states with one bare 404: a not-found recording, a not-yet-started
+    (`scheduled`) recording, and a completed recording whose `.ts` file has not
+    hit disk. The SPA rendered "Not found" where the truth was "try again in a
+    moment." The two not-yet-materialized arms now return 503 + `Retry-After:
+    2` — matching this controller's own timeshift arm and the HLS/DASH
+    segment-busy arms — while a genuinely absent or terminal (failed/cancelled)
+    recording keeps its 404. Response body shapes are unchanged (no new `code`
+    key — that half of the review rides the M13 wire-code decision); only the
+    HTTP status and the standard `Retry-After` header move, the same carrier the
+    429 mapper already uses.
+
 - **Live-TV tuner updates and deletions now go through the manager that owns the table (review M11, srphp).**
   - `AdminLiveTvController` had grown inline `UPDATE`/`DELETE` SQL for
     `livetv_tuners` on its own borrowed pooled handle (the comment confessed

@@ -123,20 +123,42 @@ class LiveTvStreamControllerTest extends TestCase
         $this->assertSame('Recording not found', $this->body($response));
     }
 
-    public function testStreamRecordingReturns404ForNonStreamableStatus(): void
+    public function testStreamRecordingReturns404ForTerminalStatus(): void
     {
+        // M15 law (webux major 4): terminal states keep the 404 — there is
+        // nothing for a retry to become. ('scheduled' moved to the 503 arm in
+        // the companion test; the old single-404-for-every-status law was the
+        // lie this review entry named.)
         $recorder = $this->createMock(Recorder::class);
-        $recorder->method('getRecording')->willReturn(['status' => 'scheduled']);
+        $recorder->method('getRecording')->willReturn(['status' => 'failed']);
 
         $controller = new LiveTvStreamController($recorder, '/var/recordings');
         $response = $controller->streamRecording(new Request(), ['id' => 'rec-1']);
 
         $this->assertSame(404, $response->statusCode);
         $this->assertSame('Recording not available', $this->body($response));
+        $this->assertArrayNotHasKey('Retry-After', $response->headers);
     }
 
-    public function testStreamRecordingReturns404WhenFileNotOnDisk(): void
+    public function testStreamRecordingReturns503WithRetryAfterForScheduled(): void
     {
+        // M15 law: a not-yet-started recording is a "not yet" answer, matching
+        // the sibling timeshift arm's 503 + Retry-After: 2 precedent.
+        $recorder = $this->createMock(Recorder::class);
+        $recorder->method('getRecording')->willReturn(['status' => 'scheduled']);
+
+        $controller = new LiveTvStreamController($recorder, '/var/recordings');
+        $response = $controller->streamRecording(new Request(), ['id' => 'rec-1']);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('2', $response->headers['Retry-After']);
+        $this->assertSame('Recording not available', $this->body($response));
+    }
+
+    public function testStreamRecordingReturns503WithRetryAfterWhenFileNotOnDisk(): void
+    {
+        // M15 law: streamable DB row, file not materialized yet → 503 +
+        // Retry-After, not a 404 that misdiagnoses the client's reference.
         $dir = $this->makeTempDir();
         $recorder = $this->createMock(Recorder::class);
         $recorder->method('getRecording')->willReturn(['status' => Recorder::STATUS_COMPLETED]);
@@ -144,7 +166,8 @@ class LiveTvStreamControllerTest extends TestCase
         $controller = new LiveTvStreamController($recorder, $dir);
         $response = $controller->streamRecording(new Request(), ['id' => 'ghost']);
 
-        $this->assertSame(404, $response->statusCode);
+        $this->assertSame(503, $response->statusCode);
+        $this->assertSame('2', $response->headers['Retry-After']);
         $this->assertSame('Recording file not found', $this->body($response));
     }
 

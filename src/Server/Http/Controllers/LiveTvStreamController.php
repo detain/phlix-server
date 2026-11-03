@@ -127,6 +127,19 @@ class LiveTvStreamController
         // Only serve completed or recording files.
         $validStatuses = [Recorder::STATUS_COMPLETED, Recorder::STATUS_RECORDING];
         if (!in_array($recording['status'] ?? '', $validStatuses, true)) {
+            // M15 (webux major 4): a SCHEDULED recording is a "not yet" state,
+            // not a "not found" one — the sibling timeshift arm already answers
+            // its not-ready case with 503 + Retry-After, and the SPA's flat
+            // "Not found" for a recording that will start shortly was the lie.
+            // Terminal states (failed/cancelled/unknown) keep the 404 — there
+            // is nothing for a retry to become.
+            if (($recording['status'] ?? '') === Recorder::STATUS_SCHEDULED) {
+                return (new Response())
+                    ->status(503)
+                    ->header('Retry-After', '2')
+                    ->json(['error' => 'Recording not available']);
+            }
+
             return (new Response())->status(404)->json(['error' => 'Recording not available']);
         }
 
@@ -142,7 +155,17 @@ class LiveTvStreamController
         $filePath = $this->storagePath . '/' . $recordingId . '.ts';
 
         if (!file_exists($filePath)) {
-            return (new Response())->status(404)->json(['error' => 'Recording file not found']);
+            // M15 (webux major 4): the DB row says streamable but the `.ts` is
+            // not on disk yet — an in-flight write (STATUS_RECORDING pre-first-
+            // flush) or a restore still landing. "Try again in a moment" is the
+            // truth, so this arm rides the same 503 + Retry-After as the
+            // timeshift sibling. A genuinely vanished file loops on 503 — an
+            // honest "the server cannot serve this right now" — where the old
+            // 404 blamed the client's reference.
+            return (new Response())
+                ->status(503)
+                ->header('Retry-After', '2')
+                ->json(['error' => 'Recording file not found']);
         }
 
         return $this->serveRecordingFile($request, $filePath);

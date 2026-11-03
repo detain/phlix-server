@@ -190,4 +190,36 @@ class NewsletterGeneratorTest extends TestCase
         }
         rmdir($dir);
     }
+
+    public function testPlainTextLegDeclinesSingularFormsLikeTheTemplate(): void
+    {
+        // M21 (review): the plain-text half of ONE email must follow the same
+        // grammar rules the HTML half already keeps (newsletter.tpl :306
+        // prints "1 play"): "1 hour" vs "N hours", "1 play" vs "N plays", and
+        // zero new items reads as prose, not "New Items Added: 0".
+        $generator = new NewsletterGenerator($this->stats, $this->library, $this->db, $this->templateDir);
+        $method = new \ReflectionMethod($generator, 'generatePlainText');
+        $method->setAccessible(true);
+
+        $singular = (string) $method->invoke($generator, 60, 1, [
+            ['name' => 'Solo Film', 'play_count' => 1],
+        ]);
+        $this->assertStringContainsString('Watch Time: 1 hour', $singular);
+        $this->assertStringContainsString('New Items Added: 1', $singular);
+        $this->assertStringContainsString('Solo Film (1 play)', $singular);
+
+        $plural = (string) $method->invoke($generator, 150, 0, [
+            ['name' => 'Repeat Watch', 'play_count' => 5],
+        ]);
+        $this->assertStringContainsString('Watch Time: 2.5 hours', $plural);
+        $this->assertStringContainsString('No new items this week', $plural);
+        $this->assertStringContainsString('Repeat Watch (5 plays)', $plural);
+
+        // A numeric-string play_count (the emulated-prepare DB face returns
+        // these) declines identically — the (int) cast is the normalizer.
+        $fromString = (string) $method->invoke($generator, 120, 2, [
+            ['name' => 'TV Show', 'play_count' => '1'],
+        ]);
+        $this->assertStringContainsString('TV Show (1 play)', $fromString);
+    }
 }

@@ -386,16 +386,27 @@ class NewsletterGenerator
     ): string {
         $hours = round($watchTimeMinutes / 60, 1);
 
+        // M21 (dba-doc minor cluster / review M21): the HTML leg (tpl :306)
+        // already declines one play as "1 play"; the text leg said
+        // "1 plays" and "New Items Added: 0" in the same email. Same grammar
+        // rule now rides both parts.
+        $hourWord = $hours == 1.0 ? 'hour' : 'hours';
         $text = "Your Phlix Weekly Watch Report\n";
         $text .= str_repeat('=', 40) . "\n\n";
-        $text .= "Watch Time: {$hours} hours\n";
-        $text .= "New Items Added: {$newItemsCount}\n\n";
+        $text .= "Watch Time: {$hours} {$hourWord}\n";
+        $text .= $newItemsCount === 1
+            ? "New Items Added: 1\n\n"
+            : ($newItemsCount === 0
+                ? "No new items this week\n\n"
+                : "New Items Added: {$newItemsCount}\n\n");
 
         if (!empty($topMedia)) {
             $text .= "Top Media This Week:\n";
             foreach ($topMedia as $index => $media) {
                 $num = $index + 1;
-                $text .= "  {$num}. {$media['name']} ({$media['play_count']} plays)\n";
+                $playCount = (int) $media['play_count'];
+                $playWord = $playCount === 1 ? 'play' : 'plays';
+                $text .= "  {$num}. {$media['name']} ({$playCount} {$playWord})\n";
             }
         }
 

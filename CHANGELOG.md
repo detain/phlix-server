@@ -33,6 +33,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The weekly newsletter's text half now declines like its HTML half (review M21, dba2-docs).**
+  - One email printed "1 plays" and "Watch Time: 1 hours" in plain text while
+    the HTML template beside it already knew "1 play" — and zero new items
+    read as "New Items Added: 0" where "No new items this week" is the
+    sentence a person wrote. Both legs now share the template's grammar rules,
+    including numeric-string play counts from the database face.
+
 - **Two people signing up with the same name at the same instant now get the honest 400, not a 500 (review M17, dba2).**
   - Registration checks username and email availability before its transaction,
     so a concurrent loser's INSERT previously died on the database UNIQUE with

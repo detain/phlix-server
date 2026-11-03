@@ -6387,6 +6387,15 @@ _Folded in from the former `### Fixed (live production batch)` heading (W-min90 
   JSON root instead of the raw text. No migration.
 ### Changed
 
+- **Composer: `justinrainbow/json-schema` moved `^5.2` → `^6.0` (locked 5.3.4 →
+  6.14.0; new transitive `marc-mabe/php-enum`).** The v5 line was the last
+  constraint lag in `require`; 6.x is the current major and the validator call
+  sites (`ManifestSchema`, `AdminSettingsController`) are API-stable across the
+  move — `validate()`'s new `int` return is unconsumed everywhere and
+  `isValid()`/`getErrors()` are unchanged in shape (62 usage-site tests + full
+  phpstan green on 6.14.0). The `phlix-tokens` dev-pin half of that deferred
+  item stays at v0.2.1 (proven no-op; the v0.2.2 cascade is a standing
+  owner-deferred item, not lane-work). (Deferred-items lane, review minor #9.)
 - **The served web SPA bundle re-pins to `@phlix/ui` v0.99.13 and is regenerated (IDs: tag-wave C1 follow, 2026-11-02).**
   - `web-ui` tarball pin moves `v0.99.12.tar.gz` → `v0.99.13.tar.gz` (tag object
     `ff9c1f91cf7b08a425e654a0717ec73b9a14cc41`, peel `e30bae9f096708dc43e863c2b4f4171d25d7c8e3`,

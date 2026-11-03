@@ -33,7 +33,7 @@
         "detain/phlix-shared": "^0.53.0",
         "directorytree/ldaprecord": "^3.0",
         "james-heinrich/getid3": "^1.9",
-        "justinrainbow/json-schema": "^5.2",
+        "justinrainbow/json-schema": "^6.0",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",
         "phpseclib/phpseclib": "^3.0",

@@ -33,6 +33,16 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The hub-enrollment refusal sentence no longer spells its own word two ways (review M22, code half).**
+  - "This server isn't **enrolled** … **Enrol** it from Admin → Hub" became
+    "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to
+    enroll it." across all three wire carriers (admin health, account-link,
+    hub-token) and the canonical-copy law pin — the `→` glyph (broken on TV
+    fonts and screen readers) is gone too. Envelope shapes and the
+    `hub.not_enrolled` code are byte-identical. The estate-wide
+    British/American convention for docs (catalogue/enrolment/behaviour
+    outliers) stays an owner call — logged, not churned.
+
 - **The weekly newsletter's text half now declines like its HTML half (review M21, dba2-docs).**
   - One email printed "1 plays" and "Watch Time: 1 hours" in plain text while
     the HTML template beside it already knew "1 play" — and zero new items

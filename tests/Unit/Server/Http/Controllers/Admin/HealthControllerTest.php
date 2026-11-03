@@ -31,7 +31,7 @@ use Psr\Container\ContainerInterface;
 final class HealthControllerTest extends TestCase
 {
     /** minors M-SERVER-09 (W-min109): canonical hub-enrolment refusal copy. */
-    private const ENROLLED_COPY = 'This server isn\'t enrolled with a Phlix Hub yet. Enrol it from Admin → Hub.';
+    private const ENROLLED_COPY = 'This server isn\'t enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it.';
 
     private string $dir;
 

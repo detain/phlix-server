@@ -150,4 +150,89 @@ class LiveTvManagerTest extends TestCase
         $this->assertEquals('atsc', LiveTvManager::TUNER_TYPE_ATSC);
         $this->assertEquals('hdhomerun', LiveTvManager::TUNER_TYPE_HDHOMERUN);
     }
+
+    /**
+     * Seed the private tuner cache with one entry and return it.
+     *
+     * @param array<string, mixed> $entry
+     */
+    private function seedTunerCache(array $entry): void
+    {
+        $cache = new \ReflectionProperty($this->manager, 'tuners');
+        $cache->setAccessible(true);
+        $cache->setValue($this->manager, [$entry['id'] => $entry]);
+    }
+
+    public function testUpdateTunerWritesAllowedColumnsAndSyncsCacheName(): void
+    {
+        // M11 (srphp major 5): the tuner-table mutation semantics live in the
+        // manager — this is the domain test the inline-controller SQL made
+        // impossible. One UPDATE over the allow-list, cache re-flavoured for
+        // the re-read, and NO shape change to the cached tuner object.
+        $this->seedTunerCache([
+            'id' => 'hdhr_1',
+            'name' => 'HDHomeRun (1234)',
+            'type' => 'hdhomerun',
+            'status' => 'idle',
+        ]);
+
+        $this->mockDb->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains(
+                    'UPDATE livetv_tuners SET name = ?, enabled = ?, '
+                    . 'updated_at = NOW() WHERE tuner_id = ?'
+                ),
+                $this->equalTo(['Living Room', 1, 'hdhr_1'])
+            )
+            ->willReturn(1);
+
+        $this->assertTrue($this->manager->updateTuner('hdhr_1', [
+            'name' => 'Living Room',
+            'enabled' => true,
+            'evil' => 'DROP TABLE',
+        ]));
+
+        $tuner = $this->manager->getTuner('hdhr_1');
+        $this->assertIsArray($tuner);
+        $this->assertSame('Living Room', $tuner['name']);
+        // The served tuner object must not gain keys the endpoint never had.
+        $this->assertArrayNotHasKey('enabled', $tuner);
+    }
+
+    public function testUpdateTunerWithNothingWritableSkipsTheQuery(): void
+    {
+        // Historical allow-list kept exactly: a mistyped name and an explicit
+        // null enabled (isset semantics) write nothing — and issue no query.
+        $this->seedTunerCache(['id' => 'hdhr_1', 'name' => 'Old', 'type' => 'hdhomerun']);
+
+        $this->mockDb->expects($this->never())->method('query');
+
+        $this->assertFalse($this->manager->updateTuner('hdhr_1', [
+            'name' => 12345,
+            'enabled' => null,
+        ]));
+        $this->assertFalse($this->manager->updateTuner('hdhr_1', []));
+
+        $tuner = $this->manager->getTuner('hdhr_1');
+        $this->assertIsArray($tuner);
+        $this->assertSame('Old', $tuner['name']);
+    }
+
+    public function testDeleteTunerRemovesRowAndCacheEntry(): void
+    {
+        $this->seedTunerCache(['id' => 'iptv_x', 'name' => 'IPTV', 'type' => 'iptv']);
+
+        $this->mockDb->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('DELETE FROM livetv_tuners WHERE tuner_id = ?'),
+                $this->equalTo(['iptv_x'])
+            )
+            ->willReturn(1);
+
+        $this->manager->deleteTuner('iptv_x');
+
+        $this->assertNull($this->manager->getTuner('iptv_x'));
+    }
 }

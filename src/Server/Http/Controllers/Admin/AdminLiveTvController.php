@@ -181,41 +181,13 @@ final class AdminLiveTvController
             }
 
             $body = is_array($request->body) ? $request->body : [];
-            $updated = [];
 
-            if (isset($body['name']) && is_string($body['name'])) {
-                $updated['name'] = $body['name'];
-            }
-
-            if (isset($body['enabled'])) {
-                $updated['enabled'] = $body['enabled'] ? 1 : 0;
-            }
-
-            // Persist update to database via a direct query since
-            // LiveTvManager does not have a dedicated updateTuner method.
-            // Re-discover to surface the updated tuner state.
-            if ($updated !== []) {
-                $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
-                $setParts = [];
-                $values = [];
-                if (isset($updated['name'])) {
-                    $setParts[] = 'name = ?';
-                    $values[] = $updated['name'];
-                }
-                if (isset($updated['enabled'])) {
-                    $setParts[] = 'enabled = ?';
-                    $values[] = $updated['enabled'];
-                }
-                if ($setParts !== []) {
-                    $values[] = $id;
-                    $db->query(
-                        'UPDATE livetv_tuners SET '
-                        . implode(', ', $setParts)
-                        . ' WHERE tuner_id = ?',
-                        $values
-                    );
-                }
-            }
+            // M11 (srphp major 5): the tuner write moved to the manager that
+            // owns the table (validation/coercion semantics preserved there);
+            // this layer is HTTP only again. Re-discover would be needed to
+            // surface updated tuner state — the manager keeps the cache in
+            // step for the fields this endpoint owns.
+            $manager->updateTuner($id, $body);
 
             // Return updated tuner
             $refreshed = $manager->getTuner($id);
@@ -255,8 +227,9 @@ final class AdminLiveTvController
                 return $this->error(404, 'Tuner not found');
             }
 
-            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
-            $db->query('DELETE FROM livetv_tuners WHERE tuner_id = ?', [$id]);
+            // M11 (srphp major 5): deletion is the manager's, too — same
+            // table owner, same lease pattern as every other tuner write.
+            $manager->deleteTuner($id);
 
             return (new Response())->json(['success' => true]);
         } catch (Throwable $e) {

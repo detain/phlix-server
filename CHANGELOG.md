@@ -33,6 +33,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Live-TV tuner updates and deletions now go through the manager that owns the table (review M11, srphp).**
+  - `AdminLiveTvController` had grown inline `UPDATE`/`DELETE` SQL for
+    `livetv_tuners` on its own borrowed pooled handle (the comment confessed
+    the manager lacked the methods). Those write semantics — the mutable-field
+    allow-list, `enabled` coercion, cache sync — moved into
+    `LiveTvManager::updateTuner()`/`deleteTuner()`, beside the table's other
+    writers, and now carry domain tests that the HTTP-layer placement made
+    impossible. The endpoint's validation behavior is kept exactly (mistyped
+    `name` and explicit-null `enabled` still write nothing; the re-read still
+    serves the cached tuner object with the same keys as before). One deliberate
+    improvement rides along: operator edits now stamp `updated_at = NOW()` like
+    every other tuner write — database bookkeeping only, never wire-visible.
+
 - **The admin dashboard stopped polling the database once per row (review M10, srphp — AGENTS.md's own batch-query law applied).**
   - One refresh of Now Playing / Top Media / Recent Activity cost roughly 3N
     queries for N rows: a `findById()` per stats row, a `getSession()` per

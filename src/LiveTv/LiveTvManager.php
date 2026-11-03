@@ -347,6 +347,92 @@ class LiveTvManager
     }
 
     /**
+     * Update the operator-editable fields of a registered tuner.
+     *
+     * Review M11 (srphp major 5): this write used to live inline in
+     * AdminLiveTvController (with its own borrowed ConnectionPool handle), so
+     * the tuner table's mutation semantics sat where domain tests could not
+     * reach them. They now live HERE, beside registerTuner()/
+     * updateTunerStatus(); the controller is a thin HTTP adapter again.
+     *
+     * Only the columns this endpoint has always owned are mutable: name and
+     * enabled. Unknown or mistyped keys are ignored — the historical
+     * allow-list behaviour, kept exactly. The response shape of the endpoint
+     * is untouched: the cache sync writes only the pre-existing 'name' key,
+     * so the cached tuner's key set never changes.
+     *
+     * @param string $tunerId The tuner identifier
+     * @param array{name?: mixed, enabled?: mixed} $fields Raw field values;
+     *        name must be a string, enabled is coerced to 0/1
+     * @return bool True when at least one column was written
+     */
+    public function updateTuner(string $tunerId, array $fields): bool
+    {
+        $setParts = [];
+        $values = [];
+
+        if (isset($fields['name']) && is_string($fields['name'])) {
+            $setParts[] = 'name = ?';
+            $values[] = $fields['name'];
+        }
+        if (isset($fields['enabled'])) {
+            // isset() (not array_key_exists) keeps the historical semantics:
+            // an explicit null 'enabled' was never written by this endpoint.
+            $setParts[] = 'enabled = ?';
+            $values[] = $fields['enabled'] ? 1 : 0;
+        }
+
+        if ($setParts === []) {
+            return false;
+        }
+
+        $values[] = $tunerId;
+        $this->db->query(
+            'UPDATE livetv_tuners SET ' . implode(', ', $setParts)
+            . ', updated_at = NOW() WHERE tuner_id = ?',
+            $values
+        );
+
+        // Keep the in-memory cache honest (the endpoint re-reads the tuner
+        // from here). 'name' exists on every cache entry; 'enabled' is a
+        // persisted-only column — injecting it would change the tuner object
+        // shape served by the API, so it is deliberately not mirrored.
+        if (isset($this->tuners[$tunerId])) {
+            if (isset($fields['name']) && is_string($fields['name'])) {
+                $this->tuners[$tunerId]['name'] = $fields['name'];
+            }
+        }
+
+        $this->logger->info('Tuner updated', [
+            'tuner_id' => $tunerId,
+            'fields' => $setParts,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Remove a tuner registration from the database and the cache.
+     *
+     * Review M11 (srphp major 5): companion of updateTuner() — the DELETE
+     * this replaces was inline in AdminLiveTvController on a pooled handle.
+     *
+     * @param string $tunerId The tuner identifier
+     * @return void
+     */
+    public function deleteTuner(string $tunerId): void
+    {
+        $this->db->query(
+            'DELETE FROM livetv_tuners WHERE tuner_id = ?',
+            [$tunerId]
+        );
+
+        unset($this->tuners[$tunerId]);
+
+        $this->logger->info('Tuner deleted', ['tuner_id' => $tunerId]);
+    }
+
+    /**
      * Scan for available channels using a specific tuner.
      *
      * For HDHomeRun tuners, triggers a channel scan via the HTTP API.

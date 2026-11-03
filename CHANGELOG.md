@@ -33,6 +33,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Error labels in account-link, OIDC and admin restart/settings responses now follow one punctuation law (review M24, copywriter).**
+  - Eight single-clause `message` strings across four controllers shed their
+    trailing periods to match their period-free siblings ('Invalid
+    credentials', 'Settings updated') — clients render these raw and the
+    same-API drift read as a bug. Multi-sentence guidance copy keeps its
+    grammatical periods. Shapes, keys and codes unchanged.
+
 - **Thirty unwired-subsystem 503s stop reciting internal wiring vocabulary (review M23, copywriter).**
   - The web portal's "Watch history/Profile manager/Favorites/Ratings/Similar
     items/Collection service/Recommendations/Transcode/Settings

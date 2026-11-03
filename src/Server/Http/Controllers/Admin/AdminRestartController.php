@@ -119,7 +119,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'PID file not found',
-                    'message' => 'The server may not be running, or the PID file setting is misconfigured.',
+                    'message' => 'The server may not be running, or the PID file setting is misconfigured',
                 ]);
             }
 
@@ -128,7 +128,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Failed to read PID file',
-                    'message' => 'The server may not be running, or the PID file is unreadable.',
+                    'message' => 'The server may not be running, or the PID file is unreadable',
                 ]);
             }
 
@@ -137,7 +137,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Invalid PID in file',
-                    'message' => 'The PID file contains an invalid value.',
+                    'message' => 'The PID file contains an invalid value',
                 ]);
             }
 
@@ -151,7 +151,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Signal send failed',
-                    'message' => sprintf('Process %d is not signalable from this worker.', $masterPid),
+                    'message' => sprintf('Process %d is not signalable from this worker', $masterPid),
                 ]);
             }
 
@@ -159,7 +159,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Signal send failed',
-                    'message' => sprintf('Failed to schedule SIGUSR2 for process %d.', $masterPid),
+                    'message' => sprintf('Failed to schedule SIGUSR2 for process %d', $masterPid),
                 ]);
             }
 

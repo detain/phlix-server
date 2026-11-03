@@ -655,7 +655,7 @@ final class AdminSettingsController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error'   => 'Invalid payload',
-                    'message' => 'Body must contain a non-empty "settings" object.',
+                    'message' => 'Body must contain a non-empty "settings" object',
                 ]);
             }
 

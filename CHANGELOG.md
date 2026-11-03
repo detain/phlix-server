@@ -33,6 +33,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Boot-degradation lines are now identity-stamped log-channel records.**
+  Two boot paths that strand an admin control — an unusable `worker.pid_file`
+  (restart rail silently falling back to Workerman's default) and a
+  SyncPlay-bridge socket collision between two daemons started from the same
+  checkout (documented loss posture) — used to report as anonymous warnings no
+  journal could attribute. A new `Phlix\Server\Runtime\BootIdentity` stamps
+  once per master boot (instance token, pid, started-at; first stamp wins,
+  later calls can never re-key correlation); the pid-fallback branch now emits
+  an `error_log()` record naming the configured path, the consequence, and the
+  identity, and the bridge listener stamps a 0600 `<socket>.owner` sidecar on
+  bind so the loser's refusal message NAMES the owning instance (stale
+  sidecars are overwritten; a never-bound `close()` cannot erase the live
+  owner's stamp; a missing sidecar reads honestly as "owner stamp absent").
+  The fail-loud alternative was weighed and rejected — the ratified
+  serving-over-restart-button posture (M8 boot-abort family) stands; what was
+  missing was correlation. The `/health`-payload half of the review ask stays
+  wire-gated with the M18 readiness-split family. (Deferred-items lane,
+  review minor #15 / devops2 m2.)
 - **Authenticated JSON APIs now ship `Cache-Control: no-store`.** Every
   `Response::json()` reply — the whole portal/API surface (settings,
   continue-watching grids, transcode status polling, and every canonical

@@ -47,7 +47,8 @@ the WS worker, fed by published deltas.
   supervisord), so they share the filesystem and user: **file mode 0600 is the
   primary access control** — no new port, no public exposure, other users
   cannot even open the path. The listener `unlink()`s a stale socket file at
-  bind time (owner-only dir, TOCTOU-safe enough at 0600) and refuses to bind
+  bind time (owner-only dir, TOCTOU-safe enough at 0600), stamps its 0600
+  `<socket>.owner` boot-identity sidecar (#15), and refuses to bind
   over a *live* listener (probe-connect first; see Failure modes).
 - **NDJSON, one frame per short-lived connection**: connect → single
   `fwrite($frame."\n")` → close. No interleaving is possible across 14
@@ -176,10 +177,13 @@ never converged). Closing this properly is a compare-and-swap on
   always fits under the bound. The listener independently caps inbound
   buffered-line size (`MAX_LINE_BYTES`, 1 MiB) and drops the connection over it.
 - **Two live listeners** cannot coexist by construction: the second `listen()`
-  probes the path, finds a live accepter and throws — the WS worker logs the
-  bridge failure and continues serving without the bridge (the HTTP side
-  publishes to the original owner; operator fix = remove the stale socket /
-  restart the second daemon).
+  probes the path, finds a live accepter and throws — naming the owner's boot
+  identity from the `<socket>.owner` sidecar the winner stamps at bind time
+  (#15: the loser's log line says WHICH instance owns the rail, not just that
+  someone does; the sidecar is diagnostic only — frame trust stays with the
+  token check). The WS worker logs the bridge failure and continues serving
+  without the bridge (the HTTP side publishes to the original owner; operator
+  fix = remove the stale socket / restart the second daemon).
 - **Oversized inbound line** at the listener: connection dropped, logged.
   Malformed frames (bad JSON, missing keys, wrong `op`, wrong version, wrong
   token) are dropped in `parse()` before any applier sees them.

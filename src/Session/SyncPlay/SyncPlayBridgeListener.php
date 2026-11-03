@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Session\SyncPlay;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Server\Runtime\BootIdentity;
 use Workerman\Events\EventInterface;
 
 /**
@@ -85,6 +86,43 @@ final class SyncPlayBridgeListener
     }
 
     /**
+     * Path of the best-effort owner sidecar written next to the socket.
+     *
+     * Deferred-item #15 (devops2 minor 2): two daemons started from the same
+     * checkout used to collide on this repo-relative path with nothing but a
+     * generic warning to correlate — the loser could not even name the owner.
+     * The winner stamps its {@see BootIdentity} into `<socket>.owner` (0600,
+     * same private boundary as the socket itself), so a collision message —
+     * and the journal entry built from it — says exactly which instance owns
+     * the rail. The sidecar is diagnostic metadata, never an authorization
+     * input: frame trust stays with the token check in {@see SyncPlayBridge::parse()}.
+     */
+    public function ownerSidecarPath(): string
+    {
+        return $this->socketPath . '.owner';
+    }
+
+    /** The sidecar's one-line owner stamp, or null when absent/unreadable. */
+    public function readOwnerStamp(): ?string
+    {
+        $raw = @file_get_contents($this->ownerSidecarPath());
+        if ($raw === false || trim($raw) === '') {
+            return null;
+        }
+
+        return trim($raw);
+    }
+
+    private function writeOwnerStamp(): void
+    {
+        // Best-effort by design: a sidecar that cannot be written must never
+        // take the live bridge down — the loser's message then honestly reads
+        // "owner stamp absent" instead of a fabricated identity.
+        @file_put_contents($this->ownerSidecarPath(), BootIdentity::describe() . "\n");
+        @chmod($this->ownerSidecarPath(), 0600);
+    }
+
+    /**
      * Bind the unix socket, clearing a stale socket file left by a dead worker.
      *
      * @throws \RuntimeException when another LIVE listener already owns the path
@@ -98,8 +136,9 @@ final class SyncPlayBridgeListener
 
         if (file_exists($this->socketPath)) {
             if ($this->probeLiveListener()) {
+                $owner = $this->readOwnerStamp() ?? 'owner stamp absent';
                 throw new \RuntimeException(
-                    "SyncPlayBridgeListener: a live listener already owns {$this->socketPath}"
+                    "SyncPlayBridgeListener: a live listener already owns {$this->socketPath} ({$owner})"
                 );
             }
             @unlink($this->socketPath);
@@ -130,7 +169,11 @@ final class SyncPlayBridgeListener
         stream_set_blocking($server, false);
 
         $this->server = $server;
-        $this->logger?->info('[SyncPlayBridge] listener bound', ['socket' => $this->socketPath]);
+        $this->writeOwnerStamp();
+        $this->logger?->info('[SyncPlayBridge] listener bound', [
+            'socket' => $this->socketPath,
+            'boot' => BootIdentity::describe(),
+        ]);
     }
 
     /**
@@ -209,6 +252,8 @@ final class SyncPlayBridgeListener
             $this->dropClient($id);
         }
 
+        $wasBound = $this->server !== null;
+
         if ($this->server !== null) {
             // Hand the property back to null BEFORE closing: a closed resource
             // must never be the property's value, not even for a statement
@@ -224,6 +269,11 @@ final class SyncPlayBridgeListener
 
         if ($this->socketPath !== '' && file_exists($this->socketPath)) {
             @unlink($this->socketPath);
+        }
+        // The owner sidecar is ours to remove only while we hold the bind —
+        // a loser that never bound must not erase the live owner's stamp.
+        if ($wasBound) {
+            @unlink($this->ownerSidecarPath());
         }
     }
 

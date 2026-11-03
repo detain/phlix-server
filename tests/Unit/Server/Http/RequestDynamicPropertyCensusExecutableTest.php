@@ -986,7 +986,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // (src/Common/Database/QueryBuilder.php) and its own-test file — zero
     // production instantiations repo-wide at removal time. Measured from the
     // red, per the S431 forward-fix precedent.
-    private const EXPECTED_PHP_FILES = 2043;
+    // +3 2043→2046: the deferred-items lane (review minor #15) added
+    // src/Server/Runtime/BootIdentity.php + tests/Unit/Server/Runtime/
+    // BootIdentityTest.php + tests/Unit/Session/SyncPlay/
+    // SyncPlayBridgeOwnerStampTest.php. Measured from the phpunit red (2046),
+    // not predicted — the S431 forward-fix precedent.
+    private const EXPECTED_PHP_FILES = 2046;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

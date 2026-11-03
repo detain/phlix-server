@@ -31,6 +31,7 @@ use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
+use Phlix\Server\Runtime\BootIdentity;
 use Phlix\Server\Runtime\ListenEndpoints;
 use Phlix\Server\Runtime\PidFile;
 use Phlix\Server\Workerman\HttpHandler;
@@ -99,12 +100,27 @@ $syncPlayBridgeToken = $syncPlayBridgeConfig['token'] ?? null;
 // endpoint 500s with "PID file not found" on every real box. Non-fatal: an
 // unusable directory leaves Workerman's default in place rather than aborting
 // boot. {@see \Phlix\Server\Runtime\PidFile}
-if (PidFile::apply($config) === null) {
-    fwrite(
-        STDERR,
-        "[phlix] WARNING: worker.pid_file is unset or its directory is not writable; "
-        . "falling back to Workerman's default PID path. POST /api/v1/admin/restart will not work.\n"
-    );
+//
+// Deferred-item #15 (devops2 minor 2): stamp the boot identity FIRST and make
+// the degraded-restart-rail branch a LOG-CHANNEL RECORD, not just a bare
+// STDERR line — one error_log() line carrying instance token, the configured
+// path and the consequence, so a journal search for the instance finds the
+// degradation beside every other line this boot emits. The fail-loud option
+// was weighed and rejected: the class's own ratified posture (serving media
+// outranks the restart button, M8 boot-abort family) stands; what was missing
+// was correlation, not a second abort path. The /health-key half of the
+// review's "health signal" ask is a new payload surface and stays gated with
+// the M18 readiness-split family (contracts wave).
+BootIdentity::stamp();
+$pidFilePath = PidFile::apply($config);
+if ($pidFilePath === null) {
+    $configuredPidFile = PidFile::configuredPath($config) ?? '(unset)';
+    $pidWarning = '[phlix] boot rail DEGRADED: worker.pid_file is unusable ('
+        . $configuredPidFile . '); falling back to Workerman\'s default PID path. '
+        . 'POST /api/v1/admin/restart will not work until that directory is writable. '
+        . BootIdentity::describe();
+    fwrite(STDERR, "[phlix] WARNING: " . $pidWarning . "\n");
+    error_log($pidWarning);
 }
 
 // -----------------------------------------------------------------------------
@@ -717,8 +733,14 @@ try {
                     $bridgeListener->close();
                 };
             } catch (\Throwable $bridgeError) {
+                // Deferred-item #15: the message now names BOTH boots — this
+                // worker's instance and (when the winner stamped it) the
+                // owner of the path — so a same-checkout double-start is
+                // legible in the log channel instead of two daemons emitting
+                // the same anonymous warning.
                 $logger->error('[SyncPlayBridge] listener unavailable; REST mutations will not reach this worker live', [
                     'error' => $bridgeError->getMessage(),
+                    'boot' => BootIdentity::describe(),
                 ]);
             }
         }

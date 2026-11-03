@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\LiveTv\ChannelManager;
 use Phlix\LiveTv\GuideManager;
 use Phlix\LiveTv\LiveTvManager;
@@ -962,6 +964,19 @@ final class AdminLiveTvController
      */
     private function error(int $statusCode, string $message, string $detail = ''): Response
     {
+        // Consolidated review C2: every 5xx arm in this controller passed the
+        // raw exception message as `detail` — a re-thrown PDOException text
+        // embeds whole SQL statements. At 500+ the detail never rides the
+        // wire; it is recorded server-side in the HTTP channel instead. 4xx
+        // detail stays (it is authored by this controller's validation arms).
+        if ($detail !== '' && $statusCode >= 500) {
+            LoggerFactory::get(LogChannels::HTTP)->error(
+                'LiveTV admin action failed: ' . $message,
+                ['detail' => $detail]
+            );
+            $detail = '';
+        }
+
         $payload = [
             'success' => false,
             'message' => $message,

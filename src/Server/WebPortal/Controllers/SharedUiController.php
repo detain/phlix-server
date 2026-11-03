@@ -57,7 +57,9 @@ final class SharedUiController
      * built/committed yet (the file is absent), returns a 503 with an
      * actionable message rather than a confusing blank 200.
      *
-     * @param Request              $request The HTTP request (unused).
+     * @param Request              $request The HTTP request — its Host header
+     *                                      seeds the CSP `connect-src` ws
+     *                                      allowance (see below).
      * @param array<string,string> $params  Path parameters (unused).
      *
      * @return Response 200 HTML shell, or 503 when the bundle is missing.
@@ -66,7 +68,7 @@ final class SharedUiController
      */
     public function shell(Request $request, array $params = []): Response
     {
-        unset($request, $params);
+        unset($params);
 
         // Validate build exists via ViteAssets manifest check.
         try {
@@ -116,8 +118,16 @@ final class SharedUiController
             . json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) . '</script>' . "\n";
         $html = preg_replace('/<head>/i', "<head>\n" . $configScript, $html, 1) ?? $html;
 
+        // The watch-party WebSocket lives on :8097 — a different port than
+        // this response's origin — so a bare `connect-src 'self'` would make
+        // every browser refuse the SPA's SyncPlay socket (consolidated review
+        // C1). Allow ws/wss on the request's own validated Host (portless:
+        // matches any port on this host — the HTTP worker cannot see the WS
+        // worker's env-resolved port). Never the Origin header.
+        $wsHost = SecurityHeaders::webSocketHostFromHeader($request->getHeader('Host'));
+
         return (new Response())
             ->html($html)
-            ->header('Content-Security-Policy', SecurityHeaders::contentSecurityPolicy($nonce));
+            ->header('Content-Security-Policy', SecurityHeaders::contentSecurityPolicy($nonce, $wsHost));
     }
 }

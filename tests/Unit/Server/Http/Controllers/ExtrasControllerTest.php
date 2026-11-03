@@ -113,7 +113,10 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(500, $response->statusCode);
         /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
-        $this->assertStringContainsString('boom', $body['error']);
+        // Consolidated review C2: the 500 copy is generic and never echoes
+        // the exception text; the cause is logged instead.
+        $this->assertStringNotContainsString('boom', $body['error']);
+        $this->assertStringContainsString('Failed to retrieve extras', $body['error']);
     }
 
     /**
@@ -173,7 +176,10 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(500, $response->statusCode);
         /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
-        $this->assertStringContainsString('upstream tmdb error', $body['error']);
+        // Consolidated review C2: the 500 copy is generic and never echoes
+        // the exception text; the cause is logged instead.
+        $this->assertStringNotContainsString('upstream tmdb error', $body['error']);
+        $this->assertStringContainsString('Failed to retrieve trailers', $body['error']);
     }
 
     /**
@@ -233,6 +239,8 @@ class ExtrasControllerTest extends TestCase
         $this->assertSame(500, $response->statusCode);
         /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
-        $this->assertStringContainsString('db down', $body['error']);
+        // Consolidated review C2: generic 500 copy; exception text logged only.
+        $this->assertStringNotContainsString('db down', $body['error']);
+        $this->assertStringContainsString('Failed to retrieve extras', $body['error']);
     }
 }

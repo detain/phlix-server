@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Extras\TrailerResolver;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -68,7 +70,7 @@ class ExtrasController
         } catch (\Throwable $e) {
             return (new Response())
                 ->status(500)
-                ->json(['error' => 'Failed to retrieve extras: ' . $e->getMessage()]);
+                ->json(['error' => $this->logAndFail('extras', $e)]);
         }
     }
 
@@ -104,7 +106,7 @@ class ExtrasController
         } catch (\Throwable $e) {
             return (new Response())
                 ->status(500)
-                ->json(['error' => 'Failed to retrieve trailers: ' . $e->getMessage()]);
+                ->json(['error' => $this->logAndFail('trailers', $e)]);
         }
     }
 
@@ -140,7 +142,25 @@ class ExtrasController
         } catch (\Throwable $e) {
             return (new Response())
                 ->status(500)
-                ->json(['error' => 'Failed to retrieve extras: ' . $e->getMessage()]);
+                ->json(['error' => $this->logAndFail('extras', $e)]);
         }
+    }
+
+    /**
+     * Record the real cause server-side and return the generic member copy.
+     *
+     * Consolidated review C2: the prior arms concatenated `$e->getMessage()`
+     * into the 500 body — resolver/storage internals (paths, provider errors)
+     * reached TVs and browsers. The cause is logged; the wire carries one
+     * fixed sentence. The envelope shape (`{error}`) is unchanged.
+     */
+    private function logAndFail(string $what, \Throwable $e): string
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error(
+            'Failed to retrieve ' . $what,
+            ['exception' => $e::class, 'message' => $e->getMessage()]
+        );
+
+        return 'Failed to retrieve ' . $what . '. Please try again later.';
     }
 }

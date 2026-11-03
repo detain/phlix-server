@@ -217,21 +217,48 @@ final class SecurityHeaders
      * value set per the frame_options precedent — and the force-inject
      * fallback (blob: trio) must stay non-negotiable in code.
      *
+     * `connect-src` carries `'self'` plus, when the caller passes a
+     * request-derived host, `ws://<host> wss://<host>`: the watch-party
+     * WebSocket lives on a SEPARATE port (:8097) from the HTTP workers
+     * (:8096), and `'self'` matches scheme+host+PORT — without the explicit
+     * ws allowance every browser refused the SPA's SyncPlay socket, silently
+     * breaking watch parties on the server's own portal. The source is
+     * portless ON PURPOSE: CSP source expressions without a port match any
+     * port on that host, which is exactly right here because the HTTP worker
+     * process that renders the shell cannot see the WS worker's RESOLVED port
+     * (`start.php` re-binds it from env after the HTTP worker captured its
+     * config snapshot — pinning `:8097` would lie on any `PHLIX_WS_PORT`
+     * install). The host is the request's own validated Host header — never a
+     * reflected Origin — so the allowance can only ever name the origin the
+     * browser is already talking to over HTTP, never an attacker-chosen one
+     * (a blanket `ws:` is, and stays, unacceptable).
+     *
      * @param string|null $scriptNonce Optional cryptographically-random nonce.
      *                                  When non-empty, `'nonce-<value>'` is added
      *                                  to `script-src` so a single matching inline
      *                                  `<script nonce="<value>">` may execute. The
      *                                  caller MUST emit the identical nonce on the
      *                                  inline tag in the same response.
+     * @param string|null $webSocketHost Optional portless host for the `ws://`/
+     *                                  `wss://` connect-src allowance — only ever
+     *                                  fed from {@see self::webSocketHostFromHeader()}
+     *                                  so it is pre-validated. NULL (or empty)
+     *                                  emits the historical bare `connect-src 'self'`.
      *
      * @return string The full CSP header value.
      */
-    public static function contentSecurityPolicy(?string $scriptNonce = null): string
+    public static function contentSecurityPolicy(?string $scriptNonce = null, ?string $webSocketHost = null): string
     {
         $scriptSrc = "'self'";
         if ($scriptNonce !== null && $scriptNonce !== '') {
             $scriptSrc .= " 'nonce-" . $scriptNonce . "'";
         }
+
+        $connectSrc = "connect-src 'self'";
+        if ($webSocketHost !== null && $webSocketHost !== '') {
+            $connectSrc .= ' ws://' . $webSocketHost . ' wss://' . $webSocketHost;
+        }
+        $connectSrc .= '; ';
 
         // img-src explicitly allowlists the TMDB image CDN hosts so poster/backdrop/
         // cast artwork served directly from TMDB (not yet locally cached) renders
@@ -243,8 +270,60 @@ final class SecurityHeaders
         return "default-src 'self'; script-src " . $scriptSrc . "; "
             . "style-src 'self' 'unsafe-inline'; "
             . "img-src 'self' data: blob: https://image.tmdb.org https://tmdb.org; "
-            . "font-src 'self'; connect-src 'self'; "
+            . "font-src 'self'; " . $connectSrc
             . "media-src 'self' blob:; worker-src 'self' blob:; "
             . "frame-ancestors 'self'; base-uri 'self'";
+    }
+
+    /**
+     * Validate a raw Host header into a CSP-safe portless ws source host.
+     *
+     * Grammar (closed set, mirrors what a browser can dial): RFC hostname
+     * labels `[a-z0-9-]` joined by dots, or a bracketed IPv6 literal. Any
+     * port suffix is stripped (the connect-src source is deliberately
+     * portless — see contentSecurityPolicy()). Returns null for anything
+     * that fails the grammar: a failed parse must emit the historical bare
+     * `connect-src 'self'`, never a guessed or attacker-influenced source.
+     */
+    public static function webSocketHostFromHeader(?string $hostHeader): ?string
+    {
+        if ($hostHeader === null) {
+            return null;
+        }
+
+        $host = strtolower(trim($hostHeader));
+        if ($host === '' || strlen($host) > 253) {
+            return null;
+        }
+
+        if (str_starts_with($host, '[')) {
+            // Bracketed IPv6 literal: take the bracketed part, validate chars.
+            $end = strpos($host, ']');
+            if ($end === false) {
+                return null;
+            }
+            $literal = substr($host, 1, $end - 1);
+            if ($literal === '' || preg_match('/^[0-9a-f:.]+$/', $literal) !== 1) {
+                return null;
+            }
+
+            return '[' . $literal . ']';
+        }
+
+        // Strip any :port suffix before validating.
+        $colon = strpos($host, ':');
+        if ($colon !== false) {
+            $host = substr($host, 0, $colon);
+        }
+
+        $label = '[a-z0-9]([a-z0-9\-]*[a-z0-9])?';
+        if (
+            $host === ''
+            || preg_match('/^' . $label . '(\.' . $label . ')*$/', $host) !== 1
+        ) {
+            return null;
+        }
+
+        return $host;
     }
 }

@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
@@ -120,7 +122,18 @@ class TranscodeController
             return (new Response())->status(404)->json(['error' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
             // Concurrency exhausted / launch failure — retryable.
-            return (new Response())->status(503)->json(['error' => $e->getMessage()]);
+            // Consolidated review C2: RuntimeException text can carry
+            // filesystem paths and encode detail; it is logged, and the wire
+            // carries a fixed retryable-copy string. Status 503 and the
+            // `{error}` envelope shape are unchanged.
+            LoggerFactory::get(LogChannels::HTTP)->error(
+                'HLS job start failed',
+                ['exception' => $e::class, 'message' => $e->getMessage()]
+            );
+
+            return (new Response())
+                ->status(503)
+                ->json(['error' => 'Transcoding is busy right now. Please try again in a moment.']);
         }
 
         // Sign the streaming URLs: the player feeds these straight to hls.js /

@@ -2802,17 +2802,20 @@ class Application
             ->status(500)
             ->json([
                 'error' => 'Internal Server Error',
-                'message' => $e->getMessage(),
+                // Consolidated review C2 (raw-exception-text class): this arm
+                // shipped `$e->getMessage()` — PDO fragments, file paths and
+                // other internals — to browsers, TVs and mobile clients. The
+                // full cause (class, message, file, line, trace) is logged
+                // above; the wire carries the generic envelope only, per the
+                // repo's own doctrine (`ErrorPages`: detail belongs to the
+                // HTTP error log, never the wire; `AdminSettingsController::
+                // GENERIC_FAILURE_MESSAGE` is the named template). The shape
+                // `{error, message}` is unchanged. The former `debug` variant
+                // that additionally echoed file/line is retired for the same
+                // reason — debug detail moves to the log line, where it
+                // already exists.
+                'message' => 'An internal error occurred. The details were logged server-side.',
             ]);
-
-        if ($this->config['debug'] ?? false) {
-            $response->json([
-                'error' => 'Internal Server Error',
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-        }
 
         $response->send();
     }

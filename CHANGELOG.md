@@ -33,6 +33,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #54 follow-through: `NewsletterSender::queueAll` now consumes its
+  INSERT IGNORE verdict through the `WriteResult` helper.** The original
+  `a7536372` hand-rolled `$created !== null` — CI's
+  `WriteResultAdoptionGuardTest` (the S342 single-idiom law) correctly flagged
+  the site, and the flag is load-bearing: a `false` return (statement error)
+  passed `!== null` as a phantom "created", and the non-auto-increment UUID PK
+  makes `lastInsertId()` return the string `'0'` for REAL writes — the exact
+  falsy trap the helper exists to end. `!WriteResult::wroteNothing($created)`
+  is now the idiom; the denominator inventory pin rotated 20→21 measured from
+  the CI red (run 41731180402) with the staircase attribution.
+- **Deferred #9 follow-through: the extension-contract test records Composer's
+  vendor-declared additions instead of pretending they cannot exist.**
+  `justinrainbow/json-schema ^6` pulls `marc-mabe/php-enum`, which declares
+  `ext-reflection`, so `vendor/composer/platform_check.php` now enforces one
+  extension more than the call-site contract lists — and the contract
+  deliberately never lists reflection (PHP cannot be built without it; its own
+  header says so). The equality law became two documented exemption classes:
+  `POLYFILL_PROVIDED` (may be absent) plus a new `VENDOR_DECLARED_ADDITIONS`
+  (may be extra), guarded by an anti-staleness assert that reddens if a
+  recorded addition ever appears on the contract side. A new vendor extension
+  in the generated check now fails until it is recorded — honest information,
+  never silent drift.
 - **CI cure (baseline-owed): the LiveTv hostile-key probe now types its own
   intent.** Psalm's tests corpus had flagged
   `tests/Unit/LiveTv/LiveTvManagerTest.php` InvalidArgument since the campaign

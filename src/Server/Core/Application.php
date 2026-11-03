@@ -13,8 +13,6 @@ namespace Phlix\Server\Core;
 
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Database\ConnectionPool;
-use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Version;
 use Phlix\Auth\RateLimitException;
 use Phlix\Hub\HubClient;
@@ -27,7 +25,6 @@ use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Psr\Container\ContainerInterface;
-use Throwable;
 
 /**
  * Main application entry point for the Phlix Media Server.

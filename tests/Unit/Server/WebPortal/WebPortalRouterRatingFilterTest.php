@@ -288,4 +288,66 @@ class WebPortalRouterRatingFilterTest extends TestCase
         $router = $this->pg13Router($itemRepo, true);
         $router->getLibraryItems($this->cappedRequest(), ['id' => 'lib-1']);
     }
+
+    // -----------------------------------------------------------------
+    // Review #73 — the listing serves the FILTERED total beside the page.
+    // -----------------------------------------------------------------
+
+    public function testGetLibraryItemsServesTotalForOwnerBrowse(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('getByLibrary')->willReturn([]);
+        $itemRepo->expects($this->once())
+            ->method('countInLibrary')
+            ->with('lib-1', null, null, true)
+            ->willReturn(128);
+
+        $router = $this->pg13Router($itemRepo, true);
+        $body = json_decode(
+            $router->getLibraryItems($this->cappedRequest(), ['id' => 'lib-1'])->body,
+            true
+        );
+
+        $this->assertSame(['items', 'total', 'limit', 'offset'], array_keys($body));
+        $this->assertSame(128, $body['total']);
+    }
+
+    public function testGetLibraryItemsCountsTheCappedSetForARestrictedProfile(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('getByAllowedRatings')->willReturn([]);
+        // The count must carry the SAME cap the page was selected with — a
+        // rating-blind total would leak the uncapped library size (and let a
+        // capped profile count rows it cannot see).
+        $itemRepo->expects($this->once())
+            ->method('countInLibrary')
+            ->with('lib-1', null, $this->pg13Filter()['allowedRatings'], true)
+            ->willReturn(41);
+
+        $router = $this->pg13Router($itemRepo, false);
+        $body = json_decode(
+            $router->getLibraryItems($this->cappedRequest(), ['id' => 'lib-1'])->body,
+            true
+        );
+
+        $this->assertSame(41, $body['total']);
+    }
+
+    public function testGetLibraryItemsCountsTheTypeFilteredSet(): void
+    {
+        $request = $this->cappedRequest();
+        $request->query = ['type' => 'movie'];
+
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('getByType')->willReturn([]);
+        $itemRepo->expects($this->once())
+            ->method('countInLibrary')
+            ->with('lib-1', 'movie', null, true)
+            ->willReturn(7);
+
+        $router = $this->pg13Router($itemRepo, true);
+        $body = json_decode($router->getLibraryItems($request, ['id' => 'lib-1'])->body, true);
+
+        $this->assertSame(7, $body['total']);
+    }
 }

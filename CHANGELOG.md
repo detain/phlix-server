@@ -33,6 +33,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #73 — the library drill-down listing now serves a total.**
+  `GET /api/v1/libraries/{id}/items` was the estate's only paged listing
+  returning `{items, limit, offset}` without `total`, so web-UI clients could
+  not render a page count or detect a past-end offset (the sibling
+  `GET /api/v1/media` contract has always carried it). The response gains
+  `total` — the row count of the **filtered** set, computed by the new
+  `ItemRepository::countInLibrary()` which mirrors each SELECT branch's WHERE
+  exactly: the `?type=` equality when that branch ran and the parental
+  content-rating cap via the repository's shared `ratingCapClause()`
+  fragment, so `total` and `items` can never disagree about what the active
+  profile may see (a rating-blind total would leak the uncapped library
+  size). Additive payload key on a route already documented with
+  `additionalProperties: true`; no route, manifest tuple, or wire-code moves.
 - **Newsletter re-fires can no longer double-queue (and double-mail) a
   recipient.** `newsletter_queue` shipped its `(user_id, week_start)` index
   NON-UNIQUE (migration 020) and `queueAll()` inserted blindly, so a re-fired

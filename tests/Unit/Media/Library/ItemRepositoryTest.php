@@ -2252,6 +2252,69 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals(5, $result);
     }
 
+    public function testCountInLibraryBareBrowseCountsTheWholeLibrary(): void
+    {
+        $capturedSql = '';
+        $capturedParams = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+
+                return [['count' => 128]];
+            });
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(128, $repo->countInLibrary('lib-1'));
+        $this->assertSame(
+            'SELECT COUNT(*) as count FROM media_items WHERE library_id = ?',
+            $capturedSql
+        );
+        $this->assertSame(['lib-1'], $capturedParams);
+        // A total counts the FILTERED SET, never just the page: no LIMIT clause.
+        $this->assertStringNotContainsString('LIMIT', $capturedSql);
+    }
+
+    public function testCountInLibraryThreadsTypeAndRatingCapIntoTheWhere(): void
+    {
+        $capturedSql = '';
+        $capturedParams = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+
+                return [['count' => 3]];
+            });
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(3, $repo->countInLibrary('lib-1', 'movie', ['G', 'PG'], true));
+        $this->assertSame(
+            'SELECT COUNT(*) as count FROM media_items'
+                . ' WHERE library_id = ? AND type = ? AND (content_rating IN (?,?) OR content_rating IS NULL)',
+            $capturedSql
+        );
+        $this->assertSame(['lib-1', 'movie', 'G', 'PG'], $capturedParams);
+    }
+
+    public function testCountInLibraryWithNoUnratedExcludesTheNullSide(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql) {
+                $capturedSql = $sql;
+
+                return [['count' => 0]];
+            });
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(0, $repo->countInLibrary('lib-1', null, ['G'], false));
+        $this->assertStringNotContainsString('IS NULL', $capturedSql);
+    }
+
     public function testGetRecentlyAddedReturnsItems(): void
     {
         $db = $this->createMock(Connection::class);

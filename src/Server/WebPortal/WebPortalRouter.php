@@ -601,7 +601,8 @@ class WebPortalRouter
      *   - offset: Pagination offset (default: 0)
      * @param array<string, string> $params Route parameters including 'id' (library ID)
      *
-     * @return Response JSON response with items array and pagination info
+     * @return Response JSON response with items array, the filtered-set total
+     *                  and pagination info
      *
      * @api_endpoint GET /api/v1/libraries/{id}/items
      *
@@ -616,6 +617,7 @@ class WebPortalRouter
      *       "path": "/mnt/media/movies/movie.mkv"
      *     }
      *   ],
+     *   "total": 128,
      *   "limit": 50,
      *   "offset": 0
      * }
@@ -657,6 +659,19 @@ class WebPortalRouter
             $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
         }
 
+        // Review #73: the listing was the library drill-down's only paged view
+        // without a total, so clients could not render a page count or detect a
+        // past-end offset. Counted with the SAME filters the page was selected
+        // with — type equality when the ?type= branch ran, and the parental cap
+        // via the repository's shared clause — so `total` and `items` can never
+        // disagree about which rows the active profile may see.
+        $total = $this->itemRepository->countInLibrary(
+            $libraryId,
+            $type !== null && $type !== '' ? $type : null,
+            $ratingFilter['allowedRatings'] ?? null,
+            $ratingFilter['allowUnrated'] ?? true
+        );
+
         $shapedItems = array_map(
             fn(array $item): array => $this->shapeMediaItem($item),
             $items
@@ -664,6 +679,7 @@ class WebPortalRouter
 
         return (new Response())->json([
             'items' => $shapedItems,
+            'total' => $total,
             'limit' => $limit,
             'offset' => $offset,
         ]);

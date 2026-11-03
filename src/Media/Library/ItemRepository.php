@@ -1943,6 +1943,63 @@ class ItemRepository
     }
 
     /**
+     * Counts the rows a paged library listing will walk, with the SAME WHERE
+     * construction as the SELECT branches in
+     * {@see \Phlix\Server\WebPortal\WebPortalRouter::getLibraryItems()} —
+     * optional `type` equality plus the shared parental-cap fragment from
+     * {@see self::ratingCapClause()} (the same clause {@see self::getByType()}
+     * applies, so page and total cannot drift on the rating cap).
+     *
+     * This is the companion to {@see self::getByLibrary()},
+     * {@see self::getByType()} and {@see self::getByAllowedRatings()}: a client
+     * rendering pagination needs the row count of the FILTERED set, not of the
+     * whole library, and {@see self::countByType()}/{@see self::countByLibrary()}
+     * are rating-blind, so reusing them would over-count capped profiles and
+     * ignore `?type=` entirely (review #73: the library drill-down could not
+     * render a count or detect a past-end offset).
+     *
+     * @param string              $libraryId      The library's unique identifier.
+     * @param string|null         $type           A `media_items.type` value to
+     *        restrict the count to, or null for every type (the caller's
+     *        no-`?type=` browse branch).
+     * @param array<int|string, mixed>|null $allowedRatings Parental-cap allow-list,
+     *        or null when the active profile carries no cap.
+     * @param bool                $allowUnrated   Include NULL-rated rows (mirrors
+     *        the SELECT branch exactly).
+     *
+     * @return int Number of `media_items` rows matching the listing's filters.
+     */
+    public function countInLibrary(
+        string $libraryId,
+        ?string $type = null,
+        ?array $allowedRatings = null,
+        bool $allowUnrated = true
+    ): int {
+        $where = 'library_id = ?';
+        $bindings = [$libraryId];
+
+        if ($type !== null) {
+            $where .= ' AND type = ?';
+            $bindings[] = $type;
+        }
+
+        if ($allowedRatings !== null) {
+            $cap = $this->ratingCapClause($allowedRatings, $allowUnrated);
+            if ($cap['sql'] !== '') {
+                $where .= ' AND ' . $cap['sql'];
+                $bindings = array_merge($bindings, $cap['bindings']);
+            }
+        }
+
+        $result = $this->db->query(
+            "SELECT COUNT(*) as count FROM media_items WHERE {$where}",
+            $bindings
+        );
+
+        return $this->extractCount($result);
+    }
+
+    /**
      * Gets recently added media items from a library.
      *
      * @param string $libraryId The library's unique identifier

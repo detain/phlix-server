@@ -31,6 +31,52 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ## [Unreleased]
 
+### Changed
+
+- **Consumer cascade: `@phlix/contracts` v0.5.5, `@phlix/tokens` v0.2.2,
+  `@phlix/ui` v0.99.14 re-pinned, and the served `/app` bundle regenerated.**
+  - *Contracts registry.* `tests/Fixtures/Contracts/error-codes.json` is
+    re-vendored byte-for-byte from the v0.5.5 tag's `dist/error-codes.json`
+    (204 → 205 codes — additive `common.not_found`, RESERVED; md5
+    `40c1da48…` → `5d1783a7…`), the `error-codes.pin.txt` sidecar moves
+    `v0.5.3` → `v0.5.5` with it (lockstep law), and
+    `ErrorCodesContractTest::CONTRACTS_TAG` plus its era note rotate in the
+    same commit. The OpenAPI `code`-enum comment now names the v0.5.5 addition;
+    the enum members themselves are UNCHANGED — the server emits no new
+    REST-emittable code, so the exact-equality law correctly keeps
+    `common.not_found` out. No vendored route manifest exists here, so the
+    held `91579683…` (412 tuples) is trivially undisturbed.
+  - *Design tokens.* The composer inline-package pin moves v0.2.1 → v0.2.2
+    (tag `aa66f2cc`, peels `1a1ee0a8`, ls-remote-verified; tag-archive tarball
+    idiom preserved) — composer.json 3 lines + composer.lock 3 lines
+    (version/url/content-hash), nothing else re-resolved. `src/css/colors.css`
+    is byte-identical v0.2.0 == v0.2.1 == v0.2.2 (sha256 `495d7b48…`, measured
+    from the delivered v0.2.2 tarball), so `ColorsCssParityTest`'s
+    `COLORS_CSS_SHA256` holds; its `TOKENS_TAG`/`TOKENS_COMMIT` constants and
+    the chain-of-custody prose rotate with the pin per the guard's own
+    bump doctrine — the v0.2.1 lane had left them naming v0.2.0, and this
+    commit repairs that drift as disclosed.
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.13 →
+    v0.99.14 (tag object `bfe47d15`, peel `a437b995` == master,
+    ls-remote-verified). The lock diff, cut with the CI-exact toolchain
+    (node 24.20.0, bundled npm 11.19.0, userconfig nulled), is minimal 7+/7−:
+    root echo, the ui node's version/resolved/integrity, and the contracts
+    edge the new tag declares — `#v0.5.4` → `#v0.5.5`, with the hoisted
+    contracts node re-resolved to `0.5.5` at `e2159816…` (the v0.5.5 peel).
+    syncplay stays `0.1.6` (ui v0.99.14 did not move it). `npm ci` from the
+    lock installs the declared tree, and the nested
+    `@phlix/contracts/dist/error-codes.json` matches this commit's server
+    fixture byte-for-byte (`5d1783a7…`). web-ui `node --test`: 33/33.
+  - *Served bundle.* `public/assets/app/` regenerated from the new lock with
+    the same CI-pinned toolchain, built twice after wiping the output — both
+    runs aggregate to md5 `0468c3c827590a2f1b8279ef00af7e1b` (stale-chunk
+    wipe + determinism proven before commit, per the S253 gate's own
+    requirements). The README "UI truth at this tip" line flips to v0.99.14
+    alongside. The bundle-aware PHP cohort (`WebUiBundleGateTest`,
+    `ViteAssetsMemoTest`, `SharedUiControllerCspNonceTest`,
+    `HttpHandlerServeStaticTest`, `PublicFrontControllerRemovalGuardTest`,
+    `NginxAssetLocationTest`) runs 42/365 green against the regenerated tree.
+
 ### Fixed
 
 - **Deferred #54 follow-through: `NewsletterSender::queueAll` now consumes its

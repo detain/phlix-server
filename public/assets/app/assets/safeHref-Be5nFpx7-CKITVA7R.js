@@ -1,0 +1,2 @@
+function e(e){let t=e.replace(/[\x00-\x20]/g,``);if(t===``||t.startsWith(`#`)||t.startsWith(`?`))return e;let n=/^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(t);if(n===null)return t.startsWith(`//`)?void 0:e;let r=n[0].slice(0,-1).toLowerCase();return r===`http`||r===`https`?e:void 0}export{e as t};
+//# sourceMappingURL=safeHref-Be5nFpx7-CKITVA7R.js.map

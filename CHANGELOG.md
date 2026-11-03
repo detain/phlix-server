@@ -33,6 +33,39 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Recovered docs/ops Major cluster (review M27, M29–M38, M43) — deploy documents tell the truth.**
+  - README Requirements now state the host installer's **Linux kernel ≥ 6.9 floor** (the
+    installer compiles Swoole with io_uring ON; the FATAL-below-6.9 fact its own comment
+    records existed nowhere a fresh-OS reader would see), the plugin bullet qualifies
+    "signature-checked" honestly, the env-census row carries the real `false` default, and
+    a new **Plugin trust model** narrative separates the default-deny catalog channel from
+    the opt-in manifest-signature channel (a tampered signature is always refused; an
+    ABSENT one warns unless `PHLIX_PLUGINS_REQUIRE_SIGNATURE=1`).
+  - The Helm chart gains `phlix.rejectKnownPlaceholder`: rendering `values.example.yaml`
+    verbatim (which shipped `CHANGE_ME` and the literal instruction `openssl rand -hex 64`
+    in secret positions) now FAILS with a remedy-bearing message instead of booting with a
+    publicly-known JWT key — the docker/examples `.env.example` doctrine applied to the
+    chart, covering `config.database_password`, `config.secret_key` and both bundled
+    mysql.auth passwords (both arms proven with a real `helm template` render).
+  - README self-contradiction on the WebSocket catalogue fixed: **27 wire events**
+    (matching both its own list and the 28-const-minus-`SYNCPLAY_PREFIX` census in
+    `WebSocketEvents.php`).
+  - Prose defects: the dangling "; if it has no saved config" clause repaired; the dead
+    `../README.md` link in AUTH_METHOD_LOCKOUT.md re-anchored (`../../`); the grammar break
+    in docker/README.md fixed; stale `start.php:NNN` coordinates in BLOCKING_IO_EXCEPTIONS
+    and SYNCPLAY_WRITE_THROUGH_BRIDGE replaced with drift-proof symbol names;
+    `scripts/bench/README.md` drops the never-existing `PHLIX_EXPANSION_PLAN.md` citation
+    and the stale v1.0 framing; the three future-tense `wsUrl` seam narrations
+    (docker/examples, nginx, caddy) rotate to shipped state while keeping the
+    "do NOT add /ws against :8096" warnings.
+  - `server_deploy.md` renamed to `docs/dev/ui-bundle-vendor.md` (its actual content), gains
+    the missing `npm ci` fetch step in BOTH options (a literal one-action-per-step read
+    silently rebuilt stale chunks), its impossible live-verify curl replaced with reading
+    the SPA shell's hashed entry reference, and a README pointer fixes its orphan status.
+  - Webhooks + access schedules join the README feature narrative (honestly: the signed
+    registry vs the UNSIGNED domain-event subscriptions surface), three endpoint-table rows
+    grounded in the registered routes, and an access-schedules cross-link in the profiles
+    section.
 - **Profile refusals stop reading like syslog and start reading like help (review M25, copywriter).**
   - The access-deny family that a child's device can be the only reader of —
     'No profile found; access denied', 'Profile not found; access denied',

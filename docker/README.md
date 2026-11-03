@@ -356,7 +356,7 @@ which is what makes the swoole/uv layers reusable across PR builds.
 - **No `phpenmod`.** That helper ships with the Debian `php` packages.
   The upstream `php:8.3-cli-alpine` image uses `docker-php-ext-install`
   (or a hand-written `.ini` under `/usr/local/etc/php/conf.d/`) to wire
-  extensions in — `phpenmod` does not exist on Alpine and shells out to
+  extensions in — `phpenmod` does not exist on Alpine and shelling out to
   it will fail with `command not found`.
 - **Use the `-dev` variant of every C library** swoole/uv/php-ext-* link
   against. Alpine ships runtime `.so` files in `<lib>` and headers in

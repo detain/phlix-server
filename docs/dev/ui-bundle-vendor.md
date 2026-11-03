@@ -42,11 +42,15 @@ git push && git push --tags
 
 **2. Wait for npm package to be published** (GitHub tarball via `package.json` reference), or if using a local path, update `web-ui/package.json` to point to the new version.
 
-**3. Build server web-ui locally:**
+**3. Fetch the new dependency and build server web-ui locally:**
 
 ```bash
 cd /path/to/phlix-server/web-ui
-# Verify @phlix/ui is the right version
+# Point web-ui/package.json at the new version FIRST, then INSTALL it —
+# `npm run build` never fetches anything on its own; without this step the
+# build silently reuses the stale node_modules copy and publishes old chunks.
+npm ci            # npm install if package.json/package-lock.json changed
+# Verify @phlix/ui is the right version (fix the version above if this prints the old one)
 cat node_modules/@phlix/ui/package.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("version"))'
 npm run build
 ```
@@ -68,8 +72,11 @@ ssh deploy@example.net "ls -la /var/www/phlix/public/assets/app/assets/index-*.j
 # Verify toggleQuality is in a chunk
 ssh deploy@example.net "grep -rl 'toggleQuality' /var/www/phlix/public/assets/app/assets/"
 
-# Test live site (hard refresh required — CDN/browser may cache old chunks)
-curl -s https://phlix.example.net/assets/app/assets/ | head -5
+# Test live site (hard refresh required — CDN/browser may cache old chunks).
+# The assets directory is never LISTED by the server (no index route — a bare
+# curl of it 404s by design); instead read the SPA shell's entry reference:
+curl -s https://phlix.example.net/app/ | grep -o 'index-[A-Za-z0-9_-]*\.js' | head -2
+# The hash printed must equal the NEW index-<hash>.js from the ls above.
 ```
 
 ---
@@ -91,10 +98,12 @@ git checkout master
 git pull origin master
 ```
 
-**3. Build the web-ui:**
+**3. Install dependencies and build the web-ui:**
 
 ```bash
 cd /var/www/phlix/web-ui
+npm ci    # fetches the @phlix/ui version pinned in package.json — required
+          # after `git pull`; a bare `npm run build` reuses stale node_modules
 npm run build
 ```
 

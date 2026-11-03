@@ -106,7 +106,7 @@ phlix.example.com {
 #      }
 #    and point WS clients at wss://ws.phlix.example.com/ .
 #
-# FUTURE: a same-origin wss:// path is being designed alongside a
-# client-side wsUrl seam (sibling lane); when it lands this note will be
-# replaced with the real routing. Until then do NOT add a /ws* handler
-# against the :8096 upstream — it cannot work.
+# NOTE: the client-side wsUrl/wsPath seam has since shipped in @phlix/ui —
+# point wss:// clients at an explicit :8097 TCP route as above. A same-origin
+# wss:// path remains unshipped: do NOT add a /ws* handler against the :8096
+# upstream — it cannot work.

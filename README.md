@@ -33,6 +33,14 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with provider fallback. The 24-hour cache freshness window is tunable (`metadata.cache_ttl_hours`), and a minimum title/year match-confidence gate for accepted provider matches (`metadata.min_match_confidence`, default `0` = gate off) — both admin-editable and read live per lookup
 - **Content Filtering**: Parental controls with rating and genre-based filtering
+- **Access Schedules**: per-profile allowed-time windows ("who may watch when") enforced at the
+  request edge for kids' profiles and beyond — managed per profile (own-profile or admin) via
+  `/api/v1/profiles/{profileId}/schedules`; household walkthrough in
+  [the quickstart](docs/user/quickstart.md)
+- **Webhooks**: outbound HTTP event delivery through two admin-managed surfaces — a signed
+  hook registry (per-hook secret, HMAC signature headers, SSRF-guarded targets) and a
+  domain-event subscription surface (`user.login`, `playback.*`, `library.*`; unsigned, see
+  the endpoint table) — troubleshooting path: [A webhook never fires](#a-webhook-never-fires)
 
 Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
@@ -96,6 +104,12 @@ public/                 # no front controller — start.php serves everything (s
   coroutine hooks in `start.php` are skipped — but the per-worker database coroutine pool
   (`DB_POOL_ENABLED`) has no coroutines to lease connections to, so in-worker queries run
   sequentially instead of in parallel (`config/database.php`).
+  **Host installer floor: Linux kernel ≥ 6.9.** `scripts/install.sh` compiles Swoole with
+  the io_uring flags ON (the container-only seccomp reason for shipping them OFF in Docker
+  does not exist on a host), and Swoole's io_uring loop is FATAL at init below 6.9 — there
+  is no silent epoll fallback once the flags are compiled in. On an older kernel use the
+  Docker image (`SWOOLE_IOURING=0` default) or compile Swoole without `--enable-iouring` /
+  `--enable-uring-socket`; the installer records the same floor in its own comment.
 - **Workerman**: 5.0+ (bundled via Composer)
 - **FFmpeg**: For transcoding (optional)
 
@@ -111,8 +125,10 @@ Every environment variable the server process reads is inventoried in the defini
   lifecycle events with typed `readonly` DTOs. Plugins subscribe by event
   class FQCN; see [phlix-docs / dev / event-reference](https://detain.github.io/phlix-docs/dev/event-reference).
 - **Plugin system**: install / enable / disable / uninstall lifecycle,
-  sandboxed per-plugin `vendor/` directories, signature-checked
-  manifests, and PSR-14 event subscription via
+  sandboxed per-plugin `vendor/` directories, signature-verified manifests
+  (a tampered signature is always refused; enforcing ABSENT signatures is
+  opt-in — see Plugin trust model under Environment variables), and PSR-14
+  event subscription via
   `Phlix\Shared\Plugin\LifecycleInterface` (the
   `Phlix\Plugins\Contract\LifecycleInterface` FQCN remains a
   deprecated bridge through 0.11.x). Installing is not enabling: install
@@ -185,6 +201,9 @@ Every environment variable the server process reads is inventoried in the defini
     `max_daily_watch_time` setting persists through the profile settings API,
     but no playback path reads it (and there is no live per-profile watch-time
     ledger to measure against), so a configured cap never restricts anything
+  - Access schedules (allowed-time windows) — configured per profile via
+    `/api/v1/profiles/{profileId}/schedules`; steps in
+    [the quickstart §4 (Add the household)](docs/user/quickstart.md#4-add-the-household)
 - **Content Rating Filters**: Age-based access restrictions
 - **Audit Logging**: Complete security event logging
 - **Security Headers / CSP**: Every response carries `X-Content-Type-Options`, `X-Frame-Options`, HSTS,
@@ -1112,13 +1131,24 @@ while these were invisible:
 |----------|---------|---------|---------|-------------|
 | `COMPOSER_BIN` | `composer` on PATH | no | live | `PluginsProvider`, `ComposerRunner`, audit scripts |
 | `PHLIX_PLUGINS_COMPOSER_TIMEOUT` | see `PluginsProvider` | no | live | plugin install/update composer runs |
-| `PHLIX_PLUGINS_REQUIRE_SIGNATURE` | see `PluginsProvider` | no | live | plugin install signature gate |
+| `PHLIX_PLUGINS_REQUIRE_SIGNATURE` | `false` | no | live | `SignatureVerifier` via `PluginsProvider` — absent/empty manifest signature: warn-only when false, install refused when true; a TAMPERED signature is refused either way |
 | `PHLIX_PLUGINS_ALLOW_UNVERIFIED` | off | no | live | `PluginLoader` — allow loading unsigned plugins (dev only) |
 | `PHLIX_PLUGINS_TRUSTED_SIGNATURES` / `PHLIX_PLUGINS_TRUSTED_SIGNATURES_FILE` | _unset_ | no | live | `TrustedSignaturesConfig` — inline list / PEM file of trusted keys |
 | `PHLIX_PLUGINS_CATALOG_REF` | branch/tag per `CatalogSourceResolver` | no | live | catalog pin override |
 | `PHLIX_PLUGINS_ALLOW_HTTP` | off | no | live | `HttpInstaller` — allow http:// plugin download URLs (dev only) |
 | `PHLIX_GITHUB_TOKEN` (fallback `GITHUB_TOKEN`, `GH_TOKEN`) | _unset_ | **yes** | live | `ComposerRunner` — private-repo plugin fetches |
 | `USER` | — | no | live | `PluginLoader::currentProcessUser()` — permission-aware enable-diagnostics only, and only when ext-posix is absent (posix uid/pwuid wins when available); `unknown` if unset |
+
+**Plugin trust model** (the honest shape behind "signature-checked"): enforcement is
+layered, and the defaults differ per install surface. The catalog channel is
+default-deny — entries ship sha256 content pins plus ref pins, and an install that fails
+verification is refused unless the dev-only `PHLIX_PLUGINS_ALLOW_UNVERIFIED=1` loosens it.
+The manifest signature channel is advisory by default: `SignatureVerifier` always refuses a
+signature that fails to verify against the on-disk manifest or the trusted-key allowlist,
+but an ABSENT signature installs with a logged warning unless the operator opts into
+`PHLIX_PLUGINS_REQUIRE_SIGNATURE=1`. Both flags are dev conveniences by intent; a production
+box running third-party plugins should set `REQUIRE_SIGNATURE=1` and never clear
+`ALLOW_UNVERIFIED`.
 
 #### HTTP surface, limits & misc
 
@@ -1358,11 +1388,14 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | POST | `/auth/identities/link/hub` | Link a hub identity from a hub JWT (body `{hub_token}`) verified against the enrolled hub — auth required; `503` `hub.not_enrolled` when this server has no hub enrollment, `400` `hub.token_required` on a missing token, `401` `hub.jwt_invalid` on a bad/expired one |
 | DELETE | `/auth/identities/{id}` | Unlink one of the current user's identities (`404` if not yours; `409` with `last_sign_in_method` in the JSON body's `error` field, no `code` key, if it is your last) — auth required |
 | GET | `/api/v1/admin/auth-providers` | List registered auth providers — admin-only |
-| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409` with `not_configured` in the JSON body's `error` field — plus the provider `name` — no `code` key; if it has no saved config). `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
+| POST | `/api/v1/admin/auth-providers/{name}/enable` \| `/disable` | Enable/disable `oidc`, `ldap` or `github` (`409` with `not_configured` in the JSON body's `error` field — plus the provider `name` — no `code` key) when the provider has no saved config. `disable` runs the same lock-out guard as `PUT /api/v1/admin/settings`: a provider that is some active admin's only factor (or the last method standing) cannot be switched off — `422` + machine `reason`, nothing persisted (see [Auth-method lock-out guards](#auth-method-lock-out-guards)) — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/oidc/config` | Read / save OIDC config (`provider_url`, `client_id`, `client_secret` write-only, `scopes`, `redirect_uri`). An absent optional key is **preserved**, not cleared — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/ldap/config` | Read / save LDAP config; `POST .../ldap/test` dry-runs a bind — admin-only |
 | GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
 | GET | `/api/v1/admin/auth-providers/{oidc,ldap,github}/schema` | JSON schema for the provider's config form — admin-only |
+| GET/POST/PUT/DELETE | `/api/v1/admin/webhooks` · `/webhooks/{id}` · `POST /webhooks/{id}/test` | Signed webhook hook registry: per-hook secret, SSRF-guarded target URL, HMAC `X-Phlix-Signature` (+ additive timestamped V2) delivery headers — admin-only (see [A webhook never fires](#a-webhook-never-fires)) |
+| GET/POST/DELETE | `/api/v1/admin/webhooks/subscriptions` · `/{id}`, `GET /api/v1/admin/webhooks/deliveries` | Domain-event subscriptions (body `{url, events[]}`; `user.login`, `playback.*`, `library.*`, …). **Unsigned** — the subscriptions store has no secret column; deliveries carry only `X-Phlix-Event`/`X-Phlix-Delivery`, so the URL is the sole (weak) capability: anyone who learns it can forge events to the receiver. Use the signed registry above for any trust-bearing flow — admin-only |
+| GET/POST/PUT/DELETE | `/api/v1/profiles/{profileId}/schedules` · `/{scheduleId}` | Per-profile access schedules (allowed-time windows), enforced request-edge by `AccessScheduleMiddleware`. Authorization is per-handler (`ProfileAccessPolicy::canManageProfile` — own profile or server admin), auth required |
 | POST | `/api/v1/admin/backup/create` | Create a backup archive now — optional body `{label: string}` (non-string `label` → `400`); `data` carries `backup_id`, `file_path`, `size_bytes`; failure → `500` — admin-only |
 | GET | `/api/v1/admin/backup/list` | All backups newest-first — rows carry `id`, `label`, `file_path`, `size_bytes`, `checksum_sha256`, `is_s3`, `created_at`, `expires_at` (the latter is never written; always `null`) — admin-only |
 | DELETE | `/api/v1/admin/backup/{id}` | Delete one backup (local file or S3 object plus its row); `404` unknown id — admin-only |
@@ -1412,7 +1445,7 @@ always-`true` behavior.
 ### WebSocket Events
 
 Event names are defined as constants in `src/Server/WebSocket/WebSocketEvents.php`
-(the full catalogue — 26 wire events — is below; `SYNCPLAY_PREFIX` in the same
+(the full catalogue — 27 wire events — is below; `SYNCPLAY_PREFIX` in the same
 file is a name-building helper, not an event).
 
 **Connection Events:**
@@ -1780,7 +1813,9 @@ The admin section (`/app/admin`) is part of the same `@phlix/ui` Vue SPA describ
 registered in `web-ui/src/main.ts` (the shell's **Admin** entry renders only for
 `useAuthStore().isAdmin`; the admin API itself is gated server-side regardless). The surviving
 legacy page paths `/admin/plugins*` and `/admin/dashboard` 302-redirect to their `/app/admin/*`
-equivalents in `src/Server/Workerman/HttpHandler.php`.
+equivalents in `src/Server/Workerman/HttpHandler.php`. To refresh the vendored `@phlix/ui`
+and rebuild these chunks, follow
+[docs/dev/ui-bundle-vendor.md](docs/dev/ui-bundle-vendor.md).
 
 Full operator + contributor docs live on the
 [phlix-docs](https://detain.github.io/phlix-docs) site — see in particular

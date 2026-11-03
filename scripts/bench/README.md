@@ -1,12 +1,12 @@
 # Phlix Streaming Benchmark Suite
 
-Performance benchmarking tools for Phlix Media Server v1.0 streaming capabilities.
+Performance benchmarking tools for Phlix Media Server streaming capabilities.
 
 ## Overview
 
-This directory contains CLI tools to benchmark Phlix's streaming performance against the v1.0 release criteria defined in the [Phlix Expansion Plan §13](https://github.com/detain/phlix-server/blob/master/PHLIX_EXPANSION_PLAN.md#section-13-v10-criteria).
+This directory contains CLI tools to benchmark Phlix's streaming performance against the performance targets recorded in this directory's scripts (the historical "Phlix Expansion Plan §13" release-criteria document is no longer part of the repository).
 
-## v1.0 Pass Criteria
+## Pass Criteria
 
 ```
 50+ concurrent 1080p direct-play from a 4-vCPU server
@@ -306,11 +306,11 @@ For VM testing, apply a correction factor:
 
 ---
 
-## Running All Benchmarks (Complete v1.0 Test Suite)
+## Running All Benchmarks (Full Suite)
 
 ```bash
 #!/bin/bash
-# Complete v1.0 Performance Benchmark Suite
+# Complete Performance Benchmark Suite
 
 set -e
 

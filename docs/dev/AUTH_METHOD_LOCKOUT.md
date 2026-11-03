@@ -5,7 +5,7 @@ toggles; both enforce the same guard *before* persisting and answer `422` with a
 machine-readable `reason` when the proposed state would lock the install out. This page
 is the error-meaning reference for integrators and operators; the operator narrative
 lives in `README.md` → [Auth-method lock-out
-guards](../README.md#auth-method-lock-out-guards).
+guards](../../README.md#auth-method-lock-out-guards).
 
 ## The governed keys
 

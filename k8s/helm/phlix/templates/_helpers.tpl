@@ -58,3 +58,25 @@ ServiceAccount name to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+M29 (seceng major 1): a known placeholder / literal instruction in a secret
+position is NOT a secret. values.example.yaml historically shipped exactly
+such values ("CHANGE_ME", even "openssl rand -hex 64" — the COMMAND as the
+VALUE) and `helm install -f values.example.yaml` succeeded verbatim, booting
+with a publicly-known JWT signing key. The entrypoint's lowercase change_me / changeme / change-me prefix refusal never matched the uppercase forms,
+and required() only proves non-emptiness. This guard applies the doctrine
+docker/examples/.env.example codified (R7-04: "anyone could forge tokens")
+to the chart: rendering FAILS on any known-placeholder shape.
+Usage: include "phlix.rejectKnownPlaceholder" with a two-element list,
+value-name then value (see secret.yaml).
+*/}}
+{{- define "phlix.rejectKnownPlaceholder" -}}
+{{- $name := index . 0 -}}
+{{- $value := index . 1 | toString -}}
+{{- $dirty := list "change_me" "changeme" "change-me" "change me" "replace_me" "replaceme" "replace-me" "secret" "password" "test" "demo" "dev" "openssl rand -hex 64" -}}
+{{- if has (lower $value) $dirty -}}
+{{- fail (printf "phlix chart: %s is a copy-paste placeholder (%q), not a credential — generate a real one (e.g. `openssl rand -hex 64`) and set it before installing" $name $value) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}

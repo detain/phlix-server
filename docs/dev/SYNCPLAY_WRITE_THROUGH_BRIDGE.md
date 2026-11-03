@@ -14,7 +14,7 @@ The HTTP and WebSocket sides are **different processes**:
   `start.php` §4a). Its `SyncPlayManager` is the authority on live group
   membership and playback state — the state it *serves* on the socket.
 - REST requests run on one of the 14 HTTP workers on `:8096`
-  (`start.php:169` area). Each HTTP worker holds its **own private**
+  (`start.php`, the `$httpListen['workerCount']` HTTP worker). Each HTTP worker holds its **own private**
   `SyncPlayManager` instance, so a room created through
   `POST /api/v1/syncplay/groups` on worker 7 was previously invisible to the
   WS worker (and to the other 13 HTTP workers) until a restart — and restart

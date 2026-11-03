@@ -106,8 +106,11 @@ internet-facing plaintext service regardless of your ufw rules; drop the
 `127.0.0.1:` prefix only knowingly on a trusted network. For real
 exposure front the loopback ports with the TLS reverse proxies in this repo
 (`reverse-proxy/`, `deploy/haproxy.cfg`) — note those front :8096 as HTTP and
-:8097 as its own TCP route; there is no same-origin `wss://` path today (a
-client-side `wsUrl` seam is a separate effort). The `full-stack/` example is
+:8097 as its own TCP route; there is no same-origin `wss://` path: the
+client-side `wsUrl`/`wsPath` seam has since shipped in `@phlix/ui` (explicit
+wss endpoints work; the server's own `/app` shell reaches :8097 directly with
+the matching CSP allowance), but no `/ws` path routes against :8096, so proxy
+`/` as HTTP and :8097 as a TCP route. The `full-stack/` example is
 the exception by design: Traefik is the TLS edge, so its 80/443 and the hub
 relay 8802 are published publicly and the MySQLs stay unpublished.
 

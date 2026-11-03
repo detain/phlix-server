@@ -21,6 +21,70 @@ class ResponseTest extends TestCase
         $this->assertStringContainsString('"key"', $response->body);
     }
 
+    /**
+     * Deferred-item #2 (fedev minor m2): the API's JSON surface is per-user
+     * dynamic data and shipped NO Cache-Control at all, so browsers and
+     * intermediaries retained it by date heuristics. json() now seeds
+     * `no-store` by default, the same seed-don't-overwrite pattern html()
+     * uses for its `no-cache`.
+     */
+    public function testJsonSeedsNoStoreCacheControlByDefault(): void
+    {
+        $response = (new Response())->json(['key' => 'value']);
+
+        $this->assertSame('no-store', $response->headers['Cache-Control']);
+    }
+
+    /**
+     * error() is json() under the envelope, so every canonical error reply
+     * inherits the no-store seed (the 404/401/503 bodies the review cited as
+     * heuristic-cacheable are all json() shapes).
+     */
+    public function testCanonicalErrorInheritsTheNoStoreSeed(): void
+    {
+        $response = (new Response())->error(401, 'auth.required', 'Authentication required');
+
+        $this->assertSame('no-store', $response->headers['Cache-Control']);
+    }
+
+    /**
+     * The seed must not steamroller a deliberate caller policy — neither a
+     * header set BEFORE json() (DLNA/CDS sites) nor one set AFTER it (artwork
+     * rails shipping public max-age). Last intentional write wins; the seed
+     * only fills the hole. The BEFORE recognition is case-insensitive per the
+     * L-7 guard doctrine (RFC 9110 §4.2): a lowercase 'cache-control' from a
+     * caller must SUPPRESS the seed, not sit beside it as a duplicate.
+     */
+    public function testCallerSuppliedCacheControlWinsInBothDirections(): void
+    {
+        $before = (new Response())
+            ->header('Cache-Control', 'no-cache, must-revalidate')
+            ->json(['key' => 'value']);
+        $this->assertSame('no-cache, must-revalidate', $before->headers['Cache-Control']);
+
+        $lowercaseBefore = (new Response())
+            ->header('cache-control', 'public, max-age=31536000, immutable')
+            ->json(['key' => 'value']);
+        $this->assertSame(
+            ['cache-control'],
+            array_values(array_filter(
+                array_keys($lowercaseBefore->headers),
+                static fn (string $key): bool => strcasecmp($key, 'Cache-Control') === 0
+            )),
+            'L-7: a lowercase caller-set Cache-Control must suppress the seed, '
+            . 'never coexist beside it as a contradictory duplicate'
+        );
+        $this->assertSame(
+            'public, max-age=31536000, immutable',
+            $lowercaseBefore->headers['cache-control']
+        );
+
+        $after = (new Response())
+            ->json(['key' => 'value'])
+            ->header('Cache-Control', 'public, max-age=86400');
+        $this->assertSame('public, max-age=86400', $after->headers['Cache-Control']);
+    }
+
     public function testCanChainMethods(): void
     {
         $response = (new Response())

@@ -33,6 +33,21 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Authenticated JSON APIs now ship `Cache-Control: no-store`.** Every
+  `Response::json()` reply — the whole portal/API surface (settings,
+  continue-watching grids, transcode status polling, and every canonical
+  error envelope) — previously carried no cache policy at all, so browsers
+  and intermediaries retained per-user dynamic bodies by date heuristics and
+  status polling could be answered from a stale cache. `json()` now seeds
+  `no-store` on the seed-don't-overwrite pattern `html()` uses for its
+  `no-cache` default — with the case-insensitive recognition the L-7 guard
+  doctrine requires (RFC 9110 §4.2), so a caller policy set in any header
+  case wins and never coexists as a duplicate. Callers that set their own
+  `Cache-Control` (the immutable artwork rails, the DLNA `no-cache,
+  must-revalidate` family) win in either direction of the chain. ETag/304
+  revalidation is a separate performance question and deliberately not mixed
+  into this correctness fix. (Deferred-items lane, review minor #2 / fedev m2.)
+
 - **Review batch 21 — README narrative and mount truth (Minors 4, 62-67,
   69-72).** The Overview now leads with what the household gets ("your own
   streaming service for the media you already own") before the platform

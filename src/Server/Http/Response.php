@@ -111,10 +111,30 @@ class Response
     }
 
     /**
+     * True when any stored header key matches $name case-insensitively.
+     *
+     * HTTP field names are case-insensitive (RFC 9110 §4.2), so every
+     * seed-don't-overwrite guard in this class must scan, not key-dig —
+     * the L-7 doctrine established by SecurityHeaders::decorate() and
+     * Response::asHeadReply().
+     */
+    private function hasHeader(string $name): bool
+    {
+        foreach (array_keys($this->headers) as $key) {
+            if (strcasecmp($key, $name) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Creates a JSON response.
      *
-     * Automatically sets Content-Type to application/json and
-     * encodes the data with pretty printing.
+     * Automatically sets Content-Type to application/json, seeds
+     * `Cache-Control: no-store` for the staleness-safe default (see below),
+     * and encodes the data with pretty printing.
      *
      * @param array<string, mixed> $data The data to encode as JSON
      * @param int|null $statusCode Optional HTTP status code override
@@ -133,6 +153,23 @@ class Response
             $this->statusCode = $statusCode;
         }
         $this->headers['Content-Type'] = 'application/json';
+        // Per-user dynamic JSON must not be retained by any cache: with no
+        // explicit Cache-Control, browsers and intermediaries apply date-based
+        // heuristics to API GETs (settings, continue-watching, transcode
+        // status), so one viewer's body can survive logout/profile switches and
+        // status polling re-serves stale answers. Callers that need a
+        // different policy (immutable artwork rails, DLNA no-cache) set their
+        // own Cache-Control and win — this only seeds the default, exactly
+        // like html() seeds no-cache. ETag/304 revalidation is a separate
+        // performance note, deliberately not mixed into this correctness fix.
+        // The recognition is case-insensitive per the L-7 guard doctrine
+        // (HTTP field names are case-insensitive, RFC 9110 §4.2; mirrors
+        // SecurityHeaders::decorate() and asHeadReply()): a caller that wrote
+        // 'cache-control' in any other case must SUPPRESS this seed, never
+        // sit beside it as a contradictory duplicate.
+        if (!$this->hasHeader('Cache-Control')) {
+            $this->headers['Cache-Control'] = 'no-store';
+        }
         $this->body = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         return $this;
     }

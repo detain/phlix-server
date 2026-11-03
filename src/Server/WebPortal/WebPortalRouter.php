@@ -1624,7 +1624,7 @@ class WebPortalRouter
 
         $typeStr = $request->queryString('type');
         if ($typeStr === null || $typeStr === '') {
-            return (new Response())->status(400)->json(['error' => 'type query parameter is required']);
+            return (new Response())->status(400)->json(['error' => 'Media type is required']);
         }
 
         $type = MarkerType::tryFrom($typeStr);
@@ -1637,11 +1637,11 @@ class WebPortalRouter
         $limit = $request->queryInt('limit', 20);
 
         if ($around < 1 || $around > 300) {
-            return (new Response())->status(400)->json(['error' => 'around must be between 1 and 300']);
+            return (new Response())->status(400)->json(['error' => 'The around value must be between 1 and 300']);
         }
 
         if ($limit < 1 || $limit > 100) {
-            return (new Response())->status(400)->json(['error' => 'limit must be between 1 and 100']);
+            return (new Response())->status(400)->json(['error' => 'The limit value must be between 1 and 100']);
         }
 
         // Resolve profile ID from user for watch-history exclusion
@@ -1699,7 +1699,7 @@ class WebPortalRouter
         $query = $request->queryString('q') ?? '';
 
         if ($query === '') {
-            return (new Response())->status(400)->json(['error' => 'Query parameter "q" is required']);
+            return (new Response())->status(400)->json(['error' => 'Search text is required']);
         }
 
         // SECURITY: single shared clamp policy (PageLimit) rather than a
@@ -1769,7 +1769,7 @@ class WebPortalRouter
 
         $typeStr = $request->queryString('type');
         if ($typeStr === null || $typeStr === '') {
-            return (new Response())->status(400)->json(['error' => 'type query parameter is required']);
+            return (new Response())->status(400)->json(['error' => 'Media type is required']);
         }
 
         $type = MarkerType::tryFrom($typeStr);
@@ -2598,7 +2598,7 @@ class WebPortalRouter
 
         $personId = $params['personId'] ?? '';
         if ($personId === '' || !ctype_digit($personId)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid person id']);
+            return (new Response())->status(400)->json(['error' => 'Invalid person ID']);
         }
 
         $wRaw = $request->query['w'] ?? '';
@@ -3053,7 +3053,7 @@ class WebPortalRouter
 
         $settings = $this->extractSettingsPayload($request);
         if ($settings === null) {
-            return (new Response())->status(400)->json(['error' => 'Invalid settings payload']);
+            return (new Response())->status(400)->json(['error' => 'The submitted settings are not valid']);
         }
 
         if ($this->userRepository === null) {

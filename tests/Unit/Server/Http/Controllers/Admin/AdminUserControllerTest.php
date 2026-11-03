@@ -821,7 +821,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('User rejected successfully', $body['message']);
+        $this->assertSame('Request declined', $body['message']);
     }
 
     public function testRejectNotFound(): void

@@ -290,7 +290,7 @@ class TrickplayController
                 ->status(404)
                 ->json([
                     'error' => 'Not Found',
-                    'message' => 'Trickplay BIF not found',
+                    'message' => 'Preview data not found',
                 ]);
         }
 
@@ -324,7 +324,7 @@ class TrickplayController
                 ->status(404)
                 ->json([
                     'error' => 'Not Found',
-                    'message' => 'Trickplay sprite not found',
+                    'message' => 'Preview image not found',
                 ]);
         }
 
@@ -338,7 +338,7 @@ class TrickplayController
                 ->status(404)
                 ->json([
                     'error' => 'Not Found',
-                    'message' => 'Trickplay sprite not found',
+                    'message' => 'Preview image not found',
                 ]);
         }
 
@@ -372,7 +372,7 @@ class TrickplayController
                 ->status(404)
                 ->json([
                     'error' => 'Not Found',
-                    'message' => 'Trickplay timeline not found',
+                    'message' => 'Preview timeline not found',
                 ]);
         }
 

@@ -85,7 +85,7 @@ final class SmartPlaylistController
 
         if (empty($data['name']) || empty($data['library_id']) || empty($data['rules_json'])) {
             return (new Response())->status(400)->json([
-                'error' => 'Missing required fields: name, library_id, rules_json',
+                'error' => 'Name, library and rules are all required',
             ]);
         }
 
@@ -97,8 +97,9 @@ final class SmartPlaylistController
         if (is_string($rulesJsonInput)) {
             json_decode($rulesJsonInput);
             if (json_last_error() !== JSON_ERROR_NONE) {
+                error_log('[smart-playlist] invalid rules_json from client: ' . json_last_error_msg());
                 return (new Response())->status(400)->json([
-                    'error' => 'Invalid rules_json: ' . json_last_error_msg(),
+                    'error' => 'The playlist rules are not valid JSON',
                 ]);
             }
         }
@@ -139,7 +140,7 @@ final class SmartPlaylistController
         $id = $params['id'] ?? null;
 
         if (!$id) {
-            return (new Response())->status(400)->json(['error' => 'Missing id parameter']);
+            return (new Response())->status(400)->json(['error' => 'Playlist ID is required']);
         }
 
         $playlist = $this->repo->findById($id);
@@ -167,7 +168,7 @@ final class SmartPlaylistController
         $id = $params['id'] ?? null;
 
         if (!$id) {
-            return (new Response())->status(400)->json(['error' => 'Missing id parameter']);
+            return (new Response())->status(400)->json(['error' => 'Playlist ID is required']);
         }
 
         $existing = $this->repo->findById($id);
@@ -182,8 +183,9 @@ final class SmartPlaylistController
         if (isset($data['rules_json']) && is_string($data['rules_json'])) {
             json_decode($data['rules_json']);
             if (json_last_error() !== JSON_ERROR_NONE) {
+                error_log('[smart-playlist] invalid rules_json from client: ' . json_last_error_msg());
                 return (new Response())->status(400)->json([
-                    'error' => 'Invalid rules_json: ' . json_last_error_msg(),
+                    'error' => 'The playlist rules are not valid JSON',
                 ]);
             }
         }
@@ -231,7 +233,7 @@ final class SmartPlaylistController
         $id = $params['id'] ?? null;
 
         if (!$id) {
-            return (new Response())->status(400)->json(['error' => 'Missing id parameter']);
+            return (new Response())->status(400)->json(['error' => 'Playlist ID is required']);
         }
 
         $existing = $this->repo->findById($id);
@@ -261,7 +263,7 @@ final class SmartPlaylistController
         $id = $params['id'] ?? null;
 
         if (!$id) {
-            return (new Response())->status(400)->json(['error' => 'Missing id parameter']);
+            return (new Response())->status(400)->json(['error' => 'Playlist ID is required']);
         }
 
         $playlist = $this->repo->findById($id);

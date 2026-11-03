@@ -289,7 +289,7 @@ final class OidcAdminController
         $this->plugin->saveSettings($settings);
 
         return (new Response())->json([
-            'message' => 'Settings saved successfully',
+            'message' => 'Settings updated',
             'configured' => true,
         ]);
     }

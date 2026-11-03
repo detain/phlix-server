@@ -672,7 +672,7 @@ class MediaItemController
         if (!isset($chapters[$index])) {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'Chapter at index ' . $index . ' does not exist',
+                'message' => 'That chapter does not exist',
             ]);
         }
 
@@ -714,7 +714,7 @@ class MediaItemController
         if (!file_exists($thumbnailPath)) {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'Chapter thumbnail file not found on disk',
+                'message' => 'Chapter thumbnail not found',
             ]);
         }
 

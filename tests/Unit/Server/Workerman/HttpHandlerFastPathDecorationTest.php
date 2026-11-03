@@ -183,6 +183,75 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
         self::assertStringContainsString('csrf.invalid_origin', $body, 'the CSRF envelope itself must not change');
     }
 
+    // --- review minor 21: the forced-logout link leg -----------------------------
+
+    public function testGetLogoutFromForeignOriginIsRejected(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('validateAccessToken')->willReturn(['user_id' => 'user-s50']);
+
+        $response = $this->invoke(
+            'GET',
+            '/auth/logout',
+            headers: [
+                'Cookie' => 'phlix_session=cookie-token-s50',
+                'Referer' => 'https://evil.example/x',
+            ],
+            authManager: $authManager,
+        );
+
+        self::assertInstanceOf(WorkermanResponse::class, $response);
+        self::assertSame(403, $response->getStatusCode());
+        self::assertStringContainsString(
+            'csrf.invalid_origin',
+            (string) $response->rawBody(),
+            'a cross-site <img> forced logout must die at the same-site gate, not reach the route',
+        );
+    }
+
+    public function testGetLogoutSameOriginLinkStillPassesTheGate(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('validateAccessToken')->willReturn(['user_id' => 'user-s50']);
+
+        $response = $this->invoke(
+            'GET',
+            '/auth/logout',
+            headers: [
+                'Cookie' => 'phlix_session=cookie-token-s50',
+                'Referer' => 'http://localhost/app',
+            ],
+            authManager: $authManager,
+        );
+
+        $body = $response instanceof WorkermanResponse ? (string) $response->rawBody() : '';
+        self::assertStringNotContainsString(
+            'csrf.invalid_origin',
+            $body,
+            'the documented `<a href>` link logout (same-origin Referer) must reach the route',
+        );
+    }
+
+    public function testOrdinaryGetWithoutOriginHeadersStaysExempt(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('validateAccessToken')->willReturn(['user_id' => 'user-s50']);
+
+        $response = $this->invoke(
+            'GET',
+            '/api/v1/media',
+            headers: ['Cookie' => 'phlix_session=cookie-token-s50'],
+            authManager: $authManager,
+        );
+
+        $body = $response instanceof WorkermanResponse ? (string) $response->rawBody() : '';
+        self::assertStringNotContainsString(
+            'csrf.invalid_origin',
+            $body,
+            'the logout leg is the ONLY GET that joins the CSRF gate',
+        );
+    }
+
     // --- the pre-router fast-path arm ----------------------------------------------
 
     public function testArtworkFastPathReplyCarriesSecurityHeaders(): void

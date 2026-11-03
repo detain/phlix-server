@@ -131,7 +131,7 @@ final class OidcAdminControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Settings saved successfully', $body['message']);
+        $this->assertSame('Settings updated', $body['message']);
         $this->assertTrue($body['configured']);
     }
 
@@ -150,7 +150,7 @@ final class OidcAdminControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Settings saved successfully', $body['message']);
+        $this->assertSame('Settings updated', $body['message']);
 
         $savedSettings = $this->plugin->getSettings();
         $this->assertSame('https://oidc-provider.example.com', $savedSettings['provider_url']);

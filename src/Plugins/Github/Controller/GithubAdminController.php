@@ -217,7 +217,7 @@ final class GithubAdminController
         }
 
         return (new Response())->json([
-            'message' => 'Settings saved successfully',
+            'message' => 'Settings updated',
             'configured' => self::isConfigured($settings),
         ]);
     }

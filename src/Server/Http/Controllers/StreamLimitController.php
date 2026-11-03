@@ -134,7 +134,7 @@ final class StreamLimitController
 
         return (new Response())->json([
             'stream_limits' => $updatedLimits->toArray(),
-            'message' => 'Stream limits updated successfully',
+            'message' => 'Stream limits updated',
         ]);
     }
 

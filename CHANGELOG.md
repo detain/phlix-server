@@ -33,6 +33,33 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Review Minor copywriter cluster (minors 45-53): human validation copy on
+  member/admin-facing envelopes.** Error keys, status codes and payload shapes
+  are byte-identical throughout — only message strings move (C2 copy model,
+  per the profile-copy precedent). `WebPortalRouter`: 'Media type is required',
+  'The around value must be between 1 and 300', 'The limit value must be
+  between 1 and 100', 'Search text is required', 'The submitted settings are
+  not valid', 'Invalid person ID' (sibling capitalization); the field-keyed
+  coded-validation half stays deferred (wire contract, pairs M13). `hub_token
+  is required in request body` → 'Hub token is required' (AccountLink +
+  HubToken controllers, moved as one string). Smart playlists: 'Name, library
+  and rules are all required', 'Playlist ID is required', and the
+  `json_last_error_msg()` passthrough now ships 'The playlist rules are not
+  valid JSON' while the raw parser detail goes to `error_log` (never to the
+  member's screen). Chapter copy drops the index jargon and the 'on disk'
+  filesystem leak. Trickplay 404 messages rename the internal feature + format
+  acronym to 'Preview data/image/timeline not found' (the second-key posture
+  itself unchanged; the wire-distinguisher guard test rotated in the same
+  commit). Join/leave announcements say 'A viewer joined/left the group' when
+  the display name is missing instead of leaking the 'Unknown' sentinel — the
+  roster and wire `member_name` value keep 'Unknown' untouched. Admin copy:
+  punitive 'User rejected successfully' → 'Request declined'; backup
+  type-vocabulary strings reworded. 'Settings saved successfully' (GitHub/
+  LDAP/OIDC controllers + their templates' fallback) and 'Stream limits
+  updated successfully' unify onto the no-adverb house style already kept by
+  the core settings surface. Carries the three forced-logout gate tests of
+  minor 21 that batch 17's pathspec accidentally left uncommitted (they pass
+  against the committed HttpHandler legs — 12 tests/55 assertions green).
 - **Review Minor code cluster (fedev m1, srphp 5, secaudit 1, asphp 1/2/3; devops2
   3 docs half).** (m1) The last-resort 500 in the Workerman HTTP handler now wears
   the same `decorateRawReply()` coat as its static and CSRF-403 siblings — nosniff,

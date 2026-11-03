@@ -1311,7 +1311,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
      * Dispatch control, shaped like the session-complete one above: both replies
      * are 404 and the BODIES tell them apart. A job with no archive reaches
      * `TrickplayController::getBif()`, which answers its own
-     * `"Trickplay BIF not found"`; an unregistered sibling gets the ROUTER's
+     * `"Preview data not found"`; an unregistered sibling gets the ROUTER's
      * `"The requested resource was not found"`. Comparing statuses alone would be
      * the "a second 404 is not a control" mistake.
      */
@@ -1322,7 +1322,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         $served = $application->dispatch($this->request('/trickplay/no-such-job/thumbs.bif'));
         $this->assertSame(404, $served->statusCode);
         $this->assertSame(
-            'Trickplay BIF not found',
+            'Preview data not found',
             $this->body($served)['message'] ?? null,
             'GET /trickplay/{jobId}/thumbs.bif must reach TrickplayController::getBif and get the '
             . "HANDLER's own miss. If a sibling /trickplay/ pattern absorbed it, or the "

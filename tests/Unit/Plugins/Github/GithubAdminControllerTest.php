@@ -319,7 +319,7 @@ final class GithubAdminControllerTest extends TestCase
         $response = $controller->saveSettings($this->post(['client_id' => 'new', 'scopes' => 'read:user']), []);
 
         $this->assertSame(200, $response->statusCode, (string) $response->body);
-        $this->assertSame('Settings saved successfully', $this->decode($response)['message'] ?? null);
+        $this->assertSame('Settings updated', $this->decode($response)['message'] ?? null);
         $this->assertSame('new', $plugin->getSettings()['client_id'] ?? null, 'the save must have persisted');
     }
 }

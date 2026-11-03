@@ -874,7 +874,7 @@ class SyncPlayManager
 
         // Broadcast join to group
         $this->broadcastToGroup($groupId, Messages::TYPE_INFO, [
-            'message' => "{$memberName} joined the group",
+            'message' => $this->announcementName($memberName) . ' joined the group',
             'member_id' => $memberId,
             'member_name' => $memberName,
         ], [$memberId]);
@@ -886,6 +886,21 @@ class SyncPlayManager
             'success' => true,
             'group' => $group->getState(),
         ];
+    }
+
+    /**
+     * Display name used in join/leave ANNOUNCEMENT copy (review minor 51).
+     *
+     * A member without a usable display name announces as "A viewer" instead
+     * of leaking the internal "Unknown" sentinel into human-facing chat text.
+     * The wire member_name key and the roster keep their recorded value —
+     * only the announcement sentence is affected.
+     */
+    private function announcementName(mixed $memberName): string
+    {
+        return is_string($memberName) && trim($memberName) !== '' && $memberName !== 'Unknown'
+            ? $memberName
+            : 'A viewer';
     }
 
     /**
@@ -956,7 +971,7 @@ class SyncPlayManager
 
         return [
             'success' => true,
-            'message' => "{$memberName} left the group",
+            'message' => $this->announcementName($memberName) . ' left the group',
         ];
     }
 

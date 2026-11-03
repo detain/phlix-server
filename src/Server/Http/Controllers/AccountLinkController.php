@@ -420,7 +420,7 @@ final class AccountLinkController
             return (new Response())->status(400)->json([
                 'error' => 'hub_token_required',
                 'code' => 'hub.token_required',
-                'message' => 'hub_token is required in request body',
+                'message' => 'Hub token is required',
             ]);
         }
 

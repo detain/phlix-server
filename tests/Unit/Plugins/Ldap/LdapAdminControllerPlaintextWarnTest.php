@@ -80,7 +80,7 @@ final class LdapAdminControllerPlaintextWarnTest extends TestCase
         ]);
 
         self::assertSame(200, $response->statusCode);
-        self::assertSame('Settings saved successfully', $this->decoded($response)['message'] ?? null);
+        self::assertSame('Settings updated', $this->decoded($response)['message'] ?? null);
         self::assertStringContainsString(self::WARNING_NEEDLE, $this->loggedText());
         self::assertStringContainsString('port=389', $this->loggedText());
     }

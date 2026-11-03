@@ -77,7 +77,7 @@ final class HubTokenController
                 ->json([
                     'error' => 'Bad Request',
                     'code' => 'hub.token_required',
-                    'message' => 'hub_token is required in request body',
+                    'message' => 'Hub token is required',
                 ]);
         }
 

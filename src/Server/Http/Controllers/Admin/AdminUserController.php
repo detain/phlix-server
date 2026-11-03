@@ -197,7 +197,7 @@ final class AdminUserController
         $this->authManager?->revokeUserTokens($id, 'user_rejected');
         $this->userRepository->delete($id);
         $this->authManager?->invalidateUserStatusCache($id);
-        return (new Response())->json(['message' => 'User rejected successfully']);
+        return (new Response())->json(['message' => 'Request declined']);
     }
 
     /**

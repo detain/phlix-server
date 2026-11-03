@@ -175,7 +175,7 @@ final class LdapAdminController
         }
 
         return (new Response())->json([
-            'message' => 'Settings saved successfully',
+            'message' => 'Settings updated',
             'configured' => true,
         ]);
     }

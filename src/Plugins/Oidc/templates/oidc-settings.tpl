@@ -111,7 +111,7 @@
             const result = await response.json();
 
             if (response.ok) {
-                showStatus(result.message || 'Settings saved successfully', false);
+                showStatus(result.message || 'Settings updated', false);
                 if (data.client_secret) {
                     form.querySelector('#oidc-client-secret').value = '';
                 }

@@ -58,7 +58,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid label',
-                    'message' => 'label must be a string',
+                    'message' => 'Backup label must be text',
                 ]);
             }
 
@@ -302,7 +302,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid interval',
-                    'message' => 'auto_backup_interval_days must be numeric',
+                    'message' => 'Auto backup interval must be a number of days',
                 ]);
             }
 
@@ -310,7 +310,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid retention count',
-                    'message' => 'retention_count must be numeric',
+                    'message' => 'Backup retention count must be a number',
                 ]);
             }
 

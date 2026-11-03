@@ -171,7 +171,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
                 'PUT',
                 "/api/v1/admin/profiles/{$profile}/stream-limits",
                 ['max_concurrent_streams' => 3],
-                'Stream limits updated successfully',
+                'Stream limits updated',
             ],
         ];
     }

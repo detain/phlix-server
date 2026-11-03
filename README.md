@@ -325,7 +325,7 @@ The shipped out-of-the-box behavior **is an approval queue**: `config/auth.php` 
 is unreadable or holds an unexpected value (`AuthManager::resolveSignupMode()`). Nobody
 slips into a fresh server just because it is reachable.
 
-- **First user** — registering on an empty server ALWAYS creates an **active admin**,
+- **First user** — registering on an empty server **always** creates an **active admin**,
   whatever the mode, so a fresh install bootstraps without an out-of-band step.
 - **Everyone else (approval mode — the default)** — the account lands with
   `status='pending'` and **no tokens are issued**: the API replies `202`
@@ -378,7 +378,7 @@ playing the same kind of item — the party syncs playback positions, not catalo
 
 1. **Start the party.** Open a movie or episode in the web player and press the
    **SyncPlay** button in the player controls → choose **Create room**. Give it a
-   name; the **Password** field is the ONLY privacy control — empty means anyone
+   name; the **Password** field is the **only** privacy control — empty means anyone
    with the room id can join, filled makes the server refuse joins that do not
    supply it. Rooms never appear in strangers' listings either way (see step 3).
 2. **Invite people.** There is no invite-link system on the server: send your
@@ -855,7 +855,7 @@ vs `/var/www/phlix`), service users (`www-data` vs `phlix`), MySQL DBs (`phlix_h
 
 **Prerequisites (manual path).** This path presumes you provision PHP, Composer
 and the database engine yourself — steps the one-liner installer automates but
-the sequence below does NOT. On a fresh Ubuntu/Debian host, start with:
+the sequence below does **not**. On a fresh Ubuntu/Debian host, start with:
 
 ```bash
 sudo apt-get update -y
@@ -1030,7 +1030,7 @@ maintainers, not resolvable from this repo alone.
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
-| `PHLIX_JOB_QUEUE_ROOT` | `<repo>/var/jobs` | no | yes | `JobQueuePaths` — one root for all five queues (R14-14); deliberately NOT `/tmp`, which `PrivateTmp=true` sandboxes per-service |
+| `PHLIX_JOB_QUEUE_ROOT` | `<repo>/var/jobs` | no | yes | `JobQueuePaths` — one root for all five queues (R14-14); deliberately **not** `/tmp`, which `PrivateTmp=true` sandboxes per-service |
 | `PHLIX_MARKER_JOBS_DIR` | `<root>/marker` | no | yes | marker-detection queue dir (beats `PHLIX_JOB_QUEUE_ROOT`) |
 | `PHLIX_MEDIA_ASSET_JOBS_DIR` | `<root>/media_asset` | no | yes | chapter-thumbnail/trickplay queue dir |
 | `PHLIX_COLLECTION_JOBS_DIR` | `<root>/collection` | no | yes | TMDB box-set sync queue dir |
@@ -1352,7 +1352,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
 | POST | `/api/v1/sessions/{id}/complete` | Signal that playback finished — body `{media_item_id: string (required), reached_end?: bool = true}`; `reached_end:true` marks the item watched (leaves Continue Watching, finalizes watch-time/stats), `false` clears the resume point. Auth mirrors `/progress` (session owner). Success `→ {message, reached_end}`; `404` unknown session, `403` wrong owner, `400` missing `media_item_id`. The web SPA player + mini-player POST this on the media `ended` event; native clients do not call it yet |
 | GET | `/api/v1/users/me/continue-watching` (also `/api/v1/me/continue-watching`) | Continue-Watching list for the authenticated user — `{items:[...]}` of `MediaItemShaper`-shaped rows with top-level `id` (= media item id, for detail navigation), `poster_url`/`poster_srcset` (series poster for episodes, falling back season → own), `runtime` (minutes), `year`, `rating`, plus re-attached `position_ticks`/`duration_ticks` (SPA resume) and preserved `media_item_id`, `parent_id`, `metadata` (console/rating-gate compatibility) |
-| GET | `/api/v1/users/me/next-up` | "Next Up" rail — for each series the active profile has STARTED, the single next unwatched episode to play (sibling to Continue Watching). Optional `?limit=` (default 20, clamped 1-50; the server scans up to `max(limit×3, 50)` started series). Auth required (`AuthMiddleware`). Returns `{items:[...]}` of `MediaItemShaper`-shaped episode rows (series poster resolved) with `position_ticks`/`duration_ticks`=0 plus added `series_id`/`series_name`; `media_item_id` carried for the rating-gate post-filter. Watched/in-progress signal is `playback_state` ONLY (not `user_item_data.watched` / `watch_history`); only numbered seasons are walked (Specials excluded); all-watched series yield no entry. `401` unauth, `503` if watch-history unwired, `{items:[]}` when no active profile |
+| GET | `/api/v1/users/me/next-up` | "Next Up" rail — for each series the active profile has STARTED, the single next unwatched episode to play (sibling to Continue Watching). Optional `?limit=` (default 20, clamped 1-50; the server scans up to `max(limit×3, 50)` started series). Auth required (`AuthMiddleware`). Returns `{items:[...]}` of `MediaItemShaper`-shaped episode rows (series poster resolved) with `position_ticks`/`duration_ticks`=0 plus added `series_id`/`series_name`; `media_item_id` carried for the rating-gate post-filter. Watched/in-progress signal is `playback_state` **only** (not `user_item_data.watched` / `watch_history`); only numbered seasons are walked (Specials excluded); all-watched series yield no entry. `401` unauth, `503` if watch-history unwired, `{items:[]}` when no active profile |
 | GET | `/api/v1/media/facets` | Distinct, sorted genre facet list for the media filter UI (`?libraryId=<uuid>` to scope) → `{genres: string[]}` |
 | GET | `/api/v1/media/most-watched` | GLOBAL "Most Watched" trending rail — the media items most-watched across the WHOLE server (not per-user), reusing the same all-time cross-user aggregate as the admin Top Media report, ordered by play count. Optional `?limit=` (default 20, clamped to 100). Auth required (`AuthMiddleware`, same audience as `GET /api/v1/media`). Returns `{items, total, limit, offset}` with `MediaItemShaper`-shaped items (poster/artwork signed URLs re-minted at response time) |
 | GET | `/api/v1/media/{id}` | Media item detail — includes `user_data: {favorite, rating, like_level}` when authenticated (`null` otherwise) |
@@ -1369,7 +1369,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | GET | `/api/v1/users/me/favorites` | List the user's favorited items (shaped media items + `user_data` incl. `like_level`; `?limit=1-100&offset`) — auth required |
 | GET | `/api/v1/themes` | Theme catalogue — built-ins (`nocturne`/`daylight`/`midnight`) + enabled plugin themes, every entry sanitiser-passed, deterministic order, `{"themes":[...]}`; `503` when theming is unwired — auth required; see [Themes (choosing an appearance)](#themes-choosing-an-appearance) |
 | GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |
-| GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
+| GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present **only** once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
 | PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
 | GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application::loadCollectionRoutes()`) — see [Collections and playlists](#collections-and-playlists-member-owned-lists) |
 | GET | `/api/v1/collections/{id}` | One collection with its items → `{collection, items, total}`; unknown **or** not visible to the actor → byte-identical `404 {error:"Collection not found"}` (`:2197`) |
@@ -1697,7 +1697,7 @@ without `--rescan`) returns one of:
 | --- | --- |
 | **0** | scan (or rescan) completed; every file was indexed |
 | **1** | scan did not run — unknown library id, the manager threw, or an already-queued/running job refused the scan |
-| **2** | Symfony's `INVALID` (invalid input/usage) — deliberately **NOT** used, so "you typed the arguments wrong" and "your library lost files" never share a number |
+| **2** | Symfony's `INVALID` (invalid input/usage) — deliberately **not** used, so "you typed the arguments wrong" and "your library lost files" never share a number |
 | **3** | scan completed but N file(s) could not be indexed (the lossy warning is on stderr; each file is named in `.logs/error.log`) |
 
 The same table is printed by `php bin/phlix library:scan --help`. `3` (not `2`) is the
@@ -1763,7 +1763,7 @@ shipped endpoint delivers or consumes that token**. While the flag is set the re
 password path only, and the two legs answer differently: a **password login** is refused by
 `PasswordChangeRequiredException` — no HTTP boundary maps that exception yet, so the served path
 answers a bare `500 Internal Server Error` (the HTTP error log names the exception class); the
-distinct `403`-with-code envelope the exception was written for is NOT shipped. A token
+distinct `403`-with-code envelope the exception was written for is **not** shipped. A token
 **refresh** is refused by a plain `InvalidArgumentException`, which `AuthController::refresh`
 catches and answers `401` + `{error}` (no code field). Neither passkey nor provider sign-in is
 gated by the latch: `WebAuthnController::finishAuthentication` mints a full session without

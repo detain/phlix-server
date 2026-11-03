@@ -33,6 +33,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Deferred #44 — ALL-CAPS prose emphasis no longer double-doubles bold.**
+  Nine sentence-level caps (`ALWAYS`, `ONLY` ×4, `NOT` ×4) in README.md and
+  RELEASE_PROCESS.md moved to bold, joining the bold emphasis already used in
+  the same sentences. The deliberate boundary: SQL keywords (`IF NOT EXISTS`),
+  imperative comments inside fenced install procedures (`MUST include DROP`,
+  `do NOT one-line-prefix`), and semantic status markers (`NOT SHIPPED`,
+  `NOT-YET-PUBLISHED`, `NOT implemented here`) are content or code, not
+  emphasis, and stay caps; CHANGELOG history is verbatim and untouched.
+  README/RELEASE_PROCESS-referrer guard battery green at 380 tests.
 - **Deferred #29 — one heading capitalization convention across primary docs.**
   Sentence case was already the dominant style and the house voice; the
   remaining Title-Case outliers (`### Web portal` et al. in README.md,

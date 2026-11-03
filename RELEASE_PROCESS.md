@@ -310,7 +310,7 @@ Real recovery, in the order an incident should reach for it:
    `config/` (recursive), and — when those directories exist — the
    `data/` tree and SSL certs; the stored SHA-256 checksum is verified before
    the import runs. The restore itself re-imports the database dump and the
-   config files ONLY: `BackupManager::restore()` never touches `data/` or SSL
+   config files **only**: `BackupManager::restore()` never touches `data/` or SSL
    files from the archive, so extract those manually if you need them. Honest
    semantics: the dump replaces the tables that existed at backup time
    (mysqldump's per-table `DROP TABLE IF EXISTS` + `CREATE TABLE`) but does not

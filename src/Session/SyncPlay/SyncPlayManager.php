@@ -1981,6 +1981,18 @@ class SyncPlayManager
                 continue;
             }
 
+            // Review minor asphp-3: the backpressure law its three MessageHandler
+            // broadcast siblings all apply — a full send buffer means Workerman
+            // SILENTLY DISCARDS what we hand it, so a mid-group member would lose
+            // exactly the frames that matter (play/seek) with no signal. Skipping
+            // a full buffer is the same tradeoff the siblings make: the member's
+            // next position-report re-converges it (the 2000 ms tolerance loop is
+            // the repair path), and one slow client never alters what the others
+            // receive.
+            if ($connection instanceof Connection && $connection->isBufferFull()) {
+                continue;
+            }
+
             $connection->send($flatFrame);
         }
     }

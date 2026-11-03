@@ -455,6 +455,39 @@ class SyncPlayManagerTest extends TestCase
         $this->assertFalse($member2Found, 'member_2 should have been removed from the group');
     }
 
+    /**
+     * Review minor asphp-3: the backpressure law its MessageHandler broadcast
+     * siblings apply. A full send buffer means Workerman SILENTLY DISCARDS the
+     * frame — the member would lose it without any signal. The guarded shape
+     * skips the full-buffer member (its next position report re-converges it)
+     * while every healthy member receives exactly what they would have.
+     */
+    public function testBroadcastToGroupSkipsMemberWithFullSendBuffer(): void
+    {
+        $createResult = $this->manager->createGroup('Test Group', null, 'host_1', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
+        $groupId = $createResult['group']['group_id'];
+        $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member-2');
+
+        $pool = ConnectionPool::getInstance();
+
+        $healthy = $this->createMock(\Phlix\Server\WebSocket\Connection::class);
+        $healthy->method('getId')->willReturn('conn-host');
+        $healthy->expects($this->once())->method('send')->willReturn(true);
+
+        $blocked = $this->createMock(\Phlix\Server\WebSocket\Connection::class);
+        $blocked->method('getId')->willReturn('conn-member-2');
+        $blocked->method('isBufferFull')->willReturn(true);
+        $blocked->expects($this->never())->method('send');
+
+        $pool->add($healthy);
+        $pool->add($blocked);
+
+        $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
+        $reflection->setAccessible(true);
+        $reflection->invoke($this->manager, $groupId, Messages::TYPE_INFO, ['message' => 'hello'], []);
+    }
+
     public function testBroadcastToGroupDeliversToAllConnectedMembers(): void
     {
         $createResult = $this->manager->createGroup(

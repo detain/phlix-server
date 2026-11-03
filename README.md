@@ -1036,7 +1036,7 @@ maintainers, not resolvable from this repo alone.
 | `DB_POOL_SIZE` | `8` | no | yes | `config/database.php` |
 | `PHLIX_MIGRATIONS_DIR` | `migrations/` | no | n/a (CLI) | `bin/phlix`, `scripts/run-migrations.php` |
 | `PHLIX_MIGRATIONS_STRICT` | off | no | n/a (boot) | **docker-entrypoint shell only** — truthy inverts the migration-failure boot-continue into refuse-to-start; the PHP runtime never reads it |
-| `PHLIX_REQUIRE_DB_CREDENTIALS` | `0` | no | yes | **PHP boot guard** — `config/database.php`, production tier only (`PHLIX_ENV=production`): truthy turns missing-OR-empty `DB_PASSWORD` into a refused boot; unset/`0` keeps the warn-once behavior and the silent empty default for dev/test |
+| `PHLIX_REQUIRE_DB_CREDENTIALS` | `0` | no | yes | **PHP boot guard** — `config/database.php`, production tier only (`PHLIX_ENV=production`): truthy turns missing-OR-empty `DB_PASSWORD` into a refused boot; unset/`0` keeps the warn-once behavior and the silent empty default for dev/test — **set it to `1` in production**: a DB that accepts the empty password yields a zero-credential install, and unlike the JWT-secret arm (hard refuse at boot) this tier stays opt-in until the owner ratifies flipping the default |
 
 #### Auth & secrets
 

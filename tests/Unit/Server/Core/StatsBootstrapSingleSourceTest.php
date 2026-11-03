@@ -14,12 +14,13 @@ use PHPUnit\Framework\TestCase;
  * `public/index.php` (nothing in any deployment artifact served it;
  * PublicFrontControllerRemovalGuardTest pins the removal), so the literal
  * two-file equality became vacuous. The LAW survives its second operand: the
- * two live bootstrap entries today are
+ * the live bootstrap entry today is
  *
- *   1. `Application::run()`            — foreground/dev mode, and
- *   2. the `background-timers` worker  — the daemon path (`start.php`),
+ *   1. the `background-timers` worker  — the daemon path (`start.php`),
  *
- * and BOTH must funnel through the SAME single method
+ * (its historical twin, the CGI-era `Application::run()`, was excised dead by
+ * review minor 5 — it had no caller in any tree since S171), and it must funnel
+ * through the SAME single method
  * (`Application::startBackgroundTimers()`), because the 73fa51dd history —
  * the daemon forked a timer worker but only `run()` used to arm the timers,
  * so `stats_storage` was never written in production — is exactly the
@@ -75,20 +76,25 @@ final class StatsBootstrapSingleSourceTest extends TestCase
 
     public function test_both_live_entries_funnel_through_the_single_timer_method(): void
     {
-        // Entry 1: run() arms the timers through the shared method — exactly once.
+        // Entry 1 (historical): the excised `run()` used to arm the timers
+        // in-place. No caller may reappear inside Application — the funnel has
+        // exactly ONE live trigger now (Entry 2), so an in-file invocation here
+        // would mean a second entry point was resurrected without re-opening
+        // the F16 equality question.
         self::assertSame(
-            1,
+            0,
             substr_count($this->app, '$this->startBackgroundTimers();'),
-            'Application must invoke startBackgroundTimers() exactly once (from run()). '
-            . 'A second in-place invocation means the entries diverged again.'
+            'Application must NOT arm the timer funnel from inside itself since '
+            . 'run() was excised (review minor 5) — any hit means a new caller '
+            . 'was added while the docblocks still claim one live entry.'
         );
 
-        // Entry 2: the daemon's background-timers worker arms the SAME method.
+        // Entry 2: the daemon's background-timers worker arms the SAME (only) method.
         self::assertSame(
             1,
             substr_count($this->start, '$timerApp->startBackgroundTimers();'),
             'start.php must arm background timers exactly once, via the timer worker '
-            . 'calling the same Application method run() uses.'
+            . 'calling the one public Application funnel method.'
         );
 
         // The method itself is defined once and exported public for that pair only.

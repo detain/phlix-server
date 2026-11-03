@@ -218,7 +218,18 @@ final class HttpHandler
             // Authorization header cross-origin. Cookie auth is vulnerable since
             // browsers auto-send cookies on cross-origin requests.
             if ($this->authenticator->isCookieAuthenticated($request)) {
-                if (!$this->authenticator->validateCsrfOrigin($request)) {
+                // review minor 21: the GET leg of /auth/logout (Application
+                // registers it so a plain `<a href>` works without JS) is
+                // state-changing in effect — a cross-site <img> forces logout
+                // — so it joins the gate through the method-free same-site
+                // law; every other GET stays exempt exactly as before, and
+                // same-origin link logouts carry Referer/Origin and pass.
+                $originLaw = $request->method === 'GET'
+                    ? ($request->path === '/auth/logout'
+                        ? $this->authenticator->validateSameSiteOrigin($request)
+                        : true)
+                    : $this->authenticator->validateCsrfOrigin($request);
+                if (!$originLaw) {
                     $responseStatus = 403;
                     $body = json_encode([
                         'error' => 'CSRF validation failed',
@@ -391,8 +402,10 @@ final class HttpHandler
             // AuthManager/DbLoginRateLimitStore, which no controller catches —
             // previously it fell through to the generic 500 below with no
             // Retry-After). Emit the shared canonical envelope so the Workerman
-            // and Application::run() paths are identical (the CGI path —
-            // public/index.php — was deleted by S171).
+            // and the (since-excised) Application::run() paths were identical
+            // (the CGI twin public/index.php died in S171; run() itself was
+            // removed dead by review minor 5 — this catch is now the sole
+            // producer of the canonical envelope).
             //
             // SV-4.15 F4: route the 429 through the SAME CORS + security-header +
             // compression decoration the success branches use. A cross-origin XHR
@@ -448,10 +461,24 @@ final class HttpHandler
                 : 'text/html; charset=utf-8'];
             if ($wr->method() === 'HEAD') {
                 $errorHeaders['Content-Length'] = (string) strlen($errorBody);
-                $connection->send(new BodylessResponse(500, $errorHeaders));
+                $reply = new BodylessResponse(500, $errorHeaders);
             } else {
-                $connection->send(new WorkermanResponse(500, $errorHeaders, $errorBody));
+                $reply = new WorkermanResponse(500, $errorHeaders, $errorBody);
             }
+            // M-SERVER-50's law now reaches the last-resort exit too (review
+            // minor m1): the 500 was the one undecorated reply left — no
+            // nosniff/CSP, and a cross-origin client could not READ the JSON
+            // fallback without the ACAO echo its 403 sibling already gets.
+            // Decoration runs through the identical value generators as the
+            // static (:207) and CSRF-403 (:234) exits. The generators are
+            // re-derived locally, because a crash may predate the in-try
+            // `$cors`/`$securityHeaders` assignments; the parsed `$request` is
+            // the precondition (without it the reply stays bare — a
+            // pre-parse crash has no origin to echo anyway).
+            if (isset($request)) {
+                self::decorateRawReply($request, $reply, CorsManager::fromEnv(), $this->securityHeaders());
+            }
+            $connection->send($reply);
         } finally {
             // SV-4.2-disconnect: neutralise the per-connection disconnect→kill hook
             // and clear the request's cancel group now the request has fully

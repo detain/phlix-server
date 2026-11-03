@@ -456,8 +456,8 @@ class Router
      * The guarantee covers exactly what this router returns from a matched route.
      * A **global** middleware registered on {@see \Phlix\Server\Core\Application}
      * (`Application::middleware()`) runs *outside* the router: when it
-     * short-circuits, its response is returned from `Application::dispatch()` /
-     * `Application::run()` without this method ever being reached, so it is NOT
+     * short-circuits, its response is returned from `Application::dispatch()`
+     * without this method ever being reached, so it is NOT
      * flagged HERE. **S295 closed that hole where the global chain returns instead**:
      * `Application::flagHeadShortCircuitReply()` sends every global short-circuit
      * reply through {@see Response::asHeadReply()} on a `HEAD` — the same

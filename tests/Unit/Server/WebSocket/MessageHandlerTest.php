@@ -221,4 +221,48 @@ class MessageHandlerTest extends TestCase
             $frames[0]['message']
         );
     }
+
+    /**
+     * Review minor asphp-2: the wildcard arm used to run OUTSIDE the guard the
+     * named arm wears — a throwing wildcard escaped to the worker loop (a
+     * Worker::stopAll() footgun that would kill every SyncPlay connection in
+     * the process). It must produce the identical canonical HANDLER_ERROR
+     * frame and swallow the exception exactly like its named sibling.
+     */
+    public function testWildcardHandlerThrowIsGuardedIdenticallyToTheNamedArm(): void
+    {
+        $pool = ConnectionPool::getInstance();
+        $pool->clear();
+        $handler = new MessageHandler($pool);
+
+        $frames = [];
+        $connection = $this->createMock(Connection::class);
+        $connection->method('isAuthenticated')->willReturn(true);
+        $connection->method('send')->willReturnCallback(
+            /** @param string|array<array-key, mixed> $frame */
+            function (string|array $frame) use (&$frames): bool {
+                $frames[] = is_array($frame) ? $frame : (array) json_decode($frame, true);
+                return true;
+            }
+        );
+
+        $handler->onAny(function (): never {
+            throw new \RuntimeException('wildcard exploded with /var/phlix/private detail');
+        });
+
+        // No named handler for this event -> dispatch reaches the wildcard arm.
+        $handler->handle($connection, (string) json_encode([
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'protocol_version' => 1,
+        ]));
+
+        $this->assertCount(1, $frames, 'Exactly the error frame must be sent');
+        $this->assertSame(Messages::TYPE_ERROR, $frames[0]['type']);
+        $this->assertSame('HANDLER_ERROR', $frames[0]['error_code']);
+        $this->assertStringNotContainsString('/var/phlix', (string) json_encode($frames[0]));
+        $this->assertSame(
+            'An internal error occurred while processing this message.',
+            $frames[0]['message']
+        );
+    }
 }

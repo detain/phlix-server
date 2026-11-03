@@ -914,7 +914,8 @@ try {
 // 4c-bis. Background timer worker.
 //
 // Registers the periodic timers that were previously reachable ONLY from
-// Application::run() — a CGI-era entry point this daemon never calls (see the
+// Application::run() — a CGI-era entry point this daemon never called, since
+// excised dead (review minor 5; see the
 // note at the top of section 4 and Application::startBackgroundTimers()). The
 // omission meant automatic backups never ran, stats_storage was never written
 // (blank dashboard Storage card), wedged transcodes never freed their slot, and

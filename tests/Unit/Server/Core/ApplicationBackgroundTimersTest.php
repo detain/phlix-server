@@ -17,8 +17,8 @@ use Workerman\MySQL\Connection;
  * ## The defect these pin
  *
  * The backup, storage-snapshot, transcode-reaper and newsletter timers were
- * registered ONLY inside {@see Application::run()} — a CGI-era entry point with no
- * caller in the tree. On every Workerman install none of them ran: production had
+ * registered ONLY inside `Application::run()` — a CGI-era entry point with no
+ * caller in the tree, since excised (review minor 5). On every Workerman install none of them ran: production had
  * zero rows in `backups` and zero in `stats_storage`.
  *
  * Nothing caught it because **a timer that is never registered throws nothing**.
@@ -180,7 +180,7 @@ class ApplicationBackgroundTimersTest extends TestCase
             '/\$\w+->startBackgroundTimers\(\)\s*;/',
             $startPhp,
             'start.php must CALL Application::startBackgroundTimers(); it never calls '
-            . 'Application::run(), so the timers are otherwise unreachable.'
+            . 'Application::run() (since excised), so the timers are otherwise unreachable.'
         );
         $this->assertMatchesRegularExpression(
             '/\$backgroundTimerWorker->name\s*=\s*\'phlix-background-timers\'\s*;/',

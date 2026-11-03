@@ -16,9 +16,10 @@ use PHPUnit\Framework\TestCase;
  * This static helper is the single source of the canonical rate-limit response
  * emitted by the server dispatch paths — the Workerman
  * {@see \Phlix\Server\Workerman\HttpHandler} central catch and this class's
- * {@see Application::handleException()} (the {@see Application::run()} path)
- * — so they cannot drift (the third consumer, `public/index.php`'s exception
- * handler, was deleted with that unserved front controller by S171). Exercising
+ * — the sibling consumers are gone: `Application::handleException()`/`run()`
+ * was excised dead (review minor 5) and `public/index.php`'s handler was
+ * deleted with that unserved front controller by S171. The Workerman catch
+ * stays the live mirror of this envelope. Exercising
  * it directly (as the hub does for its mirror helper) pins the status,
  * Retry-After header and JSON body shape once.
  */

@@ -214,24 +214,44 @@ class MessageHandler
                 // Clients localize via the HANDLER_ERROR error_code; none
                 // text-matched the old prefix. The real cause is recorded
                 // server-side in the websocket channel instead.
-                LoggerFactory::get(LogChannels::WEBSOCKET)->error(
-                    'SyncPlay handler threw during dispatch',
-                    [
-                        'event' => $event,
-                        'exception' => get_class($e),
-                        'message' => $e->getMessage(),
-                        'file' => $e->getFile() . ':' . $e->getLine(),
-                    ]
-                );
-                $connection->send(\Phlix\Session\SyncPlay\Messages::error(
-                    'HANDLER_ERROR',
-                    'An internal error occurred while processing this message.'
-                ));
+                $this->reportHandlerFailure($e, $event, $connection);
             }
         } elseif (isset($this->callbacks['*'])) {
-            // Wildcard handler
-            ($this->callbacks['*'])($connection, $event, $payload);
+            // Wildcard handler — review minor asphp-2: this arm used to run
+            // OUTSIDE the guard its named sibling wears. A throw here escaped
+            // to the worker loop, where an uncaught onMessage error is a
+            // Worker::stopAll() footgun — one rogue wildcard call killed the
+            // whole WS worker. Same canonical HANDLER_ERROR frame, same
+            // server-side log law, both arms now guarded identically.
+            try {
+                ($this->callbacks['*'])($connection, $event, $payload);
+            } catch (\Throwable $e) {
+                $this->reportHandlerFailure($e, $event, $connection);
+            }
         }
+    }
+
+    /**
+     * Single-source failure response for BOTH dispatch arms (named and
+     * wildcard): log the real cause server-side, answer the peer with the
+     * fixed generic HANDLER_ERROR frame (R17-03 law — the wire never carries
+     * exception text).
+     */
+    private function reportHandlerFailure(\Throwable $e, string $event, Connection $connection): void
+    {
+        LoggerFactory::get(LogChannels::WEBSOCKET)->error(
+            'SyncPlay handler threw during dispatch',
+            [
+                'event' => $event,
+                'exception' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile() . ':' . $e->getLine(),
+            ]
+        );
+        $connection->send(\Phlix\Session\SyncPlay\Messages::error(
+            'HANDLER_ERROR',
+            'An internal error occurred while processing this message.'
+        ));
     }
 
     /**

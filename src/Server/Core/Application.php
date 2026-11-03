@@ -18,9 +18,6 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Version;
 use Phlix\Auth\RateLimitException;
 use Phlix\Hub\HubClient;
-use Phlix\Hub\HubApplication;
-use Phlix\Hub\RelayApplication;
-use Phlix\Discovery\DiscoveryServer;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\SyncPlayController;
@@ -2728,113 +2725,6 @@ class Application
         return $handler($request);
     }
 
-    /**
-     * Runs the application, processing incoming HTTP requests.
-     *
-     * Creates a request from globals, applies middleware, dispatches
-     * to the appropriate handler, and sends the response.
-     *
-     * @return void
-     *
-     * @throws Throwable Any unhandled exception during request processing
-     *
-     * @see Request::fromGlobals() For request creation
-     * @see Router::dispatch() For route dispatching
-     */
-    public function run(): void
-    {
-        // Start hub heartbeat loop if already enrolled
-        $this->startHubHeartbeatIfEnrolled();
-
-        // Start relay tunnel if enrolled and relay is enabled
-        $this->startRelayIfEnabled();
-
-        // Start discovery server for SSDP/mDNS device discovery
-        $this->startDiscoveryIfEnabled();
-
-        // Periodic background timers. Shared with the Workerman daemon, which
-        // reaches them via {@see self::startBackgroundTimers()} because it never
-        // calls this method — see that method's docblock.
-        $this->startBackgroundTimers();
-
-        $request = Request::fromGlobals();
-
-        // Build the final handler that dispatches to the router
-        $finalHandler = function (Request $request): Response {
-            return $this->router->dispatch($request);
-        };
-
-        // Apply global middleware in reverse order (so first registered runs first).
-        // Same HEAD boundary as {@see self::dispatch()} — a global middleware that
-        // short-circuits returns before Router::markHeadOnly() can flag the reply.
-        $handler = $finalHandler;
-        foreach (array_reverse($this->middleware) as $currentHandler) {
-            $nextHandler = $handler;
-            $handler = static function (Request $request) use ($currentHandler, $nextHandler) {
-                return $currentHandler($request, $nextHandler);
-            };
-        }
-
-        // Execute the middleware chain
-        try {
-            $response = $handler($request);
-            $response->send();
-        } catch (Throwable $e) {
-            $this->handleException($e);
-        }
-    }
-
-    /**
-     * Handles uncaught exceptions.
-     *
-     * Logs the exception details and sends an appropriate error response
-     * to the client. In debug mode, includes additional error information.
-     *
-     * @param Throwable $e The uncaught exception
-     * @return void
-     *
-     * @see LoggerFactory::get() For logging setup
-     */
-    private function handleException(Throwable $e): void
-    {
-        // SV-4.15(c): a rate-limit trip that bubbles out of dispatch must map to
-        // HTTP 429 + Retry-After, NOT the generic 500 below. Mirrors the central
-        // catch in the Workerman HttpHandler and public/index.php so all three
-        // dispatch paths emit the identical envelope via rateLimitResponse().
-        if ($e instanceof RateLimitException) {
-            self::rateLimitResponse($e)->send();
-            return;
-        }
-
-        $logger = LoggerFactory::get(LogChannels::HTTP);
-        $logger->error('Unhandled exception: ' . $e->getMessage(), [
-            'exception' => get_class($e),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'trace' => $e->getTraceAsString(),
-        ]);
-
-        $response = (new Response())
-            ->status(500)
-            ->json([
-                'error' => 'Internal Server Error',
-                // Consolidated review C2 (raw-exception-text class): this arm
-                // shipped `$e->getMessage()` — PDO fragments, file paths and
-                // other internals — to browsers, TVs and mobile clients. The
-                // full cause (class, message, file, line, trace) is logged
-                // above; the wire carries the generic envelope only, per the
-                // repo's own doctrine (`ErrorPages`: detail belongs to the
-                // HTTP error log, never the wire; `AdminSettingsController::
-                // GENERIC_FAILURE_MESSAGE` is the named template). The shape
-                // `{error, message}` is unchanged. The former `debug` variant
-                // that additionally echoed file/line is retired for the same
-                // reason — debug detail moves to the log line, where it
-                // already exists.
-                'message' => 'An internal error occurred. The details were logged server-side.',
-            ]);
-
-        $response->send();
-    }
 
     /**
      * Build the canonical HTTP 429 envelope for a {@see RateLimitException}
@@ -2842,12 +2732,13 @@ class Application
      * (seconds until the window resets, never negative) + a JSON body of
      * `{error: 'Too Many Requests', code: 'rate_limited'}`.
      *
-     * SV-4.15(c): shared by every dispatch entrypoint — the Workerman
-     * {@see \Phlix\Server\Workerman\HttpHandler} central catch, this class's
-     * {@see self::handleException()} (used by {@see self::run()}), and the CGI
-     * `public/index.php` path — so a limiter trip produces identical output no
-     * matter which entrypoint served the request. Static + side-effect-free so
-     * tests exercise it directly.
+     * SV-4.15(c): shared by every LIVE dispatch entrypoint — the Workerman
+     * {@see \Phlix\Server\Workerman\HttpHandler} central catch. (The other two
+     * twins this sentence once named are gone: `public/index.php` was deleted in
+     * S171 — pinned by `PublicFrontControllerRemovalGuardTest` — and this class's
+     * CGI-era `run()`/`handleException()` path with it (review minor 5), so the
+     * Workerman catch is now the whole map.) Static + side-effect-free so tests
+     * exercise it directly.
      */
     public static function rateLimitResponse(RateLimitException $e): Response
     {
@@ -2867,72 +2758,6 @@ class Application
     public function getRouter(): Router
     {
         return $this->router;
-    }
-
-    /**
-     * Starts the hub heartbeat background worker if the server is enrolled.
-     *
-     * @return void
-     */
-    /**
-     * Starts the relay tunnel worker if the server is enrolled and relay is enabled.
-     *
-     * @return void
-     */
-    private function startRelayIfEnabled(): void
-    {
-        if ($this->container === null) {
-            return;
-        }
-
-        try {
-            $relayApp = $this->container->get(RelayApplication::class);
-            if ($relayApp instanceof RelayApplication) {
-                $relayApp->start();
-            }
-        } catch (\Throwable $e) {
-            error_log('relay: tunnel worker did not start: ' . $e->getMessage());
-            // Relay wiring failed — the tunnel stays down; logged, never silent (M8).
-        }
-    }
-
-    private function startHubHeartbeatIfEnrolled(): void
-    {
-        if ($this->container === null) {
-            return;
-        }
-
-        try {
-            $hubApp = $this->container->get(HubApplication::class);
-            if ($hubApp instanceof HubApplication) {
-                $hubApp->start();
-            }
-        } catch (\Throwable $e) {
-            error_log('hub: heartbeat worker did not start: ' . $e->getMessage());
-            // Hub wiring failed — heartbeats stay off; logged, never silent (M8).
-        }
-    }
-
-    /**
-     * Start the discovery server for SSDP/mDNS device discovery.
-     *
-     * @return void
-     */
-    private function startDiscoveryIfEnabled(): void
-    {
-        if ($this->container === null) {
-            return;
-        }
-
-        try {
-            $discoveryServer = $this->container->get(DiscoveryServer::class);
-            if ($discoveryServer instanceof DiscoveryServer) {
-                $discoveryServer->start();
-            }
-        } catch (\Throwable $e) {
-            error_log('discovery: server did not start: ' . $e->getMessage());
-            // Discovery wiring failed — SSDP/mDNS stay off; logged, never silent (M8).
-        }
     }
 
     /**
@@ -3121,13 +2946,14 @@ class Application
      *
      * ## Why this method exists
      *
-     * These four timers were originally registered only inside {@see self::run()}.
-     * `run()` is a **CGI-era entry point** — it ends in `Request::fromGlobals()` and
-     * dispatches a single request — and it has **no caller anywhere in the tree**:
-     * `start.php` constructs {@see Application} (`start.php:199`, `:760`) but never
-     * runs it, and `public/index.php` dispatches through `Router` directly. The only
-     * `->run()` occurrences are a docblock example on this class and an unrelated CLI
-     * class in `bin/phlix`.
+     * These four timers were originally registered only inside `Application::run()`
+     * — a **CGI-era entry point** (it ended in `Request::fromGlobals()` and dispatched
+     * a single request) with **no caller anywhere in the tree**: `start.php`
+     * constructs {@see Application} (`start.php:199`, `:760`) but never reached
+     * `run()`, and the pre-S171 `public/index.php` dispatched through `Router`
+     * directly. That dead path — `run()` and its `handleException()` companion — was
+     * excised with the review's minor 5; this method is now their only survivor, and
+     * the daemon's dedicated timer worker is the only caller.
      *
      * `start.php:191-196` records that the daemon "does NOT call boot() or run() and
      * therefore does not start hub/relay/discovery/newsletter/backup timers", and
@@ -3142,17 +2968,19 @@ class Application
      *
      * Nothing detected this because a timer that is never registered throws nothing.
      *
-     * Calling `run()` from the daemon would be wrong (it would dispatch a bogus
-     * request from CLI globals into a resident worker), so the timer block lives here
-     * and both entry points call it.
+     * Calling the old `run()` from the daemon would have been wrong (it would
+     * dispatch a bogus request from CLI globals into a resident worker), so the
+     * timer block lives here and the daemon's timer worker calls it.
      *
-     * ## Deliberately NOT included: `startDiscoveryIfEnabled()`
+     * ## Deliberately NOT started: discovery
      *
-     * {@see \Phlix\Discovery\DiscoveryServer} is registered in no DI provider, its
+     * \Phlix\Discovery\DiscoveryServer is registered in no DI provider, its
      * `config/discovery.php` is loaded by nothing, and it advertises over SSDP
      * alongside the DLNA `SsdpAdvertiser` the daemon already starts
      * (`start.php:937`). Activating it here would risk an SSDP port conflict to
-     * enable a subsystem with no configuration path. It stays in `run()` only.
+     * enable a subsystem with no configuration path — its one-time caller, the
+     * private `startDiscoveryIfEnabled()`, was excised with `run()` (review
+     * minor 5) and must not be resurrected as a side door.
      *
      * ## Concurrency
      *

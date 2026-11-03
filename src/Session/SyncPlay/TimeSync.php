@@ -178,8 +178,13 @@ class TimeSync
      */
     private function addOffsetSample(int $offset, int $rtt): void
     {
-        // Only use samples with acceptable RTT
-        if ($rtt > self::MAX_ACCEPTABLE_RTT) {
+        // Only use samples with acceptable RTT — on BOTH axes (review minor
+        // asphp-1): a NEGATIVE rtt is physically impossible (the payload's
+        // timing fields disagree — clock stepped mid-flight, or a broken /
+        // hostile pong). Admitting it poisoned the estimator:
+        // getEstimatedLatency() happily averaged negative half-rtts toward
+        // negative latency, and the offset window it feeds skewed with it.
+        if ($rtt < 0 || $rtt > self::MAX_ACCEPTABLE_RTT) {
             return;
         }
 

@@ -33,6 +33,36 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Review Minor code cluster (fedev m1, srphp 5, secaudit 1, asphp 1/2/3; devops2
+  3 docs half).** (m1) The last-resort 500 in the Workerman HTTP handler now wears
+  the same `decorateRawReply()` coat as its static and CSRF-403 siblings — nosniff,
+  CSP, and the ACAO echo a cross-origin client needs to READ the JSON fallback
+  (generators re-derived locally; a pre-parse crash has no origin to echo).
+  (srphp-5) The dead CGI-era path is excised: `Application::run()` +
+  `handleException()` and their three private subsystem starters
+  (`startRelay/HubHeartbeat/Discovery…`) — no caller in any tree since S171 — go,
+  along with their now-orphaned imports; the seven docblocks that referenced them
+  (Router, HttpHandler 429 comment, `start.php`, four test files) rotate to
+  past-tense truth, and the F16 single-source funnel test re-blesses from its
+  MEASURED red in the same commit (Application may now arm the timer funnel
+  ZERO times from inside itself — a resurrection is what that pin catches).
+  (secaudit-1) `GET /auth/logout` — the plain-`<a href>` logout leg — joins the
+  cookie-auth CSRF gate through a new method-free `validateSameSiteOrigin()`
+  (the Origin/Referer law extracted from `validateCsrfOrigin()` unchanged);
+  a cross-site `<img>` forced logout now dies with the identical 403 envelope
+  while same-origin link logouts pass untouched; every other GET keeps its
+  exemption. Three new handler-leg tests pin all three shapes.
+  (asphp-1) `TimeSync` refuses physically-impossible negative-RTT pongs into
+  the offset window (they dragged `getEstimatedLatency()` negative). (asphp-2)
+  The wildcard dispatch arm gets the named arm's try/catch — extracted to a
+  shared `reportHandlerFailure()` so the two can never drift; a throwing
+  wildcard no longer escapes toward `Worker::stopAll()`. (asphp-3)
+  `SyncPlayManager::broadcastToGroup()` applies the backpressure law its three
+  MessageHandler siblings carry — a full-buffer member is skipped (Workerman
+  silently discarded the frame anyway; the position-report loop re-converges
+  them) instead of pretending delivery. (devops2-3 docs half) The env census's
+  `PHLIX_REQUIRE_DB_CREDENTIALS` row finally says what operators should do
+  (set `1` in production) and why the default flip waits for the owner.
 - **The docs cluster of the review's Minor findings — thirty prose cures, one
   voice.** (a) README: "LiveTV" standardized to "Live TV" in prose (identifiers
   keep `livetv_*`); the dangling "creates" gets its object ("creates a

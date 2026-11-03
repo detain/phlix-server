@@ -63,6 +63,29 @@ class TimeSyncTest extends TestCase
         $this->assertArrayHasKey('is_stable', $pong);
     }
 
+    /**
+     * Review minor asphp-1: a negative RTT is physically impossible — the
+     * payload timing fields disagree (mid-flight clock step or a broken/hostile
+     * pong). The window used to admit it, dragging getEstimatedLatency() toward
+     * negative latency and skewing the offsets it feeds.
+     */
+    public function testNegativeRttSampleIsNeverAdmittedIntoTheWindow(): void
+    {
+        $timeSync = new TimeSync();
+        $now = (int) (microtime(true) * 1000);
+
+        // client_time in the future ⇒ rtt = receive - send - serverHold < 0.
+        $result = $timeSync->processPong([
+            'client_time' => $now + 100000,
+            'server_time' => $now,
+            'server_receive_time' => $now - 50,
+        ]);
+
+        $this->assertLessThan(0, $result['rtt'], 'premise: the crafted sample really is negative');
+        $this->assertSame(0, $timeSync->getEstimatedLatency(), 'the window must never hold a negative-RTT sample');
+        $this->assertFalse($timeSync->isSyncStable(), 'and stability may not be claimed off it either');
+    }
+
     public function testIsSyncStableReturnsFalseWhenNoSamples(): void
     {
         $timeSync = new TimeSync();

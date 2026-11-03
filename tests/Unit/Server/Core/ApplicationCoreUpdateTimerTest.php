@@ -31,7 +31,8 @@ use Workerman\Worker;
  * it — that is precisely the defect `startBackgroundTimers()` itself exists to
  * fix (backups, storage snapshots, the transcode reaper and the newsletter were
  * all registered only in the CGI-era `Application::run()`, which the daemon
- * never calls, so none of them ever ran on a Workerman install).
+ * never called, so none of them ever ran on a Workerman install — that dead
+ * path was since excised, and this method is the only surviving arm site).
  *
  * ## Why the assertions FIRE the timers instead of reading intervals
  *

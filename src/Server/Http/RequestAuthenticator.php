@@ -156,11 +156,37 @@ final class RequestAuthenticator
      */
     public function validateCsrfOrigin(Request $request): bool
     {
-        // Only check state-changing methods that are CSRF-exposed.
+        // Only check state-changing methods that are CSRF-exposed. (GET keeps
+        // exactly ONE exception downstream: the forced-logout link leg,
+        // review minor 21 — named at its single call site in HttpHandler.)
         if (!in_array($request->method, ['POST', 'PUT', 'DELETE', 'PATCH'], true)) {
             return true;
         }
 
+        return $this->validateSameSiteOrigin($request);
+    }
+
+    /**
+     * The same-site header law WITHOUT the method gate: Origin/Referer (when
+     * present) must name this server's host, a request presenting neither is
+     * refused fail-closed, and the literal `null` Origin is rejected outright
+     * (M-SERVER-76). {@see validateCsrfOrigin()} is this method behind the
+     * state-changing-methods guard.
+     *
+     * review minor 21: `GET /auth/logout` is state-changing IN EFFECT — a
+     * cross-site `<img src="/auth/logout">` drive-by terminates the session —
+     * so the cookie-auth gate runs THIS variant on that one path while every
+     * other GET stays exempt exactly as before. Same-origin `<a href>` link
+     * logouts carry Referer (or Origin) like any browser navigation and pass
+     * unchanged.
+     *
+     * @param Request $request The incoming request.
+     *
+     * @return bool True when the origin is valid or no check is needed;
+     *              false when the request should be rejected.
+     */
+    public function validateSameSiteOrigin(Request $request): bool
+    {
         $origin = $request->getHeader('Origin');
         $referer = $request->getHeader('Referer');
 

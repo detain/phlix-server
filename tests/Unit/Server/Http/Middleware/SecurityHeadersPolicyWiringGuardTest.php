@@ -27,7 +27,8 @@ use function DI\factory;
  *     HttpHandler a store-less policy, freezing both headers at their defaults
  *     while every hand-built unit test passes the store positionally;
  *  2. the CONSUMER half (structural): HttpHandler::__invoke and the 429 branch
- *     must both go through the single memoised securityHeaders() accessor.
+ *     must all go through the single memoised securityHeaders() accessor
+ *     (main dispatch, 429 branch, raw-reply 500 decoration since 6437e318).
  *     A reintroduced bare `new SecurityHeaders()` beside the accessor would
  *     silently bypass the settings on whichever branch kept it — the exact
  *     "two entries diverge" class F16 was about.
@@ -59,15 +60,24 @@ final class SecurityHeadersPolicyWiringGuardTest extends TestCase
         $source = file_get_contents(dirname(__DIR__, 5) . '/src/Server/Workerman/HttpHandler.php');
         self::assertIsString($source);
 
-        // The accessor is defined once and called twice: the main dispatch
-        // (CORS/preflight seam where $securityHeaders is assigned) and the
-        // SV-4.15 F4 429 branch.
+        // The accessor is defined once and called from THREE funnels: the main
+        // dispatch (CORS/preflight seam where $securityHeaders is assigned),
+        // the SV-4.15 F4 429 branch, and the batch-17 (6437e318) raw-reply
+        // 500-decoration call site (fedev m1 — `decorateRawReply(...)` passes
+        // the accessor result as an argument). That commit added the third
+        // funnel without rotating this pin (its author's miss, disclosed);
+        // rotated HERE from the measured red (3), never predicted — the S431
+        // forward-fix precedent. The LAW is unchanged: every decoration reaches
+        // the decorator ONLY through the policy-fed accessor — a bare
+        // `new SecurityHeaders()` beside it bypasses the settings on that
+        // branch (the two construction pins below still carry that half).
         self::assertSame(
-            2,
+            3,
             substr_count($source, '$this->securityHeaders()'),
-            'HttpHandler must reach the decorator ONLY via securityHeaders() — twice '
-            . '(main path + 429 branch). Any bare `new SecurityHeaders()` reintroduced '
-            . 'beside it bypasses the settings on that branch.',
+            'HttpHandler must reach the decorator ONLY via securityHeaders() — three '
+            . 'funnels (main path, 429 branch, raw-reply 500 decoration). Any bare '
+            . '`new SecurityHeaders()` reintroduced beside them bypasses the settings '
+            . 'on that branch.',
         );
 
         // The ONLY `new SecurityHeaders(` in the file lives INSIDE the accessor

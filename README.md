@@ -8,9 +8,9 @@
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%209-brightgreen)](https://phpstan.org/)
 [![Code style](https://img.shields.io/badge/code%20style-PSR--12-blueviolet)](https://www.php-fig.org/psr/psr-12/)
 
-A comprehensive media server platform built with PHP 8.3+, featuring real-time WebSocket communication, HTTP REST APIs, and support for multiple client platforms including Roku, Samsung Tizen, and Windows.
+Phlix is your own streaming service for the media you already own: it organizes your movies, shows, music, books and photos and plays them on every TV, phone and computer in the house — with watch parties for friends, kid-safe profiles, and cast-to-TV, all on hardware you control.
 
-> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlix` to [`github.com/detain/phlix-server`](https://github.com/detain/phlix-server) as part of the Phase B repo split. Update existing local clones with `git remote set-url origin git@github.com:detain/phlix-server.git`. The old repo is being archived in step B.4b.
+Under the hood it is a comprehensive media server platform built with PHP 8.3+, featuring real-time WebSocket communication, HTTP REST APIs, and support for multiple client platforms including Roku, Samsung Tizen, and Windows.
 
 ## Overview
 
@@ -20,13 +20,17 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **User Authentication**: JWT-based auth with refresh tokens
 - **Real-time SyncPlay**: Watch content together with friends
 - **Live TV Support**: DVR and guide integration
-- **DLNA Streaming**: Standard protocol support for compatible devices
+- **Cast to TV**: Chromecast, AirPlay, Roku and DLNA renderers — per-protocol device discovery plus
+  full transport control (play/pause/seek/stop), each gated by `CastingEnabledMiddleware` on its
+  `casting.<protocol>.enabled` switch; triage in [A cast device is not found](#a-cast-device-is-not-found)
 - **Transcoding**: On-the-fly media conversion via FFmpeg with automatic quality selection
-- **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists. Transcoded
-  output is normalized for browser playback: 8-bit H.264 video, **stereo AAC audio** (surround layouts like
-  AC-3 5.1(side) are downmixed — a `channel_configuration=0` PCE otherwise breaks hls.js), and even scale
-  widths (`force_divisible_by=2`)
+- **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists, normalized
+  for browser playback — encoder-level detail under [HLS & transcoding](#hls--transcoding)
 - **WebSocket Events**: Real-time progress and notification delivery
+- **Household quality-of-life**: watched status scrobbles to Trakt and Last.fm, trickplay scrub-preview
+  thumbnails and box-set collection sync are produced by background asset jobs
+  (`PHLIX_MEDIA_ASSET_JOBS_DIR`, `PHLIX_COLLECTION_JOBS_DIR`), and intro/outro skip markers are exposed
+  to players — see [Metadata providers & scrobblers](#metadata-providers--scrobblers)
 - **Subtitles**: embedded text tracks are extracted to WebVTT on demand and served through signed URLs, HLS transcodes emit sidecar subtitle tracks, and provider plugins add searchable remote subtitles (downloaded tracks attach to the item) — see [Subtitles (choosing them)](#subtitles-choosing-them)
 - **Hub / remote access**: enrolling the server with a [phlix-hub](https://github.com/detain/phlix-hub) links your account to the hub's single sign-on and opens an outbound relay path, so you can reach this server from outside your home network without port forwarding. The installer's `--hub-url` (or `PHLIX_HUB_URL`) is the server-side half; pairing completes with `scripts/pair-with-hub.php`. What a hub is for, step by step: [the quickstart's hub section](docs/user/quickstart.md#remote-access-the-hub)
 - **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API, `bin/phlix` and an admin-only `/app` Backup page; see [Backups (admin-managed)](#backups-admin-managed)
@@ -635,6 +639,10 @@ the disabled theme's id 400s in the meantime.
 
 ## Installation
 
+> **Prefer containers?** The published Docker images are CI-built and fully supported —
+> see [docker/README.md](docker/README.md) for compose files, entrypoint behaviour and image
+> tagging. Everything below covers the bare-metal Ubuntu/Debian installer and source installs.
+
 ### One-line install (Ubuntu/Debian)
 
 On a fresh Ubuntu/Debian host, [`scripts/install.sh`](scripts/install.sh) does the whole thing:
@@ -733,6 +741,12 @@ operator actions the deploy must take, or `None.` when the release is drop-in �
 pre-convention releases carry their deploy-critical warnings inline instead
 (S331's bold `MIGRATION ANSWER` line shows that older shape). Anything that needs doing beyond the automatic
 `scripts/run-migrations.php` step above (a rescan, a new required env var) is named there.
+
+### Updating a clone of the old repo
+
+This codebase moved from `github.com/detain/phlix` to [`github.com/detain/phlix-server`](https://github.com/detain/phlix-server)
+on 2026-05-17 as part of the Phase B repo split. Existing local clones just need
+`git remote set-url origin git@github.com:detain/phlix-server.git`.
 
 ### Uninstalling
 
@@ -1096,6 +1110,10 @@ while these were invisible:
 | `PHLIX_SYNCPLAY_BRIDGE_TOKEN` | _unset_ | **yes** | yes | `config/server.php` + `src/Session/SyncPlay/SyncPlayBridge.php` |
 
 #### HLS & transcoding
+
+**Browser-playback normalization.** Transcoded output is 8-bit H.264 video with **stereo AAC** audio:
+surround layouts like AC-3 5.1(side) are downmixed because a `channel_configuration=0` PCE otherwise
+breaks hls.js, and scale widths are forced even (`force_divisible_by=2` in the vf chain).
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
@@ -1849,6 +1867,24 @@ application log files under `<install>/.logs/` (`app.log`, `error.log`,
 `plugins.log`, and `events.log` when `PHLIX_DEBUG_EVENTS` is on — see
 [Environment variables](#environment-variables)), and stdout/stderr, which on
 a systemd install goes to the journal (`journalctl -u phlix-server`).
+
+### First steps (no terminal needed)
+
+Before digging into logs, work through these — they resolve most household playback complaints:
+
+1. Open the same item in a different browser or the platform app — that tells you whether the
+   problem is the device rather than the server.
+2. Sign out and back in on the affected device; an expired session often looks like an empty
+   library or playback that fails instantly.
+3. Confirm the device is on the same network (Wi-Fi/VLAN) as the server and uses the right
+   address and port.
+4. A freshly added item can be slower on its first play — transcoding and preview assets are
+   produced on demand; retry after it has played once.
+5. If only one profile misbehaves, check that profile's rating filters and access schedule
+   before suspecting the server at all.
+
+Then continue with the symptom entries below; the endpoints they name are listed in
+[Diagnostic endpoints](#diagnostic-endpoints).
 
 ### Diagnostic endpoints
 

@@ -33,6 +33,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Review batch 21 — README narrative and mount truth (Minors 4, 62-67,
+  69-72).** The Overview now leads with what the household gets ("your own
+  streaming service for the media you already own") before the platform
+  sentence; casting is positioned as four protocols with full transport
+  control (Chromecast/AirPlay/Roku/DLNA, each behind
+  `CastingEnabledMiddleware`/`casting.<protocol>.enabled`) instead of the
+  one-line "DLNA Streaming"; shipped background subsystems (Trakt/Last.fm
+  scrobbling, trickplay thumbnails, intro/outro skip markers, box-set sync)
+  surface as capabilities in the Overview; ffmpeg-level normalization detail
+  (`channel_configuration=0` PCE, `force_divisible_by=2`) moved out of the
+  buyer-facing list into [HLS & transcoding]. Installation gained a
+  first-class Docker pointer (`docker/README.md`), the repo-move notice left
+  the position directly under the title (and its frozen "being archived in
+  step B.4b" transition clause was dropped) to become an "Updating a clone
+  of the old repo" section, and Troubleshooting opens with five no-terminal
+  first steps for non-technical household members. `reverse-proxy/README.md`
+  states the root-mount constraint the code enforces in fact: the shell is
+  built with root-absolute `/assets/app/…` URLs and routerBase `/app`, so
+  path-prefix mounts without upstream rewrite break SPA boot — host per
+  domain/subdomain. Verified already-honest in place: daily watch-time
+  limits already lead with "stored, not enforced" (Minor 69); the
+  group/room/watch-party naming law is already documented (Minor 66 —
+  consolidation stays an open product decision). No behavior or wire
+  changes; doc-only batch. (Phlix review program — server Minors 4, 62-67,
+  69-72)
+
 - **Review minor 58 — the unscoped browse rail stops filesorting.** New
   migration `124_media_items_type_sort_index.sql` adds
   `idx_media_items_type_sort (type, sort_title, name)` to `media_items`, so

@@ -2,6 +2,17 @@
 
 This directory contains reverse-proxy configurations for nginx and Caddy to front Phlix Media Server.
 
+## Mount at the root — path-prefix mounts are not supported
+
+The web shell is built with **root-absolute paths**: hashed bundles are referenced as
+`/assets/app/…` (`web-ui/vite.config.ts`, `base: '/assets/app/'`), the SPA router boots at `/app`
+(`SharedUiController.php`, `routerBase`), and an empty API base resolves from the origin root. A
+proxy that mounts Phlix under a path prefix (e.g. `https://host/phlix/`) without stripping the
+prefix upstream breaks SPA boot, asset loading and every API call. Host Phlix at the **root of a
+domain or subdomain** — every template here does exactly that. If you must share one host, run
+Phlix on its own subdomain rather than rewriting a prefix: redirects and WebSocket URLs are also
+emitted root-absolute.
+
 ## Why a Reverse Proxy?
 
 - TLS termination (HTTPS)

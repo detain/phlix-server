@@ -194,6 +194,14 @@ final class RelayConsumer
     private ?int $heartbeatTimer = null;
 
     /**
+     * M1 (asphp review): monotonic seconds ({@see hrtime()}) of the most recent
+     * inbound BYTE on the live tunnel, or null while no tunnel is active.
+     * The read-side liveness watchdog ({@see checkTunnelLiveness()}) compares
+     * the silence against one hub heartbeat cycle plus {@see RelayConfig::$pingTimeout}.
+     */
+    private ?float $lastTunnelInboundAt = null;
+
+    /**
      * @var bool Whether a relay-state field changed since the last persist
      *      ({@see markRelayStateDirty()}).
      */
@@ -1268,6 +1276,11 @@ final class RelayConsumer
      */
     private function onHubMessage(string $data): void
     {
+        // M1: ANY inbound byte proves the tunnel is two-way alive — this is the
+        // watchdog's liveness stamp, recorded before the state branches so even
+        // the HELLO_ACK pass refreshes it.
+        $this->lastTunnelInboundAt = hrtime(true) / 1_000_000_000.0;
+
         if ($this->state === self::STATE_HANDSHAKING) {
             $this->handleHelloAck($data);
             return;
@@ -3242,6 +3255,10 @@ final class RelayConsumer
         $this->lastDisconnectTime = new \DateTimeImmutable();
         $this->connection = null;
         $this->recvBuffer = '';
+        // M1: the liveness clock belongs to the DEAD tunnel — a fresh tunnel
+        // must not inherit a stale stamp (it would reap instantly on its first
+        // tick). Re-armed by the first inbound byte (onHubMessage).
+        $this->lastTunnelInboundAt = null;
         // Abandon any in-flight chunked-request assemblies — their tunnel is gone.
         $this->requestAccumulators = [];
         // M2: the parked egress queue, local backlogs, parked file streams and
@@ -3335,6 +3352,63 @@ final class RelayConsumer
     }
 
     /**
+     * M1 (asphp review): read-side liveness watchdog for the relay tunnel.
+     *
+     * Before this cure the tunnel had NO inbound liveness check at all:
+     * HEARTBEAT frames are fire-and-forget, a failed tunnel-scoped send only
+     * warns, and the count=1 relay worker kept stamping {@see writeRelayState()}
+     * healthy on every heartbeat tick while frames vanished into a one-way
+     * blackhole (the NAT idle-expiry case this relay exists to serve). Death
+     * detection depended solely on saturating the 16 MiB egress cap, and the
+     * configured {@see RelayConfig::$pingTimeout} knob had zero consumers.
+     *
+     * Semantics (measured against the hub side, which is why the threshold is
+     * interval + timeout and NOT the bare timeout): the hub master does not
+     * reply to our HEARTBEAT frames (its Tunnel::onHeartbeat only touches its
+     * own bookkeeping) — on a healthy idle tunnel the inbound clock is moved
+     * ONLY by the hub's own keepalive sweep, once per heartbeat cycle. A bare
+     * timeout of 10s against a 30s cycle would therefore reap perfectly live
+     * tunnels every sweep. The limit is thus ONE full heartbeat cycle plus the
+     * configured grace: silence beyond it can only mean the peer stopped
+     * talking (or the socket is one-way dead), which is exactly a zombie.
+     *
+     * Reap path = {@see closeTunnel()}: Workerman fires the tunnel's onClose →
+     * {@see handleDisconnect()}, which runs the full teardown (flow-control
+     * reset, local-connection close, down-state persist) and arms the
+     * exponential-backoff reconnect ladder. Any inbound byte clears the clock
+     * ({@see onHubMessage()}).
+     *
+     * @param float|null $nowHrtime Test seam: monotonic seconds to compare
+     *                              against (defaults to hrtime() now).
+     *
+     * @return bool True when the tunnel was declared dead and closed.
+     */
+    public function checkTunnelLiveness(?float $nowHrtime = null): bool
+    {
+        $timeout = $this->config->pingTimeout;
+        if ($timeout < 1 || $this->state !== self::STATE_ACTIVE || $this->lastTunnelInboundAt === null) {
+            return false;
+        }
+
+        $now = $nowHrtime ?? (hrtime(true) / 1_000_000_000.0);
+        $limit = $this->config->pingInterval + $timeout;
+        $silence = $now - $this->lastTunnelInboundAt;
+        if ($silence <= $limit) {
+            return false;
+        }
+
+        $this->logger->warning('RelayConsumer: tunnel inbound silence exceeded the liveness limit — reaping zombie', [
+            'silent_seconds' => round($silence, 1),
+            'limit_seconds' => $limit,
+            'ping_interval' => $this->config->pingInterval,
+            'ping_timeout' => $timeout,
+        ]);
+        $this->closeTunnel();
+
+        return true;
+    }
+
+    /**
      * Start the heartbeat timer that periodically sends HEARTBEAT frames.
      *
      * @return void
@@ -3352,6 +3426,16 @@ final class RelayConsumer
 
         try {
             $this->heartbeatTimer = Timer::add($interval, function (): void {
+                // M1: read-side liveness watchdog, riding the same cadence as
+                // the keepalive itself. A zombie tunnel (NAT idle-expiry — the
+                // exact case this relay serves) swallows our fire-and-forget
+                // frames forever while the write side stays error-free; only
+                // the inbound clock can see it. If the sweep reaps, stop the
+                // tick here: handleDisconnect already persisted the down state.
+                if ($this->checkTunnelLiveness()) {
+                    return;
+                }
+
                 $this->sendFrame(RelayFrameType::HEARTBEAT, '');
                 // S40: refresh the persisted snapshot on the same cadence the
                 // state file advertises as `staleAfterSeconds`. Without a

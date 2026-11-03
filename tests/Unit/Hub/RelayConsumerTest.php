@@ -3295,4 +3295,82 @@ class RelayConsumerTest extends TestCase
         );
         $this->assertSame(0, $this->consumerState($consumer, 'tunnelSendQueueBytes'), 'bookkeeping must zero out');
     }
+
+    // ------------------------------------------------------------------
+    // M1 (asphp review): read-side liveness watchdog — a zombie tunnel whose
+    // inbound clock has stopped must be reaped and reconnect-scheduled instead
+    // of being advertised healthy forever (the knob that governs it is
+    // RelayConfig::$pingTimeout, previously consumed by nothing).
+
+    private function backdateLiveness(RelayConsumer $consumer, float $seconds): void
+    {
+        $prop = new \ReflectionProperty(RelayConsumer::class, 'lastTunnelInboundAt');
+        $prop->setAccessible(true);
+        $prop->setValue($consumer, (hrtime(true) / 1_000_000_000.0) - $seconds);
+    }
+
+    public function testZombieTunnelSilenceBeyondIntervalPlusTimeoutIsReaped(): void
+    {
+        $consumer = $this->createConsumer(); // defaults: interval 30 + timeout 10 → limit 40
+        $this->activate($consumer);
+        self::assertTrue($consumer->isActive());
+
+        $this->backdateLiveness($consumer, 41.0);
+
+        self::assertTrue(
+            $consumer->checkTunnelLiveness(),
+            'M1: silence beyond pingInterval + pingTimeout must declare the tunnel dead',
+        );
+        self::assertTrue($this->hub->closed, 'the reap must close the tunnel socket (onClose → handleDisconnect → reconnect ladder)');
+        self::assertFalse($consumer->isActive(), 'the reaped tunnel must no longer be active');
+        self::assertNull(
+            $this->consumerState($consumer, 'lastTunnelInboundAt'),
+            'the dead tunnel must leave no stale stamp for the next one to inherit',
+        );
+    }
+
+    public function testSilenceWithinTheIntervalPlusTimeoutCeilingSurvives(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        // Comfortably INSIDE the limit (the strict-greater-than cut itself is
+        // pinned by the 41s reap case above; an exactly-at-limit probe would
+        // race the forward-moving hrtime clock). The hub keepalive cycle alone
+        // legitimately moves the inbound clock once per interval, so a shorter
+        // cut-off would flap live tunnels — the ceiling must cover one cycle.
+        $this->backdateLiveness($consumer, 39.0);
+        self::assertFalse($consumer->checkTunnelLiveness());
+        self::assertFalse($this->hub->closed, 'a live-quiet tunnel must not be reaped');
+    }
+
+    public function testAnyInboundByteResetsTheLivenessClock(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $this->backdateLiveness($consumer, 41.0);
+        // One hub keepalive lands — the stamp must refresh before the watchdog
+        // can read the aged value.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HEARTBEAT, 0, ''));
+
+        self::assertFalse($consumer->checkTunnelLiveness(), 'M1: fresh inbound traffic saves the tunnel');
+        self::assertFalse($this->hub->closed);
+    }
+
+    public function testPingTimeoutBelowOneDisablesTheWatchdog(): void
+    {
+        $consumer = $this->createConsumer(new RelayConfig(
+            enabled: true,
+            hubRelayWsUrl: 'ws://hub.example.com:8802',
+            localHttpAddress: '127.0.0.1:8096',
+            pingTimeout: 0,
+        ));
+        $this->activate($consumer);
+
+        $this->backdateLiveness($consumer, 86_400.0);
+
+        self::assertFalse($consumer->checkTunnelLiveness(), 'pingTimeout < 1 disables the watchdog (documented knob semantics)');
+        self::assertFalse($this->hub->closed);
+    }
 }

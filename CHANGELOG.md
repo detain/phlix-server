@@ -33,6 +33,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A half-dead hub relay tunnel is now detected from the READ side instead of being advertised healthy forever (review M1, asphp — the `ping_timeout` knob finally has a consumer).**
+  - The relay worker's HEARTBEAT frames are fire-and-forget and a failed
+    tunnel-scoped send only warns, so a NAT-expired (one-way blackholed) tunnel —
+    the exact case the relay exists to serve — kept passing frames into a void
+    while the heartbeat tick stamped the persisted relay state healthy; death was
+    only noticed once the 16 MiB egress cap saturated. `RelayConfig::$pingTimeout`
+    documented "seconds before considering the tunnel dead" but was read by
+    nothing outside its own config class. New: every inbound tunnel byte stamps a
+    monotonic liveness clock, and the heartbeat sweep reaps (close → the existing
+    `handleDisconnect` teardown + backoff reconnect ladder) any ACTIVE tunnel
+    silent beyond ONE hub heartbeat cycle plus that grace — the cycle is in the
+    ceiling because the hub master never replies to our heartbeats; its own
+    keepalive sweep is what moves a healthy idle tunnel's inbound clock, so a
+    bare 10s cut-off against the 30s cycle would flap live tunnels. `ping_timeout
+    < 1` disables the watchdog; the knob's docblock now states the shipped
+    semantics. Zero wire/frame change (reuses the existing HEARTBEAT keepalives);
+    the relay-state file shape is untouched. `RelayConsumerTest` +4 (red-first
+    mutation-toothed): 41s silence on default knobs reaps and leaves no stale
+    clock for the next tunnel, in-ceiling silence survives, one inbound
+    keepalive byte resets the clock, and timeout<1 disables.
+
 - **Idle WebSocket timeouts no longer leave ghost members in watch parties (review M2, asphp — the ping-sweep R16-02 cure's overlooked twin).**
   - The 60-second receive-side idle sweep lived in `ConnectionPool` and closed stale
     wrappers with sendMessage + close + remove() directly. Workerman's `close()`

@@ -49,7 +49,13 @@ final class RelayConfig
      * @param int    $reconnectMaxDelay     Maximum reconnect delay cap (5 minutes).
      * @param float  $reconnectJitterFactor Jitter factor for reconnect delay (±30% by default).
      * @param int    $pingInterval          Seconds between heartbeat frames.
-     * @param int    $pingTimeout           Seconds to wait before considering the tunnel dead.
+     * @param int    $pingTimeout           Liveness grace beyond one heartbeat cycle:
+     *                                      the read-side watchdog (RelayConsumer::
+     *                                      checkTunnelLiveness) reaps a tunnel whose
+     *                                      inbound silence exceeds pingInterval + this
+     *                                      value (the hub keepalive moves the inbound
+     *                                      clock only once per cycle). Values < 1
+     *                                      disable the watchdog. Default: 10.
      * @param string $hubRelayWsUrl         Explicit hub server-tunnel WS endpoint
      *                                      (e.g. ws://hub.example.com:8802). When empty
      *                                      it is derived from $hubWssUrl + port 8802.

@@ -404,7 +404,7 @@ final class ThemeEndpointsReachabilityTest extends TestCase
             $response = $router->dispatch($this->request($path));
 
             $this->assertSame(503, $response->statusCode);
-            $this->assertSame(['error' => 'Theming is not configured'], $this->body($response));
+            $this->assertSame(['error' => 'This feature isn\'t available on this server right now. Please try again later.'], $this->body($response));
         }
     }
 

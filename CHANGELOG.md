@@ -33,6 +33,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Thirty unwired-subsystem 503s stop reciting internal wiring vocabulary (review M23, copywriter).**
+  - The web portal's "Watch history/Profile manager/Favorites/Ratings/Similar
+    items/Collection service/Recommendations/Transcode/Settings
+    persistence/Theming/Artwork storage/Avatar service/Music library service
+    is(are) not configured (on this server)" family — 30 member-facing arms
+    reached by ordinary signed-in users whenever an optional subsystem is
+    unwired — now answers one human sentence: "This feature isn't available on
+    this server right now. Please try again later." 503 statuses and the
+    single-`error`-key envelope shape are unchanged (copy-only per the C2
+    model); the machine-readable `code` half of the proposal adds a payload
+    key and joins the M13 deferral (contract registry territory). The two law
+    pins that sample the copy (wire-path 503 guard, theme reachability)
+    followed the string; every other arm was unpinned.
+
 - **The hub-enrollment refusal sentence no longer spells its own word two ways (review M22, code half).**
   - "This server isn't **enrolled** … **Enrol** it from Admin → Hub" became
     "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to

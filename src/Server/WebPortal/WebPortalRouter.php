@@ -1870,7 +1870,7 @@ class WebPortalRouter
 
         if ($this->watchHistory === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Watch history is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -1966,13 +1966,13 @@ class WebPortalRouter
 
         if ($this->watchHistory === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Watch history is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
         if ($this->profileManager === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Profile manager is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2017,13 +2017,13 @@ class WebPortalRouter
 
         if ($this->watchHistory === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Watch history is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
         if ($this->profileManager === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Profile manager is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2056,7 +2056,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->addFavorite($request, $params);
@@ -2073,7 +2073,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->removeFavorite($request, $params);
@@ -2090,7 +2090,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->setRating($request, $params);
@@ -2110,7 +2110,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->setLikeLevel($request, $params);
@@ -2127,7 +2127,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->clearRating($request, $params);
@@ -2146,7 +2146,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->markWatched($request, $params);
@@ -2165,7 +2165,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->markUnwatched($request, $params);
@@ -2208,7 +2208,7 @@ class WebPortalRouter
     {
         if ($this->mediaUserDataController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Favorites are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaUserDataController->listFavorites($request, $params);
@@ -2228,7 +2228,7 @@ class WebPortalRouter
     {
         if ($this->mediaRatingsController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Ratings are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         $ratings = $this->mediaRatingsController->getRatings($params);
@@ -2251,7 +2251,7 @@ class WebPortalRouter
     {
         if ($this->mediaRatingsController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Ratings are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->mediaRatingsController->createRating($request, $params);
@@ -2288,7 +2288,7 @@ class WebPortalRouter
     {
         if ($this->similarityService === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Similar items are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2393,7 +2393,7 @@ class WebPortalRouter
     {
         if ($this->collectionService === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Collection service is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2469,7 +2469,7 @@ class WebPortalRouter
     {
         if ($this->collectionService === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Collection service is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2528,7 +2528,9 @@ class WebPortalRouter
     public function listThemes(Request $request, array $params): Response
     {
         if ($this->themesController === null) {
-            return (new Response())->status(503)->json(['error' => 'Theming is not configured']);
+            return (new Response())->status(503)->json([
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
+            ]);
         }
 
         return $this->themesController->index($request, $params);
@@ -2551,7 +2553,9 @@ class WebPortalRouter
     public function getTheme(Request $request, array $params): Response
     {
         if ($this->themesController === null) {
-            return (new Response())->status(503)->json(['error' => 'Theming is not configured']);
+            return (new Response())->status(503)->json([
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
+            ]);
         }
 
         return $this->themesController->show($request, $params);
@@ -2587,7 +2591,9 @@ class WebPortalRouter
     public function getPersonPhoto(Request $request, array $params): Response
     {
         if ($this->artworkStorage === null) {
-            return (new Response())->status(503)->json(['error' => 'Artwork storage is not configured']);
+            return (new Response())->status(503)->json([
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
+            ]);
         }
 
         $personId = $params['personId'] ?? '';
@@ -2658,7 +2664,7 @@ class WebPortalRouter
     {
         if ($this->recommendationService === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Recommendations are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2703,7 +2709,7 @@ class WebPortalRouter
     {
         if ($this->recommendationService === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Recommendations are not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -2737,7 +2743,7 @@ class WebPortalRouter
     {
         if ($this->transcodeController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Transcode is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->transcodeController->start($request, $params);
@@ -2758,7 +2764,7 @@ class WebPortalRouter
     {
         if ($this->transcodeController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Transcode is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
         return $this->transcodeController->status($request, $params);
@@ -2869,7 +2875,7 @@ class WebPortalRouter
 
         if ($this->userRepository === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Settings persistence is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -3053,7 +3059,7 @@ class WebPortalRouter
         if ($this->userRepository === null) {
             // No persistence layer wired; cannot honestly claim success.
             return (new Response())->status(503)->json([
-                'error' => 'Settings persistence is not configured on this server',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -3093,7 +3099,7 @@ class WebPortalRouter
 
         if ($this->avatarStorage === null || $this->userAvatarController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Avatar service not configured',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -3124,7 +3130,7 @@ class WebPortalRouter
 
         if ($this->avatarStorage === null || $this->userAvatarController === null) {
             return (new Response())->status(503)->json([
-                'error' => 'Avatar service not configured',
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
             ]);
         }
 
@@ -3220,7 +3226,9 @@ class WebPortalRouter
     public function scanMusicDirectory(Request $request, array $params): Response
     {
         if ($this->musicLibraryService === null) {
-            return (new Response())->status(503)->json(['error' => 'Music library service not configured']);
+            return (new Response())->status(503)->json([
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
+            ]);
         }
 
         $body = $request->body;

@@ -33,6 +33,16 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Two people signing up with the same name at the same instant now get the honest 400, not a 500 (review M17, dba2).**
+  - Registration checks username and email availability before its transaction,
+    so a concurrent loser's INSERT previously died on the database UNIQUE with
+    a raw duplicate-key error — surfacing as a generic 500 even though the
+    answer ("Username already taken") was knowable. The INSERT failure now
+    translates into the exact 400 copy the pre-check produces (JSON and
+    browser-form arms alike, no new codes); unrelated INSERT failures keep
+    their verbatim exception identity — a PRIMARY collision is a real fault,
+    never a friendly rejection.
+
 - **The relay-tunnel worker no longer opens an unintended listener on every interface (review M20, devops2).**
   - Both places that started it passed `text://0.0.0.0:0` "purely to get a
     timer context" — but Workerman binds and listens on any socket name, so

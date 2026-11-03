@@ -572,6 +572,30 @@ class AuthManager
     }
 
     /**
+     * Which signup identity did a duplicate-key INSERT reject? (M17)
+     *
+     * Returns 'username' / 'email' for a MySQL 1062 on the respective UNIQUE
+     * constraint — inline column UNIQUEs are reported as `for key
+     * 'users.username'` — and null for ANYTHING else, so an unrelated INSERT
+     * failure (PRIMARY collision, malformed row) is never swallowed into a
+     * friendly 400; the caller rethrows it verbatim.
+     */
+    private static function duplicateSignupKeyField(string $message): ?string
+    {
+        if (!str_contains($message, 'Duplicate entry')) {
+            return null;
+        }
+        if (str_contains($message, "key 'users.username'") || str_contains($message, "key 'username'")) {
+            return 'username';
+        }
+        if (str_contains($message, "key 'users.email'") || str_contains($message, "key 'email'")) {
+            return 'email';
+        }
+
+        return null;
+    }
+
+    /**
      * The shared AUTH-channel logger — not a private one in a temp directory.
      *
      * The old body `mkdir()`ed a `sys_get_temp_dir()/phlix_auth_<uniqid>`
@@ -907,13 +931,36 @@ class AuthManager
             $status = ($isFirstUser || $signupMode !== 'approval') ? 'active' : 'pending';
 
             // Create user
-            $userId = $this->userRepository->create([
-                'username' => $username,
-                'email' => $email,
-                'password' => $password,
-                'display_name' => $username,
-                'status' => $status,
-            ]);
+            // M17 (dba2 major 2): the uniqueness pre-checks above run OUTSIDE
+            // this transaction, so two concurrent signups can both pass them
+            // and the loser's INSERT dies on the users.username / users.email
+            // UNIQUE with MySQL 1062 — previously a raw PDOException reaching
+            // the wire as a generic 500. The race now throws the SAME 400 copy
+            // the pre-check produces (InvalidArgumentException rides
+            // AuthController's existing JSON + browser arms; no new wire
+            // codes). Detection is message-based because the connection
+            // implementation rethrows non-reconnect errors as a fresh
+            // PDOException with no errorInfo — the repo's own
+            // StreamProbeBackfill doctrine: only the message survives.
+            try {
+                $userId = $this->userRepository->create([
+                    'username' => $username,
+                    'email' => $email,
+                    'password' => $password,
+                    'display_name' => $username,
+                    'status' => $status,
+                ]);
+            } catch (\PDOException $e) {
+                $taken = self::duplicateSignupKeyField($e->getMessage());
+                if ($taken === null) {
+                    throw $e;
+                }
+                throw new \InvalidArgumentException(
+                    $taken === 'username'
+                        ? 'Username already taken'
+                        : 'That email address is already in use'
+                );
+            }
 
             if ($isFirstUser) {
                 // Minimum-viable admin bootstrap: the operator who

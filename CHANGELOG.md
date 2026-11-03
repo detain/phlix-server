@@ -33,6 +33,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A wiring failure that removes an API surface is now logged instead of vanishing silently (review M8, srphp).**
+  - Route-registration and subsystem-start blocks in `Application` caught every
+    resolution error with a comment-only body: a broken DI binding made clients
+    get 404s (or the relay/hub/discovery workers stay down) while the daemon
+    booted green. The estate fail-loud law is restored at the minimum without
+    changing boot behavior: every swallow site now `error_log`s the feature name
+    and the driver message. Sites whose degrade path is already client-visible
+    (a per-request 503) and the legacy container-less DB fallback chain stay as
+    they were, documented in the review ledger.
+- **The parental-rating gate on the direct-play fast path announces its own failure (review M9, srphp).**
+  - `PreRouterFastPaths::ratingGate()` returned null on any container error and
+    the stream branch treats a null gate as "no cap", so a transient wiring fault
+    served capped-profile streams ungated with zero log output. The degrade
+    direction (keep playing rather than black out the server) is unchanged; the
+    fault is now logged on every occurrence — a silent security-control
+    degradation must be visible. The stricter alternative (503 for capped
+    sessions) is an availability trade kept for the owner, recorded in the ledger.
+
 - **A half-dead hub relay tunnel is now detected from the READ side instead of being advertised healthy forever (review M1, asphp — the `ping_timeout` knob finally has a consumer).**
   - The relay worker's HEARTBEAT frames are fire-and-forget and a failed
     tunnel-scoped send only warns, so a NAT-expired (one-way blackholed) tunnel —

@@ -593,7 +593,8 @@ class Application
                     },
                     [$telemetryAdminMiddleware],
                 );
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('routes: admin telemetry clients endpoint not registered: ' . $e->getMessage());
                 // Admin middleware unavailable — route not registered (same
                 // posture as every other admin loader in this class).
             }
@@ -675,7 +676,7 @@ class Application
                                 $paramsArr['allowedRatings'] = $ratingFilter['allowedRatings'];
                                 $paramsArr['allowUnrated'] = $ratingFilter['allowUnrated'];
                             }
-                        } catch (\Throwable) {
+                        } catch (\Throwable $e) {
                             // R18-01: the S235 docblock above promises a deny-all
                             // cap for unidentified requests — a broken gate must
                             // not hand back what a missing identity never gets.
@@ -684,6 +685,7 @@ class Application
                             // uncapped: storage layout of the parental filter is
                             // a safety property, not an optimization. denyAll()
                             // is static, so it resolves without the container.
+                            error_log('routes: search gate unavailable; degrading to deny-all: ' . $e->getMessage());
                             $denyAll = \Phlix\Media\Library\RatingGate::denyAll();
                             $paramsArr['allowedRatings'] = $denyAll['allowedRatings'];
                             $paramsArr['allowUnrated'] = $denyAll['allowUnrated'];
@@ -915,7 +917,8 @@ class Application
                     },
                     [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
                 );
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('routes: media watched/unwatched endpoints not registered: ' . $e->getMessage());
                 // MediaUserDataController not available — routes not registered
             }
         }
@@ -933,7 +936,8 @@ class Application
                     },
                     [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
                 );
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('routes: media item action endpoints not registered: ' . $e->getMessage());
                 // Controller unavailable — routes not registered
             }
         }
@@ -951,7 +955,8 @@ class Application
                     },
                     [$adminMiddleware]
                 );
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('routes: media delete endpoint not registered: ' . $e->getMessage());
                 // AdminMiddleware or controller unavailable — route not registered
             }
         }
@@ -977,7 +982,8 @@ class Application
                     },
                     [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
                 );
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('routes: most-watched rail not registered: ' . $e->getMessage());
                 // Controller unavailable — route not registered
             }
         }
@@ -1177,8 +1183,9 @@ class Application
                 },
                 [$adminMiddleware],
             );
-        } catch (\Throwable) {
-            // Services not configured — silent ignore
+        } catch (\Throwable $e) {
+            error_log('routes: admin services endpoints not registered: ' . $e->getMessage());
+            // Services wiring failed — the endpoints are absent; logged, never silent (M8).
         }
     }
 
@@ -1222,8 +1229,9 @@ class Application
                 },
                 [$adminMiddleware],
             );
-        } catch (\Throwable) {
-            // Backup not configured — silent ignore
+        } catch (\Throwable $e) {
+            error_log('routes: admin backup endpoints not registered: ' . $e->getMessage());
+            // Backup wiring failed — the endpoints are absent; logged, never silent (M8).
         }
     }
 
@@ -1262,7 +1270,8 @@ class Application
                     $controller->setCdsServer($cdsServer);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('dlna: CdsServer wiring failed; status reports disabled: ' . $e->getMessage());
             // CdsServer unavailable — controller stays null; status() reports disabled.
         }
 
@@ -1278,7 +1287,8 @@ class Application
                     $controller->setSettingsRepository($settingsRepo);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('dlna: settings store wiring failed; toggle reports 503: ' . $e->getMessage());
             // Settings store unavailable — start()/stop() report 503.
         }
 
@@ -1291,7 +1301,8 @@ class Application
                     $controller->setRestartController($restartController);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('dlna: restart wiring failed; toggle persists unscheduled: ' . $e->getMessage());
             // Restart controller unavailable — toggle still persists, reloadScheduled=false.
         }
 
@@ -1361,12 +1372,12 @@ class Application
                 },
                 [$adminMiddleware],
             );
-        } catch (\Throwable) {
-            // Remote access not configured — silent ignore. Post-S211 this catch also
-            // swallows resolveConfigDir()'s throw on a misconfigured (relative or root)
-            // hub.config_dir, so admin remote routes come up ABSENT (404s) instead of
-            // the pre-S211 silently-CWD-dependent behavior; a loud boot would be nicer,
-            // but the group-registration context swallows like its sibling loaders.
+        } catch (\Throwable $e) {
+            error_log('routes: admin remote-access endpoints not registered: ' . $e->getMessage());
+            // Remote access wiring failed — admin remote routes come up ABSENT (404s).
+            // Post-S211 this catch also swallows resolveConfigDir()'s throw on a
+            // misconfigured (relative or root) hub.config_dir, instead of the pre-S211
+            // silently-CWD-dependent behavior. Logged, never silent (M8).
         }
     }
 
@@ -1507,8 +1518,9 @@ class Application
                 },
                 [$adminMiddleware],
             );
-        } catch (\Throwable) {
-            // LiveTV admin not configured — silent ignore
+        } catch (\Throwable $e) {
+            error_log('routes: admin LiveTV endpoints not registered: ' . $e->getMessage());
+            // LiveTV admin wiring failed — the endpoints are absent; logged, never silent (M8).
         }
     }
 
@@ -1876,7 +1888,8 @@ class Application
             /** @var \Phlix\Server\Http\Controllers\Admin\BackupController */
             $controller = $this->container->get(\Phlix\Server\Http\Controllers\Admin\BackupController::class);
             return $controller;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('backup: container resolution failed; manual controller used: ' . $e->getMessage());
             // Fall back to manual construction
             return \Phlix\Server\Http\Controllers\Admin\BackupController::createDefault();
         }
@@ -1941,7 +1954,8 @@ class Application
         foreach ($map as $settingKey => $configKey) {
             try {
                 $override = $settings->getOverride($settingKey);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('lastfm: settings override ' . $settingKey . ' unreadable: ' . $e->getMessage());
                 // A settings-store failure must never stop Last.fm from loading
                 // on its file config.
                 continue;
@@ -1972,7 +1986,8 @@ class Application
             $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
 
             return $settings;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('settings: SettingsRepository unavailable; env/file fallback: ' . $e->getMessage());
             // Settings repository not available — fall back to env/file config.
             return null;
         }
@@ -2071,8 +2086,9 @@ class Application
                 $this->router->get('/api/v1/oauth/lastfm', [$controller, 'apiAuthorize']);
                 $this->router->get('/api/v1/oauth/lastfm/callback', [$controller, 'apiCallback']);
             }
-        } catch (\Throwable) {
-            // Last.fm not configured — silent ignore (e.g. DB not ready).
+        } catch (\Throwable $e) {
+            error_log('routes: Last.fm OAuth endpoints not registered: ' . $e->getMessage());
+            // Last.fm wiring failed — the endpoints are absent; logged, never silent (M8).
         }
     }
 
@@ -2874,8 +2890,9 @@ class Application
             if ($relayApp instanceof RelayApplication) {
                 $relayApp->start();
             }
-        } catch (\Throwable) {
-            // Relay not configured — silent ignore
+        } catch (\Throwable $e) {
+            error_log('relay: tunnel worker did not start: ' . $e->getMessage());
+            // Relay wiring failed — the tunnel stays down; logged, never silent (M8).
         }
     }
 
@@ -2890,8 +2907,9 @@ class Application
             if ($hubApp instanceof HubApplication) {
                 $hubApp->start();
             }
-        } catch (\Throwable) {
-            // Hub is not configured or not enrolled — silent ignore
+        } catch (\Throwable $e) {
+            error_log('hub: heartbeat worker did not start: ' . $e->getMessage());
+            // Hub wiring failed — heartbeats stay off; logged, never silent (M8).
         }
     }
 
@@ -2911,8 +2929,9 @@ class Application
             if ($discoveryServer instanceof DiscoveryServer) {
                 $discoveryServer->start();
             }
-        } catch (\Throwable) {
-            // Discovery not configured — silent ignore
+        } catch (\Throwable $e) {
+            error_log('discovery: server did not start: ' . $e->getMessage());
+            // Discovery wiring failed — SSDP/mDNS stay off; logged, never silent (M8).
         }
     }
 
@@ -4208,7 +4227,8 @@ class Application
         try {
             /** @var \Phlix\Media\Library\RatingGate $ratingGate */
             $ratingGate = $this->container->get(\Phlix\Media\Library\RatingGate::class);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('media: RatingGate unavailable; item routes run ungated: ' . $e->getMessage());
             $ratingGate = null;
         }
         // S97: shuffle needs the `music_*` read path to turn an album/artist id
@@ -4219,7 +4239,8 @@ class Application
         try {
             /** @var \Phlix\Media\Music\MusicLibraryService $musicLibrary */
             $musicLibrary = $this->container->get(\Phlix\Media\Music\MusicLibraryService::class);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('media: MusicLibraryService unavailable; shuffle stays 404: ' . $e->getMessage());
             $musicLibrary = null;
         }
         return new \Phlix\Server\Http\Controllers\MediaItemController(
@@ -4890,7 +4911,8 @@ class Application
             /** @var \Phlix\Media\Library\RatingGate $gate */
             $gate = $this->container->get(\Phlix\Media\Library\RatingGate::class);
             return $gate;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            error_log('media: optional RatingGate resolution failed: ' . $e->getMessage());
             return null;
         }
     }
@@ -5239,20 +5261,23 @@ class Application
             try {
                 /** @var \Psr\Log\LoggerInterface */
                 $logger = $this->container->get(\Psr\Log\LoggerInterface::class);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('trakt: logger unavailable: ' . $e->getMessage());
                 // Logger not available — use null
             }
             try {
                 /** @var \Phlix\Admin\SettingsRepository $settings */
                 $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('trakt: settings repository unavailable: ' . $e->getMessage());
                 // Settings repository not available — fall back to env/file config.
                 $settings = null;
             }
             try {
                 /** @var \Phlix\Plugins\Repository\PluginRepository */
                 $plugins = $this->container->get(\Phlix\Plugins\Repository\PluginRepository::class);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('trakt: plugin repository unavailable: ' . $e->getMessage());
                 // Plugin repository not available
             }
         }
@@ -5272,7 +5297,8 @@ class Application
                 $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
                 $adminGate = static fn (\Phlix\Server\Http\Request $request): ?\Phlix\Server\Http\Response
                     => $adminMiddleware($request);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
+                error_log('trakt: admin middleware unavailable; callback fails closed: ' . $e->getMessage());
                 // Admin middleware unavailable — leave the gate null so the
                 // callback fails closed instead of running ungated.
             }

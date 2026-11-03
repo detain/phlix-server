@@ -973,7 +973,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * the phpunit red (2042), not predicted.
      */
     // M-SERVER-05 (+1 file = AdminSettingsControllerErrorEnvelopeTest.php).
-    private const EXPECTED_PHP_FILES = 2042;
+    // +1 (+2 total) 2042→2044: this review-lane chain added
+    // SecurityHeadersCspWebSocketTest.php (commit 14156288) and
+    // GrantListCensusTest.php (commit 213850ca) without rotating the pin in
+    // those commits (their authors' miss, disclosed); rotated HERE from the
+    // measured red (2044), never predicted — the S431 forward-fix precedent.
+    private const EXPECTED_PHP_FILES = 2044;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

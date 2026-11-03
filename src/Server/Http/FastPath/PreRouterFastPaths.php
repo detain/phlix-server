@@ -731,14 +731,16 @@ final class PreRouterFastPaths
     /**
      * Resolve the shared parental-control {@see RatingGate} from the container,
      * or null when it cannot be built (never blocks the stream on wiring error —
-     * a null gate is a strict no-op, owner-safe).
+     * a null gate is a strict no-op, owner-safe). The resolution failure IS
+     * logged (M9): a parental control degrading silently must be visible.
      */
     private function ratingGate(): ?RatingGate
     {
         try {
             $gate = $this->container()->get(RatingGate::class);
             return $gate instanceof RatingGate ? $gate : null;
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            error_log('stream: parental RatingGate unavailable; direct play runs ungated: ' . $e->getMessage());
             return null;
         }
     }

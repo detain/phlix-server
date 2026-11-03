@@ -1008,10 +1008,14 @@ class ItemRepository
         // walk and repeats the other. `id` is the PRIMARY KEY, so appending it
         // makes the order TOTAL and every page boundary reproducible.
         //
-        // This costs nothing in plan terms: `WHERE type = ?` resolves through
-        // the single-column `idx_type` and the ORDER BY already filesorts (there
-        // is no `(type, sort_title, …)` index — the composite from migration 050
-        // leads with `library_id`), so the sort was happening either way.
+        // Plan terms (review minor 58): migration 124 added
+        // `idx_media_items_type_sort (type, sort_title, name)` — with `type`
+        // pinned by the equality the index supplies the `sort_title, name`
+        // order outright, and InnoDB's implicit PK suffix covers the trailing
+        // `id`, so this rail filesorts no more. Before it, `WHERE type = ?`
+        // resolved through `idx_type` and the whole partition sorted per call
+        // (migration 050's composite leads with `library_id` and cannot serve
+        // an unscoped browse).
         $results = $this->db->query(
             "SELECT * FROM media_items WHERE type = ? ORDER BY " . self::titleOrder() . ", id ASC LIMIT ? OFFSET ?",
             [$type, min(max(1, $limit), self::ABSOLUTE_ROW_CEILING), $this->normalizeOffset($offset)]

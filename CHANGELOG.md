@@ -33,6 +33,22 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Review minor 58 — the unscoped browse rail stops filesorting.** New
+  migration `124_media_items_type_sort_index.sql` adds
+  `idx_media_items_type_sort (type, sort_title, name)` to `media_items`, so
+  `ItemRepository::getAllByType()` (`WHERE type = ? ORDER BY sort_title, name,
+  id`) reads its partition in index order: `type` is pinned by the equality,
+  the index supplies the `sort_title, name` order, and InnoDB's implicit PK
+  suffix covers the trailing `id`. Measured three-way on MySQL 8.0: with the
+  index `key=idx_media_items_type_sort` and no `Using filesort`; without it
+  `idx_type` + filesort; and the review's suggested `(type, sort_title(64),
+  name)` PREFIX variant measurably does NOT kill the filesort (a prefix index
+  cannot order a VARCHAR(255) column — the optimizer declines it), so the full
+  column rides instead. Guard idiom per 107/121/123 (INFORMATION_SCHEMA +
+  PREPARE; replay short-circuits, proven twice on MySQL and verbatim twice on
+  MariaDB 10.6); the runner's full-chain apply is green with it in the tree.
+  050's library-led composite stays — the library-scoped browse cannot use
+  this one, and vice versa.
 - **Review Minor static/SQL-law cluster (minors 3, 55, 56, 57, 74).** The rest
   of the public static tree (legacy `public/assets/{css,images,js}` residents,
   favicon, robots) now gets the same fail-closed `Cache-Control: no-cache` the

@@ -33,6 +33,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Newsletter re-fires can no longer double-queue (and double-mail) a
+  recipient.** `newsletter_queue` shipped its `(user_id, week_start)` index
+  NON-UNIQUE (migration 020) and `queueAll()` inserted blindly, so a re-fired
+  weekly campaign appended a second pending row per already-queued user.
+  Migration 125 collapses any pre-existing duplicates deterministically
+  (earliest `created_at` per group survives, `id` tiebreak) and lands
+  `uk_newsletter_user_week`; `queueAll()` becomes `INSERT IGNORE` and counts
+  only rows ACTUALLY created (vendor `Connection::query()` returns
+  `lastInsertId()` for a changed INSERT and NULL for a skipped duplicate —
+  pinned by the unit test's mixed callback). The SELECT-without-FOR-UPDATE
+  process-claim half of the review stays documented-safe under the count=1
+  timer worker, unchanged. (Deferred-items lane, review minor #54 / dba2 m2.)
+
 - **Two pre-existing CI reds at the campaign tip are cured (baseline repair,
   no behavior change).** (1) Batch-17 (6437e318) excised the dead
   `run()`/`handleException()` starters from `Application.php` but left three

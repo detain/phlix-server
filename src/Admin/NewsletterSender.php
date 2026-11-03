@@ -65,10 +65,25 @@ class NewsletterSender
      * Inserts one row per recipient into the newsletter_queue table
      * with status 'pending' for the specified week.
      *
+     * Deferred-item #54: `uk_newsletter_user_week` (migration 125) makes
+     * (user_id, week_start) UNIQUE — a pre-125 re-fired campaign used to
+     * DOUBLE-queue (and thereby double-mail) anyone already holding a row
+     * for the week. The INSERT is now IGNORE-shaped, so re-firing an
+     * already-queued recipient is a no-op at the storage layer rather than a
+     * second email. Workerman's `Connection::query()` returns
+     * `lastInsertId()` for an INSERT that changed rows and NULL when
+     * rowCount() came back 0 (vendor Connection.php:1859-1863), so a
+     * non-null result is exactly "this call created a row" — the return
+     * count stays honest under IGNORE (IGNORE can only hide duplicate-key
+     * 1062 here: id is a random UUID PK, and every column the loop binds is
+     * pre-validated or generated, so no other coercible-violation class
+     * reaches the statement).
+     *
      * @param array<int, string> $userIds Array of user UUIDs to queue
      * @param DateTimeInterface $weekStart Start date of the week
      *
-     * @return int Number of queue entries created
+     * @return int Number of queue entries CREATED by this call (already
+     *             queued duplicates are no-ops and are not counted)
      */
     public function queueAll(array $userIds, DateTimeInterface $weekStart): int
     {
@@ -86,13 +101,15 @@ class NewsletterSender
 
         foreach ($userIds as $userId) {
             $id = $this->generateUuid();
-            $this->db->query(
-                "INSERT INTO newsletter_queue
+            $created = $this->db->query(
+                "INSERT IGNORE INTO newsletter_queue
                  (id, user_id, week_start, status, attempts, created_at)
                  VALUES (?, ?, ?, 'pending', 0, NOW())",
                 [$id, $userId, $weekStartStr]
             );
-            $count++;
+            if ($created !== null) {
+                $count++;
+            }
         }
 
         $this->log('info', 'Newsletter queue entries created', ['count' => $count]);

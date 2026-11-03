@@ -25,22 +25,30 @@ class NewsletterSenderTest extends TestCase
 
     public function testQueueAllCreatesQueueEntries(): void
     {
+        // #54 law: the count is rows ACTUALLY created. vendor
+        // Connection::query() returns lastInsertId() (never null) for an INSERT
+        // that changed rows, and NULL for an IGNORE-skipped duplicate — the
+        // callback below emulates one re-fired recipient (third user already
+        // queued) against two fresh ones.
         $this->db->expects($this->exactly(3))
             ->method('query')
             ->with(
-                $this->stringContains('INSERT INTO newsletter_queue'),
+                $this->stringContains('INSERT IGNORE INTO newsletter_queue'),
                 $this->callback(function ($params): bool {
                     return count($params) === 3
                         && is_string($params[0])
                         && strlen($params[0]) === 36;
                 })
-            );
+            )
+            ->willReturnCallback(function (string $sql, array $params): ?string {
+                return $params[1] === 'user-3' ? null : '0';
+            });
 
         $sender = new NewsletterSender($this->db);
         $weekStart = new DateTime('2024-01-01');
         $result = $sender->queueAll(['user-1', 'user-2', 'user-3'], $weekStart);
 
-        $this->assertEquals(3, $result);
+        $this->assertEquals(2, $result, 'already-queued duplicates must not inflate the created-count');
     }
 
     public function testQueueAllReturnsZeroForEmptyUserList(): void

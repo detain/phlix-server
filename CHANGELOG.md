@@ -33,6 +33,18 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Two pre-existing CI reds at the campaign tip are cured (baseline repair,
+  no behavior change).** (1) Batch-17 (6437e318) excised the dead
+  `run()`/`handleException()` starters from `Application.php` but left three
+  now-unreferenced imports (`LogChannels`, `LoggerFactory`, `Throwable` — every
+  surviving reference is fully-qualified), reddening the S187 whole-tree
+  unused-import guard; excised (57a96f55). (2) The same batch added a third
+  SecurityHeaders funnel (raw-reply 500 decoration) without rotating the
+  wiring guard's two-funnel count pin; rotated 2→3 from the measured red with
+  attribution, the law (one construction, never store-less) untouched
+  (b7718586). Both author-misses disclosed; the guard rotation is the sole
+  test failure in the origin CI red run at 98d7f691 (41714136593).
+
 - **Boot-degradation lines are now identity-stamped log-channel records.**
   Two boot paths that strand an admin control — an unusable `worker.pid_file`
   (restart rail silently falling back to Workerman's default) and a

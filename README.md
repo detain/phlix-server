@@ -27,10 +27,17 @@ Phlix Media Server provides a complete media management and streaming solution:
   AC-3 5.1(side) are downmixed — a `channel_configuration=0` PCE otherwise breaks hls.js), and even scale
   widths (`force_divisible_by=2`)
 - **WebSocket Events**: Real-time progress and notification delivery
+- **Subtitles**: embedded text tracks are extracted to WebVTT on demand and served through signed URLs, HLS transcodes emit sidecar subtitle tracks, and provider plugins add searchable remote subtitles (downloaded tracks attach to the item) — see [Subtitles (choosing them)](#subtitles-choosing-them)
+- **Hub / remote access**: enrolling the server with a [phlix-hub](https://github.com/detain/phlix-hub) links your account to the hub's single sign-on and opens an outbound relay path, so you can reach this server from outside your home network without port forwarding. The installer's `--hub-url` (or `PHLIX_HUB_URL`) is the server-side half; pairing completes with `scripts/pair-with-hub.php`. What a hub is for, step by step: [the quickstart's hub section](docs/user/quickstart.md#remote-access-the-hub)
 - **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API, `bin/phlix` and an admin-only `/app` Backup page; see [Backups (admin-managed)](#backups-admin-managed)
 - **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with provider fallback. The 24-hour cache freshness window is tunable (`metadata.cache_ttl_hours`), and a minimum title/year match-confidence gate for accepted provider matches (`metadata.min_match_confidence`, default `0` = gate off) — both admin-editable and read live per lookup
 - **Content Filtering**: Parental controls with rating and genre-based filtering
+
+Setting a server up for your household for the first time? Follow
+[docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
+library → first watch party, one page, in order. The rest of this README is the
+reference; the quickstart is the journey.
 
 ## Architecture
 
@@ -335,6 +342,66 @@ slips into a fresh server just because it is reachable.
   *watch party* (the feature line above). A one-noun consolidation is an open
   owner decision — until it lands, this map is the translation table between
   the three vocabularies.
+
+#### Starting a watch party (portal walkthrough)
+
+The portal UI names the feature **SyncPlay**; the page is `/app/syncplay` and the
+web player carries a **SyncPlay** button. Both open the same create/join
+dialog. Everyone in a watch party needs an account on this server and a client
+playing the same kind of item — the party syncs playback positions, not catalogs.
+
+1. **Start the party.** Open a movie or episode in the web player and press the
+   **SyncPlay** button in the player controls → choose **Create room**. Give it a
+   name; the **Password** field is the ONLY privacy control — empty means anyone
+   with the room id can join, filled makes the server refuse joins that do not
+   supply it. Rooms never appear in strangers' listings either way (see step 3).
+2. **Invite people.** There is no invite-link system on the server: send your
+   household the **room id** (shown in the SyncPlay dialog while the party is
+   open) out-of-band, plus the password if you set one. Members must already
+   have accounts — see [Signup approval gate](#signup-approval-gate-adding-household-users)
+   for admitting them.
+3. **Join.** Each member opens **SyncPlay** → **Join room** and enters the
+   **Room ID** from the invite (locked rooms refuse the join until the password
+   is filled in). The dialog's "available rooms" listing is discovery for rooms
+   you are already in — an active admin sees every room there, a plain member
+   sees only their own — so a first-time joiner uses the id. Members joining
+   while the host is watching are snapped to the party's current position.
+4. **Watch.** The party **host** (the creator; the oldest member takes over if
+   the host leaves) controls play / pause / seek for everyone via the synced
+   transport buttons. Members see re-sync status ("Out of sync… / Re-syncing…")
+   and can rewind/fast-forward the whole group through the host gate. Chat and
+   typing indicators live in the same dialog; the queue holds up to 1000 items.
+
+Stuck? See [A SyncPlay / watch group gets stuck](#a-syncplay-watch-group-gets-stuck).
+
+### Subtitles (choosing them)
+
+Subtitles are a first-class playback surface, not an afterthought. In the web
+player the **Subtitles** menu (captions icon) lists the text tracks available
+for the item plus **Off**; pick one and the player attaches it live. The
+initial language is the config-file default `subtitles.default_language`
+(`config/subtitles.php`, `en` out of the box). What can show up in that menu:
+
+- **Embedded text tracks** (SRT/ASS/mov_text inside the file) are extracted to
+  WebVTT on demand with ffmpeg — cache-first, so only the first viewer of a
+  track pays the extraction cost — and served per item. Failed extractions are
+  not cached (a transient ffmpeg hiccup never ossifies into a missing track).
+- **HLS transcodes** emit sidecar `.vtt` tracks per embedded subtitle stream,
+  so streamed (transcoded) playback gets the same picker.
+- **Downloaded external tracks** persist beside the library under the subtitle
+  storage root (`SUBTITLE_STORAGE_PATH`) and attach to the item like any other
+  track — one download, then every member sees it.
+
+**Remote search.** If an item has no track in your language, the player can
+search provider plugins (`phlix-plugin-opensubtitles` and friends) for
+candidates and download the one you pick; the fetched track is then attached
+to the item as above. Search itself consumes no provider quota — only
+downloads do — and remote search needs the provider plugin installed **and**
+enabled, like every other plugin surface.
+
+The surface is the `/api/v1/media/{id}/subtitles*` endpoint family (rows in
+the REST table below); signed subtitle URLs ride the HLS pipeline the same way
+segment URLs do.
 
 ### Session Management
 - **Device Sessions**: Track authenticated devices with activity timestamps
@@ -750,6 +817,29 @@ vs `/var/www/phlix`), service users (`www-data` vs `phlix`), MySQL DBs (`phlix_h
 
 ### Manual install (from source)
 
+**Prerequisites (manual path).** This path presumes you provision PHP, Composer
+and the database engine yourself — steps the one-liner installer automates but
+the sequence below does NOT. On a fresh Ubuntu/Debian host, start with:
+
+```bash
+sudo apt-get update -y
+sudo apt-get install -y ca-certificates curl git unzip openssl \
+    php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-ldap \
+    mysql-server
+```
+
+That package set is the manual mirror of `scripts/install.sh`'s own apt line and
+its built-in-vs-packaged mapping comment: `ctype`, `exif`, `fileinfo`, `iconv`,
+`posix` and `sockets` ship in `php8.3-common` (pulled by `php-cli`); `dom`,
+`libxml` and `simplexml` come with `php-xml`; `hash`, `json`, `filter`,
+`openssl`, `pcntl`, `random`, `sodium` and `zlib` are built into the
+`php8.3-cli` binary; `pdo_mysql` rides `php-mysql`, `mbstring`/`curl`/`gd`/`zip`
+/`ldap` are their own packages. `composer.json`'s 24 `ext-*` requirements are
+the derived contract (`scripts/required-php-extensions.php`) — a missing member
+makes the very first `composer install` below refuse. Then install Composer
+itself (<https://getcomposer.org/download/>), verified against its published
+signature.
+
 ```bash
 # Clone the repository
 git clone https://github.com/detain/phlix-server.git
@@ -761,16 +851,20 @@ composer install
 # Provision the database the shipped defaults expect: database `phlix`
 # and MySQL user `phlix` (config/database.php defaults). This mirrors the
 # create-half of scripts/install.sh's own SQL — run as MySQL root over the
-# local socket; the grant list is exactly what migrations + runtime need.
-# Both host rows matter: a TCP connect to 127.0.0.1 is matched as
-# 'localhost' when reverse DNS resolves it (default Ubuntu behavior).
+# local socket; the grant list is what migrations + runtime need — note it
+# MUST include DROP: several in-chain migrations swap indexes with
+# unconditional ALTER TABLE … DROP INDEX / DROP PRIMARY KEY, and without
+# the privilege the first run aborts with error 1142 (not in the
+# idempotent-squelch set). Both host rows matter: a TCP connect to
+# 127.0.0.1 is matched as 'localhost' when reverse DNS resolves it
+# (default Ubuntu behavior).
 # Replace your_strong_password here and below — the two must match.
 sudo mysql <<'SQL'
 CREATE DATABASE IF NOT EXISTS `phlix` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'phlix'@'127.0.0.1' IDENTIFIED BY 'your_strong_password';
 CREATE USER IF NOT EXISTS 'phlix'@'localhost' IDENTIFIED BY 'your_strong_password';
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON `phlix`.* TO 'phlix'@'127.0.0.1';
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON `phlix`.* TO 'phlix'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES, DROP ON `phlix`.* TO 'phlix'@'127.0.0.1';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES, DROP ON `phlix`.* TO 'phlix'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 
@@ -1207,6 +1301,11 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | PUT | `/api/v1/media/{id}/rating` | Set the user's personal rating (body `{rating: int 1-10\|null}`; `null` clears) — auth required |
 | DELETE | `/api/v1/media/{id}/rating` | Clear the user's personal rating — auth required |
 | PUT | `/api/v1/media/{id}/like` | Set the user's thumbs value (body `{level: int -2..2}`, required; `-2`=strongly dislike, `-1`=dislike, `0`=not set, `1`=like, `2`=love) — auth required |
+| GET | `/api/v1/media/{id}/subtitles` | Embedded TEXT subtitle tracks of one item → `{tracks:[...]}` (each with its player-usable `index`) — auth required; see [Subtitles (choosing them)](#subtitles-choosing-them) |
+| GET | `/api/v1/media/{id}/subtitles/{index}` | Extract embedded track #{index} as WebVTT (`text/vtt`, cache-first) — auth required |
+| GET | `/api/v1/media/{id}/subtitles/search` | Remote (provider-plugin) candidate list, optional `?lang=` (comma list or `*`) → `{candidates:[...]}` — auth required; needs a subtitle provider plugin enabled |
+| POST | `/api/v1/media/{id}/subtitles/download` | Download ONE candidate and attach it as an external track — body `{provider, downloadId, language, format?, releaseName?, hearingImpaired?}` — auth required |
+| GET | `/api/v1/media/{id}/subtitles/external/{streamId}` | Serve an attached external track as stored WebVTT (`text/vtt`) — auth required |
 | GET | `/api/v1/users/me/favorites` | List the user's favorited items (shaped media items + `user_data` incl. `like_level`; `?limit=1-100&offset`) — auth required |
 | GET | `/api/v1/themes` | Theme catalogue — built-ins (`nocturne`/`daylight`/`midnight`) + enabled plugin themes, every entry sanitiser-passed, deterministic order, `{"themes":[...]}`; `503` when theming is unwired — auth required; see [Themes (choosing an appearance)](#themes-choosing-an-appearance) |
 | GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |

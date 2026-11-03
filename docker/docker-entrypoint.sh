@@ -88,11 +88,10 @@ JWT_SECRET_FILE="${PHLIX_JWT_SECRET_FILE:-/var/phlix/config/jwt_secret}"
 # directly is never overridden. Exported (not merely assigned) so supervisord
 # and the programs it starts inherit them too.
 #
-# ⚠ Known limit, stated rather than papered over: supervisord passes its own
-# environment to its children, so the `workerman` program (which is the
-# application) sees these. php-fpm pools default to `clear_env = yes`, so
-# anything served through php-fpm does NOT — that is a pre-existing property of
-# docker/supervisord.conf and is out of scope here.
+# Supervisord passes its own environment to its children, so the `workerman`
+# program (which is the application) sees these, and the programs it starts
+# inherit them too. (The pre-S163 php-fpm `clear_env` caveat died with the
+# php-fpm program itself — nothing here is served through a pool.)
 # ---------------------------------------------------------------------------
 [ -n "${DB_HOST:-}" ] || DB_HOST="${PHLIX_DATABASE_HOST:-}"
 [ -n "${DB_PORT:-}" ] || DB_PORT="${PHLIX_DATABASE_PORT:-}"

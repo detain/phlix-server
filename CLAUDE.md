@@ -12,7 +12,7 @@ php scripts/run-migrations.php              # apply migrations/*.sql against DB 
 php start.php start                         # the ONLY served entry (HTTP :8096, WS :8097)
 
 # Tests
-./vendor/bin/phpunit                        # full suite (Unit + Integration suites are wired in phpunit.xml)
+./vendor/bin/phpunit                        # all three phpunit.xml suites: Unit + Integration + the serial E2E tail
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
 ./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php --testdox    # single file

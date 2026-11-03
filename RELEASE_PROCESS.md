@@ -231,7 +231,7 @@ curl -s -H "Authorization: Bearer $(cat /tmp/ghcr.token)" \
 Never bake a `<full-sha>` into docs or manifests by hand — query the list and
 pick the commit you want.
 
-## Hub/Server Compatibility
+## Feature Compatibility and API Versioning
 
 ### Feature Compatibility
 
@@ -393,7 +393,7 @@ What IS true today, and what it is actually worth:
 |-----------|-------|---------------|----------------------|
 | TLS transport + registry digest verification when pinning by `@sha256:…` | GHCR, every pull | content integrity of the pulled bytes | publisher identity |
 | Per-run base-digest equality gate | `docker.yml` "Verify the base image is the one built from this commit" (hard error, empty/mismatched digest) | runtime image was built against the base image published in the same run | anything about who ran the build |
-| Immutable `<full-sha>-<variant>` image tags, derived from the commit | `docker.yml` tag table below | the image bytes trace to a specific commit on this repo's master | the commit was never signed; the GHCR write token does not carry `id-token` |
+| Immutable `<full-sha>-<variant>` image tags, derived from the commit | docker.yml tag table ("Docker Image Tagging" above) | the image bytes trace to a specific commit on this repo's master | the commit was never signed; the GHCR write token does not carry `id-token` |
 | GitHub release with the packaged Helm `.tgz` files attached | `release.yml` "Create Release" | assets are served by GitHub over TLS, at the release URL | no published checksum file, no detached signature — hash each download yourself if this matters |
 
 Integrity checks that work right now:

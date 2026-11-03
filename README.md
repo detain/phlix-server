@@ -99,7 +99,10 @@ public/                 # no front controller — start.php serves everything (s
   contract that `composer.json`'s 24 `ext-*` requires and its `config.platform` pins are held
   identical to by `RequiredPhpExtensionsContractTest` (an entry whose symbol stops existing in
   the cited file goes RED, so the list cannot rot silently).
-- **Swoole**: strongly recommended (the installer compiles it; the Docker images bundle it).
+- **Swoole**: strongly recommended (the installer compiles it; the Alpine Docker image
+  bundles it, while the hardware-accel variants — `Dockerfile.nvidia`,
+  `Dockerfile.intel` — install PHP from apt without it, so pooled coroutines do not
+  apply there and in-worker queries run sequentially).
   The server boots without it — Workerman falls back to its plain loop and the curated
   coroutine hooks in `start.php` are skipped — but the per-worker database coroutine pool
   (`DB_POOL_ENABLED`) has no coroutines to lease connections to, so in-worker queries run
@@ -111,7 +114,7 @@ public/                 # no front controller — start.php serves everything (s
   Docker image (`SWOOLE_IOURING=0` default) or compile Swoole without `--enable-iouring` /
   `--enable-uring-socket`; the installer records the same floor in its own comment.
 - **Workerman**: 5.0+ (bundled via Composer)
-- **FFmpeg**: For transcoding (optional)
+- **FFmpeg**: for transcoding (optional)
 
 Every environment variable the server process reads is inventoried in the definitive census —
 [Environment variables](#environment-variables) — with defaults, secrets, and restart semantics.
@@ -154,7 +157,7 @@ Every environment variable the server process reads is inventoried in the defini
   duplicates. Metadata source order is configurable per media type via the
   `metadata.provider_priority` setting. See
   [phlix-docs / admin / library-management](https://detain.github.io/phlix-docs/admin/library-management)
-  and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
+  and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings)..
 
 ### Web Portal
 - **Web portal (`/app`) — the only web UI**: The web portal is the shared `@phlix/ui` Vue SPA, served
@@ -169,7 +172,7 @@ Every environment variable the server process reads is inventoried in the defini
 - **Legacy Smarty page rendering removed**: The old server-rendered (Smarty) portal pages —
   `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
   **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
-  `/app/login`, `/library` → `/app`, `/player/{id}` → `/app/player/{id}`, `/music|/books|/audiobooks|/photo`
+  `/app/login`, `/library` → `/app`, `/player/{id}` → `/app/player/{id}`, `/music`, `/books`, `/audiobooks`, `/photo`
   → their `/app` pages), dispatched in `src/Server/Workerman/HttpHandler.php` (the served daemon; the pre-S171 `public/index.php` copy of that logic was unserved and deleted). Smarty (`smarty/smarty`) is retained on the
   server **only** for the newsletter email (`src/Admin/NewsletterGenerator.php` +
   `public/templates/emails/newsletter.tpl`).
@@ -438,14 +441,14 @@ segment URLs do.
 Collections are user-curated media lists — the feature clients call **Playlists**. The HTTP surface,
 the `created_by` ownership model and the OpenAPI paths all shipped before this paragraph existed;
 everything below is read from the code at this tip. Routes are registered in
-`Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2190-2218`) under
+`Application::loadCollectionRoutes()` (`src/Server/Core/Application.php`) under
 `[AuthMiddleware]`, served by `src/Server/Http/Controllers/CollectionController.php`; each registration's
 exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
 
-- **CRUD loop**: `POST /api/v1/collections` creates — body `{name, library_id}` are both required
+- **CRUD loop**: `POST /api/v1/collections` creates a collection — body `{name, library_id}` are both required
   non-empty strings (`400` otherwise), with optional `smart_playlist_id`/`parent_id`/`sort_order` —
   and returns `201 {collection}` (`create()`, `CollectionController.php:116-163`). **`POST /api/v1/playlists`
-  is an alias of that same registration** (`Application.php:2210`) — there is no separate playlist table.
+  is an alias of that same registration** (`Application::loadCollectionRoutes()`) — there is no separate playlist table.
   Reads: `GET /api/v1/collections` (visible-to-actor list), `GET /api/v1/collections/{id}`
   (`{collection, items, total}`), `GET /api/v1/libraries/{libraryId}/collections` (list scoped to one
   library). Mutation: `PUT /api/v1/collections/{id}` partial-merges the metadata, `DELETE` removes the
@@ -483,16 +486,16 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   `OpenapiSpecCurrencyTest` machine-checks the route↔spec bijection.
 
 ### Live TV & DVR (admin-managed)
-LiveTV ships as operator tooling. The entire control plane — tuners, channels, guide,
+Live TV ships as operator tooling. The entire control plane — tuners, channels, guide,
 recordings, and series rules — is served under `/api/v1/admin/livetv` behind admin auth,
 and the web SPA exposes it on an admin-only page (`/app/admin/livetv`); there is no
-member-facing LiveTV page, channel browse, recording-schedule, or settings surface.
-The only non-admin LiveTV routes are stream legs, served under
+member-facing Live TV page, channel browse, recording-schedule, or settings surface.
+The only non-admin Live TV routes are stream legs, served under
 the same signed-URL/stream middleware as HLS/DASH:
 `GET /livetv/recording/{id}/stream` (DVR recording playback, re-checked against the
 requester's profile rating cap via the recording's linked library item) and
 `GET /livetv/timeshift/{sessionId}/...` (the live tuner's rolling window — session rows
-carry only a channel id with no library linkage, so these are rating-gated by nothing, by
+carry only a channel id with no library linkage, so no rating gate applies to them — by
 design).
 
 Shipped capabilities (driven through the admin API — except recording storage, which is
@@ -947,6 +950,14 @@ return [
     // 'rate_limit', 'trusted_proxies', ... and the required subsystem files.
 ];
 ```
+> **Exposure note (bare metal).** The shipped defaults bind **both** listeners
+> to `0.0.0.0` — and the WebSocket worker on `:8097` is plaintext, JWT-bearing
+> traffic. `install.sh` opens only `:8096` in `ufw`; if the firewall is inactive
+> the WS port is an internet-facing plaintext service on every interface.
+> Pin it (`PHLIX_WS_HOST=127.0.0.1`) and front it with TLS (`reverse-proxy/`,
+> `deploy/haproxy.cfg`), or firewall `8097` closed yourself. The docker
+> examples loopback-pin by default for exactly this reason.
+
 
 **Database credentials are not a `config/server.php` key.** The connection is
 loaded from `config/database.php` (wired as `db_config_path` by `start.php`),
@@ -960,8 +971,9 @@ which reads every parameter — `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER
 This is the **definitive census** (R14-05): every environment variable the
 server process reads, grouped by subsystem. The list was built by grepping
 every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
-`start.php`, `bin/` and `scripts/` — if a knob is not here, the PHP runtime
-does not read it. Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
+`start.php`, `bin/` and `scripts/` — if a knob is not here, no in-repo PHP code reads
+it. (Externally vendored plugins may resolve additional knobs inside this process —
+the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is itself a row below.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
 everything else has a safe default. "Secret?" marks values that must never be
 logged or committed. The "Restart" column (R14-20) uses four values: **yes** =
 read once at boot (bind, container/config construction) — a new value applies
@@ -1320,7 +1332,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | DELETE | `/api/v1/sessions/{id}` | End a session |
 | POST | `/api/v1/sessions/{id}/progress` | Report playback progress |
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
-| POST | `/api/v1/sessions/{id}/complete` | Signal that playback finished — body `{media_item_id: string (required), reached_end?: bool = true}`; `reached_end:true` marks the item watched (leaves Continue Watching, finalizes watch-time/stats), `false` clears the resume point. Auth mirrors `/progress` (session owner). `→ {message, reached_end}`; `404` unknown session, `403` wrong owner, `400` missing `media_item_id`. The web SPA player + mini-player POST this on the media `ended` event; native clients do not call it yet |
+| POST | `/api/v1/sessions/{id}/complete` | Signal that playback finished — body `{media_item_id: string (required), reached_end?: bool = true}`; `reached_end:true` marks the item watched (leaves Continue Watching, finalizes watch-time/stats), `false` clears the resume point. Auth mirrors `/progress` (session owner). Success `→ {message, reached_end}`; `404` unknown session, `403` wrong owner, `400` missing `media_item_id`. The web SPA player + mini-player POST this on the media `ended` event; native clients do not call it yet |
 | GET | `/api/v1/users/me/continue-watching` (also `/api/v1/me/continue-watching`) | Continue-Watching list for the authenticated user — `{items:[...]}` of `MediaItemShaper`-shaped rows with top-level `id` (= media item id, for detail navigation), `poster_url`/`poster_srcset` (series poster for episodes, falling back season → own), `runtime` (minutes), `year`, `rating`, plus re-attached `position_ticks`/`duration_ticks` (SPA resume) and preserved `media_item_id`, `parent_id`, `metadata` (console/rating-gate compatibility) |
 | GET | `/api/v1/users/me/next-up` | "Next Up" rail — for each series the active profile has STARTED, the single next unwatched episode to play (sibling to Continue Watching). Optional `?limit=` (default 20, clamped 1-50; the server scans up to `max(limit×3, 50)` started series). Auth required (`AuthMiddleware`). Returns `{items:[...]}` of `MediaItemShaper`-shaped episode rows (series poster resolved) with `position_ticks`/`duration_ticks`=0 plus added `series_id`/`series_name`; `media_item_id` carried for the rating-gate post-filter. Watched/in-progress signal is `playback_state` ONLY (not `user_item_data.watched` / `watch_history`); only numbered seasons are walked (Specials excluded); all-watched series yield no entry. `401` unauth, `503` if watch-history unwired, `{items:[]}` when no active profile |
 | GET | `/api/v1/media/facets` | Distinct, sorted genre facet list for the media filter UI (`?libraryId=<uuid>` to scope) → `{genres: string[]}` |
@@ -1341,7 +1353,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | GET | `/api/v1/themes/{id}` | One theme as `{"theme": {...}}`, `404` `{"error":"Theme not found"}` for an unknown id — auth required |
 | GET | `/api/v1/users/me/settings` | The user's settings; the `theme` key is present ONLY once a theme was ever chosen (no-clearing v1 law — `NULL` reads as "key omitted", clients fall back to their own default) — auth required |
 | PUT | `/api/v1/users/me/settings` | Update the user's settings; a submitted `theme` is validated against built-ins ∪ live plugin registry BEFORE any write — unknown/non-string/`null` → `400` flat `{"error"}` with zero rows changed (clearing has no API path) — auth required |
-| GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application.php:2196`) — see [Collections and Playlists](#collections-and-playlists-member-owned-lists) |
+| GET | `/api/v1/collections` | Collections visible to the actor — own rows + legacy `created_by=NULL` (active admins: all) — auth required (`AuthMiddleware`; `Application::loadCollectionRoutes()`) — see [Collections and Playlists](#collections-and-playlists-member-owned-lists) |
 | GET | `/api/v1/collections/{id}` | One collection with its items → `{collection, items, total}`; unknown **or** not visible to the actor → byte-identical `404 {error:"Collection not found"}` (`:2197`) |
 | GET | `/api/v1/libraries/{libraryId}/collections` | Collections scoped to one library, same visibility law → `{collections:[...]}` (`:2200`) |
 | POST | `/api/v1/collections` | Create a collection — body `{name: string (required non-empty), library_id: string (required non-empty), smart_playlist_id?, parent_id?, sort_order?}` → `201 {collection}` with `created_by` stamped to the actor server-side; `400` on a missing/invalid `name`/`library_id` (`:2203`). **`POST /api/v1/playlists` (`:2210`) is an alias to this same handler** — no separate playlist table |
@@ -1799,7 +1811,7 @@ is the usual answer (reversible); reserve `user:delete` for hard removal.
 `backup:list` shows what is on disk. Configured schedules and retention live in
 `config/backup.php`.
 
-### Admin Section (`/app/admin`)
+### Admin section (`/app/admin`)
 
 There is **no separate admin app**. An earlier React + Vite admin console (`admin-ui/`, served at
 `/admin` by `AdminAppController`, built into `public/assets/admin/`, gated by an `admin-ui.yml`

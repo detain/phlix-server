@@ -19,7 +19,7 @@ This directory contains example docker-compose stacks for different deployment s
    - `server-hub/` — Phlix server + phlix hub for remote access
    - `full-stack/` — Complete setup with Traefik reverse proxy
 
-4. Start with `docker-compose up -d`
+4. Start with `docker compose up -d`
 
 ## Scenarios
 
@@ -114,6 +114,16 @@ the matching CSP allowance), but no `/ws` path routes against :8096, so proxy
 the exception by design: Traefik is the TLS edge, so its 80/443 and the hub
 relay 8802 are published publicly and the MySQLs stay unpublished.
 
+> **Why this is not optional — the browser's mixed-content rule.** A page
+> loaded over `https://` may not open a `ws://` socket at all: the browser
+> refuses the upgrade before the server ever sees it, and the failure is
+> silent (nothing in the server log; the watch party simply never syncs). The
+> moment you front :8096 with TLS, you must also give :8097 a TLS front (the
+> `wss://` TCP routes in `reverse-proxy/` / `deploy/haproxy.cfg`, or an
+> explicit `wsUrl`) — leaving the web on `ws://` breaks every https-served
+> client, and the plaintext-WS note above is the security half of the same
+> fact.
+
 ## MySQL Connection Budget
 
 The database is the first shared resource a busy install exhausts, so every
@@ -187,8 +197,8 @@ All scenarios use a bridge network named `phlix_network` for container communica
 
 Check logs:
 ```bash
-docker-compose logs phlix
-docker-compose logs mysql
+docker compose logs phlix
+docker compose logs mysql
 ```
 
 ### The container exited — what the exit code means
@@ -212,11 +222,11 @@ change the `phlix` service to `restart: on-failure:5`.
 
 ### Can't connect to database
 
-Verify environment variables are set correctly in `.env` file.
+Verify that the environment variables are set correctly in the `.env` file.
 
 ### Media not scanning
 
-Ensure `media_library` volume is mounted correctly and contains media files.
+Ensure that the `media_library` volume is mounted correctly and contains media files.
 
 ## Generating Secrets
 

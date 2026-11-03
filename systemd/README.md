@@ -89,6 +89,13 @@ JWT_SECRET=...
 #PHLIX_HTTP_WORKER_COUNT=14
 #PHLIX_WS_HOST=0.0.0.0
 #PHLIX_WS_PORT=8097
+#
+# Exposure: both shipped defaults are 0.0.0.0 and the :8097 leg is plaintext
+# WS + JWT. The installer's ufw rules open only :8096 — with ufw inactive the
+# WS port is internet-facing. Set PHLIX_WS_HOST=127.0.0.1 behind a TLS front
+# (reverse-proxy/, deploy/haproxy.cfg), or open a firewall for 8097 yourself.
+# The compose examples loopback-pin by default.
+
 
 # Live knobs — both rows are read at boot (the main README.md env census
 # is the SSOT), and both installers write them for that reason.

@@ -52,36 +52,41 @@ code right for the sum and wrong for both runs — is closed, so a refusal now p
 at a specific run instead of the input as a whole.
 
 ⚠ **`--testdox` is the one invocation this cannot cover, and it is a PHPUnit
-limitation, not a config mistake.** PHPUnit constructs the default result printer for
-a testdox run with its `$displayDetailsOnSkippedTests` argument hardcoded `false`
-(the `outputIsTestDox()` branch of `Facade::createResultPrinter()` — the configuration
-value is not consulted there; `vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`
-in the pinned PHPUnit 10.5.64, which is the citation the script's own error message
-prints), so a `--testdox` run adds to `Skipped: N` and can never
-name those skips, with or without `--display-skipped`. No workflow passes `--testdox`
-any more (`syncplay-e2e.yml` dropped it in S345 for exactly this reason). If you add it
-back, or use it locally, the script exits **5** and says so — do **not** "fix"
-`phpunit.xml` in response; re-run without `--testdox`. Exit 5 is decided inside the
-run whose OWN glyphs prove it is a testdox run: any ` ↩ ` glyph that does not surplus
-the run's shortfall marks the run, and because the attribution uses the run's own
-`Skipped: N` rather than the glyph count, a SINGLE glyph is enough to carry the whole
-shortfall to exit 5 — the glyph-less suite skip (a `testSuiteSkipped` event produces
-no glyph) is accounted for exactly this way. Only a SURPLUS — more glyphs than the
-run's shortfall, which no real testdox run can produce because PHPUnit counts every
-glyph it prints in the same run's `Skipped: N` — attributes nothing to testdox: both
-causes are then named and `phpunit.xml` is not exonerated. A surplus can only come
-from other output sharing the log, which `gh run view --log` makes routine. Stray
-glyphs are attributed to NO run only when they fall outside every run's segment —
-before any PHPUnit banner, or after a run's terminating summary line, since the
-segment is flushed and closed at that line — so those can never reach exit 5 whatever
-their count. A stray glyph that lands INSIDE a run's segment is attributed to that
-run and can carry it to exit 5, because it is arithmetically identical to the genuine
-mixed testdox shape above. Exit 5 is also
-taken for a run that ends `No tests executed!` with **nothing named**: a whole-suite
-skip under `--testdox` prints exactly that (the suite skip is invisible), so a
-quietly-empty set would be a lie. The message says to verify the invocation, because
-a genuinely empty run (a typo'd `--filter`, an empty directory) prints a
-byte-identical shape and is refused the same way — see the KNOWN LIMITS note below.
+limitation, not a config mistake.** The mechanics:
+
+- PHPUnit constructs the default result printer for a testdox run with its
+  `$displayDetailsOnSkippedTests` argument hardcoded `false` — the
+  `outputIsTestDox()` branch of `Facade::createResultPrinter()` never consults the
+  configuration value (`vendor/phpunit/phpunit/src/TextUI/Output/Facade.php:204-221`
+  in the pinned PHPUnit 10.5.64, which is the citation the script's own error message
+  prints). A `--testdox` run therefore adds to `Skipped: N` and can never name those
+  skips, with or without `--display-skipped`.
+- No workflow passes `--testdox` any more (`syncplay-e2e.yml` dropped it in S345 for
+  exactly this reason). If you add it back, or use it locally, the script exits **5**
+  and says so — do not "fix" `phpunit.xml` in response; re-run without `--testdox`.
+- Exit 5 is decided inside the run whose own glyphs prove it is a testdox run:
+  any ` ↩ ` glyph that does not exceed the run's shortfall marks the run, and because
+  the attribution uses the run's own `Skipped: N` rather than the glyph count, a
+  single glyph is enough to carry the whole shortfall to exit 5 — this is how the
+  glyph-less suite skip (a `testSuiteSkipped` event produces no glyph) is accounted
+  for.
+- Only a surplus — more glyphs than the run's shortfall, which no real testdox run
+  can produce because PHPUnit counts every glyph it prints in the same run's
+  `Skipped: N` — attributes nothing to testdox: both causes are then named and
+  `phpunit.xml` is not exonerated. A surplus can only come from other output sharing
+  the log, which `gh run view --log` makes routine.
+- Stray glyphs are attributed to no run only when they fall outside every run's
+  segment — before any PHPUnit banner, or after a run's terminating summary line,
+  since the segment is flushed and closed at that line — so those can never reach
+  exit 5 whatever their count. A stray glyph that lands inside a run's segment is
+  attributed to that run and can carry it to exit 5, because it is arithmetically
+  identical to the genuine mixed testdox shape above.
+- Exit 5 is also taken for a run that ends `No tests executed!` with nothing named:
+  a whole-suite skip under `--testdox` prints exactly that (the suite skip is
+  invisible), so a quietly-empty set would be a lie. The message says to verify the
+  invocation, because a genuinely empty run (a typo'd `--filter`, an empty directory)
+  prints a byte-identical shape and is refused the same way — see the KNOWN LIMITS
+  note below.
 
 ⚠ **The second exception is the `assertion-escape-probe` job.** It runs PHPUnit from
 `scripts/assertion-escape-audit.php`, which captures the output into a PHP variable and

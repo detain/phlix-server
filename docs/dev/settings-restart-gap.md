@@ -6,11 +6,13 @@
 Read this before telling a user — in docs, in a CHANGELOG entry, in a docblock, or in the admin UI —
 that restarting the server makes a specific setting take effect.
 
-**All sixteen `restart: true` keys tracked here now genuinely apply on restart.** One further
-key, `hwaccel.probe_timeout`, was **deleted** from `server-settings.schema.json` in `phlix-shared`
-**v0.26.0** rather than wired — it had no consumer and could not be given one cheaply or safely
-(reasoning below). The one remaining caveat is the `process.<worker>.enabled` enable/disable
-asymmetry, which is now disclosed in the keys' own admin-facing `helpText`, not merely here.
+Of the sixteen rows in the table below, fifteen `restart: true` keys now genuinely apply on
+restart — five of those apply a *disable* but not an enable-from-off, the documented
+`process.<worker>.enabled` asymmetry, now disclosed in the keys' own admin-facing `helpText`
+and not merely here. The sixteenth row, `hwaccel.probe_timeout`, was **deleted** from
+`server-settings.schema.json` in `phlix-shared` **v0.26.0** rather than wired — it had no
+consumer and could not be given one cheaply or safely (reasoning below).'
+
 
 > **Scope note.** This table tracks the keys covered by the `EffectiveConfig` work plus
 > `tmdb.api_key`. The schema has since grown other `restart: true` keys (the

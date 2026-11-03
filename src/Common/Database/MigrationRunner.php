@@ -109,7 +109,8 @@ use Workerman\MySQL\Connection;
  *
  * ## The `@phlix-require-mysql` dialect gate (M-SERVER-06)
  *
- * README advertises "MySQL 8.0+ or MariaDB 10.6+", and the chain contains a
+ * README advertises "MySQL: 8.0.13 or higher … or MariaDB 10.6+", and the
+ * chain contains a
  * handful of MySQL-only index statements — functional key parts
  * (`CREATE INDEX ... ((CAST(...)))`, MySQL 8.0.13+) and one multi-valued
  * `CAST(... AS ARRAY)` index (MySQL 8.0.17+). MariaDB rejects them with a 1064
@@ -118,6 +119,10 @@ use Workerman\MySQL\Connection;
  * permanently un-recorded and the runner exited 1 on every boot — the support
  * claim was simply false. Measured live before this gate existed: 4 errors
  * (three in `011_music_library.sql`, one in `050_media_items_sort_indexes.sql`).
+ * The directive census is pinned by measurement — the real-chain scan in
+ * `tests/Unit/Common/Database/MigrationRunnerTest.php` asserts exactly 011 (×3)
+ * + 050 (×1); migrations 121/123 once carried two more, attached to a SET
+ * fragment rather than a complete statement, and those were removed (M28).
  *
  * The fix must not edit the shipped statements: rewriting them in place flips
  * the file's ledger checksum, which re-applies the whole file on every already

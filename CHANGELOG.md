@@ -33,6 +33,49 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The docs cluster of the review's Minor findings — thirty prose cures, one
+  voice.** (a) README: "LiveTV" standardized to "Live TV" in prose (identifiers
+  keep `livetv_*`); the dangling "creates" gets its object ("creates a
+  collection"); the pipe-joined legacy-path list reads as paths, not regex
+  alternation; the arrow-initial table sentence becomes "Success →"; the
+  "Admin Section" heading joins sentence-case; the FFmpeg requirement bullet
+  lowercases its continuation; the timeshift rating sentence loses its nominal
+  stack; the Swoole requirement row is scoped honestly (the Alpine image bundles
+  it, `Dockerfile.nvidia`/`Dockerfile.intel` install PHP from apt without it —
+  so pooled coroutines do not apply there); three drifted `Application.php:NNNN`
+  endpoint cites re-anchor to their symbol; the env-census scope sentence gains
+  its truthful exception clause and `PHLIX_ANIDB_CACHE_DIR` finally has its
+  census row (consumer: the vendored anidb plugin, set by the shipped unit); a
+  bare-metal exposure note lands where the `0.0.0.0` sample lives. (b) Security
+  docs: the deprecated `X-XSS-Protection` header is dropped from both
+  reverse-proxy templates and its feature bullet; the proxy README stops
+  teaching the retiring, log-leaky `?token=` carrier (bearer subprotocol +
+  query-logging warning); a mixed-content paragraph explains WHY the `wss://`
+  fronts are not optional (https pages cannot open `ws://` sockets, silently);
+  systemd/README carries the same plaintext-:8097 exposure note the compose
+  docs already had. (c) Dev docs: the AUTH_METHOD_LOCKOUT json fence is now
+  actually valid JSON (the union notation moves to the table above it);
+  data-model.md's numbering law states the truth (ordinals are NOT unique —
+  003/004/062 pairs ship — same-prefix order falls out of the file-name sort,
+  `012a` is the one alphabetic deviation) and classifies
+  `080_backfill_missing_profiles.php` as the runner-invisible manual diagnostic
+  it is; its catalog rows re-enter ordinal order (106 before 108, 012 before
+  012a); settings-restart-gap's headline arithmetic matches its own table
+  (fifteen live keys, five asymmetric, one deleted row); the 31-line
+  `--testdox` paragraph in skipped-test-names.md becomes a bulleted decision
+  list; RELEASE_PROCESS stops saying "below" for the table above and the
+  reversed-twin section titles get disambiguated; docker/examples README
+  standardizes on the plugin `docker compose` form and recovers two dropped
+  articles; the AGENTS/CLAUDE Media section documents the CURED transactional
+  stream-replacement law (the "neither is transactional / permanent partial
+  set" claim was stale since `replaceStreams()` grew its transaction), E10
+  gains its watched/unwatched carve-out, and the bare-phpunit comment names all
+  three suites including the serial E2E tail; the Dockerfile headers stop
+  citing the dead `php:8.3-fpm-alpine` base; the entrypoint's php-fpm
+  `clear_env` caveat retires with the program that died in S163; the
+  MigrationRunner dialect docblock re-quotes the README's real floor (8.0.13)
+  and names the M28 census it now pins; BLOCKING_IO's Exception-7 cells close
+  their sentences.
 - **The MariaDB dialect gate can no longer shoot migrations in the foot (review M28).**
   - Migrations 121/123 carried `@phlix-require-mysql` directives that were wrong twice
     over: the blocks they guarded are NOT MySQL-only (measured — the full SET +

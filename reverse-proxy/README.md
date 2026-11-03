@@ -98,8 +98,13 @@ Expose :8097 as its own TCP route instead:
   frontend — see `deploy/haproxy.cfg`) forwarding to `127.0.0.1:8097`.
 
 Use long read/write timeouts (WS connections are idle-long by design; the
-templates use 24h) and no path routing (the worker speaks the WS handshake
-at any path; auth rides the `?token=` query parameter).
+templates use 24h) and no path routing (the worker speaks the WS handshake at
+any path). Auth targets the bearer subprotocol (`Sec-WebSocket-Protocol:
+bearer, <jwt>`) — see `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`; the legacy
+`?token=` query carrier is RETIRING precisely because any proxy or load
+balancer that logs request URIs records the JWT in plaintext, so if a client
+still uses it, disable query logging for the upgrade route or front the WS
+leg without logging.
 
 > **Shipped state:** the client-side `wsUrl` seam this note once promised as a
 > future has since landed — `@phlix/ui` exposes `wsUrl`/`wsPath` (and the hub
@@ -118,7 +123,6 @@ at any path; auth rides the `?token=` query parameter).
 ### Security Headers
 - X-Frame-Options
 - X-Content-Type-Options
-- X-XSS-Protection
 - HSTS
 - Referrer-Policy
 - Permissions-Policy

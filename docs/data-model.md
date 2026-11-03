@@ -20,8 +20,19 @@ a fresh database. The operator-facing migration workflow lives in
   checksum, and replays are tolerated (`IF NOT EXISTS`, duplicate-error
   downgrade). A retired number (e.g. `016`, `099`) is never reused — new work
   takes the next free number.
+- **Ordinals are NOT unique.** Several files share a prefix in the shipped tree —
+  `003_marker_columns` + `003_plugins`, `004_admin_user_flag` +
+  `004_smart_playlists`, `062_profile_tags` + `062_user_recommendations` — and
+  same-prefix files therefore apply in lexicographic order of their full names,
+  i.e. by description text. The one deliberately non-numeric prefix is `012a`
+  (`012a_livetv_recordings.sql` sorts between `012_…` and `013_…`); README's
+  migration section documents that legacy deviation.
 - `cleanup_NNN.php` files are one-shot data cleanups, not schema migrations,
-  and are not part of the `NNN_*.sql` sequence.
+  and are not part of the `NNN_*.sql` sequence. The runner's glob (`*.sql`) is
+  also blind to `migrations/080_backfill_missing_profiles.php` — despite its
+  migration-style ordinal it is a retained manual diagnostic (see its own
+  header), never applied by `migrate`. The ordinal law means nothing for files
+  the glob cannot see.
 
 ## Collections vs. media_collections (the classic confusion)
 
@@ -59,8 +70,8 @@ Two unrelated families share a noun:
 | `media_extras` | 007 | Cached trailers/extras per item (`source=local\|tmdb`, local `Trailers/` folders) — read by `ExtrasRepository`/`TrailerResolver`. |
 | `theme_media` | 008 | Per-library theme media (audio + backdrop video) scanned from disk. |
 | `webauthn_credentials` | 010 | Passkey credentials per user (credential id, public key, counters). |
-| `livetv_recordings` | 012a | DVR recording schedule/entries (predecessor of the 028 livetv family). |
 | `audiobook_progress` | 012 | Audiobook time position per (user, item). |
+| `livetv_recordings` | 012a | DVR recording schedule/entries (predecessor of the 028 livetv family). |
 | `livetv_series_rules` | 013 | DVR auto-record rules (series → new-episode recording). |
 | `livetv_relay_sessions` | 015 | Hub-relayed tuner sessions. |
 | `custom_format_sync` | 017 | Custom playback format sync state (external app integration). |
@@ -119,8 +130,8 @@ Two unrelated families share a noun:
 | `user_identities` | 092 | Linked external identities per user (oidc/github/ldap/hub). |
 | `plugin_settings` | 093 | DB-backed per-plugin settings documents (provider configs live here). |
 | `maintenance_jobs` | 098 | One-off admin maintenance task queue (S77: storage snapshots, path dedup) — sibling of `library_scan_jobs`, drained by `MaintenanceQueueWorker` on a timer in the background-timers worker. |
-| `first_admin_election` | 108 | Single-row sentinel serialising first-admin bootstrap (L-3). |
 | `client_heartbeats` | 106 | Consent-gated client telemetry heartbeats (AD-27/S518), one UPSERTed row per client. |
+| `first_admin_election` | 108 | Single-row sentinel serialising first-admin bootstrap (L-3). |
 | `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers (Device-M1). |
 
 ## Reading notes

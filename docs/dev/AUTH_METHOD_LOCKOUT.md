@@ -54,7 +54,7 @@ Both surfaces answer the **byte-identical** 422 envelope (`AdminSettingsControll
   "success": false,
   "error":   "Validation failed",
   "errors":  { "auth.<method>.enabled": "<human message>" },
-  "reason":  "all_methods_disabled" | "admin_lockout",
+  "reason":  "all_methods_disabled",
   "message": "<human message>"
 }
 ```

@@ -2,7 +2,7 @@
 # Phlix Server — Intel QuickSync / VAAPI hardware acceleration build
 # ----------------------------------------------------------------------------
 # Path layout note: this variant inherits from `ubuntu:24.04` instead of the
-# Alpine-based `php:8.3-fpm-alpine`. The Intel non-free media driver
+# Alpine-based `php:8.3-cli-alpine`. The Intel non-free media driver
 # (`intel-media-va-driver-non-free`) is only packaged for Debian/Ubuntu, so
 # the official php:* image cannot be used as the base. As a consequence:
 #

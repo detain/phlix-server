@@ -2,7 +2,7 @@
 # Phlix Server — NVIDIA (CUDA) hardware acceleration build
 # ----------------------------------------------------------------------------
 # Path layout note: this variant inherits from `nvidia/cuda:*` (Ubuntu 24.04)
-# instead of the Alpine-based `php:8.3-fpm-alpine`. NVIDIA's CUDA runtime
+# instead of the Alpine-based `php:8.3-cli-alpine`. NVIDIA's CUDA runtime
 # requires a glibc-based distribution, so the official php:* image cannot
 # be used as the base. As a consequence:
 #

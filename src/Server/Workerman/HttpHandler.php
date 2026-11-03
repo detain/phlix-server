@@ -744,6 +744,15 @@ final class HttpHandler
             $headers['Cache-Control'] = preg_match('/-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/', basename($real)) === 1
                 ? 'public, max-age=31536000, immutable'
                 : 'no-cache';
+        } else {
+            // Review minor 3: residents of the public root OUTSIDE the Vite tree
+            // (`public/assets/{css,images,js}` era files, favicon, robots) rode
+            // heuristic date-math caching with no policy at all — stale-after-
+            // deploy risk with no validator conversation. They now get the same
+            // fail-closed revalidating default the unhashed members of /assets/app
+            // already receive; `Last-Modified` (set below) is the validator. The
+            // hashed bundle keeps its strictly stronger immutable tag.
+            $headers['Cache-Control'] = 'no-cache';
         }
 
         // minors M-SERVER-51 (W-min105): the docker images run the worker bare on

@@ -110,6 +110,14 @@ JOIN media_items mi ON wh.media_item_id = mi.id';
             $sql .= ' WHERE ' . implode(' AND ', $conditions);
         }
 
+        // CANONICAL LIMIT LAW (review minor 57; full text in
+        // MaintenanceJobRepository::recent()): LIMIT must be a server-validated
+        // int; the clamped-int INLINE form is the estate default because
+        // emulated-prepare paths re-materialize the statement as text and MySQL
+        // rejects `LIMIT '20'` there. This admin listing runs on the vendor
+        // prepared-statement transport exclusively (constructor-typed), so
+        // binding the int param is equally safe and keeps the value out of the
+        // SQL text; the query-shape tests pin this exact tail.
         $sql .= ' ORDER BY wh.last_watched_at DESC LIMIT ?';
         $params[] = $limit;
 

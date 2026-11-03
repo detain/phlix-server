@@ -97,6 +97,36 @@ final class SharedUiControllerCspNonceTest extends TestCase
         self::assertStringContainsString('https://tmdb.org', $csp);
     }
 
+    /**
+     * Review minor 3 (anchor robustness): a build emitting `<head>` with
+     * attributes or different casing must still receive the bootstrap
+     * injection — and the original tag must survive verbatim. The pre-fix
+     * exact-`<head>` regex silently skipped such documents, stranding the SPA
+     * without window.__PHLIX__.
+     */
+    public function testInjectionSurvivesAttributedAndUppercaseHeadTags(): void
+    {
+        foreach (['<head data-crit="1">', '<HEAD >', '<HeAd>'] as $headTag) {
+            file_put_contents(
+                $this->publicRoot . '/assets/app/index.html',
+                '<!DOCTYPE html><html>' . $headTag . '<title>Phlix</title></head><body></body></html>',
+            );
+
+            $response = (new SharedUiController($this->publicRoot))->shell(new Request());
+
+            self::assertStringContainsString(
+                'window.__PHLIX__ = ',
+                $response->body,
+                "Bootstrap must inject after the {$headTag} anchor.",
+            );
+            self::assertStringContainsString(
+                $headTag,
+                $response->body,
+                "Original {$headTag} tag must be re-emitted verbatim.",
+            );
+        }
+    }
+
     public function testEachResponseGeneratesAFreshNonce(): void
     {
         $controller = new SharedUiController($this->publicRoot);

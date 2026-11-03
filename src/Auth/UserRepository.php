@@ -360,6 +360,12 @@ class UserRepository
      *                           In practice only 'is_admin = 1' is ever passed from
      *                           AdminUserController::countAdmins().
      *
+     * HOUSE LAW (review minor 55): `$predicate` is interpolated into SQL text,
+     * so it accepts ONLY server-authored constant fragments — never anything
+     * derived from request input. The whole-repo call-site census at the time
+     * of writing is three verified literals ('is_admin = 1' x2, '' x1); new
+     * callers must pass a literal or use a parameterized query instead.
+     *
      * @return int Total user count (>= 0).
      *
      * @since 0.10.0 (Step A.5)

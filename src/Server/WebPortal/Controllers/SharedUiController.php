@@ -116,7 +116,18 @@ final class SharedUiController
 
         $configScript = '<script nonce="' . $nonce . '">window.__PHLIX__ = '
             . json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) . '</script>' . "\n";
-        $html = preg_replace('/<head>/i', "<head>\n" . $configScript, $html, 1) ?? $html;
+        // Anchor-robust injection (review minor 3): `<head>` with optional
+        // attributes and any casing matches — a future build emitting
+        // `<head data-x>` or `<HEAD >` no longer silently skips the bootstrap
+        // and strands the SPA without window.__PHLIX__. The matched tag is
+        // re-emitted verbatim via the callback, so nothing between <head and >
+        // is rewritten.
+        $html = preg_replace_callback(
+            '/<head\b[^>]*>/i',
+            static fn(array $m): string => $m[0] . "\n" . $configScript,
+            $html,
+            1
+        ) ?? $html;
 
         // The watch-party WebSocket lives on :8097 — a different port than
         // this response's origin — so a bare `connect-src 'self'` would make

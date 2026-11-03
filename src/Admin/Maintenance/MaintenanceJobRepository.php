@@ -244,10 +244,20 @@ class MaintenanceJobRepository
     {
         $limit = max(1, min(self::MAX_RECENT_LIMIT, $limit));
 
-        // The limit is an already-clamped integer interpolated into the SQL
-        // rather than bound: `Workerman\MySQL\Connection` binds a bound value as
-        // a string, and MySQL rejects `LIMIT '20'`. It cannot carry injection —
-        // `max()`/`min()` over an `int` parameter leaves an int.
+        // CANONICAL LIMIT LAW (review minor 57 — stated identically at the
+        // three historical sites; this is the full-text one): a LIMIT must be
+        // a server-validated int, and the MECHANISM depends on how the
+        // connection ends up text-building the statement. Both arms below are
+        // safe on the vendor `Workerman\MySQL\Connection` this repo runs
+        // (prepared-statement transport); the difference matters where
+        // statements get re-materialized as text — the PDO wrapper forces
+        // emulated prepares and substitutes bound values as QUOTED literals,
+        // and MySQL rejects `LIMIT '20'` (1064) in text — so LIMIT-like values
+        // must ride INLINE as a clamped int there, and this repo keeps the
+        // clamped-int inline form as the estate default. Never let a
+        // request-derived non-integer reach either arm; `max()`/`min()` over
+        // an `int` parameter leaves an int, so the interpolation cannot carry
+        // injection.
         $sql = 'SELECT * FROM maintenance_jobs';
         $params = [];
         if ($task !== null) {

@@ -33,6 +33,30 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Review Minor static/SQL-law cluster (minors 3, 55, 56, 57, 74).** The rest
+  of the public static tree (legacy `public/assets/{css,images,js}` residents,
+  favicon, robots) now gets the same fail-closed `Cache-Control: no-cache` the
+  unhashed members of the Vite tree already received, with `Last-Modified` as
+  the validator — stale-after-deploy heuristic caching ends (minor 3's cache
+  half; its ETag note stays a perf idea). The SPA bootstrap injection is
+  anchor-robust (`<head ...>` / any casing re-emitted verbatim) — a build
+  shape-shifting the head tag can no longer silently strand the SPA without
+  `window.__PHLIX__`; regression test covers attributed, uppercase and mixed
+  forms. `UserRepository::countUsers()`'s SQL-fragment parameter gained the
+  house allowlist law (server-authored literals only; call-site census in
+  prose; minor 55 kept-with-law disposition). The dead `QueryBuilder` — zero
+  production instantiations repo-wide, whole-table-write footgun by design —
+  was deleted with its own-test (minor 56); the census denominators re-pinned
+  from measured reds in the same commit (2043 files; declared-reads 457 — the
+  +2 there belongs to batch 18's carried logout tests and its rotation was
+  owed there, disclosed). The three contradictory LIMIT docblocks now state
+  ONE canonical law (validated int; clamped-inline is the estate default
+  because emulated-prepare paths re-materialize `LIMIT '20'` and MySQL 1064s
+  it; existing bound sites grandfathered where the vendor prepared transport
+  is constructor-typed) — prose-only, no query changed (minor 57). The
+  `getMedia` doc example's `runtime` shows 120 — minutes, as TMDB defines it
+  — instead of 7200, which read as seconds and invited a client formatting
+  bug (minor 74).
 - **Review Minor copywriter cluster (minors 45-53): human validation copy on
   member/admin-facing envelopes.** Error keys, status codes and payload shapes
   are byte-identical throughout — only message strings move (C2 copy model,

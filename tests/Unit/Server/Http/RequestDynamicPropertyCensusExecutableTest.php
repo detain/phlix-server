@@ -982,7 +982,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Unit/Auth/RegisterDuplicateKeyRaceTest.php without rotating the pin
     // (its author's miss, disclosed); rotated HERE in the M28 batch from the
     // measured red (2045), never predicted — the S431 forward-fix precedent.
-    private const EXPECTED_PHP_FILES = 2045;
+    // -2 2045→2043: this batch (review minor 56) deleted the dead QueryBuilder
+    // (src/Common/Database/QueryBuilder.php) and its own-test file — zero
+    // production instantiations repo-wide at removal time. Measured from the
+    // red, per the S431 forward-fix precedent.
+    private const EXPECTED_PHP_FILES = 2043;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1073,8 +1077,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * offset writes count here per the M-SERVER-48 law above. The memo cures'
      * own reads stay getHeader()-only, inert. Measured from the phpunit red
      * (455), not predicted.
+     * Re-pinned 455→457 by the batch-18 commit (34ba3be2): the three
+     * forced-logout gate tests it carried (HttpHandlerFastPathDecorationTest's
+     * logout legs, authored in batch 17) added two bracket-seed read sites to
+     * the Request roots; the rotation was owed in that commit and lands here
+     * (disclosed). The minor-56 QueryBuilder deletion is inert to this
+     * denominator (the file held zero $request property reads — probe-proven
+     * via the at-HEAD run). Measured from the phpunit red (457), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 455;
+    private const EXPECTED_DECLARED_READS = 457;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request

@@ -1048,7 +1048,7 @@ class WebPortalRouter
      *       "genres": ["Action", "Drama"],
      *       "year": 2020,
      *       "rating": "PG-13",
-     *       "runtime": 7200,
+     *       "runtime": 120,
      *       "overview": "A great movie...",
      *       "actors": ["Actor One", "Actor Two"],
      *       "director": "Director Name",

@@ -438,10 +438,15 @@ class WatchHistory
      */
     private function fetchStartedSeries(string $userId, int $scanCap): array
     {
-        // Inline a validated int for the scan-cap LIMIT; NEVER bind a LIMIT-like
-        // value (emulated prepares raise a 1064 on a bound LIMIT in this repo —
-        // the same reason getNextUp() inlines its clamped $limit). Clamp
-        // defensively so a stray direct caller can never issue an unbounded scan.
+        // CANONICAL LIMIT LAW (review minor 57; full text in
+        // MaintenanceJobRepository::recent()): inline a validated, clamped int
+        // for the scan-cap LIMIT — the estate default for LIMIT-like values.
+        // This repo's pooled connection family includes an emulated-prepares
+        // subclass that re-materializes statements as quoted text (`LIMIT '20'`
+        // is a 1064 there), and the same clamped-int inline shape keeps this
+        // site independent of how the transport types the param — the reason
+        // getNextUp() inlines its clamped $limit too. Clamp defensively so a
+        // stray direct caller can never issue an unbounded scan.
         $scanCap = max(1, min(500, $scanCap));
 
         $result = $this->db->query(

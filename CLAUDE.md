@@ -47,7 +47,7 @@ PHP 8.3+ media server on **Workerman 5.x**. PSR-4 autoload: `Phlix\` → `src/`,
 - **`src/Admin/Maintenance/`** — one-off admin tasks behind `/api/v1/admin/maintenance/*` (`MaintenanceController`). `MaintenanceTask::CATALOGUE` splits them into `MODE_SYNC` (`reap-scan-jobs`, `reap-transcode-jobs`, `cleanup-orphaned-stats` → `200`) and `MODE_QUEUED` (`storage-snapshot`, `dedupe-paths` → `202` plus a `maintenance_jobs` row to poll). Queued rows are claimed atomically by `MaintenanceQueueWorker` (conditional `UPDATE`, `POLL_SECONDS = 5` `Workerman\Timer`) in the background-timers worker; table from migration `098_maintenance_jobs.sql`.
 - **`src/Session/`** — `SessionManager` (device sessions), `PlaybackController` (continue-watching at <95%), `SyncPlay/` with `TimeSync` doing NTP-style weighted-mean offset over `OFFSET_SAMPLE_COUNT=5` samples.
 - **`src/LiveTv/`** (`ChannelManager`, `GuideManager`, `Recorder`, `LiveTvManager`) and **`src/Dlna/`** (`ContentDirectory`, `AvTransport`, `DlnaServer`, `DeviceRegistry`, `DlnaDevice`).
-- **`src/Common/`** — `Database/ConnectionPool` (static `init()` / `getConnection('mysql')`), `QueryBuilder`. `Logger/LoggerFactory` + `LogChannels` (`AUTH`, `HTTP`, `WEBSOCKET`, `MEDIA`, `SESSION`, `STREAMING`); `StructuredLogger` wraps Monolog; `AuditLogger` for security events.
+- **`src/Common/`** — `Database/ConnectionPool` (static `init()` / `getConnection('mysql')`. `Logger/LoggerFactory` + `LogChannels` (`AUTH`, `HTTP`, `WEBSOCKET`, `MEDIA`, `SESSION`, `STREAMING`); `StructuredLogger` wraps Monolog; `AuditLogger` for security events.
 
 ### Database
 

@@ -53,9 +53,15 @@ final class RelayApplication
     /**
      * Start the relay worker.
      *
-     * Creates a Workerman Worker on the `text://` protocol (no actual
-     * network socket needed) purely to get a timer context within
-     * the Workerman event loop.
+     * M20 (devops2 major 3): a socket-less Worker, like this repo's own
+     * hub-heartbeat and background-timer workers (`new Worker()` in
+     * start.php) — the timer context needs no listening socket. It used to
+     * pass `text://0.0.0.0:0` "purely to get a timer context", but Workerman
+     * BINDS AND LISTENS on any socket name, and port 0 meant a
+     * kernel-chosen ephemeral port on ALL interfaces: unauthenticated remote
+     * peers could pile accepted connections onto the count=1 relay fork
+     * (fd/memory exhaustion kills the whole subsystem) and the random port
+     * defeated firewall pinning. No socket is the fix.
      *
      * @return void
      *
@@ -67,7 +73,7 @@ final class RelayApplication
             return;
         }
 
-        $this->worker = new Worker('text://0.0.0.0:0');
+        $this->worker = new Worker();
         $this->worker->name = 'phlix-relay-tunnel';
         $this->worker->count = 1;
         $this->worker->onWorkerStart = function (): void {

@@ -33,6 +33,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The relay-tunnel worker no longer opens an unintended listener on every interface (review M20, devops2).**
+  - Both places that started it passed `text://0.0.0.0:0` "purely to get a
+    timer context" — but Workerman binds and listens on any socket name, so
+    every server was exposing a kernel-chosen ephemeral port on all interfaces:
+    unauthenticated peers could pile connections onto the count=1 relay fork
+    (fd/memory exhaustion takes down 100% of relay), and the random port could
+    not be firewall-pinned. The worker is now socket-less, exactly like the
+    repo's own hub-heartbeat and background-timer workers, which run the same
+    timer job with no listening socket at all.
+
+- **An absurd `?offset=` can no longer buy a full scan of the media table (review M16, dba2).**
+  - `ItemRepository::normalizeOffset()` clamped negatives only: `LIMIT` had the
+    S99 row ceiling while `OFFSET` was unbounded, so `?offset=999999999` made
+    MySQL scan-and-discard a million-plus rows on the largest table inside a
+    resident worker. Offsets beyond a documented 100,000-row pageable ceiling
+    clamp silently — the same tolerance law an out-of-range `limit` already
+    gets — and in-range pagination is byte-identical.
+
 - **DVR recordings that merely aren't ready yet stop lying that they don't exist (review M15, webux).**
   - `LiveTvStreamController::streamRecording()` answered three different
     states with one bare 404: a not-found recording, a not-yet-started

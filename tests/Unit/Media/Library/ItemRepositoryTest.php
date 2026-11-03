@@ -674,6 +674,36 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(['lib-1', 2, 4], $capturedParams);
     }
 
+    public function testOffsetBeyondThePageableCeilingIsClamped(): void
+    {
+        // M16 (dba2 major M1) law: an absurd offset never reaches MySQL as an
+        // O(offset) scan-and-discard order — normalizeOffset clamps it to the
+        // documented pageable ceiling (the same silent-clamp tolerance an
+        // out-of-range limit gets), and negative junk keeps its old zero-floor
+        // behaviour while in-range offsets pass through untouched.
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->getTopLevelByLibrary('lib-1', 2, 999999999);
+        $this->assertSame(100000, $capturedParams[2]);
+
+        $repo->getTopLevelByLibrary('lib-1', 2, -50);
+        $this->assertSame(0, $capturedParams[2]);
+
+        $repo->getTopLevelByLibrary('lib-1', 2, 4);
+        $this->assertSame(4, $capturedParams[2], 'in-range offsets pass through untouched');
+    }
+
     public function testGetTopLevelByLibraryReturnsEmptyPastTheEnd(): void
     {
         $db = $this->createMock(Connection::class);

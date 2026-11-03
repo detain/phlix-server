@@ -981,7 +981,10 @@ try {
 // -----------------------------------------------------------------------------
 
 try {
-    $relayTunnelWorker = new Worker('text://0.0.0.0:0');
+    // M20 (devops2 major 3): socket-less, like the hub-heartbeat worker above —
+    // `text://0.0.0.0:0` here used to bind a kernel-chosen ephemeral port on
+    // ALL interfaces for a worker that only needs the timer context.
+    $relayTunnelWorker = new Worker();
     $relayTunnelWorker->count = 1;
     $relayTunnelWorker->name = 'phlix-relay-tunnel';
     $relayTunnelWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {

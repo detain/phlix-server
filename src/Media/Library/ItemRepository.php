@@ -47,6 +47,15 @@ class ItemRepository
      */
     private const ABSOLUTE_ROW_CEILING = 10000;
 
+    /**
+     * Deepest row a supplied offset may skip (M16, dba2 major M1).
+     *
+     * Ten full pages-worth of the largest legitimate internal caller, so no
+     * real browse hits it while an abusive `?offset=999999999` can no longer
+     * buy an O(offset) scan-and-discard on MySQL's largest table.
+     */
+    private const MAX_PAGEABLE_OFFSET = 100000;
+
     /** @var Connection Database connection */
     private Connection $db;
 
@@ -3758,7 +3767,15 @@ class ItemRepository
     }
 
     /**
-     * Normalizes the offset to a non-negative integer.
+     * Normalizes the offset to a non-negative integer inside the pageable
+     * ceiling.
+     *
+     * M16 (dba2 major M1): a deep OFFSET forces MySQL to scan-and-discard
+     * O(offset) rows on the largest table; LIMIT always had its cap
+     * ({@see ABSOLUTE_ROW_CEILING}) while OFFSET was unbounded. Requests past
+     * {@see MAX_PAGEABLE_OFFSET} clamp silently — the same tolerance law an
+     * out-of-range limit gets — because at that depth the honest remedy is a
+     * filter, a search, or keyset pagination, never page ten-thousand-and-one.
      *
      * @param mixed $offset Raw offset value
      * @return int Normalized offset
@@ -3766,7 +3783,11 @@ class ItemRepository
     private function normalizeOffset(mixed $offset): int
     {
         $o = is_numeric($offset) ? (int) $offset : 0;
-        return $o < 0 ? 0 : $o;
+        if ($o < 0) {
+            return 0;
+        }
+
+        return min($o, self::MAX_PAGEABLE_OFFSET);
     }
 
     /**

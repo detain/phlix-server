@@ -1312,7 +1312,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // W-min109 / M-SERVER-40 (+1 write = the memo test's preflight helper
     // assigning $request->method — one site, three invocations; the headers
     // bracket-writes land on the READS denominator; zero src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1118;
+    // Deferred #73 (+1 write = the type-branch router pin's
+    // '$request->query = ['type' => 'movie'];' seed in
+    // WebPortalRouterRatingFilterTest — one site, the sanctioned
+    // harness-seed pattern; zero src/ writes added).
+    private const EXPECTED_DECLARED_WRITES = 1119;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

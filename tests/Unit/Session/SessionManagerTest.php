@@ -43,4 +43,33 @@ class SessionManagerTest extends TestCase
             $uuid
         );
     }
+
+    public function testGetSessionsByIdsIsCacheFirstAndSingleQuery(): void
+    {
+        // M10 (srphp major 3): the batch getter must consult the in-memory
+        // activeSessions cache per id, send ONLY the cache misses in ONE
+        // IN(...) query, and leave unknown ids absent from the map — the
+        // exact per-id getSession() semantics, looped zero times.
+        $db = $this->createMock(Connection::class);
+        $manager = new SessionManager($db);
+
+        $cache = new \ReflectionProperty($manager, 'activeSessions');
+        $cache->setAccessible(true);
+        $cache->setValue($manager, ['sess-cached' => ['id' => 'sess-cached', 'device_name' => 'TV']]);
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('WHERE id IN'),
+                $this->equalTo(['sess-miss', 'sess-gone'])
+            )
+            ->willReturn([['id' => 'sess-miss', 'device_name' => 'Phone']]);
+
+        $map = $manager->getSessionsByIds(['sess-cached', 'sess-miss', 'sess-gone', '']);
+
+        $this->assertSame('TV', $map['sess-cached']['device_name']);
+        $this->assertSame('Phone', $map['sess-miss']['device_name']);
+        $this->assertArrayNotHasKey('sess-gone', $map);
+        $this->assertCount(2, $map);
+    }
 }

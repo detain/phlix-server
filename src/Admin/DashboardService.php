@@ -14,6 +14,7 @@ namespace Phlix\Admin;
 use DateTime;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Streaming\StreamManager;
+use Phlix\Media\Streaming\StreamState;
 use Phlix\Session\SessionManager;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
@@ -106,14 +107,38 @@ class DashboardService
             return [];
         }
 
-        $result = [];
+        // M10 (srphp major 3): batch-then-render. The per-row findById /
+        // getSession / username lookups made one admin refresh cost ~3N
+        // queries; the poll now resolves items, sessions and usernames in
+        // three batched reads and renders from the maps. A map miss is
+        // exactly the old per-row null, so no rendering behavior moved.
+        $liveStreams = [];
         foreach ($activeStreams as $stream) {
-            if (!$stream->isActive()) {
-                continue;
+            if ($stream->isActive()) {
+                $liveStreams[] = $stream;
             }
+        }
+        if ($liveStreams === []) {
+            return [];
+        }
 
-            $mediaItem = $this->items->findById($stream->mediaItemId);
-            $session = $this->sessions->getSession($stream->sessionId);
+        $itemsById = $this->itemsByIds(array_map(
+            static fn (StreamState $stream): string => $stream->mediaItemId,
+            $liveStreams
+        ));
+        $sessionsById = $this->sessions->getSessionsByIds(array_map(
+            static fn (StreamState $stream): string => $stream->sessionId,
+            $liveStreams
+        ));
+        $usernamesById = $this->usernamesByIds(array_map(
+            static fn (StreamState $stream): string => $stream->userId,
+            $liveStreams
+        ));
+
+        $result = [];
+        foreach ($liveStreams as $stream) {
+            $mediaItem = $itemsById[$stream->mediaItemId] ?? null;
+            $session = $sessionsById[$stream->sessionId] ?? null;
 
             $mediaTitle = is_array($mediaItem) ? $this->toString($mediaItem['name'] ?? null) : null;
             $mediaType = is_array($mediaItem) ? $this->toString($mediaItem['type'] ?? null) : null;
@@ -123,7 +148,7 @@ class DashboardService
             $result[] = [
                 'stream_id' => $stream->id,
                 'user_id' => $stream->userId,
-                'username' => $this->getUsernameById($stream->userId),
+                'username' => $usernamesById[$stream->userId] ?? null,
                 'media_item_id' => $stream->mediaItemId,
                 'media_title' => $mediaTitle,
                 'media_type' => $mediaType,
@@ -212,9 +237,18 @@ class DashboardService
         $since = $days !== null ? new DateTime("-{$days} days") : null;
         $statsData = $this->stats->getTopMedia($limit, $since);
 
+        // M10 (srphp major 3): one batched hydrate instead of findById per
+        // stats row. The S14 orphan guard is unchanged in law and order:
+        // rows are still walked in rank order and a row whose item no longer
+        // hydrates is hidden, not blanked.
+        $itemsById = $this->itemsByIds(array_map(
+            fn (array $row): string => $this->toString($row['media_item_id']),
+            $statsData
+        ));
+
         $result = [];
         foreach ($statsData as $row) {
-            $mediaItem = $this->items->findById($row['media_item_id']);
+            $mediaItem = $itemsById[$this->toString($row['media_item_id'])] ?? null;
 
             // S14 orphan guard (defense-in-depth). StatsCollector::getTopMedia()
             // already INNER JOINs media_items so deleted-item plays are dropped
@@ -447,11 +481,23 @@ class DashboardService
             [$limit]
         );
 
+        // M10 (srphp major 3): both hydrations are batched (items in one
+        // findByIds, users in one WHERE id IN) — the S220 skip law below is
+        // unchanged: it keys off the same per-row null/miss the N+1 produced.
+        $itemsById = $this->itemsByIds(array_map(
+            fn (array $row): string => $this->toString($row['media_item_id']),
+            $rows
+        ));
+        $usernamesById = $this->usernamesByIds(array_map(
+            fn (array $row): string => $this->toString($row['user_id']),
+            $rows
+        ));
+
         $result = [];
         foreach ($rows as $row) {
-            $mediaItem = $this->items->findById($this->toString($row['media_item_id']));
+            $mediaItem = $itemsById[$this->toString($row['media_item_id'])] ?? null;
             $mediaTitle = is_array($mediaItem) ? $this->toString($mediaItem['name'] ?? null) : null;
-            $username = $this->getUsernameById($this->toString($row['user_id']));
+            $username = $usernamesById[$this->toString($row['user_id'])] ?? null;
 
             // S220 — the S14 HIDE decision, finished on this missed surface.
             // A playback event whose media item or user account has since been
@@ -629,6 +675,86 @@ class DashboardService
         }
 
         return $this->toString($row['username'] ?? null);
+    }
+
+    /**
+     * Batch-hydrate media items into an id-keyed map.
+     *
+     * M10 (srphp major 3): the single-query face of ItemRepository::findByIds().
+     * The profile-tag filter is the same per-item predicate findById() applied,
+     * so map membership equals the old per-row results exactly. Empty ids are
+     * dropped — the DB never had a row for them.
+     *
+     * @param array<int, string> $ids
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function itemsByIds(array $ids): array
+    {
+        $unique = [];
+        foreach ($ids as $id) {
+            if ($id !== '' && !isset($unique[$id])) {
+                $unique[$id] = true;
+            }
+        }
+        if ($unique === []) {
+            return [];
+        }
+
+        $map = [];
+        foreach ($this->items->findByIds(array_keys($unique)) as $item) {
+            $id = $item['id'] ?? null;
+            if (is_string($id)) {
+                $map[$id] = $item;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Batch-resolve usernames in ONE query.
+     *
+     * M10 (srphp major 3): replaces the per-row getUsernameById() loop on the
+     * batched dashboard surfaces. A deleted/unknown account maps to null — the
+     * per-id lookup's own contract — so the S14/S220 orphan-skip law is kept
+     * exactly.
+     *
+     * @param array<int, string> $ids
+     *
+     * @return array<string, string|null>
+     */
+    private function usernamesByIds(array $ids): array
+    {
+        $unique = [];
+        foreach ($ids as $id) {
+            if ($id !== '' && !isset($unique[$id])) {
+                $unique[$id] = true;
+            }
+        }
+        $byId = array_fill_keys(array_keys($unique), null);
+        if ($byId === []) {
+            return $byId;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($byId), '?'));
+        /** @var array<array<string, mixed>> $result */
+        $result = $this->db->query(
+            "SELECT id, username FROM users WHERE id IN ({$placeholders})",
+            array_keys($byId)
+        );
+
+        foreach ($result as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = $row['id'] ?? null;
+            if (is_string($id) && array_key_exists($id, $byId)) {
+                $byId[$id] = $this->toString($row['username'] ?? null);
+            }
+        }
+
+        return $byId;
     }
 
     /**

@@ -67,18 +67,22 @@ class DashboardServiceTest extends TestCase
         $mockStreamManager->method('getActiveStreams')->willReturn([$streamState]);
 
         $mockItemRepository = $this->createMockItemRepository();
-        $mockItemRepository->method('findById')->willReturn([
+        // M10: getNowPlaying() hydrates through the batched findByIds() map
+        // (same law, one query); the session/username lookups batch likewise.
+        $mockItemRepository->method('findByIds')->willReturn([[
             'id' => 'media-456',
             'name' => 'Test Movie',
             'type' => 'movie',
             'metadata' => ['poster_url' => '/poster.jpg'],
-        ]);
+        ]]);
 
         $mockSessionManager = $this->createMockSessionManager();
-        $mockSessionManager->method('getSession')->willReturn([
-            'id' => 'session-789',
-            'device_name' => 'Chrome',
-            'device_type' => 'desktop',
+        $mockSessionManager->method('getSessionsByIds')->willReturn([
+            'session-789' => [
+                'id' => 'session-789',
+                'device_name' => 'Chrome',
+                'device_type' => 'desktop',
+            ],
         ]);
 
         $mockStatsCollector = $this->createMockStatsCollector();
@@ -103,8 +107,64 @@ class DashboardServiceTest extends TestCase
         $this->assertEquals('Chrome', $result[0]['device_name']);
     }
 
+    public function test_get_now_playing_batches_instead_of_per_row_queries(): void
+    {
+        // M10 (srphp major 3) law pin: a now-playing poll of N active streams
+        // must resolve items, sessions and usernames in ONE batched call each —
+        // never findById/getSession/username-per-row. The estate's batch-query
+        // law ("Never loop with individual queries", AGENTS.md) in executable
+        // form: this test reddens the moment any surface regresses to N+1.
+        $streams = [];
+        foreach (['a', 'b', 'c'] as $n) {
+            $state = new StreamState();
+            $state->id = "stream-{$n}";
+            $state->mediaItemId = "media-{$n}";
+            $state->sessionId = "session-{$n}";
+            $state->userId = "user-{$n}";
+            $state->positionTicks = 100;
+            $state->durationTicks = 200;
+            $state->status = StreamState::STATUS_PLAYING;
+            $streams[] = $state;
+        }
+
+        $mockStreamManager = $this->createMockStreamManager();
+        $mockStreamManager->method('getActiveStreams')->willReturn($streams);
+
+        $mockItemRepository = $this->createMockItemRepository();
+        $mockItemRepository->expects($this->once())->method('findByIds')->willReturn([]);
+
+        $mockSessionManager = $this->createMockSessionManager();
+        $mockSessionManager->expects($this->once())->method('getSessionsByIds')->willReturn([]);
+
+        $mockConnection = $this->createMockConnection();
+        $mockConnection->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('WHERE id IN'),
+                $this->equalTo(['user-a', 'user-b', 'user-c'])
+            )
+            ->willReturn([]);
+
+        $service = new DashboardService(
+            $this->createMockStatsCollector(),
+            $mockSessionManager,
+            $mockStreamManager,
+            $mockItemRepository,
+            $mockConnection
+        );
+
+        $result = $service->getNowPlaying();
+
+        // All three streams still render (map misses = null fields, the old
+        // per-row null semantics), with zero per-row queries.
+        $this->assertCount(3, $result);
+        $this->assertNull($result[0]['media_title']);
+        $this->assertNull($result[0]['username']);
+    }
+
     public function test_get_top_users_returns_leaderboard(): void
     {
+
         $mockConnection = $this->createMockConnection();
         $mockConnection->method('query')
             ->willReturnCallback(function (string $sql, array $params = []): array {
@@ -162,23 +222,23 @@ class DashboardServiceTest extends TestCase
         ]);
 
         $mockItemRepository = $this->createMockItemRepository();
-        $mockItemRepository->method('findById')
-            ->willReturnCallback(function (string $id): array {
-                if ($id === 'media-123') {
-                    return [
-                        'id' => 'media-123',
-                        'name' => 'Popular Movie',
-                        'type' => 'movie',
-                        'metadata' => ['poster_url' => '/poster1.jpg'],
-                    ];
-                }
-                return [
-                    'id' => 'media-456',
-                    'name' => 'Another Movie',
-                    'type' => 'movie',
-                    'metadata' => ['poster_url' => '/poster2.jpg'],
-                ];
-            });
+        // M10: getTopMedia() hydrates one batched findByIds() now; the map the
+        // service builds is keyed by the rows' 'id', exactly what the old
+        // per-row findById() callbacks resolved.
+        $mockItemRepository->method('findByIds')->willReturn([
+            [
+                'id' => 'media-123',
+                'name' => 'Popular Movie',
+                'type' => 'movie',
+                'metadata' => ['poster_url' => '/poster1.jpg'],
+            ],
+            [
+                'id' => 'media-456',
+                'name' => 'Another Movie',
+                'type' => 'movie',
+                'metadata' => ['poster_url' => '/poster2.jpg'],
+            ],
+        ]);
 
         $mockSessionManager = $this->createMockSessionManager();
         $mockStreamManager = $this->createMockStreamManager();
@@ -209,7 +269,9 @@ class DashboardServiceTest extends TestCase
         // S14 orphan guard (behavioural proof of the consumer-side skip).
         // A play-count row whose media item has since been deleted must NOT
         // surface as a blank (null-title) dashboard entry: getTopMedia() skips
-        // any row whose ItemRepository::findById() hydrate returns null.
+        // any row the batched ItemRepository::findByIds() hydrate left out
+        // (M10 moved the hydrate from per-row findById to one batch; the skip
+        // law is the same map-miss test).
         $mockConnection = $this->createMockConnection();
         $mockConnection->method('query')->willReturn([]);
 
@@ -223,18 +285,20 @@ class DashboardServiceTest extends TestCase
         ]);
 
         $mockItemRepository = $this->createMockItemRepository();
-        $mockItemRepository->method('findById')
-            ->willReturnCallback(function (string $id): ?array {
-                if ($id === 'media-live') {
-                    return [
+        $mockItemRepository->method('findByIds')
+            ->willReturnCallback(function (array $ids): array {
+                $rows = [];
+                if (in_array('media-live', $ids, true)) {
+                    $rows[] = [
                         'id' => 'media-live',
                         'name' => 'Surviving Movie',
                         'type' => 'movie',
                         'metadata' => ['poster_url' => '/poster-live.jpg'],
                     ];
                 }
-                // Deleted item — the repository no longer has a row for it.
-                return null;
+                // The deleted item is simply absent from the batch result — the
+                // repository has no row for it.
+                return $rows;
             });
 
         $service = new DashboardService(
@@ -504,19 +568,23 @@ class DashboardServiceTest extends TestCase
                 if (strpos($sql, 'FROM users') !== false) {
                     // S220: getRecentPlaybackEvents() now applies the S14 HIDE
                     // decision — a playback row is surfaced only while its user
-                    // resolves. Mirror the resolvable-user mock the S14 Top-Users
-                    // orphan test uses, so this feed's survivor stays listed.
-                    return [['username' => 'alice']];
+                    // resolves. M10 batches that lookup (SELECT id, username …
+                    // WHERE id IN), so the row must carry its id; the per-id
+                    // auth/library lookups ignore the extra key. Mirror the
+                    // resolvable-user mock the S14 Top-Users orphan test uses,
+                    // so this feed's survivor stays listed.
+                    return [['id' => 'user-123', 'username' => 'alice']];
                 }
                 return [];
             });
 
         $mockItemRepository = $this->createMockItemRepository();
-        $mockItemRepository->method('findById')->willReturn([
+        // M10: playback events hydrate via the batched findByIds() map.
+        $mockItemRepository->method('findByIds')->willReturn([[
             'id' => 'media-456',
             'name' => 'Test Movie',
             'metadata' => [],
-        ]);
+        ]]);
 
         $mockStatsCollector = $this->createMockStatsCollector();
         $mockSessionManager = $this->createMockSessionManager();

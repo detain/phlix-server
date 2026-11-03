@@ -33,6 +33,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The admin dashboard stopped polling the database once per row (review M10, srphp — AGENTS.md's own batch-query law applied).**
+  - One refresh of Now Playing / Top Media / Recent Activity cost roughly 3N
+    queries for N rows: a `findById()` per stats row, a `getSession()` per
+    stream, and a raw single-id `SELECT username` per row. All three surfaces
+    now hydrate items through one `ItemRepository::findByIds()`, sessions
+    through a new `SessionManager::getSessionsByIds()` (in-memory cache first,
+    one query for the misses — identical per-id semantics), and usernames
+    through one `WHERE id IN (...)` map. The S14 orphan-skip and S220
+    hide-deleted laws are unchanged — a map miss is exactly the old per-row
+    null — and an executable law pin now reddens any regression back to N+1.
+
 - **A wiring failure that removes an API surface is now logged instead of vanishing silently (review M8, srphp).**
   - Route-registration and subsystem-start blocks in `Application` caught every
     resolution error with a comment-only body: a broken DI binding made clients

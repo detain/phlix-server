@@ -175,6 +175,54 @@ class SessionManager
     }
 
     /**
+     * Batch-load sessions by id — one query for the cache misses.
+     *
+     * Review M10 (srphp major 3): the admin dashboard hydrated every active
+     * stream's session with a per-row getSession() poll (~N queries per
+     * refresh). This is the same batch law the estate adopted for favorites.
+     * Semantics are identical to calling getSession() per id: the in-memory
+     * activeSessions cache is consulted first, only the misses go to the
+     * database, and an unknown id is simply absent from the returned map
+     * (the per-id contract's null).
+     *
+     * @param list<string> $ids Session UUIDs (duplicates and empty strings are ignored)
+     *
+     * @return array<string, array<string, mixed>> id-keyed session rows
+     */
+    public function getSessionsByIds(array $ids): array
+    {
+        $out = [];
+        $missing = [];
+
+        foreach (array_unique($ids) as $id) {
+            if ($id === '') {
+                continue;
+            }
+            if (isset($this->activeSessions[$id])) {
+                $out[$id] = $this->activeSessions[$id];
+                continue;
+            }
+            $missing[] = $id;
+        }
+
+        if ($missing !== []) {
+            $placeholders = implode(',', array_fill(0, count($missing), '?'));
+            $rows = RowMap::listFromMixed($this->db->query(
+                "SELECT * FROM sessions WHERE id IN ({$placeholders})",
+                $missing
+            ));
+            foreach ($rows as $row) {
+                $id = $row['id'] ?? null;
+                if (is_string($id)) {
+                    $out[$id] = $row;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Find a session by device ID.
      *
      * Returns the most recently active session for the device.

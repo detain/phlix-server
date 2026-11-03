@@ -2957,4 +2957,47 @@ final class MediaItemShaperTest extends TestCase
 
         $this->assertSame(self::SURVIVAL_TOKEN, 'S112' . 'URLGUARD' . 'X3D7');
     }
+
+    /**
+     * M7 (consolidated review) — the two un-normalized keys are now under the
+     * same type law as their siblings: whatever a legacy/odd row stored,
+     * `genres` leaves as list<string> and `overview` as string|null, so the
+     * SPA's `genres.join(', ')`/`v-for` can never throw on a malformed row
+     * and the "shaped top-level keys are the validated contract" header
+     * claim holds without exception.
+     */
+    public function testShapeNormalizesGenreAndOverviewShapesFromHostileRows(): void
+    {
+        // Map-stored genres (legacy .nfo row) → flat values list.
+        $mapRow = MediaItemShaper::shape([
+            'id' => 'm-a', 'name' => 'Map', 'type' => 'movie',
+            'metadata' => ['genres' => ['0' => 'Drama', '1' => 'Sci-Fi']],
+        ]);
+        $this->assertSame(['Drama', 'Sci-Fi'], $mapRow['genres']);
+
+        // Provider-object genres ({name}) are UNWRAPPED, not dropped —
+        // legitimate TMDB-shaped rows keep their data.
+        $objectRow = MediaItemShaper::shape([
+            'id' => 'm-b', 'name' => 'Objects', 'type' => 'movie',
+            'metadata' => ['genres' => [['name' => 'Horror'], ['name' => 'Thriller'], 'Comedy']],
+        ]);
+        $this->assertSame(['Horror', 'Thriller', 'Comedy'], $objectRow['genres']);
+
+        // Non-array genres (a bare string from a broken serializer) and
+        // non-string overview (object) degrade to the contract shapes.
+        $hostileRow = MediaItemShaper::shape([
+            'id' => 'm-c', 'name' => 'Hostile', 'type' => 'movie',
+            'metadata' => ['genres' => 'Drama', 'overview' => ['text' => 'nope']],
+        ]);
+        $this->assertSame([], $hostileRow['genres']);
+        $this->assertNull($hostileRow['overview']);
+
+        // Well-formed rows keep shipping EXACTLY what they shipped before.
+        $cleanRow = MediaItemShaper::shape([
+            'id' => 'm-d', 'name' => 'Clean', 'type' => 'movie',
+            'metadata' => ['genres' => ['Drama'], 'overview' => 'Begins.'],
+        ]);
+        $this->assertSame(['Drama'], $cleanRow['genres']);
+        $this->assertSame('Begins.', $cleanRow['overview']);
+    }
 }

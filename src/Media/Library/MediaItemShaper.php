@@ -281,7 +281,11 @@ final class MediaItemShaper
             // advertising `/original`. Null when neither exists (a non-TMDB
             // backdrop with no cached variants) → the client uses `backdrop_url`.
             'backdrop_srcset' => SignedUrl::refreshArtworkSrcset($backdropSrcset),
-            'genres' => $metadata['genres'] ?? [],
+            // Type-guarded like every sibling key: a legacy .nfo/provider row that
+            // stored genres as a map or as [{name}] objects ships as a flat,
+            // de-duplicated list<string> — never a JSON object the SPA's
+            // `genres.join(', ')` would throw on.
+            'genres' => self::normalizeGenres($metadata['genres'] ?? null),
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,
             'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime'])
@@ -294,7 +298,10 @@ final class MediaItemShaper
             'duration' => isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds'])
                 ? (int) $metadata['duration_seconds']
                 : null,
-            'overview' => $metadata['overview'] ?? null,
+            // string|null contract: an exotic provider row that stored overview
+            // non-string (object/array) reads as null instead of shipping the
+            // raw structure beside a claim that top-level keys are validated.
+            'overview' => is_string($metadata['overview'] ?? null) ? $metadata['overview'] : null,
             // Normalise to a flat list of names regardless of how the row was
             // stored (TMDB objects vs an already-flattened list) so the SPA
             // cast chips never render "[object Object]".
@@ -917,6 +924,27 @@ final class MediaItemShaper
             }
         }
         return $out;
+    }
+
+    /**
+     * Normalize the top-level `genres` list for every shape seen in the field:
+     * list<string>, map<string,string>, or [{name: string}, ...]. Name-bearing
+     * entries are unwrapped BEFORE the generic string pass so legitimate
+     * provider-object rows keep their data; anything non-string-y drops, and
+     * the contract (list<string>) holds for every row that lands.
+     *
+     * @return list<string>
+     */
+    private static function normalizeGenres(mixed $value): array
+    {
+        if (is_array($value)) {
+            $value = array_map(
+                static fn (mixed $genre): mixed => is_array($genre) && isset($genre['name']) ? $genre['name'] : $genre,
+                $value
+            );
+        }
+
+        return self::normalizeStringList($value);
     }
 
     /**

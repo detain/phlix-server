@@ -280,10 +280,13 @@ class WebSocketServer
         $staleGroupTimeoutRaw = $this->config['stale_group_timeout'] ?? 3600;
         $staleGroupTimeout = is_numeric($staleGroupTimeoutRaw) ? (int) $staleGroupTimeoutRaw : 3600;
 
-        // Start cleanup timer for stale connections (every 60 seconds)
+        // Start cleanup timer for stale connections (every 60 seconds).
+        // M2: routed through the server's finalizing reap (reapConnection) —
+        // the pool-level sweep bypassed the R16-02 teardown arm; see
+        // reapStaleConnections().
         if (class_exists(\Workerman\Timer::class)) {
             \Workerman\Timer::add(60, function () use ($staleConnectionTimeout): void {
-                $this->connections->cleanupStaleConnections($staleConnectionTimeout);
+                $this->reapStaleConnections($staleConnectionTimeout);
             });
 
             // Start cleanup timer for stale SyncPlay groups (every 5 minutes)
@@ -325,6 +328,47 @@ class WebSocketServer
             \Workerman\Timer::add($pingInterval, function () use ($pingLimit): void {
                 $this->pingConnections($pingLimit);
             });
+        }
+    }
+
+    /**
+     * Notify and reap connections that have been idle past the given maximum.
+     *
+     * M2 (asphp review): this sweep used to live in ConnectionPool, which
+     * closed stale wrappers with sendMessage + close + remove() directly —
+     * bypassing the R16-02 teardown arm. Workerman's close() DEFERS destroy()
+     * (and with it onClose) while the send buffer still holds bytes, and once
+     * remove() has un-pooled the wrapper, a late onClose finds no pool entry,
+     * so SyncPlay vacate and the final metrics touch were silently skipped:
+     * the idle member lingered in its group as a ghost until the hourly
+     * stale-group cleanup, and its opened-connection marker leaked forever.
+     * The sweep therefore belongs to the SERVER, whose reapConnection is the
+     * single finalizing close path (same shape as the ping sweep's reap).
+     *
+     * Wire-identical to the old pool sweep: each stale peer receives the same
+     * `timeout` message immediately before its socket closes; the strict
+     * greater-than idle boundary is unchanged.
+     *
+     * @param int $maxIdleTime Maximum idle time in seconds (timer default: 300).
+     * @return void
+     */
+    public function reapStaleConnections(int $maxIdleTime): void
+    {
+        $now = time();
+
+        // all() hands back a snapshot copy, so reaping (which mutates the pool)
+        // during iteration is safe — same pattern as pingConnections().
+        foreach ($this->connections->all() as $wsConnection) {
+            if (!$wsConnection instanceof Connection) {
+                continue;
+            }
+
+            if ($now - $wsConnection->getLastActivity() <= $maxIdleTime) {
+                continue;
+            }
+
+            $wsConnection->sendMessage('timeout', ['message' => 'Connection timed out']);
+            $this->reapConnection($wsConnection);
         }
     }
 

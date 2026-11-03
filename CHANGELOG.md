@@ -33,6 +33,45 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Idle WebSocket timeouts no longer leave ghost members in watch parties (review M2, asphp — the ping-sweep R16-02 cure's overlooked twin).**
+  - The 60-second receive-side idle sweep lived in `ConnectionPool` and closed stale
+    wrappers with sendMessage + close + remove() directly. Workerman's `close()`
+    DEFERS `destroy()` — and with it the worker's onClose — while the send buffer
+    still holds bytes, and once remove() had un-pooled the wrapper a late onClose
+    found no pool entry, so the entire teardown arm (SyncPlay vacate + final
+    metrics touch) was skipped: an idle-timed-out member lingered in its active
+    group as a ghost (possibly as its host) until the hourly stale-group cleanup,
+    and its opened-connection marker leaked for the worker's lifetime. The sweep
+    now runs server-side (`WebSocketServer::reapStaleConnections()`) through the
+    same finalizing `reapConnection()` path the ping sweep uses, and the bypass-
+    prone pool method is removed. Wire-identical: the stale peer still receives the
+    same `timeout` notice (`{"type":"timeout","data":{"message":"Connection timed out"}}`)
+    immediately before its socket closes, and the strict greater-than idle boundary
+    is unchanged. `WebSocketServerReapTeardownTest` +2: ordered send-before-close
+    capture with vacate/group-deletion assertions (mutation-toothed — reverting to
+    the raw close/remove path reddens the vacate pin), and a fresh-connection
+    survivor pinning the boundary. Zero new wire codes; no payload-shape change.
+- **Theme music streaming no longer buffers whole multi-MB files into the resident HTTP worker (review M3 — the closed blocking-I/O register's unlisted exception).**
+  - `ThemeMusicStreamController::streamFile()`'s whole-file leg answered with
+    `file_get_contents()` into `->body()`, the exact pattern AGENTS.md's S3 doctrine
+    reserves `Response::withFile()` for (HLS/DASH precedent). It now hands the path
+    to the event-loop file sender; explicit Content-Type/Content-Length/
+    Accept-Ranges/Cache-Control headers are unchanged (the withFile header mirror
+    emits the same values). `ThemeMusicStreamControllerTest`'s whole-file law was
+    rotated with teeth: the response body must be EMPTY pre-materialize (a buffering
+    regression reddens) and `materializeFileWindow()` then asserts identical bytes.
+    The Range leg keeps its bounded `fread()` (≤ requested window, honestly capped).
+    Zero wire change.
+- **The shaped media list's `genres` and `overview` can no longer carry hostile row shapes to clients (review M7 — type law their siblings already kept).**
+  - `MediaItemShaper::shape()` passed `metadata_json` fragments straight through:
+    a malformed row could ship `genres` as an object/map or `overview` as a
+    non-string, breaking every consumer that trusts the declared `list<string>` /
+    `string|null` types. `genres` now runs through a name-unwrapping
+    `normalizeGenres()` (map/object/bare-string hostile rows all leave as
+    `list<string>`; legitimate `{name}` rows keep their data) and `overview` takes
+    a strict `is_string()` guard. Well-formed rows ship byte-identical — the
+    pre-existing pins are unmodified — with +1 hostile-rows law-pin test.
+
 - **Watch-party playback no longer rubber-bands backward every few seconds (INCIDENT playjump — the group's echoed position now advances while playing).**
   - A `playback_sync` echo answered with the raw group ANCHOR — the last explicit host play/pause/seek position — while the group kept advancing on members' players, so each ~5s echo dragged drift-correcting clients back to a stale second ("jumps back a few seconds, wasn't there before"). The anchor is now stamped at every write (`Messages::nowMs()` scale, never `time()` — the two-scale class is part of this incident); the echo serves anchor + elapsed at 1× (exact milliseconds, elapsed clamped at zero, result clamped to `[0, duration]` when a duration is known, raw anchor when not playing), and the echoed position, the nudge's `position`/`drift_ms`, and the S446 in-sync predicate all hang off ONE reference tick per ingest, so a frame can never carry a position and a drift that disagree. Payload keys and every envelope are unchanged — the VALUE law is what moved; zero new wire codes (the contracts registry md5 stays `40c1da48`).
   - The stamp survives a worker handoff: `GroupState::serialize()` gained ONE mirror-internal key, `playback_position_at_ms` (the live-only draft was measured insufficient — a restore silently discarded 90s of advancement: the rubber-band once per deploy; the continuation test pins it). `getState()` and the public broadcast shape are untouched; blobs predating the key self-heal to restore-time-now and can only under-claim elapsed, never inject a forward leap. Deterministic proof: two clock-seam manager tests assert the echo delta equals the injected tick EXACTLY (5000ms → 5000ms) — red on the frozen anchor at the parent. SUPERSEDES, forward-only (pushed history untouched): the same-day duplicate-lane entry below ("rubber-band cure — [review incident playjump]") shipped the same anchor stamp and mirror key but with whole-second quantization and a deliberately RAW nudge/predicate reading; arbitration rejected both halves — quantization leaves two echoes inside one second identical (the frozen-anchor defect in miniature), and mixing an advanced echo with raw drift breaks the one-reference-instant law the clients key their seek on; that lane's clock-frozen echo test is removed with the file count re-pinned around it. Disclosed goldens: the nudge test's and E2E Tests 12/13's exact-5000 echo pins became bounded-range + frame-identity assertions (they had survived on a sub-millisecond timing accident); the S431 census re-pinned 2041→2042 from its measured red (+2 files: `GroupStateAnchorAdvanceTest`, `SyncPlayEchoAdvanceTest`; −1 superseded lane test); `docs/dev/SYNCPLAY_MEMBER_SYNC_NUDGE.md` updated for the one-tick drift law and the new mirror key. REST/snapshot surfaces keep answering the raw anchor by design (scope: the echo chain only). The hub :8804 relay twin lands separately with verbatim-mirrored semantics.

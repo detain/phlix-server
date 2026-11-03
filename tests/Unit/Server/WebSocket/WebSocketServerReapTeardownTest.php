@@ -15,7 +15,9 @@ use Phlix\Stats\Metrics\MetricsRegistry;
 use Workerman\Connection\TcpConnection;
 
 /**
- * R16-02 regression pins for the ping-sweep reaper's teardown arm.
+ * R16-02 regression pins for the reaper teardown arm — both the ping sweep
+ * (half-open peers) and, since M2, the receive-side idle sweep, which now
+ * shares the same finalizing reapConnection path.
  *
  * Workerman's TcpConnection::close() DEFERS destroy() — and with it the worker's
  * onClose callback — while its sendBuffer still holds bytes. A half-open socket
@@ -129,6 +131,85 @@ final class WebSocketServerReapTeardownTest extends TestCase
         $server->onClose($tcp);
         self::assertSame(0, ConnectionPool::getInstance()->count());
         self::assertSame([], $manager->listGroups());
+    }
+
+    /**
+     * M2 (asphp review): the receive-side idle sweep shares the ping sweep's
+     * teardown requirement. The sweep used to live in ConnectionPool and close
+     * + remove stale wrappers directly; with Workerman's deferred destroy() the
+     * onClose arm (vacate + final metrics touch) was skipped exactly like the
+     * pre-R16-02 ping reaper — ghost idle members until the hourly stale-group
+     * cleanup plus a permanent opened-connection marker leak. The sweep now
+     * runs through WebSocketServer::reapStaleConnections() → reapConnection(),
+     * so an idle SyncPlay member is vacated even when onClose never fires,
+     * while the peer still receives the wire-identical `timeout` notice before
+     * its socket closes.
+     */
+    public function testIdleReaperVacatesSyncPlayGroupAndNotifiesBeforeClose(): void
+    {
+        $handler = new MessageHandler(ConnectionPool::getInstance());
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097], $handler);
+        $manager = new SyncPlayManager();
+        $manager->initialize($handler);
+        $server->setSyncPlayManager($manager);
+
+        $sentPayloads = [];
+        $events = [];
+        $tcp = $this->createMock(TcpConnection::class);
+        $tcp->method('send')->willReturnCallback(function (string $data) use (&$sentPayloads, &$events): bool {
+            $sentPayloads[] = $data;
+            $events[] = 'send';
+            return true;
+        });
+        $tcp->method('close')->willReturnCallback(function () use (&$events): void {
+            $events[] = 'close';
+        });
+        $wsConnection = new Connection($tcp);
+        ConnectionPool::getInstance()->add($wsConnection);
+
+        $created = $manager->createGroup('Idle Group', null, 'idle_member', 'Host', $wsConnection->getId());
+        self::assertTrue($created['success']);
+        self::assertSame($created['group']['group_id'], $manager->getMemberGroup('idle_member'));
+
+        // Negative threshold: every connection counts as idle right now
+        // (the sweep's boundary itself is pinned separately below).
+        $server->reapStaleConnections(-1);
+
+        self::assertSame(
+            ['send', 'close'],
+            $events,
+            'M2: the stale peer must receive its timeout notice before the socket closes',
+        );
+        self::assertStringContainsString('"type":"timeout"', $sentPayloads[0]);
+        self::assertStringContainsString('Connection timed out', $sentPayloads[0]);
+
+        self::assertSame(0, ConnectionPool::getInstance()->count(), 'reaped connection must leave the pool');
+        self::assertNull(
+            $manager->getMemberGroup('idle_member'),
+            'M2: the idle sweep must vacate the member even when onClose never fires',
+        );
+        self::assertSame([], $manager->listGroups(), 'the emptied group must be deleted');
+    }
+
+    /**
+     * The idle boundary stays strictly-greater-than (byte-identical to the old
+     * pool sweep): a connection whose last activity is exactly maxIdleTime
+     * seconds ago is NOT reaped.
+     */
+    public function testIdleReaperKeepsStrictBoundaryForFreshConnections(): void
+    {
+        $handler = new MessageHandler(ConnectionPool::getInstance());
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097], $handler);
+
+        $tcp = $this->createMock(TcpConnection::class);
+        $wsConnection = new Connection($tcp);
+        ConnectionPool::getInstance()->add($wsConnection);
+
+        // now - lastActivity == 0; 0 > 0 is false → survivor.
+        $server->reapStaleConnections(0);
+
+        self::assertSame(1, ConnectionPool::getInstance()->count());
+        self::assertSame($wsConnection->getId(), ConnectionPool::getInstance()->all()[0]->getId());
     }
 
     /**

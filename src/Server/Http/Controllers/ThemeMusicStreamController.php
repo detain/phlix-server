@@ -162,18 +162,18 @@ final class ThemeMusicStreamController
             return $this->handleRangeRequest($filePath, $fileSize, $contentType, $rangeHeader);
         }
 
-        $content = file_get_contents($filePath);
-        if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Could not read file']);
-        }
-
+        // Whole-file leg streams through the event loop (AGENTS.md S3 withFile
+        // doctrine): a multi-MB flac must not be buffered into resident HTTP
+        // worker memory per request. Workerman (and Response::send()'s CGI
+        // path) emit Content-Length from the stat it already did; Accept-Ranges
+        // + Cache-Control stay explicit here because clients probe them.
         return (new Response())
             ->status(200)
             ->header('Content-Type', $contentType)
             ->header('Content-Length', (string) $fileSize)
             ->header('Accept-Ranges', 'bytes')
             ->header('Cache-Control', 'public, max-age=86400')
-            ->body($content);
+            ->withFile($filePath);
     }
 
     /**

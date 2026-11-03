@@ -109,6 +109,12 @@ final class ThemeMusicStreamControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
         $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
+        // M3: the whole-file leg streams via withFile(); the body is EMPTY until
+        // the event loop materializes it — a regression to reading the file into
+        // worker memory reddens this pin, then materialize the deferred wire
+        // body the way the daemon would before asserting bytes.
+        $this->assertSame('', $response->body);
+        $response->materializeFileWindow();
         $this->assertSame('MP3-DATA', $response->body);
         $this->assertSame('bytes', $response->headers['Accept-Ranges']);
     }
@@ -200,6 +206,8 @@ final class ThemeMusicStreamControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
         $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
+        $this->assertSame('', $response->body); // withFile — never buffered (M3)
+        $response->materializeFileWindow();
         $this->assertSame('LOCAL-THEME', $response->body);
     }
 

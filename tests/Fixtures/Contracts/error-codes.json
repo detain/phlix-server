@@ -119,6 +119,7 @@
     "missing_user_id",
     "missing_server_id",
     "not_server_owner",
+    "not_found",
     "peer_url_exists",
     "peer_key_exists",
     "peer_not_found",

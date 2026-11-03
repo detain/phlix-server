@@ -66,7 +66,21 @@
 SET @dbname = DATABASE();
 
 -- (1) The materialized year key, guarded (107 idiom).
--- @phlix-require-mysql 8.0.13 JSON-typed metadata_json generated-column extraction (dialect floor per the 011 precedent; the syntax itself is MySQL 5.7+)
+-- Dialect-neutral as shipped (review M28; measured 2026-11-03 on a fresh
+-- 10.6.28-MariaDB scratch DB): the whole file — the SET +
+-- PREPARE/EXECUTE/DEALLOCATE guard idiom, the STORED generated column
+-- (JSON_EXTRACT / CASE / REGEXP / LEAST-GREATEST clamp / CAST AS SIGNED) and
+-- idempotent replays — executes on MariaDB exactly as on MySQL, with
+-- byte-equal column semantics (path-missing NULL first, digit values exact,
+-- junk folded to 0, out-of-range clamped to 32767). An earlier misplaced
+-- dialect-directive line here was wrong twice over: its rationale cited
+-- the 011 functional-index precedent (a different, genuinely MySQL-only
+-- syntax; this generated-column syntax is not), and the gate binds to the
+-- NEXT flushed statement only — skipping just the SET half left the PREPARE
+-- reading a NULL variable (ERROR 1064 measured on the same server), the file
+-- permanently unrecordable and every migration run red. Do not re-add a
+-- directive here without a MariaDB REFUTATION of the measurement above — and
+-- note MigrationRunner now refuses the directive-on-fragment shape outright.
 SET @preparedStatement = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = @dbname AND TABLE_NAME = 'media_items' AND COLUMN_NAME = 'year_sort') = 0,

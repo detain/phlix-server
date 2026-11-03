@@ -978,7 +978,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // GrantListCensusTest.php (commit 213850ca) without rotating the pin in
     // those commits (their authors' miss, disclosed); rotated HERE from the
     // measured red (2044), never predicted — the S431 forward-fix precedent.
-    private const EXPECTED_PHP_FILES = 2044;
+    // +1 2044→2045: commit fd490c07 (M17 review lane) added
+    // tests/Unit/Auth/RegisterDuplicateKeyRaceTest.php without rotating the pin
+    // (its author's miss, disclosed); rotated HERE in the M28 batch from the
+    // measured red (2045), never predicted — the S431 forward-fix precedent.
+    private const EXPECTED_PHP_FILES = 2045;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

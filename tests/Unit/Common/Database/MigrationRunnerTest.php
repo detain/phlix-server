@@ -1636,15 +1636,17 @@ class MigrationRunnerTest extends TestCase
 
     public function testDirectiveCommentsLeaveRealMigrationChecksumsUnchanged(): void
     {
-        // The estate law this whole design hinges on: adding the dialect
-        // directives to 011/050 changed ONLY full-line comments, so the
-        // checksum the runner records for the CURRENT on-disk bytes still
-        // equals the pre-directive normalisation mirror — already-installed
-        // machines skip the files and re-apply nothing (a 050 re-apply would
-        // resurrect the purged multi-valued index).
+        // The estate law this whole design hinges on: directive LINES are
+        // full-line comments, invisible to the ledger checksum, in EITHER
+        // direction — the 011/050 insertion (M-SERVER-06) and the M28 REMOVAL
+        // from 121/123 both changed only comment text, so the checksum the
+        // runner records for the CURRENT on-disk bytes still equals the
+        // pre-edit normalisation mirror and already-installed machines skip
+        // the files and re-apply nothing (a 050 re-apply would resurrect the
+        // purged multi-valued index).
         $reflected = new ReflectionMethod(MigrationRunner::class, 'checksum');
 
-        foreach (['011_music_library.sql', '050_media_items_sort_indexes.sql'] as $name) {
+        foreach (['011_music_library.sql', '050_media_items_sort_indexes.sql', '121_media_items_year_sort.sql', '123_collection_items_sort_index.sql'] as $name) {
             $path = dirname(__DIR__, 4) . '/migrations/' . $name;
             $this->assertFileExists($path);
             $onDisk = (string) file_get_contents($path);
@@ -1766,6 +1768,85 @@ class MigrationRunnerTest extends TestCase
         }
         $this->assertSame(['8.0.13', '8.0.13', '8.0.13'], $minVersions['011_music_library.sql'] ?? [], '011: functional key parts need MySQL 8.0.13');
         $this->assertSame(['8.0.17'], $minVersions['050_media_items_sort_indexes.sql'] ?? [], '050: multi-valued index needs MySQL 8.0.17');
+    }
+
+    public function testNoDirectiveInTheRealChainGuardsADynamicDdlFragment(): void
+    {
+        // M28 structural law: the two directives that once sat in migrations
+        // 121/123 guarded the SET half of the SET + PREPARE/EXECUTE/DEALLOCATE
+        // idiom — on any gated server the skip left PREPARE reading a NULL
+        // @preparedStatement (ERROR 1064 measured on 10.6.28-MariaDB), the
+        // file un-recordable, every boot red — and both blocks are in fact
+        // dialect-neutral (the SAME 10.6.28 measurement ran them cleanly,
+        // replay included). Pinned here: directives exist ONLY in 011 (x3, on
+        // standalone CREATE INDEX) and 050 (x1, on the standalone ALTER) —
+        // exactly the set README.md:87's parenthetical enumerates — and no
+        // directive anywhere attaches to a dynamic-DDL keyword.
+        $files = glob(dirname(__DIR__, 4) . '/migrations/*.sql');
+        $this->assertIsArray($files);
+
+        $census = [];
+        foreach ($files as $file) {
+            $lines = preg_split('/\r\n|\r|\n/', (string) file_get_contents($file)) ?: [];
+            $directiveRx = '/^\s*(?:--|#)\s*\@phlix-require-mysql\b/';
+            $keywordRx = '/^\s*(?:SET|PREPARE|EXECUTE|DEALLOCATE)\b/i';
+            for ($i = 0, $n = count($lines); $i < $n; $i++) {
+                if (preg_match($directiveRx, $lines[$i]) !== 1) {
+                    continue;
+                }
+                $census[basename($file)] = ($census[basename($file)] ?? 0) + 1;
+                for ($j = $i + 1; $j < $n; $j++) {
+                    $next = trim($lines[$j]);
+                    if ($next === '' || preg_match('/^\s*(?:--|#|\/\*)/', $lines[$j]) === 1) {
+                        continue;
+                    }
+                    $this->assertMatchesRegularExpression(
+                        '/^(?:CREATE|ALTER|DROP|RENAME|GRANT|INSERT|UPDATE|DELETE|TRUNCATE)\b/i',
+                        $next,
+                        basename($file) . ':' . ($j + 1)
+                        . ' — a dialect directive guards a non-standalone statement '
+                        . '(dynamic-DDL fragments cannot be half-skipped: PREPARE would read a NULL '
+                        . 'user variable, ERROR 1064 on MariaDB — see '
+                        . 'MigrationRunner::rejectDirectiveOnDynamicDdlFragment)'
+                    );
+                    break;
+                }
+            }
+        }
+
+        ksort($census);
+        $this->assertSame(
+            ['011_music_library.sql' => 3, '050_media_items_sort_indexes.sql' => 1],
+            $census,
+            'exactly four dialect directives exist in the chain, in 011 and 050 only '
+            . '(M28: 121/123 carry none — proven dialect-neutral); re-count, then re-pin'
+        );
+    }
+
+    public function testDirectiveOnDynamicDdlFragmentFailsLoudOnEveryServer(): void
+    {
+        // The runner-side teeth of the same law: the shape must THROW even on
+        // a server that SATISFIES the directive (8.4.0 >= 8.0.13) — a
+        // mis-gated file is a configuration bug, not a dialect fact, and no
+        // half-guarded block may ever execute anywhere.
+        $this->writeMigration('001_misgated.sql', "-- @phlix-require-mysql 8.0.13 wrong placement\n"
+            . "SET @preparedStatement = (SELECT IF(1 = 0, 'SELECT 1', 'SELECT 2'));\n"
+            . "PREPARE guard FROM @preparedStatement;\n"
+            . "EXECUTE guard;\n"
+            . "DEALLOCATE PREPARE guard;\n");
+
+        $executed = [];
+        $conn = $this->dialectConnection([['VERSION()' => '8.4.0']], $executed);
+
+        try {
+            (new MigrationRunner(fn () => $conn, $this->tmpDir))->run();
+            $this->fail('expected RuntimeException for a directive guarding a dynamic-DDL fragment');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('001_misgated.sql', $e->getMessage());
+            $this->assertStringContainsString('dynamic-DDL fragment', $e->getMessage());
+        }
+
+        $this->assertSame([], $executed, 'the structural scan must reject BEFORE executing any statement of the file');
     }
 
     public function testReadmeSupportClaimIsAnnotatedForTheDialectGate(): void

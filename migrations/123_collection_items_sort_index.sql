@@ -27,7 +27,14 @@
 
 SET @dbname = DATABASE();
 
--- @phlix-require-mysql 8.0.13 INFORMATION_SCHEMA guard against STATISTICS (dialect floor per the 011 precedent; the ALTER itself is version-neutral)
+-- Dialect-neutral as shipped (review M28; the guard's INFORMATION_SCHEMA
+-- query, the SET + PREPARE/EXECUTE/DEALLOCATE idiom and the plain composite
+-- ALTER are all long-standing MariaDB syntax — measured executing cleanly,
+-- twice, on 10.6.28-MariaDB on 2026-11-03). An earlier dialect directive here was doubly wrong: the ALTER is version-neutral by its own
+-- rationale, and a directive binds to the NEXT flushed statement only —
+-- skipping just the SET half left the PREPARE reading a NULL variable
+-- (ERROR 1064 measured), unrecordable file, red boot. MigrationRunner now
+-- rejects that shape.
 SET @preparedStatement = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
      WHERE TABLE_SCHEMA = @dbname AND TABLE_NAME = 'collection_items' AND INDEX_NAME = 'idx_ci_collection_sort') = 0,

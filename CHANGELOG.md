@@ -33,6 +33,31 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The MariaDB dialect gate can no longer shoot migrations in the foot (review M28).**
+  - Migrations 121/123 carried `@phlix-require-mysql` directives that were wrong twice
+    over: the blocks they guarded are NOT MySQL-only (measured — the full SET +
+    PREPARE/EXECUTE/DEALLOCATE guard idiom, the STORED generated column with JSON
+    extraction / CASE / REGEXP / LEAST-GREATEST clamp / CAST AS SIGNED, and idempotent
+    replays all execute cleanly on a fresh 10.6.28-MariaDB scratch DB, with byte-equal
+    `year_sort` semantics: path-missing NULL first, digit values exact, junk folded to 0,
+    out-of-range clamped), AND the directive binds to the NEXT flushed statement only —
+    on any gated server it skipped just the `SET @preparedStatement` half, leaving
+    `PREPARE … FROM @preparedStatement` reading a NULL variable (ERROR 1064 measured on
+    the same server), which is not a squelchable idempotent code: the file stayed
+    permanently un-recorded and every migration run exited red. The two directives are
+    REMOVED (comment-only edit — ledger checksums unchanged, installed machines re-apply
+    nothing, pinned by the existing checksum-mirror test now extended to 121/123). With
+    them gone the chain's directive census is exactly 011 (x3) + 050 (x1) — the set the
+    README's MariaDB-support parenthetical enumerates — so the advertised support is true
+    again and `sort=year` no longer dies with 1054 on MariaDB (the column now exists there).
+  - The runner gained structural teeth: `rejectDirectiveOnDynamicDdlFragment` throws on
+    ANY server when a directive guards a dynamic-DDL fragment (SET/PREPARE/EXECUTE/
+    DEALLOCATE) — a mis-gated file is a configuration bug, not a dialect fact, and no
+    half-guarded block may execute anywhere. Two new MigrationRunnerTest laws pin it: the
+    fail-loud behavior (red without the guard — mutation-proven) and a real-chain scan
+    asserting the directive census and whole-statement placement. Census forward-fix in
+    the same commit: EXPECTED_PHP_FILES 2044→2045 from the measured red, attributed to
+    commit fd490c07 (M17 lane) adding RegisterDuplicateKeyRaceTest.php without rotating.
 - **Recovered docs/ops Major cluster (review M27, M29–M38, M43) — deploy documents tell the truth.**
   - README Requirements now state the host installer's **Linux kernel ≥ 6.9 floor** (the
     installer compiles Swoole with io_uring ON; the FATAL-below-6.9 fact its own comment

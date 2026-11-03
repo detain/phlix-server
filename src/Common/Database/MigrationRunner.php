@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Database;
 
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Throwable;
 use Workerman\MySQL\Connection;
 
@@ -138,7 +139,11 @@ use Workerman\MySQL\Connection;
  * indexes are performance-only and correctness does not depend on them) or is
  * genuine MySQL below the stated minimum. A version string that cannot be
  * classified, or a failed probe, RUNS the statement with a warning: the gate
- * must never silently skip work on a server it cannot identify.
+ * must never silently skip work on a server it cannot identify. A
+ * directive may only guard a COMPLETE statement: the scanner rejects
+ * (RuntimeException, every server) a directive attached to a dynamic-DDL
+ * fragment — SET/PREPARE/EXECUTE/DEALLOCATE — because a half-skipped guard
+ * idiom leaves `PREPARE … FROM @preparedStatement` reading NULL (M28).
  */
 final class MigrationRunner
 {
@@ -396,7 +401,10 @@ final class MigrationRunner
 
             $fileRequirements = [];
 
-            foreach (self::splitStatements($sql, $fileRequirements) as $index => $statement) {
+            $statements = self::splitStatements($sql, $fileRequirements);
+            self::rejectDirectiveOnDynamicDdlFragment($name, $statements, $fileRequirements);
+
+            foreach ($statements as $index => $statement) {
                 $requirement = $fileRequirements[$index] ?? null;
 
                 if ($requirement !== null && !$this->serverSatisfiesMysqlRequirement($connection, $requirement)) {
@@ -999,6 +1007,46 @@ final class MigrationRunner
         $requirements = $requirementsOut;
 
         return $statements;
+    }
+
+    /**
+     * Structural law of the dialect gate (review M28): a directive may only
+     * ever guard a COMPLETE standalone statement. Binding one to the first
+     * half of the dynamic-DDL idiom (`SET @preparedStatement = ...;` followed
+     * by PREPARE/EXECUTE/DEALLOCATE) is unconditionally broken: the skip is
+     * per-statement, so the gate drops the SET and the PREPARE then reads a
+     * NULL user variable — ERROR 1064 on MariaDB (measured 2026-11-03,
+     * 10.6.28), not a squelchable idempotent code, leaving the file
+     * permanently un-recorded and every migration run red. Rejected at scan
+     * time on EVERY server (satisfied or not): a mis-gated file is a
+     * configuration bug, not a dialect fact, and must never execute half a
+     * guarded block anywhere. Gate the whole idiom (directive above each of
+     * the four statements) only if the block is genuinely dialect-specific —
+     * the correct answer for a dialect-neutral block is no directive at all.
+     *
+     * @param list<string>                                       $statements
+     * @param array<int, array{min_version: string, reason: string}|null> $requirements
+     */
+    private static function rejectDirectiveOnDynamicDdlFragment(
+        string $name,
+        array $statements,
+        array $requirements
+    ): void {
+        foreach ($statements as $index => $statement) {
+            if (($requirements[$index] ?? null) === null) {
+                continue;
+            }
+            if (preg_match('/^(?:SET|PREPARE|EXECUTE|DEALLOCATE)\b/i', ltrim($statement)) === 1) {
+                throw new RuntimeException(sprintf(
+                    'Migration %s: a @phlix-require-mysql directive guards a dynamic-DDL fragment '
+                    . '("%s"); the per-statement skip would leave PREPARE reading a NULL @preparedStatement '
+                    . '(ERROR 1064 on MariaDB) and the file permanently un-recordable. Guard the complete '
+                    . 'statement, or drop the directive if the block is dialect-neutral.',
+                    $name,
+                    preg_replace('/\s+/', ' ', substr(ltrim($statement), 0, 60)) ?? ''
+                ));
+            }
+        }
     }
 
     /**

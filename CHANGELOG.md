@@ -33,6 +33,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **CI cure (baseline-owed): the LiveTv hostile-key probe now types its own
+  intent.** Psalm's tests corpus had flagged
+  `tests/Unit/LiveTv/LiveTvManagerTest.php` InvalidArgument since the campaign
+  tip (red on every push CI of the deferred lane, inherited at 98d7f691): the
+  probe passes an extra `evil` key through `updateTuner()`, whose param shape
+  is deliberately closed — the shape strictness IS the allow-list law, and the
+  junk key IS the test. Cured with the estate's established
+  `@psalm-suppress InvalidArgument` malformed-input-probe precedent
+  (AuthMethodPolicyTest), annotating exactly that call.
 - **Deferred #2 follow-through — three byte-exact wire pins rotated for the
   no-store seed.** The CI full-suite runs caught what the #2 targeted battery
   missed: `RouterTest`'s gated-HEAD refusal pins and

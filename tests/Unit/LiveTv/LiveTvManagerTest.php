@@ -187,6 +187,12 @@ class LiveTvManagerTest extends TestCase
             )
             ->willReturn(1);
 
+        // @psalm-suppress InvalidArgument: the extra 'evil' key is DELIBERATE —
+        // this probe proves the historical allow-list ignores unknown fields.
+        // The strict param shape is exactly what makes the literal a shape
+        // violation; the suppression documents that the mismatch is the test
+        // (same pattern as AuthMethodPolicyTest's malformed-union pin).
+        /** @psalm-suppress InvalidArgument */
         $this->assertTrue($this->manager->updateTuner('hdhr_1', [
             'name' => 'Living Room',
             'enabled' => true,

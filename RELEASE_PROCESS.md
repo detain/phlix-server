@@ -84,7 +84,7 @@ What actually governs interop today:
 ## Pre-release checklist
 
 - [ ] All tests pass on `master`
-- [ ] Coverage >= 80%
+- [ ] Coverage >= the `MIN_COVERAGE` floor declared in `.github/workflows/phpunit.yml` (the live gate; AGENTS.md — never set a coverage demand above measured coverage or every run turns red, making the checklist false-by-construction)
 - [ ] PHPStan level 9 clean
 - [ ] PHPCS PSR-12 clean
 - [ ] Changelog updated

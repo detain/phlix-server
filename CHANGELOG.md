@@ -79,6 +79,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The pre-release checklist demanded a coverage bar the repo cannot meet.**
+  `RELEASE_PROCESS.md` carried "Coverage >= 80%" while the CI floor is
+  `MIN_COVERAGE=40` and measured coverage sits at the 65%-era AGENTS.md records —
+  a false-by-construction checkbox that teaches operators to skip checklist
+  lines. The item now tracks the live gate. [review server__writer SRV-M8]
+
 - **Accounts created or reset through the admin API could never log in: the
   controller hashed the password and the repository hashed it again.**
   `AdminUserController::create()` and `update()` pre-hashed with their own

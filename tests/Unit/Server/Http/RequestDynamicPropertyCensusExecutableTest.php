@@ -1173,8 +1173,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * `$request->headers['Host']` — a bracket write, counted here per the
      * M-SERVER-48 law; zero src/ reads added. Measured from the phpunit
      * red (460), not predicted.
+     * +1 460→461 by the INFO-SERVER-49 separator-safety twin pin (this
+     * commit): the new query-bearing refusal test in the same file seeds
+     * `$request->headers['Host']` — the same bracket-write, counted per the
+     * M-SERVER-48 law; zero src/ reads added (probe-proven: the src-only
+     * worktree at this change measures 460 green). Measured from the
+     * phpunit red (461), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 460;
+    private const EXPECTED_DECLARED_READS = 461;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1439,13 +1445,21 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // consults-users pin) each seed $request->method + $request->path +
     // $request->body — sanctioned harness-seed sites; zero src/ writes added.
     // Measured from the phpunit red (1170), not predicted.
-    // +4 1170→1174 by the SRV-m43 wire-boundary tests (this commit): the
+    // +1 1170→1171 by the INFO-SERVER-49 separator-safety twin pin (this
+    // commit): the new query-bearing refusal test in OidcCallbackControllerTest
+    // seeds $request->query (1) — sanctioned harness-seed site; zero src/ writes
+    // added (probe-proven: the src-only worktree at this change measures 1170
+    // green). Measured from the phpunit red (1171), not predicted.
+    // +4 1171→1175 by the SRV-m43 wire-boundary tests: the
     // UserRowWireRedactionTest /me + profile-switch harnesses seed
     // $request->userId (2) and the quick-connect harness seeds $request->body
     // + $request->remoteIp (2) — sanctioned harness-seed sites; zero src/
-    // writes added. Measured from the phpunit red (1174) in a clean tip
-    // worktree plus this diff, not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1174;
+    // writes added. The m43 commit (d0c948b0) measured off a stale b1f13dc1
+    // worktree while the INFO-SERVER-49 rotation was still in flight and
+    // pinned 1174/460 — re-measured from the phpunit red (1175/461) at the
+    // rebased tip 947f7de8 in a clean worktree, forward-corrected in this
+    // commit (the 1170→1171 stepped over it mid-flight).
+    private const EXPECTED_DECLARED_WRITES = 1175;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

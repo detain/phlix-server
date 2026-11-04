@@ -129,6 +129,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Forward-note (census figures): the SRV-m43 S431 re-pin landed on wrong
+  numbers.** The `d0c948b0` entry below says the declared-writes denominator
+  rotates 1170 to 1174 “measured in a clean tip worktree plus this diff” —
+  the worktree was clean but STALE: it predated the sibling INFO-SERVER-49
+  commit that stepped writes 1170 to 1171 (and reads 460 to 461) on master
+  mid-lane, and the swap that committed m43 additionally carried the census
+  file off that stale base, briefly reverting the reads pin and its
+  staircase note. The corrected register: writes 1170 → 1171 → 1175, reads
+  461 untouched (the m43 harness seeds add writes only), re-measured from
+  the phpunit red at the rebased tip `947f7de8` in a clean worktree, and the
+  INFO-SERVER-49 notes restored verbatim. The earlier text stands verbatim
+  as history; this note corrects the reading (review server__dba, SRV-m43).
+
 - **Forward-note (wording): the `b1f13dc1` entry says refusing unlinked hub
   principals would enforce "an unrated linkage policy" — the intended word is
   "unruled" (as in that commit's own message: no policy of ours rules the

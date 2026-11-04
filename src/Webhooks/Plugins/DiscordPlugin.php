@@ -65,6 +65,12 @@ class DiscordPlugin extends AbstractNotificationPlugin
             return false;
         }
 
+        // SRV-M20 parity: re-validate the configured destination at the
+        // moment of use so a poisoned webhook_url never reaches the transport.
+        if (!$this->guardEgressUrl($webhookUrl, $event)) {
+            return false;
+        }
+
         $payload = $this->buildPayload($event);
 
         $context = stream_context_create([

@@ -11,6 +11,10 @@ declare(strict_types=1);
 
 namespace Phlix\Webhooks\Plugins;
 
+use InvalidArgumentException;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Webhooks\WebhookEvent;
 use Phlix\Webhooks\WebhookPluginInterface;
 
@@ -19,9 +23,61 @@ use Phlix\Webhooks\WebhookPluginInterface;
  *
  * Provides common formatting helpers and enforces the contract
  * that subclasses implement buildPayload().
+ *
+ * ## The egress law (family-wide)
+ *
+ * Every outbound URL a plugin is about to POST to passes through
+ * {@see guardEgressUrl()} at the moment of use — the same
+ * {@see SsrfGuard} gate the webhook surfaces enforce at create and
+ * re-enforce on every delivery (SRV-M20). A config file that once
+ * named a public endpoint and was since edited (or shipped) to point
+ * at loopback, link-local metadata, or a private range must be
+ * refused at send time, not trusted because it was acceptable when
+ * written. Refusal shape: one logged warning, zero bytes out, send()
+ * returns false.
  */
 abstract class AbstractNotificationPlugin implements WebhookPluginInterface
 {
+    /**
+     * Moment-of-use SSRF gate for a fully-composed egress URL.
+     *
+     * The family's single-source predicate: subclasses call this with
+     * the exact URL string that is about to reach file_get_contents()
+     * and skip the transport entirely when it returns false. Reuses
+     * the MqttPlugin guard idiom (SRV-M20 sibling) so a poisoned
+     * destination — edited-in config, DNS rebind to a denied range,
+     * or a link-local literal — never leaves the host. The guard
+     * resolves the host itself; IP literals need no DNS, so tests run
+     * network-free.
+     *
+     * @param string       $url   fully-composed http(s) destination
+     * @param WebhookEvent $event event being delivered (log context)
+     *
+     * @return bool true when the URL passed the guard and egress is allowed
+     */
+    protected function guardEgressUrl(string $url, WebhookEvent $event): bool
+    {
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } catch (InvalidArgumentException $exception) {
+            /* The URL may embed a credential (Slack/Discord webhook paths,
+             * the Telegram bot token in the path). The guard's refusal
+             * message quotes the URL it examined — redact it from the log
+             * line so the reason (scheme/host verdict) survives without the
+             * secret. */
+            LoggerFactory::get(LogChannels::APPLICATION)->warning(
+                ucfirst(static::getName()) . ' notification blocked by SSRF guard',
+                [
+                    'event_type' => $event->eventType,
+                    'reason' => str_replace($url, '<destination-redacted>', $exception->getMessage()),
+                ]
+            );
+            return false;
+        }
+
+        return true;
+    }
+
     /**
      * Formats the event as a human-readable message string.
      */

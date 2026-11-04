@@ -66,6 +66,12 @@ class ApprisePlugin extends AbstractNotificationPlugin
             return false;
         }
 
+        // SRV-M20 parity: re-validate the configured destination at the
+        // moment of use so a poisoned url never reaches the transport.
+        if (!$this->guardEgressUrl($url, $event)) {
+            return false;
+        }
+
         $payload = $this->buildPayload($event);
 
         $context = stream_context_create([

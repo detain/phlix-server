@@ -1043,7 +1043,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // UserRowWireRedactionTest.php (admin user-list wire-redaction pins + the
     // single-source SECRET-set tripwire, review server__dba); measured from the
     // phpunit red (2060), not predicted.
-    private const EXPECTED_PHP_FILES = 2060;
+    // +1 2060→2061: this parity lane adds tests/Unit/Webhooks/Plugins/
+    // NotificationPluginSsrfParityTest.php (family-wide moment-of-use egress
+    // guard, review server__secaudit); measured from the phpunit red in a clean
+    // worktree (2061), not predicted.
+    private const EXPECTED_PHP_FILES = 2061;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

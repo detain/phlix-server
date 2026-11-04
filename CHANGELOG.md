@@ -100,6 +100,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Every notification plugin re-validates its egress URL at the moment of use
+  — the webhook path's SSRF law now covers the whole outbound family (review
+  server__secaudit).** The SRV-M20 cure guarded the webhook surfaces, but the
+  sibling notification plugins (`src/Webhooks/Plugins/`) posted events to
+  whatever URL their configuration named: Slack, Discord, Apprise and ntfy read
+  a raw `webhook_url`/`url`/`server` and called `file_get_contents()` with no
+  re-check, while MqttPlugin already applied the guard — the divergence this
+  finding named. `AbstractNotificationPlugin` now owns the family's
+  single-source predicate `guardEgressUrl()`: the fully-composed destination
+  passes `SsrfGuard::assertPublicUrl()` before any transport, and a refusal is
+  one logged warning (`<Provider> notification blocked by SSRF guard`, reason
+  included, credential-bearing path redacted) plus `send()` returning false
+  with zero bytes out — the webhook surfaces' refusal shape. All six unguarded
+  plugins gained the one-line adapter (Slack, Discord, ntfy, Apprise, and the
+  fixed-host Telegram and Pushover legs, whose moment-of-use check also closes
+  the DNS-rebind class); MqttPlugin's proven inline guard stays untouched.
+  Pinned by `NotificationPluginSsrfParityTest`: http/https are swapped for a
+  spy stream wrapper, so every leg measures the transport itself — 11 cases
+  measured RED at the parent (four poisoned configured-URL literals, six
+  resolver-rebind hosts including both fixed-host plugins, and the
+  logged-refusal-without-URL-shape leg), six public-destination legs green on
+  both sides proving the guard is not a kill switch. The S431 file census
+  staircase continues 2060 to 2061 with its pin file; the declared-writes
+  denominator was re-measured unchanged (1157) at this tip in a clean worktree.
+  [server__secaudit]
+
 - **The admin user endpoints stop serializing the credential columns of the
   `users` table — `GET /api/v1/admin/users` (every cohort) and
   `GET /api/v1/admin/users/{id}` no longer ship `password_hash`,

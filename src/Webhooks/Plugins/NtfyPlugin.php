@@ -69,6 +69,13 @@ class NtfyPlugin extends AbstractNotificationPlugin
         $server = $this->getConfigValue('server') ?: self::DEFAULT_SERVER;
         $url = rtrim($server, '/') . '/' . urlencode($topic);
 
+        // SRV-M20 parity: the composed destination (configured server +
+        // topic) is re-validated at the moment of use, so a poisoned or
+        // edited-in `server` never reaches the transport.
+        if (!$this->guardEgressUrl($url, $event)) {
+            return false;
+        }
+
         $tags = $this->getTagsFromEvent($event);
         $priority = $this->getPriorityFromEvent($event);
 

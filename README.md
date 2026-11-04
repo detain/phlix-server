@@ -44,7 +44,12 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Webhooks**: outbound HTTP event delivery through two admin-managed surfaces — a signed
   hook registry (per-hook secret, HMAC signature headers, SSRF-guarded targets) and a
   domain-event subscription surface (`user.login`, `playback.*`, `library.*`; unsigned, see
-  the endpoint table) — troubleshooting path: [A webhook never fires](#a-webhook-never-fires)
+  the endpoint table). The same moment-of-use SSRF gate covers the notification plugin family
+  (`src/Webhooks/Plugins/` — Slack, Discord, ntfy, Apprise, Telegram, Pushover, MQTT): every
+  configured egress URL is re-validated against `SsrfGuard` at send time, so a config edited
+  or shipped to point at loopback, link-local metadata, or a private range is refused with a
+  logged warning and zero bytes out — the create+moment-of-use law the webhook surfaces proved
+  (SRV-M20) — troubleshooting path: [A webhook never fires](#a-webhook-never-fires)
 
 Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
@@ -2010,7 +2015,10 @@ for per-event delivery history — `webhook_subscriptions`/`webhook_deliveries`)
 Use `{id}/test` (legacy) or check `/deliveries?event_id=…` (V2) to see whether
 the event never triggered or the delivery failed, and tail `.logs/` for the
 dispatcher's HTTP errors. Note the two subsystems differ in payload signing
-(see the `src/Webhooks/` docblocks).
+(see the `src/Webhooks/` docblocks). SSRF refusals are loud, not silent: every
+outbound surface — webhook deliveries and the notification plugins alike — logs
+`… blocked by SSRF guard` on the application channel, redacting the refused
+URL's credential-bearing path.
 
 ### Locked out of admin settings
 

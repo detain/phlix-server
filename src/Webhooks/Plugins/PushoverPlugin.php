@@ -67,6 +67,13 @@ class PushoverPlugin extends AbstractNotificationPlugin
             return false;
         }
 
+        // SRV-M20 parity: the host is structurally fixed, but the moment-of-use
+        // check still guards the resolution (a rebind of api.pushover.net to a
+        // denied range is refused, zero bytes out, like every sibling).
+        if (!$this->guardEgressUrl(self::API_URL, $event)) {
+            return false;
+        }
+
         $payload = $this->buildPayload($event);
 
         $context = stream_context_create([

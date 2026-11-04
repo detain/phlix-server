@@ -13,6 +13,11 @@
  * overrides a variable that's already present. So scripts "just work" whether
  * run by systemd (env already provided → no-op) or by hand. Override the file
  * path with the `PHLIX_ENV_FILE` environment variable (default `/etc/phlix/env`).
+ *
+ * The repo deliberately ships no `.env` / `.env.example`: config is PHP
+ * files plus this one systemd EnvironmentFile — there is no dotenv loader
+ * anywhere in the product. (Info-wave disclosure, docs/user/quickstart.md
+ * §1 carries the operator-facing version of this sentence.)
  */
 
 declare(strict_types=1);

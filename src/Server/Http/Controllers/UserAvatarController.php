@@ -26,9 +26,12 @@ use Phlix\Server\Http\Response;
  * entry point from the Bearer token / session cookie before dispatch and
  * enforced by AuthMiddleware on the route group).
  *
- * Handlers are referenced from {@see \Phlix\Server\WebPortal\WebPortalRouter},
- * which both HTTP entry points (public/index.php and the Workerman daemon's
- * HttpHandler) dispatch `/api/*` to, so a single registration serves both.
+ * Handlers are referenced from {@see \Phlix\Server\WebPortal\WebPortalRouter}.
+ * The Workerman HTTP daemon is the sole HTTP entry point (`start.php`; its
+ * {@see \Phlix\Server\Workerman\HttpHandler} dispatches the `/api/*` surface
+ * to that router), so a single registration serves every request — the old
+ * FPM surface (`public/index.php`) was removed by S171 and is no longer an
+ * auditor's defense target.
  */
 class UserAvatarController
 {

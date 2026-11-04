@@ -4999,8 +4999,16 @@ paths:
                 additionalProperties: true
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          description: "Server not enrolled with a hub (hub.not_enrolled)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   "/api/v1/auth/login":
     post:
       operationId: "post_api_v1_auth_login"
@@ -10846,6 +10854,12 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          description: "Server not enrolled with a hub (hub.not_enrolled)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   "/auth/identities/link/ldap":
     post:
       operationId: "post_auth_identities_link_ldap"

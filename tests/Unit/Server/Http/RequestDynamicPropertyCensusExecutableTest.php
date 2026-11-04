@@ -1067,7 +1067,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Catalog/PluginCatalogEgressRedirectTest.php (live loopback 302 fixture
     // over PluginCatalogService's three transports, EGRESS_TRANSPORT_LAW /
     // 4187ff14 family); measured from the phpunit red (2066) at tip 10a82683.
-    private const EXPECTED_PHP_FILES = 2066;
+    // +1 2066→2067: SRV-M22 adds tests/Unit/Server/Http/Controllers/
+    // HubEnrollmentRefusalEnvelopeTest.php (flat {error, code} envelope pins
+    // over the hub-enrollment refusal legs, review server__secnet); measured
+    // from the phpunit red (2067) at tip b815e7d4, not predicted.
+    private const EXPECTED_PHP_FILES = 2067;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1476,7 +1480,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // only getHeader() method calls — not property writes — on Request roots.
     // Rotated forward in the first commit that lands atop it (this one),
     // attribution to the adding change per the 1170→1171 lesson above.
-    private const EXPECTED_DECLARED_WRITES = 1176;
+    // +5 1176→1181: SRV-M22 adds the new envelope test's harness — five
+    // sanctioned Request property-write seeds (method, path, body; userId,
+    // body), zero src/ writes (the cure swaps json payloads, adds no
+    // Request sites). Measured from the phpunit red (1181) at tip b815e7d4.
+    private const EXPECTED_DECLARED_WRITES = 1181;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -386,7 +386,8 @@ final class AccountLinkController
      * ({@see \Phlix\Hub\HubJwtValidator}), which also bind the token to THIS
      * server (`aud = phlix-server`, `server_id` = this server's id) and to a
      * live expiry. An invalid/expired/foreign token links NOTHING and returns a
-     * single generic 401 — no user-enumeration oracle.
+     * single generic 401 — no user-enumeration oracle. Every refusal here
+     * answers the canonical flat {error, code} envelope (SRV-M22).
      *
      * @param Request $request
      * @param array<string, string> $params
@@ -407,31 +408,25 @@ final class AccountLinkController
         }
 
         if ($this->hubJwtValidator === null) {
-            return (new Response())->status(503)->json([
-                'error' => 'hub_not_enrolled',
-                'code' => 'hub.not_enrolled',
-                'message' => 'This server isn\'t enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it.',
-            ]);
+            // SRV-M22: canonical flat {error, code} envelope — the human
+            // sentence lives in `error`; the code is registry-registered.
+            return (new Response())->error(
+                503,
+                'hub.not_enrolled',
+                "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it."
+            );
         }
 
         $body = $request->body;
         $hubToken = is_string($body['hub_token'] ?? null) ? $body['hub_token'] : '';
         if ($hubToken === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'hub_token_required',
-                'code' => 'hub.token_required',
-                'message' => 'Hub token is required',
-            ]);
+            return (new Response())->error(400, 'hub.token_required', 'Hub token is required');
         }
 
         $claims = $this->hubJwtValidator->validate($hubToken);
         if ($claims === null) {
             // One generic 401 for every failure mode — no oracle.
-            return (new Response())->status(401)->json([
-                'error' => 'hub_jwt_invalid',
-                'code' => 'hub.jwt_invalid',
-                'message' => 'Invalid or expired hub token',
-            ]);
+            return (new Response())->error(401, 'hub.jwt_invalid', 'Invalid or expired hub token');
         }
 
         // The identity to link is the VERIFIED hub user UUID from the claims —
@@ -439,11 +434,7 @@ final class AccountLinkController
         $externalId = $claims->userId;
         if ($externalId === '') {
             LoggerFactory::get(LogChannels::AUTH)->error('Hub JWT validated without a hub_user_id claim');
-            return (new Response())->status(401)->json([
-                'error' => 'hub_jwt_invalid',
-                'code' => 'hub.jwt_invalid',
-                'message' => 'Invalid or expired hub token',
-            ]);
+            return (new Response())->error(401, 'hub.jwt_invalid', 'Invalid or expired hub token');
         }
 
         return $this->linkVerifiedIdentity($userId, self::HUB_PROVIDER, $externalId, null);

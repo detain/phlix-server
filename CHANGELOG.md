@@ -203,6 +203,26 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Hub-enrollment refusals now answer the repo's canonical flat
+  `{error, code}` envelope.** The three refusal legs on POST
+  `/api/v1/auth/hub-token` carried an HTTP phrase (`'Service unavailable'`,
+  `'Bad Request'`, `'Unauthorized'`) in `error`, and the four legs on POST
+  `/auth/identities/link/hub` carried snake_case machine tokens
+  (`hub_not_enrolled`, `hub_token_required`, `hub_jwt_invalid`); both shapes
+  also shipped an off-contract third `message` key. All seven now route
+  through `Response::error()`: the human-readable sentence lives in `error`,
+  the dotted code in `code`, and no stray key remains. The codes themselves
+  — `hub.not_enrolled`, `hub.token_required`, `hub.jwt_invalid` — are
+  pre-existing contracts-registry members and are byte-ident before and
+  after: zero new wire codes, and first-party consumers localize by `code`
+  (none text-matched the old `error`/`message` values). The spec now lists
+  the `401`/`503` responses on both paths against the shared `Error` schema.
+  Pinned by a new exact-body-shape `HubEnrollmentRefusalEnvelopeTest`
+  (7 tests, full-body `assertSame` — re-adding `message` or restoring a
+  phrase/token `error` reddens); the existing code-only pins in both sibling
+  suites survived unmodified. [review server__secnet, SRV-M22;
+  register: `.reviews/2026-11-03/FIX-SRV-M22.md`]
+
 - **Direct-play stream limiting now honours the canonical `X-Phlix-Session-ID`
   header.** Both session-id ladders — `StreamLimitMiddleware::getSessionId()`
   (router/HLS path) and its pre-router twin

@@ -32,8 +32,11 @@ use Phlix\Server\Http\Response;
  * { "hub_token": "eyJ..." }
  *
  * Response 200: { "server_session_token": "..." }
- * Response 400: { "error": "hub_token required" }
- * Response 401: { "error": "hub.jwt_invalid" }
+ *
+ * Refusals answer the repo's canonical flat {error, code} envelope via
+ * Response::error (SRV-M22, review server__secnet): 400 hub.token_required,
+ * 401 hub.jwt_invalid, 503 hub.not_enrolled — all registered contracts
+ * codes (zero new wire codes); `error` carries the human-readable message.
  *
  * The mint is an account-hold gate like every other token-minting surface
  * (SRV-M18 rework, review server__pm): a server account carrying
@@ -100,37 +103,25 @@ final class HubTokenController
     public function handle(Request $request, array $params = []): Response
     {
         if ($this->validator === null) {
-            return (new Response())
-                ->status(503)
-                ->json([
-                    'error' => 'Service unavailable',
-                    'code' => 'hub.not_enrolled',
-                    'message' => 'This server isn\'t enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it.',
-                ]);
+            // SRV-M22: canonical flat {error, code} envelope — the human
+            // sentence lives in `error`; the code is registry-registered.
+            return (new Response())->error(
+                503,
+                'hub.not_enrolled',
+                "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it."
+            );
         }
 
         $hubToken = $request->input('hub_token');
 
         if (!is_string($hubToken) || $hubToken === '') {
-            return (new Response())
-                ->status(400)
-                ->json([
-                    'error' => 'Bad Request',
-                    'code' => 'hub.token_required',
-                    'message' => 'Hub token is required',
-                ]);
+            return (new Response())->error(400, 'hub.token_required', 'Hub token is required');
         }
 
         $claims = $this->validator->validate($hubToken);
 
         if ($claims === null) {
-            return (new Response())
-                ->status(401)
-                ->json([
-                    'error' => 'Unauthorized',
-                    'code' => 'hub.jwt_invalid',
-                    'message' => 'Invalid or expired hub token',
-                ]);
+            return (new Response())->error(401, 'hub.jwt_invalid', 'Invalid or expired hub token');
         }
 
         // SRV-M18 RW2 (review server__pm round-2 Major): the hold flag lives

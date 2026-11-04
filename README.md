@@ -1979,9 +1979,9 @@ If passwords are gone entirely, CLI recovery is the escape hatch
 2. Ensure the tests covering your change pass — serial commands are correct
    for single files and small slices; for a full local pass use the parallel
    seam (`bash scripts/parallel/run-suite.sh <Unit|Integration> 8`), because
-   CI drives the two fast suites through that seam — its only raw `phpunit`
-   invocations are the serial E2E tail and a Server-specific slice
-   ([Running tests](#running-tests))
+   CI drives the two fast suites through that seam — the PHPUnit workflow's
+   only raw `phpunit` invocations are the serial E2E tail and a
+   Server-specific slice ([Running tests](#running-tests))
 3. Follow PSR-12 coding standards
 4. Use `type(scope):` conventional commit subjects, one logical change per
    commit

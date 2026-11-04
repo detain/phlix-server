@@ -79,6 +79,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The Contributing list's raw-`phpunit` counsel now names its workflow — it was
+  true of `phpunit.yml` but read as a claim about all of CI.** The entry below cured
+  the absolute overclaim ("CI never runs a single `phpunit` invocation") into "its
+  only raw `phpunit` invocations are the serial E2E tail and a Server-specific
+  slice" — one magnitude down, the same class: as a CI-wide sentence it is false.
+  The repo's own re-derived census (`scripts/skipped-test-names.sh`, exactness
+  guard-pinned by `SkippedTestNameReportingTest::test_the_documented_invocation_sites_are_still_the_real_ones`)
+  counts FIVE raw sites CI-wide — `phpunit.yml` twice, `syncplay-e2e.yml` twice,
+  and `scripts/assertion-escape-audit.php` once. The bullet now reads "the PHPUnit
+  workflow's only raw `phpunit` invocations…", which is the truth
+  `phpunit.yml`'s own invocation-census comment already pins of itself ("exactly
+  TWICE in this file"). The entry below's headline "CI runs raw `phpunit` exactly
+  twice" is verbatim history and stays; this entry is its correction.
+  [review server__ipd]
 - **Three README claims about running tests were still not true.** The
   Contributing step said CI "never runs a single `phpunit` invocation" — CI runs
   raw `phpunit` exactly twice (the serial `E2E,Serialized` tail and the

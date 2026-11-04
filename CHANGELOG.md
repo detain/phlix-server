@@ -79,6 +79,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A crashing SyncPlay message handler no longer mails its raw exception text
+  to the connecting peer.** The dispatch catch-all in `SyncPlayManager` answered
+  `HANDLER_ERROR` with `$e->getMessage()` verbatim — the exact leak the sibling
+  `MessageHandler::reportHandlerFailure()` layer exists to prevent (R17-03: the
+  wire never carries exception text; these strings class-carry SQL fragments,
+  file paths, and other users' data). The peer now receives the same fixed
+  generic sentence the guarded layer standardizes on, while the real cause
+  (class + message) stays in the server-side error log. A canary-shaped
+  containment pin reddens if any exception text resurfaces on the wire.
+  [review server__secnet SRV-M21]
+
 - **The contributor docs prescribed a git workflow the repo does not run.**
   "Git workflow" taught feature-branch → PR → squash-merge and "Contributing"
   told newcomers to submit pull requests, while 200+ commits of history are

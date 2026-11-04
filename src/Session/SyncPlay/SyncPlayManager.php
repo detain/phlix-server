@@ -560,7 +560,9 @@ class SyncPlayManager
      * Handle incoming WebSocket message from a client connection.
      *
      * Routes the message to the appropriate handler based on message type.
-     * All exceptions are caught and reported back to the client as error messages.
+     * All exceptions are caught: the peer receives a fixed generic
+     * HANDLER_ERROR frame (R17-03 — exception text never reaches the wire)
+     * while the real cause is logged server-side only.
      *
      * @param ConnectionInterface $connection The WebSocket connection that sent the message
      * @param array<string, mixed> $payload The decoded message payload
@@ -634,9 +636,18 @@ class SyncPlayManager
                     $this->sendError($connection, 'UNKNOWN_MESSAGE', 'Unknown message type');
             }
         } catch (\Throwable $e) {
-            $this->sendError($connection, 'HANDLER_ERROR', $e->getMessage());
+            // R17-03 law (review server__secnet, SRV-M21): the wire never
+            // carries exception text. Exception strings in this codebase
+            // class carry SQL fragments, file paths, and other users' data;
+            // the real cause is logged server-side below and the peer gets
+            // the SAME fixed generic sentence the guarded sibling layer
+            // `MessageHandler::reportHandlerFailure()` sends, so a throwing
+            // subhandler is indistinguishable on the wire from any other
+            // transport failure — and indistinguishable to nobody in the log.
+            $this->sendError($connection, 'HANDLER_ERROR', 'An internal error occurred while processing this message.');
             $this->log('error', 'Message handler error', [
                 'type' => $type,
+                'exception' => get_class($e),
                 'error' => $e->getMessage(),
             ]);
         }

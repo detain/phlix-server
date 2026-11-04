@@ -1006,7 +1006,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // CollectionRoutesReadmeCitesTest.php (README collection-route cite
     // tripwire, review server__docmaint SRV-M2). Measured from the phpunit
     // red (2050), not predicted.
-    private const EXPECTED_PHP_FILES = 2050;
+    // +1 2050→2051: this cure added tests/Unit/Session/SyncPlay/
+    // SyncPlayDispatchErrorContainmentTest.php (R17-03 wire-containment pin
+    // for the dispatch catch-all, review server__secnet SRV-M21). Measured
+    // from the phpunit red (2051), not predicted.
+    private const EXPECTED_PHP_FILES = 2051;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

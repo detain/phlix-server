@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Dlna;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Server\Http\Controllers\Admin\AdminRestartController;
 use Phlix\Server\Http\Request;
@@ -196,11 +198,21 @@ class AdminDlnaServerController
         try {
             $this->settings->set(self::SETTING_KEY, $desired, 'bool');
         } catch (\Throwable $e) {
+            // INFO-SERVER-51 (E2 cluster): a store failure is often a rethrown
+            // PDOException whose message carries the whole SQL statement; the
+            // wire keeps the fixed copy in the unchanged 500 envelope and the
+            // class + cause go to the HTTP log only (R17-03 at HTTP, the
+            // M-SERVER-05 settings-store precedent this toggle shares).
+            LoggerFactory::get(LogChannels::HTTP)->error(
+                'DLNA content-directory toggle failed',
+                ['exception' => get_class($e), 'message' => $e->getMessage()]
+            );
+
             return (new Response())
                 ->status(500)
                 ->json([
                     'success' => false,
-                    'message' => 'Failed to persist DLNA setting: ' . $e->getMessage(),
+                    'message' => 'Failed to persist DLNA setting.',
                 ]);
         }
 

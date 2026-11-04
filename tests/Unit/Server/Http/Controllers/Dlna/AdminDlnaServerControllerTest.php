@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Dlna;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Config\EffectiveConfig;
 use Phlix\Dlna\CdsServer;
 use Phlix\Dlna\DlnaServer;
@@ -35,6 +36,9 @@ final class AdminDlnaServerControllerTest extends TestCase
     /** @var list<string> Temp config dirs to clean up. */
     private array $tempConfigDirs = [];
 
+    /** @var list<string> E2W captured-logger dirs (INFO-SERVER-51 pins). */
+    private array $e2wLoggerDirs = [];
+
     protected function tearDown(): void
     {
         EffectiveConfig::reset();
@@ -47,6 +51,14 @@ final class AdminDlnaServerControllerTest extends TestCase
             }
         }
         $this->tempConfigDirs = [];
+        foreach ($this->e2wLoggerDirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+        $this->e2wLoggerDirs = [];
+        LoggerFactory::reset();
         parent::tearDown();
     }
 
@@ -364,5 +376,62 @@ final class AdminDlnaServerControllerTest extends TestCase
         $body = $this->decode($response);
         self::assertTrue($body['success']);
         self::assertTrue($body['enabled']);
+    }
+
+    // ------------------------------------------------------------------
+    // INFO-SERVER-51 (E2 cluster): the persist-failure 500 answers a FIXED
+    // copy in the unchanged envelope. A settings-store failure typically
+    // surfaces as a rethrown PDOException whose message embeds the full SQL
+    // statement (the exact defect class M-SERVER-05 pinned for the admin
+    // settings controller) — so the cause is log-only, never on the wire.
+    // Red at the parent arm: 'Failed to persist DLNA setting: <SQL text>'.
+    // ------------------------------------------------------------------
+
+    public function testPersistFailureEnvelopeCarriesNoExceptionText(): void
+    {
+        // Estate captured-logger idiom (temp logger.php + init/reset).
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix_e2w_dlnalog_' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $this->e2wLoggerDirs[] = $dir;
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        $marker = 'SQL:UPDATE server_settings SET v = 0xCAFEB0BA WHERE k = [E2W-DLNA-MARKER] SQLSTATE[HY000]';
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')->with('dlna.cds_enabled')->willReturn(false);
+        $settings->method('set')->willThrowException(new \PDOException($marker));
+
+        $controller = new AdminDlnaServerController();
+        $controller->setSettingsRepository($settings);
+
+        $response = $controller->start(new Request(), []);
+
+        self::assertSame(500, $response->statusCode);
+        self::assertSame(
+            ['success' => false, 'message' => 'Failed to persist DLNA setting.'],
+            $this->decode($response)
+        );
+        self::assertStringNotContainsString('E2W-DLNA-MARKER', (string) $response->body);
+        self::assertStringNotContainsString('SQLSTATE', (string) $response->body);
+
+        $log = (string) file_get_contents($logPath);
+        self::assertStringContainsString('DLNA content-directory toggle failed', $log);
+        self::assertStringContainsString('PDOException', $log);
+        self::assertStringContainsString('E2W-DLNA-MARKER', $log);
     }
 }

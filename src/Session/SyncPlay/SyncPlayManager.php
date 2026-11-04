@@ -2108,12 +2108,21 @@ class SyncPlayManager
                     'message' => 'Group timed out due to inactivity',
                 ]);
 
-                // Remove all members
-                foreach ($group->getMembers() as $memberId => $member) {
-                    unset($this->memberToGroup[$memberId]);
-                }
-
+                // SRV-M9: the removal must tear down the reverse indexes and
+                // the durable row, mirroring the sibling teardown paths
+                // (bridge-replace :354/:392, leave-empty :963). Before this,
+                // only memberToGroup was (bluntly) unset: connectionToMember
+                // entries stranded forever (the later socket close can never
+                // recover them — leaveGroup early-returns once the member
+                // mapping is gone), and the syncplay_snapshots row survived,
+                // so REST rails served ghost rooms and the table grew
+                // unboundedly on a resident worker. unindexGroup carries the
+                // identity checks: a member who already joined a NEWER group
+                // keeps that mapping (the old code clobbered it unconditionally).
+                $this->unindexGroup($group, (string) $id);
                 unset($this->groups[$id]);
+                $this->removeSnapshot((string) $id);
+                $this->log('info', 'Group removed (stale timeout)', ['group_id' => $id]);
                 $removed++;
             }
         }

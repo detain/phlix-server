@@ -1051,7 +1051,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // PasswordChangeRequiredHttpBoundaryTest.php (every served leg of the
     // account hold answers its 403, review server__pm); measured from the
     // clean-tip count (2061) plus this file, not predicted.
-    private const EXPECTED_PHP_FILES = 2062;
+    // +1 2062→2063: SRV-M9 adds tests/Unit/Session/SyncPlay/
+    // SyncPlayStaleTeardownTest.php (stale-sweep reverse-index + durable-row
+    // teardown, review server__asphp); measured from the clean-tip red (2063)
+    // plus this diff, not predicted.
+    private const EXPECTED_PHP_FILES = 2063;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

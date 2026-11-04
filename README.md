@@ -647,7 +647,7 @@ the disabled theme's id 400s in the meantime.
 
 On a fresh Ubuntu/Debian host, [`scripts/install.sh`](scripts/install.sh) does the whole thing:
 system packages (PHP 8.3+, MySQL, ffmpeg), a dedicated `phlix` system user, MySQL database +
-user, application code, env file at `/etc/phlix/env`, generated `PHLIX_SECRET_KEY`, database
+user, application code, env file at `/etc/phlix/env`, generated `JWT_SECRET`, database
 migrations, a systemd `phlix-server` service, and an HAProxy reverse proxy with an
 auto-renewing Let's Encrypt certificate.
 

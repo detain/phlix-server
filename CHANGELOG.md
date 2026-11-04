@@ -79,6 +79,14 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The install headline named the alias as the secret.** The one-line
+  install bullet listed "generated `PHLIX_SECRET_KEY`", but the boot-critical
+  key the daemon refuses to start without is `JWT_SECRET`
+  (`AuthServicesProvider::assertSecretConfigured()` reads only that name),
+  and the README's own env census documents `PHLIX_SECRET_KEY` as the
+  docker-entrypoint alias the PHP runtime never reads. The headline now
+  names the real key; the installer still writes both (the alias row is
+  container parity), so nothing else moved. [review server__ipd]
 - **Contributing step 2 prescribed the serial full-suite run the README's
   own tests section forbids.** "Ensure all tests pass
   (`./vendor/bin/phpunit`)" contradicted "CI does not run a single

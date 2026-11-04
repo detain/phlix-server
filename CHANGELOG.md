@@ -33,6 +33,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Forward-note: the `must_change_password` README truth-flip rode `48e2c560`,
+  and the red-wave belongs there — not to the SRV-M18 cure (review server__pm
+  lineage, majors-R1/T3 minors).** `48e2c560` (a symlink-containment
+  `test(minor)` commit) carried the README reset-password rows reworded to the
+  new hold law — "no route mints a new session" — while the golden that pins
+  those rows, `tests/Unit/Admin/PasswordResetRecoveryReadmeTest`, still
+  asserted the retired sentence "cannot sign in with its password" at that
+  tree: measured at the commit, its test file holds the assertion (line 121)
+  and its README holds zero occurrences of the string, so the pair was split
+  and the test rode RED from `48e2c560` until `d8c834d5` rotated it in the
+  same commit as the provider/mint-seam gates. House law is one commit per
+  moved doc/golden pair (or the rotation ships FIRST). `d8c834d5`'s own entry
+  states "The README and the … docblocks … were reworded to the new law" —
+  true of its four docblocks (exception, repository, admin controller,
+  AuthManager), untrue of the README — `d8c834d5`'s stat lists seven files
+  and README is not among them; it touched no README row at all.
+  Verbatim-history law: both original entries stay exactly as written; this
+  note is the correction, not an edit. No tree change is implied — the tip is
+  self-consistent (the golden measures green at `3e3e47a8`, 5 tests/41
+  assertions).
+
 - **Consumer cascade: `@phlix/contracts` v0.5.5, `@phlix/tokens` v0.2.2,
   `@phlix/ui` v0.99.14 re-pinned, and the served `/app` bundle regenerated.**
   - *Contracts registry.* `tests/Fixtures/Contracts/error-codes.json` is

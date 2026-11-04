@@ -53,8 +53,27 @@ final class CorsManager
     /** Methods advertised to preflight requests (the API surface). */
     private const ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 
-    /** Request headers the browser may send on the actual request. */
-    private const ALLOW_HEADERS = 'Authorization, Content-Type, X-Device-Id';
+    /**
+     * Request headers the browser may send on the actual request.
+     *
+     * SRV-M16 (review server__fedev): the pre-cure list advertised only
+     * `Authorization, Content-Type, X-Device-Id` while the server READS
+     * `X-Phlix-Device-Type`, `X-Phlix-Client-Capabilities` and
+     * `X-Session-ID` and the vendored @phlix/ui SPA sends the whole
+     * X-Phlix-Device / Session-ID / Client-Capabilities family on every API
+     * request —
+     * a credentialed cross-origin browser preflights those names and the
+     * request dies when one is missing here. Header matching is
+     * case-insensitive on both planes (Fetch spec; Request::getHeader uses
+     * strcasecmp), so one canonical spelling each. Proxy-set infrastructure
+     * headers (X-Forwarded-*, X-Real-IP, Host) are DELIBERATELY absent —
+     * a browser must never be permitted to forge them. The tripwire
+     * `CorsManagerTest::testPreflightAdvertisesEveryClientReachableHeaderThe
+     * ServerReads` scans src/ for read sites and reddens on drift.
+     */
+    private const ALLOW_HEADERS = 'Authorization, Content-Type, X-Device-Id, X-Session-ID, '
+        . 'X-Phlix-Session-ID, X-Request-Id, X-Phlix-Device-Type, '
+        . 'X-Phlix-Device-ID, X-Phlix-Device-Name, X-Phlix-Client-Capabilities';
 
     /** Preflight cache lifetime (seconds). 600 = 10 minutes, a safe default. */
     private const MAX_AGE = '600';

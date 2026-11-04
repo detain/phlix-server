@@ -203,4 +203,101 @@ class CorsManagerTest extends TestCase
 
         return $request;
     }
+
+    /**
+     * SRV-M16 tripwire (review server__fedev): every `X-*` request header the
+     * SERVER actually reads from a client must be advertised on preflight —
+     * otherwise a credentialed cross-origin browser client that sends it dies
+     * at preflight, and the read site is unreachable theater for the SPA.
+     * The census is scanned live from src/ (both access planes: getHeader()
+     * literals and $_SERVER['HTTP_*'] reads), so a new read site without an
+     * allowlist entry reddens HERE. Proxy-only infrastructure headers are
+     * excluded by law — a browser must never be allowed to forge them.
+     */
+    public function testPreflightAdvertisesEveryClientReachableHeaderTheServerReads(): void
+    {
+        $infraExempt = [
+            'x-forwarded-proto', // set by the reverse proxy, never by a browser
+            'x-forwarded-for',   // ditto
+            'x-real-ip',         // ditto
+            'host',              // forbidden header name in fetch(); never allowable
+        ];
+
+        $root = dirname(__DIR__, 5) . '/src';
+        $read = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root));
+        foreach ($files as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+            $source = (string) file_get_contents($file->getPathname());
+            if (preg_match_all("/getHeader\(\s*'(X-[A-Za-z0-9-]+)'/i", $source, $matches)) {
+                foreach ($matches[1] as $name) {
+                    $read[strtolower($name)] = $name;
+                }
+            }
+            if (preg_match_all("/\\\$_SERVER\['HTTP_([A-Z0-9_]+)'\]/", $source, $matches)) {
+                foreach ($matches[1] as $underscored) {
+                    $dashed = strtolower(str_replace('_', '-', $underscored));
+                    $read[strtolower($dashed)] = $dashed;
+                }
+            }
+        }
+
+        $this->assertNotEmpty($read, 'the src/ census must find the X-* header reads it guards');
+
+        $cors = new CorsManager([self::ORIGIN]);
+        $response = $cors->preflightResponse($this->requestWithOrigin('OPTIONS', self::ORIGIN));
+        $this->assertInstanceOf(Response::class, $response);
+        $advertised = array_map(
+            'trim',
+            explode(',', strtolower((string) $response->headers['Access-Control-Allow-Headers']))
+        );
+
+        foreach ($read as $lower => $original) {
+            if (in_array($lower, $infraExempt, true)) {
+                continue;
+            }
+            $this->assertContains(
+                $lower,
+                $advertised,
+                "server-read client header '{$original}' must be advertised in Access-Control-Allow-Headers "
+                . '(a preflighted browser client cannot send it otherwise)'
+            );
+        }
+    }
+
+    /**
+     * The vendored @phlix/ui SPA sends its device/session header family on every
+     * API request (bundle census at the v0.99.x pin: X-Phlix-Device-Type x19,
+     * X-Phlix-Session-ID x9, X-Phlix-Device-ID x5, X-Phlix-Device-Name x5).
+     * node_modules is untracked, so the contract names are pinned literally
+     * here: renaming one in the bundle rotates this pin deliberately.
+     */
+    public function testPreflightAdvertisesTheVendoredUiDeviceHeaderFamily(): void
+    {
+        $cors = new CorsManager([self::ORIGIN]);
+        $response = $cors->preflightResponse($this->requestWithOrigin('OPTIONS', self::ORIGIN));
+        $this->assertInstanceOf(Response::class, $response);
+        $advertised = strtolower((string) $response->headers['Access-Control-Allow-Headers']);
+
+        foreach (
+            [
+                'authorization',
+                'content-type',
+                'x-phlix-device-type',
+                'x-phlix-device-id',
+                'x-phlix-device-name',
+                'x-phlix-session-id',
+                'x-phlix-client-capabilities',
+                'x-request-id',
+            ] as $header
+        ) {
+            $this->assertStringContainsString(
+                $header,
+                $advertised,
+                "the SPA contract header '{$header}' must survive preflight"
+            );
+        }
+    }
 }

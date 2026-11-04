@@ -79,6 +79,26 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **CORS preflight now advertises every header the server actually reads and the
+  SPA actually sends (SRV-M16, review server__fedev).** `ALLOW_HEADERS` listed
+  only `Authorization, Content-Type, X-Device-Id` while `src/` reads
+  `X-Phlix-Device-Type`, `X-Phlix-Client-Capabilities`, `X-Session-ID` and
+  `X-Request-Id`, and the vendored `@phlix/ui` bundle sends
+  `X-Phlix-Device-ID`/`-Type`/`-Name` + `X-Phlix-Session-ID` on every API
+  request — so any credentialed cross-origin browser client that preflighted
+  one of those names was refused on the actual request, silently degrading
+  those server features to same-origin-only. The list gained the four
+  server-read names and the four SPA-contract spellings (matching is
+  case-insensitive on both planes); proxy infrastructure headers
+  (`X-Forwarded-*`, `X-Real-IP`, `Host`) stay deliberately out — a browser
+  must never be allowed to forge them. Two tripwires in `CorsManagerTest`:
+  one scans `src/` live for client-reachable `X-*` read sites (both
+  `getHeader()` literals and `$_SERVER['HTTP_*']`) and asserts each is
+  advertised, the other pins the SPA contract family literally (node_modules
+  is untracked, so a bundle rename rotates that pin deliberately). Both
+  refusal pins measured RED at the pre-cure constant; the 11 existing CORS
+  tests pass UNMODIFIED. No origin-matching, credentials or Vary behavior
+  changed. [review server__fedev]
 - **The Contributing list's raw-`phpunit` counsel now names its workflow — it was
   true of `phpunit.yml` but read as a claim about all of CI.** The entry below cured
   the absolute overclaim ("CI never runs a single `phpunit` invocation") into "its

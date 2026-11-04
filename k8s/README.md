@@ -23,6 +23,7 @@ Install from a checkout of this repo, or after downloading the release `.tgz`:
 # From a repo checkout (chart sources in ./k8s/helm/phlix):
 helm install phlix ./k8s/helm/phlix \
   --set image.tag=<full-sha>-latest \
+  --set config.database_host=your-mysql.example.internal \
   --set config.database_password=your_password \
   --set config.secret_key=your_secret \
   --set ingress.enabled=true \
@@ -67,7 +68,7 @@ ingress:
         - phlix.example.com
 
 config:
-  database_host: phlix-mysql
+  database_host: phlix-mysql   # a MySQL YOU operate; the chart deploys none
   database_port: 3306
   database_name: phlix
   database_user: phlix
@@ -92,32 +93,25 @@ resources:
     memory: 512Mi
 ```
 
-### Using MySQL
+### Database
 
-The chart can include a MySQL subchart:
-
-```yaml
-mysql:
-  enabled: true
-  auth:
-    database: phlix
-    username: phlix
-    password: mysql_password
-  primary:
-    persistence:
-      size: 10Gi
-```
-
-Or use an external MySQL:
+**This chart deploys no database.** `Chart.yaml` declares no `dependencies:`
+and `charts/` is empty — the `mysql:` block is an inert hook that only gains
+meaning if you vendor a real MySQL subchart into `Chart.yaml` yourself. The
+operative knob is `config.database_host`, which is REQUIRED (no default):
+`helm install` fails with a clear message rather than booting a pod that
+CrashLoops behind the image's `PHLIX_MIGRATIONS_STRICT=1` entrypoint gate.
 
 ```yaml
-mysql:
-  enabled: false
-
 config:
-  database_host: external-mysql.example.com
+  database_host: external-mysql.example.com   # any MySQL that serves database_name
   database_port: 3306
 ```
+
+(The historical `mysql.enabled: true` default pointed `DB_HOST` at a
+`<release>-mysql` Service that no template could ever create — every
+documented default install was a guaranteed CrashLoopBackOff. Fixed
+2026-11-03; see the entry in CHANGELOG.md.)
 
 ## Configuration options
 

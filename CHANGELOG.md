@@ -79,6 +79,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The documented default Helm install could never boot: DB_HOST pointed at a
+  MySQL Service this chart cannot deploy.** `values.yaml` shipped
+  `mysql.enabled: true` with a templated `config.database_host` defaulting to
+  `<release>-mysql` — but `Chart.yaml` declares no `dependencies:`, `charts/`
+  holds only a `.gitkeep`, and no template creates that Service, so the
+  README quick-start produced a pod failing every migration under the image's
+  baked `PHLIX_MIGRATIONS_STRICT=1` entrypoint gate → guaranteed
+  CrashLoopBackOff. The cure removes the fiction end-to-end: `mysql.enabled`
+  now defaults `false` (the block is documented as an inert hook until a real
+  subchart is vendored), `config.database_host` loses its unfulfillable
+  default and is wrapped in `required` in `templates/deployment.yaml`, so the
+  failure lands at `helm install` with an actionable message instead of as a
+  dead pod; the `secret.yaml` M29 comment and `values.example.yaml` tell the
+  same truth; `k8s/README.md`'s "The chart can include a MySQL subchart"
+  section is rewritten as "This chart deploys no database" and the quick-start
+  now passes `config.database_host` (the form the hub quick-start already
+  used). Verified with real helm 3.16.4 (containerized — the host ships no
+  helm binary): `helm lint` clean; render with a real host emits
+  `value: "mysql.example.internal"`; render WITHOUT `database_host` fails the
+  install with the required-guard message (both legs executed).
+  [review server__devops 2026-11-03, Critical]
 - **The newsletter template interpolated `poster_url` into its `src`
   attribute unescaped.** Poster URLs arrive via `metadata_json` (provider
   content); a quote-bearing value closed the attribute and smuggled event

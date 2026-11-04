@@ -111,9 +111,17 @@ persistence:
     # Mount media as read-only by default for safety
     readOnly: true
 
-# Optional bundled MySQL subchart (bitnami)
+# MySQL subchart HOOK — INERT AS SHIPPED (2026-11-03 review server__devops,
+# Critical). Chart.yaml declares NO `dependencies:` and charts/ holds only a
+# .gitkeep, so nothing in this chart can deploy a database. The old default
+# (`enabled: true`) paired with a templated `config.database_host` pointing at
+# `<release>-mysql` sent every documented quick-start install into
+# CrashLoopBackOff behind PHLIX_MIGRATIONS_STRICT=1 (the entrypoint refuses to
+# boot on failed migrations, and every migration fails without a DB). Keep
+# this false and point config.database_host at a real MySQL; flip it only
+# AFTER vendoring an actual subchart into Chart.yaml dependencies.
 mysql:
-  enabled: true
+  enabled: false
   auth:
     database: phlix
     username: phlix
@@ -123,8 +131,13 @@ mysql:
 
 # Application configuration — surfaces in env vars / ConfigMap
 config:
-  # MySQL host (defaults to the bundled subchart service)
-  database_host: "{{ .Release.Name }}-mysql"
+  # REQUIRED (no default): the host of a MySQL that actually serves the phlix
+  # database. This chart deploys no database — templates/deployment.yaml wraps
+  # this value in `required`, so an unset host fails `helm install` with a
+  # clear message instead of booting a CrashLoopBackOff pod. The value is
+  # rendered through `tpl`, so Go-template forms remain legal for operators
+  # who DO vendor a real subchart and want the templated service name.
+  database_host: ""
   database_port: 3306
   database_name: phlix
   database_user: phlix

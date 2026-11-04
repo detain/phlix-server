@@ -55,7 +55,11 @@ spec:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           env:
             - name: PHLIX_DATABASE_HOST
-              value: {{ tpl (.Values.config.database_host | toString) . | quote }}
+              # `required` guard (2026-11-03 review server__devops, Critical):
+              # the chart ships no database, so an unset host must fail the
+              # INSTALL with this message — previously the defaults rendered a
+              # host whose Service could never exist and the pod CrashLooped.
+              value: {{ tpl (required "config.database_host is required — this chart deploys no MySQL; point it at a real database host (see values.yaml)" (.Values.config.database_host | toString)) . | quote }}
             - name: PHLIX_DATABASE_PORT
               value: {{ .Values.config.database_port | quote }}
             - name: PHLIX_DATABASE_NAME

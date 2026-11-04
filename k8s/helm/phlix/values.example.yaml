@@ -69,9 +69,11 @@ persistence:
     mountPath: /media
     readOnly: true
 
-# Bundle MySQL or point at an external DB by disabling and setting config.database_host
+# MySQL subchart hook — INERT as shipped: Chart.yaml vendors no dependency, so
+# keep this false and point config.database_host at a real database (the values
+# below only matter if you vendor an actual subchart into Chart.yaml first).
 mysql:
-  enabled: true
+  enabled: false
   auth:
     database: phlix
     username: phlix
@@ -84,7 +86,9 @@ mysql:
       size: 50Gi
 
 config:
-  database_host: "{{ .Release.Name }}-mysql"
+  # REQUIRED — no default. This chart deploys no database; set the host of a
+  # MySQL that actually serves database_name (helm install fails without it).
+  database_host: "mysql.example.internal"
   database_port: 3306
   database_name: phlix
   database_user: phlix

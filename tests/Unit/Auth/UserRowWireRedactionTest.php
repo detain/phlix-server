@@ -11,10 +11,28 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Auth;
 
+use Phlix\Access\ProfileAccessPolicy;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\Dto\UserRow;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\ProviderManager;
+use Phlix\Auth\QuickConnectPair;
+use Phlix\Auth\QuickConnectStateStore;
+use Phlix\Auth\QuickConnectStateStoreInterface;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\RateLimit\RateLimiterInterface;
+use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
+use Phlix\Server\Http\Controllers\Auth\QuickConnectController;
+use Phlix\Server\Http\Controllers\AuthController;
+use Phlix\Server\Http\Controllers\ProfilesController;
 use Phlix\Server\Http\Request;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -43,7 +61,17 @@ use Workerman\MySQL\Connection;
  *    carrying the whole secret set, and the wire consumers route through
  *    {@see UserRow::forWire()} — RED at parent, where `UserListCommand` carried
  *    its own private `SENSITIVE_COLUMNS` copy (the per-caller convention the
- *    review named as the root cause).
+ *    review named as the root cause);
+ * 5. the auth-read wire law (SRV-m43, review server__dba): the second wire
+ *    family — `AuthManager::getUser()` and every envelope fed by it
+ *    (login/register/provider-login/refresh mints, `GET /api/v1/me`,
+ *    quick-connect token, profile switch) — shipped `password_reset_token`
+ *    and `provider_data` because `getUser()` unset only `password_hash`.
+ *    RED at parent per surface; the enumeration law is additionally
+ *    strengthened so a FIFTH consumer that bypasses the shared helper trips
+ *    a mechanical call-site census instead of a hand-written 3-file list
+ *    (the SRV-M12 tripwire's blind spot — a 4th bypasser slipped past it,
+ *    which IS m43).
  *
  * Rows here deliberately carry REALISTIC credential values, so a leak trips
  * the assertion instead of hiding behind an empty string.
@@ -71,6 +99,30 @@ final class UserRowWireRedactionTest extends TestCase
         'last_login',
         'logout_all_devices_at',
         'tokens_not_valid_after',
+    ];
+
+    /**
+     * Every file in src/ that contains a `->getUser(` call site — discovered
+     * mechanically by {@see self::test_every_get_user_call_site_is_in_the_audited_set()}
+     * (SRV-m43). SRV-M12's consumer list was hand-written over three files and
+     * never saw this family at all — the exact blind spot that let m43 ship.
+     * A NEW call site must be audited AND named here (with its wire role), or
+     * the set-equality law reddens.
+     *
+     * - `Admin/NewsletterSender.php` — name-twin: its OWN private getUser()
+     *   reads an explicit `SELECT id, username, email` projection, so it is
+     *   structurally credential-free and never touches AuthManager.
+     * - `Auth/AuthManager.php` — the mint seam (`buildAuthResponse()` calls
+     *   `getUser()`); its redaction law is the forWire pin below.
+     * - `Server/Http/Controllers/AuthController.php` — `GET /api/v1/me`.
+     * - `Server/Http/Controllers/WebAuthnController.php` — passkey ceremony,
+     *   reads `['username']` only (never serializes the row).
+     */
+    private const AUDITED_GET_USER_CONSUMERS = [
+        'Admin/NewsletterSender.php',
+        'Auth/AuthManager.php',
+        'Server/Http/Controllers/AuthController.php',
+        'Server/Http/Controllers/WebAuthnController.php',
     ];
 
     /**
@@ -331,6 +383,313 @@ final class UserRowWireRedactionTest extends TestCase
             $this->assertTrue(
                 $this->hasCallTo($this->tokens(self::SRC_DIR . '/' . $relative), ['forWire']),
                 "{$relative} must call the single-source redaction helper UserRow::forWire()",
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // 5. The auth-read wire law (SRV-m43, review server__dba)
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Single-source law, second family: `AuthManager::getUser()` was the one
+     * unset-`password_hash`-only convention the SRV-M12 docblock named as the
+     * root cause, left standing on the auth-read side of the estate. The cure
+     * is the same helper at the same source boundary — RED at parent, where
+     * AuthManager.php contained no `forWire` call at all.
+     */
+    public function test_auth_manager_routes_user_reads_through_the_shared_helper(): void
+    {
+        $this->assertTrue(
+            $this->hasCallTo($this->tokens(self::SRC_DIR . '/Auth/AuthManager.php'), ['forWire']),
+            'Auth/AuthManager.php must redact getUser() through the single-source '
+                . 'UserRow::forWire() helper — the per-caller unset() convention is '
+                . 'exactly what leaked password_reset_token/provider_data (SRV-m43)',
+        );
+    }
+
+    /**
+     * The enumeration strengthening the m12 review asked for: instead of a
+     * hand-written list of three, discover EVERY `->getUser(` call site in src/
+     * by token walk (comments and the definition itself are invisible to
+     * hasCallTo()) and pin the discovered set to the audited list. A fourth
+     * bypasser — or any new consumer of an existing surface — reddens here
+     * instead of slipping past silently. Green at parent and at tip; it is a
+     * tripwire for the NEXT lane, not a demonstration of this fix.
+     */
+    public function test_every_get_user_call_site_is_in_the_audited_set(): void
+    {
+        $discovered = [];
+        foreach ($this->phpFiles(self::SRC_DIR) as $abs) {
+            if ($this->hasCallTo($this->tokens($abs), ['getUser'])) {
+                $discovered[] = str_replace(self::SRC_DIR . '/', '', $abs);
+            }
+        }
+        sort($discovered);
+
+        $this->assertSame(
+            self::AUDITED_GET_USER_CONSUMERS,
+            $discovered,
+            'a new ->getUser() call site appeared in src/. getUser() crosses a wire '
+                . 'boundary in every known case (auth envelopes, /me, ceremonies): audit '
+                . 'what the new consumer does with the row, then add it to '
+                . 'AUDITED_GET_USER_CONSUMERS with its wire role documented.',
+        );
+    }
+
+    public function test_get_user_hands_no_credential_columns_to_its_callers(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $user = $this->manager($repo)->getUser('user-42');
+
+        $this->assertIsArray($user);
+        $this->assertCredentialFree($user, 'AuthManager::getUser()');
+    }
+
+    /**
+     * The mint seam is where the five AuthManager legs (register, password
+     * login, provider login, refresh) and the three controller minters
+     * (WebAuthn finish, quick-connect token, profile switch) converge —
+     * one pin here, one per consumer below, all RED at parent because
+     * `getUser()` fed the raw row straight into the envelope.
+     */
+    public function test_the_mint_seam_envelope_carries_a_redacted_user_row(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $envelope = $this->manager($repo)->buildAuthResponse('user-42');
+
+        /** @var array<string, mixed> $user */
+        $user = $envelope['user'];
+        $this->assertCredentialFree($user, 'buildAuthResponse() envelope');
+    }
+
+    public function test_login_envelope_carries_no_credential_columns(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findByUsername')->willReturn(self::rawRow('user-42'));
+        $repo->method('verifyPassword')->willReturn(true);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $result = $this->manager($repo)->login('alice', 'topsecret123', 'device-1');
+
+        /** @var array<string, mixed> $user */
+        $user = $result['user'];
+        $this->assertCredentialFree($user, 'POST /api/v1/auth/login envelope');
+    }
+
+    public function test_register_envelope_carries_no_credential_columns(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(1);
+        $repo->method('create')->willReturn('user-42');
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $result = $this->manager($repo)->register('alice', 'alice@example.com', 'topsecret123');
+
+        /** @var array<string, mixed> $user */
+        $user = $result['user'];
+        $this->assertCredentialFree($user, 'POST /api/v1/auth/register envelope');
+    }
+
+    public function test_provider_login_envelope_carries_no_credential_columns(): void
+    {
+        $registry = new AuthProviderRegistry();
+        $provider = $this->createMock(ProviderInterface::class);
+        $provider->method('name')->willReturn('ldap');
+        $provider->method('authenticate')->willReturn(
+            new AuthResult(success: true, userId: 'user-42'),
+        );
+        $registry->registerProvider($provider);
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $result = $this->manager($repo, new ProviderManager($registry, $repo))
+            ->loginWithProvider('ldap:alice', ['password' => 'topsecret123'], 'device-1');
+
+        /** @var array<string, mixed> $user */
+        $user = $result['user'];
+        $this->assertCredentialFree($user, 'provider-login envelope');
+    }
+
+    public function test_refresh_envelope_carries_no_credential_columns(): void
+    {
+        $jwtHandler = new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
+        $refreshToken = $jwtHandler->createRefreshToken('user-42');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $result = $this->manager($repo)->refreshToken($refreshToken);
+
+        /** @var array<string, mixed> $user */
+        $user = $result['user'];
+        $this->assertCredentialFree($user, 'POST /api/v1/auth/refresh envelope');
+    }
+
+    public function test_me_endpoint_ships_no_credential_columns(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $request = new Request();
+        $request->userId = 'user-42';
+
+        $response = (new AuthController($this->manager($repo)))->me($request, []);
+
+        /** @var array{user: array<string, mixed>} $body */
+        $body = json_decode((string) $response->body, true);
+        $this->assertCredentialFree($body['user'], 'GET /api/v1/me response');
+    }
+
+    public function test_quick_connect_token_response_ships_no_credential_columns(): void
+    {
+        $pair = new QuickConnectPair(
+            'ACDFGH',
+            's',
+            QuickConnectPair::STATE_APPROVED,
+            'user-42',
+            time() + 300,
+        );
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $request = new Request();
+        $request->body = ['secret' => 's'];
+        $request->remoteIp = '203.0.113.9';
+
+        $controller = new QuickConnectController($this->manager($repo), $store, null, serverUrl: '');
+        $response = $controller->token($request, ['code' => 'ACDFGH']);
+
+        /** @var array{user: array<string, mixed>} $body */
+        $body = json_decode((string) $response->body, true);
+        $this->assertSame('user-42', $body['user']['id']);
+        $this->assertCredentialFree($body['user'], 'quick-connect token response');
+    }
+
+    public function test_profile_switch_response_ships_no_credential_columns(): void
+    {
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('findById')->willReturn(['id' => 'p-2', 'user_id' => 'user-42']);
+        $profiles->method('switchProfile')->with('user-42', 'p-2')->willReturn(true);
+
+        $policyRepo = $this->createMock(UserRepository::class);
+        $policyRepo->method('findAdminById')->willReturn(null);
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(self::rawRow('user-42'));
+
+        $controller = new ProfilesController(
+            $profiles,
+            new ProfileAccessPolicy($profiles, $policyRepo),
+            $this->manager($repo),
+            $this->createMock(AvatarStorage::class),
+            $this->createMock(RateLimiterInterface::class),
+        );
+
+        $request = new Request();
+        $request->userId = 'user-42';
+
+        $response = $controller->switchProfile($request, ['profileId' => 'p-2']);
+
+        /** @var array{user: array<string, mixed>} $body */
+        $body = json_decode((string) $response->body, true);
+        $this->assertSame('user-42', $body['user']['id']);
+        $this->assertCredentialFree($body['user'], 'POST profile-switch response');
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // SRV-m43 harness (real AuthManager over doubled repositories — the
+    // estate's AuthManagerEmailLoginTest shape)
+    // ─────────────────────────────────────────────────────────────────
+
+    /** @var list<string> log files minted by silentLogger(), removed in tearDown(). */
+    private array $mintedLogPaths = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // The login/provider legs throttle per-IP through a process-wide
+        // static store; isolate exactly like AuthManagerEmailLoginTest does
+        // under executionOrder="random".
+        AuthManager::resetRateLimitStore();
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        // S439/S457: sweep only streams actually created (Monolog opens
+        // lazily; unlinking a never-written path records a warning event).
+        foreach ($this->mintedLogPaths as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+        $this->mintedLogPaths = [];
+    }
+
+    private function silentLogger(): StructuredLogger
+    {
+        $path = sys_get_temp_dir() . '/phlix_userowwire_' . uniqid() . '.log';
+        $this->mintedLogPaths[] = $path;
+
+        return new StructuredLogger('test', [
+            'handlers' => [
+                'stream' => [
+                    'type' => 'stream',
+                    'path' => $path,
+                    'level' => 'debug',
+                ],
+            ],
+        ]);
+    }
+
+    private function manager(UserRepository $repo, ?ProviderManager $providerManager = null): AuthManager
+    {
+        return new AuthManager(
+            $repo,
+            new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
+            $this->createMock(AuditLogger::class),
+            $this->silentLogger(),
+            null,
+            null,
+            $providerManager,
+        );
+    }
+
+    /**
+     * Wire-shape law for a user row about to be serialized: the credential
+     * trio is GONE, every operational column SURVIVES (the data-minimization
+     * decision — the envelope keeps the documented profile/account-state
+     * fields clients read; it loses only the columns carrying secret
+     * entropy), and nothing else about the row changed.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function assertCredentialFree(array $row, string $surface): void
+    {
+        foreach (self::SECRET_COLUMNS as $column) {
+            $this->assertArrayNotHasKey(
+                $column,
+                $row,
+                "{$surface} must not ship the credential column {$column} (SRV-m43)",
+            );
+        }
+        foreach (self::KEPT_COLUMNS as $column) {
+            $this->assertArrayHasKey(
+                $column,
+                $row,
+                "{$surface} must keep the operational column {$column} its consumers read",
             );
         }
     }

@@ -1633,10 +1633,31 @@ class AuthManager
     /**
      * Get user profile information by user ID.
      *
+     * Every consumer of this method crosses a wire boundary — the token-mint
+     * envelopes (login, register, provider login, refresh, WebAuthn finish,
+     * quick-connect, profile switch), `GET /api/v1/me`, and the passkey
+     * ceremony reads — so the row is redacted HERE, at the shared source,
+     * through the estate's single definition of the users-table secret set
+     * ({@see UserRow::forWire()}: `password_hash`, `password_reset_token`,
+     * `provider_data`). Before this the method unset only `password_hash`,
+     * so the live-reset-token hash and the provider token payload rode every
+     * envelope out to clients (SRV-m43, review server__dba — the auth-read
+     * twin of SRV-M12).
+     *
+     * Data-minimization decision (documented per the review): the row KEEPS
+     * the operational account-state columns (`status`, `must_change_password`,
+     * `password_reset_expires_at`, …) — they carry no secret entropy, and the
+     * same documented consumers (admin SPA, console client, self-service /me
+     * renderers) read them. Only secret-bearing columns are stripped. The
+     * authentication verify legs are untouched: they consume the RAW row via
+     * {@see UserRepository::findByUsername()}/`findByEmail()` before any mint
+     * ever calls this method, so `password_verify()` keeps the credential it
+     * needs (the anti-over-redaction law, UserRowWireRedactionTest group 3).
+     *
      * @param string $userId Unique user identifier
      *
-     * @return array<string, mixed>|null User profile data without password hash,
-     *         or null if user not found
+     * @return array<string, mixed>|null User profile data with the credential
+     *         columns removed, or null if user not found
      *
      * @example
      * ```php
@@ -1653,8 +1674,7 @@ class AuthManager
             return null;
         }
 
-        unset($user['password_hash']);
-        return $user;
+        return UserRow::forWire($user);
     }
 
     /**

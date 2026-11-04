@@ -100,6 +100,39 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The login, register, refresh, provider-login, quick-connect, profile-switch
+  and `GET /api/v1/me` responses stop shipping the credential columns of the
+  `users` table (review server__dba, SRV-m43 — the auth-read twin of SRV-M12).**
+  `AuthManager::getUser()` unset only `password_hash`, so every envelope fed by
+  it — the four AuthManager mint legs (register, password login, provider
+  login, refresh) through `buildAuthResponse()`, plus the three controllers
+  that mint or echo it directly (WebAuthn finish, quick-connect token, profile
+  switch) — carried each account's Argon2id
+  reset-token hash and the external-provider payload (which holds provider
+  access/refresh tokens) to the client on every call. The cure is the same
+  single-source helper SRV-M12 shipped: `getUser()` now returns
+  `UserRow::forWire()` at the shared source, and the authentication verify legs
+  are untouched by law (they consume the RAW row via the repository lookups
+  before any mint runs, so `password_verify()` keeps the credential it needs —
+  the anti-over-redaction group-3 pin stays green). Data-minimization decision,
+  documented in the method docblock: account-state columns (`status`,
+  `must_change_password`, `password_reset_expires_at`, …) SURVIVE — they carry
+  no secret entropy and the admin SPA, console client and self-service /me
+  renderers read them; only the secret-bearing trio is stripped. The estate
+  grep behind the change: no consumer — ui, hub, tizen, windows, mobile,
+  console or roku — reads `password_reset_token` or `provider_data` from any
+  response (the console's `AdminUser` docblock already DOCUMENTED they never
+  appear on the admin family; this makes the auth family true to the same
+  word). Ten new legs in `UserRowWireRedactionTest` measured RED at the parent
+  (source-law pin + one per wire surface, envelopes asserted credential-free
+  AND operationally complete), and the SRV-M12 consumer tripwire — a
+  hand-written list of three files that let a fourth bypasser (this very
+  `getUser()` family) slip silently — is replaced by a mechanical `->getUser(`
+  call-site census pinned to an audited four-file set with wire roles
+  documented. The S431 declared-writes denominator rotates 1170 to 1174 with
+  the four sanctioned harness-seed sites in this commit, measured from the
+  phpunit red in a clean tip worktree plus this diff. [server__dba]
+
 - **The hub-token hold-guard now keys the RESOLVED server identity — the
   round-1 cure was vacuous in production and this eliminates it (review
   server__pm, SRV-M18 RW2).** `1da9f7b1` placed the shared `refuseIfHeld()`

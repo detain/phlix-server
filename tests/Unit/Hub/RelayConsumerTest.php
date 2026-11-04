@@ -1423,6 +1423,180 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * SRV-M16 (forwarded-header trust, relay leg): a spoofed X-Real-IP must not
+     * choose the rate-limit key.
+     *
+     * `buildRequest()` asserts the trusted loopback peer (RELAY_REMOTE_IP) for
+     * every relayed request — the resolver's peer gate therefore CANNOT protect
+     * this path; the header strip is the only gate. The shared DTO's denylist
+     * names x-forwarded-for but NOT x-real-ip, and `TrustedProxyResolver::resolve()`
+     * trusts X-Real-IP once the peer is trusted (nginx overwrites it — but a
+     * relay envelope producer is not nginx). Without the strip, a malicious or
+     * regression-prone producer picks the limiter identity for every IP-keyed
+     * route (register/refresh/jwks/WebAuthn/DLNA allowlist) at will. RED ON THE
+     * HONORED SPOOF: the captured request must resolve the truthful loopback
+     * marker, never the injected address.
+     */
+    public function test_a_producer_supplied_x_real_ip_cannot_choose_the_rate_limit_key(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'POST',
+            '/api/v1/auth/register',
+            '',
+            [
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Real-IP' => '9.9.9.9',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        foreach ($captured->headers as $name => $_value) {
+            $this->assertStringNotContainsStringIgnoringCase(
+                'real-ip',
+                (string) $name,
+                'a producer-supplied X-Real-IP must never survive into a relayed request',
+            );
+        }
+        $this->assertSame(
+            '127.0.0.1',
+            $captured->getTrustedClientIp(),
+            'relayed traffic must key to the truthful loopback marker — an injected X-Real-IP '
+            . 'may never mint a fresh (or borrowed) rate-limit bucket',
+        );
+    }
+
+    /**
+     * SRV-M16 (forwarded-header trust, relay leg): the whole `x-forwarded-*`
+     * family must never cross the tunnel. X-Forwarded-Proto is consumed
+     * un-gated by CallbackUrl (OAuth redirect scheme) and QuickConnect
+     * (advertised server URL); X-Forwarded-Host/Port ride the same doctrine.
+     * The hub strips this family at its edge — but the server's own S301
+     * precedent states it MUST NOT depend on that. RED ON ANY SURVIVING COPY.
+     */
+    public function test_the_forwarded_header_family_never_crosses_the_tunnel(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            [
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Forwarded-Proto' => 'https',
+                'X-Forwarded-Host' => 'evil.test',
+                'X-Forwarded-Port' => '443',
+                'X-Forwarded-For' => '6.6.6.6',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        foreach ($captured->headers as $name => $_value) {
+            $this->assertStringStartsNotWith(
+                'x-forwarded-',
+                strtolower((string) $name),
+                'no x-forwarded-* header may survive as a forwardable header on the relay path',
+            );
+        }
+    }
+
+    /**
+     * Re-pin of the DTO-leg XFF law AT THIS SEAM: the leftmost-forwarded
+     * client claim is already dropped by `withoutForbiddenHeaders()`; this
+     * keeps the full family law honest even if that shared denylist is ever
+     * narrowed (the prefix strip here is the belt). GREEN PRE- AND POST-CURE.
+     */
+    public function test_a_spoofed_forwarded_for_never_reaches_the_router(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            [
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Forwarded-For' => '6.6.6.6, 5.5.5.5',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertNull($captured->getHeader('X-Forwarded-For'));
+        $this->assertSame('127.0.0.1', $captured->getTrustedClientIp());
+    }
+
+    /**
+     * CONTROL against an over-broad strip: ordinary client headers still cross
+     * the tunnel (device identity and content-type ride every legit SPA call)
+     * and the hub-stamped principal still lands. RED IF THE CURE BLINDS THE
+     * RELAY PATH.
+     */
+    public function test_ordinary_headers_still_cross_the_tunnel(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            [
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Device-Id' => 'dev-77',
+                'X-Phlix-Device-Type' => 'tv',
+                'Accept-Language' => 'en',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame('dev-77', $captured->getHeader('X-Device-Id'));
+        $this->assertSame('tv', $captured->getHeader('X-Phlix-Device-Type'));
+        $this->assertSame('en', $captured->getHeader('Accept-Language'));
+        $this->assertSame('user-42', $captured->userId);
+    }
+
+    /**
      * NO SERVER IDENTITY WITHOUT A LINKAGE ROW: the resolver is the ONLY door
      * to a server identity. A principal that maps to nothing keeps the raw
      * hub-stamped UUID (auth-presence + log attribution — the pre-S301

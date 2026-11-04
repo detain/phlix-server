@@ -2040,9 +2040,18 @@ final class RelayConsumer
         // identity added hub-side) is dropped here before it can be
         // re-forwarded downstream. Pinned by the re-derived S247 crossing test
         // (test_a_profile_identity_never_crosses_the_tunnel).
+        //
+        // SRV-M16 sibling: the same non-dependence applies to the FORWARDED
+        // family. The DTO drops x-forwarded-for only, but the resolver (and
+        // CallbackUrl/QuickConnect for the proto) consume more of the family —
+        // and on this path the peer is an ASSERTED trusted loopback, so the
+        // resolver's peer gate cannot help. The whole `x-forwarded-*` prefix +
+        // `x-real-ip` are stripped here (mirrors the hub's edge list), pinned
+        // by test_a_producer_supplied_x_real_ip_cannot_choose_the_rate_limit_key
+        // + test_the_forwarded_header_family_never_crosses_the_tunnel.
         $forwardHeaders = [];
         foreach ($safeEnvelope->headers as $name => $value) {
-            if (!self::isRelayTrustMarker($name)) {
+            if (!self::isRelayTrustMarker($name) && !self::isForwardedTrustHeader($name)) {
                 $forwardHeaders[$name] = $value;
             }
         }
@@ -2178,6 +2187,33 @@ final class RelayConsumer
     private static function isRelayTrustMarker(string $name): bool
     {
         return str_starts_with(strtolower($name), 'x-phlix-relay');
+    }
+
+    /**
+     * Whether a header name is part of the FORWARDED trust family (`x-forwarded-*`
+     * plus `x-real-ip`), which must never cross the tunnel (SRV-M16).
+     *
+     * Why a second, server-side strip: `buildRequest()` asserts the trusted
+     * loopback peer (RELAY_REMOTE_IP), so {@see \Phlix\Common\Http\TrustedProxyResolver}'s
+     * peer gate CANNOT protect the relay path — the header strip is the only
+     * gate there. The shared DTO's denylist names `x-forwarded-for` but not the
+     * rest of the family: an injected `X-Real-IP` is consumed by the resolver's
+     * X-Real-IP fallback (attacker-chosen rate-limit keys on every IP-keyed
+     * route: register / refresh / jwks / WebAuthn / the DLNA allowlist), and an
+     * injected `X-Forwarded-Proto` is consumed ungated by CallbackUrl and
+     * QuickConnect (wire-scheme flip on OAuth redirect derivation). The hub
+     * strips exactly this name+prefix set at its edge
+     * (ServerProxyController::STRIPPED_REQUEST_HEADERS / _PREFIXES) — but the
+     * S301 precedent above already states the server must not DEPEND on the
+     * peer's strip; this predicate is that independence, mirroring the hub's
+     * list one-for-one.
+     *
+     * @param string $name Header name.
+     */
+    private static function isForwardedTrustHeader(string $name): bool
+    {
+        $lower = strtolower($name);
+        return $lower === 'x-real-ip' || str_starts_with($lower, 'x-forwarded-');
     }
 
     /**

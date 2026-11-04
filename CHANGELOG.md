@@ -9354,6 +9354,27 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   probes, boot-smoke). Gated in the nested `''`-prefix group so the METHOD+PATH tuple is
   byte-identical and only the middleware column moves (`[]` → `[AuthMiddleware]` in the
   wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
+### Security
+
+- **A relayed request can no longer pick its own rate-limit key or wire scheme
+  through forwarded headers.** The hub-relay dispatcher asserts a trusted
+  loopback peer for every relayed request — the right call for the tunnel, but
+  it means the trusted-proxy IP resolver's peer gate cannot protect this path,
+  and only the header strip can. The strip previously removed `X-Forwarded-For`
+  (via the shared envelope DTO) but not the rest of the family the server itself
+  consumes: an injected `X-Real-IP` reached every IP-keyed limiter and the DLNA
+  allowlist through the resolver's `X-Real-IP` fallback, and an injected
+  `X-Forwarded-Proto` reached the OAuth callback derivation and the Quick-Connect
+  advertised URL ungated. `RelayConsumer::buildRequest()` now strips the whole
+  `x-forwarded-*` prefix plus `x-real-ip` before dispatch — mirroring the hub's
+  own edge list, and independent of it (the S301 doctrine: the server must not
+  depend on the peer's strip). Healthy deployments see no behavior change: the
+  hub already removes these headers inbound. Pinned by four relay-seam tests
+  including an ordinary-headers control against over-stripping. [review
+  server__secnet lineage, SRV-M16 forwarded-trust unit; fix measured red 2/4 at
+  parent; direct-exposure site class verified already mitigated by the SV-4.15
+  resolver — proof register: `.reviews/2026-11-03/FIX-SRV-M16.md`]
+
 ### Known gaps (documented, NOT fixed)
 
 - **`restart: true` settings still do not take effect on restart.** The restart endpoint now works,

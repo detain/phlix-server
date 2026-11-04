@@ -79,6 +79,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Accounts created or reset through the admin API could never log in: the
+  controller hashed the password and the repository hashed it again.**
+  `AdminUserController::create()` and `update()` pre-hashed with their own
+  private `hashPassword()` helper before handing the value to
+  `UserRepository::create()`/`update()` — which run `password_hash()`
+  themselves (the documented repository contract every other caller follows).
+  The stored value was `argon2(argon2(plaintext))`, so
+  `UserRepository::verifyPassword()` failed permanently for every admin-made
+  account and every admin-side password reset; recovery required direct SQL.
+  The cure passes the plaintext through, deletes the dead private helper, and
+  flips the unit test that had encoded the wrong contract (it asserted
+  `password_verify()` on the captured mock argument — the bug pinned as law).
+  A new real-MySQL integration proof closes the loop end-to-end:
+  `AdminPasswordHandoffRealDbTest` runs admin create → login and admin
+  reset → login with the same credentials over a throwaway `phlix_admpw_*`
+  database, pinning that the at-rest hash verifies the plaintext exactly once
+  and that the superseded password stops authenticating. The reset-token
+  helper's `password_hash()` use is a different, correct contract (the store
+  expects pre-hashed tokens) and stays. Census denominators re-pinned from
+  their measured reds in the same commit (adopters 80→81, writes 1123→1124,
+  PHP files 2047→2048).
+  [review server__srphp 2026-11-03, Critical]
 - **The user-marker create/delete API could never serve any request: both live
   handlers violated the router calling convention and every call 500'd.**
   `MediaMarkerController::createMarker(string $id)` and

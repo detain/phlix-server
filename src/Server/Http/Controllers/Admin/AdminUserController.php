@@ -299,12 +299,14 @@ final class AdminUserController
             ]);
         }
 
-        // Hash password and create user
-        $hashedPassword = $this->hashPassword($password);
+        // Password hashing is the REPOSITORY's contract (UserRepository::create()
+        // runs password_hash($data['password'], ARGON2ID) itself). Pre-hashing
+        // here stored argon2(argon2(plaintext)) and made every admin-created
+        // account unable to ever log in — 2026-11-03 review server__srphp CRITICAL.
         $userId = $this->userRepository->create([
             'username' => $username,
             'email' => $email,
-            'password' => $hashedPassword,
+            'password' => $password,
             'is_admin' => $isAdmin ? 1 : 0, // DB column is TINYINT(1), not boolean
         ]);
 
@@ -390,7 +392,9 @@ final class AdminUserController
             $data['email'] = $email;
         }
         if ($password !== null) {
-            $data['password'] = $this->hashPassword($password);
+            // Hash-once law: pass plaintext through — UserRepository::update()
+            // hashes it (and stamps M-1 token revocation in the same UPDATE).
+            $data['password'] = $password;
         }
 
         if ($data !== []) {
@@ -542,17 +546,5 @@ final class AdminUserController
     private function countAdmins(): int
     {
         return $this->userRepository->countUsers('is_admin = 1');
-    }
-
-    /**
-     * Hash a plain text password using Argon2ID.
-     *
-     * @param string $plaintext Plain text password
-     *
-     * @return string Hashed password
-     */
-    private function hashPassword(string $plaintext): string
-    {
-        return password_hash($plaintext, PASSWORD_ARGON2ID);
     }
 }

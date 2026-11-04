@@ -172,8 +172,14 @@ final class AdminUserControllerTest extends TestCase
             ->method('emailExists')
             ->with('alice@example.com')
             ->willReturn(false);
+        // HASH-ONCE law (2026-11-03 review server__srphp CRITICAL): password
+        // hashing is the repository's job — the controller must hand the
+        // PLAINTEXT straight through. The old test pinned the double-hash
+        // contract itself (password_verify on the captured argument), so the
+        // corruption stayed invisible; the create arm is pinned with() below.
         $repo->expects($this->once())
             ->method('create')
+            ->with($this->callback(fn (array $data): bool => ($data['password'] ?? null) === 'securepassword123'))
             ->willReturn('new-user-id');
 
         $controller = new AdminUserController($repo);
@@ -335,12 +341,16 @@ final class AdminUserControllerTest extends TestCase
             ->method('findById')
             ->with('1')
             ->willReturn($existingUser);
-        // update() should be called with a hashed password
+        // HASH-ONCE law: update() receives the PLAINTEXT — hashing belongs to
+        // the repository (UserRepository::update() runs password_hash() and
+        // stamps M-1 revocation itself). Pre-hashing here stored
+        // argon2(argon2(plaintext)) and the user could never log in again.
+        // The prior version of this test asserted password_verify() on the
+        // captured argument — i.e. it pinned the WRONG contract; that is the
+        // encoded bug the 2026-11-03 review (server__srphp, Critical) named.
         $repo->expects($this->once())
             ->method('update')
-            ->with('1', $this->callback(function (array $data): bool {
-                return isset($data['password']) && password_verify('newpassword123', $data['password']);
-            }));
+            ->with('1', $this->callback(fn (array $data): bool => ($data['password'] ?? null) === 'newpassword123'));
 
         $controller = new AdminUserController($repo);
         $response = $controller->update($this->makeRequest([

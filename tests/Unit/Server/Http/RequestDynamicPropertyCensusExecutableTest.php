@@ -994,7 +994,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +1 2046→2047: this cure added tests/Integration/Admin/
     // NewsletterQueueDedupMigration125RealDbTest.php (migration-125 survivor
     // precedence, review major-1). Measured from the phpunit red (2047).
-    private const EXPECTED_PHP_FILES = 2047;
+    // +1 2047→2048: this cure added tests/Integration/Auth/
+    // AdminPasswordHandoffRealDbTest.php (hash-once proof for the
+    // AdminUserController double-hash CRITICAL, review server__srphp).
+    // Measured from the phpunit red (2048), not predicted.
+    private const EXPECTED_PHP_FILES = 2048;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1331,7 +1335,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // sanctioned harness-seed pattern; zero src/ writes added — the src delta
     // there is a READ, counted on the denominator above).
     // Measured from the phpunit red (1123), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1123;
+    // +1 by the 2026-11-03 review server__srphp CRITICAL cure (this commit):
+    // the jsonRequest() harness seed in tests/Integration/Auth/
+    // AdminPasswordHandoffRealDbTest.php assigns $request->body — one site,
+    // the sanctioned harness-seed pattern; zero src/ writes added.
+    // Measured from the phpunit red (1124), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1124;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

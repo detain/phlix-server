@@ -528,7 +528,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // pending > failed — over throwaway phlix_srpcure_* databases; the arms
     // red on the keep-earliest parent, green on the amended file).
     // Measured from the phpunit red (80), not predicted.
-    private const EXPECTED_ADOPTERS = 80;
+    // 80→81 by the 2026-11-03 review server__srphp CRITICAL cure (this
+    // commit): +tests/Integration/Auth/AdminPasswordHandoffRealDbTest.php
+    // (real-MySQL proof that admin-created and admin-reset passwords hash
+    // exactly once at rest and the same credentials then log in, over
+    // throwaway phlix_admpw_* databases).
+    // Measured from the phpunit red (81), not predicted.
+    private const EXPECTED_ADOPTERS = 81;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

@@ -79,6 +79,21 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The admin MetricsPage server-detail card renders again — the server now
+  answers `GET /api/v1/servers/{id}` for its own id (review xrepo__server-ui).**
+  The shared admin surface fetched the selected server's detail row, but the
+  route was never registered server-side, so every lookup 404ed and the card
+  stayed empty on server hosts. The server publishes its truthful self-entry —
+  the same identity the list rail hands out (enrollment id → config id →
+  process-stable fallback), plus the build `version` — and 404s every other id
+  rather than impersonating another fleet member. Fleet metric fields stay
+  omitted (no honest request-time source; the client degrades them to zero by
+  design). Auth posture matches the list (`AuthMiddleware` only, anonymous 401
+  with zero disclosure). S64 composed-route inventory, S239 wire-path manifest,
+  S65 spec currency (350 to 351 templates) and the SRV-M2 README cite table
+  (+39-line re-anchor after the closure extraction) all rotated in the same
+  commit. [xrepo__server-ui]
+
 - **Rail cards can create playlists again — the continue-watching and Next-Up
   rails now carry a real `library_id` (review xrepo__server-ui).** The SPA's
   'Add to playlist → Create new' leg POSTs the card row's `library_id`, and

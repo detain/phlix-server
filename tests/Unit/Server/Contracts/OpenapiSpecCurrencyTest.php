@@ -533,8 +533,10 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // so BookReaderPage's silent-catch POST actually lands — re-measured here; 350
         // after xrepo__server-ui M1 registered the member GET watch-history twin
         // (alias /api/v1/me/history — one new template; the canonical
-        // /api/v1/users/me/history GET joins an existing one) — re-measured here.
-        $this->assertCount(350, $doc['paths'], 'the served surface is 350 distinct path templates');
+        // /api/v1/users/me/history GET joins an existing one) — re-measured here; 351
+        // after xrepo__server-ui M3 registered GET /api/v1/servers/{id} (the admin
+        // MetricsPage detail card) — re-measured from this phpunit red.
+        $this->assertCount(351, $doc['paths'], 'the served surface is 351 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

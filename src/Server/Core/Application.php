@@ -405,98 +405,36 @@ class Application
         $resolvedServerId = null;
         $this->router->group('', function (Router $r) use (&$resolvedServerId): void {
             $r->get('/api/v1/servers', function (Request $request) use (&$resolvedServerId): Response {
-                // Get server name from config
-                $serverConfig = $this->config['server'] ?? [];
-                $serverName = (
-                    is_array($serverConfig)
-                    && isset($serverConfig['name'])
-                    && is_string($serverConfig['name'])
-                )
-                    ? $serverConfig['name']
-                    : 'Phlix Media Server';
-
-                // Get server ID: try hub enrollment first, then config, then generate
-                $serverId = null;
-                $enrolledAt = null;
-
-                $configDir = $this->resolveConfigDir();
-                $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
-
-                if (file_exists($enrollmentPath)) {
-                    $content = @file_get_contents($enrollmentPath);
-                    if ($content !== false) {
-                        $data = json_decode($content, true);
-                        if (is_array($data)) {
-                            if (isset($data['server_id']) && is_string($data['server_id'])) {
-                                $serverId = $data['server_id'];
-                            }
-                            if (isset($data['enrolled_at']) && is_int($data['enrolled_at'])) {
-                                $enrolledAt = $data['enrolled_at'];
-                            }
-                        }
-                    }
-                }
-
-                // Fall back to config server.id if not enrolled
-                if ($serverId === null || $serverId === '') {
-                    if (is_array($serverConfig) && isset($serverConfig['id']) && is_string($serverConfig['id'])) {
-                        $serverId = $serverConfig['id'];
-                    }
-                }
-
-                // Generate a persistent ID if still missing (first run) — memoised
-                // per process so repeated unenrolled requests report a STABLE id
-                // (was a fresh Uuid::v4() per request: the dropdown's server id
-                // churned on every poll).
-                if ($serverId === null || $serverId === '') {
-                    if (!is_string($resolvedServerId) || $resolvedServerId === '') {
-                        $resolvedServerId = \Phlix\Common\Uuid::v4();
-                    }
-                    $serverId = $resolvedServerId;
-                }
-
-                // Build hostname from hub config
-                $hubConfig = $this->config['hub'] ?? [];
-                $publicUrl = (
-                    is_array($hubConfig)
-                    && isset($hubConfig['public_url'])
-                    && is_string($hubConfig['public_url'])
-                )
-                    ? $hubConfig['public_url'] : '';
-
-                if (
-                    $publicUrl === ''
-                    && is_array($hubConfig)
-                    && isset($hubConfig['domain'])
-                    && is_string($hubConfig['domain'])
-                ) {
-                    $tlsEnabled = is_bool($hubConfig['tls_enabled'] ?? null)
-                        ? $hubConfig['tls_enabled']
-                        : true;
-                    $publicUrl = ($tlsEnabled ? 'https://' : 'http://') . $hubConfig['domain'];
-                }
-
-                $hostnameCandidates = [];
-                if ($publicUrl !== '') {
-                    $hostnameCandidates[] = $publicUrl;
-                }
-                // Always include localhost as a fallback candidate
-                $hostnameCandidates[] = 'http://localhost:8096';
-
                 return (new Response())->json([
                     'success' => true,
-                    'data' => [
-                        [
-                            'id' => $serverId,
-                            'name' => $serverName,
-                            'hostname' => $publicUrl ?: 'http://localhost:8096',
-                            'online' => true,
-                            'last_seen_at' => $enrolledAt ?? time(),
-                            'hostname_candidates' => array_values(array_unique($hostnameCandidates)),
-                        ],
-                    ],
+                    'data' => [$this->selfServerEntry($resolvedServerId)],
                 ]);
             });
+
+            // xrepo__server-ui (Major): the admin MetricsPage detail card fetches
+            // GET /api/v1/servers/{id}; the route never existed server-side, so the
+            // card 404s forever on a server host. The server answers ONLY its own
+            // id — the same identity ladder the list publishes, plus the build
+            // `version` — and 404s every other id (it must never impersonate a
+            // fleet member). Fleet metrics fields (uptime/session/library/storage
+            // counts) are deliberately omitted: no truthful request-time source
+            // exists here, and the ui degrades absent numbers to 0 by design.
+            $r->get(
+                '/api/v1/servers/{id}',
+                function (Request $request, array $params) use (&$resolvedServerId): Response {
+                    $entry = $this->selfServerEntry($resolvedServerId);
+
+                    $requested = $params['id'] ?? null;
+                    if (!is_string($requested) || $requested !== $entry['id']) {
+                        return (new Response())->status(404)->json(['error' => 'Server not found']);
+                    }
+
+                    return (new Response())->json([
+                        'success' => true,
+                        'data' => $entry + ['version' => \Phlix\Common\Version::STRING],
+                    ]);
+                },
+            );
         }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
         // Username/password authentication endpoints. The controller validates
@@ -1373,6 +1311,110 @@ class Application
             // misconfigured (relative or root) hub.config_dir, instead of the pre-S211
             // silently-CWD-dependent behavior. Logged, never silent (M8).
         }
+    }
+
+    /**
+     * The server's own fleet entry — single source for the `/api/v1/servers`
+     * list and the `/api/v1/servers/{id}` detail rail (xrepo__server-ui Major:
+     * the MetricsPage detail card was 404ing because only the list existed).
+     *
+     * Identity ladder (unchanged from the original list closure, L-1):
+     * hub-enrollment.json `server_id` → config `server.id` → process-memoised
+     * `Uuid::v4()` fallback. The `&$resolvedServerId` memo is passed by
+     * reference so BOTH rails resolve the same stable id — a detail lookup
+     * for the id the list just handed out must never miss.
+     *
+     * @param string|null $resolvedServerId Process-stable fallback id carrier.
+     * @return array<string, mixed> Wire entry: id/name/hostname/online/last_seen_at/hostname_candidates.
+     */
+    private function selfServerEntry(?string &$resolvedServerId): array
+    {
+        // Get server name from config
+        $serverConfig = $this->config['server'] ?? [];
+        $serverName = (
+            is_array($serverConfig)
+            && isset($serverConfig['name'])
+            && is_string($serverConfig['name'])
+        )
+            ? $serverConfig['name']
+            : 'Phlix Media Server';
+
+        // Get server ID: try hub enrollment first, then config, then generate
+        $serverId = null;
+        $enrolledAt = null;
+
+        $configDir = $this->resolveConfigDir();
+        $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
+
+        if (file_exists($enrollmentPath)) {
+            $content = @file_get_contents($enrollmentPath);
+            if ($content !== false) {
+                $data = json_decode($content, true);
+                if (is_array($data)) {
+                    if (isset($data['server_id']) && is_string($data['server_id'])) {
+                        $serverId = $data['server_id'];
+                    }
+                    if (isset($data['enrolled_at']) && is_int($data['enrolled_at'])) {
+                        $enrolledAt = $data['enrolled_at'];
+                    }
+                }
+            }
+        }
+
+        // Fall back to config server.id if not enrolled
+        if ($serverId === null || $serverId === '') {
+            if (is_array($serverConfig) && isset($serverConfig['id']) && is_string($serverConfig['id'])) {
+                $serverId = $serverConfig['id'];
+            }
+        }
+
+        // Generate a persistent ID if still missing (first run) — memoised
+        // per process so repeated unenrolled requests report a STABLE id
+        // (was a fresh Uuid::v4() per request: the dropdown's server id
+        // churned on every poll).
+        if ($serverId === null || $serverId === '') {
+            if (!is_string($resolvedServerId) || $resolvedServerId === '') {
+                $resolvedServerId = \Phlix\Common\Uuid::v4();
+            }
+            $serverId = $resolvedServerId;
+        }
+
+        // Build hostname from hub config
+        $hubConfig = $this->config['hub'] ?? [];
+        $publicUrl = (
+            is_array($hubConfig)
+            && isset($hubConfig['public_url'])
+            && is_string($hubConfig['public_url'])
+        )
+            ? $hubConfig['public_url'] : '';
+
+        if (
+            $publicUrl === ''
+            && is_array($hubConfig)
+            && isset($hubConfig['domain'])
+            && is_string($hubConfig['domain'])
+        ) {
+            $tlsEnabled = is_bool($hubConfig['tls_enabled'] ?? null)
+                ? $hubConfig['tls_enabled']
+                : true;
+            $publicUrl = ($tlsEnabled ? 'https://' : 'http://') . $hubConfig['domain'];
+        }
+
+        $hostnameCandidates = [];
+        if ($publicUrl !== '') {
+            $hostnameCandidates[] = $publicUrl;
+        }
+        // Always include localhost as a fallback candidate
+        $hostnameCandidates[] = 'http://localhost:8096';
+
+        return [
+            'id' => $serverId,
+            'name' => $serverName,
+            'hostname' => $publicUrl ?: 'http://localhost:8096',
+            'online' => true,
+            'last_seen_at' => $enrolledAt ?? time(),
+            'hostname_candidates' => array_values(array_unique($hostnameCandidates)),
+        ];
     }
 
     /**

@@ -399,6 +399,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/roku/devices -> RokuController::listDevices [AuthMiddleware,CastingEnabledMiddleware]',
         'GET /api/v1/roku/devices/{id}/status -> RokuController::getStatus [AuthMiddleware,CastingEnabledMiddleware]',
         'GET /api/v1/servers -> Closure@Application.php [AuthMiddleware]',
+        'GET /api/v1/servers/{id} -> Closure@Application.php [AuthMiddleware]',
         'GET /api/v1/sessions/{id}/progress -> SessionController::getProgress []',
         'GET /api/v1/shows/{id}/markers/bulk -> MarkerController::getShowMarkers [AuthMiddleware]',
         'GET /api/v1/syncplay/groups -> SyncPlayController::listGroups [AuthMiddleware]',

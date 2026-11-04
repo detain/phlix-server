@@ -55,30 +55,51 @@ reference; the quickstart is the journey.
 
 ```
 src/
-├── Server/
-│   ├── Core/           # Application bootstrap and core
-│   ├── Http/            # HTTP REST API layer
-│   │   ├── Controllers/ # Request handlers
-│   │   ├── Request.php  # HTTP request representation
-│   │   ├── Response.php # HTTP response builder
-│   │   └── Router.php  # Route dispatching
-│   ├── WebSocket/       # Real-time communication
-│   │   ├── Connection.php      # Client connection wrapper
-│   │   ├── ConnectionPool.php  # Connection management
-│   │   ├── MessageHandler.php  # Event routing
-│   │   ├── WebSocketServer.php # Server implementation
-│   │   └── WebSocketEvents.php # Event type constants
-│   └── WebPortal/       # Web portal
-│       ├── WebPortalRouter.php # REST API for the /app Vue SPA (JSON only)
-│       └── Controllers/SharedUiController.php # serves the /app SPA shell (+ ViteAssets.php)
-├── Session/            # Playback session management
-├── Media/              # Media library and metadata
-│   ├── Library/        # Library management (LibraryManager, ItemRepository, MediaScanner)
-│   ├── Metadata/      # Metadata fetching (TMDB, TVDB, Fanart, NFO providers)
-│   ├── Transcoding/    # FFmpeg transcoding (FfmpegRunner, TranscodeManager, EncodeSettings)
-│   └── Streaming/      # HLS streaming with adaptive bitrate
-├── Auth/               # Authentication services
-└── Common/             # Shared utilities
+├── Access/           # Per-profile access schedules and content access policy
+├── Admin/            # Admin services: backup manager, dashboard aggregation
+├── AirPlay/          # AirPlay devices: discovery, session, playback control
+├── Auth/             # Authentication: login/JWT, OIDC/LDAP/GitHub providers, WebAuthn, method lockout
+├── Casting/          # Casting session store + ownership shared by the AirPlay/Roku/DLNA paths
+├── Chromecast/       # Chromecast devices: discovery and the Cast API client
+├── Collections/      # Collections and smart-collection rule engine (manager, item repositories)
+├── Common/           # Shared infrastructure: DI container, DB pool, logger, HTTP client, net guards
+├── Config/           # Effective-config resolution, job-queue paths, hardware-accel config
+├── Console/          # bin/phlix commands (user create/promote, migrations, install helpers)
+├── Discovery/        # SSDP service discovery and NAT-PMP/PCP port mapping
+├── Dlna/             # DLNA media server: CDS, AVTransport, device descriptions
+├── Hub/              # Hub relay client: enrollment, Ed25519 keys, :8804 tunnel, relay config
+├── LiveTv/           # Channels, EPG, Comskip EDL parsing, recordings (transcode-gated streams)
+├── Media/            # Media library domain (subsystems below; root files add markers/recommendations/similarity)
+│   ├── Extras/       # Extras (behind-the-scenes, trailers) domain
+│   ├── Library/      # Scanners, per-type LibraryManagers, ItemRepository (browse query layer)
+│   ├── Markers/      # Playback markers domain
+│   ├── MediaAsset/   # Media asset persistence
+│   ├── Metadata/     # Providers (TMDB, TVDB, Fanart, AniDB, MyAnimeList, NFO/local) + match/cache policies
+│   ├── Music/        # Track/album/artist domain services
+│   ├── Playback/     # Resume positions, user item data
+│   ├── Storage/      # Library storage paths and capacity
+│   ├── Streaming/    # HLS packaging, segment prep, adaptive bitrate
+│   ├── Subtitles/    # Subtitle extraction and conversion
+│   └── Transcoding/  # FFmpeg jobs: FfmpegRunner, TranscodeManager, EncodeSettings
+├── Network/          # Swoole coroutine socket guards and fault containment
+├── Playlists/        # Smart-playlist rule DTOs (RuleNode/RuleOperators) consumed by Collections
+├── Plugins/          # Plugin runtime: catalog, contracts, OAuth2 callbacks, enable bootstrap
+├── Roku/             # Roku control point: discovery + RemoteRokuClient
+├── Server/           # Process bootstrap and request surface (subsystems below)
+│   ├── Arr/          # *arr integration glue (custom formats, Workerman transport)
+│   ├── Core/         # Application bootstrap — owns the HTTP route registrations
+│   ├── Http/         # REST layer: Request/Response/Router, Controllers/, Middleware/, FastPath/
+│   ├── Integrations/ # Service integrations: Last.fm, Trakt
+│   ├── Runtime/      # Boot identity, PID files, listen endpoints, hook delivery
+│   ├── Updates/      # Core update-check service and version-marker fetchers
+│   ├── WebSocket/    # Real-time :8097 server: connections, pool, MessageHandler, SyncPlay auth
+│   ├── WebPortal/    # /app SPA boundary: WebPortalRouter JSON, SharedUiController shell, ViteAssets
+│   └── Workerman/    # Workerman HTTP worker (HttpHandler.php — the served daemon)
+├── Session/          # Playback sessions + SyncPlay group management
+│   └── SyncPlay/     # Watch-party group state, bridge, snapshots, time sync
+├── Stats/            # Client heartbeats and metrics stores
+├── Theming/          # Built-in theme registry + theme source seam (plugin themes)
+└── Webhooks/         # Outbound webhook dispatch and delivery records
 
 public/                 # no front controller — start.php serves everything (see below)
 ├── templates/emails/   # Smarty newsletter email template (only remaining .tpl)

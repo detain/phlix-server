@@ -100,6 +100,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **README Architecture tree now maps all 24 top-level `src/` subsystems —
+  machine-pinned both ways.** The tree stopped at Server/Session/Media/Auth/
+  Common, omitting 19 real subsystems (Access, Admin, AirPlay, Casting,
+  Chromecast, Collections, Config, Console, Discovery, Dlna, Hub, LiveTv,
+  Network, Playlists, Plugins, Roku, Stats, Theming, Webhooks) — a reader
+  auditing features against the map concluded the casting, hub-relay, webhook,
+  DLNA and theming stacks did not exist. `ArchitectureTreeCoversSrcSubsystemsTest`
+  now reddens if any `src/` directory leaves the tree OR the tree names one that
+  never lands; it validates directories only, deliberately — file-level README
+  detail is exactly what rotted before. The empty `.gitkeep` placeholder
+  `src/Session/Playback/` stays unlisted: the map documents territory, not
+  intentions. [review server__ipd]
+
 - **README collection-route cites re-anchored to the shipped lines —
   `CollectionRoutesReadmeCitesTest` was RED (all 9 datasets) at master.**
   `8bb435cf` recorded the SRV-M2 cite-table rotation in its message, but its

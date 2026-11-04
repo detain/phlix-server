@@ -79,6 +79,11 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Stale autowire cite in the README smart-collections bullet.** The prose
+  pointed at `MediaServicesProvider.php:899` for the
+  `SmartPlaylistRefreshSubscriber::autowire()` registration; the line moved
+  to `:900` under an earlier insertion. Re-anchored to the measured line;
+  the wiring itself is unchanged. [review server__docmaint]
 - **Stale openapi line cite in the README collections note.** The prose
   pointed at `openapi.yaml :5738` for the first `/api/v1/collections*` path;
   the block actually starts at `:5728` (a 10-line drift from an earlier spec

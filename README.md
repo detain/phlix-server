@@ -475,7 +475,7 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   indistinguishable from absence, mirroring the syncplay room-visibility precedent the docblock cites.
 - **Smart collections**: a collection carrying a `smart_playlist_id` is *smart* — its membership is
   materialized in `collection_items` and re-evaluated against the playlist's rules after library scans
-  (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:899`, subscribed by the
+  (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:900`, subscribed by the
   call pinned in `start.php`'s library-scan worker by `SmartPlaylistRefreshWiringTest`), or on demand
   via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
   a smart collection" on a plain row, `200 {message}` on a smart one). Honest gap: **the backing

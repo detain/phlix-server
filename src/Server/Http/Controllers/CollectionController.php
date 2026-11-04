@@ -137,6 +137,17 @@ final class CollectionController
             $smartPlaylistId = $body['smart_playlist_id'];
         }
 
+        // SRV-M19: a body-supplied smart_playlist_id must name an existing
+        // smart_playlists row — the FK edge is deliberately constraint-free
+        // (migrations/122), so the request boundary is the admission point.
+        // Storing garbage used to leave the collection pointing at a phantom
+        // and its refresh answering 200 while doing nothing.
+        if ($smartPlaylistId !== null && !$this->manager->smartPlaylistExists($smartPlaylistId)) {
+            return (new Response())->status(400)->json([
+                'error' => 'smart_playlist_id does not reference an existing smart playlist',
+            ]);
+        }
+
         $parentId = null;
         if (isset($body['parent_id']) && is_string($body['parent_id'])) {
             $parentId = $body['parent_id'];
@@ -243,6 +254,17 @@ final class CollectionController
         $smartPlaylistId = $existing->smartPlaylistId;
         if (array_key_exists('smart_playlist_id', $body)) {
             $smartPlaylistId = is_string($body['smart_playlist_id']) ? $body['smart_playlist_id'] : null;
+            // SRV-M19 write-time law, same as create(): a body-supplied
+            // string must name an existing row; an explicit null clears the
+            // edge (no lookup — clearing is always lawful) and a body that
+            // leaves the key untouched never re-validates a legacy dangling
+            // value (a rename must keep working; refresh answers 409 for
+            // that edge instead).
+            if ($smartPlaylistId !== null && !$this->manager->smartPlaylistExists($smartPlaylistId)) {
+                return (new Response())->status(400)->json([
+                    'error' => 'smart_playlist_id does not reference an existing smart playlist',
+                ]);
+            }
         }
 
         $parentId = $existing->parentId;
@@ -450,10 +472,13 @@ final class CollectionController
      * Refresh a smart collection the actor manages.
      *
      * Re-evaluates the underlying smart playlist rules and syncs items.
+     * A 200 carries the applied diff (`items_added`/`items_removed`); a
+     * dangling `smart_playlist_id` edge answers 409 instead of faking
+     * success (SRV-M19).
      *
      * @param Request $request Current request
      * @param array<string, string> $params Path parameters with 'id'
-     * @return Response JSON response on success
+     * @return Response JSON response — 200 with diff counts, 409 dangling edge
      *
      * @since 0.14.0
      */
@@ -482,9 +507,23 @@ final class CollectionController
             return (new Response())->status(400)->json(['error' => 'Collection is not a smart collection']);
         }
 
-        $this->manager->refreshSmartCollection($id);
+        $diff = $this->manager->refreshSmartCollection($id);
+        // SRV-M19: the manager answers null when NOTHING was refreshed —
+        // here that means the smart_playlist_id edge dangles (its row was
+        // never reachable over HTTP CRUD, and is deleted out-of-band or by
+        // direct write). The old code ignored the result and still promised
+        // "Smart collection refreshed" — a success lie over a no-op.
+        if ($diff === null) {
+            return (new Response())->status(409)->json([
+                'error' => 'Smart collection references a smart playlist that does not exist',
+            ]);
+        }
 
-        return (new Response())->json(['message' => 'Smart collection refreshed']);
+        return (new Response())->json([
+            'message' => 'Smart collection refreshed',
+            'items_added' => $diff['items_added'],
+            'items_removed' => $diff['items_removed'],
+        ]);
     }
 
     /**

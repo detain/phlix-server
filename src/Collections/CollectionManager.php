@@ -226,6 +226,25 @@ class CollectionManager
     }
 
     /**
+     * Is a smart playlist row with this id present?
+     *
+     * The single existence oracle the HTTP layer validates
+     * `smart_playlist_id` writes against (SRV-M19). The FK edge stays
+     * deliberately constraint-free (migrations/122_collections_foreign_keys
+     * .sql), so admission control lives HERE, at the request boundary.
+     *
+     * @param string $smartPlaylistId Candidate playlist id (may be empty —
+     *        an empty string can never name a row and answers false)
+     * @return bool True only when the row exists
+     *
+     * @since 0.16.0
+     */
+    public function smartPlaylistExists(string $smartPlaylistId): bool
+    {
+        return $this->playlistRepo->findById($smartPlaylistId) !== null;
+    }
+
+    /**
      * Refresh a smart collection by re-evaluating its rules.
      *
      * Loads the collection's smartPlaylistId, fetches the SmartPlaylist,
@@ -233,21 +252,28 @@ class CollectionManager
      * against current items. Adds new matches, removes non-matches.
      * Does NOT wipe and rebuild to preserve curator sort orders.
      *
-     * @param string $id Collection UUID
-     * @return void
+     * SRV-M19: returns the applied diff so a silent no-op can never
+     * masquerade as success at the HTTP layer. `null` means NOTHING was
+     * refreshed — the row is absent, not smart, or its playlist edge is
+     * dangling (row deleted out-of-band or written directly; the FK is
+     * intentionally constraint-free, migrations/122).
      *
-     * @since 0.14.0
+     * @param string $id Collection UUID
+     * @return array{items_added:int, items_removed:int}|null Diff counts on a
+     *         real refresh, null when no refresh happened
+     *
+     * @since 0.14.0 (return shape honest since 0.16.0, SRV-M19)
      */
-    public function refreshSmartCollection(string $id): void
+    public function refreshSmartCollection(string $id): ?array
     {
         $collection = $this->repo->findById($id);
         if ($collection === null || $collection->smartPlaylistId === null) {
-            return;
+            return null;
         }
 
         $playlist = $this->playlistRepo->findById($collection->smartPlaylistId);
         if ($playlist === null) {
-            return;
+            return null;
         }
 
         // Evaluate the rules against the library
@@ -293,6 +319,11 @@ class CollectionManager
             array_values(array_map('strval', $toRemove)),
             $maxSortOrder + 1
         );
+
+        return [
+            'items_added' => count($toAdd),
+            'items_removed' => count($toRemove),
+        ];
     }
 
     /**

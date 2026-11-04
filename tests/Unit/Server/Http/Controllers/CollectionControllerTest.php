@@ -192,6 +192,61 @@ class CollectionControllerTest extends TestCase
         $this->assertSame('Library ID is required', $body['error']);
     }
 
+    /**
+     * SRV-M19: a `smart_playlist_id` naming a row that does not exist used
+     * to be stored raw, leaving the collection pointing at a phantom — the
+     * write channel now refuses it with a 400 that names the field (the
+     * request-body channel, consistent with the 404-not-403 law being about
+     * path ids, per the review recommendation).
+     */
+    public function testCreateRejectsBogusSmartPlaylistIdWithoutStoring(): void
+    {
+        $manager = $this->createMock(CollectionManager::class);
+        $manager->expects($this->once())
+            ->method('smartPlaylistExists')
+            ->with('sp-ghost')
+            ->willReturn(false);
+        $manager->expects($this->never())->method('create');
+
+        $controller = new CollectionController($manager);
+
+        $response = $controller->create($this->request([
+            'name' => 'Smart-ish',
+            'library_id' => 'lib-1',
+            'smart_playlist_id' => 'sp-ghost',
+        ]), []);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsString($body['error']);
+        $this->assertStringContainsString('smart_playlist_id', $body['error']);
+    }
+
+    public function testCreateAcceptsAnExistingSmartPlaylistId(): void
+    {
+        $manager = $this->createMock(CollectionManager::class);
+        $manager->expects($this->once())
+            ->method('smartPlaylistExists')
+            ->with('sp-real')
+            ->willReturn(true);
+        $manager->expects($this->once())
+            ->method('create')
+            ->with($this->callback(function (Collection $c): bool {
+                return $c->smartPlaylistId === 'sp-real';
+            }));
+
+        $controller = new CollectionController($manager);
+
+        $response = $controller->create($this->request([
+            'name' => 'Smart',
+            'library_id' => 'lib-1',
+            'smart_playlist_id' => 'sp-real',
+        ]), []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
     // ─── show ─────────────────────────────────────────────────────────────────
 
     public function testShowReturns200WithItems(): void
@@ -271,6 +326,56 @@ class CollectionControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
+    }
+
+    /**
+     * SRV-M19: PUT carried the same raw-store leg (controller :244-246 at
+     * review time). A body-supplied string must reference an existing row.
+     */
+    public function testUpdateRejectsBogusSmartPlaylistIdFromBody(): void
+    {
+        $manager = $this->createMock(CollectionManager::class);
+        $manager->method('findById')->with('c-1')->willReturn($this->makeCollection());
+        $manager->expects($this->once())
+            ->method('smartPlaylistExists')
+            ->with('sp-ghost')
+            ->willReturn(false);
+        $manager->expects($this->never())->method('update');
+
+        $controller = new CollectionController($manager);
+
+        $response = $controller->update(
+            $this->request(['smart_playlist_id' => 'sp-ghost']),
+            ['id' => 'c-1']
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertStringContainsString('smart_playlist_id', $body['error']);
+    }
+
+    /**
+     * Explicit null still CLEARS the smart edge (unchanged PUT semantics) and
+     * must not trigger a playlist existence lookup.
+     */
+    public function testUpdateClearingSmartEdgeViaNullNeedsNoPlaylistLookup(): void
+    {
+        $manager = $this->createMock(CollectionManager::class);
+        $manager->method('findById')->with('c-1')->willReturn($this->makeCollection());
+        $manager->expects($this->never())->method('smartPlaylistExists');
+        $manager->expects($this->once())
+            ->method('update')
+            ->with($this->callback(fn (Collection $c): bool => $c->smartPlaylistId === null));
+
+        $controller = new CollectionController($manager);
+
+        $response = $controller->update(
+            $this->request(['smart_playlist_id' => null]),
+            ['id' => 'c-1']
+        );
+
+        $this->assertSame(200, $response->statusCode);
     }
 
     // ─── delete ────────────────────────────────────────────────────────────────
@@ -525,7 +630,8 @@ class CollectionControllerTest extends TestCase
             ->willReturn($collection);
         $manager->expects($this->once())
             ->method('refreshSmartCollection')
-            ->with('c-1');
+            ->with('c-1')
+            ->willReturn(['items_added' => 2, 'items_removed' => 1]);
 
         $controller = new CollectionController($manager);
         $response = $controller->refresh($this->request(), ['id' => 'c-1']);
@@ -534,6 +640,49 @@ class CollectionControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Smart collection refreshed', $body['message']);
+        // SRV-M19: a success 200 now carries the real diff — a silent no-op
+        // cannot masquerade as success (review recommendation).
+        $this->assertSame(2, $body['items_added']);
+        $this->assertSame(1, $body['items_removed']);
+    }
+
+    /**
+     * SRV-M19: the refresh answer must tell the truth about a dangling
+     * smart_playlist_id edge (legacy row, out-of-band playlist delete, or
+     * direct DB write). The manager's null return used to be ignored and
+     * the caller was told "Smart collection refreshed" while nothing was
+     * refreshed — that success lie now answers 409.
+     */
+    public function testRefreshDanglingPlaylistEdgeIsRefusedNotFaked(): void
+    {
+        $collection = new Collection(
+            id: 'c-1',
+            name: 'Smart Collection',
+            libraryId: 'lib-1',
+            smartPlaylistId: 'sp-ghost',
+            parentId: null,
+            sortOrder: 0,
+            createdAt: new \DateTimeImmutable('2024-01-01'),
+            updatedAt: new \DateTimeImmutable('2024-01-01'),
+            createdBy: self::ACTOR,
+        );
+
+        $manager = $this->createMock(CollectionManager::class);
+        $manager->method('findById')->with('c-1')->willReturn($collection);
+        $manager->expects($this->once())
+            ->method('refreshSmartCollection')
+            ->with('c-1')
+            ->willReturn(null);
+
+        $controller = new CollectionController($manager);
+        $response = $controller->refresh($this->request(), ['id' => 'c-1']);
+
+        $this->assertSame(409, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertIsString($body['error']);
+        $this->assertStringContainsString('smart playlist', strtolower((string) $body['error']));
+        $this->assertStringNotContainsString('refreshed', $body['error']);
     }
 
     public function testRefreshReturns400OnNonSmartCollection(): void

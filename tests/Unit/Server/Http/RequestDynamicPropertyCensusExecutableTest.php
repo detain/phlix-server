@@ -1031,7 +1031,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Unit/Platform/ArchitectureTreeCoversSrcSubsystemsTest.php joined
     // the tree; this rotation carries it. Measured from the phpunit red
     // (2057), not predicted.
-    private const EXPECTED_PHP_FILES = 2057;
+    // +1 2057→2058: this cure adds tests/Unit/Collections/
+    // CollectionManagerSmartEdgeTest.php (SRV-M19 smart-edge oracle pin,
+    // review server__pm). Measured from the phpunit red (2058), not
+    // predicted.
+    private const EXPECTED_PHP_FILES = 2058;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

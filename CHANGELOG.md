@@ -100,6 +100,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Smart collections stop lying — a bogus `smart_playlist_id` is refused 400
+  at create/update, and a dangling edge answers refresh with 409 instead of a
+  200 that refreshed nothing (review server__pm).** Create and PUT accepted any
+  `smart_playlist_id` verbatim (migration 122 deliberately keeps the edge free
+  of constraint), and POST /collections/{id}/refresh answered
+  `{message: 'Smart collection refreshed'}` while the manager silently returned
+  on the missing playlist. `CollectionManager` gains `smartPlaylistExists()`
+  (the write-time oracle) and `refreshSmartCollection()` now reports: null when
+  the edge dangles or the collection is not smart, else an
+  `items_added`/`items_removed` diff the controller ships with its 200. The
+  controller refuses unknown playlist ids at write time, answers 409
+  `Smart collection references a smart playlist that does not exist` on a
+  dangling refresh, and its docblock/README/openapi (new 409 leg) state the
+  real contract. The owner-gate refresh arms stub the healthy diff (the
+  controller reads the new return), and the S431 file census rotated 2057 to
+  2058 with its pin file (the SRV-M20 sibling continues the staircase).
+  [server__pm]
+
 - **The auth middlewares' wire-shape docblocks told the truth about a dead
   world: `AdminMiddleware` pointed at "the SSR page-route branch in
   `public/index.php`" as a co-consumer (that front controller was deleted by

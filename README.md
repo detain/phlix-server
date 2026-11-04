@@ -499,7 +499,10 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   (`SmartPlaylistRefreshSubscriber`, autowired at `MediaServicesProvider.php:900`, subscribed by the
   call pinned in `start.php`'s library-scan worker by `SmartPlaylistRefreshWiringTest`), or on demand
   via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
-  a smart collection" on a plain row, `200 {message}` on a smart one). Honest gap: **the backing
+  a smart collection" on a plain row, `409` when the collection's `smart_playlist_id` edge dangles —
+  its playlist row is gone — and `200 {message, items_added, items_removed}` when the refresh
+  actually ran; SRV-M19 made both the write-time existence check on `smart_playlist_id`
+  (`400` naming the field) and the honest refresh diff live). Honest gap: **the backing
   rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper sits
   uncalled in `Router.php` (never invoked; pinned by `SmartPlaylistRegistrationGuardTest`), so a
   `smart_playlist_id` must reference a pre-existing `smart_playlists` row created out-of-band.

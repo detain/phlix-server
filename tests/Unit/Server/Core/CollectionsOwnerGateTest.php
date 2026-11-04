@@ -791,6 +791,9 @@ final class CollectionsOwnerGateTest extends TestCase
      * Manager double answering `findById`/`getCollectionWithItems` with a row
      * owned by $ownedBy (null = legacy unowned); refresh-capable fixture rows
      * are smart so the post-gate handler path completes instead of 400ing.
+     * The refresh leg answers with a healthy diff (SRV-M19): the controller
+     * now reads refreshSmartCollection()'s return — null would mean a
+     * dangling playlist edge and 409, which is NOT what this suite gates.
      *
      * @return CollectionManager&\PHPUnit\Framework\MockObject\MockObject
      */
@@ -802,6 +805,9 @@ final class CollectionsOwnerGateTest extends TestCase
             $collection === null
                 ? null
                 : new CollectionWithItems(collection: $collection, items: [], total: 0)
+        );
+        $manager->method('refreshSmartCollection')->willReturn(
+            ['items_added' => 0, 'items_removed' => 0]
         );
         return $manager;
     }

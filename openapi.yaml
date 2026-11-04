@@ -6015,6 +6015,13 @@ paths:
           $ref: "#/components/responses/NotFound"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          description: "Smart collection references a smart playlist that does not exist (SRV-M19)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/dlna/renderers":

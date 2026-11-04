@@ -20,6 +20,7 @@ use Phlix\Server\Integrations\Lastfm\LastfmSessionRepository;
 use Phlix\Server\Integrations\Lastfm\SessionLastfmOAuthStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Plugins\OAuth2\CallbackUrl;
 use Workerman\MySQL\Connection;
 
 /**
@@ -128,12 +129,20 @@ final class LastfmController
 
         // CSRF state, bound server-side to the initiating user, so the callback
         // can both validate the state AND recover which user initiated the flow.
+        // SRV-M15: the callback is resolved BEFORE any state is seeded — a host
+        // that cannot be trusted yields the same refusal as an unusable config
+        // and never leaves an orphan state entry.
+        $callback = $this->apiCallbackUrl($request);
+        if ($callback === null) {
+            return $this->redirect('/app/admin/services?lastfm=not_configured');
+        }
+
         $state = bin2hex(random_bytes(16));
         $this->stateStore->put($state, $userId);
 
         // Last.fm appends `&token=<token>` to whatever `cb` we hand it, so we
         // carry our `state` on the cb URL itself (it is preserved verbatim).
-        $cb = $this->apiCallbackUrl($request) . '?' . http_build_query(['state' => $state]);
+        $cb = $callback . '?' . http_build_query(['state' => $state]);
 
         $query = [
             'api_key' => $this->config->apiKey,
@@ -267,32 +276,45 @@ final class LastfmController
     }
 
     /**
-     * Build the absolute URL of this server's new API callback endpoint
-     * (`/api/v1/oauth/lastfm/callback`) from the inbound request host.
+     * Absolute URL of this server's API callback endpoint
+     * (`/api/v1/oauth/lastfm/callback`) — or null when no trusted one exists.
      *
-     * The legacy operator-configured `callback_url` typically points at the
-     * old `/admin/lastfm/callback`, so the new flow derives its own callback
-     * from the request host (mirroring how Trakt's redirect lands on the API
-     * callback). Falls back to a relative path when no Host header is present
-     * (e.g. unit-test stubs).
+     * SRV-M15 (review server__fedev): the pre-cure version interpolated the
+     * RAW request Host (and an unvalidated X-Forwarded-Proto scheme) straight
+     * into the OAuth `cb` parameter — a Host header an attacker controls (or
+     * simply a missing reverse-proxy allowlist) steered Last.fm's post-auth
+     * redirect, state and session token, to a foreign domain. Resolution now
+     * goes through the estate guard {@see CallbackUrl}: an operator-configured
+     * `callback_url` counts ONLY when it is absolute AND targets this API
+     * callback path (the legacy value points at the retired
+     * `/admin/lastfm/callback` and must never ride the new flow); otherwise the
+     * callback is DERIVED from the request host only when that host matches
+     * the operator-allowlisted `PHLIX_DOMAIN` — no allowlist, no derivation:
+     * the flow refuses instead of minting state against an untrusted URL.
+     * The old relative fallback served no purpose on the wire (Last.fm needs
+     * an absolute cb) and is gone.
      */
-    private function apiCallbackUrl(Request $request): string
+    private function apiCallbackUrl(Request $request): ?string
     {
         $path = '/api/v1/oauth/lastfm/callback';
 
-        $host = $request->headers['HOST'] ?? ($request->headers['Host'] ?? '');
-        if (!is_string($host) || $host === '') {
-            return $path;
+        // Step 1 candidate: the operator config, but only the API-path shape.
+        $configured = trim($this->config->callbackUrl);
+        if ($configured !== '' && CallbackUrl::isAbsolute($configured)) {
+            $configuredPath = parse_url($configured, PHP_URL_PATH);
+            if (is_string($configuredPath) && $configuredPath === $path) {
+                return $configured;
+            }
         }
 
-        // X-Forwarded-Proto is set by the fronting HAProxy/TLS terminator;
-        // default to https since Last.fm requires an https callback in
-        // production and the public deployment is TLS-terminated.
-        $proto = $request->headers['X-FORWARDED-PROTO']
-            ?? ($request->headers['X-Forwarded-Proto'] ?? 'https');
-        $scheme = (is_string($proto) && $proto !== '') ? $proto : 'https';
-
-        return $scheme . '://' . $host . $path;
+        // Step 2: allowlisted derivation from the request host.
+        return CallbackUrl::resolve(
+            '',
+            $request->getHeader('Host'),
+            $request->getHeader('X-Forwarded-Proto'),
+            $path,
+            CallbackUrl::configuredHost(),
+        );
     }
 
     /**

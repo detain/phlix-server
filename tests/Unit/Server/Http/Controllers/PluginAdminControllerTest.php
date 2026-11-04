@@ -846,6 +846,103 @@ final class PluginAdminControllerTest extends TestCase
     }
 
     /**
+     * SRV-M15 (review server__fedev): `redirect_url` on the plugin DETAIL
+     * endpoint is offered ONLY when the request host matches the
+     * operator-allowlisted PHLIX_DOMAIN; the raw Host header alone never
+     * produces a URL the admin is told to register at the provider.
+     */
+    public function test_show_offers_scrobbler_redirect_url_for_allowlisted_host(): void
+    {
+        $ambient = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN=phlix.test');
+
+        try {
+            $scrobbler = new InstalledPlugin(
+                id: 'id-phlix-plugin-lastfm',
+                manifest: Manifest::fromArray([
+                    'name' => 'phlix-plugin-lastfm',
+                    'version' => '1.0.0',
+                    'phlix_min_server_version' => '0.10.0',
+                    'type' => 'scrobbler',
+                    'entry' => 'Demo\\Plugin',
+                ]),
+                enabled: true,
+                installedAt: new DateTimeImmutable('2024-01-01 00:00:00'),
+                settings: [],
+                directory: '/tmp/phlix-plugin-lastfm',
+            );
+
+            $this->expectCall($this->loader, 'getInstalled')
+                ->once()
+                ->with('phlix-plugin-lastfm')
+                ->andReturn($scrobbler);
+
+            $request = $this->makeRequest('admin-1');
+            $request->headers = ['HOST' => 'phlix.test', 'X-FORWARDED-PROTO' => 'https'];
+
+            $body = $this->decode($this->controller->show($request, ['name' => 'phlix-plugin-lastfm'])->body);
+
+            $this->assertSame(
+                'https://phlix.test/api/v1/oauth/lastfm/callback',
+                $body['plugin']['redirect_url'],
+            );
+        } finally {
+            if ($ambient === false) {
+                putenv('PHLIX_DOMAIN');
+            } else {
+                putenv('PHLIX_DOMAIN=' . $ambient);
+            }
+        }
+    }
+
+    /**
+     * SRV-M15: an attacker-controlled Host with NO PHLIX_DOMAIN allowlist gets
+     * `redirect_url: null` — pre-cure this served
+     * `https://evil.test/api/v1/oauth/lastfm/callback` as an actionable
+     * provider-registration instruction straight out of a spoofable header.
+     */
+    public function test_show_omits_redirect_url_for_untrusted_host(): void
+    {
+        $ambient = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN');
+
+        try {
+            $scrobbler = new InstalledPlugin(
+                id: 'id-phlix-plugin-lastfm',
+                manifest: Manifest::fromArray([
+                    'name' => 'phlix-plugin-lastfm',
+                    'version' => '1.0.0',
+                    'phlix_min_server_version' => '0.10.0',
+                    'type' => 'scrobbler',
+                    'entry' => 'Demo\\Plugin',
+                ]),
+                enabled: true,
+                installedAt: new DateTimeImmutable('2024-01-01 00:00:00'),
+                settings: [],
+                directory: '/tmp/phlix-plugin-lastfm',
+            );
+
+            $this->expectCall($this->loader, 'getInstalled')
+                ->once()
+                ->with('phlix-plugin-lastfm')
+                ->andReturn($scrobbler);
+
+            $request = $this->makeRequest('admin-1');
+            $request->headers = ['HOST' => 'evil.test', 'X-FORWARDED-PROTO' => 'https'];
+
+            $body = $this->decode($this->controller->show($request, ['name' => 'phlix-plugin-lastfm'])->body);
+
+            $this->assertNull($body['plugin']['redirect_url']);
+        } finally {
+            if ($ambient === false) {
+                putenv('PHLIX_DOMAIN');
+            } else {
+                putenv('PHLIX_DOMAIN=' . $ambient);
+            }
+        }
+    }
+
+    /**
      * @param array<string, array{type?: string, required?: bool, secret?: bool, default?: mixed, label?: string}> $manifestSettings
      * @param array<string, mixed> $settings
      */

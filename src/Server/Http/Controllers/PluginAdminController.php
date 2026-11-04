@@ -20,6 +20,7 @@ use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Installer\SourceUrlResolver;
 use Phlix\Plugins\Manifest;
+use Phlix\Plugins\OAuth2\CallbackUrl;
 use Phlix\Plugins\PluginFieldHelp;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\SettingsMasker;
@@ -696,7 +697,8 @@ final class PluginAdminController
             // the secret value itself.
             'secret_status'   => SettingsMasker::secretStatus($plugin),
             // OAuth redirect URL for plugins that support it (scrobblers).
-            // Constructed from the request host so the URL is absolute.
+            // SRV-M15: null when no operator-allowlisted host exists — the
+            // panel hides the copy affordance rather than show a forged URL.
             'redirect_url'    => $this->buildOAuthRedirectUrl($plugin, $request),
         ];
     }
@@ -707,8 +709,17 @@ final class PluginAdminController
      * Scrobbler-type plugins use OAuth, so the redirect URL follows the
      * pattern `/api/v1/oauth/{plugin_name}/callback`.
      *
-     * @return string|null The absolute URL, or null if the plugin type
-     *                     does not support OAuth.
+     * SRV-M15 (review server__fedev): the URL is displayed to the admin as
+     * the value to register at the provider, and it used to be built from
+     * the RAW request Host with an unvalidated X-Forwarded-Proto — a spoofed
+     * header made the panel instruct the admin to register an attacker
+     * domain. It now goes through the estate {@see CallbackUrl} guard: the
+     * host is honored only when it matches the operator-allowlisted
+     * PHLIX_DOMAIN, otherwise NO URL is offered (null) instead of a forged
+     * one.
+     *
+     * @return string|null The absolute URL, or null when the plugin type does
+     *                     not support OAuth or no trusted host exists.
      */
     private function buildOAuthRedirectUrl(InstalledPlugin $plugin, Request $request): ?string
     {
@@ -718,14 +729,18 @@ final class PluginAdminController
             return null;
         }
 
-        $host = $request->getHeader('Host') ?? 'localhost';
-        $scheme = $request->getHeader('X-Forwarded-Proto') ?? 'https';
         $pluginName = strtolower($plugin->manifest->name);
 
         // Strip the phlix-plugin- prefix if present to get the OAuth route name
         $oauthName = preg_replace('/^phlix-plugin-/', '', $pluginName);
 
-        return sprintf('%s://%s/api/v1/oauth/%s/callback', $scheme, $host, $oauthName);
+        return CallbackUrl::resolve(
+            '',
+            $request->getHeader('Host'),
+            $request->getHeader('X-Forwarded-Proto'),
+            '/api/v1/oauth/' . $oauthName . '/callback',
+            CallbackUrl::configuredHost(),
+        );
     }
 
     /**

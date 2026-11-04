@@ -22,10 +22,36 @@ use PHPUnit\Framework\TestCase;
 final class LastfmControllerTest extends TestCase
 {
     /**
+     * SRV-M16/M15 test-hermeticity law (CallbackUrl class docblock): every
+     * test that depends on PHLIX_DOMAIN sets it here and the ambient value
+     * is restored in tearDown — the suite must pass with the env var set OR
+     * unset in the developer/CI shell.
+     */
+    private string|false $ambientDomain = false;
+
+    protected function setUp(): void
+    {
+        $this->ambientDomain = getenv('PHLIX_DOMAIN');
+        putenv('PHLIX_DOMAIN=phlix.test');
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->ambientDomain === false) {
+            putenv('PHLIX_DOMAIN');
+        } else {
+            putenv('PHLIX_DOMAIN=' . $this->ambientDomain);
+        }
+    }
+
+    /**
      * `GET /api/v1/oauth/lastfm` (apiAuthorize) when Last.fm is configured must
      * 302-redirect straight to the Last.fm auth URL, carrying the api_key and a
-     * `cb` that points at the NEW `/api/v1/oauth/lastfm/callback` derived from
-     * the request host (NOT the legacy operator callback_url).
+     * `cb` that points at the NEW `/api/v1/oauth/lastfm/callback` DERIVED FROM
+     * THE REQUEST HOST ONLY WHEN THE HOST MATCHES THE OPERATOR-ALLOWLISTED
+     * PHLIX_DOMAIN (SRV-M15 — the raw Host header is attacker-controlled;
+     * an un-allowlisted host refuses the flow, it is never interpolated).
+     * NOT the legacy operator callback_url.
      */
     public function testApiAuthorizeRedirectsToLastfmWhenConfigured(): void
     {
@@ -68,6 +94,126 @@ final class LastfmControllerTest extends TestCase
         $expectedCb = 'https://phlix.test/api/v1/oauth/lastfm/callback?state=' . $state;
         self::assertStringContainsString('cb=' . rawurlencode($expectedCb), $location);
         self::assertStringNotContainsString('admin%2Flastfm%2Fcallback', $location);
+    }
+
+    /**
+     * SRV-M15: with NO operator-allowlisted host (PHLIX_DOMAIN unset) the
+     * request Host is NOT trusted — the flow must refuse back to
+     * `?lastfm=not_configured`, seed ZERO state entries, and never emit a
+     * last.fm URL carrying an attacker-influenceable callback.
+     */
+    public function testApiAuthorizeRefusesWithoutAllowListedHost(): void
+    {
+        putenv('PHLIX_DOMAIN');
+
+        try {
+            [$controller, $store] = $this->usableController();
+
+            $request = new Request();
+            $request->userId = 'user-1';
+            $request->headers = ['HOST' => 'phlix.test', 'X-FORWARDED-PROTO' => 'https'];
+
+            $response = $controller->apiAuthorize($request, []);
+
+            self::assertSame(302, $response->statusCode);
+            self::assertSame(
+                '/app/admin/services?lastfm=not_configured',
+                $response->headers['Location'] ?? '',
+            );
+            self::assertCount(0, $store->entries);
+            self::assertStringNotContainsString('last.fm', (string) ($response->headers['Location'] ?? ''));
+        } finally {
+            putenv('PHLIX_DOMAIN=phlix.test');
+        }
+    }
+
+    /**
+     * SRV-M15: an attacker-controlled Host that does not match the
+     * operator-allowlisted PHLIX_DOMAIN is REFUSED — the raw header never
+     * reaches the OAuth `cb` parameter (Host-header trust → account-token
+     * exfiltration to an attacker domain was the shipped bypass).
+     */
+    public function testApiAuthorizeRefusesHostOutsideAllowList(): void
+    {
+        [$controller, $store] = $this->usableController();
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->headers = ['HOST' => 'evil.test', 'X-FORWARDED-PROTO' => 'https'];
+
+        $response = $controller->apiAuthorize($request, []);
+
+        self::assertSame(302, $response->statusCode);
+        self::assertSame(
+            '/app/admin/services?lastfm=not_configured',
+            $response->headers['Location'] ?? '',
+        );
+        self::assertCount(0, $store->entries);
+        self::assertStringNotContainsString('evil.test', (string) ($response->headers['Location'] ?? ''));
+    }
+
+    /**
+     * SRV-M15: an operator-configured ABSOLUTE callback that targets the API
+     * callback path is honored verbatim (resolve STEP 1) even with no
+     * PHLIX_DOMAIN — the config is operator input, not request input.
+     */
+    public function testApiAuthorizeHonorsConfiguredCallbackPointingAtApiPath(): void
+    {
+        putenv('PHLIX_DOMAIN');
+
+        try {
+            $config = LastfmConfig::fromArray([
+                'api_key'       => 'test-api-key',
+                'shared_secret' => 'test-shared-secret',
+                'enabled'       => true,
+                'callback_url'  => 'https://configured.test/api/v1/oauth/lastfm/callback',
+            ]);
+            $store = new InMemoryLastfmOAuthStateStore();
+            $controller = new LastfmController(
+                $config,
+                $this->createMock(LastfmSessionRepository::class),
+                $this->createMock(LastfmApi::class),
+                $store,
+            );
+
+            $request = new Request();
+            $request->userId = 'user-1';
+            $request->headers = ['HOST' => 'evil.test', 'X-FORWARDED-PROTO' => 'https'];
+
+            $response = $controller->apiAuthorize($request, []);
+
+            self::assertSame(302, $response->statusCode);
+            $location = (string) ($response->headers['Location'] ?? '');
+            self::assertStringContainsString('last.fm/api/auth', $location);
+            self::assertCount(1, $store->entries);
+            $state = (string) array_key_first($store->entries);
+            $expectedCb = 'https://configured.test/api/v1/oauth/lastfm/callback?state=' . $state;
+            self::assertStringContainsString('cb=' . rawurlencode($expectedCb), $location);
+            self::assertStringNotContainsString('evil.test', $location);
+        } finally {
+            putenv('PHLIX_DOMAIN=phlix.test');
+        }
+    }
+
+    /**
+     * @return array{0: LastfmController, 1: InMemoryLastfmOAuthStateStore}
+     */
+    private function usableController(): array
+    {
+        $config = LastfmConfig::fromArray([
+            'api_key'       => 'test-api-key',
+            'shared_secret' => 'test-shared-secret',
+            'enabled'       => true,
+        ]);
+        $store = new InMemoryLastfmOAuthStateStore();
+        $controller = new LastfmController(
+            $config,
+            $this->createMock(LastfmSessionRepository::class),
+            $this->createMock(LastfmApi::class),
+            $store,
+        );
+
+        return [$controller, $store];
     }
 
     /**

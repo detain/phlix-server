@@ -8703,6 +8703,36 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   - *Run B:* the dead server gapless/crossfade subsystem — `FfmpegRunner::buildGaplessSegmentCommand()`, `GaplessTranscoder`, `CrossfadeGenerator`, `GaplessPlayer`, and the now-orphaned members of `GaplessPlaybackManager` (`getPlayer()`, `getCrossfadeGenerator()`, `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()`, and later the caller-less `clearCache()`). Gapless/crossfade playback is implemented **100% client-side** in `@phlix/ui` (`useMusicPlayer.ts`), which superseded the reserved server path. `GaplessPlaybackManager` itself is kept — its live `getPreferences()` surface is still used by `MediaItemController`.
 ### Security
 
+- **OAuth callback URLs are no longer fabricated from a spoofable Host header
+  (SRV-M15, review server__fedev).**
+  `LastfmController::apiCallbackUrl()` built the Last.fm `cb` parameter from
+  the raw request `Host` plus an unvalidated `X-Forwarded-Proto`, with a
+  relative-path fallback when no host header arrived at all;
+  `PluginAdminController::buildOAuthRedirectUrl()` did the same (with a
+  `localhost` fallback) and handed the result to the admin panel as the URL
+  to register at the provider. A spoofed host therefore either poisoned the
+  OAuth handshake with an attacker-chosen callback origin or instructed the
+  operator to register one. Both sites now route through the estate
+  `Phlix\Plugins\OAuth2\CallbackUrl` guard used by the GitHub leg:
+  an explicitly configured absolute `callback_url` wins (and for Last.fm only
+  when it actually points at the API callback path — legacy
+  `/admin/lastfm/callback` values never ride the new flow), otherwise the host
+  is honored only when it matches the operator-allowlisted `PHLIX_DOMAIN`; no
+  match means no URL — Last.fm redirects to
+  `/app/admin/services?lastfm=not_configured` **before** any OAuth state is
+  minted, and the plugin detail endpoint serves `redirect_url: null` instead
+  of a forged absolute. No new wire error codes were added.
+  Pins: three new `LastfmControllerTest` refusals (no-allowlist fail-closed,
+  foreign-host refusal, configured-API-path precedence) plus a
+  `PHLIX_DOMAIN=phlix.test` setUp/tearDown hermeticity law on the suite —
+  measured RED at the pre-cure tree (12 tests, 3 failures, the wire diff
+  literally showed `cb=https%3A%2F%2Fevil.test%2F...`); two new
+  `PluginAdminControllerTest` detail-endpoint tests (the untrusted-host
+  refusal measured RED verbatim at parent, the allowlisted-host pin is
+  behavior-preserving green at parent — disclosed); the existing
+  configured-redirect pin keeps its assertions byte-identical under the new
+  derivation law.
+
 - **`must_change_password` is now an account hold — passkey and provider sign-in can no
   longer mint sessions around it (SRV-M18, review server__pm).**
   The flag was consulted only on the two password legs

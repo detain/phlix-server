@@ -222,4 +222,57 @@ class NewsletterGeneratorTest extends TestCase
         ]);
         $this->assertStringContainsString('TV Show (1 play)', $fromString);
     }
+
+    public function testSubjectInterpolatesTheAdvertisedDateTokens(): void
+    {
+        $this->db->method('query')->willReturn([]);
+
+        $generator = new NewsletterGenerator(
+            $this->stats,
+            $this->library,
+            $this->db,
+            $this->templateDir,
+            ['subject_template' => 'New this week ({$week_start} to {$week_end})']
+        );
+
+        $result = $generator->generateForUser('user-123', new DateTime('2024-01-01'));
+
+        // SRV-M11 red-at-parent: before the cure this subject shipped the
+        // literal '{$week_start} to {$week_end}' — the assign existed, the
+        // interpolation did not.
+        $this->assertSame('New this week (Jan 1, 2024 to Jan 8, 2024)', $result['subject']);
+    }
+
+    public function testSubjectWithoutTokensPassesThroughUnchanged(): void
+    {
+        $this->db->method('query')->willReturn([]);
+
+        $generator = new NewsletterGenerator(
+            $this->stats,
+            $this->library,
+            $this->db,
+            $this->templateDir
+        );
+
+        $result = $generator->generateForUser('user-123', new DateTime('2024-01-01'));
+
+        $this->assertSame('Your Phlix Weekly Watch Report', $result['subject']);
+    }
+
+    public function testNonStringSubjectTemplateFallsBackToTheDefault(): void
+    {
+        $this->db->method('query')->willReturn([]);
+
+        $generator = new NewsletterGenerator(
+            $this->stats,
+            $this->library,
+            $this->db,
+            $this->templateDir,
+            ['subject_template' => 42]
+        );
+
+        $result = $generator->generateForUser('user-123', new DateTime('2024-01-01'));
+
+        $this->assertSame('Your Phlix Weekly Watch Report', $result['subject']);
+    }
 }

@@ -29,6 +29,9 @@ use Workerman\MySQL\Connection;
  */
 class NewsletterGenerator
 {
+    /** Default subject line — the single source for config merge and SRV-M11 fallback. */
+    private const DEFAULT_SUBJECT = 'Your Phlix Weekly Watch Report';
+
     /** @var StatsCollector Statistics collector for watch data */
     private StatsCollector $stats;
 
@@ -67,7 +70,7 @@ class NewsletterGenerator
         $this->config = array_merge([
             'active_user_days' => 30,
             'top_media_limit' => 5,
-            'subject_template' => 'Your Phlix Weekly Watch Report',
+            'subject_template' => self::DEFAULT_SUBJECT,
             'from_email' => 'phlix@example.com',
             'from_name' => 'Phlix Media Server',
             'base_url' => '',
@@ -322,17 +325,38 @@ class NewsletterGenerator
     }
 
     /**
-     * Render the email subject line using Smarty.
+     * Render the email subject line.
      *
-     * @param Smarty $smarty Configured Smarty instance
+     * SRV-M11: this seam used to assign `week_start` to Smarty and return the
+     * config string verbatim — an admin who wrote `{$week_start}` (the only
+     * reason the assign existed) got the literal token in every recipient's
+     * subject line. The two advertised date tokens are now interpolated by
+     * plain substitution. Deliberately NOT Smarty `string:` evaluation: a
+     * deployment config string is not template code, and executing it would
+     * widen the trust boundary for no real gain.
+     *
+     * @param Smarty $smarty Configured Smarty instance (vars already assigned)
      *
      * @return string Rendered subject
      */
     private function renderSubject(Smarty $smarty): string
     {
-        $template = $this->config['subject_template'] ?? 'Your Phlix Weekly Watch Report';
-        $smarty->assign('week_start', $smarty->getTemplateVars('week_start'));
-        return is_string($template) ? $template : 'Your Phlix Weekly Watch Report';
+        $template = $this->config['subject_template'] ?? self::DEFAULT_SUBJECT;
+        if (!is_string($template)) {
+            return self::DEFAULT_SUBJECT;
+        }
+
+        $weekStart = $smarty->getTemplateVars('week_start');
+        $weekEnd = $smarty->getTemplateVars('week_end');
+
+        return str_replace(
+            ['{$week_start}', '{$week_end}'],
+            [
+                is_string($weekStart) ? $weekStart : '',
+                is_string($weekEnd) ? $weekEnd : '',
+            ],
+            $template
+        );
     }
 
     /**

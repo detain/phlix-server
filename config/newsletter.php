@@ -55,6 +55,9 @@ return [
     /**
      * Email subject template.
      *
+     * The tokens {$week_start} and {$week_end} are substituted with the
+     * report window dates (SRV-M11; NewsletterGenerator::renderSubject).
+     *
      * @var string
      */
     'subject_template' => 'Your Phlix Weekly Watch Report',

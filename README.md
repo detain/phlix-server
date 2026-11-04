@@ -1849,11 +1849,15 @@ Full operator + contributor docs live on the
 
 ### Git workflow
 
-1. Create a feature branch: `git checkout -b feature/my-feature`
-2. Make changes and commit: `git commit -am 'Add new feature'`
-3. Push to remote: `git push origin feature/my-feature`
-4. Create Pull Request on GitHub
-5. After review, merge via squash-merge
+Development happens **directly on `master`**: one logical change per commit
+with a `type(scope):` conventional subject (e.g. `fix(collections): …`),
+pushed to `master` where CI is the review backstop. There is no
+feature-branch/squash-merge ceremony in this repository's history; the
+older phase-plan flow that used one was retired to the external
+[phlix-docs](https://detain.github.io/phlix-docs) site. Fork-based
+contributors are the exception: they work on a branch in their fork and
+open a pull request, which a maintainer reviews and lands — see
+[Contributing](#contributing).
 
 ## Troubleshooting
 
@@ -1960,11 +1964,14 @@ If passwords are gone entirely, CLI recovery is the escape hatch
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch
-3. Ensure all tests pass (`./vendor/bin/phpunit`)
-4. Follow PSR-12 coding standards
-5. Submit a pull request
+1. Fork the repository and work on a branch in your fork
+2. Ensure all tests pass (`./vendor/bin/phpunit`)
+3. Follow PSR-12 coding standards
+4. Use `type(scope):` conventional commit subjects, one logical change per
+   commit
+5. Open a pull request against `master` — in-repo development commits
+   directly to `master` (see [Git workflow](#git-workflow)), so PR review
+   is how external changes land
 
 ## License
 

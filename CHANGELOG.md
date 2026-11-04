@@ -79,6 +79,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The contributor docs prescribed a git workflow the repo does not run.**
+  "Git workflow" taught feature-branch → PR → squash-merge and "Contributing"
+  told newcomers to submit pull requests, while 200+ commits of history are
+  all direct-to-master conventional commits with zero merge commits. Both
+  sections now state the real practice — maintainers commit straight to
+  `master` with `type(scope):` subjects; external contributions arrive as
+  PRs — with the two sections cross-linked. [review server__writer SRV-M7]
 - **The one credential the headline feature cannot work without was buried.**
   Every doc called the TMDB key "optional" (installer flag) or never mentioned
   it (quickstart step 3, the Docker "minimum" note), so a literal walker ended

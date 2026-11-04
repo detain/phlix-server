@@ -1426,6 +1426,18 @@ final class RelayConsumer
      * for this client's subsequent DATA frames; the JSON {client_id, session_id}
      * payload is observability only.
      *
+     * Fan-out bound (review server__asphp, INFO-SERVER-02): every fresh
+     * channel id opens one loopback connection and the COUNT of concurrent
+     * channels carries no local numeric cap — by design, the sole producer
+     * of these frames is the enrollment-JWT-authenticated hub on the
+     * established tunnel (class-header steps 2-3). Bytes are bounded in
+     * depth, not breadth: a channel's parked backlog fail-loud-closes it at
+     * {@see MAX_PENDING_LOCAL_BYTES} and the tunnel egress queue
+     * fail-loud-closes the tunnel at {@see MAX_TUNNEL_QUEUE_BYTES}. A hub
+     * bug leaking channel ids would surface here first as fd growth; a
+     * sanity cap (refuse-new + log) is available hardening, deliberately
+     * not added by a documentation-only pass.
+     *
      * @param RelayFrame $frame CLIENT_CONNECT frame; channel id in seq, payload {client_id, session_id}.
      *
      * @return void
@@ -2014,6 +2026,14 @@ final class RelayConsumer
 
     /**
      * Build a synthetic {@see ServerRequest} from a relayed request envelope.
+     *
+     * Client-IP posture (disclosed, pre-existing — unchanged by SRV-M16):
+     * the hub's edge legitimately stamps the real client's `X-Forwarded-For`
+     * on the proxied request, the forwarded strip below drops it, and every
+     * relayed request therefore keys this server's IP-based limiters to the
+     * single loopback bucket set at {@see self::RELAY_REMOTE_IP} below — real
+     * per-client limiting for relayed traffic lives hub-side; server-side
+     * bucketing on this path is per-relay by design.
      *
      * @param RelayHttpRequest $envelope Decoded request envelope.
      *

@@ -349,6 +349,18 @@ class WebSocketServer
      * `timeout` message immediately before its socket closes; the strict
      * greater-than idle boundary is unchanged.
      *
+     * Clock domain (review server__asphp, INFO-SERVER-01): both sides of the
+     * idle comparison are wall-clock — this sweep's time() versus the
+     * unix-second stamp Connection records on activity. The domain is part of
+     * the interface: ConnectionInterface::getLastActivity() is declared to
+     * return unix seconds. A backward NTP step longer than the idle threshold
+     * can therefore make live sockets look stale (they are reaped; clients
+     * reconnect, and the count-based ping sweep keeps liveness honest within
+     * ~(limit + 1) x interval seconds regardless of the clock); a forward step
+     * merely delays the reap. Moving the pair to hrtime(true) would remove the
+     * skew but relocate the unit contract, so the sensitivity is disclosed
+     * here rather than silently accepted or unilaterally changed.
+     *
      * @param int $maxIdleTime Maximum idle time in seconds (timer default: 300).
      * @return void
      */

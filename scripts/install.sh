@@ -128,7 +128,8 @@ Options:
   --db-host HOST          Database host                   (default: 127.0.0.1)
   --db-port PORT          Database port                   (default: 3306)
   --http-port PORT        HTTP listen port                (default: 8096)
-  --tmdb-api-key KEY      TMDB API key (metadata)         (optional)
+  --tmdb-api-key KEY      TMDB API key (metadata)   (optional for the
+                          installer, required for provider metadata)
   --hub-url URL           PHLIX_HUB_URL for hub relay     (optional)
   --service-user USER     System user to run as           (default: phlix)
   --branch NAME           Git branch / tag to install     (default: master)

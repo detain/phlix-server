@@ -24,7 +24,7 @@ use Smarty;
  * COMMITTED template directly so the grammar law is pinned at the shipped
  * bytes, not at a mocked pipeline.
  *
- * Review server__copywriter SRV-M6 rides the same harness: poster_url is
+ * Review server__secaudit SRV-M6 rides the same harness: poster_url is
  * metadata_json content (a TMDB-supplied string the admin library can
  * influence) interpolated into a quoted src attribute — the template must
  * html-escape it, exactly as it already escapes the alt/name slots.

@@ -137,7 +137,13 @@ House discipline this file maintains (established by review W-min90/91/92):
   handlers into every recipient's client. The slot now carries the same
   `|escape:'html'` the name/alt slots already used; `NewsletterGrammarTruthTest`
   pins both the escaped-payload and well-formed-passthrough arms.
-  [review server__copywriter SRV-M6]
+  [review server__secaudit SRV-M6]
+  (Provenance corrected forward at review: SRV-M6 is server__secaudit's
+  poster_url finding per FIX-QUEUE.md — server__copywriter carries no
+  poster/escape finding anywhere. The cure commit's subject is history and
+  stands as-landed; this entry's stamp and the `NewsletterGrammarTruthTest`
+  docblock were the misattributed editable surfaces and now read
+  server__secaudit.)
 - **The newsletter HTML leg mailed "1 new items added to the library this
   week".** The plain-text leg carries the 0/1 grammar guard (and the HTML
   play-count line always did — "1 play"); the new-items label was the one

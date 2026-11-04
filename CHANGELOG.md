@@ -79,6 +79,10 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Double period at the end of a README sentence.** The Library-management
+  bullet closed with two periods after the phlix-docs server-settings link
+  (`..` where house typography wants `.`); the links and the sentence are
+  otherwise untouched. [review server__writer]
 - **The containment test's docblock claimed an estate-wide scope the review
   never established.** `SyncPlayDispatchErrorContainmentTest` called the
   SRV-M21 catch "the estate's last raw-leak arm" — server__secnet's finding

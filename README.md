@@ -161,7 +161,7 @@ Every environment variable the server process reads is inventoried in the defini
   duplicates. Metadata source order is configurable per media type via the
   `metadata.provider_priority` setting. See
   [phlix-docs / admin / library-management](https://detain.github.io/phlix-docs/admin/library-management)
-  and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings)..
+  and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
 
 ### Web portal
 - **Web portal (`/app`) — the only web UI**: The web portal is the shared `@phlix/ui` Vue SPA, served

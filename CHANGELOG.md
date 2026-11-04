@@ -96,6 +96,42 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Wave 5: `@phlix/ui` v0.99.16 re-pinned, and the served `/app`
+  bundle regenerated.** [wave-5 cascade]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.15 →
+    v0.99.16 (tag object `743a4b38`, peel `4d89b3a7` == master,
+    ls-remote-verified). The lock diff, cut with the CI-exact toolchain
+    (node 24.20.0, bundled npm 11.19.0, userconfig nulled), is minimal 7+/7−:
+    root echo, the ui node's version/resolved/integrity, and the contracts
+    edge the new tag declares — `#v0.5.5` → `#v0.5.6`; syncplay stays
+    `0.1.7@1a80b1d1…` (ui v0.99.16 did not move it). The hoisted contracts
+    node needed the same TARGETED ADVANCE as the v0.99.15-era syncplay
+    precedent: `npm install --package-lock-only` rotated the declared edge
+    but left the stale `0.5.5@e2159816…` node line standing (S450-class npm
+    behaviour); the corrected lock is idempotent under a fresh npm run, and
+    a from-scratch `npm ci` after wiping `node_modules` installs bytes
+    diff-identical to the v0.5.6 tag's `dist/` — trio md5s `5d1783a7…` /
+    `90b79e35…` / `8c92c070…` match the release register (error-codes and
+    mcp-scopes HELD, route-manifest moved with regen #36; zero
+    ErrorCode-union blast radius). Installed `@phlix/ui` matches the
+    v0.99.16 payload 1:1 (1687 files both sides; `dist/` diff -r exit 0 —
+    the only tree delta is npm's pack-time `.gitignore`→`.npmignore`
+    rename): `phlix-ui.js a43ff080…`, `player.js 372d2c51…` equal the
+    register's consumer-target figures. web-ui `node --test`: 33/33.
+  - *Served bundle.* `public/assets/app/` regenerated from the new lock
+    with the same CI-pinned toolchain (output dir wiped by the config's
+    `emptyOutDir`), built twice, both runs aggregating to md5
+    `92d30c6c36272e3d524c16379ae0fc03` under the printed recipe
+    `find public/assets/app -type f | sort | xargs md5sum | md5sum`.
+    The 200-file set holds; the bundle's ui version stamp now reads
+    0.99.16 (grepped from the built tree; zero `0.99.15` remnants). The
+    README "UI truth at this tip" line flips to v0.99.16 alongside. The
+    bundle-aware PHP cohort (`WebUiBundleGateTest`, `ViteAssetsMemoTest`,
+    `SharedUiControllerCspNonceTest`, `HttpHandlerServeStaticTest`,
+    `PublicFrontControllerRemovalGuardTest`, `NginxAssetLocationTest`) runs
+    42/365 green against the regenerated tree — zero era pins moved,
+    nothing rotated from red.
+
 - **Endgame gate 2: `@phlix/ui` v0.99.15 re-pinned, and the served `/app`
   bundle regenerated.** [endgame gate2]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.14 →

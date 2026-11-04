@@ -1434,7 +1434,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // PasswordChangeRequiredHttpBoundaryTest — sanctioned harness-seed sites;
     // zero src/ writes added. Measured from the phpunit red (1164) in a clean
     // tip worktree plus this diff, not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1164;
+    // +6 1164→1170 by the SRV-M18 RW2 cure (this commit): the two new legs in
+    // HubTokenControllerTest (resolved-key consult pin, unlinked never-
+    // consults-users pin) each seed $request->method + $request->path +
+    // $request->body — sanctioned harness-seed sites; zero src/ writes added.
+    // Measured from the phpunit red (1170), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1170;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

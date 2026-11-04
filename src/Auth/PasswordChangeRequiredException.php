@@ -29,7 +29,9 @@ use RuntimeException;
  * browser callbacks mint only via their own `createTokensForUser()` after
  * the guard has passed (a held account is answered a
  * `?error=password_change_required` redirect with zero cookies); and the
- * hub-token exchange calls the guard before its single-token mint. The
+ * hub-token exchange calls the guard — keyed on the LOCAL account the hub
+ * principal RESOLVES to via the `RelayIdentityResolver` link, never on the
+ * raw hub-side claim (SRV-M18 RW2) — before its single-token mint. The
  * OPDS HTTP-Basic surface consults the same flag (no token mints there;
  * {@see AuthManager::verifyCredentials()} answers the hold a silent null).
  * With every minter gated there is no route that can mint a session around

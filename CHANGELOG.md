@@ -100,6 +100,38 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The hub-token hold-guard now keys the RESOLVED server identity — the
+  round-1 cure was vacuous in production and this eliminates it (review
+  server__pm, SRV-M18 RW2).** `1da9f7b1` placed the shared `refuseIfHeld()`
+  guard correctly but keyed it on `$claims->userId` — the HUB-side UUID. The
+  `must_change_password` flag lives on this server's own `users.id` rows, a
+  key space hub UUIDs can never enter (`UserRepository` generates local
+  ids; the hub↔server mapping is `user_identities`, which is exactly why
+  `RelayIdentityResolver`/`AccountLinkController` exist), so the lookup
+  always missed, the flag read false, and a HELD LINKED account still
+  received its `server_session_token`. The shipped pin hid this by mocking
+  the answer-true for the foreign key. Now: the exchange first resolves
+  hub principal → local account through the same single-source
+  `RelayIdentityResolver` the relay path uses, and the guard consults the
+  RESOLVED id. UNLINKED hub principals are an explicitly ratified
+  refuse-open arm: no local row means no hold subject at all — the resolver
+  lineage's own S301 law rules the no-row state "the honest state, not a
+  hole", refusing would enforce an unrated linkage policy needing a frozen
+  wire code, and the minted token's hub-UUID subject is inert against every
+  wired gate's users-row liveness law (linking itself requires a
+  server-authenticated session a held account cannot obtain). The
+  mint's wire shape is untouched — subject, claims and responses are
+  byte-identical; only the guard's key moved. The fixtures now separate the
+  id spaces for real (distinct hub/server UUIDs, the flag row answerable
+  only under the server id through a recording `UserRepository` connection),
+  so stripping the resolution leg reddens the held leg, the consulted-key
+  leg, and the unlinked never-consults-users leg. The OAuth callback legs
+  were re-confirmed to key the LOCAL `findOrCreateByExternalId` id (unchanged).
+  Collateral [Minor]: the blank separator `1da9f7b1`'s rebase scar deleted
+  between two pre-existing entries (ipd architecture-tree / collection-route
+  cites) is restored — history whitespace was collision damage, not a
+  rewrite, and append-only means the separator too.
+
 - **Guarded egress refuses redirects — the notification family's SSRF law now
   reaches hop two (review server__secaudit U1, against the entry below).**
   The plugin send sites' HTTP contexts omitted `follow_location`, so PHP's
@@ -329,6 +361,7 @@ House discipline this file maintains (established by review W-min90/91/92):
   detail is exactly what rotted before. The empty `.gitkeep` placeholder
   `src/Session/Playback/` stays unlisted: the map documents territory, not
   intentions. [review server__ipd]
+
 - **README collection-route cites re-anchored to the shipped lines —
   `CollectionRoutesReadmeCitesTest` was RED (all 9 datasets) at master.**
   `8bb435cf` recorded the SRV-M2 cite-table rotation in its message, but its

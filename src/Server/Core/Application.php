@@ -3597,6 +3597,19 @@ class Application
     private function getHubTokenController(): \Phlix\Server\Http\Controllers\HubTokenController
     {
         if ($this->container === null) {
+            // SRV-M18 RW2 (review server__pm round-2 Major): the hold guard
+            // keys the RESOLVED local identity, so even the legacy
+            // no-container helper needs the link resolver — same
+            // dummy-connection shape, and the identities repository shares
+            // the ONE connection the repo gets (two connections to the same
+            // dummy DSN would not be the same session).
+            $connection = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
             return new \Phlix\Server\Http\Controllers\HubTokenController(
                 new \Phlix\Hub\HubJwtValidator(
                     'https://hub.example.com/.well-known/jwks.json',
@@ -3606,15 +3619,11 @@ class Application
                 ),
                 new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
                 // SRV-M18 rework: the mint consults the account-hold flag, so
-                // even the legacy no-container helper needs the repo — same
-                // dummy-connection shape as getAuthController()'s fallback.
-                new \Phlix\Auth\UserRepository(new \Phlix\Common\Database\PhlixMySQLConnection(
-                    '127.0.0.1',
-                    3306,
-                    'phlix',
-                    'root',
-                    'password'
-                )),
+                // even the legacy no-container helper needs the repo.
+                new \Phlix\Auth\UserRepository($connection),
+                new \Phlix\Hub\RelayIdentityResolver(
+                    new \Phlix\Auth\UserIdentityRepository($connection)
+                ),
             );
         }
 

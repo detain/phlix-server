@@ -7,14 +7,32 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\PasswordChangeRequiredException;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Hub\HubUserClaims;
+use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Server\Http\Controllers\HubTokenController;
 use Phlix\Server\Http\Request;
+use Workerman\MySQL\Connection;
 
+/**
+ * SRV-M18 RW2 (review server__pm round-2 Major): the hold guard keys the
+ * RESOLVED local identity. Every fixture here honors the estate's real
+ * id-space separation — HUB_UUID and SERVER_UUID are DISTINCT values, and
+ * the must_change_password row lives under the SERVER id ONLY — so no mock
+ * can answer "held" for the foreign hub key the way the original vacuous
+ * pin did. Stripping the resolution leg (handing the guard the raw claim)
+ * reddens the held leg, the consulted-key leg, and the unlinked leg.
+ */
 class HubTokenControllerTest extends TestCase
 {
+    /** The hub-side principal: the value in the verified claims. */
+    private const HUB_UUID = '7b7b7b7b-7777-4777-8777-777777777777';
+
+    /** The server-side account id: only ever present in user_identities/users. */
+    private const SERVER_UUID = '5a5a5a5a-5555-4555-8555-555555555555';
+
     private JwtHandler $jwtHandler;
     private string $jwtSecret = 'test-secret-key-for-jwt-at-least-32-bytes';
 
@@ -25,18 +43,14 @@ class HubTokenControllerTest extends TestCase
 
     public function test_handle_with_valid_hub_token_returns_server_session_token(): void
     {
-        $validator = $this->createMock(HubJwtValidatorInterface::class);
-        $validator->method('validate')->willReturn(new HubUserClaims(
-            userId: 'hub-user-123',
-            serverId: 'server-456',
-            subject: 'hub-user-123',
-            issuer: 'phlix-hub',
-            expiresAt: time() + 3600,
-            scope: ['media:read'],
-            token: 'test-opaque-token-from-hub',
-        ));
+        $validator = $this->validatorReturningClaims();
 
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(self::SERVER_UUID),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -59,24 +73,25 @@ class HubTokenControllerTest extends TestCase
         $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
 
         $this->assertEquals('test-opaque-token-from-hub', $payload['opaque_token'] ?? null);
-        $this->assertEquals('hub-user-123', $payload['hub_user_id']);
+        $this->assertEquals(self::HUB_UUID, $payload['hub_user_id']);
         $this->assertEquals('server-456', $payload['server_id']);
+
+        // RW2 wire-invariance pin: the cure moved the GUARD's key, never the
+        // token's identity — the subject stays the hub-side UUID exactly as
+        // the endpoint shipped before (and after) this fix.
+        $this->assertSame(self::HUB_UUID, $payload['sub']);
     }
 
     public function test_handle_with_hub_token_lacking_token_claim_still_succeeds(): void
     {
-        $validator = $this->createMock(HubJwtValidatorInterface::class);
-        $validator->method('validate')->willReturn(new HubUserClaims(
-            userId: 'hub-user-123',
-            serverId: 'server-456',
-            subject: 'hub-user-123',
-            issuer: 'phlix-hub',
-            expiresAt: time() + 3600,
-            scope: ['media:read'],
-            token: '', // No token claim
-        ));
+        $validator = $this->validatorReturningClaims(token: '');
 
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(self::SERVER_UUID),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -102,7 +117,12 @@ class HubTokenControllerTest extends TestCase
 
     public function test_handle_with_null_validator_returns_503(): void
     {
-        $controller = new HubTokenController(null, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            null,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(null),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -120,9 +140,12 @@ class HubTokenControllerTest extends TestCase
 
     public function test_handle_without_hub_token_returns_400(): void
     {
-        $validator = $this->createMock(HubJwtValidatorInterface::class);
-
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $this->createMock(HubJwtValidatorInterface::class),
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(null),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -143,7 +166,12 @@ class HubTokenControllerTest extends TestCase
         $validator = $this->createMock(HubJwtValidatorInterface::class);
         $validator->method('validate')->willReturn(null);
 
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(null),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -164,7 +192,12 @@ class HubTokenControllerTest extends TestCase
         $validator = $this->createMock(HubJwtValidatorInterface::class);
         $validator->method('validate')->willReturn(null); // null = invalid/expired
 
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(null),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -180,18 +213,18 @@ class HubTokenControllerTest extends TestCase
     {
         $opaqueTokenValue = 'invite-redemption-token-abc123';
 
-        $validator = $this->createMock(HubJwtValidatorInterface::class);
-        $validator->method('validate')->willReturn(new HubUserClaims(
-            userId: 'hub-user-789',
-            serverId: 'server-999',
-            subject: 'hub-user-789',
-            issuer: 'phlix-hub',
-            expiresAt: time() + 3600,
-            scope: [],
-            token: $opaqueTokenValue,
-        ));
+        $validator = $this->validatorReturningClaims(
+            self::HUB_UUID,
+            'server-999',
+            $opaqueTokenValue,
+        );
 
-        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $this->unheldRepo(),
+            $this->resolverMapping(self::SERVER_UUID),
+        );
 
         $request = new Request();
         $request->method = 'POST';
@@ -215,9 +248,178 @@ class HubTokenControllerTest extends TestCase
     }
 
     /**
+     * SRV-M18 REWORK leg (review server__pm Major "third ungated minter"),
+     * RW2-recut (review round-2 Major "the mock could answer true for a
+     * foreign key"): a held server account must NOT receive a server bearer
+     * token from the hub exchange. The flag now lives where it really lives —
+     * the users row under the SERVER id — and only the resolution leg can
+     * reach it. Red at 1da9f7b1 (the parent): there the guard keys the raw
+     * hub claim, the recorder answers "no such row" exactly like a real
+     * database must, and the held account is minted its token.
+     */
+    public function test_handle_held_account_is_refused_before_any_mint(): void
+    {
+        $validator = $this->validatorReturningClaims(token: '');
+
+        $usersQueries = [];
+        $repo = $this->recordingRepo($usersQueries, held: true);
+
+        $jwtSpy = $this->createMock(JwtHandler::class);
+        $jwtSpy->expects($this->never())->method('createAccessToken');
+
+        $controller = new HubTokenController(
+            $validator,
+            $jwtSpy,
+            $repo,
+            $this->resolverMapping(self::SERVER_UUID),
+        );
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/hub-token';
+        $request->body = ['hub_token' => 'valid-hub-jwt-token'];
+
+        $this->expectException(PasswordChangeRequiredException::class);
+        try {
+            $controller->handle($request, []);
+        } finally {
+            // The resolution pin (recorder idiom): the users table was
+            // consulted EXACTLY ONCE, bound under the resolved SERVER id —
+            // the hub UUID never enters a users query. Strip the resolver leg
+            // and this binding is the foreign key the row cannot answer for.
+            $this->assertCount(1, $usersQueries, 'the hold check must run exactly once');
+            [$sql, $params] = $usersQueries[0];
+            $this->assertStringContainsString('must_change_password FROM users', $sql);
+            $this->assertSame([self::SERVER_UUID], $params);
+        }
+    }
+
+    /**
+     * RW2 per-leg resolution pin (the review's Info note "future rotation
+     * could pin per-leg resolution calls so a wrong-keyed guard reddens"):
+     * the identity lookup runs with the hub provider family keyed on the
+     * verified claim, and the flag consult runs ONLY under the id it
+     * resolved. An unheld linked account still receives its token.
+     */
+    public function test_the_guard_consults_users_only_under_the_resolved_server_id(): void
+    {
+        $validator = $this->validatorReturningClaims();
+
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->expects($this->once())
+            ->method('findByProviderExternalId')
+            ->with('hub', '', self::HUB_UUID)
+            ->willReturn(['user_id' => self::SERVER_UUID]);
+
+        $repo = $this->createMock(UserRepository::class);
+        // ->with(SERVER_UUID): a guard re-keyed to the raw hub claim violates
+        // this parameter expectation at call time — the exact vacuity class.
+        $repo->expects($this->once())
+            ->method('mustChangePassword')
+            ->with(self::SERVER_UUID)
+            ->willReturn(false);
+
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $repo,
+            new RelayIdentityResolver($identities),
+        );
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/hub-token';
+        $request->body = ['hub_token' => 'valid-hub-jwt-token'];
+
+        $response = $controller->handle($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
+    }
+
+    /**
+     * RW2 UNLINKED-SEMANTICS PIN: a hub principal with no user_identities
+     * row is the ratified REFUSE-OPEN arm (the controller docblock rules it,
+     * mirroring RelayIdentityResolver's S301 "no row → honest pass-through,
+     * not a hole" law). Two teeth: the exchange still mints (no new wire
+     * shape was invented), and the users table is NEVER consulted — the hub
+     * UUID cannot reach a users query even as a vacuous miss, which is what
+     * the round-1 guard did wrong.
+     */
+    public function test_an_unlinked_hub_principal_mints_without_users_consultation(): void
+    {
+        $validator = $this->validatorReturningClaims(token: '');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->never())->method('mustChangePassword');
+
+        $controller = new HubTokenController(
+            $validator,
+            $this->jwtHandler,
+            $repo,
+            $this->resolverMapping(null),
+        );
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/hub-token';
+        $request->body = ['hub_token' => 'valid-hub-jwt-token'];
+
+        $response = $controller->handle($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
+
+        /** @var array{server_session_token: string} $body */
+        $body = json_decode($response->body, true);
+        $tokenParts = explode('.', $body['server_session_token']);
+        /** @var array<array-key, mixed> $payload */
+        $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
+
+        // The token's subject is the hub UUID — inert against every wired
+        // gate's users-row liveness law until a link row exists.
+        $this->assertSame(self::HUB_UUID, $payload['sub']);
+    }
+
+    /**
+     * A validator double answering with the given verified claims.
+     */
+    private function validatorReturningClaims(
+        ?string $userId = null,
+        string $serverId = 'server-456',
+        string $token = 'test-opaque-token-from-hub',
+    ): HubJwtValidatorInterface {
+        $validator = $this->createMock(HubJwtValidatorInterface::class);
+        $validator->method('validate')->willReturn(new HubUserClaims(
+            userId: $userId ?? self::HUB_UUID,
+            serverId: $serverId,
+            subject: $userId ?? self::HUB_UUID,
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+            scope: ['media:read'],
+            token: $token,
+        ));
+
+        return $validator;
+    }
+
+    /**
+     * A REAL RelayIdentityResolver over a mocked identities store — the
+     * production mapping, not a re-stub of it: $serverUserId null models the
+     * unmapped principal exactly like a missing user_identities row.
+     */
+    private function resolverMapping(?string $serverUserId): RelayIdentityResolver
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')
+            ->with('hub', '', self::HUB_UUID)
+            ->willReturn($serverUserId === null ? null : ['user_id' => $serverUserId]);
+
+        return new RelayIdentityResolver($identities);
+    }
+
+    /**
      * A UserRepository double answering the SRV-M18 hold check "not held" —
-     * the shape every pre-rework success leg now has to state explicitly,
-     * because the mint consults the flag.
+     * the shape every success leg has to state explicitly, because a linked
+     * mint consults the flag.
      */
     private function unheldRepo(): UserRepository
     {
@@ -228,46 +430,34 @@ class HubTokenControllerTest extends TestCase
     }
 
     /**
-     * SRV-M18 REWORK leg (review server__pm Major "third ungated minter"):
-     * a server account carrying the must-change-password hold must NOT
-     * receive a server bearer token from the hub exchange, whatever
-     * freshness the hub-side JWT follows. The refusal is the typed
-     * exception bubbling toward the router's central 500 (the documented
-     * SRV-M17 interim shape — same as the passkey/quick-connect legs); the
-     * mint never runs.
+     * A REAL UserRepository over a recording connection double — the SQL-shape
+     * idiom. The must_change_password row exists under SERVER_UUID ONLY, the
+     * way the id spaces really separate; any other binding answers "no row"
+     * (UserRow::int default 0 → false), so the flag is unreachable without the
+     * resolver leg. Every users-table call is recorded as [sql, params].
      *
-     * This test goes RED at 3e3e47a8 (the parent): there the exchange mints
-     * a 200 with a real token for the held account.
+     * @param list<array{0: string, 1: list<string>}> $usersQueries
      */
-    public function test_handle_held_account_is_refused_before_any_mint(): void
+    private function recordingRepo(array &$usersQueries, bool $held): UserRepository
     {
-        $validator = $this->createMock(HubJwtValidatorInterface::class);
-        $validator->method('validate')->willReturn(new HubUserClaims(
-            userId: 'hub-user-held',
-            serverId: 'server-456',
-            subject: 'hub-user-held',
-            issuer: 'phlix-hub',
-            expiresAt: time() + 3600,
-            scope: [],
-            token: '',
-        ));
+        $connection = $this->createMock(Connection::class);
+        $connection->method('query')->willReturnCallback(
+            /**
+             * @param array<int, string>|null $params
+             */
+            static function (string $sql, $params = null, $fetchMode = null) use (&$usersQueries, $held) {
+                $bound = is_array($params) ? array_values(array_map('strval', $params)) : [];
+                $usersQueries[] = [$sql, $bound];
+                if (str_contains($sql, 'must_change_password')) {
+                    return $held && $bound === [self::SERVER_UUID]
+                        ? [['must_change_password' => 1]]
+                        : [];
+                }
 
-        $repo = $this->createMock(UserRepository::class);
-        $repo->method('mustChangePassword')
-            ->with('hub-user-held')
-            ->willReturn(true);
+                return [];
+            }
+        );
 
-        $jwtSpy = $this->createMock(JwtHandler::class);
-        $jwtSpy->expects($this->never())->method('createAccessToken');
-
-        $controller = new HubTokenController($validator, $jwtSpy, $repo);
-
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/api/v1/auth/hub-token';
-        $request->body = ['hub_token' => 'valid-hub-jwt-token'];
-
-        $this->expectException(PasswordChangeRequiredException::class);
-        $controller->handle($request, []);
+        return new UserRepository($connection);
     }
 }

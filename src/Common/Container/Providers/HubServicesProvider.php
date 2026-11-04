@@ -30,6 +30,7 @@ use Phlix\Hub\JwksCache;
 use Phlix\Hub\RelayApplication;
 use Phlix\Hub\RelayConfig;
 use Phlix\Hub\RelayConsumer;
+use Phlix\Hub\RelayIdentityResolver;
 use Phlix\Hub\RelayMessageFramer;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Controllers\HubJwksController;
@@ -177,13 +178,19 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             // SRV-M18 rework (review server__pm): the mint performs the shared
             // account-hold guard, so the exchange is bound to the flag's sole
-            // source of truth. Explicit like the siblings above — the autowire
-            // of a required param would also resolve, but an explicit binding
-            // is the pin-able shape this provider documents.
+            // source of truth. SRV-M18 RW2 (review round 2): the guard keys
+            // the RESOLVED local identity, so the exchange is also bound to
+            // the hub-principal → server-user link resolver — the same
+            // RelayIdentityResolver (user_identities 'hub' family) the relay
+            // path resolves against, never a parallel lookup. Explicit like
+            // the siblings above — the autowire of a required param would
+            // also resolve, but an explicit binding is the pin-able shape
+            // this provider documents.
             HubTokenController::class => autowire()
                 ->constructorParameter('validator', get(HubJwtValidator::class))
                 ->constructorParameter('jwtHandler', get(JwtHandler::class))
-                ->constructorParameter('userRepository', get(UserRepository::class)),
+                ->constructorParameter('userRepository', get(UserRepository::class))
+                ->constructorParameter('identityResolver', get(RelayIdentityResolver::class)),
 
             // L-5 (security hygiene, dead-code deletion à la src/Plugin/ @b0007060):
             // HubJwtMiddleware was autowired here but attached to NO route on any

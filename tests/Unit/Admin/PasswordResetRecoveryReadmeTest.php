@@ -50,6 +50,12 @@ use ReflectionMethod;
  * and pinned OUT) and closed the r5 MINOR-2 hole: the anti-fiction loop
  * scans the flattened source, so line-wrapped fiction re-entries bite.
  *
+ * SRV-M18 (review server__pm) closed the passkey/provider bypass the r4
+ * pins disclosed: the flag is now an ACCOUNT HOLD on every token-minting
+ * path. The row-scope pin, the classifier's leg buckets and the entry-point
+ * messages below rotated to the gated truth (measured red at the cure);
+ * the historical r1-r4 paragraphs above stay verbatim.
+ *
  * @package Phlix\Tests\Unit\Admin
  */
 final class PasswordResetRecoveryReadmeTest extends TestCase
@@ -117,15 +123,27 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         // must name what the latch actually gates plus the bypass, so the
         // blanket sentence cannot silently re-enter via a table-row rewrite.
         $flatRow = self::flatten((string) $row);
+        // SRV-M18 rotation (measured red at the cure — moved-golden
+        // disclosure): the pre-cure row disclosed the bypass ("cannot sign
+        // in with its password ... passkey and provider sign-in do not
+        // consult the flag"). The flag is now an ACCOUNT HOLD — every
+        // token-minting path refuses — so the row's load-bearing sentence
+        // is the hold-scope one, and the retired bypass sentence is
+        // pinned OUT against silent re-entry.
         $this->assertStringContainsString(
-            'cannot sign in with its password',
+            'no route mints a new session',
             $flatRow,
-            'the endpoint row must scope the sign-in refusal to the password path (passkey/provider bypass it)'
+            'the endpoint row must state the account-hold scope (SRV-M18): every token-minting path refuses'
         );
         $this->assertStringContainsString(
             'passkey',
             $flatRow,
-            'the endpoint row must disclose that passkey sign-in does not consult the flag'
+            'the endpoint row must name the passkey leg covered by the hold'
+        );
+        $this->assertStringNotContainsString(
+            'do not consult the flag',
+            $flatRow,
+            'the retired passkey/provider bypass disclosure must not re-enter the endpoint row'
         );
 
         $classDoc = (string) (new ReflectionClass(AdminUserController::class))->getDocComment();
@@ -215,6 +233,17 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
      * also carry the passkey/provider non-consultation disclosure — the
      * security-relevant survivor of r1 MAJOR-1 (WebAuthn ships default-enabled
      * in config/auth.php and provider login never consults the latch).
+     *
+     * SRV-M18 rotation (measured red at the cure; moved-golden disclosure):
+     * the bypass is closed — provider sign-in refuses on the typed exception
+     * (fail-closed 503 at its controller arm) and the passkey mint refuses at
+     * the AuthManager::buildAuthResponse() seam — so the classifier now runs
+     * THREE ordered leg buckets (refresh → provider → password login: the
+     * provider sentence names loginWithProvider, whose 'login' prefix the
+     * old flat 'login' check misrouted into the password-leg bucket), and
+     * every prior pin's presence (exception+500 on the password leg, 401 +
+     * no exception on the refresh leg, the entry-point names somewhere in the
+     * paragraph) is KEPT, re-scoped to the gated truth.
      */
     public function testRefusalStoryTellsShippedTruthNotTheUnshippedWireCode(): void
     {
@@ -254,6 +283,7 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         $sentences = preg_split('/(?<=\.)\s+/', $flat) ?: [];
 
         $refreshSentences = [];
+        $providerSentences = [];
         $loginSentences = [];
         foreach ($sentences as $sentence) {
             if (strpos($sentence, 'refus') === false) {
@@ -261,14 +291,25 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
             }
             if (stripos($sentence, 'refresh') !== false) {
                 $refreshSentences[] = $sentence;
-            }
-            if (stripos($sentence, 'login') !== false) {
+            } elseif (stripos($sentence, 'provider') !== false) {
+                // SRV-M18 rotation: the provider leg is checked BEFORE the
+                // password-login leg — its sentence names
+                // AuthManager::loginWithProvider, whose leading 'login'
+                // must not route it into the password-leg bucket (the
+                // pre-cure two-bucket classifier had no such sentence and
+                // the naive 'login' check convicts the truth).
+                $providerSentences[] = $sentence;
+            } elseif (stripos($sentence, 'password login') !== false) {
                 $loginSentences[] = $sentence;
             }
         }
 
         $this->assertNotEmpty($loginSentences, 'the recovery story must keep the login-leg refusal sentence');
         $this->assertNotEmpty($refreshSentences, 'the recovery story must keep the refresh-leg refusal sentence');
+        $this->assertNotEmpty(
+            $providerSentences,
+            'the recovery story must keep the provider-leg refusal sentence (SRV-M18)'
+        );
         foreach ($loginSentences as $sentence) {
             $this->assertStringContainsString(
                 $exception,
@@ -279,6 +320,19 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
                 '500',
                 $sentence,
                 "the login-leg refusal sentence must state the unmapped-exception 500: '{$sentence}'"
+            );
+        }
+        foreach ($providerSentences as $sentence) {
+            $this->assertStringContainsString(
+                $exception,
+                $sentence,
+                "the provider-leg refusal sentence must name {$exception}: '{$sentence}'"
+            );
+            $this->assertStringContainsString(
+                '503',
+                $sentence,
+                'the provider-leg refusal sentence must state the fail-closed '
+                . "503 its controller arm answers: '{$sentence}'"
             );
         }
         foreach ($refreshSentences as $sentence) {
@@ -302,16 +356,20 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
             'the recovery story must name the exception the refresh leg really throws'
         );
 
-        $this->assertStringContainsString('passkey', $flat, 'the recovery story must disclose the passkey bypass');
+        $this->assertStringContainsString(
+            'passkey',
+            $flat,
+            'the recovery story must cover the passkey leg (SRV-M18: gated at the mint seam)'
+        );
         $this->assertStringContainsString(
             'WebAuthnController',
             $flat,
-            'the recovery story must name the ungated passkey entry point'
+            'the recovery story must name the passkey entry point the seam now guards'
         );
         $this->assertStringContainsString(
             'loginWithProvider',
             $flat,
-            'the recovery story must name the ungated provider entry point'
+            'the recovery story must name the provider entry point the hold now gates'
         );
     }
 

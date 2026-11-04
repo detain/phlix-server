@@ -1355,6 +1355,24 @@ class AuthManager
             }
         }
 
+        // SRV-M18 (review server__pm): the account hold blocks provider
+        // sign-in too — BEFORE any success bookkeeping, mirroring the
+        // password login leg's audit + typed throw. `AuthController::
+        // ldapLogin()` answers its RuntimeException arm (503, fail closed,
+        // no session); the distinct 403 envelope is the SRV-M17 mapping,
+        // not this lane. `buildAuthResponse()` gates again at the mint seam
+        // — this earlier check exists so a held account never gets
+        // `updateLastLogin`, a success `logLogin` audit, activity or a
+        // UserLoggedIn dispatch it earned by a session that will not exist.
+        if ($this->userRepository->mustChangePassword($userId)) {
+            $this->auditLogger->logFailedAuth('password_change_required', [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+
+            throw new PasswordChangeRequiredException();
+        }
+
         $this->userRepository->updateLastLogin($userId);
 
         $this->auditLogger->logLogin($userId, $deviceId, true);
@@ -1662,9 +1680,34 @@ class AuthManager
      *
      * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
      *     user: array<string, mixed>|null, profile_id: string|null}
+     *
+     * @throws PasswordChangeRequiredException When the account carries the
+     *     `must_change_password` hold — this seam is the single convergence
+     *     point of EVERY token-minting path (password login, refresh, external
+     *     provider sign-in, WebAuthn passkey finish, quick-connect approval,
+     *     profile switch), so the hold refuses new sessions for all of them
+     *     here, whatever verified the credential (SRV-M18, review server__pm).
      */
     public function buildAuthResponse(string $userId, ?string $profileId = null): array
     {
+        // SRV-M18 (review server__pm): the flag is an ACCOUNT HOLD, not a
+        // password-leg quirk — the admin reset flow stamps it precisely
+        // because the credentials are trusted-but-compromised. Guarding only
+        // the password legs let passkey/quick-connect/profile-switch mints
+        // walk straight around the wall. Refuse as the FIRST act of the one
+        // seam every minter converges on: audit the refusal, throw the typed
+        // exception the boundary mapping (SRV-M17) owns, mint nothing. The
+        // password login and refresh legs keep their own earlier typed checks
+        // — those fire first and their shipped envelopes are byte-identical.
+        if ($this->userRepository->mustChangePassword($userId)) {
+            $this->auditLogger->logFailedAuth('password_change_required', [
+                'user_id' => $userId,
+                'context' => 'auth_response',
+            ]);
+
+            throw new PasswordChangeRequiredException();
+        }
+
         $resolvedProfileId = $this->resolveProfileForUser($userId, $profileId);
 
         // Both tokens carry the claim. If only the access token did, the first

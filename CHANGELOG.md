@@ -8683,6 +8683,46 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   - *Run B:* the dead server gapless/crossfade subsystem — `FfmpegRunner::buildGaplessSegmentCommand()`, `GaplessTranscoder`, `CrossfadeGenerator`, `GaplessPlayer`, and the now-orphaned members of `GaplessPlaybackManager` (`getPlayer()`, `getCrossfadeGenerator()`, `buildCrossfadeCommand()`, `isCrossfadeEnabled()`, `isGaplessEnabled()`, `clearPlayer()`, and later the caller-less `clearCache()`). Gapless/crossfade playback is implemented **100% client-side** in `@phlix/ui` (`useMusicPlayer.ts`), which superseded the reserved server path. `GaplessPlaybackManager` itself is kept — its live `getPreferences()` surface is still used by `MediaItemController`.
 ### Security
 
+- **`must_change_password` is now an account hold — passkey and provider sign-in can no
+  longer mint sessions around it (SRV-M18, review server__pm).**
+  The flag was consulted only on the two password legs
+  (`AuthManager::login()`, `AuthManager::refreshToken()`), while
+  `AuthManager::loginWithProvider()` completed its whole success bookkeeping
+  (`updateLastLogin`, a success `logLogin` audit, activity, `UserLoggedIn`
+  dispatch) and every external minter — `WebAuthnController::finishAuthentication`
+  (WebAuthn ships **enabled** by default), quick-connect approval, the
+  profile-switch endpoint — called the public `AuthManager::buildAuthResponse()`
+  seam blind. An admin who force-changed a password to contain a compromise
+  therefore left the account fully sign-in-able through a registered passkey.
+  The wall is now two-tiered: `loginWithProvider()` refuses the held account
+  with the pre-existing typed `PasswordChangeRequiredException` + a
+  `password_change_required` audit **before** any success bookkeeping, and
+  `buildAuthResponse()` — the single seam every mint converges on — refuses as
+  its first act, so the remaining external minters (and any future ones) are
+  covered at the chokepoint. The two password legs keep their own earlier
+  typed checks; their shipped envelopes are byte-identical (the sibling latch
+  suites pass UNMODIFIED). Per-leg wire outcome: the provider refusal answers
+  the `AuthController::ldapLogin()` generic `RuntimeException` arm (503, fail
+  closed, no token) and the seam refusals surface as the same unmapped
+  exception the password leg already serves — no envelope was changed and no
+  wire error code was added; the distinct `403`-with-code mapping remains the
+  adjacent SRV-M17 finding. The README and the admin-endpoint/exception/
+  repository docblocks that disclosed the bypass as shipped behavior were
+  reworded to the new law. Four pins in `AuthManagerLatchGateTest` (both
+  refusal tiers measured RED at the pre-cure tree — the seam minted
+  `createAccessToken('user-1')`, the provider leg ran `updateLastLogin('user-1')` —
+  plus the two unlatched controls). The disclosure guard
+  `PasswordResetRecoveryReadmeTest` — whose per-sentence pins encoded the
+  OLD bypass prose — rotated in the same commit: its endpoint-row pin now
+  states the hold scope (the retired "do not consult the flag" sentence is
+  pinned OUT), its refusal classifier runs ordered leg buckets (refresh →
+  provider → password login; the naive flat 'login' check misrouted the
+  provider sentence naming `loginWithProvider`), and a provider-leg
+  sentence must now name the typed exception plus its fail-closed 503.
+  Every pre-existing pin's presence (exception+500 password leg,
+  401-without-exception refresh leg, entry-point names, anti-fiction loop)
+  is KEPT, re-scoped to the gated truth.
+
 - **The admin-settings 500 envelopes no longer echo raw exception text onto the wire — for a DB failure that text was the FULL SQL statement (review server__copywriter M5, M-SERVER-05).**
   `GET/PUT /api/v1/admin/settings` answered every unexpected failure with
   `'message' => $e->getMessage()`, and a settings-store blow-up surfaces as the

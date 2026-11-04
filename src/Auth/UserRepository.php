@@ -1411,8 +1411,11 @@ class UserRepository
     /**
      * Set or clear the must_change_password flag on a user account.
      *
-     * S7+F1: When an admin resets a password, the user is forced to set a new
-     * password on next login before they can access any content.
+     * S7+F1: When an admin resets a password, the flag marks the account as
+     * held: no new session is minted while it is set (SRV-M18 widened the
+     * refusal from the two password legs to EVERY token-minting path —
+     * login, refresh, provider sign-in, and the passkey/quick-connect/
+     * profile-switch mints that converge on {@see \Phlix\Auth\AuthManager::buildAuthResponse()}).
      *
      * @param string $userId         Local user UUID.
      * @param bool   $mustChange     Whether the user must change their password.
@@ -1435,7 +1438,10 @@ class UserRepository
     /**
      * Check if a user must change their password before accessing content.
      *
-     * S7+F1: Gates login/refresh to require a password change when the flag is set.
+     * S7+F1: Gates login/refresh to require a password change when the flag is
+     * set; SRV-M18 (review server__pm) widened the wall — every token-minting
+     * path (provider sign-in included, and every external minter through
+     * {@see \Phlix\Auth\AuthManager::buildAuthResponse()}) consults it too.
      *
      * @param string $userId Local user UUID.
      *

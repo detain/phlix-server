@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Access\ProfileAccessPolicy;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Common\Http\UploadErrorMessages;
@@ -449,7 +450,19 @@ final class ProfilesController
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
 
-        return (new Response())->json($this->auth->buildAuthResponse($userId, $profileId));
+        try {
+            return (new Response())->json($this->auth->buildAuthResponse($userId, $profileId));
+        } catch (PasswordChangeRequiredException $e) {
+            // SRV-M17: the switch itself committed (active profile moved), but
+            // the re-mint is refused by the account-hold seam (SRV-M18) — the
+            // held caller keeps its current session claim until the password
+            // changes. Answer the contracts-registered distinct 403, never a
+            // bare 500.
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
+        }
     }
 
     /**

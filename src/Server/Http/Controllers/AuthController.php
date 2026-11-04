@@ -18,6 +18,7 @@ use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\AccountInactiveException;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use InvalidArgumentException;
@@ -264,6 +265,19 @@ class AuthController
                 'error' => $e->getMessage(),
                 'code' => $e->errorCode,
             ]);
+        } catch (PasswordChangeRequiredException $e) {
+            // SRV-M17: correct credentials, but the account carries the
+            // must_change_password HOLD. Same 403 boundary mapping as the
+            // inactive arm — the code `auth.password_change_required` is the
+            // contracts-registered member of the auth.* family, so the SPA
+            // shows the change-password guidance instead of a bare 500.
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+            }
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
         } catch (InvalidArgumentException $e) {
             if ($isBrowser) {
                 return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
@@ -343,6 +357,19 @@ class AuthController
                 return (new Response())->redirect('/login?error=' . rawurlencode($msg));
             }
             return (new Response())->status(401)->json(['error' => $msg]);
+        } catch (PasswordChangeRequiredException $e) {
+            // SRV-M17 (and the F8 note in REVIEW-SRV-MAJORS-T3): the provider IS
+            // available and the credentials were correct — the ACCOUNT is held.
+            // Answer the same distinct 403 as the local-password arm instead of
+            // letting this RuntimeException fall into the arm below, which
+            // mislabels a hold as an infrastructure outage ('not available').
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+            }
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
         } catch (\RuntimeException $e) {
             // The LDAP provider is not enabled/registered (or ProviderManager is
             // unavailable) — AuthProviderNotFoundException extends RuntimeException.

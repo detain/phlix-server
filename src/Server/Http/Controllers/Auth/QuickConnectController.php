@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Auth;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\QuickConnectPair;
 use Phlix\Auth\QuickConnectStateStore;
 use Phlix\Auth\QuickConnectStateStoreInterface;
@@ -319,7 +320,21 @@ final class QuickConnectController
             return $this->pairingNotFound();
         }
 
-        $auth = $this->authManager->buildAuthResponse($pair->userId);
+        try {
+            $auth = $this->authManager->buildAuthResponse($pair->userId);
+        } catch (PasswordChangeRequiredException $e) {
+            // SRV-M17: the APPROVING account is held, so the mint seam refuses —
+            // the TV gets the contracts-registered distinct 403, never a bare
+            // 500. The pairing itself is already spent (consumeApproved is
+            // one-shot and ran before the mint): the member re-pairs after the
+            // password is changed. Burning the pair is deliberate — un-spending
+            // a consumed row would fork the pairing state machine outside its
+            // single-owner store.
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
+        }
 
         return (new Response())->json([
             'accessToken' => $auth['access_token'],

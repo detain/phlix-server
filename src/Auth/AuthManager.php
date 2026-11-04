@@ -1063,6 +1063,9 @@ class AuthManager
      *         refresh_token, token_type, expires_in, and user data
      *
      * @throws \InvalidArgumentException If credentials are invalid
+     * @throws PasswordChangeRequiredException If credentials are valid but the account
+     *     carries the must_change_password hold (SRV-M17: the HTTP boundary maps this
+     *     leg's refusal to the distinct 403 envelope; the typed throw itself is pre-existing)
      * @throws AccountInactiveException If credentials are valid but the account
      *         is not 'active' (pending approval or disabled) — no tokens issued.
      * @throws RateLimitException If the client IP has exceeded the rate limit.

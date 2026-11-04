@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthMethodPolicy;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Common\RateLimit\RateLimiterInterface;
@@ -377,6 +378,14 @@ final class WebAuthnController
             }
 
             return (new Response())->status(401)->json(['error' => $result->error ?? 'Authentication failed']);
+        } catch (PasswordChangeRequiredException $e) {
+            // SRV-M17: the ceremony verified, but the mint seam (SRV-M18's hold
+            // gate) refused — answer the contracts-registered distinct 403 so
+            // the client shows the change-password guidance, not a bare 500.
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
         } catch (\InvalidArgumentException $e) {
             return self::ceremonyFailure(401, 'authentication_finish', $e);
         }

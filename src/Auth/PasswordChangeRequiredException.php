@@ -38,9 +38,13 @@ use RuntimeException;
  * Carries a stable error code so the HTTP boundary can return a distinct
  * 403 with `{error: "...", code: "auth.password_change_required"}` that
  * the client UI can interpret as "show the password change form". That
- * boundary mapping is NOT shipped (SRV-M17): until it lands the served
- * legs answer unmapped 500s / the ldap arm's fail-closed 503 — always
- * WITHOUT a session.
+ * boundary mapping is SHIPPED (SRV-M17): the password-login, LDAP-login,
+ * passkey-finish, quick-connect-token and profile-switch legs catch this
+ * exception at the controller edge and answer exactly that 403 envelope —
+ * the code is the contracts-registered member of the auth.* family, no new
+ * wire codes. The OIDC/GitHub browser callbacks answer their leg's shape (a
+ * `?error=password_change_required` redirect, zero cookies). Every refusal
+ * stays WITHOUT a session.
  *
  * @package Phlix\Auth
  * @since   S7+F1

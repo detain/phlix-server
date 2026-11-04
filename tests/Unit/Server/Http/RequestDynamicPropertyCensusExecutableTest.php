@@ -1047,7 +1047,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // NotificationPluginSsrfParityTest.php (family-wide moment-of-use egress
     // guard, review server__secaudit); measured from the phpunit red in a clean
     // worktree (2061), not predicted.
-    private const EXPECTED_PHP_FILES = 2061;
+    // +1 2061→2062: SRV-M17 adds tests/Unit/Server/Http/Controllers/
+    // PasswordChangeRequiredHttpBoundaryTest.php (every served leg of the
+    // account hold answers its 403, review server__pm); measured from the
+    // clean-tip count (2061) plus this file, not predicted.
+    private const EXPECTED_PHP_FILES = 2062;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1417,7 +1421,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // once (the ?status= admin-list conviction) — a declared member, the S427
     // license intact; zero src/ writes. Measured from the phpunit red (1157),
     // not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1157;
+    // +7 1157→1164 by the SRV-M17 cure (boundary test): the harness seeds
+    // $request->body (5), $request->path (1) and $request->userId (1) across
+    // PasswordChangeRequiredHttpBoundaryTest — sanctioned harness-seed sites;
+    // zero src/ writes added. Measured from the phpunit red (1164) in a clean
+    // tip worktree plus this diff, not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1164;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

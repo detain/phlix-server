@@ -276,8 +276,10 @@ class WebhookDispatcherTest extends TestCase
         // at dispatch even though it passed (or bypassed) creation validation.
         SsrfGuard::setResolver(static fn (string $host): array => ['10.0.0.5']);
 
+        /** @var array<int, array{0: string, 1: array<mixed>}> $writes */
+        $writes = [];
         $this->db->method('query')
-            ->willReturnCallback(function ($sql) {
+            ->willReturnCallback(function ($sql, $bind = []) use (&$writes) {
                 if (strpos($sql, 'SELECT') !== false && strpos($sql, 'is_active = TRUE') !== false) {
                     return [[
                         'id' => 'wh-private',
@@ -287,6 +289,7 @@ class WebhookDispatcherTest extends TestCase
                         'events_json' => '["playback.started"]',
                     ]];
                 }
+                $writes[] = [$sql, $bind];
                 return [];
             });
 
@@ -295,5 +298,23 @@ class WebhookDispatcherTest extends TestCase
 
         $this->assertSame(0, $result->successCount);
         $this->assertSame(1, $result->failureCount);
+
+        // SRV-m44: the refusal persisted to webhook_logs.error_message quotes
+        // the stored destination inside the guard's message — it must be
+        // redacted there (log side). The admin-visible failure list carries
+        // the url as its own structured key and is unchanged.
+        $logInsert = null;
+        foreach ($writes as $write) {
+            if (str_starts_with($write[0], 'INSERT INTO webhook_logs')) {
+                $logInsert = $write;
+                break;
+            }
+        }
+        $this->assertNotNull($logInsert, 'the blocked dispatch must be recorded in webhook_logs');
+        // bind order: [id, webhook_id, event_type, response_code, response_body, error_message]
+        $errorMessage = (string) $logInsert[1][5];
+        $this->assertStringContainsString('SSRF guard blocked URL', $errorMessage);
+        $this->assertStringContainsString('<destination-redacted>', $errorMessage);
+        $this->assertStringNotContainsString('http://internal.example/webhook', $errorMessage);
     }
 }

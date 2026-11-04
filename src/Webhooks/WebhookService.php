@@ -288,7 +288,13 @@ class WebhookService
         try {
             SsrfGuard::assertPublicUrl($delivery->webhookUrl);
         } catch (InvalidArgumentException $e) {
-            $message = 'SSRF guard blocked URL: ' . $e->getMessage();
+            // SRV-m44: the guard's refusal message quotes the full URL it
+            // examined; this one is logged AND persisted into the admin-visible
+            // webhook_deliveries.response_body. Redact the destination with the
+            // estate idiom (AbstractNotificationPlugin::send()) — the verdict's
+            // host/IP prose, which is the informative part, survives.
+            $message = 'SSRF guard blocked URL: '
+                . str_replace($delivery->webhookUrl, '<destination-redacted>', $e->getMessage());
             $this->logger->warning('Webhook delivery refused by SSRF guard', [
                 'delivery_id' => $delivery->id,
                 'error' => $message,

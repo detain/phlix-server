@@ -9712,6 +9712,23 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
 ### Security
 
+- **SSRF refusals no longer quote the exact destination they blocked in
+  logs and delivery records.** The shared guard's refusal message names the
+  full URL it examined, and the webhook subsystem fed that raw message into
+  persisted surfaces: `webhook_deliveries.response_body` (first attempt and
+  retry) via `WebhookService::ssrfRefusal()`, `webhook_logs.error_message`
+  via `WebhookDispatcher::sendToWebhook()`, and the MQTT plugin's
+  blocked-notification warning. All three now replace the URL with
+  `<destination-redacted>` — the idiom the notification family's
+  delivery-failure log already used; the verdict's host/IP prose and the
+  `SSRF guard blocked URL:` prefix survive. The webhook-admin test-endpoint
+  failure list deliberately keeps the raw message: that response already
+  carries the URL as its own structured key, visible only to the operator
+  who configured it. Red-first pins across the three existing SSRF suites
+  (5 convictions at parent, zero collateral); the MQTT arm has no logger
+  seam, so its law is source-pinned. [review server__secaudit derived-queue,
+  SRV-m44; register: `.reviews/2026-11-03/FIX-DERIVED-SRV.md`]
+
 - **A relayed request can no longer pick its own rate-limit key or wire scheme
   through forwarded headers.** The hub-relay dispatcher asserts a trusted
   loopback peer for every relayed request — the right call for the tunnel, but

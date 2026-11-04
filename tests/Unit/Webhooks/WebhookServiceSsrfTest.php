@@ -109,19 +109,30 @@ class WebhookServiceSsrfTest extends TestCase
 
     public function testProcessDeliveryRefusesARowMutatedToTheMetadataIpWithoutPosting(): void
     {
-        $updated = $this->runProcessDeliveryWithStoredUrl('http://169.254.169.254/latest/meta-data/');
+        $url = 'http://169.254.169.254/latest/meta-data/';
+        $updated = $this->runProcessDeliveryWithStoredUrl($url);
 
         $this->assertNotNull($updated, 'the refused delivery must still be recorded as failed');
         // bind order: [attempt, response_code, response_body, next_retry_at, id]
         $this->assertStringContainsString('SSRF guard blocked URL', (string) $updated[1][2]);
+        // SRV-m44: the guard message quotes the full URL it examined; the
+        // persisted response_body must redact that destination the way the
+        // notification plugins redact their delivery-failure logs (the
+        // verdict's host/IP prose is the informative part and survives).
+        $this->assertStringContainsString('<destination-redacted>', (string) $updated[1][2]);
+        $this->assertStringNotContainsString($url, (string) $updated[1][2]);
+        $this->assertStringNotContainsString('/latest/meta-data/', (string) $updated[1][2]);
     }
 
     public function testProcessDeliveryRefusesARowMutatedToLoopbackWithoutPosting(): void
     {
-        $updated = $this->runProcessDeliveryWithStoredUrl('http://127.0.0.1/internal');
+        $url = 'http://127.0.0.1/internal';
+        $updated = $this->runProcessDeliveryWithStoredUrl($url);
 
         $this->assertNotNull($updated);
         $this->assertStringContainsString('SSRF guard blocked URL', (string) $updated[1][2]);
+        $this->assertStringContainsString('<destination-redacted>', (string) $updated[1][2]);
+        $this->assertStringNotContainsString($url, (string) $updated[1][2]);
     }
 
     public function testRetryDeliveryAlsoRefusesAPoisonedStoredRow(): void
@@ -158,6 +169,13 @@ class WebhookServiceSsrfTest extends TestCase
         $update = $this->findDeliveryUpdate($writes);
         $this->assertNotNull($update);
         $this->assertStringContainsString('SSRF guard blocked URL', (string) $update[1][2]);
+        // SRV-m44: the retry arm re-runs the same refusal, so its persisted
+        // response_body carries the same destination redaction.
+        $this->assertStringContainsString('<destination-redacted>', (string) $update[1][2]);
+        $this->assertStringNotContainsString(
+            'http://169.254.169.254/latest/meta-data/',
+            (string) $update[1][2],
+        );
     }
 
     public function testProcessDeliveryPostsWhenTheStoredUrlIsPublic(): void

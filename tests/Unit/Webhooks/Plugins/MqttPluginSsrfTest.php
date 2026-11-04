@@ -65,4 +65,23 @@ final class MqttPluginSsrfTest extends TestCase
 
         self::assertFalse($plugin->send($this->event()));
     }
+
+    public function test_the_blocked_broker_reason_is_destination_redacted(): void
+    {
+        // This plugin builds its logger internally (no injection seam), so the
+        // SRV-m44 redaction law is pinned at source instead: the refusal
+        // passed to the logger must run the guard message through the estate's
+        // destination-redaction idiom (AbstractNotificationPlugin::send()),
+        // never persist the full broker URL the guard quoted. Mutating the
+        // 'reason' back to the raw getMessage() reddens here.
+        $source = (string) file_get_contents(
+            __DIR__ . '/../../../../src/Webhooks/Plugins/MqttPlugin.php',
+        );
+
+        self::assertStringContainsString(
+            "str_replace(\$url, '<destination-redacted>', \$e->getMessage())",
+            $source,
+            'the SSRF refusal logged by MqttPlugin must redact the destination it examined',
+        );
+    }
 }

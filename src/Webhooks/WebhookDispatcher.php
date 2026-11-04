@@ -415,12 +415,18 @@ class WebhookDispatcher
             SsrfGuard::assertPublicUrl($url);
         } catch (InvalidArgumentException $e) {
             $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
+            // SRV-m44: webhook_logs.error_message is a persisted log surface —
+            // redact the destination the guard's message quotes (estate idiom,
+            // AbstractNotificationPlugin::send()). The admin-visible failure
+            // list keeps the raw message: it already carries the url as its own
+            // structured key, so redacting there would be theater.
+            $redacted = str_replace($url, '<destination-redacted>', $e->getMessage());
             $this->logDispatch(
                 $webhookId,
                 $event->eventType,
                 null,
                 null,
-                'SSRF guard blocked URL: ' . $e->getMessage(),
+                'SSRF guard blocked URL: ' . $redacted,
             );
             return ['success' => false, 'error' => $e->getMessage()];
         }

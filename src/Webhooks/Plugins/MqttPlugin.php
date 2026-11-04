@@ -89,10 +89,13 @@ class MqttPlugin extends AbstractNotificationPlugin
         try {
             SsrfGuard::assertPublicUrl($url);
         } catch (InvalidArgumentException $e) {
+            // SRV-m44: the guard message quotes the full broker URL it examined;
+            // redact the destination before persisting the refusal to the log —
+            // the same idiom the parent's delivery-failure catch applies.
             $this->getLogger()->warning('MQTT notification blocked by SSRF guard', [
                 'event_type' => $event->eventType,
                 'topic' => $topic,
-                'reason' => $e->getMessage(),
+                'reason' => str_replace($url, '<destination-redacted>', $e->getMessage()),
             ]);
             return false;
         }

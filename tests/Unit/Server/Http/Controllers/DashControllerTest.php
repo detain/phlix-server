@@ -461,6 +461,47 @@ class DashControllerTest extends TestCase
         $this->rrmdir($outside);
     }
 
+    /**
+     * The FILE arm of the same containment law (2026-11-04 review
+     * server__secaudit, Minor): the job dir itself is legitimate (real UUID,
+     * inside the base) but the planted symlink IS the requested file, pointing
+     * out of the tree. is_file() and Workerman's file sender follow symlinks,
+     * so directory-only containment streamed the target's bytes. Refusal must
+     * stay byte-identical to the ordinary missing-file 404 — same status, same
+     * JSON, no oracle. The second leg proves the arm is not a deny-all: the
+     * same job dir serves a REAL file of the same name after the link is
+     * removed (a symlink-to-file inside the same dir keeps passing too —
+     * prefix law on the resolved path, not a ban on links).
+     */
+    public function testSymlinkedFileInsideLegitimateJobDirIsNotStreamed(): void
+    {
+        $jobId = '4d444444-4444-4444-8444-444444444444';
+        $dir = "{$this->segmentDir}/{$jobId}";
+        mkdir($dir, 0755, true);
+        $outside = sys_get_temp_dir() . '/phlix_dash_file_escape_' . uniqid();
+        mkdir($outside, 0755, true);
+        file_put_contents("{$outside}/secret.mpd", "EXFILTRATED\n");
+        if (!@symlink("{$outside}/secret.mpd", "{$dir}/manifest.mpd")) {
+            $this->markTestSkipped('symlinks are unavailable on this filesystem');
+        }
+
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'manifest.mpd']);
+        $this->assertSame(404, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'Segment not found'], $body);
+        $this->assertStringNotContainsString('EXFILTRATED', $res->body);
+
+        // Legit-file leg: replace the link with real bytes — they must serve.
+        unlink("{$dir}/manifest.mpd");
+        file_put_contents("{$dir}/manifest.mpd", '<MPD/>');
+        $ok = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'manifest.mpd']);
+        $this->assertSame(200, $ok->statusCode);
+        $this->assertStringContainsString('<MPD/>', $this->bodyOf($ok));
+
+        $this->rrmdir($outside);
+    }
+
     private function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) {

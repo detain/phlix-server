@@ -79,6 +79,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Transcode file serving followed symlinked files out of the job dir.** The
+  realpath containment in `TranscodeFileServer::serveJobFile()` validated the
+  job DIRECTORY only, while `is_file()` and Workerman's file sender follow
+  symlinks — a symlinked segment planted inside a legitimate (valid-UUID,
+  in-base) job dir streamed out-of-tree bytes, which the 2026-11-03 cure's
+  own docblock had promised could not happen. Serving now additionally
+  requires the file's realpath to BE the resolved job dir or live under it
+  (a dangling link fails the same arm), and a refused file answers the same
+  byte-identical 404 `Segment not found` every other absent/outside file
+  already gets — no new oracle, no new wire code — with the escape detail
+  logged server-side. The pin plants a real symlink in a mirrored temp job
+  dir (no privileged ops) and refuses it, then proves a real file in the same
+  dir still streams, so the arm can not silently become a deny-all.
+  [review server__secaudit]
 - **The install headline named the alias as the secret.** The one-line
   install bullet listed "generated `PHLIX_SECRET_KEY`", but the boot-critical
   key the daemon refuses to start without is `JWT_SECRET`

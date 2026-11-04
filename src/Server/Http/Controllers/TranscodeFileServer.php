@@ -53,12 +53,16 @@ trait TranscodeFileServer
      * @param string  $dir     Absolute job directory (empty → 400).
      * @param string  $file    Requested filename within the job dir.
      * @param string  $withinBaseDir Optional trusted base: when non-empty the
-     *     job dir must RESOLVE (realpath) inside it — defense-in-depth behind
-     *     the handlers' {@see isSafeJobId()} gate, so even a planted symlink
-     *     cannot stream bytes from outside the segment tree (2026-11-03 review
-     *     server__secaudit, Critical). A dir that does not exist or escapes the
-     *     base answers the SAME 404 the missing file already answers — no new
-     *     oracle, no new envelope.
+     *     job dir must RESOLVE (realpath) inside it AND the served file must
+     *     RESOLVE inside that job dir — defense-in-depth behind the handlers'
+     *     {@see isSafeJobId()} gate, so not even a planted symlink can stream
+     *     bytes from outside the segment tree: neither a job-DIRECTORY link
+     *     (2026-11-03 review server__secaudit, Critical) nor a symlinked FILE
+     *     inside a legitimate job dir (same review, Minor cure 2026-11-04 —
+     *     is_file() and the file sender follow symlinks, so dir-prefix-only
+     *     containment was not enough). A dir or file that does not exist or
+     *     escapes answers the SAME 404 the missing file already answers — no
+     *     new oracle, no new envelope.
      *
      * @return Response The file response, or a 304/400/404/416 status.
      */
@@ -68,16 +72,37 @@ trait TranscodeFileServer
             return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
+        $path = $dir . '/' . $file;
+
         if ($withinBaseDir !== '') {
             $base = realpath($withinBaseDir);
             $resolved = realpath($dir);
             if ($base === false || $resolved === false || !str_starts_with($resolved, $base . DIRECTORY_SEPARATOR)) {
                 return (new Response())->status(404)->json(['error' => 'Segment not found']);
             }
-            $dir = $resolved;
+
+            // FILE arm (2026-11-04 review server__secaudit, Minor): containment
+            // is realpath-scoped down to the served bytes, not just the job
+            // directory — is_file() and Workerman's file sender FOLLOW symlinks,
+            // so a symlinked segment planted inside a legitimate in-base job dir
+            // would otherwise stream out-of-tree content. The resolved path must
+            // be the job dir itself or live under it; anything else (including a
+            // dangling link realpath cannot resolve) answers the same ordinary
+            // missing-file 404 — no new oracle, no new wire code — with the
+            // escape detail left in the error log for the operator.
+            $real = realpath($path);
+            $escapesJobDir = $real === false
+                || ($real !== $resolved && !str_starts_with($real, $resolved . DIRECTORY_SEPARATOR));
+            if ($escapesJobDir) {
+                error_log(
+                    'streaming: transcode file refused (resolves outside its job dir): '
+                    . $path . ' -> ' . ($real === false ? 'unresolvable' : $real)
+                );
+                return (new Response())->status(404)->json(['error' => 'Segment not found']);
+            }
+            $path = $real;
         }
 
-        $path = $dir . '/' . $file;
         if (!is_file($path)) {
             return (new Response())->status(404)->json(['error' => 'Segment not found']);
         }

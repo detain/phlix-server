@@ -1002,7 +1002,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // NewsletterGrammarTruthTest.php (newsletter HTML-leg singular guard,
     // review server__copywriter SRV-M1). Measured from the phpunit red
     // (2049), not predicted.
-    private const EXPECTED_PHP_FILES = 2049;
+    // +1 2049→2050: this cure added tests/Unit/Server/Core/
+    // CollectionRoutesReadmeCitesTest.php (README collection-route cite
+    // tripwire, review server__docmaint SRV-M2). Measured from the phpunit
+    // red (2050), not predicted.
+    private const EXPECTED_PHP_FILES = 2050;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

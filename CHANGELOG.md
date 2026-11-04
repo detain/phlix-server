@@ -79,6 +79,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **All ten README collection-route line cites had drifted ~13 lines off
+  their registrations.** The endpoints table promises "each registration's
+  exact line is cited"; a single insertion above `loadCollectionRoutes()`
+  had shifted the block with nothing re-anchoring it. Every cite is
+  re-pinned to the measured line and `CollectionRoutesReadmeCitesTest`
+  reddens on the next silent drift. [review server__docmaint SRV-M2]
 - **The documented default Helm install could never boot: DB_HOST pointed at a
   MySQL Service this chart cannot deploy.** `values.yaml` shipped
   `mysql.enabled: true` with a templated `config.database_host` defaulting to

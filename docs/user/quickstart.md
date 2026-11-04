@@ -37,6 +37,10 @@ until it does, the grids are legitimately empty. Home art and metadata are
 fetched afterwards from TMDB/TVDB (and any provider plugins you enable);
 `ffmpeg` on the box is what makes trick previews and subtitle extraction work.
 
+Fetching that art needs a (free) TMDB API key: pass `--tmdb-api-key` to the
+installer, or save it later in **Admin → Settings → Metadata** — without a
+key, only local NFO metadata and artwork work.
+
 ## 4. Add the household
 
 Each person registers at `/app` (`Register`) and lands in the **pending** queue;

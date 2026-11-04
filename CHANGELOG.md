@@ -79,6 +79,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The one credential the headline feature cannot work without was buried.**
+  Every doc called the TMDB key "optional" (installer flag) or never mentioned
+  it (quickstart step 3, the Docker "minimum" note), so a literal walker ended
+  up with a named-but-posterless library. The quickstart now names the key and
+  both set-paths; the installer flag and the env-census minimum say
+  "optional for the installer, required for provider metadata".
+  [review server__newcomer SRV-M5]
 - **All ten README collection-route line cites had drifted ~13 lines off
   their registrations.** The endpoints table promises "each registration's
   exact line is cited"; a single insertion above `loadCollectionRoutes()`

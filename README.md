@@ -688,7 +688,7 @@ HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 | `--admin-email EMAIL` | Email registered with Let's Encrypt |
 | `--db-name`, `--db-user`, `--db-pass`, `--db-host`, `--db-port` | MySQL identity (random password if `--db-pass` omitted). The installer writes these to `/etc/phlix/env`; at runtime `config/database.php` reads all of `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER` / `DB_PASSWORD` from the environment — see [Environment variables](#environment-variables). |
 | `--http-port PORT` | HTTP listen port (default `8096`) |
-| `--tmdb-api-key KEY` | TMDB API key for metadata (optional, recorded in `/etc/phlix/env`) |
+| `--tmdb-api-key KEY` | TMDB API key for metadata — optional for the installer, required for provider metadata; can also be saved later in the SPA under Settings → Metadata (recorded in `/etc/phlix/env`) |
 | `--hub-url URL` | `PHLIX_HUB_URL` for hub relay (optional) |
 | `--service-user USER` | System user to run as (default `phlix` — dedicated system account, created if missing) |
 | `--branch NAME` | Git branch or tag to install (default `master`) |
@@ -936,7 +936,9 @@ so a hand-run `php start.php start` outside a login shell that exports the varia
 connects with no password and refuses to boot.
 Every key, default, secret flag and restart semantics lives in the [environment
 variable census](#environment-variables) below; `DB_PASSWORD` + `JWT_SECRET` are
-its "most operators only set" minimum.
+its "most operators only set" minimum — the advertised poster/artwork fetching
+additionally wants `TMDB_API_KEY` (installer flag above, or Settings →
+Metadata in the SPA after boot).
 
 ## Configuration
 

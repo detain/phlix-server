@@ -30,7 +30,8 @@ use Phlix\Tests\Unit\Server\WebSocket\TestableSyncPlayManager;
  * carries exception text"), because exception strings in this codebase class
  * carry SQL fragments, file paths, and other users' data. Every SyncPlay
  * subhandler is private and wrapped by this inner catch, so the guarded
- * outer layer never sees them: this catch was the estate's last raw-leak arm.
+ * outer layer never sees them. Within the SyncPlay WebSocket dispatch,
+ * this catch was that surface's last raw-leak arm.
  *
  * The canary below throws a deliberately secret-shaped message from the
  * lazy admin probe inside `visibleGroupSummaries()` (the only deterministic

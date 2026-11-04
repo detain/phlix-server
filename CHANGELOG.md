@@ -79,6 +79,14 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The containment test's docblock claimed an estate-wide scope the review
+  never established.** `SyncPlayDispatchErrorContainmentTest` called the
+  SRV-M21 catch "the estate's last raw-leak arm" — server__secnet's finding
+  scoped its law to the SyncPlay WebSocket dispatch; the docblock was the
+  one surface where the wording inflated to the estate. The sentence now
+  reads at its verified scope; the containment law and both tests are
+  untouched (2/6 green on the new bytes, phpcs both standards clean).
+  [review server__secnet]
 - **48d8bb8f's workflow cure over-claimed, and RELEASE_PROCESS.md survived
   the same sweep.** README asserted there is "no feature-branch/squash-merge
   ceremony in this repository's history" — false: master carries 26 merge

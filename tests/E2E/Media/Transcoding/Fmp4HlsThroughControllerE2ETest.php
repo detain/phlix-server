@@ -223,7 +223,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      */
     public function testHlsJsPlaysAnFmp4PresentationServedEntirelyByTheRealController(): void
     {
-        $jobId = 's315-fmp4';
+        $jobId = '5b8a9c2d-1e3f-4a7b-9c8d-2e4f6a8b0c1d';
         $dir = $this->buildJob($jobId);
 
         // Denominator #1 — the premise. Playlists, and NOT ONE segment.
@@ -374,7 +374,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      */
     public function testRemovingTheExtXMapBreaksPlaybackThroughTheController(): void
     {
-        $jobId = 's315-nomap';
+        $jobId = '8c7b6a5d-4e3f-4a2b-b1c9-8d7e6f5a4b3c';
         $dir = $this->buildJob($jobId);
 
         $media = "{$dir}/media_v360p.m3u8";
@@ -518,7 +518,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         $expected = array_fill_keys($names, 200);
 
         // ── the measurement: SERVER_WORKERS workers ──────────────────
-        $parallelJob = 's317-parallel';
+        $parallelJob = '1f2e3d4c-5b6a-47c8-9d0e-1a2b3c4d5e6f';
         $parallelDir = $this->buildJob($parallelJob);
         $this->assertSame(
             [],
@@ -563,7 +563,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
         $parallelStatuses = $this->drain($parallelBatch);
 
         // ── the control: ONE worker, which must be UNABLE ────────────
-        $serialJob = 's317-serial';
+        $serialJob = '6a5b4c3d-2e1f-4b8a-9c7d-0e1f2a3b4c5d';
         $serialDir = $this->buildJob($serialJob);
         $this->assertSame([], $this->m4sIn($serialDir));
 
@@ -776,7 +776,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
             . 'so this control would have re-run the positive case and passed for the wrong reason'
         );
 
-        $jobId = 's60-csp-control';
+        $jobId = '9e8d7c6b-5a4f-4e3d-a2b1-c0d9e8f7a6b5';
         $dir = $this->buildJob($jobId);
         $server = $this->startServer($jobId, self::SERVER_WORKERS);
         $probe = $this->probe($dir, $server, $mutated, $shipped['nonce']);
@@ -836,7 +836,7 @@ final class Fmp4HlsThroughControllerE2ETest extends TestCase
      */
     public function testTheHarnessServerShutsDownCleanlyAndLeaksNoListener(): void
     {
-        $jobId = 's315-shutdown';
+        $jobId = '3b4c5d6e-7f8a-4b9c-8d0e-1f2a3b4c5d6e';
         $this->buildJob($jobId);
         $server = $this->startServer($jobId, self::SERVER_WORKERS);
 

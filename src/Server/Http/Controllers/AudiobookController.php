@@ -391,7 +391,7 @@ class AudiobookController
             ],
             'metadata' => $metadata,
             'progress' => $progress?->toArray(),
-            'message' => 'Player ready',
+            'message' => 'Audiobook ready to play.',
         ]);
     }
 

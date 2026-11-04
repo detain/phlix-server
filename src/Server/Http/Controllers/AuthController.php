@@ -346,7 +346,11 @@ class AuthController
         } catch (\RuntimeException $e) {
             // The LDAP provider is not enabled/registered (or ProviderManager is
             // unavailable) — AuthProviderNotFoundException extends RuntimeException.
-            $msg = 'LDAP authentication is not available.';
+            // The prose names that permanent state ("not enabled"), which the
+            // ldap_error: arm above ("temporarily unavailable") deliberately
+            // does not: an operator seeing it knows to configure, not to retry.
+            // Full auth-failure status mapping is the SRV-M17 named follow-up.
+            $msg = 'LDAP authentication is not enabled on this server.';
             if ($isBrowser) {
                 return (new Response())->redirect('/login?error=' . rawurlencode($msg));
             }

@@ -17,6 +17,14 @@ declare(strict_types=1);
  * (`type`/`required`/`secret`/`default`) still comes from the manifest schema.
  * Add an entry for any new plugin/field here to enrich its form.
  *
+ * ## Label copy law (review server__copywriter)
+ *
+ * `label` and `link_text` are sentence case — "AniDB username", never
+ * "AniDB Username". A capitalized word inside a label must be an initialism
+ * (API, URL, UDP, SSL, TTL, ID) or a brand/service name (Last.fm, OMDb,
+ * Trakt, MusicBrainz, AcoustID, AniList, MyAnimeList, OAuth). `User-Agent`
+ * keeps its header spelling: it is the literal HTTP header name, not prose.
+ *
  * ## Link policy (plan_settings.md §3.5)
  *
  * Concepts, protocols, acronyms and file formats link to **Wikipedia**; named
@@ -45,14 +53,14 @@ declare(strict_types=1);
 return [
     'phlix-plugin-anidb' => [
         'username' => [
-            'label'       => 'AniDB Username',
+            'label'       => 'AniDB username',
             'description' => 'Your AniDB account username (NOT the API password — that is the separate '
                 . 'field below). Registration is free.',
             'link'        => 'https://anidb.net/',
             'link_text'   => 'Create an AniDB account',
         ],
         'api_key' => [
-            'label'       => 'AniDB UDP API Key',
+            'label'       => 'AniDB UDP API key',
             'description' => 'The UDP "API Key" (a.k.a. API password) you set in your AniDB profile under '
                 . 'Settings → Account → API. This is SEPARATE from your website login password. Required to '
                 . 'query the AniDB UDP API.',
@@ -84,20 +92,20 @@ return [
             'link_text'   => 'What scrobbling is',
         ],
         'api_key' => [
-            'label'       => 'Last.fm API Key',
+            'label'       => 'Last.fm API key',
             'description' => 'Your Last.fm API key. Create a free API account to get one.',
             'link'        => 'https://www.last.fm/api/account/create',
             'link_text'   => 'Create a Last.fm API account',
         ],
         'shared_secret' => [
-            'label'       => 'Last.fm Shared Secret',
+            'label'       => 'Last.fm shared secret',
             'description' => 'The "Shared secret" shown next to your API key on your Last.fm API accounts page. '
                 . 'Used to sign authenticated requests.',
             'link'        => 'https://www.last.fm/api/accounts',
             'link_text'   => 'Your Last.fm API accounts',
         ],
         'callback_url' => [
-            'label'       => 'OAuth Callback URL',
+            'label'       => 'OAuth callback URL',
             'description' => 'The Callback URL you registered for your Last.fm API application, used for the '
                 . 'authorization handshake. Optional — a server-relative path such as '
                 . '/auth/lastfm/callback is expected, not a full URL.',
@@ -105,7 +113,7 @@ return [
             'link_text'   => 'Last.fm web-auth handshake',
         ],
         'username' => [
-            'label'       => 'Last.fm Username',
+            'label'       => 'Last.fm username',
             'description' => 'Display-only: the Last.fm account scrobbles are sent to (set during authorization).',
             'link'        => 'https://www.last.fm/',
             'link_text'   => 'Last.fm',
@@ -120,7 +128,7 @@ return [
             'link_text'   => 'OMDb API',
         ],
         'api_key' => [
-            'label'       => 'OMDb API Key',
+            'label'       => 'OMDb API key',
             'description' => 'Your OMDb API key. The free tier allows 1,000 requests/day.',
             'link'        => 'https://www.omdbapi.com/apikey.aspx',
             'link_text'   => 'Get a free OMDb API key',
@@ -149,13 +157,13 @@ return [
             'link_text'   => 'Trakt',
         ],
         'username' => [
-            'label'       => 'Trakt Username',
+            'label'       => 'Trakt username',
             'description' => 'Display-only: the Trakt account Phlix is linked to (set during authorization).',
             'link'        => 'https://trakt.tv/',
             'link_text'   => 'Your Trakt profile',
         ],
         'access_token' => [
-            'label'       => 'Access Token',
+            'label'       => 'Access token',
             'description' => 'Obtained automatically when you authorize Phlix with Trakt — you do not enter this '
                 . 'by hand. Create an API app only if you self-host credentials.',
             // Was https://trakt.tv/oauth/applications, which now 404s. See the file
@@ -165,14 +173,14 @@ return [
             'link_text'   => 'Create a Trakt API app',
         ],
         'refresh_token' => [
-            'label'       => 'Refresh Token',
+            'label'       => 'Refresh token',
             'description' => 'Set automatically during authorization; used to renew the access token. Not entered '
                 . 'by hand.',
             'link'        => 'https://en.wikipedia.org/wiki/OAuth',
             'link_text'   => 'OAuth token refresh',
         ],
         'expires_at' => [
-            'label'       => 'Token Expiry',
+            'label'       => 'Token expiry',
             'description' => 'Unix timestamp when the access token expires. Managed automatically.',
             'link'        => 'https://en.wikipedia.org/wiki/Unix_time',
             'link_text'   => 'Unix timestamp',
@@ -200,7 +208,7 @@ return [
 
     'phlix-plugin-opensubtitles' => [
         'api_key' => [
-            'label'       => 'OpenSubtitles API Key',
+            'label'       => 'OpenSubtitles API key',
             'description' => 'The API key for your OpenSubtitles.com consumer (API application). Required.',
             'link'        => 'https://www.opensubtitles.com/en/consumers',
             'link_text'   => 'OpenSubtitles API consumers',
@@ -292,14 +300,14 @@ return [
             'link_text'   => 'AniList',
         ],
         'access_token' => [
-            'label'       => 'Access Token',
+            'label'       => 'Access token',
             'description' => 'Obtained automatically when you authorize Phlix with AniList — you do not enter this '
                 . 'by hand. Register a client only if you self-host credentials.',
             'link'        => 'https://anilist.co/settings/developer',
             'link_text'   => 'AniList developer settings',
         ],
         'username' => [
-            'label'       => 'AniList Username',
+            'label'       => 'AniList username',
             'description' => 'Display-only: the AniList account Phlix is linked to (set during authorization).',
             'link'        => 'https://anilist.co/',
             'link_text'   => 'Your AniList profile',
@@ -327,7 +335,7 @@ return [
 
     'phlix-plugin-myanimelist' => [
         'client_id' => [
-            'label'       => 'MyAnimeList Client ID',
+            'label'       => 'MyAnimeList client ID',
             'description' => 'Your MyAnimeList API Client ID. Create an API application (choose "web"/"other"), '
                 . 'then copy its Client ID. Sent as the X-MAL-CLIENT-ID header.',
             'link'        => 'https://myanimelist.net/apiconfig',

@@ -397,7 +397,7 @@ class BookController
             'total_pages' => $totalPages,
             'chapters' => $chapters,
             'progress' => $progress?->toArray(),
-            'message' => 'Reader ready',
+            'message' => 'Book ready to read.',
         ]);
     }
 

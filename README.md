@@ -173,6 +173,9 @@ Every environment variable the server process reads is inventoried in the defini
   Server-internals reference for contributors extending the loader:
   [phlix-docs / dev / plugin-sdk](https://detain.github.io/phlix-docs/dev/plugin-sdk). Reference
   plugin: [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example).
+  The only in-tree example is `examples/plugins/phlix-plugin-sample-theme` — a
+  complete, installable **`ui-theme`** plugin (theme surfaces only); functional
+  (metadata/event) plugin examples ship in that external repo, not here.
 - **Shared interfaces / DTOs in `detain/phlix-shared`**: framework-neutral
   Composer package shared with `phlix-hub`. `Phlix\Shared\Plugin\*`,
   `Phlix\Shared\Events\*`, `Phlix\Shared\Auth\JwtClaims`,
@@ -1668,9 +1671,12 @@ docker run --rm --network host -v "$PWD:/app" -w /app -u "$(id -u):$(id -g)" -e 
   phlix-psalm ./vendor/bin/psalm --show-info=false --no-progress
 ```
 
-The extension list is not optional and mirrors the `extensions:` list in the
-Psalm CI job: Psalm resolves classes and constants from the extensions that are
-actually loaded, so a bare `php:8.3-cli` reports 140 phantom errors
+The extension list is not optional — it is the working subset of the
+`extensions:` list in the Psalm CI job (every extension first-party code
+resolves symbols from; the job's list is a superset whose extras the job's own
+comment marks as tool-resolution conveniences). Psalm resolves classes and
+constants from the extensions that are actually loaded, so a bare
+`php:8.3-cli` reports 140 phantom errors
 (`Swoole\Coroutine\Channel`, `Socket`, `AF_INET`, `ZipArchive`, `GdImage`, `FFI`, …)
 that do not exist on a properly configured runner.
 

@@ -1022,15 +1022,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // WorkermanVersionRequirementTruthTest.php (README Workerman version
     // truth pin, review server__devops SRV-m18). Measured from the phpunit
     // red (2055), not predicted.
-    // +1 2055→2056: this rework adds tests/Unit/Auth/
-    // MintSeamLawTripwireTest.php (token-site enumeration pin of the
-    // must-change-password mint law, SRV-M18 rework, review server__pm).
-    // Measured from the phpunit red (2056), not predicted.
-    // +1 2056→2057 landed unrotated with 0acd8194 (disclosed owed landing,
+    // +1 2055→2056 landed unrotated with 0acd8194 (disclosed owed landing,
     // same precedent as the a86e0999 reads row above): the SRV-M3 pin test
     // tests/Unit/Platform/ArchitectureTreeCoversSrcSubsystemsTest.php joined
     // the tree; this rotation carries it. Measured from the phpunit red
-    // (2057), not predicted.
+    // (2056), not predicted.
+    // +1 2056→2057: this rework adds tests/Unit/Auth/
+    // MintSeamLawTripwireTest.php (token-site enumeration pin of the
+    // must-change-password mint law, SRV-M18 rework, review server__pm).
+    // Measured from the phpunit red (2057), not predicted.
     // +1 2057→2058: this cure adds tests/Unit/Collections/
     // CollectionManagerSmartEdgeTest.php (SRV-M19 smart-edge oracle pin,
     // review server__pm). Measured from the phpunit red (2058), not

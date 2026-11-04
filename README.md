@@ -1010,7 +1010,8 @@ server process reads, grouped by subsystem. The list was built by grepping
 every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
 `start.php`, `bin/` and `scripts/` — if a knob is not here, no in-repo PHP code reads
 it. (Externally vendored plugins may resolve additional knobs inside this process —
-the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is itself a row below.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
+the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is one such example: plugin code reads it,
+no in-repo source does, so it deliberately has no row in this census.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
 everything else has a safe default. "Secret?" marks values that must never be
 logged or committed. The "Restart" column uses four values: **yes** =
 read once at boot (bind, container/config construction) — a new value applies

@@ -100,6 +100,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The environment census no longer promises a row that does not exist: the
+  anidb cross-reference said `PHLIX_ANIDB_CACHE_DIR` "is itself a row below",
+  and the census has no such row (review server__docmaint, SRV-m15).** The
+  clause's point — plugin knobs resolve inside this process — is true; only
+  the pointer was fabricated. The parenthetical now states the actual
+  relationship: plugin code reads the variable, no in-repo source does, so it
+  deliberately has no census row. Readers auditing against this list follow a
+  pointer that lands.
+
 - **Sign-in around the admin force-change wall is closed everywhere: the OIDC
   and GitHub browser callbacks and the hub-token exchange now honor the
   `must_change_password` hold, and so does OPDS HTTP-Basic (SRV-M18 rework,

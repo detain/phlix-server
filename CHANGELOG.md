@@ -79,6 +79,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The user-marker create/delete API could never serve any request: both live
+  handlers violated the router calling convention and every call 500'd.**
+  `MediaMarkerController::createMarker(string $id)` and
+  `deleteMarker(string $id, string $markerId)` were registered on rails the
+  router dispatches as `$handler($request, $params)` — under
+  `declare(strict_types=1)` a `Request` cannot bind `string $id`, so
+  `Router::callHandler()` threw TypeError and HttpHandler's Throwable catch
+  answered 500 for every request. A second, independent bug in the same
+  handler: the JSON body was read with `file_get_contents('php://input')` —
+  a CGI/FPM-era idiom; on this Workerman CLI SAPI the body lives on the
+  Request, so even a correctly-shaped handler would have parsed an empty
+  string and answered its own 400. The cure takes `id`/`markerId` from the
+  route params and the body from `$request->rawBody` (the
+  `Invalid JSON body` 400 envelope stays byte-identical), the deliberately
+  unregistered `getMarkers` sibling was reshaped to the convention with them,
+  and the ownership tests now call through the router's own `(Request, array)`
+  shape (they had been calling with bare strings — the exact blind spot).
+  The bug class gets a permanent whole-table guard:
+  `ApplicationRouterWirePathGuardTest::testEveryRegisteredHandlerAcceptsTheRouterCallingConvention()`
+  reflects EVERY registered handler pair (all 353 rails, closures included)
+  and refuses any declared parameter that cannot bind what `callHandler`
+  passes — measured red at the parent naming exactly the two marker rails,
+  zero collateral. `RequestDynamicPropertyCensusExecutableTest` denominators
+  re-pinned from their measured reds in the same commit (reads 457→458: the
+  src `rawBody` read; writes 1119→1123: the four test harness seeds).
+  [review server__srphp 2026-11-03, Critical]
 - **Newsletter queue collapses no longer pick the row that loses the user's
   delivery.** `migrations/125_newsletter_queue_user_week_unique.sql` deduped
   `(user_id, week_start)` groups by keeping the EARLIEST row: a pending retry

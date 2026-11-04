@@ -18,6 +18,8 @@ use Phlix\Server\WebPortal\WebPortalRouter;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
+use ReflectionFunction;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -1360,5 +1362,174 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
             . 'assertions above use. If it does not, those refusals prove nothing.'
         );
         $this->assertSame('ok', $this->body($response)['status'] ?? null);
+    }
+
+    /**
+     * 2026-11-03 review server__srphp CRITICAL — router calling-convention guard.
+     *
+     * `Router::callHandler()` invokes EVERY handler as `$handler($request, $params)`
+     * (src/Server/Http/Router.php). Controller files run under
+     * `declare(strict_types=1)`, so a handler that declares `string $id` as its first
+     * parameter cannot bind the `Request` — dispatch throws TypeError and every
+     * request on that rail 500s through HttpHandler's Throwable catch.
+     *
+     * The two live media-marker write rails shipped exactly that wrong shape
+     * (`createMarker(string $id)`, `deleteMarker(string $id, string $markerId)`) and
+     * stayed 100%-broken with the entire suite green, because mock-based controller
+     * tests call the methods DIRECTLY with strings and this file's manifest pins only
+     * the wiring text table. This test reads the PRODUCTION route table (the same one
+     * {@see self::renderedManifest()} pins) and asserts every handler can accept the
+     * two positional arguments callHandler passes:
+     *
+     * - a declared parameter counts as violating only when a NAMED type cannot bind
+     *   what callHandler sends (param 1 must accept a Request instance, param 2 an
+     *   array). Untyped and zero-parameter handlers are legal — PHP ignores extra
+     *   positional arguments at userland calls, so they cannot produce a TypeError;
+     * - union/intersection types are refused outright (none exist today; a refusal
+     *   here forces a deliberate look at the rail instead of silent rot);
+     * - a missing or non-public method is a violation — callHandler's
+     *   `$instance->$method(...)` fatals on both.
+     *
+     * The bug class is invisible to any per-controller mock test BY CONSTRUCTION;
+     * this whole-table reflection is what makes it impossible to ship again.
+     */
+    public function testEveryRegisteredHandlerAcceptsTheRouterCallingConvention(): void
+    {
+        /** @var list<string> $violations */
+        $violations = [];
+        $inspected = 0;
+        $total = 0;
+
+        foreach ($this->routeTable() as $verb => $entries) {
+            foreach ($entries as $entry) {
+                $total++;
+                $path = $entry['path'] ?? null;
+                $this->assertIsString($path);
+
+                $handler = $entry['handler'] ?? null;
+                $label = is_array($handler)
+                    ? sprintf(
+                        '%s %s -> %s::%s',
+                        $verb,
+                        $path,
+                        $this->shortName(is_object($handler[0]) ? $handler[0]::class : (string) $handler[0]),
+                        (string) $handler[1]
+                    )
+                    : sprintf('%s %s -> Closure', $verb, $path);
+
+                /** @var list<string> $routeViolations */
+                $routeViolations = [];
+                $reflection = null;
+
+                if (is_array($handler)) {
+                    $this->assertCount(2, $handler, "route {$label} must bind [target, method]");
+                    $target = $handler[0];
+                    $this->assertTrue(
+                        is_object($target) || is_string($target),
+                        "route {$label} must bind an object or class-string target"
+                    );
+                    $className = is_object($target) ? $target::class : $target;
+                    $method = (string) $handler[1];
+                    if (!method_exists($className, $method)) {
+                        $routeViolations[] = "{$label}: method does not exist on {$className}";
+                    } else {
+                        $candidate = new ReflectionMethod($className, $method);
+                        if (!$candidate->isPublic()) {
+                            $routeViolations[] = "{$label}: handler method is not public";
+                        } else {
+                            $reflection = $candidate;
+                        }
+                    }
+                } elseif ($handler instanceof \Closure) {
+                    $reflection = new ReflectionFunction($handler);
+                } else {
+                    $this->fail("route {$label} carries an unrecognised handler shape");
+                }
+
+                if ($routeViolations === [] && $reflection !== null) {
+                    $signature = $this->renderSignature($reflection);
+                    $parameters = $reflection->getParameters();
+
+                    foreach ([0 => Request::class, 1 => 'array'] as $position => $expected) {
+                        if (!array_key_exists($position, $parameters)) {
+                            continue;
+                        }
+                        $type = $parameters[$position]->getType();
+                        if ($type === null) {
+                            continue;
+                        }
+                        if (!$type instanceof \ReflectionNamedType) {
+                            $routeViolations[] =
+                                "{$label}: composite type at position {$position} ({$signature})";
+                            continue;
+                        }
+                        if ($type->getName() === 'mixed') {
+                            continue;
+                        }
+                        $bindable = $expected === 'array'
+                            ? in_array($type->getName(), ['array', 'iterable'], true)
+                            : !$type->isBuiltin() && is_a($type->getName(), Request::class, true);
+                        if (!$bindable) {
+                            $routeViolations[] =
+                                "{$label}: position {$position} cannot bind ({$signature})";
+                        }
+                    }
+                }
+
+                if ($routeViolations === []) {
+                    $inspected++;
+                } else {
+                    $violations = [...$violations, ...$routeViolations];
+                }
+            }
+        }
+
+        $this->assertSame(
+            $total,
+            $inspected + ($violations === [] ? 0 : count($this->distinctViolationRoutes($violations))),
+            'ANTI-VACUITY: every entry in the production route table must be inspected or reported'
+        );
+
+        $this->assertSame([], $violations, implode(
+            "\n",
+            ['Handlers that violate the Router calling convention (TypeError → HTTP 500 at dispatch):']
+            + $violations
+        ));
+    }
+
+    /**
+     * One route can fail at both positions; the anti-vacuity sum counts ROUTES, so
+     * collapse violation lines by their route label (text before ": ").
+     *
+     * @param list<string> $violations
+     * @return list<string>
+     */
+    private function distinctViolationRoutes(array $violations): array
+    {
+        $routes = [];
+        foreach ($violations as $violation) {
+            $separator = strpos($violation, ': ');
+            if ($separator === false) {
+                continue;
+            }
+            $routes[substr($violation, 0, $separator)] = true;
+        }
+
+        return array_keys($routes);
+    }
+
+    /**
+     * @param ReflectionMethod|\ReflectionFunction $reflection
+     */
+    private function renderSignature(ReflectionMethod|\ReflectionFunction $reflection): string
+    {
+        return '(' . implode(', ', array_map(
+            static fn (\ReflectionParameter $param): string => sprintf(
+                '%s$%s',
+                $param->hasType() ? (string) $param->getType() . ' ' : '',
+                $param->getName()
+            ),
+            $reflection->getParameters()
+        )) . ')';
     }
 }

@@ -13,6 +13,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
+use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\RequestContext;
 
@@ -37,15 +38,36 @@ final readonly class MediaMarkerController
      * Note: This endpoint is NOT registered to avoid conflicting with MarkerController's
      * skip marker set endpoint. User marker listing should go through getPlaybackInfo
      * or a dedicated endpoint in the future.
+     *
+     * 2026-11-03 review server__srphp CRITICAL: handlers are invoked by
+     * `Router::callHandler()` as `$handler($request, $params)` — a `string $id`
+     * first parameter cannot bind a Request under strict_types, so every prior
+     * wrong-shape signature here was dispatch-time TypeError → HTTP 500. The
+     * convention is pinned repo-wide by
+     * {@see \Phlix\Tests\Unit\Server\Core\ApplicationRouterWirePathGuardTest::testEveryRegisteredHandlerAcceptsTheRouterCallingConvention()};
+     * this method stays correct even though it is deliberately unregistered.
+     *
+     * @param Request              $request The HTTP request
+     * @param array<string, string> $params Route params with 'id' key
      */
-    public function getMarkers(string $id): Response
+    public function getMarkers(Request $request, array $params): Response
     {
+        $id = $params['id'] ?? '';
+
         $markers = $this->markerService->findByMediaItem($id);
         return (new Response())->json(['markers' => array_map(fn($m) => $m->toArray(), $markers)]);
     }
 
-    public function createMarker(string $id): Response
+    /**
+     * POST /api/v1/media/{id}/markers — create/update a user marker.
+     *
+     * @param Request              $request The HTTP request (JSON body read from rawBody)
+     * @param array<string, string> $params Route params with 'id' key
+     */
+    public function createMarker(Request $request, array $params): Response
     {
+        $id = $params['id'] ?? '';
+
         // Verify the media item exists before allowing marker creation
         $item = $this->itemRepository->findById($id);
         if ($item === null) {
@@ -58,11 +80,11 @@ final readonly class MediaMarkerController
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
-        $rawBody = file_get_contents('php://input');
-        if (!is_string($rawBody)) {
-            return (new Response())->status(400)->json(['error' => 'Invalid request body']);
-        }
-        $decoded = json_decode($rawBody, true);
+        // 2026-11-03 review server__srphp CRITICAL (second, independent bug): the
+        // body lives on the Request (Workerman CLI SAPI — there is no CGI
+        // php://input here), so the old file_get_contents read always saw an
+        // empty string and the endpoint could never parse a real JSON body.
+        $decoded = json_decode($request->rawBody, true);
         if (!is_array($decoded)) {
             return (new Response())->status(400)->json(['error' => 'Invalid JSON body']);
         }
@@ -93,9 +115,18 @@ final readonly class MediaMarkerController
      * 3. The current user owns the marker (user_id matches), OR the marker
      *    has no user_id (NULL = legacy system marker) and the requester is an
      *    ACTIVE admin (minors M-SERVER-80: non-admins are refused 403)
+     *
+     * Router calling convention: see the createMarker/getMarkers docblocks —
+     * item id and marker id arrive as route params, never as bare strings.
+     *
+     * @param Request              $request The HTTP request (unused; convention shape)
+     * @param array<string, string> $params Route params with 'id' and 'markerId' keys
      */
-    public function deleteMarker(string $id, string $markerId): Response
+    public function deleteMarker(Request $request, array $params): Response
     {
+        $id = $params['id'] ?? '';
+        $markerId = $params['markerId'] ?? '';
+
         // Verify authenticated user context exists
         $userId = RequestContext::getUserId();
         if ($userId === null) {

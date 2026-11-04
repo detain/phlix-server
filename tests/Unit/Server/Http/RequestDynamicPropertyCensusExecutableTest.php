@@ -1092,8 +1092,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * (disclosed). The minor-56 QueryBuilder deletion is inert to this
      * denominator (the file held zero $request property reads — probe-proven
      * via the at-HEAD run). Measured from the phpunit red (457), not predicted.
+     * Re-pinned 457→458 by the 2026-11-03 review server__srphp CRITICAL cure
+     * (markers dead-path fix): MediaMarkerController::createMarker replaced its
+     * CGI-era file_get_contents('php://input') read with the declared
+     * $request->rawBody read (+1 src site; the reworked ownership tests'
+     * $request->method/->rawBody seeds are writes — counted below).
+     * Measured from the phpunit red (458), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 457;
+    private const EXPECTED_DECLARED_READS = 458;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1319,7 +1325,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // '$request->query = ['type' => 'movie'];' seed in
     // WebPortalRouterRatingFilterTest — one site, the sanctioned
     // harness-seed pattern; zero src/ writes added).
-    private const EXPECTED_DECLARED_WRITES = 1119;
+    // 2026-11-03 review server__srphp CRITICAL cure (+4 writes = the two new
+    // createMarker tests in MediaMarkerOwnershipTest each seed
+    // $request->method + $request->rawBody — two sites per test, the
+    // sanctioned harness-seed pattern; zero src/ writes added — the src delta
+    // there is a READ, counted on the denominator above).
+    // Measured from the phpunit red (1123), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1123;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

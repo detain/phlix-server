@@ -486,7 +486,7 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   `web-ui/package.json:15`) exposes both the **admin** Collections page (`/app/admin/collections`)
   and the member-facing `/app/playlists` pages (the v0.99.12 re-pin landed them; playlist
   manageability gating per `@phlix/ui` v0.99.11/v0.99.12). Either way clients code against the REST contract above —
-  `openapi.yaml` carries all paths (`/api/v1/collections*` from `:5738`) and
+  `openapi.yaml` carries all paths (`/api/v1/collections*` from `:5728`) and
   `OpenapiSpecCurrencyTest` machine-checks the route↔spec bijection.
 
 ### Live TV & DVR (admin-managed)

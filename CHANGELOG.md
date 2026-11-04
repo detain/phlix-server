@@ -79,6 +79,11 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Stale openapi line cite in the README collections note.** The prose
+  pointed at `openapi.yaml :5738` for the first `/api/v1/collections*` path;
+  the block actually starts at `:5728` (a 10-line drift from an earlier spec
+  edit). The cite now names the measured line; the cited path set is
+  unchanged. [review server__docmaint]
 - **Double period at the end of a README sentence.** The Library-management
   bullet closed with two periods after the phlix-docs server-settings link
   (`..` where house typography wants `.`); the links and the sentence are

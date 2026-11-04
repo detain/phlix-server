@@ -12,9 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Webhooks;
 
 use DateTimeImmutable;
+use InvalidArgumentException;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\SsrfGuard;
 use Workerman\MySQL\Connection;
 use Workerman\Timer;
 
@@ -42,6 +44,18 @@ use Workerman\Timer;
  * applies to {@see WebhookDispatcher} deliveries only. Signing this path
  * is an open owner decision — until it ships, do not advertise these
  * deliveries as authenticated.
+ *
+ * ## Deliveries re-validate the stored URL at dispatch (review SRV-M20)
+ *
+ * Both the first attempt ({@see self::processDelivery()}) and every retry
+ * ({@see self::retryDelivery()}) run the stored delivery URL through
+ * {@see SsrfGuard::assertPublicUrl()} immediately before posting — the same
+ * moment-of-use doctrine the signed sibling {@see WebhookDispatcher}
+ * enforces — so a row poisoned after creation (direct DB write, restore)
+ * cannot reach loopback/link-local/private targets, and every retry
+ * re-resolves DNS so the rebinding window stays closed.
+ * {@see self::createSubscription()} additionally guards at write time
+ * inside the service, independent of controller-side validation.
  *
  * @autowire
  */
@@ -225,6 +239,16 @@ class WebhookService
             return;
         }
 
+        // Moment-of-use SSRF re-validation (SRV-M20): mirror the sibling
+        // WebhookDispatcher doctrine — a stored row poisoned after creation
+        // (or via a direct DB write/restore) must never reach internal space,
+        // and every retry re-evaluates it (DNS-rebinding window closes).
+        $refusal = $this->ssrfRefusal($delivery);
+        if ($refusal !== null) {
+            $this->handleFailedDelivery($delivery, $refusal);
+            return;
+        }
+
         $httpResponse = $this->httpClient->post(
             $delivery->webhookUrl,
             $eventType,
@@ -243,6 +267,38 @@ class WebhookService
         } else {
             $this->handleFailedDelivery($delivery, $httpResponse);
         }
+    }
+
+    /**
+     * SSRF refusal probe for one stored delivery row (SRV-M20).
+     *
+     * Returns the synthesized failed-httpResponse when the guard refuses the
+     * URL — feed it to {@see self::handleFailedDelivery()} so the attempt is
+     * recorded, the admin-visible response_body names the block, and the
+     * standard backoff re-checks at the next moment of use. Null means the
+     * URL passed the guard.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function ssrfRefusal(WebhookDeliveryRecord $delivery): ?array
+    {
+        try {
+            SsrfGuard::assertPublicUrl($delivery->webhookUrl);
+        } catch (InvalidArgumentException $e) {
+            $message = 'SSRF guard blocked URL: ' . $e->getMessage();
+            $this->logger->warning('Webhook delivery refused by SSRF guard', [
+                'delivery_id' => $delivery->id,
+                'error' => $message,
+            ]);
+            return [
+                'success' => false,
+                'response_code' => null,
+                'response_body' => $message,
+                'error' => $message,
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -392,6 +448,14 @@ class WebhookService
             return;
         }
 
+        // SRV-M20: the retry path re-reads the STORED url — guard it at the
+        // moment of use exactly like the first attempt.
+        $refusal = $this->ssrfRefusal($delivery);
+        if ($refusal !== null) {
+            $this->handleFailedDelivery($delivery, $refusal);
+            return;
+        }
+
         $httpResponse = $this->httpClient->post(
             $delivery->webhookUrl,
             $event->eventType,
@@ -419,13 +483,24 @@ class WebhookService
     /**
      * Create a new webhook subscription.
      *
+     * Service-layer SSRF law (SRV-M20): the admin controller already
+     * refuses non-public URLs, but this service must not trust its caller —
+     * any future non-admin writer, and every direct code path around the
+     * controller, are guarded here too. Throws the same
+     * {@see InvalidArgumentException} the controller maps to its 400
+     * validation envelope, so the wire shape is unchanged.
+     *
      * @param string $url Webhook endpoint URL
      * @param array<string> $events Array of subscribed event types
      *
      * @return int New subscription ID
+     *
+     * @throws InvalidArgumentException When the URL is not a safe public http(s) target.
      */
     public function createSubscription(string $url, array $events): int
     {
+        SsrfGuard::assertPublicUrl($url);
+
         $eventsJson = json_encode($events, JSON_THROW_ON_ERROR);
 
         $this->db->query(

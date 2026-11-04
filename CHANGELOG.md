@@ -100,6 +100,23 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Webhook deliveries re-validate the stored URL through the SSRF guard on
+  every attempt — a subscription can no longer POST to a target the guard
+  would refuse (review server__secaudit).** The unsigned subscription
+  subsystem took whatever URL it was handed and posted events to it at both
+  dispatch sites, so a row mutated out-of-band (or written by a future
+  non-guarded path) could send signed-shape payloads to link-local, loopback
+  or other internal endpoints. `WebhookService::createSubscription()` now
+  runs `SsrfGuard::assertPublicUrl()` at the service boundary (defense in
+  depth behind the admin controller's existing guard), and `processDelivery`
+  / `retryDelivery` re-check the URL on the row they are about to POST:
+  a refusal is recorded as a failed delivery (retryable shape, logged,
+  response body names the guard) and zero bytes leave the process. Pinned by
+  `WebhookServiceSsrfTest` (six network-free cases: create-time refusals,
+  public-literal pass-through, mutated-row and poisoned-retry delivery legs).
+  The S431 file census staircase continues 2058 to 2059 with its pin file.
+  [server__secaudit]
+
 - **Smart collections stop lying — a bogus `smart_playlist_id` is refused 400
   at create/update, and a dangling edge answers refresh with 409 instead of a
   200 that refreshed nothing (review server__pm).** Create and PUT accepted any

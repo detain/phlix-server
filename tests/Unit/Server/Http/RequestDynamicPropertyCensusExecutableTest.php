@@ -1035,7 +1035,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // CollectionManagerSmartEdgeTest.php (SRV-M19 smart-edge oracle pin,
     // review server__pm). Measured from the phpunit red (2058), not
     // predicted.
-    private const EXPECTED_PHP_FILES = 2058;
+    // +1 2058→2059: the SRV-M20 sibling adds tests/Unit/Webhooks/
+    // WebhookServiceSsrfTest.php (delivery SSRF re-validation pin, review
+    // server__secaudit), completing the staircase this pair measured red at
+    // 2059.
+    private const EXPECTED_PHP_FILES = 2059;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

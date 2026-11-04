@@ -452,6 +452,7 @@ class PlaybackController
             "SELECT limited.media_item_id,
                     limited.position_ticks, limited.duration_ticks, limited.updated_at,
                     mi.name, mi.type, mi.path, mi.parent_id, mi.created_at, mi.metadata_json,
+                    mi.library_id,
                     p.metadata_json AS parent_metadata_json,
                     s.metadata_json AS series_metadata_json
              FROM (
@@ -521,14 +522,18 @@ class PlaybackController
             }
 
             // Build the item array for MediaItemShaper::shape(): needs top-level
-            // id, name, type, path, parent_id, created_at, updated_at, metadata.
-            // Use media_item_id (not playback state id) as the shaped id.
+            // id, name, type, path, parent_id, library_id, created_at, updated_at,
+            // metadata. Use media_item_id (not playback state id) as the shaped id.
+            // library_id is NOT decoration: the SPA's 'Add to playlist → Create'
+            // leg POSTs the card's library_id and CollectionController::create()
+            // 400s without it [review xrepo__server-ui].
             $item = [
                 'id' => $row['media_item_id'],
                 'name' => $row['name'],
                 'type' => $row['type'],
                 'path' => $row['path'] ?? null,
                 'parent_id' => $row['parent_id'] ?? null,
+                'library_id' => $row['library_id'] ?? null,
                 'created_at' => $row['created_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
                 'metadata' => $metadata,

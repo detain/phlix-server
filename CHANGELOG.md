@@ -79,6 +79,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Rail cards can create playlists again — the continue-watching and Next-Up
+  rails now carry a real `library_id` (review xrepo__server-ui).** The SPA's
+  'Add to playlist → Create new' leg POSTs the card row's `library_id`, and
+  `CollectionController::create()` answers 400 `Library ID is required` on a
+  non-string. c42e166a restored the key for GRID rows (their queries are
+  `SELECT *`; the shape() whitelist was the only thing dropping it), but both
+  HOME rails project narrow column lists that never asked for `mi.library_id`,
+  and each builds its `shape()` input from an explicit key set that omitted it
+  too — so every rail card shipped `library_id: null` and playlist creation
+  from those cards failed for every user. The two projections now carry
+  `mi.library_id` and the two `$item` builders thread it into
+  `MediaItemShaper::shape()`, pinned at both legs (SQL projection + wire
+  value) by new tests. Zero schema, zero new routes, zero contract moves: the
+  key was already in the shape()'s whitelisted 27 since c42e166a.
 - **CORS preflight now advertises every header the server actually reads and the
   SPA actually sends (SRV-M16, review server__fedev).** `ALLOW_HEADERS` listed
   only `Authorization, Content-Type, X-Device-Id` while `src/` reads

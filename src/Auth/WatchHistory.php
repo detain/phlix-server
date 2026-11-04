@@ -483,7 +483,12 @@ class WatchHistory
      * Deduped with `ROW_NUMBER() OVER (PARTITION BY episode ORDER BY updated_at
      * DESC, id DESC)` so multi-session playback collapses to the latest row. The
      * season + series `metadata_json` are projected so {@see shapeNextEpisode()}
-     * can resolve the SERIES poster for the episode card (mirrors CW).
+     * can resolve the SERIES poster for the episode card (mirrors CW). The
+     * `library_id` column is projected for the other half of the same contract:
+     * the SPA's 'Add to playlist → Create' leg POSTs the card's library_id and
+     * {@see \Phlix\Server\Http\Controllers\CollectionController::create()} 400s
+     * without a non-empty string — grid rows gained the key at c42e166a; rails
+     * are narrow projections and had to ask for it too [review xrepo__server-ui].
      *
      * @param string $userId   The resolved user UUID.
      * @param string $seriesId The series UUID.
@@ -494,12 +499,14 @@ class WatchHistory
     {
         $result = $this->db->query(
             "SELECT ranked.id, ranked.name, ranked.type, ranked.path, ranked.parent_id,
+                    ranked.library_id,
                     ranked.created_at, ranked.updated_at, ranked.metadata_json,
                     ranked.parent_metadata_json, ranked.series_metadata_json,
                     ranked.series_id, ranked.series_name,
                     ranked.playback_status, ranked.position_ticks, ranked.duration_ticks
              FROM (
                  SELECT mi.id, mi.name, mi.type, mi.path, mi.parent_id,
+                        mi.library_id,
                         mi.created_at, mi.updated_at, mi.metadata_json,
                         se.metadata_json AS parent_metadata_json,
                         s.metadata_json AS series_metadata_json,
@@ -560,6 +567,7 @@ class WatchHistory
             'type' => UserRow::string($row, 'type') ?? 'episode',
             'path' => $row['path'] ?? null,
             'parent_id' => $row['parent_id'] ?? null,
+            'library_id' => $row['library_id'] ?? null,
             'created_at' => $row['created_at'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
             'metadata' => $metadata,

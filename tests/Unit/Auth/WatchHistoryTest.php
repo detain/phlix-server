@@ -689,6 +689,68 @@ class WatchHistoryTest extends TestCase
     }
 
     /**
+     * [review xrepo__server-ui] Sibling of the continue-watching rail pin: the
+     * Next-Up rail shapes its pick through the SAME shape() whitelist, and the
+     * SPA's create-playlist leg POSTs the card's library_id — which 400s when
+     * null. fetchSeriesEpisodes projects a narrow column list and never carried
+     * library_id, and shapeNextEpisode() never passed it to shape(). Pins both
+     * the projection leg and the wire leg.
+     */
+    public function testGetNextUpRailCarriesRealLibraryIdForPlaylistCreate(): void
+    {
+        $episodeSql = null;
+
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql) use (&$episodeSql) {
+                if (str_contains($sql, 'user_profiles')) {
+                    return [['user_id' => 'user-1']];
+                }
+                if (str_contains($sql, 'ps.media_item_id AS episode_id')) {
+                    return [[
+                        'series_id' => 'series-x',
+                        'episode_id' => 'ep-1',
+                        'updated_at' => '2026-01-01 00:00:00',
+                    ]];
+                }
+                if (str_contains($sql, 'series_metadata_json')) {
+                    $episodeSql = $sql;
+
+                    return [[
+                        'id' => 'ep-1',
+                        'name' => 'S01E02',
+                        'type' => 'episode',
+                        'metadata_json' => '{"season":1,"episode":2}',
+                        'parent_metadata_json' => '{}',
+                        'series_metadata_json' => '{"poster_url":"/series/x.jpg"}',
+                        'series_id' => 'series-x',
+                        'series_name' => 'Series X',
+                        'playback_status' => null,
+                        'position_ticks' => 0,
+                        'duration_ticks' => 0,
+                        'library_id' => 'lib-77',
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        $result = $this->watchHistory->getNextUp('profile-1', 20);
+
+        $this->assertNotNull($episodeSql, 'the per-series episode query must have been issued');
+        $this->assertStringContainsString(
+            'mi.library_id',
+            $episodeSql,
+            'fetchSeriesEpisodes must project the owning-library column onto the row it shapes'
+        );
+        $this->assertCount(1, $result);
+        $this->assertSame(
+            'lib-77',
+            $result[0]['library_id'] ?? null,
+            'the shaped Next-Up pick must carry the string library_id the SPA POSTs to /api/v1/playlists'
+        );
+    }
+
+    /**
      * @return array<string, array{int, int}> [requested $limit, expected inlined scan cap]
      */
     public static function nextUpScanCapProvider(): array

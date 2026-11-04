@@ -360,6 +360,53 @@ final class PlaybackControllerTest extends TestCase
     }
 
     /**
+     * [review xrepo__server-ui] The SPA's 'Add to playlist → Create new' flow
+     * POSTs the card row's library_id and CollectionController::create() 400s
+     * ("Library ID is required") on a non-string — so every rail card that
+     * carries library_id: null cannot start a playlist. c42e166a cured the
+     * GRID rows (shape()'s whitelist gained the key; grid queries are
+     * SELECT *); the continue-watching rail is a narrow projection and dropped
+     * the column TWICE over — absent from the SQL AND from the $item array
+     * fed to shape(). This test pins both legs from the wire inward.
+     */
+    public function testContinueWatchingRailCarriesRealLibraryIdForPlaylistCreate(): void
+    {
+        $rows = [
+            [
+                'media_item_id' => 'm-cw-1',
+                'name' => 'Interstellar',
+                'type' => 'movie',
+                'path' => '/movies/interstellar.mkv',
+                'parent_id' => null,
+                'created_at' => '2026-01-01 00:00:00',
+                'updated_at' => '2026-01-02 00:00:00',
+                'metadata_json' => '{}',
+                'position_ticks' => 1000,
+                'duration_ticks' => 10000,
+                'library_id' => 'lib-42',
+            ],
+        ];
+        $controller = new PlaybackController(
+            $this->captureConnection($rows),
+            $this->createMock(SessionManager::class)
+        );
+
+        $result = $controller->getContinueWatching('user-1', 10);
+
+        self::assertNotNull($this->captured);
+        self::assertStringContainsString(
+            'mi.library_id',
+            $this->captured['query'],
+            'the rail SQL must project the owning-library column — shape() can only carry what the row holds'
+        );
+        self::assertSame(
+            'lib-42',
+            $result[0]['library_id'] ?? null,
+            'the shaped rail row must carry the string library_id the SPA POSTs to /api/v1/playlists'
+        );
+    }
+
+    /**
      * A Connection stub that records the query + params and returns $rows.
      *
      * @param list<array<string, mixed>> $rows

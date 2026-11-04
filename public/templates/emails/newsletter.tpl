@@ -313,7 +313,7 @@
                 <!-- New Items Section -->
                 <div class="new-items-section">
                     <div class="new-items-count">{$new_items_count|default:'0'}</div>
-                    <div class="new-items-label">new items added to the library this week</div>
+                    <div class="new-items-label">{if $new_items_count == 1}new item added to the library this week{else}new items added to the library this week{/if}</div>
                 </div>
 
                 <!-- CTA Section -->

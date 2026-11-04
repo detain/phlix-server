@@ -79,6 +79,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The newsletter HTML leg mailed "1 new items added to the library this
+  week".** The plain-text leg carries the 0/1 grammar guard (and the HTML
+  play-count line always did — "1 play"); the new-items label was the one
+  site the earlier sweep left behind. The template now declines a one-item
+  week as "new item added"; `NewsletterGrammarTruthTest` pins both arms at
+  the committed bytes. [review server__copywriter SRV-M1]
 - **Any authenticated member could read arbitrary files on the host through
   the HLS/DASH segment routes: the `job_id` path parameter was interpolated
   into the served filesystem path unvalidated.** `{job_id}` matches the raw

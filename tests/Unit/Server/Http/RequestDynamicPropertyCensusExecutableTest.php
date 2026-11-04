@@ -998,7 +998,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // AdminPasswordHandoffRealDbTest.php (hash-once proof for the
     // AdminUserController double-hash CRITICAL, review server__srphp).
     // Measured from the phpunit red (2048), not predicted.
-    private const EXPECTED_PHP_FILES = 2048;
+    // +1 2048→2049: this cure added tests/Unit/Admin/
+    // NewsletterGrammarTruthTest.php (newsletter HTML-leg singular guard,
+    // review server__copywriter SRV-M1). Measured from the phpunit red
+    // (2049), not predicted.
+    private const EXPECTED_PHP_FILES = 2049;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

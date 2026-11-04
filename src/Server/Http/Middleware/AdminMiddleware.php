@@ -25,11 +25,13 @@ use Phlix\Server\Http\Response;
  * `array<callable>` rather than a typed middleware interface.
  *
  * Behaviour:
- *  - `$request->userId === null` → 401 Unauthorized JSON `{error}`.
+ *  - `$request->userId === null` → 401 Unauthorized JSON `{error, code}`
+ *    (code `auth.required`).
  *    This happens before the bearer-token validator has had a chance,
  *    or when the token is invalid / expired.
  *  - `$request->userId` set, but the user is not in `users` with
- *    `is_admin = 1` → 403 Forbidden JSON `{error}` and an
+ *    `is_admin = 1` → 403 Forbidden JSON `{error, code}` (code
+ *    `auth.not_admin`) and an
  *    `AuditLogger::logPermissionDenied()` entry so privilege
  *    escalation attempts are traceable.
  *  - Otherwise → returns `null`, signalling the {@see \Phlix\Server\Http\Router}
@@ -77,8 +79,11 @@ final class AdminMiddleware
      * {@see \Phlix\Server\Http\Router::runMiddleware()} semantics).
      *
      * @param Request $request Incoming request. {@see Request::$userId}
-     *                         is expected to be filled by the bearer-token
-     *                         validation block in `public/index.php`.
+     *                         is expected to be filled by the pre-dispatch
+     *                         bearer-token / `phlix_session` authentication
+     *                         seam ({@see \Phlix\Server\Http\RequestAuthenticator},
+     *                         run by the served Workerman entry point
+     *                         `src/Server/Workerman/HttpHandler.php`).
      *
      * @return Response|null   401/403 to short-circuit; null to continue.
      *
@@ -107,10 +112,15 @@ final class AdminMiddleware
      * (401/403) when the request fails the admin gate, or `null` when
      * the request should be allowed through.
      *
-     * Shared with the SSR page-route branch in `public/index.php` so
-     * the role-check logic lives in exactly one place. Side effects
-     * (audit logging for the 403 case) happen here too so the page
-     * route automatically gets the same security telemetry as the JSON
+     * The single role-decision site for the admin gate: besides this class's
+     * own {@see __invoke()}, Admin-surface controllers call it as an
+     * in-handler guard (e.g. `AdminUpdatesController`, `MaintenanceController`,
+     * `ThemeMediaController`, `LibraryController`, `WebhookAdminController`,
+     * `MediaPosterController`, `MediaMatchController`, `Arr\SyncController`),
+     * mapping the returned status to their own response shape — so the
+     * role-check logic lives in exactly one place. Side effects
+     * (audit logging for the 403 case) happen here too so every gate
+     * consumer automatically gets the same security telemetry as the JSON
      * API.
      *
      * @param Request $request Incoming request. {@see Request::$userId}

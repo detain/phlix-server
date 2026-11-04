@@ -19,9 +19,11 @@ use Phlix\Server\Http\Response;
  * Gates an HTTP route group behind "must be a signed-in user" — the
  * authenticated-but-not-necessarily-admin counterpart to {@see AdminMiddleware}.
  *
- * Both HTTP entry points populate {@see Request::$userId} from the Bearer token
- * (or the `phlix_session` cookie) BEFORE dispatch — see `public/index.php` and
- * {@see \Phlix\Server\Workerman\HttpHandler}. This middleware simply requires it
+ * The served HTTP entry point — `src/Server/Workerman/HttpHandler.php`, which
+ * runs the pre-dispatch authentication seam
+ * ({@see \Phlix\Server\Http\RequestAuthenticator}) — populates
+ * {@see Request::$userId} from the Bearer token (or the `phlix_session`
+ * cookie) BEFORE dispatch. This middleware simply requires it
  * to be present, so media/library listing + search endpoints are no longer
  * world-readable (a private library must not be enumerable without logging in).
  *

@@ -100,6 +100,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The auth middlewares' wire-shape docblocks told the truth about a dead
+  world: `AdminMiddleware` pointed at "the SSR page-route branch in
+  `public/index.php`" as a co-consumer (that front controller was deleted by
+  S171 and its removal is guard-pinned), advertised its 401/403 envelopes as
+  bare JSON `{error}` while the code emits `{error, code}`
+  (`auth.required` / `auth.not_admin`), and `AuthMiddleware` still named
+  `public/index.php` as one of "both HTTP entry points" that populate
+  `$request->userId` (review server__fedev, SRV-m21).** Envelope-shape
+  docblocks are the browser contract in this repo. They now state the emitted
+  `{error, code}` pair, name the sole live entry point (the served Workerman
+  `HttpHandler` running the `RequestAuthenticator` seam), and describe
+  `checkAccess()`'s actual co-consumers — the Admin-surface controllers'
+  in-handler guards — instead of a file that no longer exists.
+
 - **The copy-pasteable version-pin example pinned a tag that does not exist:
   `--branch v0.2.0` is not a release — the repo's tags start at v1.0.0, and
   both the README section and the installer's own `--help` carried the dead

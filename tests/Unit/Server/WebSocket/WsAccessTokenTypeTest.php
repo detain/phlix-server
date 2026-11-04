@@ -17,8 +17,12 @@ use Workerman\Connection\TcpConnection;
  * JwtHandler::validateToken() verifies signature and expiry but is type-blind —
  * the refresh token (7-day TTL) is a signing-valid, unexpired credential. Before
  * this guard, a stolen refresh token — minted for the REST refresh rail only —
- * could authenticate a live SyncPlay WebSocket session for a full week. Every
- * validation rail in SyncPlayAuthMiddleware now demands `type === 'access'`.
+ * could authenticate a live SyncPlay WebSocket session for a full week. Both
+ * live validation rails of SyncPlayAuthMiddleware — the handshake gate
+ * {@see SyncPlayAuthMiddleware::authenticateConnection()} and the public
+ * {@see SyncPlayAuthMiddleware::validateTokenStatic()} — demand
+ * `type === 'access'`. (The deprecated TCP-accept rail that also carried the
+ * guard was deleted with INFO-SERVER-32; its pin retired with it.)
  */
 final class WsAccessTokenTypeTest extends TestCase
 {
@@ -39,7 +43,6 @@ final class WsAccessTokenTypeTest extends TestCase
         $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
         $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
-        unset($_GET['token'], $_GET['syncplay_user_id']);
         // Un-pool (remove() also un-indexes userId/sessionId), then the singleton
         // reset guarantees no cross-test residue under random execution order.
         foreach ($this->pooledIds as $id) {
@@ -69,8 +72,9 @@ final class WsAccessTokenTypeTest extends TestCase
     private array $pooledIds = [];
 
     /**
-     * Build a pooled Connection wrapper, exactly as onConnect() does before the
-     * handshake gate authenticates it.
+     * Build a pooled Connection wrapper, exactly as the live
+     * WebSocketServer::onConnect() does before the handshake gate
+     * authenticates it.
      */
     private function wrap(): Connection
     {
@@ -127,27 +131,5 @@ final class WsAccessTokenTypeTest extends TestCase
             ['sub' => 'user-1'],
             SyncPlayAuthMiddleware::validateTokenStatic($this->accessJwt(), self::SECRET),
         );
-    }
-
-    /**
-     * The deprecated TCP-accept rail keeps the same guard: a refresh token is
-     * closed with the invalid-token code, never stashed into $_GET.
-     */
-    public function testLegacyOnConnectClosesOnRefreshToken(): void
-    {
-        $closedWith = [];
-        $tcp = $this->createMock(TcpConnection::class);
-        $tcp->method('getRemoteIp')->willReturn('203.0.113.9');
-        $tcp->method('close')->willReturnCallback(
-            function (?string $reason = null) use (&$closedWith): void {
-                $closedWith[] = $reason;
-            }
-        );
-
-        $_GET['token'] = $this->refreshJwt();
-        $this->middleware()->onConnect($tcp);
-
-        self::assertNotEmpty($closedWith, 'refresh token must be closed on the legacy rail');
-        self::assertArrayNotHasKey('syncplay_user_id', $_GET);
     }
 }

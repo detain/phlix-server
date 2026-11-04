@@ -203,6 +203,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **INFO tail: a dead WS auth superglobal rail is gone, and the plugin-update
+  rethrow stopped laundering transport prose into client JSON.** From the
+  INFO-SERVER review-queue tail sweep. (1) The deprecated
+  `SyncPlayAuthMiddleware::onConnect()` TCP-accept rail — a `$_GET` reader and
+  superglobal stasher on the auth class, unreferenced in src/ outside its own
+  docblock, whose advertised close codes were structurally never emitted (its
+  private close helper discarded the code argument, and the live
+  handshake-stage gate `authenticateConnection()` does not use the helper at
+  all) — is deleted together with the close helper, the three zero-reader
+  4001-4003 public constants, the stale docblock example, and the dead-path
+  test pin that exercised it. The R17-02 access-only law the rail duplicated
+  stays pinned on both live validation rails (handshake gate + static
+  validator), untouched legs. (2) `PluginUpdateService::fetchLatestVersion()`
+  laundered transport errors into `new \RuntimeException($e->getMessage())` —
+  upstream-URL prose that then reached admin client bodies through every
+  downstream echo (the checkUpdates row `error`, the update leg's 404 copy).
+  The rethrow now carries a fixed curated copy while class, message and repo
+  go to the PLUGINS log only, previous exception preserved; zero new wire
+  codes, envelope shapes unchanged — the E2 law exactly as the E2W wave's
+  `internalFailure()` ships it.
+  [review server__secnet server__secaudit, INFO-SERVER-32 / INFO-SERVER-62]
+
 - **Hub-enrollment refusals now answer the repo's canonical flat
   `{error, code}` envelope.** The three refusal legs on POST
   `/api/v1/auth/hub-token` carried an HTTP phrase (`'Service unavailable'`,

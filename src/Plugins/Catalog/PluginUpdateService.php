@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Catalog;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
 
@@ -200,7 +202,9 @@ final class PluginUpdateService
      * Fetch a repository's own `plugin.json` and return its `version`, or null
      * when the manifest has no usable version string.
      *
-     * @throws \RuntimeException On transport failure or non-JSON response.
+     * @throws \RuntimeException Fixed curated copy on transport failure or
+     *         non-JSON response — the real cause is logged, never carried
+     *         (INFO-SERVER-62, E2 laundering leg).
      */
     private function fetchLatestVersion(string $repo): ?string
     {
@@ -209,7 +213,23 @@ final class PluginUpdateService
         try {
             $body = ($this->fetcher)($url, self::FETCH_TIMEOUT);
         } catch (\Throwable $e) {
-            throw new \RuntimeException($e->getMessage(), 0, $e);
+            // INFO-SERVER-62 (E2 laundering leg): transport errors surface as
+            // exception text embedding the upstream URL, and every downstream
+            // reader of this rethrow echoes getMessage() into an admin client
+            // body (checkUpdates row 'error', the update 404 copy). The wire
+            // carries the fixed curated copy; class + cause go to the log
+            // only — the estate E2 law exactly as the E2W wave's
+            // internalFailure() ships it.
+            LoggerFactory::get(LogChannels::PLUGINS)->error(
+                'Plugin manifest fetch failed',
+                ['repo' => $repo, 'exception' => get_class($e), 'message' => $e->getMessage()]
+            );
+
+            throw new \RuntimeException(
+                'The plugin manifest could not be fetched from its catalog repository.',
+                0,
+                $e,
+            );
         }
 
         /** @var mixed $decoded */

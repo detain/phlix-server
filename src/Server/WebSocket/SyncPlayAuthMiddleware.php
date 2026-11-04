@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebSocket;
 
-use Workerman\Connection\TcpConnection;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Logger\LoggerFactory;
@@ -31,21 +30,20 @@ use Phlix\Common\Logger\LogChannels;
  *    carrier law phlix-hub `:8804` ships, S237) or in the legacy `?token=<jwt>`
  *    query param (transitional; clients retire per estate policy
  *    WEBSOCKET_URL_QUERY_REFUSED). {@see resolveHandshakeToken()} is the law.
- * 2. Middleware validates the JWT token
- * 3. If invalid/expired: connection is closed with code 4001
+ * 2. {@see authenticateConnection()} validates the JWT at the handshake stage
+ * 3. If invalid/expired (or missing while auth is required): the gate returns
+ *    false and the caller — {@see WebSocketServer::onWebSocketConnect()} —
+ *    closes the socket
  * 4. If valid: userId is extracted and attached to the connection context
  *
- * ## Close Codes
- *
- * - **4001**: Invalid or expired token
- * - **4002**: Token missing (if required)
- * - **4003**: Server error during authentication
- *
- * ## Usage
+ * ## Usage (the live wiring)
  *
  * ```php
- * $middleware = new SyncPlayAuthMiddleware($jwtSecret);
- * $worker->onConnect = [$middleware, 'onConnect'];
+ * $middleware = new SyncPlayAuthMiddleware($jwtSecret, true, $authManager);
+ * // called from WebSocketServer::onWebSocketConnect():
+ * if (!$middleware->authenticateConnection($wsConnection, $token)) {
+ *     $connection->close(); // caller rejects the handshake
+ * }
  * ```
  *
  * @author Phlix Development Team
@@ -55,21 +53,6 @@ use Phlix\Common\Logger\LogChannels;
  */
 class SyncPlayAuthMiddleware
 {
-    /**
-     * Close code for invalid or expired token.
-     */
-    public const CLOSE_CODE_INVALID_TOKEN = 4001;
-
-    /**
-     * Close code for missing token when required.
-     */
-    public const CLOSE_CODE_MISSING_TOKEN = 4002;
-
-    /**
-     * Close code for server error during auth.
-     */
-    public const CLOSE_CODE_SERVER_ERROR = 4003;
-
     /**
      * Subprotocol marker id of the bearer credential carrier — the exact name
      * phlix-hub `:8804` uses (`SyncPlayRelayWorker::BEARER_SUBPROTOCOL`, S237)
@@ -195,9 +178,12 @@ class SyncPlayAuthMiddleware
      * (tests/dev, no container) the seam is absent and the gate keeps only the
      * crypto + access-type law.
      *
-     * Unlike {@see onConnect()} this does NOT read `$_GET` (empty/stale at the
-     * TCP-accept stage under Workerman) and does NOT stash the user id in a
-     * superglobal — it authenticates the {@see Connection} wrapper directly.
+     * It does NOT read `$_GET` and does NOT stash the user id in a superglobal
+     * — it authenticates the {@see Connection} wrapper directly. (The
+     * deprecated TCP-accept rail that did both — `onConnect()` — was deleted
+     * with INFO-SERVER-32: under Workerman `$_GET` is empty/stale at
+     * TCP-accept anyway, and a dormant superglobal reader on an auth class is
+     * a regression waiting to be re-wired.)
      *
      * @param Connection  $connection The WebSocket connection wrapper to authenticate.
      * @param string|null $token      The handshake credential resolved by
@@ -287,122 +273,6 @@ class SyncPlayAuthMiddleware
             ]);
             return false;
         }
-    }
-
-    /**
-     * LEGACY TCP-accept handler — kept for backward compatibility only.
-     *
-     * @deprecated Reads `$_GET['token']` at the TCP-accept stage, BEFORE the WS
-     *   handshake, where the query string is not yet populated under Workerman, and
-     *   stashes the user id in `$_GET`. Use {@see authenticateConnection()} from the
-     *   handshake-stage {@see WebSocketServer::onWebSocketConnect} hook instead —
-     *   that is the wired, correct-lifecycle auth path. This rail carries the
-     *   crypto + access-type law only; the user-liveness seam lives on
-     *   {@see authenticateConnection()} (it is the wired handshake).
-     *
-     * Validates the token from `?token=...` query parameter and either:
-     * - Closes the connection with code 4001 if token is invalid/expired
-     * - Closes with code 4002 if token is required but missing
-     * - Marks the connection as authenticated with userId attached
-     *
-     * @param TcpConnection $connection The Workerman TCP connection
-     * @return void
-     *
-     * @example
-     * ```php
-     * $worker->onConnect = [$syncPlayAuthMiddleware, 'onConnect'];
-     * ```
-     */
-    public function onConnect(TcpConnection $connection): void
-    {
-        $token = $_GET['token'] ?? null;
-
-        // Handle missing token
-        if (!is_string($token) || $token === '') {
-            if ($this->requireAuth) {
-                $this->logger?->warning('SyncPlay connection rejected: missing token', [
-                    'remote_ip' => $connection->getRemoteIp(),
-                ]);
-                $this->closeConnection($connection, self::CLOSE_CODE_MISSING_TOKEN, 'Authentication required');
-                return;
-            }
-
-            // No auth required - allow unauthenticated connection
-            $this->logger?->debug('SyncPlay unauthenticated connection allowed', [
-                'remote_ip' => $connection->getRemoteIp(),
-            ]);
-            return;
-        }
-
-        // Validate the token
-        try {
-            $payload = $this->jwtHandler->validateToken($token);
-
-            if ($payload === null) {
-                $this->logger?->warning('SyncPlay connection rejected: invalid token', [
-                    'remote_ip' => $connection->getRemoteIp(),
-                    'reason' => 'Token validation failed',
-                ]);
-                $this->closeConnection($connection, self::CLOSE_CODE_INVALID_TOKEN, 'Invalid or expired token');
-                return;
-            }
-
-            // R17-02: access-only law — see authenticateConnection() for the
-            // full rationale; this legacy rail carries the same guard.
-            if (($payload['type'] ?? null) !== 'access') {
-                $this->logger?->warning('SyncPlay connection rejected: token type is not access', [
-                    'remote_ip' => $connection->getRemoteIp(),
-                ]);
-                $this->closeConnection(
-                    $connection,
-                    self::CLOSE_CODE_INVALID_TOKEN,
-                    'Invalid token: not an access token'
-                );
-                return;
-            }
-
-            // Extract userId from token payload
-            $sub = $payload['sub'] ?? null;
-            if (!is_string($sub) || $sub === '') {
-                $this->logger?->warning('SyncPlay connection rejected: missing user ID in token', [
-                    'remote_ip' => $connection->getRemoteIp(),
-                ]);
-                $this->closeConnection($connection, self::CLOSE_CODE_INVALID_TOKEN, 'Invalid token: missing user ID');
-                return;
-            }
-
-            $this->logger?->info('SyncPlay connection authenticated', [
-                'user_id' => $sub,
-                'remote_ip' => $connection->getRemoteIp(),
-            ]);
-
-            // Note: The actual Connection creation and authentication marking
-            // is done by the WebSocketServer::onConnect handler which is called
-            // AFTER this middleware. This middleware validates the token and
-            // ensures invalid connections are closed early.
-            // Store userId in $_GET for WebSocketServer to pick up
-            $_GET['syncplay_user_id'] = $sub;
-        } catch (\Throwable $e) {
-            $this->logger?->error('SyncPlay authentication error', [
-                'remote_ip' => $connection->getRemoteIp(),
-                'error' => $e->getMessage(),
-            ]);
-            $this->closeConnection($connection, self::CLOSE_CODE_SERVER_ERROR, 'Authentication error');
-        }
-    }
-
-    /**
-     * Close a connection with a specific code and reason.
-     *
-     * @param TcpConnection $connection The connection to close
-     * @param int $code Close code (4001-4003 for SyncPlay errors)
-     * @param string $reason Human-readable close reason
-     * @return void
-     */
-    private function closeConnection(TcpConnection $connection, int $code, string $reason): void
-    {
-        // Workerman TcpConnection always has close($reason = null) method
-        $connection->close($reason);
     }
 
     /**

@@ -1205,4 +1205,98 @@ class WebPortalRouterMediaTest extends TestCase
         // Total alignment
         $this->assertSame(130, $body['total']); // 20+35+50+25
     }
+
+    // -----------------------------------------------------------------
+    // review xrepo__server-ui M2 — types[] + maxRating admission
+    //
+    // The SPA FilterBar emits `?types[]=<MediaType>&…` and `?maxRating=<n>`;
+    // before this fix both were silently dropped by extractMediaQueryParams(),
+    // so every type chip and the upper half of the rating slider were inert
+    // against GET /api/v1/media. These pins hold the boundary parse.
+    // -----------------------------------------------------------------
+
+    public function testGetMediaForwardsTypesFilter(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['types'] ?? null) === ['movie', 'series'];
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['types' => ['movie', 'series']];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaParsesTypesAgainstTheKnownVocabulary(): void
+    {
+        // Parse-don't-validate: unknown members and non-strings are dropped at
+        // the HTTP boundary; recognized survivors (in request order, de-duped)
+        // are the only values that reach the repository.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['types'] ?? null) === ['movie', 'audiobook', 'photo'];
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['types' => ['movie', 'bogus', 42, 'audiobook', 'movie', 'photo']];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaDropsTypesWhenNothingSurvivesTheVocabulary(): void
+    {
+        // An all-unknown list must degrade to NO type filter (browse stays
+        // usable) rather than matching nothing — same law as the ratings leg.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return !array_key_exists('types', $params);
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['types' => ['bogus', 42]];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaForwardsMaxRatingAsFloat(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['maxRating'] ?? null) === 8.5;
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['maxRating' => '8.5'];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaIgnoresNonNumericMaxRating(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return !array_key_exists('maxRating', $params);
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['maxRating' => 'abc'];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
 }

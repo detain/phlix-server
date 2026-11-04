@@ -34,6 +34,20 @@ use Workerman\MySQL\Connection;
 class ItemRepository
 {
     /**
+     * The full `media_items.type` vocabulary — the 13-member ENUM exactly as
+     * established by migrations 001 + 011 (track) + 034 (audiobook), mirrored
+     * one-for-one by the `MediaType` union in `@phlix/contracts`
+     * (dist/media.d.ts). The SPA browse boundary
+     * ({@see \Phlix\Server\WebPortal\WebPortalRouter::extractMediaQueryParams()})
+     * parses `?types[]=` against this list so an unknown member can never reach
+     * an ENUM comparison as noise (review xrepo__server-ui M2).
+     */
+    public const TYPES = [
+        'movie', 'series', 'season', 'episode', 'track', 'music', 'album',
+        'artist', 'video', 'audio', 'book', 'photo', 'audiobook',
+    ];
+
+    /**
      * Absolute row ceiling for a single listing query (S99 hardening).
      *
      * A last-resort backstop against an unclamped caller-supplied `?limit=`
@@ -3145,6 +3159,7 @@ class ItemRepository
         $bindings = $filters['bindings'];
         $ratingJoin = $filters['ratingJoin'];
         $minRating = $filters['minRating'];
+        $maxRating = $filters['maxRating'];
 
         $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
         $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
@@ -3173,6 +3188,18 @@ class ItemRepository
         if ($minRating !== null) {
             $wheres[] = 'rating_score >= ?';
             $bindings[] = $minRating;
+            $baseWhere = implode(' AND ', $wheres);
+        }
+
+        // Numeric rating cap (e.g. ?maxRating=8.5) — the upper arm of the SPA
+        // FilterBar rating-range slider (review xrepo__server-ui M2). Same
+        // indexed rating_score column as the floor, ASYMMETRIC NULL semantics by
+        // design: an unrated item can never PROVE it clears a floor (minRating
+        // excludes NULL above), but it can never EXCEED a ceiling either — so
+        // the cap keeps unrated rows and only rows scoring above the cap drop.
+        if ($maxRating !== null) {
+            $wheres[] = '(rating_score IS NULL OR rating_score <= ?)';
+            $bindings[] = $maxRating;
             $baseWhere = implode(' AND ', $wheres);
         }
 
@@ -3353,7 +3380,8 @@ class ItemRepository
      *
      * @param array<string, mixed> $params
      *
-     * @return array{wheres: list<string>, bindings: list<mixed>, ratingJoin: string, minRating: float|null}
+     * @return array{wheres: list<string>, bindings: list<mixed>, ratingJoin: string,
+     *               minRating: float|null, maxRating: float|null}
      */
     private function buildFilters(array $params, ?string $libraryId): array
     {
@@ -3361,6 +3389,7 @@ class ItemRepository
         $bindings = [];
         $ratingJoin = '';
         $minRating = null;
+        $maxRating = null;
 
         if ($libraryId !== null) {
             $wheres[] = 'library_id = ?';
@@ -3375,6 +3404,11 @@ class ItemRepository
         $actors = isset($params['actors']) && is_array($params['actors']) ? $params['actors'] : null;
         $companies = isset($params['companies']) && is_array($params['companies']) ? $params['companies'] : null;
         $match = isset($params['match']) && is_string($params['match']) ? $params['match'] : null;
+        // Media-type facet (`?types[]=`), already parsed against
+        // {@see self::TYPES} by the browse boundary. The repository guards its
+        // own input shape too (same law as `genres`/`ratings`): non-strings and
+        // empty strings never reach the bindings.
+        $types = isset($params['types']) && is_array($params['types']) ? $params['types'] : null;
 
         $parentId = isset($params['parentId']) && is_string($params['parentId']) && $params['parentId'] !== ''
             ? $params['parentId']
@@ -3447,6 +3481,23 @@ class ItemRepository
             // (migration 050) instead of a per-row JSON extraction.
             $wheres[] = "content_rating IN ({$ratingPlaceholders})";
             $bindings = array_merge($bindings, $ratings);
+        }
+
+        if ($types !== null && count($types) > 0) {
+            $validTypes = array_values(array_filter(
+                $types,
+                static fn (mixed $t): bool => is_string($t) && $t !== ''
+            ));
+            if (count($validTypes) > 0) {
+                // `media_items.type` is a real ENUM column (13 members —
+                // {@see self::TYPES}); a plain indexed `IN (...)` is the exact
+                // facet the SPA FilterBar type chips send (review
+                // xrepo__server-ui M2 — before this leg the chips were parsed
+                // nowhere and every type filter was silently inert).
+                $typePlaceholders = implode(',', array_fill(0, count($validTypes), '?'));
+                $wheres[] = "type IN ({$typePlaceholders})";
+                $bindings = array_merge($bindings, $validTypes);
+            }
         }
 
         // Parental content-rating cap. Threaded in by the browse/listing read
@@ -3539,6 +3590,18 @@ class ItemRepository
             $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
         }
 
+        // Maximum numeric rating cap (e.g. ?maxRating=8.5) — the upper arm of
+        // the SPA FilterBar's rating-range slider, which before this leg was
+        // parsed nowhere (review xrepo__server-ui M2). Consumed by query()
+        // against the same denormalized `rating_score` column as minRating.
+        $maxRatingRaw = isset($params['maxRating']) && is_numeric($params['maxRating'])
+            ? (float) $params['maxRating']
+            : null;
+
+        if ($maxRatingRaw !== null) {
+            $maxRating = $maxRatingRaw;
+        }
+
         // array_values keeps `bindings` a positional list after the array_merge
         // calls above (they can widen the inferred key type).
         return [
@@ -3546,6 +3609,7 @@ class ItemRepository
             'bindings' => array_values($bindings),
             'ratingJoin' => $ratingJoin,
             'minRating' => $minRating,
+            'maxRating' => $maxRating,
         ];
     }
 

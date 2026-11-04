@@ -1035,6 +1035,9 @@ class WebPortalRouter
      *   - yearFrom (int): Minimum release year (inclusive)
      *   - yearTo (int): Maximum release year (inclusive)
      *   - ratings (string[]): Filter to items with any of these ratings
+     *   - types (string[]): Filter to these media types — members must be in the
+     *     media_items.type vocabulary ({@see \Phlix\Media\Library\ItemRepository::TYPES});
+     *     unknown members are dropped at the boundary. The SPA FilterBar type chips.
      *   - actors (string[]): Filter to items featuring any of these actors
      *   - sort (string): Sort field — name|year|rating|date_added|runtime
      *   - order (string): Sort direction — asc|desc
@@ -1320,6 +1323,23 @@ class WebPortalRouter
             $params['ratings'] = array_filter($ratings, 'is_string');
         }
 
+        // `?types[]=` — the SPA FilterBar media-type chips (review
+        // xrepo__server-ui M2). PARSED against the ENUM vocabulary at the
+        // boundary: unknown members and non-strings are dropped, order is kept
+        // and values de-duped; a list with nothing valid surviving is the same
+        // as no filter at all (browse stays usable — same law as the ratings
+        // leg's empty-after-filter degrade).
+        $types = $query['types'] ?? null;
+        if (is_array($types)) {
+            $knownTypes = array_values(array_unique(array_filter(
+                $types,
+                static fn (mixed $t): bool => is_string($t) && in_array($t, ItemRepository::TYPES, true)
+            )));
+            if (count($knownTypes) > 0) {
+                $params['types'] = $knownTypes;
+            }
+        }
+
         $actors = $query['actors'] ?? null;
         if (is_array($actors) && count($actors) > 0) {
             $params['actors'] = array_filter($actors, 'is_string');
@@ -1380,6 +1400,15 @@ class WebPortalRouter
         $minRating = $request->queryString('minRating');
         if ($minRating !== null && is_numeric($minRating)) {
             $params['minRating'] = (float) $minRating;
+        }
+
+        // max_rating cap (e.g. ?maxRating=8.5) — the upper arm of the SPA
+        // FilterBar rating-range slider, mirror of the floor above (review
+        // xrepo__server-ui M2). Unrated items survive a cap — see the
+        // asymmetric NULL semantics documented at ItemRepository::query().
+        $maxRating = $request->queryString('maxRating');
+        if ($maxRating !== null && is_numeric($maxRating)) {
+            $params['maxRating'] = (float) $maxRating;
         }
 
         // Parental content-rating cap of the active profile (if any). Injected

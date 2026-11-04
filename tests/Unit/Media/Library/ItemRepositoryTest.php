@@ -4475,4 +4475,89 @@ class ItemRepositoryTest extends TestCase
         $this->assertStringContainsString('GROUP BY year_sort', $capturedSql);
         $this->assertStringContainsString('ORDER BY year_sort ASC', $capturedSql);
     }
+
+    // -----------------------------------------------------------------
+    // review xrepo__server-ui M2 — types[] IN-list + maxRating cap in query()
+    // -----------------------------------------------------------------
+
+    public function testQueryWithTypesAppliesInListToCountAndSelect(): void
+    {
+        $calls = $this->captureQueryCalls(['types' => ['movie', 'series']]);
+
+        $this->assertCount(2, $calls);
+        foreach ($calls as $call) {
+            $this->assertStringContainsString('type IN (?,?)', $call['sql']);
+            $this->assertContains('movie', $call['params']);
+            $this->assertContains('series', $call['params']);
+        }
+    }
+
+    public function testQueryWithoutTypesAppliesNoTypeClause(): void
+    {
+        // Byte-identity regression pin: the unfiltered browse path must not
+        // grow any type predicate at all.
+        $calls = $this->captureQueryCalls(['limit' => 50, 'offset' => 0]);
+
+        foreach ($calls as $call) {
+            $this->assertStringNotContainsString('type IN', $call['sql']);
+        }
+    }
+
+    public function testQueryWithTypesDropsNonStringMembersDefensively(): void
+    {
+        // The repository guards its own boundary too (same law as genres):
+        // non-strings never reach the bindings even if a caller skips the
+        // router's vocabulary parse.
+        $calls = $this->captureQueryCalls(['types' => ['movie', 42, '', 'photo']]);
+
+        foreach ($calls as $call) {
+            $this->assertStringContainsString('type IN (?,?)', $call['sql']);
+            $this->assertContains('movie', $call['params']);
+            $this->assertContains('photo', $call['params']);
+            $this->assertNotContains(42, $call['params']);
+            $this->assertNotContains('', $call['params']);
+        }
+    }
+
+    public function testQueryWithMaxRatingCapsScoreAndKeepsUnrated(): void
+    {
+        $calls = $this->captureQueryCalls(['maxRating' => 8.5]);
+
+        $this->assertCount(2, $calls);
+        foreach ($calls as $call) {
+            $this->assertStringContainsString('(rating_score IS NULL OR rating_score <= ?)', $call['sql']);
+            $this->assertContains(8.5, $call['params']);
+        }
+    }
+
+    public function testQueryWithoutMaxRatingHasNoRatingCap(): void
+    {
+        // Byte-identity regression pin: with no cap requested (and the default
+        // name sort), no rating_score predicate may appear anywhere.
+        $calls = $this->captureQueryCalls(['limit' => 50, 'offset' => 0]);
+
+        foreach ($calls as $call) {
+            $this->assertStringNotContainsString('rating_score', $call['sql']);
+        }
+    }
+
+    public function testQueryMinAndMaxRatingBindBracketInClauseOrder(): void
+    {
+        // Positional binds (Workerman\MySQL) require the binding order to match
+        // the clause order: the floor binds before the ceiling.
+        $calls = $this->captureQueryCalls(['minRating' => 6.0, 'maxRating' => 8.5]);
+
+        foreach ($calls as $call) {
+            $floor = strpos($call['sql'], 'rating_score >= ?');
+            $ceiling = strpos($call['sql'], '(rating_score IS NULL OR rating_score <= ?)');
+            $this->assertIsInt($floor);
+            $this->assertIsInt($ceiling);
+            $this->assertLessThan($ceiling, $floor, 'floor clause must precede the cap clause');
+            $minIdx = array_search(6.0, $call['params'], true);
+            $maxIdx = array_search(8.5, $call['params'], true);
+            $this->assertIsInt($minIdx);
+            $this->assertIsInt($maxIdx);
+            $this->assertLessThan($maxIdx, $minIdx, 'floor bind must precede the cap bind');
+        }
+    }
 }

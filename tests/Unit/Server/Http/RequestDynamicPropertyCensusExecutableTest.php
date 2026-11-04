@@ -1055,7 +1055,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // SyncPlayStaleTeardownTest.php (stale-sweep reverse-index + durable-row
     // teardown, review server__asphp); measured from the clean-tip red (2063)
     // plus this diff, not predicted.
-    private const EXPECTED_PHP_FILES = 2063;
+    // +1 2063→2064: the U1 rework adds tests/Unit/Webhooks/Plugins/
+    // NotificationPluginEgressRedirectTest.php (live loopback 302 fixture: the
+    // guarded egress never follows a redirect, review server__secaudit);
+    // measured from the rebased-tip count (2063) plus this file, not predicted.
+    private const EXPECTED_PHP_FILES = 2064;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

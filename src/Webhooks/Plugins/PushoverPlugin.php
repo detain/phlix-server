@@ -67,9 +67,12 @@ class PushoverPlugin extends AbstractNotificationPlugin
             return false;
         }
 
-        // SRV-M20 parity: the host is structurally fixed, but the moment-of-use
-        // check still guards the resolution (a rebind of api.pushover.net to a
-        // denied range is refused, zero bytes out, like every sibling).
+        // SRV-M20 parity: the host is structurally fixed, but the
+        // moment-of-use check still vets its resolution at check time — a
+        // persistently poisoned answer for api.pushover.net is refused here,
+        // zero bytes out, like every sibling. (Connect-time rebind inside the
+        // guard→socket window and the redirect class: see the check-time note
+        // and redirect law in AbstractNotificationPlugin.)
         if (!$this->guardEgressUrl(self::API_URL, $event)) {
             return false;
         }
@@ -77,20 +80,19 @@ class PushoverPlugin extends AbstractNotificationPlugin
         $payload = $this->buildPayload($event);
 
         $context = stream_context_create([
-            'http' => [
+            'http' => $this->buildEgressHttpOptions([
                 'method' => 'POST',
                 'header' => [
                     'Content-Type: application/x-www-form-urlencoded',
                 ],
                 'content' => http_build_query($payload),
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
+            ]),
             'ssl' => $this->buildSslContextOptions($this->loadConfig()),
         ]);
 
         $response = @file_get_contents(self::API_URL, false, $context);
-        $success = $response !== false && $this->getLastResponseCode() === 200;
+        $statusLine = $http_response_header[0] ?? '';
+        $success = $this->egressSucceeded($event, $response, $statusLine);
 
         $this->getLogger()->debug('Pushover notification sent', [
             'event_type' => $event->eventType,
@@ -156,17 +158,6 @@ class PushoverPlugin extends AbstractNotificationPlugin
 
         /** @var array<string, mixed> */
         return [];
-    }
-
-    private function getLastResponseCode(): ?int
-    {
-        global $http_response_header;
-        if (isset($http_response_header[0])) {
-            if (preg_match('/HTTP\/\d+\.?\d*\s+(\d+)/', $http_response_header[0], $matches)) {
-                return (int) $matches[1];
-            }
-        }
-        return null;
     }
 
     private function getLogger(): \Phlix\Common\Logger\StructuredLogger

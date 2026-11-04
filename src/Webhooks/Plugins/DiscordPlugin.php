@@ -74,20 +74,19 @@ class DiscordPlugin extends AbstractNotificationPlugin
         $payload = $this->buildPayload($event);
 
         $context = stream_context_create([
-            'http' => [
+            'http' => $this->buildEgressHttpOptions([
                 'method' => 'POST',
                 'header' => [
                     'Content-Type: application/json',
                 ],
                 'content' => json_encode($payload, JSON_THROW_ON_ERROR),
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
+            ]),
             'ssl' => $this->buildSslContextOptions($this->loadConfig()),
         ]);
 
         $response = @file_get_contents($webhookUrl, false, $context);
-        $success = $response !== false && $this->getLastResponseCode() === 200;
+        $statusLine = $http_response_header[0] ?? '';
+        $success = $this->egressSucceeded($event, $response, $statusLine);
 
         $this->getLogger()->debug('Discord notification sent', [
             'event_type' => $event->eventType,
@@ -158,17 +157,6 @@ class DiscordPlugin extends AbstractNotificationPlugin
 
         /** @var array<string, mixed> */
         return [];
-    }
-
-    private function getLastResponseCode(): ?int
-    {
-        global $http_response_header;
-        if (isset($http_response_header[0])) {
-            if (preg_match('/HTTP\/\d+\.?\d*\s+(\d+)/', $http_response_header[0], $matches)) {
-                return (int) $matches[1];
-            }
-        }
-        return null;
     }
 
     private function getLogger(): \Phlix\Common\Logger\StructuredLogger

@@ -35,6 +35,32 @@ use Phlix\Webhooks\WebhookPluginInterface;
  * refused at send time, not trusted because it was acceptable when
  * written. Refusal shape: one logged warning, zero bytes out, send()
  * returns false.
+ *
+ * ## The redirect law (family-wide, review server__secaudit U1)
+ *
+ * The guard checks the configured URL only; PHP's http wrapper would
+ * otherwise follow up to 20 redirect hops of whatever answer that
+ * endpoint gives, and a public endpoint answering
+ * `302 Location: http://169.254.169.254/…` smuggles bytes past a
+ * check that passed at hop one. The family therefore denies redirects
+ * at the transport: every guarded egress context is built through
+ * {@see buildEgressHttpOptions()} with `follow_location=0` and
+ * `max_redirects=0`, so the wrapper never requests a redirect target.
+ * A 3xx terminal answer is then refused by {@see egressSucceeded()}
+ * with one logged warning and send() false — the same shape as a
+ * guard refusal, and the only 3xx the plugin can ever observe is the
+ * one it declined to follow.
+ *
+ * ## Check-time depth (honest residual)
+ *
+ * {@see SsrfGuard::assertPublicUrl()} resolves the host at CHECK time
+ * while the transport re-resolves independently at CONNECT time; there
+ * is no IP pinning between the two. What the moment-of-use gate closes
+ * is edited-in or persistently poisoned configuration (and, via the
+ * redirect law above, the multi-hop smuggling variant); a DNS answer
+ * that flips inside the sub-second window between the guard's lookup
+ * and the socket's connect is the same bounded TOCTOU residual the
+ * webhook surfaces carry — one connection, no redirect hop.
  */
 abstract class AbstractNotificationPlugin implements WebhookPluginInterface
 {
@@ -45,10 +71,11 @@ abstract class AbstractNotificationPlugin implements WebhookPluginInterface
      * the exact URL string that is about to reach file_get_contents()
      * and skip the transport entirely when it returns false. Reuses
      * the MqttPlugin guard idiom (SRV-M20 sibling) so a poisoned
-     * destination — edited-in config, DNS rebind to a denied range,
-     * or a link-local literal — never leaves the host. The guard
-     * resolves the host itself; IP literals need no DNS, so tests run
-     * network-free.
+     * destination — edited-in config, a resolver that persistently
+     * answers a denied range at check time, or a link-local literal —
+     * never leaves the host. The guard resolves the host itself at
+     * check time (see "Check-time depth" above for the connect-time
+     * residual); IP literals need no DNS, so tests run network-free.
      *
      * @param string       $url   fully-composed http(s) destination
      * @param WebhookEvent $event event being delivered (log context)
@@ -76,6 +103,104 @@ abstract class AbstractNotificationPlugin implements WebhookPluginInterface
         }
 
         return true;
+    }
+
+    /**
+     * The non-negotiable keys of every guarded egress HTTP context.
+     *
+     * `follow_location=0` + `max_redirects=0` deny the wrapper's own
+     * redirect walking (default: follow up to 20 hops with no per-hop
+     * re-check — the same 302→metadata exfiltration class the estate
+     * legislated against in WebhookHttpClient R20-01 and
+     * ProviderUrlAllowlist). `timeout`/`ignore_errors` are the family
+     * shape every send site already used; centralizing them keeps the
+     * law in one file. Union-operator precedence (law array on the
+     * left) means a site cannot override a law key.
+     *
+     * @var array<string, mixed>
+     */
+    private const EGRESS_TRANSPORT_LAW = [
+        'follow_location' => 0,
+        'max_redirects' => 0,
+        'timeout' => 10,
+        'ignore_errors' => true,
+    ];
+
+    /**
+     * The family's single-source HTTP transport option block.
+     *
+     * Sites pass only what varies (method, header, content); the
+     * redirect denial and the shared timeouts come from
+     * {@see self::EGRESS_TRANSPORT_LAW} and cannot be overridden.
+     *
+     * @param array<string, mixed> $options site-specific http options
+     *
+     * @return array<string, mixed> complete http context options
+     */
+    protected function buildEgressHttpOptions(array $options): array
+    {
+        return self::EGRESS_TRANSPORT_LAW + $options;
+    }
+
+    /**
+     * Parses the terminal status code from the wrapper's response
+     * headers.
+     *
+     * PHP populates `$http_response_header` in the LOCAL scope of the
+     * function that called `file_get_contents()` — a `global` read of
+     * it from a helper always saw nothing (the pre-U1 per-site
+     * private copies did exactly that, so every send reported failure
+     * even on a real 200). The value must therefore be passed in by
+     * the call site.
+     *
+     * @param string $statusLine the call site's `$http_response_header[0]`
+     *                            ('' when no response was received at all)
+     *
+     * @return int|null status code of the first status line, null when
+     *                  no response was received at all
+     */
+    protected function terminalResponseCode(string $statusLine): ?int
+    {
+        if ($statusLine !== '' && preg_match('/HTTP\/\d+\.?\d*\s+(\d+)/', $statusLine, $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Post-flight evaluation of one guarded egress attempt.
+     *
+     * Success means exactly one thing: the terminal status is 200 and
+     * bytes came back. Because {@see self::EGRESS_TRANSPORT_LAW}
+     * denies the wrapper's redirect walking, the only 3xx a plugin can
+     * ever observe is a redirect the endpoint tried to hand it — the
+     * moment-of-use guard cannot see a hop the caller never asked for,
+     * so the refusal happens HERE: one logged warning (naming no URL —
+     * the redirect's Location may carry credentials just like the
+     * configured path does), send() false, zero bytes to the target.
+     *
+     * @param WebhookEvent $event      event being delivered
+     * @param string|false $response   body returned by file_get_contents()
+     * @param string       $statusLine the call site's $http_response_header[0]
+     *                                 ('' when the wrapper received nothing)
+     *
+     * @return bool true only for a 200 answer from the guarded URL
+     */
+    protected function egressSucceeded(WebhookEvent $event, string|false $response, string $statusLine): bool
+    {
+        $code = $this->terminalResponseCode($statusLine);
+
+        if ($code !== null && $code >= 300 && $code < 400) {
+            LoggerFactory::get(LogChannels::APPLICATION)->warning(
+                ucfirst(static::getName()) . ' notification refused: HTTP redirect not followed',
+                ['event_type' => $event->eventType]
+            );
+
+            return false;
+        }
+
+        return $response !== false && $code === 200;
     }
 
     /**

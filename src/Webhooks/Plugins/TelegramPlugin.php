@@ -70,28 +70,30 @@ class TelegramPlugin extends AbstractNotificationPlugin
         $payload = $this->buildPayload($event);
         $url = self::API_BASE_URL . $botToken . '/sendMessage';
 
-        // SRV-M20 parity: the host is structurally fixed, but the moment-of-use
-        // check still guards the resolution (a rebind of api.telegram.org to a
-        // denied range is refused, zero bytes out, like every sibling).
+        // SRV-M20 parity: the host is structurally fixed, but the
+        // moment-of-use check still vets its resolution at check time — a
+        // persistently poisoned answer for api.telegram.org is refused here,
+        // zero bytes out, like every sibling. (Connect-time rebind inside the
+        // guard→socket window and the redirect class: see the check-time note
+        // and redirect law in AbstractNotificationPlugin.)
         if (!$this->guardEgressUrl($url, $event)) {
             return false;
         }
 
         $context = stream_context_create([
-            'http' => [
+            'http' => $this->buildEgressHttpOptions([
                 'method' => 'POST',
                 'header' => [
                     'Content-Type: application/json',
                 ],
                 'content' => json_encode($payload, JSON_THROW_ON_ERROR),
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
+            ]),
             'ssl' => $this->buildSslContextOptions($this->loadConfig()),
         ]);
 
         $response = @file_get_contents($url, false, $context);
-        $success = $response !== false && $this->getLastResponseCode() === 200;
+        $statusLine = $http_response_header[0] ?? '';
+        $success = $this->egressSucceeded($event, $response, $statusLine);
 
         $this->getLogger()->debug('Telegram notification sent', [
             'event_type' => $event->eventType,
@@ -156,17 +158,6 @@ class TelegramPlugin extends AbstractNotificationPlugin
 
         /** @var array<string, mixed> */
         return [];
-    }
-
-    private function getLastResponseCode(): ?int
-    {
-        global $http_response_header;
-        if (isset($http_response_header[0])) {
-            if (preg_match('/HTTP\/\d+\.?\d*\s+(\d+)/', $http_response_header[0], $matches)) {
-                return (int) $matches[1];
-            }
-        }
-        return null;
     }
 
     private function getLogger(): \Phlix\Common\Logger\StructuredLogger

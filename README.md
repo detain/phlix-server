@@ -49,7 +49,14 @@ Phlix Media Server provides a complete media management and streaming solution:
   configured egress URL is re-validated against `SsrfGuard` at send time, so a config edited
   or shipped to point at loopback, link-local metadata, or a private range is refused with a
   logged warning and zero bytes out — the create+moment-of-use law the webhook surfaces proved
-  (SRV-M20) — troubleshooting path: [A webhook never fires](#a-webhook-never-fires)
+  (SRV-M20). Redirects are never followed: every guarded egress context pins
+  `follow_location=0`/`max_redirects=0`, so a public endpoint answering `302 →` a denied
+  range is refused at hop one (logged, zero bytes to the target). The guard's verdict is
+  check-time, before the socket connects; the sub-second resolver window is disclosed as a
+  bounded residual in `AbstractNotificationPlugin`'s egress law. The family ships ahead of its
+  dispatcher — no in-tree producer calls `send()` yet, so this is pre-deployment posture;
+  the wiring lane owns the refusal-marking law. Troubleshooting path:
+  [A webhook never fires](#a-webhook-never-fires)
 
 Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
@@ -2021,10 +2028,17 @@ for per-event delivery history — `webhook_subscriptions`/`webhook_deliveries`)
 Use `{id}/test` (legacy) or check `/deliveries?event_id=…` (V2) to see whether
 the event never triggered or the delivery failed, and tail `.logs/` for the
 dispatcher's HTTP errors. Note the two subsystems differ in payload signing
-(see the `src/Webhooks/` docblocks). SSRF refusals are loud, not silent: every
-outbound surface — webhook deliveries and the notification plugins alike — logs
-`… blocked by SSRF guard` on the application channel, redacting the refused
-URL's credential-bearing path.
+(see the `src/Webhooks/` docblocks). SSRF refusals are loud, not silent, but the
+surfaces differ in shape: the notification-plugin family logs
+`… notification blocked by SSRF guard` (and `… notification refused: HTTP
+redirect not followed`) on the application channel with the refused URL
+redacted from the reason — webhook paths and bot tokens ARE credentials. The
+older webhook surfaces log the guard's own message, which quotes the full URL:
+`WebhookService` writes `SSRF guard blocked URL: …` to the application channel
+and copies it into the delivery-record error, `WebhookDispatcher` puts the same
+line into the delivery-log row, and `MqttPlugin`'s inline guard logs its reason
+verbatim. Extending the redaction door to those legacy arms is registered
+forward-cure, not current behavior.
 
 ### Locked out of admin settings
 

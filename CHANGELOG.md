@@ -100,6 +100,50 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Guarded egress refuses redirects — the notification family's SSRF law now
+  reaches hop two (review server__secaudit U1, against the entry below).**
+  The plugin send sites' HTTP contexts omitted `follow_location`, so PHP's
+  wrapper followed up to 20 hops of whatever a legitimate, guard-passing
+  endpoint answered: a configured-public URL answering
+  `302 Location: http://169.254.169.254/…` smuggled bytes past a check that
+  only ever saw hop one. The family's transport options now flow through
+  `AbstractNotificationPlugin::buildEgressHttpOptions()` — the single source
+  pinning `follow_location=0` + `max_redirects=0` (with the shared
+  timeout/ignore-error shape a site cannot override) — and
+  `egressSucceeded()` refuses any 3xx answer with one logged warning naming no
+  URL (`<Provider> notification refused: HTTP redirect not followed`) and a
+  false `send()`. Same seam, one latent repair: the seven per-site
+  `getLastResponseCode()` copies read `global $http_response_header` from a
+  helper scope — the wrapper populates it only in the CALLER's locals — so
+  every send reported failure even on a genuine 200 (unobservable so far: the
+  family has no dispatcher wired yet, see the README note); one
+  `terminalResponseCode()` fed by the call site replaces them. Pinned by
+  `NotificationPluginEgressRedirectTest` against a live loopback `php -S`
+  fixture: the five configured-URL plugins knock on a path that answers
+  `302 → /secret`, the second path must NEVER be requested (zero bytes out to
+  the target), the refusal line must be logged with neither URL named, and a
+  plain 200 leg now returns true — all seven legs measured RED at the parent.
+  The fixed-host plugins (Telegram, Pushover) cannot be dialled at the
+  fixture; their builder carries the same law, pinned through the single
+  source.
+  **Forward-corrections to the entry below** (verbatim history stands): its
+  "zero bytes out" held for hop one only — the redirect class the review
+  names was open until this entry; "whose moment-of-use check also closes the
+  DNS-rebind class" overstated the mechanism — the guard validates its
+  resolution at CHECK time while the transport re-resolves independently at
+  connect time, and the honest bounded residual (one connection, no redirect
+  hop with this fix) is now stated in the class-level egress law and the two
+  fixed-host sites' comments. README likewise: the refusal-log redaction is
+  the plugin family's law, not estate-wide — the webhook surfaces'
+  `WebhookService` (log line and delivery-record error), `WebhookDispatcher`
+  (delivery-log row) and `MqttPlugin`'s inline guard still carry the guard's
+  full-URL message — extending the redaction door there is registered, not
+  shipped. The S431 file census staircase continues 2063 to 2064 with its pin
+  file (measured from the rebased-tip red — SRV-M17 and SRV-M9 stepped 2061→2062
+  and 2062→2063 while this fix was in flight); the declared-writes denominator
+  holds at the rebased tip's 1164, this commit adding zero write sites.
+  [server__secaudit]
+
 - **Every notification plugin re-validates its egress URL at the moment of use
   — the webhook path's SSRF law now covers the whole outbound family (review
   server__secaudit).** The SRV-M20 cure guarded the webhook surfaces, but the

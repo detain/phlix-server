@@ -530,8 +530,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // + {code}/token), the consent-gated telemetry heartbeat and its admin census read
         // — 404→410 operations — re-measured from this phpunit red; 349 after the M-6
         // security lane registered /api/v1/books/{id}/progress (GET+POST, one template)
-        // so BookReaderPage's silent-catch POST actually lands — re-measured here.
-        $this->assertCount(349, $doc['paths'], 'the served surface is 349 distinct path templates');
+        // so BookReaderPage's silent-catch POST actually lands — re-measured here; 350
+        // after xrepo__server-ui M1 registered the member GET watch-history twin
+        // (alias /api/v1/me/history — one new template; the canonical
+        // /api/v1/users/me/history GET joins an existing one) — re-measured here.
+        $this->assertCount(350, $doc['paths'], 'the served surface is 350 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

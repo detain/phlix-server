@@ -6902,6 +6902,29 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/history":
+    get:
+      operationId: "get_api_v1_me_history"
+      tags: ["Users"]
+      summary: "Get watch history"
+      description: "Get watch history (get /api/v1/me/history)."
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me/recommendations":
     get:
       operationId: "get_api_v1_me_recommendations"
@@ -10504,6 +10527,28 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/users/me/history":
+    get:
+      operationId: "get_api_v1_users_me_history"
+      tags: ["Users"]
+      summary: "Get watch history"
+      description: "Get watch history (get /api/v1/users/me/history)."
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     delete:
       operationId: "delete_api_v1_users_me_history"
       tags: ["Users"]

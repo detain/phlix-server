@@ -364,6 +364,12 @@ class WebPortalRouter
             $r->delete('/api/v1/me/recommendations/{mediaItemId}', [$this, 'dismissRecommendation']);
 
             // Watch history routes
+            $r->get('/api/v1/users/me/history', [$this, 'getWatchHistory']);
+            // Alias twin of the canonical path above: the SPA's
+            // WatchHistoryPage fetches this literal verbatim (review
+            // xrepo__server-ui M1 — before these legs existed the deep-linked
+            // page 404'd on every visit on the server host).
+            $r->get('/api/v1/me/history', [$this, 'getWatchHistory']);
             $r->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
             $r->delete('/api/v1/users/me/history', [$this, 'clearHistory']);
 
@@ -1984,6 +1990,123 @@ class WebPortalRouter
         $gate = $this->gate();
         if ($filter !== null && $gate !== null) {
             $items = $gate->filterItems($items, $filter, 'media_item_id');
+        }
+
+        return (new Response())->json(['items' => $items]);
+    }
+
+    /**
+     * Member-facing watch history for the current profile (S80) — the feed of
+     * phlix-ui's WatchHistoryPage.
+     *
+     * Registered on BOTH wire paths: the canonical
+     * `GET /api/v1/users/me/history` (mirror of the DELETE legs that already
+     * live there) and the `GET /api/v1/me/history` alias twin the SPA page
+     * fetches verbatim (review xrepo__server-ui M1).
+     *
+     * Each row is the page's HistoryItem shape: `id` is the MEDIA item id
+     * (cards key on it; removals call DELETE history/{mediaItemId} with it),
+     * `media` is the list-shaped MediaItem ({@see MediaItemShaper::shape()} —
+     * the browse-grid contract, hydrated through ONE batched findByIds per
+     * page, the M-SERVER-16 Batch Queries law), `progress` is the 0..1
+     * completion fraction (a `completed` row reports 1.0 whatever the stored
+     * percent says), and `updated_at` is the verbatim `last_watched_at`
+     * string — the same MySQL-timestamp convention every sibling rail emits.
+     *
+     * The active profile's parental content-rating cap applies BEFORE shaping
+     * (raw-row isAllowed — listFavorites placement), so an over-cap item never
+     * reaches the payload at all.
+     *
+     * @param Request               $request The HTTP request (userId/profile from auth).
+     * @param array<string, string> $params  Route parameters (unused).
+     *
+     * @return Response 200 `{items: list<HistoryItem>}`; 401 unauthenticated;
+     *         404 when no profile resolves; 503 when watch history is unwired.
+     *
+     * @api_endpoint GET /api/v1/users/me/history
+     * @api_endpoint GET /api/v1/me/history
+     *
+     * @requires Authentication
+     */
+    public function getWatchHistory(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->watchHistory === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'This feature isn\'t available on this server right now. Please try again later.',
+            ]);
+        }
+
+        // S80: history is per PROFILE — the same session-published claim the
+        // DELETE legs act on, so the page lists exactly what it can clear.
+        $profileId = $this->resolveProfileId($request, $userId);
+        if ($profileId === null) {
+            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+        }
+
+        $limit = $request->queryPageSize('limit', 50);
+        $offset = $request->queryOffset();
+
+        $rows = $this->watchHistory->getHistory($profileId, $limit, $offset);
+
+        $ids = [];
+        foreach ($rows as $row) {
+            $itemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            if ($itemId !== '' && !in_array($itemId, $ids, true)) {
+                $ids[] = $itemId;
+            }
+        }
+
+        /** @var array<string, array<string, mixed>> $itemsById */
+        $itemsById = [];
+        if ($ids !== []) {
+            foreach ($this->itemRepository->findByIds($ids) as $item) {
+                $hydratedId = is_string($item['id'] ?? null) ? $item['id'] : '';
+                if ($hydratedId !== '') {
+                    $itemsById[$hydratedId] = $item;
+                }
+            }
+        }
+
+        $filter = $this->resolveRatingFilter($request);
+        $gate = $this->gate();
+
+        $items = [];
+        foreach ($rows as $row) {
+            $itemId = is_string($row['media_item_id'] ?? null) ? $row['media_item_id'] : '';
+            if ($itemId === '') {
+                continue;
+            }
+
+            $item = $itemsById[$itemId] ?? null;
+            if ($item === null) {
+                // Media deleted since the history row was written — skip (the
+                // row's absence is the page's "gone" state, matching the
+                // favorites rail's defensive skip).
+                continue;
+            }
+
+            if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
+                continue;
+            }
+
+            $percent = $row['progress_percent'] ?? 0;
+            $progress = ($row['playback_status'] ?? '') === 'completed'
+                ? 1.0
+                : min(1.0, max(0.0, (is_numeric($percent) ? (float) $percent : 0.0) / 100.0));
+
+            $watchedAt = $row['last_watched_at'] ?? '';
+
+            $items[] = [
+                'id' => $itemId,
+                'media' => MediaItemShaper::shape($item),
+                'progress' => $progress,
+                'updated_at' => is_string($watchedAt) ? $watchedAt : '',
+            ];
         }
 
         return (new Response())->json(['items' => $items]);

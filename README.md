@@ -704,7 +704,7 @@ HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 ### Updating an existing install
 
 The same `scripts/install.sh` updates an in-place install **without rotating any secrets**. It
-reads the existing `/etc/phlix/env` (so `DB_PASSWORD` and `PHLIX_SECRET_KEY` are preserved),
+reads the existing `/etc/phlix/env` (so `DB_PASSWORD` and `JWT_SECRET` are preserved),
 pulls the latest code, refreshes Composer dependencies, runs migrations, and restarts the
 service:
 
@@ -1517,8 +1517,13 @@ file is a name-building helper, not an event).
 ### Running tests
 
 ```bash
-# Run all tests
-./vendor/bin/phpunit
+# Full local pass — the parallel seam (the shape CI drives the two fast
+# suites through; see the seam law below before running these)
+bash scripts/parallel/run-suite.sh Unit 8
+bash scripts/parallel/run-suite.sh Integration 8 8
+
+# Single file or small slice — serial commands are correct here
+./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php
 
 # Run with coverage
 ./vendor/bin/phpunit --coverage-html coverage-report
@@ -1545,6 +1550,11 @@ throwaway MySQL that has had `php scripts/run-migrations.php` applied:
 DB_HOST=127.0.0.1 DB_PORT=3306 DB_DATABASE=phlix_test DB_USER=root DB_PASSWORD=root \
   ./vendor/bin/phpunit --no-coverage
 ```
+
+This is the single-schema direct form. The CI-shaped full pass routes the
+Integration suite through the parallel seam below against eight clone schemas
+(`bash scripts/parallel/run-suite.sh Integration 8 8` after
+`PHLIX_TEST_DB_SHARDS=8 ./scripts/parallel-test-db.sh create`).
 
 CI does exactly this (`.github/workflows/phpunit.yml` provisions a `mysql:8.0`
 service and runs the migrations before the suite), so these tests are not
@@ -1969,7 +1979,8 @@ If passwords are gone entirely, CLI recovery is the escape hatch
 2. Ensure the tests covering your change pass — serial commands are correct
    for single files and small slices; for a full local pass use the parallel
    seam (`bash scripts/parallel/run-suite.sh <Unit|Integration> 8`), because
-   CI never runs a single `phpunit` invocation
+   CI drives the two fast suites through that seam — its only raw `phpunit`
+   invocations are the serial E2E tail and a Server-specific slice
    ([Running tests](#running-tests))
 3. Follow PSR-12 coding standards
 4. Use `type(scope):` conventional commit subjects, one logical change per

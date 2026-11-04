@@ -79,6 +79,21 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Three README claims about running tests were still not true.** The
+  Contributing step said CI "never runs a single `phpunit` invocation" — CI runs
+  raw `phpunit` exactly twice (the serial `E2E,Serialized` tail and the
+  Server-specific slice; `phpunit.yml`'s own invocation-census comment pins the
+  count), so the sentence now scopes itself to the two fast suites driven
+  through the parallel seam. The `Running tests` section opened its fence with
+  "# Run all tests / ./vendor/bin/phpunit" while its own law four paragraphs
+  down commands the seam for a full pass — the fence now leads with the seam
+  commands for the full pass and keeps serial commands scoped to a single file
+  or small slice, and the real-database example gained a sentence siting its
+  single-schema direct form against CI's eight-clone seam shape. And the
+  `--update` paragraph named the docker-only alias `PHLIX_SECRET_KEY` as the
+  preserved secret where the native guarantee is about `JWT_SECRET` — the same
+  survivor class the install-headline cure closed one commit up.
+  [review server__writer, server__ipd]
 - **Transcode file serving followed symlinked files out of the job dir.** The
   realpath containment in `TranscodeFileServer::serveJobFile()` validated the
   job DIRECTORY only, while `is_file()` and Workerman's file sender follow

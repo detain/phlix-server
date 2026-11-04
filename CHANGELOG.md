@@ -79,6 +79,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Contributing step 2 prescribed the serial full-suite run the README's
+  own tests section forbids.** "Ensure all tests pass
+  (`./vendor/bin/phpunit`)" contradicted "CI does not run a single
+  `phpunit` invocation, and neither should you for a full local pass"; a
+  contributor following the list literally got a slow, contention-prone
+  serial run that is not what CI gates. The step now names the parallel
+  seam for a full pass and keeps the serial command scoped to single
+  files and small slices, matching the README's "Running tests" law.
+  [review server__ipd]
 - **Dead `@see plans/...` pointers in the alias-compat shim docblock.** The
   two provenance references named `plans/expansion/b.1-shared-design.md` and
   `plans/expansion/b.3-shared-consume.md`, but no `plans/` directory exists

@@ -31,6 +31,29 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ## [Unreleased]
 
+### Security
+
+- **Admin and plugin endpoints stopped echoing exception text to clients.**
+  Fifteen raw-`Throwable` catch arms answered the (otherwise byte-identical)
+  JSON envelope with `$e->getMessage()` embedded: twelve
+  `AdminHubController` remote-access arms — shipping absolute key-file paths,
+  upstream hub URLs and echoed rejected input to any authenticated admin
+  client; the `AdminDlnaServerController` persist arm — whose store failure is
+  typically the rethrown `PDOException` carrying the full SQL statement; and
+  `PluginAdminController::testCredentials()`'s catch-all — relaying
+  third-party plugin exception prose, redacted only for the just-submitted
+  secrets. Each now answers a fixed curated copy in the unchanged envelope
+  (same status codes, same key shapes, zero new wire codes); exception class
+  + message go to the server-side HTTP log only, and on the credential-test
+  path the message passes through the submitted-secrets scrubber on its way
+  there. Typed domain catches (signup-disabled, plugin-not-found,
+  invalid-argument, …) stay as designed, per the E2 triage law. The register
+  named nine admin-hub arms; the file was byte-unchanged since the review so
+  the true count was twelve — all twelve converted. Red-first pins: three
+  real drives + a one-exit source tripwire (admin hub, +4 tests),
+  marker-in/absent captured-logger pins (DLNA +1, credential test +1).
+  [review server__secaudit, INFO-SERVER-51]
+
 ### Changed
 
 - **Closeout docs-truth batch (srv-w4 duty; reviews server__pm lineage,

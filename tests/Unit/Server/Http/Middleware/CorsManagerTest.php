@@ -213,6 +213,9 @@ class CorsManagerTest extends TestCase
      * literals and $_SERVER['HTTP_*'] reads), so a new read site without an
      * allowlist entry reddens HERE. Proxy-only infrastructure headers are
      * excluded by law — a browser must never be allowed to forge them.
+     * The scan runs on CODE, never prose: comment and docblock text is
+     * stripped token-wise before matching, so a mentioned-not-read header
+     * cannot masquerade as a read site (INFO-SERVER-53).
      */
     public function testPreflightAdvertisesEveryClientReachableHeaderTheServerReads(): void
     {
@@ -236,16 +239,8 @@ class CorsManagerTest extends TestCase
                 continue;
             }
             $source = (string) file_get_contents($file->getPathname());
-            if (preg_match_all("/getHeader\(\s*'(X-[A-Za-z0-9-]+)'/i", $source, $matches)) {
-                foreach ($matches[1] as $name) {
-                    $read[strtolower($name)] = $name;
-                }
-            }
-            if (preg_match_all("/\\\$_SERVER\['HTTP_([A-Z0-9_]+)'\]/", $source, $matches)) {
-                foreach ($matches[1] as $underscored) {
-                    $dashed = strtolower(str_replace('_', '-', $underscored));
-                    $read[strtolower($dashed)] = $dashed;
-                }
+            foreach (self::clientHeaderReadsIn($source) as $lower => $original) {
+                $read[$lower] = $original;
             }
         }
 
@@ -270,6 +265,74 @@ class CorsManagerTest extends TestCase
                 . '(a preflighted browser client cannot send it otherwise)'
             );
         }
+    }
+
+    /**
+     * INFO-SERVER-53 teeth: the census reads CODE, not prose. A docblock and
+     * a line comment below each mention a header read; only the real call is
+     * a read site. Without the token strip, this prose would force
+     * browser-advertisable entries for headers nobody reads.
+     */
+    public function testTheCensusScannerIgnoresCommentProse(): void
+    {
+        $snippet = <<<'PHP'
+            <?php
+            /**
+             * Example: $request->getHeader('X-Docblock-Prose') and
+             * $_SERVER['HTTP_X_DOCBLOCK_PROSE'] are mentioned, never read.
+             */
+            // retired rail read $_SERVER['HTTP_X_LINE_COMMENT'] once
+            $real = $request->getHeader('X-Real-Call');
+            PHP;
+
+        $read = self::clientHeaderReadsIn($snippet);
+
+        $this->assertSame(['x-real-call' => 'X-Real-Call'], $read);
+    }
+
+    /**
+     * Both client-header read planes (getHeader() literals and
+     * $_SERVER['HTTP_*'] reads) scanned from ONE PHP source string, with
+     * comment prose stripped token-wise before matching — the same scanner
+     * law MintSeamLawTripwireTest applies to mint call sites.
+     *
+     * @return array<string, string> lowercased header name => first-seen spelling
+     */
+    private static function clientHeaderReadsIn(string $phpSource): array
+    {
+        $source = self::codeOnlySource($phpSource);
+        $read = [];
+        if (preg_match_all("/getHeader\(\s*'(X-[A-Za-z0-9-]+)'/i", $source, $matches)) {
+            foreach ($matches[1] as $name) {
+                $read[strtolower($name)] = $name;
+            }
+        }
+        if (preg_match_all("/\\\$_SERVER\['HTTP_([A-Z0-9_]+)'\]/", $source, $matches)) {
+            foreach ($matches[1] as $underscored) {
+                $dashed = strtolower(str_replace('_', '-', $underscored));
+                $read[strtolower($dashed)] = $dashed;
+            }
+        }
+
+        return $read;
+    }
+
+    /**
+     * Drop T_COMMENT/T_DOC_COMMENT token text, keeping code and string
+     * literals byte-present (the regexes need the quotes of real calls;
+     * comments must contribute nothing).
+     */
+    private static function codeOnlySource(string $source): string
+    {
+        $code = '';
+        foreach (\PhpToken::tokenize($source) as $token) {
+            if ($token->is(T_COMMENT) || $token->is(T_DOC_COMMENT)) {
+                continue;
+            }
+            $code .= $token->text;
+        }
+
+        return $code;
     }
 
     /**

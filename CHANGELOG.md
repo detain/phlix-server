@@ -203,6 +203,18 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The header-name census tripwire reads code, not prose.**
+  `CorsManagerTest`'s SRV-M16 tripwire walks `src/` for client-reachable
+  header reads (`getHeader('X-*')` literals and `$_SERVER['HTTP_*']` reads)
+  and forces each into the preflight-advertised allowlist — but the scan ran
+  on raw file source, so a mere docblock or line-comment mention of a header
+  could force a browser-advertisable entry for a header nobody actually
+  reads. The scanner now strips `T_COMMENT`/`T_DOC_COMMENT` token-wise before
+  matching (the `MintSeamLawTripwireTest` token-walk idiom) and a new pin
+  proves prose contributes zero while real call sites still count. Measured:
+  the `src/` read-set is unchanged (9 headers before and after) —
+  hardening, not relaxation. [review server__fedev, INFO-SERVER-53]
+
 - **INFO tail: a dead WS auth superglobal rail is gone, and the plugin-update
   rethrow stopped laundering transport prose into client JSON.** From the
   INFO-SERVER review-queue tail sweep. (1) The deprecated

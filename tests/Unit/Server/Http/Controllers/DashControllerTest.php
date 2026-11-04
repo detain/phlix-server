@@ -470,8 +470,11 @@ class DashControllerTest extends TestCase
      * stay byte-identical to the ordinary missing-file 404 — same status, same
      * JSON, no oracle. The second leg proves the arm is not a deny-all: the
      * same job dir serves a REAL file of the same name after the link is
-     * removed (a symlink-to-file inside the same dir keeps passing too —
-     * prefix law on the resolved path, not a ban on links).
+     * removed (the in-dir-symlink counterpart of that leg — a link pointing
+     * at a file inside the same job dir keeps passing, the resolved-path
+     * prefix law, not a ban on links — is carried by
+     * {@see self::testSymlinkPointingToAFileInTheSameJobDirStillStreams()},
+     * which replaces this sentence's former unexercised claim).
      */
     public function testSymlinkedFileInsideLegitimateJobDirIsNotStreamed(): void
     {
@@ -500,6 +503,59 @@ class DashControllerTest extends TestCase
         $this->assertStringContainsString('<MPD/>', $this->bodyOf($ok));
 
         $this->rrmdir($outside);
+    }
+
+    /**
+     * The in-dir leg of the file-arm containment law (2026-11-04 review
+     * server__secaudit, Info: the claim was asserted in prose but not carried
+     * by a test): containment is a prefix law on the RESOLVED path, not a ban
+     * on links — a symlink whose target lives inside the same job dir must
+     * keep streaming. This leg exists to catch the opposite regression: a
+     * future "reject any symlink component" hardening (a shape proposed at
+     * review time) would refuse legitimate in-dir links and break it.
+     */
+    public function testSymlinkPointingToAFileInTheSameJobDirStillStreams(): void
+    {
+        $jobId = '6f666666-6666-4666-8666-666666666666';
+        $dir = "{$this->segmentDir}/{$jobId}";
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/seg-001.ts", "SEGMENT-BYTES\n");
+        if (!@symlink('seg-001.ts', "{$dir}/seg-002.ts")) {
+            $this->markTestSkipped('symlinks are unavailable on this filesystem');
+        }
+
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'seg-002.ts']);
+        $this->assertSame(200, $res->statusCode);
+        $this->assertStringContainsString('SEGMENT-BYTES', $this->bodyOf($res));
+    }
+
+    /**
+     * The literal-path guard: a requested name carrying glob metacharacters
+     * (`*`, `?`, `[`) never reaches path construction, containment, or the
+     * file sender at all — the `isSafeFilename()` character class runs FIRST
+     * and answers the ordinary 400 `Invalid request` byte-identically (2026-11-05
+     * cure lane, pinning the law the R1 symlink review's `readfile`-arm row
+     * gestured at: there is no readfile arm to reach; the charset refusal is
+     * what makes a glob pattern unnameable here). Traversal shapes ('..') ride
+     * the same gate via their own explicit checks. The refusal-leg mutation
+     * (widening the class) turns the three glob-metacharacter cases into 404s
+     * — a different status, a different body, refused only one layer deeper —
+     * so this test is a real boundary pin, not a tautology.
+     */
+    public function testGlobMetacharacterAndTraversalNamesAreRefusedBeforePathConstruction(): void
+    {
+        $jobId = '6f666666-6666-4666-8666-666666666666';
+        $dir = "{$this->segmentDir}/{$jobId}";
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/seg-001.ts", "SEGMENT-BYTES\n");
+
+        foreach (['seg-*.ts', 'seg-?.ts', 'seg-[0-9].ts', '../manifest.mpd', '..'] as $file) {
+            $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => $file]);
+            $this->assertSame(400, $res->statusCode, $file);
+            /** @var array<array-key, mixed> $body */
+            $body = json_decode($res->body, true);
+            $this->assertSame(['error' => 'Invalid request'], $body, $file);
+        }
     }
 
     private function rrmdir(string $dir): void

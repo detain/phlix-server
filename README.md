@@ -1401,7 +1401,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
-| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, so until an operator intervenes the account cannot sign in **with its password** or refresh its tokens — passkey (WebAuthn) and provider sign-in do not consult the flag ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
+| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, and while the flag is set the account is **held** — no route mints a new session: password sign-in and refresh are refused, and provider sign-in plus the passkey (WebAuthn), quick-connect and profile-switch mints all refuse at `AuthManager`'s token seam ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
 | POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
 | POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
 | POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
@@ -1764,16 +1764,21 @@ direct database write when none can.
 **Locked by the admin `reset-password` endpoint.** `POST /api/v1/admin/users/{id}/reset-password`
 is a force-change-and-revoke button, not a reset the affected user can complete: it stores the
 hashed reset token, sets `must_change_password`, and kills the account's sessions — and **no
-shipped endpoint delivers or consumes that token**. While the flag is set the refusal covers the
-password path only, and the two legs answer differently: a **password login** is refused by
-`PasswordChangeRequiredException` — no HTTP boundary maps that exception yet, so the served path
-answers a bare `500 Internal Server Error` (the HTTP error log names the exception class); the
-distinct `403`-with-code envelope the exception was written for is **not** shipped. A token
+shipped endpoint delivers or consumes that token**. While the flag is set the account is held —
+no route mints a new session — and the legs answer differently: a **password login** is refused
+by `PasswordChangeRequiredException` — no HTTP boundary maps that exception yet, so the served
+path answers a bare `500 Internal Server Error` (the HTTP error log names the exception class);
+the distinct `403`-with-code envelope the exception was written for is **not** shipped. A token
 **refresh** is refused by a plain `InvalidArgumentException`, which `AuthController::refresh`
-catches and answers `401` + `{error}` (no code field). Neither passkey nor provider sign-in is
-gated by the latch: `WebAuthnController::finishAuthentication` mints a full session without
-consulting `must_change_password` (WebAuthn ships **enabled** by default in `config/auth.php`),
-and `AuthManager::loginWithProvider` never checks it either. Full recovery is ONE CLI step:
+catches and answers `401` + `{error}` (no code field). Provider sign-in through
+`AuthManager::loginWithProvider` is refused with `PasswordChangeRequiredException` **before any
+success bookkeeping** (SRV-M18, review server__pm); its controller arm's generic
+`RuntimeException` catch answers `503` + `provider_unavailable` — fail closed, no token, until
+SRV-M17 maps the distinct 403. The passkey entry point `WebAuthnController::finishAuthentication`
+no longer walks around the hold: like quick-connect approval and the profile switch, it mints
+through `AuthManager::buildAuthResponse()`, which consults `must_change_password` at the seam
+itself and mints nothing for a held account (WebAuthn ships **enabled** by default in
+`config/auth.php`, so this gate is load-bearing). Full recovery is ONE CLI step:
 `user:reset-password` sets a new password AND clears
 `must_change_password` itself (live-session revocation rides the same
 `tokens_not_valid_after` stamp):

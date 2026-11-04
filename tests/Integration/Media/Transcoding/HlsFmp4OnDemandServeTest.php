@@ -52,7 +52,7 @@ final class HlsFmp4OnDemandServeTest extends TestCase
     private const FFMPEG = '/usr/bin/ffmpeg';
     private const FFPROBE = '/usr/bin/ffprobe';
 
-    private const JOB_ID = 's310-job';
+    private const JOB_ID = '1c2d3e4f-5a6b-4c7d-9e8f-0a1b2c3d4e5f';
     private const DURATION = 8.0;
     private const SEGMENT_SECONDS = 4;
 
@@ -228,8 +228,9 @@ final class HlsFmp4OnDemandServeTest extends TestCase
      */
     public function testTheLegacySingleVariantShapesAreEncodedOnDemand(): void
     {
-        [$manager, $controller, $dir] = $this->makeLegacyJob('s310-legacy', 'fmp4');
-        $this->assertTrue($manager->ensurePlaylistRegenerated('s310-legacy'));
+        $legacyJob = '7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d';
+        [$manager, $controller, $dir] = $this->makeLegacyJob($legacyJob, 'fmp4');
+        $this->assertTrue($manager->ensurePlaylistRegenerated($legacyJob));
         $this->assertStringContainsString(
             '#EXT-X-MAP:URI="init.m4s"',
             (string) file_get_contents($dir . '/media_0.m3u8'),
@@ -238,10 +239,10 @@ final class HlsFmp4OnDemandServeTest extends TestCase
         $this->assertSame([], self::m4sIn($dir), 'the legacy fixture must start with no segments');
 
         $init = $this->bodyOf($this->assertOk(
-            $controller->serveFile(new Request(), ['job_id' => 's310-legacy', 'file' => 'init.m4s'])
+            $controller->serveFile(new Request(), ['job_id' => $legacyJob, 'file' => 'init.m4s'])
         ));
         $segment = $this->bodyOf($this->assertOk(
-            $controller->serveFile(new Request(), ['job_id' => 's310-legacy', 'file' => 'seg-00000.m4s'])
+            $controller->serveFile(new Request(), ['job_id' => $legacyJob, 'file' => 'seg-00000.m4s'])
         ));
 
         $this->assertSame('ftyp', substr($init, 4, 4));
@@ -344,8 +345,8 @@ final class HlsFmp4OnDemandServeTest extends TestCase
      */
     public function testAnMpegTsJobStillServesItsTsSegmentsOnDemand(): void
     {
-        [$manager, $controller, $dir] = $this->makeMultiVariantJob('s310-mpegts', 'mpegts');
-        $this->assertTrue($manager->ensurePlaylistRegenerated('s310-mpegts'));
+        [$manager, $controller, $dir] = $this->makeMultiVariantJob('3d4c5b6a-7f8e-4d2c-a1b0-9f8e7d6c5b4a', 'mpegts');
+        $this->assertTrue($manager->ensurePlaylistRegenerated('3d4c5b6a-7f8e-4d2c-a1b0-9f8e7d6c5b4a'));
         $this->assertStringNotContainsString(
             'EXT-X-MAP',
             (string) file_get_contents($dir . '/media_v240p.m3u8'),
@@ -355,7 +356,7 @@ final class HlsFmp4OnDemandServeTest extends TestCase
 
         $response = $controller->serveFile(
             new Request(),
-            ['job_id' => 's310-mpegts', 'file' => 'seg-v240p-00000.ts']
+            ['job_id' => '3d4c5b6a-7f8e-4d2c-a1b0-9f8e7d6c5b4a', 'file' => 'seg-v240p-00000.ts']
         );
         $this->assertSame(200, $response->statusCode, $this->ffmpegLog($dir));
         $this->assertSame('video/mp2t', $response->headers['Content-Type']);

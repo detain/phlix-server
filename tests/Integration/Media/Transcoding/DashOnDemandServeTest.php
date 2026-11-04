@@ -45,7 +45,7 @@ final class DashOnDemandServeTest extends TestCase
     private const FFMPEG = '/usr/bin/ffmpeg';
     private const FFPROBE = '/usr/bin/ffprobe';
 
-    private const JOB_ID = 's59-job';
+    private const JOB_ID = '2f6a1b7e-9c4d-4e8a-b1f2-3c5d7e9f0123';
     private const DURATION = 8.0;
     private const SEGMENT_SECONDS = 4;
 
@@ -90,7 +90,7 @@ final class DashOnDemandServeTest extends TestCase
         }
         // S439 hardening (S227 lane): an on-demand encode can land its final
         // rename while the sweep runs — measured under CPU load: the suite
-        // passed every case, yet a re-created `s59-job` dir survived the single
+        // passed every case, yet a re-created job dir survived the single
         // rrmdir pass and tripped the zero-residue census. The minter owns the
         // sweep, so retry until the root is gone or the bounded deadline passes.
         $deadline = hrtime(true) + 5_000_000_000;

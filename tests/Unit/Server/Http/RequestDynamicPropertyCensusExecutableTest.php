@@ -1010,7 +1010,19 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // SyncPlayDispatchErrorContainmentTest.php (R17-03 wire-containment pin
     // for the dispatch catch-all, review server__secnet SRV-M21). Measured
     // from the phpunit red (2051), not predicted.
-    private const EXPECTED_PHP_FILES = 2051;
+    // +4 2051→2055: four first-party files joined the tree without the
+    // same-commit rotation this pin demands (disclosed owed landings;
+    // per-commit deltas measured by re-running this scan at each tip): +1
+    // 2051→2052 tests/Unit/Auth/AuthManagerLatchGateTest.php (d8c834d5,
+    // review server__pm), +1 2052→2053 tests/Unit/Server/WebPortal/
+    // WebPortalRouterWatchHistoryGetTest.php (a86e0999, review
+    // xrepo__server-ui), +1 2053→2054 tests/Unit/Server/Core/
+    // ServerSelfDetailTest.php (8bb435cf, review xrepo__server-ui), +1
+    // 2054→2055 this cure adds tests/Unit/Platform/
+    // WorkermanVersionRequirementTruthTest.php (README Workerman version
+    // truth pin, review server__devops SRV-m18). Measured from the phpunit
+    // red (2055), not predicted.
+    private const EXPECTED_PHP_FILES = 2055;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1114,8 +1126,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * $request->rawBody read (+1 src site; the reworked ownership tests'
      * $request->method/->rawBody seeds are writes — counted below).
      * Measured from the phpunit red (458), not predicted.
+     * +1 458→459 landed unrotated with a86e0999 (disclosed owed landing;
+     * measured by re-running this scan at each tip). This cure adds zero
+     * sites — its new test touches no Request root (probe-proven: 459
+     * measured with the new file on disk). Measured from the phpunit red
+     * (459), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 458;
+    private const EXPECTED_DECLARED_READS = 459;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1352,7 +1369,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // AdminPasswordHandoffRealDbTest.php assigns $request->body — one site,
     // the sanctioned harness-seed pattern; zero src/ writes added.
     // Measured from the phpunit red (1124), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1124;
+    // +28 1124→1152 landed unrotated across four cures (disclosed owed
+    // landings; per-commit deltas measured by re-running this scan at each
+    // tip): +5 1124→1129 with 03bf5c2b (browse types[]+maxRating, review
+    // xrepo__server-ui), +8 1129→1137 with 4c81dc91 (CallbackUrl guard,
+    // review server__fedev), +12 1137→1149 with a86e0999 (watch-history GET
+    // on both wire paths, review xrepo__server-ui), +3 1149→1152 with
+    // 8bb435cf (server self-detail GET, review xrepo__server-ui). This cure
+    // adds zero sites on either denominator — its file-count +1 is its only
+    // census delta. Measured from the phpunit red (1152), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1152;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

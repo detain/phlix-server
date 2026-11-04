@@ -23,6 +23,9 @@ use Phlix\Common\Net\SsrfGuard;
  * dodge cross-origin restrictions (GitHub raw does not send permissive CORS
  * headers) and to keep a single, auditable egress path.
  *
+ * Egress posture: every fetcher REFUSES HTTP redirects, per estate
+ * EGRESS_TRANSPORT_LAW (precedent 4187ff14 — see {@see defaultFetcher()}).
+ *
  * Sources are layered:
  *
  *  - the **default** catalog (`plugins.catalog.default_source`, shipped as
@@ -543,11 +546,18 @@ final class PluginCatalogService
      * is therefore NOT hook-safe in this environment and is used only as a
      * synchronous fallback when the async path is unavailable.
      *
-     * Sends a Phlix User-Agent + `Accept: application/json`, follows up to 3
-     * redirects (restricted to http/https so a redirect cannot downgrade to
-     * `file://` etc.), and verifies TLS. When ext-curl is unavailable the
-     * fetcher falls back to the previous stream-context implementation so
-     * curl-less environments still work.
+     * Sends a Phlix User-Agent + `Accept: application/json`, REFUSES HTTP
+     * redirects, and verifies TLS. Redirect refusal is estate egress law
+     * (EGRESS_TRANSPORT_LAW, precedent 4187ff14 / R20-01 / R20-02): every
+     * fetcher here is configured not to follow 3xx responses and throws when
+     * the terminal response is one, so a catalog response can never move the
+     * egress path to an unvalidated host (and no redirect chain exists to
+     * downgrade to `file://` because following is disabled outright). The
+     * raw `plugins.json` / `plugin.json` URLs this service fetches are served
+     * 200-direct by GitHub (measured); archive tarballs redirect to codeload
+     * and must be requested by their direct codeload URL. When ext-curl is
+     * unavailable the fetcher falls back to the previous stream-context
+     * implementation so curl-less environments still work.
      *
      * @return callable(string, int): string
      */
@@ -584,14 +594,16 @@ final class PluginCatalogService
     }
 
     /**
-     * Synchronous HTTP GET using native cURL. Follows ≤3 http/https redirects, verifies TLS.
+     * Synchronous HTTP GET using native cURL. Refuses HTTP redirects (estate
+     * egress law — see {@see defaultFetcher()}) and verifies TLS.
      *
      * Uses native PHP cURL for synchronous catalog fetching. This is the fallback
      * path when no Swoole event loop is running or when the URL requires blocking
      * curl. Note: `SWOOLE_HOOK_NATIVE_CURL` is deliberately excluded from the
      * runtime hook mask, so native cURL is NOT hook-safe in this environment.
      *
-     * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
+     * @throws \RuntimeException On transport failure, an HTTP redirect (3xx)
+     *         response, or an HTTP status ≥ 400.
      */
     private static function curlFetch(string $url, int $timeout): string
     {
@@ -608,8 +620,8 @@ final class PluginCatalogService
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        // Estate egress law (4187ff14 / R20-01 family): never follow redirects.
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'User-Agent: Phlix-PluginCatalog',
             'Accept: application/json',
@@ -625,6 +637,12 @@ final class PluginCatalogService
             throw new \RuntimeException('request failed or timed out: ' . ($curlError ?: 'Unknown error'));
         }
 
+        if ($status >= 300 && $status < 400) {
+            // Egress law: the terminal response IS a redirect — refuse it.
+            // Message names no URL (87616b0f disclosure law).
+            throw new \RuntimeException('HTTP redirect refused (' . $status . ' not followed)');
+        }
+
         if ($status >= 400) {
             throw new \RuntimeException('HTTP ' . $status);
         }
@@ -637,7 +655,8 @@ final class PluginCatalogService
      *
      * Routes through the Swoole event loop so the worker is not blocked during
      * the network I/O wait. Falls back to a RuntimeException on timeout or
-     * connection failure.
+     * connection failure. Refuses HTTP redirects (estate egress law — see
+     * {@see defaultFetcher()}); the vendor default would follow up to 5.
      *
      * @param \Workerman\Http\Client $client Async HTTP client (lazy-initd by caller).
      * @param string                 $url    Full URL to fetch.
@@ -645,12 +664,13 @@ final class PluginCatalogService
      *
      * @return string Response body.
      *
-     * @throws \RuntimeException On timeout or connection error.
+     * @throws \RuntimeException On timeout, connection error, or an HTTP
+     *         redirect (3xx) response.
      */
     private static function asyncFetch(\Workerman\Http\Client $client, string $url, int $timeout): string
     {
         $channel = new \Swoole\Coroutine\Channel(1);
-        $state = ['body' => null, 'error' => null];
+        $state = ['body' => null, 'error' => null, 'status' => null];
 
         $client->request($url, [
             'method'  => 'GET',
@@ -658,7 +678,12 @@ final class PluginCatalogService
                 'User-Agent' => 'Phlix-PluginCatalog',
                 'Accept'     => 'application/json',
             ],
+            // Estate egress law (4187ff14 / R20-01 precedent): the vendor
+            // default follows up to 5 redirects; refuse them outright like
+            // every other egress path in the estate.
+            'allow_redirects' => ['max' => 0],
             'success' => static function (\Psr\Http\Message\ResponseInterface $response) use ($channel, &$state): void {
+                $state['status'] = $response->getStatusCode();
                 $state['body'] = (string) $response->getBody();
                 $channel->push(true);
             },
@@ -674,6 +699,11 @@ final class PluginCatalogService
             throw new \RuntimeException('async fetch failed: ' . $state['error']);
         }
 
+        if (is_int($state['status']) && $state['status'] >= 300 && $state['status'] < 400) {
+            // Egress law: refuse the redirect. Message names no URL.
+            throw new \RuntimeException('HTTP redirect refused (' . $state['status'] . ' not followed)');
+        }
+
         if ($state['body'] === null) {
             throw new \RuntimeException('async fetch timed out after ' . $timeout . 's');
         }
@@ -683,17 +713,20 @@ final class PluginCatalogService
 
     /**
      * Fallback `file_get_contents` + stream-context GET, used only when
-     * ext-curl is unavailable. Follows ≤3 redirects and verifies TLS.
+     * ext-curl is unavailable. Refuses HTTP redirects (estate egress law —
+     * see {@see defaultFetcher()}) and verifies TLS.
      *
-     * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
+     * @throws \RuntimeException On transport failure, an HTTP redirect (3xx)
+     *         response, or an HTTP status ≥ 400.
      */
     private static function streamFetch(string $url, int $timeout): string
     {
         $headers = "User-Agent: Phlix-PluginCatalog\r\nAccept: application/json\r\n";
         $http = [
             'timeout'        => $timeout,
-            'follow_location' => 1,
-            'max_redirects'  => 3,
+            // Estate egress law (4187ff14 / R20-02 precedent): follow nothing.
+            'follow_location' => 0,
+            'max_redirects'  => 0,
             'header'         => $headers,
             'ignore_errors'  => false,
         ];
@@ -703,17 +736,28 @@ final class PluginCatalogService
             'ssl'   => ['verify_peer' => true, 'verify_peer_name' => true],
         ]);
 
+        // The HTTP wrapper replaces `$http_response_header` in THIS scope;
+        // the pre-declared-empty + named-read idiom is the HttpInstaller-
+        // proven form (get_defined_vars() does NOT surface the magic var —
+        // measured). No replacement = transport-layer failure = stays [].
+        $http_response_header = [];
         $body = @file_get_contents($url, false, $context);
+        $status = self::lastHttpStatus($http_response_header === [] ? null : $http_response_header);
+
         if ($body === false) {
-            // `$http_response_header` is populated by the HTTP stream
-            // wrapper only when a response was received; read it via
-            // get_defined_vars() so it is absent (not assumed-set) when
-            // the failure was at the transport layer.
-            $status = self::lastHttpStatus(get_defined_vars()['http_response_header'] ?? null);
             throw new \RuntimeException(
                 $status !== null ? 'HTTP ' . $status : 'request failed or timed out',
             );
         }
+
+        // Measured: with follow_location=0 a refused 3xx completes WITHOUT an
+        // error (empty body, terminal status in the response headers), so the
+        // refusal needs an explicit status check on the success path.
+        if ($status !== null && $status >= 300 && $status < 400) {
+            // Egress law: refuse the redirect. Message names no URL.
+            throw new \RuntimeException('HTTP redirect refused (' . $status . ' not followed)');
+        }
+
         return $body;
     }
 

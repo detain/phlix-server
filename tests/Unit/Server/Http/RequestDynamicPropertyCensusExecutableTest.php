@@ -1063,7 +1063,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // (retired-jargon copy tripwire over UserRepository/AuthManager/
     // SyncPlayManager, review server__copywriter); measured from the phpunit
     // red (2065) at tip 61e3a662, not predicted.
-    private const EXPECTED_PHP_FILES = 2065;
+    // +1 2065→2066: the catalog egress-law alignment adds tests/Unit/Plugins/
+    // Catalog/PluginCatalogEgressRedirectTest.php (live loopback 302 fixture
+    // over PluginCatalogService's three transports, EGRESS_TRANSPORT_LAW /
+    // 4187ff14 family); measured from the phpunit red (2066) at tip 10a82683.
+    private const EXPECTED_PHP_FILES = 2066;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

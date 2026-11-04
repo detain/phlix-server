@@ -594,10 +594,12 @@ final class PluginCatalogServiceTest extends TestCase
      *     `phlix-plugin-sample-theme` **release entry v1.0.0, verified:true**,
      *     with a full-SHA ref and a 64-hex artifact digest;
      *  3. the service's own install-pin path (`pinFor()`) agrees with the entry;
-     *  4. re-hashing the artifact through the installer's own
-     *     {@see SourceUrlResolver} repo→`/archive/<ref>.tar.gz` rewrite — i.e.
-     *     codeload bytes, the estate's canonical hash source (api.github.com
-     *     tarballs are DIFFERENT bytes) — reproduces the catalog digest exactly.
+     *  4. re-hashing the artifact from the direct codeload URL — the estate's
+     *     canonical hash bytes (api.github.com tarballs are DIFFERENT bytes) —
+     *     reproduces the catalog digest exactly. Egress-law era (4187ff14):
+     *     the installer-shaped `github.com/…/archive/<ref>.tar.gz` URL is a
+     *     redirector (302→codeload) and the production fetcher REFUSES it —
+     *     the conviction is asserted live here too.
      *
      * Planted-regression proof: re-pin the constant to v2.3.0 and claim (2)
      * reddens — the entry is absent from that tag's catalog. This mirrors the
@@ -712,8 +714,14 @@ final class PluginCatalogServiceTest extends TestCase
                 'pinFor() and the fetched entry disagree on the pinned ref. ' . self::STEP_MARK
             );
 
-            // (4) Codeload re-hash: the exact URL HttpInstaller would fetch,
-            // fetched with the exact fetcher the catalog path uses.
+            // (4) Codeload re-hash — egress-law era. The installer-shaped URL
+            // (github.com/…/archive/<ref>.tar.gz) is a pure redirector: GitHub
+            // answers 302 → codeload. defaultFetcher() refuses redirects per
+            // estate EGRESS_TRANSPORT_LAW (precedent 4187ff14), so fetching the
+            // redirector form must now raise the refusal (live conviction of
+            // the law on the production fetcher), and the byte audit moves to
+            // the redirect's codeload target — fetched by its direct URL
+            // (measured: 200 direct, no second hop).
             $artifactUrl = SourceUrlResolver::normalize($release->repo, $release->ref);
             self::assertSame(
                 rtrim($release->repo, '/') . '/archive/' . $release->ref . '.tar.gz',
@@ -722,7 +730,27 @@ final class PluginCatalogServiceTest extends TestCase
                     . self::STEP_MARK
             );
             $fetcher = PluginCatalogService::defaultFetcher();
-            $artifactBytes = $fetcher($artifactUrl, 60);
+
+            $refusal = null;
+            try {
+                $fetcher($artifactUrl, 60);
+            } catch (\RuntimeException $exception) {
+                $refusal = $exception->getMessage();
+            }
+            self::assertNotNull(
+                $refusal,
+                'the redirector-shaped archive URL must raise the redirect refusal — the egress '
+                    . 'law is not enforced on the production fetcher. ' . self::STEP_MARK
+            );
+            self::assertStringContainsString('redirect refused', (string) $refusal, self::STEP_MARK);
+            self::assertStringNotContainsString(
+                'github.com',
+                (string) $refusal,
+                'the refusal must name no destination URL (87616b0f disclosure law). ' . self::STEP_MARK
+            );
+
+            $codeloadUrl = self::codeloadDirectUrl($artifactUrl);
+            $artifactBytes = $fetcher($codeloadUrl, 60);
             self::assertSame(
                 $release->artifactSha256,
                 hash('sha256', $artifactBytes),
@@ -740,5 +768,25 @@ final class PluginCatalogServiceTest extends TestCase
                 putenv($overrideKey . '=' . $savedOverride);
             }
         }
+    }
+
+    /**
+     * Map a GitHub redirector-shaped archive URL to its direct codeload URL —
+     * the redirect target github.com's 302 names (measured:
+     * `…/archive/<ref>.tar.gz` → `https://codeload.github.com/OWNER/REPO/tar.gz/<ref>`
+     * — the `.tar.gz` suffix is dropped and full-SHA refs pass through
+     * unchanged; release entries pin 40-hex refs, asserted at the call site).
+     * Test-side derivation only; production egress never follows the
+     * hop (EGRESS_TRANSPORT_LAW, precedent 4187ff14).
+     */
+    private static function codeloadDirectUrl(string $archiveUrl): string
+    {
+        $direct = preg_replace(
+            '#^https://github\.com/([^/]+)/([^/]+)/archive/(.+)\.tar\.gz$#',
+            'https://codeload.github.com/$1/$2/tar.gz/$3',
+            $archiveUrl,
+        );
+        self::assertIsString($direct, "unrecognised archive-URL shape: {$archiveUrl}");
+        return $direct;
     }
 }

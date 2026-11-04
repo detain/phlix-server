@@ -9738,6 +9738,24 @@ run and can never reach it (AC2a / KNOWN LIMIT 3 closed), and a
   wire-path manifest); anonymous 401 `auth.required` pinned by the same guard test as L-1.
 ### Security
 
+- **The plugin catalog's live fetchers now refuse HTTP redirects, closing the
+  estate's last redirect-following egress family.** The catalog fetchers
+  followed up to 3 redirects (cURL and stream transports) and — the async
+  Workerman client carried no `allow_redirects` option at all — up to 5 by
+  vendor default, so a vetted catalog host answering 302 could move the fetch
+  (and its bytes) to an unchecked destination behind the moment-of-use SSRF
+  check. All three transports now terminate on any 3xx with a refusal that
+  names no URL. Healthy behaviour is unchanged: the default catalog and
+  `plugin.json` URLs GitHub serves are 200-direct (measured), and the
+  byte-audit network test now asserts the refusal on the redirector-shaped
+  archive URL and re-hashes the artifact from its direct codeload target.
+  Pinned by a live loopback fixture over all three transports (3 conviction
+  legs measured red at the parent; the async legs execute where ext-swoole is
+  present) plus the census file-count rotation. [EGRESS_TRANSPORT_LAW family:
+  precedent 4187ff14 (R20-01), the R20-02 HttpInstaller posture, 87616b0f
+  no-URL disclosure law; derived queue SRV-6; register:
+  `.reviews/2026-11-03/FIX-DERIVED-SRV.md`]
+
 - **SSRF refusals no longer quote the exact destination they blocked in
   logs and delivery records.** The shared guard's refusal message names the
   full URL it examined, and the webhook subsystem fed that raw message into

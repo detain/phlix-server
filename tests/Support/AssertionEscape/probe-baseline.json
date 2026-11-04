@@ -43,6 +43,12 @@
             "method": "derToRawEcSignature",
             "recorded": "2026-09-29",
             "reason": "The site is `self::fail('not a DER integer')` — the malformed-DER guard arm inside the `$readInt` static closure of the DER→raw signature helper. The closure IS invoked twice per call, but only its happy path runs: the sole caller is `test_es256_full_ceremony`, which signs with openssl_sign and feeds VALID DER, so the `ord($der[$offset]) !== 0x02` arm is unreachable on the passing path BY DESIGN — making the probed line run would mean handing the converter a corrupt signature, i.e. breaking the behaviour under test (and a `fail()` arm that ever executes reddens the test itself, so no green run can reach it). A run-tripwire placed before the fail line cannot execute in any green run of this site. Mocked Connection, no database — deterministic on every box."
+        },
+        {
+            "file": "tests/Unit/Server/Http/Controllers/MediaMarkerOwnershipTest.php",
+            "method": "createHarness",
+            "recorded": "2026-11-04",
+            "reason": "The site is `$this->fail('unexpected SQL reached by the create path: ' . $sql)` — the last-arm guard of the createHarness() mock's willReturnCallback, added with the media-marker ownership cures (6ad21937). The closure IS invoked on every create-path test, but only its two handler arms run: the flow under test issues exactly the INSERT INTO media_markers and SELECT * FROM media_markers WHERE id shapes the arms above resolve. The guard line is unreachable on the passing path BY DESIGN — making it run would mean the controller issuing SQL it must not, i.e. breaking the behaviour under test (and a fail() arm that ever executes reddens the test itself). The sibling harness closure in the same file GATES, proving the probe executes this file's mock wiring. Mocked Connection, no database — deterministic on every box (measured NOT-REACHED locally and on CI 2026-11-04)."
         }
     ]
 }

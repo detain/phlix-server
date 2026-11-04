@@ -24,6 +24,11 @@ use Smarty;
  * COMMITTED template directly so the grammar law is pinned at the shipped
  * bytes, not at a mocked pipeline.
  *
+ * Review server__copywriter SRV-M6 rides the same harness: poster_url is
+ * metadata_json content (a TMDB-supplied string the admin library can
+ * influence) interpolated into a quoted src attribute — the template must
+ * html-escape it, exactly as it already escapes the alt/name slots.
+ *
  * @package Phlix\Tests\Unit\Admin
  */
 final class NewsletterGrammarTruthTest extends TestCase
@@ -97,6 +102,41 @@ final class NewsletterGrammarTruthTest extends TestCase
             '>new item added',
             $html,
             'the singular label must not render for a count above one.'
+        );
+    }
+
+    public function test_the_committed_template_escapes_poster_url_attributes(): void
+    {
+        $html = $this->render(0, [[
+            'name' => 'Safe Name',
+            'poster_url' => 'https://x.test/a.png" onerror="alert(1)',
+            'play_count' => 1,
+        ]]);
+
+        self::assertStringNotContainsString(
+            '" onerror="alert(1)',
+            $html,
+            'a quote-bearing poster_url must not break out of the src attribute (SRV-M6).'
+        );
+        self::assertStringContainsString(
+            '&quot; onerror=&quot;alert(1)',
+            $html,
+            'the payload must survive only in escaped form inside the quoted attribute.'
+        );
+    }
+
+    public function test_the_committed_template_leaves_wellformed_poster_urls_intact(): void
+    {
+        $html = $this->render(0, [[
+            'name' => 'Safe Name',
+            'poster_url' => 'https://image.tmdb.org/a.jpg',
+            'play_count' => 1,
+        ]]);
+
+        self::assertStringContainsString(
+            'src="https://image.tmdb.org/a.jpg"',
+            $html,
+            'escaping must not mangle ordinary scheme/host/path characters.'
         );
     }
 }

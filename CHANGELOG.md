@@ -79,6 +79,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The newsletter template interpolated `poster_url` into its `src`
+  attribute unescaped.** Poster URLs arrive via `metadata_json` (provider
+  content); a quote-bearing value closed the attribute and smuggled event
+  handlers into every recipient's client. The slot now carries the same
+  `|escape:'html'` the name/alt slots already used; `NewsletterGrammarTruthTest`
+  pins both the escaped-payload and well-formed-passthrough arms.
+  [review server__copywriter SRV-M6]
 - **The newsletter HTML leg mailed "1 new items added to the library this
   week".** The plain-text leg carries the 0/1 grammar guard (and the HTML
   play-count line always did — "1 play"); the new-items label was the one

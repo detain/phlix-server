@@ -289,7 +289,7 @@
                         <div class="media-item">
                             {if $media.poster_url}
                             <img
-                                src="{$media.poster_url}"
+                                src="{$media.poster_url|escape:'html'}"
                                 alt="{$media.name|escape:'html'}"
                                 class="media-poster"
                             />

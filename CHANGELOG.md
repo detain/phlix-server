@@ -100,6 +100,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **README collection-route cites re-anchored to the shipped lines —
+  `CollectionRoutesReadmeCitesTest` was RED (all 9 datasets) at master.**
+  `8bb435cf` recorded the SRV-M2 cite-table rotation in its message, but its
+  README hunk never made it into the commit: the `selfServerEntry()` closure
+  extraction moved the collection registrations +3 lines (`:2249` era →
+  `:2252` era) while the table kept citing the pre-move lines. The pin test
+  did its job — it reddens exactly this drift — and the table now lands on the
+  exact `$r->…` lines again. Verbatim-history note: the bullet inside the
+  `8bb435cf` entry above stays as written; this entry is its correction.
+  [review xrepo__server-ui]
+
 - **The admin MetricsPage server-detail card renders again — the server now
   answers `GET /api/v1/servers/{id}` for its own id (review xrepo__server-ui).**
   The shared admin surface fetched the selected server's detail row, but the

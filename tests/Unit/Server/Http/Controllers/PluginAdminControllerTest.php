@@ -10,6 +10,7 @@ use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\CatalogSourceResolver;
 use Phlix\Plugins\Catalog\PluginCatalogService;
@@ -44,6 +45,9 @@ final class PluginAdminControllerTest extends TestCase
     /** @var AuditLogger&MockInterface */
     private AuditLogger&MockInterface $audit;
     private PluginAdminController $controller;
+
+    /** @var list<string> E2W captured-logger dirs (INFO-SERVER-51 pins). */
+    private array $e2wLoggerDirs = [];
 
     protected function setUp(): void
     {
@@ -116,6 +120,14 @@ final class PluginAdminControllerTest extends TestCase
     {
         SsrfGuard::reset();
         PluginFieldHelp::setMapForTesting(null);
+        foreach ($this->e2wLoggerDirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+        $this->e2wLoggerDirs = [];
+        LoggerFactory::reset();
         parent::tearDown();
     }
 
@@ -1016,5 +1028,87 @@ final class PluginAdminControllerTest extends TestCase
         $expectation = $mock->shouldReceive($method);
 
         return $expectation;
+    }
+
+    // ------------------------------------------------------------------
+    // INFO-SERVER-51 (E2 cluster, 2026-11-04): testCredentials()'s single
+    // raw-Throwable arm used to relay the plugin's exception text to the
+    // client (redacted only for submitted secrets). The wire now answers the
+    // fixed copy in the byte-identical envelope (status stays 200 — the
+    // method reports test results, not HTTP errors), and the cause reaches
+    // the server-side log STILL SCRUBBED of the just-submitted values: one
+    // RequestException would otherwise carry the API key into the log line.
+    // Red at the parent arm: the wire carried E2W-PA-MARKER.
+    // ------------------------------------------------------------------
+
+    public function test_test_credentials_exception_path_answers_fixed_copy_and_logs_scrubbed_cause(): void
+    {
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix_e2w_pa_log_' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $this->e2wLoggerDirs[] = $dir;
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        $secret = 'OMDbkey-E2W-SUPERSECRET-0123456789';
+        $marker = 'GET https://api.upstream.test/key=[E2W-PA-MARKER] failed: connection reset';
+
+        $entry = new class ($marker, $secret) {
+            public function __construct(private string $marker, private string $secret)
+            {
+            }
+
+            /** @param array<string, mixed> $settings */
+            public function testCredentials(array $settings): string
+            {
+                // Third-party plugin code: its exception embeds both the
+                // upstream detail and — as OMDb-shaped clients really do — the
+                // submitted key inside the URL.
+                throw new \RuntimeException($this->marker . ' (sent key ' . $this->secret . ')');
+            }
+        };
+
+        $this->expectCall($this->loader, 'getInstalled')
+            ->with('phlix-plugin-demo')
+            ->andReturn($this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: true,
+                manifestSettings: ['apiKey' => ['type' => 'string', 'secret' => true]],
+            ));
+        $this->expectCall($this->loader, 'getEntryInstance')
+            ->with('phlix-plugin-demo')
+            ->andReturn($entry);
+
+        $response = $this->controller->testCredentials(
+            $this->makeRequest('admin-1', ['settings' => ['apiKey' => $secret]]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(
+            ['success' => false, 'message' => 'Credential test failed.'],
+            $this->decode((string) $response->body),
+        );
+        self::assertStringNotContainsString('E2W-PA-MARKER', (string) $response->body);
+        self::assertStringNotContainsString($secret, (string) $response->body);
+
+        $log = (string) file_get_contents($logPath);
+        self::assertStringContainsString('Plugin credential test failed: phlix-plugin-demo', $log);
+        self::assertStringContainsString('RuntimeException', $log);
+        self::assertStringContainsString('[E2W-PA-MARKER]', $log);
+        self::assertStringNotContainsString($secret, $log, 'the submitted secret is scrubbed before logging');
     }
 }

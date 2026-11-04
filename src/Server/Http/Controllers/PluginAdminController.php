@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Exception\PluginEnableException;
@@ -559,13 +561,27 @@ final class PluginAdminController
                 'message' => 'Credentials validated successfully.',
             ]);
         } catch (\Throwable $e) {
+            // INFO-SERVER-51 (E2 cluster): the raw-Throwable arm of the ONE
+            // credential-test endpoint in the estate used to relay the plugin
+            // code's exception text (redacted only for submitted secrets).
+            // Third-party throw messages carry upstream URLs, tokens of other
+            // shapes, and stack-flavoured prose no admin client needs. The wire
+            // keeps the byte-identical 200 envelope with the fixed copy; the
+            // class + message — still scrubbed of the just-submitted values —
+            // go to the HTTP log only. The typed/string-return relay paths
+            // above stay as designed (plugin-authored result copy, not
+            // exception text).
+            LoggerFactory::get(LogChannels::HTTP)->error(
+                'Plugin credential test failed: ' . $name,
+                [
+                    'exception' => get_class($e),
+                    'message' => self::redactSubmittedSecrets($e->getMessage(), $submitted, $plugin),
+                ]
+            );
+
             return (new Response())->json([
                 'success' => false,
-                'message' => self::redactSubmittedSecrets(
-                    'Credential test failed: ' . $e->getMessage(),
-                    $submitted,
-                    $plugin,
-                ),
+                'message' => 'Credential test failed.',
             ]);
         }
     }
@@ -575,10 +591,12 @@ final class PluginAdminController
      * returned to the client.
      *
      * {@see self::testCredentials()} hands operator-supplied secrets to
-     * third-party plugin code and then relays that code's message — either a
-     * returned string or a caught exception's `getMessage()` — straight back in
-     * the JSON body. That is a plaintext-credential leak waiting to happen:
-     * HTTP client exceptions routinely embed the full request URI, and several
+     * third-party plugin code and then relays that code's returned-string
+     * message straight back in the JSON body (the caught-exception path,
+     * since INFO-SERVER-51, answers a fixed copy and passes the exception
+     * message through here on its way to the server-side log). That is a
+     * plaintext-credential leak waiting to happen: HTTP client exceptions
+     * routinely embed the full request URI, and several
      * provider APIs carry the API key as a *query parameter* (OMDb's
      * `?apikey=…` is the in-tree example), so one `RequestException` would put
      * the key in the response verbatim. The controller knows which values it

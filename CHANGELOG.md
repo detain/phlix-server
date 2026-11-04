@@ -33,6 +33,22 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Append-only restoration record (procedural note; no code, no sentence
+  rewritten).** The entry below printed "Fifteen raw-`Throwable` catch arms"
+  when commit 194b278f landed AND pushed it; commit f758546c then changed
+  that word to "Fourteen" by editing the landed line IN PLACE instead of
+  appending. The correction is TRUE (twelve `AdminHubController` arms + the
+  DLNA persist arm + the credential-test catch-all = fourteen) and was
+  self-disclosed in both the commit message and the e2w register, so nothing
+  shipped reads falsely — but the verbatim record was rewritten, and this
+  file's own discipline reserves corrections for NEWER entries naming the
+  prior claim. This note restores that record: 194b278f's landed word was
+  "Fifteen"; "Fourteen" is the truth; the line stays exactly as corrected
+  from here on. The compliant pattern is 10a82683 in this same file — a pure
+  insertion correcting 947f7de8's CHANGELOG over-claim, invoked explicitly
+  under append-only discipline.
+  [review server__secaudit, e2w-R1 Major]
+
 - **Admin and plugin endpoints stopped echoing exception text to clients.**
   Fourteen raw-`Throwable` catch arms answered the (otherwise byte-identical)
   JSON envelope with `$e->getMessage()` embedded: twelve

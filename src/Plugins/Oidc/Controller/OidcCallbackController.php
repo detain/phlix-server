@@ -508,10 +508,8 @@ final class OidcCallbackController
                 // Generic error code only — the redirect target is same-origin
                 // (allowlisted above) but the error string still rides the URL.
                 $errorValue = is_string($result->error) ? $result->error : 'auth_failed';
-                $redirectUrl = $redirectUri . '?error=' . urlencode($errorValue);
-                return $this->clearCorrelation(
-                    (new Response())->status(302)->header('Location', $redirectUrl),
-                );
+
+                return StateCorrelation::errorRedirect($redirectUri, $errorValue, self::CORRELATION_COOKIE);
             }
 
             // S45 — LINK branch. The OIDC auth above ran with the SAME S44
@@ -555,8 +553,10 @@ final class OidcCallbackController
                     ['user_id' => $userId],
                 );
 
-                return $this->clearCorrelation(
-                    (new Response())->status(302)->header('Location', $redirectUri . '?error=password_change_required'),
+                return StateCorrelation::errorRedirect(
+                    $redirectUri,
+                    'password_change_required',
+                    self::CORRELATION_COOKIE,
                 );
             }
 
@@ -578,10 +578,7 @@ final class OidcCallbackController
                 'error' => $e->getMessage(),
             ]);
 
-            $redirectUrl = $redirectUri . '?error=internal';
-            return $this->clearCorrelation(
-                (new Response())->status(302)->header('Location', $redirectUrl),
-            );
+            return StateCorrelation::errorRedirect($redirectUri, 'internal', self::CORRELATION_COOKIE);
         }
     }
 

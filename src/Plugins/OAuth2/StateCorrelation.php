@@ -127,4 +127,35 @@ final class StateCorrelation
     {
         return $response->clearCookie($cookieName);
     }
+
+    /**
+     * Build the 302 back to the allowlisted same-origin target with a fixed
+     * internal error code, using the correct query separator — THE single
+     * separator-safe join both browser callback legs (GitHub + OIDC) answer
+     * their refusals through.
+     *
+     * Origin of the law (review r1, GitHub Finding 9): appending `'?error='`
+     * unconditionally produced `/app?a=1?error=…` — the second '?' turns the
+     * whole tail into the VALUE of the last existing parameter, so the error
+     * code is silently swallowed. `isSafeRedirectTarget` (both controllers,
+     * byte-twins) admits '?' in the target, so this is reachable input, and the
+     * OIDC leg carried the raw concatenation on all three refusal arms until
+     * INFO-SERVER-49 (REWORK-SRV-M18RW [Info], review server__secaudit) routed
+     * it through this method too.
+     *
+     * Every call site is downstream of the state consume, so the spent
+     * correlation cookie is expired here as well (NEW-10) — each flow passes
+     * its OWN cookie name, exactly like {@see self::clear()}.
+     */
+    public static function errorRedirect(string $redirectUri, string $code, string $cookieName): Response
+    {
+        $separator = str_contains($redirectUri, '?') ? '&' : '?';
+
+        return self::clear(
+            (new Response())
+                ->status(302)
+                ->header('Location', $redirectUri . $separator . 'error=' . urlencode($code)),
+            $cookieName,
+        );
+    }
 }

@@ -555,18 +555,14 @@ final class GithubCallbackController
      * code, using the correct query separator (Finding 9 — the old code appended
      * `'?error='` unconditionally, producing `/app?a=1?error=…`).
      *
-     * Every call site is downstream of the state consume, so the spent correlation
-     * cookie is expired here too (NEW-10).
+     * The join itself lives in the family's single source,
+     * {@see StateCorrelation::errorRedirect()}, shared with the OIDC leg since
+     * INFO-SERVER-49; the spent correlation cookie is expired there too
+     * because every call site is downstream of the state consume (NEW-10).
      */
     private function errorRedirect(string $redirectUri, string $code): Response
     {
-        $separator = str_contains($redirectUri, '?') ? '&' : '?';
-
-        return $this->clearCorrelation(
-            (new Response())
-                ->status(302)
-                ->header('Location', $redirectUri . $separator . 'error=' . urlencode($code)),
-        );
+        return StateCorrelation::errorRedirect($redirectUri, $code, self::CORRELATION_COOKIE);
     }
 
     /**

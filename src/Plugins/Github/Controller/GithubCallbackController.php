@@ -14,6 +14,7 @@ namespace Phlix\Plugins\Github\Controller;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LogChannels;
@@ -480,7 +481,20 @@ final class GithubCallbackController
                 }
             }
 
-            $tokens = $this->createTokensForUser($userId);
+            try {
+                $tokens = $this->createTokensForUser($userId);
+            } catch (PasswordChangeRequiredException) {
+                // SRV-M18 rework (review server__pm): a held account is
+                // answered like every other callback sign-in refusal — the
+                // fixed code on the allowlisted redirect, NO cookies. Caught
+                // here so it never falls into the generic ?error=internal arm.
+                LoggerFactory::get(LogChannels::AUTH)->warning(
+                    'GitHub sign-in refused: the account carries the must-change-password hold',
+                    ['user_id' => $userId],
+                );
+
+                return $this->errorRedirect($redirectUri, 'password_change_required');
+            }
 
             // Deliver the session as HttpOnly cookies and 302 to the clean,
             // allowlisted same-origin path with NO token query string. The
@@ -850,6 +864,18 @@ final class GithubCallbackController
      */
     private function createTokensForUser(string $userId): array
     {
+        // SRV-M18 rework (review server__pm): this leg minted full sessions
+        // around the must-change-password hold — the browser-callback analogue
+        // of the seam the finding named. The refusal law is the shared guard
+        // every minter calls; callback() answers it via errorRedirect() the
+        // way this surface answers every other sign-in refusal.
+        PasswordChangeRequiredException::refuseIfHeld(
+            $this->userRepository,
+            null,
+            $userId,
+            'github_callback',
+        );
+
         return [
             'access_token' => $this->jwtHandler->createAccessToken($userId),
             'refresh_token' => $this->jwtHandler->createRefreshToken($userId),

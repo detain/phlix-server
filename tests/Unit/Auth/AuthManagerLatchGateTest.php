@@ -42,9 +42,20 @@ use PHPUnit\Framework\TestCase;
  *     bookkeeping (no `updateLastLogin`, no `logLogin` audit, no activity,
  *     no dispatch) — the same typed exception + refusal audit the password
  *     login leg raises, mirrored in shape.
- *  2. `buildAuthResponse()` — the ONE seam every mint converges on — refuses
- *     a held account as its first act, so passkey/quick-connect/profile-
- *     switch callers cannot mint either.
+ *  2. `buildAuthResponse()` — the seam every token-mint inside AuthManager
+ *     converges on — refuses a held account as its first act, so passkey/
+ *     quick-connect/profile-switch callers cannot mint either. The refusal
+ *     law itself is single-sourced in
+ *     `PasswordChangeRequiredException::refuseIfHeld()`; the SRV-M18 REWORK
+ *     (review server__pm: the claim was universal, the gates were not)
+ *     routes the browser legs that mint OUTSIDE AuthManager — the OIDC and
+ *     GitHub callbacks and the hub-token exchange — through that same
+ *     guard, pinned by the held-account tests in
+ *     `OidcCallbackControllerTest` / `GithubCallbackControllerTest` /
+ *     `HubTokenControllerTest`, by the src/ enumeration in
+ *     `MintSeamLawTripwireTest`, and (for the OPDS HTTP-Basic surface) by
+ *     `AuthManagerVerifyCredentialsTest`. These four tests remain the
+ *     AuthManager-leg pins.
  *
  * The password login and refresh legs keep their own earlier checks; their
  * envelopes are byte-identical to the shipped ones and are pinned UNMODIFIED
@@ -202,7 +213,10 @@ final class AuthManagerLatchGateTest extends TestCase
         // This is the public seam the passkey finish (WebAuthnController),
         // the quick-connect approval (QuickConnectController) and the
         // profile switch (ProfilesController) all mint through — refusing
-        // here closes every external bypass at once.
+        // here closes every bypass that reaches AuthManager; the legs that
+        // mint outside it (OAuth callbacks, hub-token exchange) call the
+        // same shared guard refuseIfHeld() and are pinned by their own held-
+        // account tests plus the MintSeamLawTripwireTest enumeration.
         $repo = $this->createMock(UserRepository::class);
         $repo->method('mustChangePassword')
             ->willReturnCallback(static fn(string $id): bool => $id === 'user-1');

@@ -650,6 +650,61 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertTrue($byName['phlix_refresh']['secure']);
     }
 
+    /**
+     * SRV-M18 REWORK leg (review server__pm Major): the original finding named
+     * this route — "any member with a linked OIDC identity simply signs in
+     * around the wall". An account held by an admin reset must NOT get a
+     * session from the browser callback. The shared hold-guard inside
+     * createTokensForUser() refuses before any mint; the callback answers the
+     * refusal in its own shipped voice — the provider-failure shape: 302 to
+     * the allowlisted redirect with the fixed code, NO session credentials.
+     *
+     * This test goes RED at 3e3e47a8 (the parent): there the callback mints a
+     * full cookie session for the held account.
+     */
+    public function test_callback_held_account_is_refused_before_any_mint(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        $providerUrl = 'https://idp.held.test';
+        $clientId = 'client-id';
+        $nonce = 'held-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $userRepository = $this->createMock(UserRepository::class);
+        $userRepository->method('findOrCreateByExternalId')->willReturn('user-777');
+        $userRepository->method('mustChangePassword')
+            ->with('user-777')
+            ->willReturn(true);
+
+        $jwtHandler = $this->createMock(JwtHandler::class);
+        $jwtHandler->expects($this->never())->method('createAccessToken');
+        $jwtHandler->expects($this->never())->method('createRefreshToken');
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-held', 'verifier-held', $nonce, self::boundContext());
+        $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler, $stateStore);
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-held',
+            'redirect_uri' => '/app/home',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = self::bindBrowser(new Request());
+        $request->headers['Host'] = 'phlix.test';
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app/home?error=password_change_required', $response->headers['Location']);
+        $this->assertNoSessionCookies($response);
+    }
+
     // -----------------------------------------------------------------------
     // S44 Finding 3 (MEDIUM) — request-path self-heal of the worker registry.
     // -----------------------------------------------------------------------

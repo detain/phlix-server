@@ -6,6 +6,8 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\PasswordChangeRequiredException;
+use Phlix\Auth\UserRepository;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Hub\HubUserClaims;
 use Phlix\Server\Http\Controllers\HubTokenController;
@@ -34,7 +36,7 @@ class HubTokenControllerTest extends TestCase
             token: 'test-opaque-token-from-hub',
         ));
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -74,7 +76,7 @@ class HubTokenControllerTest extends TestCase
             token: '', // No token claim
         ));
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -100,7 +102,7 @@ class HubTokenControllerTest extends TestCase
 
     public function test_handle_with_null_validator_returns_503(): void
     {
-        $controller = new HubTokenController(null, $this->jwtHandler);
+        $controller = new HubTokenController(null, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -120,7 +122,7 @@ class HubTokenControllerTest extends TestCase
     {
         $validator = $this->createMock(HubJwtValidatorInterface::class);
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -141,7 +143,7 @@ class HubTokenControllerTest extends TestCase
         $validator = $this->createMock(HubJwtValidatorInterface::class);
         $validator->method('validate')->willReturn(null);
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -162,7 +164,7 @@ class HubTokenControllerTest extends TestCase
         $validator = $this->createMock(HubJwtValidatorInterface::class);
         $validator->method('validate')->willReturn(null); // null = invalid/expired
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -189,7 +191,7 @@ class HubTokenControllerTest extends TestCase
             token: $opaqueTokenValue,
         ));
 
-        $controller = new HubTokenController($validator, $this->jwtHandler);
+        $controller = new HubTokenController($validator, $this->jwtHandler, $this->unheldRepo());
 
         $request = new Request();
         $request->method = 'POST';
@@ -210,5 +212,62 @@ class HubTokenControllerTest extends TestCase
         $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
 
         $this->assertEquals($opaqueTokenValue, $payload['opaque_token']);
+    }
+
+    /**
+     * A UserRepository double answering the SRV-M18 hold check "not held" —
+     * the shape every pre-rework success leg now has to state explicitly,
+     * because the mint consults the flag.
+     */
+    private function unheldRepo(): UserRepository
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('mustChangePassword')->willReturn(false);
+
+        return $repo;
+    }
+
+    /**
+     * SRV-M18 REWORK leg (review server__pm Major "third ungated minter"):
+     * a server account carrying the must-change-password hold must NOT
+     * receive a server bearer token from the hub exchange, whatever
+     * freshness the hub-side JWT follows. The refusal is the typed
+     * exception bubbling toward the router's central 500 (the documented
+     * SRV-M17 interim shape — same as the passkey/quick-connect legs); the
+     * mint never runs.
+     *
+     * This test goes RED at 3e3e47a8 (the parent): there the exchange mints
+     * a 200 with a real token for the held account.
+     */
+    public function test_handle_held_account_is_refused_before_any_mint(): void
+    {
+        $validator = $this->createMock(HubJwtValidatorInterface::class);
+        $validator->method('validate')->willReturn(new HubUserClaims(
+            userId: 'hub-user-held',
+            serverId: 'server-456',
+            subject: 'hub-user-held',
+            issuer: 'phlix-hub',
+            expiresAt: time() + 3600,
+            scope: [],
+            token: '',
+        ));
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('mustChangePassword')
+            ->with('hub-user-held')
+            ->willReturn(true);
+
+        $jwtSpy = $this->createMock(JwtHandler::class);
+        $jwtSpy->expects($this->never())->method('createAccessToken');
+
+        $controller = new HubTokenController($validator, $jwtSpy, $repo);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/hub-token';
+        $request->body = ['hub_token' => 'valid-hub-jwt-token'];
+
+        $this->expectException(PasswordChangeRequiredException::class);
+        $controller->handle($request, []);
     }
 }

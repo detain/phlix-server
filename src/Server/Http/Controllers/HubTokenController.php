@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\PasswordChangeRequiredException;
+use Phlix\Auth\UserRepository;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -32,6 +34,16 @@ use Phlix\Server\Http\Response;
  * Response 400: { "error": "hub_token required" }
  * Response 401: { "error": "hub.jwt_invalid" }
  *
+ * The mint is an account-hold gate like every other token-minting surface
+ * (SRV-M18 rework, review server__pm): a server account carrying
+ * `must_change_password` is refused through the shared
+ * {@see PasswordChangeRequiredException::refuseIfHeld()} guard BEFORE the
+ * exchange token is minted, whatever freshness policy the hub-side JWT
+ * follows. Until the SRV-M17 boundary mapping lands, this typed refusal
+ * answers the router's central 500 (the error log names the exception
+ * class) — the same documented interim shape as the passkey finish and
+ * quick-connect approve legs.
+ *
  * @package Phlix\Server\Http\Controllers
  * @since 0.11.0
  */
@@ -40,12 +52,15 @@ final class HubTokenController
     /**
      * Creates a new HubTokenController.
      *
-     * @param HubJwtValidatorInterface|null $validator The hub JWT validator.
-     * @param JwtHandler     $jwtHandler The server's JWT handler for issuing session tokens.
+     * @param HubJwtValidatorInterface|null $validator      The hub JWT validator.
+     * @param JwtHandler     $jwtHandler      The server's JWT handler for issuing session tokens.
+     * @param UserRepository $userRepository  Source of truth for the account-hold
+     *                                        gate the mint performs (SRV-M18).
      */
     public function __construct(
         private readonly ?HubJwtValidatorInterface $validator,
         private readonly JwtHandler $jwtHandler,
+        private readonly UserRepository $userRepository,
     ) {
     }
 
@@ -56,6 +71,10 @@ final class HubTokenController
      * @param array<string, string> $params Path parameters (unused).
      *
      * @return Response
+     *
+     * @throws PasswordChangeRequiredException When the mapped account carries
+     *     the `must_change_password` hold — no server token is minted (the
+     *     central router answers 500 until SRV-M17 maps the leg).
      */
     public function handle(Request $request, array $params = []): Response
     {
@@ -92,6 +111,18 @@ final class HubTokenController
                     'message' => 'Invalid or expired hub token',
                 ]);
         }
+
+        // SRV-M18 rework (review server__pm): this mint is a session-shaped
+        // token like any other — the shared hold-guard refuses a held account
+        // before the exchange token exists. No cookies and no token are ever
+        // produced; the typed refusal reaches the router's central 500 until
+        // SRV-M17 maps it.
+        PasswordChangeRequiredException::refuseIfHeld(
+            $this->userRepository,
+            null,
+            $claims->userId,
+            'hub_token',
+        );
 
         $tokenClaims = [
             'hub_user_id' => $claims->userId,

@@ -13,6 +13,7 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\RateLimit\RateLimitProfiles;
@@ -174,9 +175,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                 }
             ),
 
+            // SRV-M18 rework (review server__pm): the mint performs the shared
+            // account-hold guard, so the exchange is bound to the flag's sole
+            // source of truth. Explicit like the siblings above — the autowire
+            // of a required param would also resolve, but an explicit binding
+            // is the pin-able shape this provider documents.
             HubTokenController::class => autowire()
                 ->constructorParameter('validator', get(HubJwtValidator::class))
-                ->constructorParameter('jwtHandler', get(JwtHandler::class)),
+                ->constructorParameter('jwtHandler', get(JwtHandler::class))
+                ->constructorParameter('userRepository', get(UserRepository::class)),
 
             // L-5 (security hygiene, dead-code deletion à la src/Plugin/ @b0007060):
             // HubJwtMiddleware was autowired here but attached to NO route on any

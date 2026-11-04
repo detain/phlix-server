@@ -1186,8 +1186,10 @@ class AuthManager
      * @param string $password        The plaintext password to verify.
      *
      * @return string|null The user id on success; null when the account does not
-     *                      exist, the password is wrong, or the account is not
-     *                      'active' (pending/suspended).
+     *                      exist, the password is wrong, the account is not
+     *                      'active' (pending/suspended), or the account carries
+     *                      the `must_change_password` hold (SRV-M18 scope —
+     *                      see the refusal arm below).
      *
      * @since 0.44.0
      */
@@ -1227,6 +1229,21 @@ class AuthManager
         // lookup, where null means "row gone" — see getCachedAuthState() (H-1).
         $status = UserRow::string($user, 'status') ?? 'active';
         if ($status !== 'active') {
+            return null;
+        }
+
+        // SRV-M18 scope decision (review server__pm [Minor]): the hold covers
+        // this surface too. The wall exists because the admin reset flow
+        // stamps it precisely when the password is trusted-but-compromised —
+        // a compromised password must not keep streaming OPDS indefinitely
+        // while the SPA is walled. This method's contract is silent nulls —
+        // no audit, no exception — and the arm honours it exactly like the
+        // F7 branch above. Under the throttled wrapper (the OPDS Basic leg's
+        // sole src/ caller) this refusal charges the per-IP brute-force
+        // budget exactly like a wrong-password refusal does — the accepted
+        // shared-IP primitive of the M-5 throttle design, disclosed here so
+        // the semantics are no silent half.
+        if ($this->userRepository->mustChangePassword($userId)) {
             return null;
         }
 
@@ -1682,11 +1699,15 @@ class AuthManager
      *     user: array<string, mixed>|null, profile_id: string|null}
      *
      * @throws PasswordChangeRequiredException When the account carries the
-     *     `must_change_password` hold — this seam is the single convergence
-     *     point of EVERY token-minting path (password login, refresh, external
-     *     provider sign-in, WebAuthn passkey finish, quick-connect approval,
-     *     profile switch), so the hold refuses new sessions for all of them
-     *     here, whatever verified the credential (SRV-M18, review server__pm).
+     *     `must_change_password` hold — this seam is the convergence point of
+     *     every token-minting path that runs through AuthManager (password
+     *     login, refresh, external provider sign-in, WebAuthn passkey finish,
+     *     quick-connect approval, profile switch), and the browser legs that
+     *     mint outside it (the OIDC/GitHub callbacks, the hub-token exchange)
+     *     call the same {@see PasswordChangeRequiredException::refuseIfHeld()}
+     *     guard before their own mints, so the hold refuses new sessions for
+     *     all of them whatever verified the credential (SRV-M18, review
+     *     server__pm).
      */
     public function buildAuthResponse(string $userId, ?string $profileId = null): array
     {
@@ -1694,19 +1715,20 @@ class AuthManager
         // password-leg quirk — the admin reset flow stamps it precisely
         // because the credentials are trusted-but-compromised. Guarding only
         // the password legs let passkey/quick-connect/profile-switch mints
-        // walk straight around the wall. Refuse as the FIRST act of the one
-        // seam every minter converges on: audit the refusal, throw the typed
-        // exception the boundary mapping (SRV-M17) owns, mint nothing. The
-        // password login and refresh legs keep their own earlier typed checks
-        // — those fire first and their shipped envelopes are byte-identical.
-        if ($this->userRepository->mustChangePassword($userId)) {
-            $this->auditLogger->logFailedAuth('password_change_required', [
-                'user_id' => $userId,
-                'context' => 'auth_response',
-            ]);
-
-            throw new PasswordChangeRequiredException();
-        }
+        // walk straight around the wall. Refuse as the FIRST act of this
+        // seam: audit the refusal, throw the typed exception the boundary
+        // mapping (SRV-M17) owns, mint nothing. The refusal law lives in
+        // PasswordChangeRequiredException::refuseIfHeld() — the same guard
+        // the OAuth callback + hub-token minters call — so it can never
+        // drift between surfaces. The password login and refresh legs keep
+        // their own earlier typed checks — those fire first and their
+        // shipped envelopes are byte-identical.
+        PasswordChangeRequiredException::refuseIfHeld(
+            $this->userRepository,
+            $this->auditLogger,
+            $userId,
+            'auth_response',
+        );
 
         $resolvedProfileId = $this->resolveProfileForUser($userId, $profileId);
 

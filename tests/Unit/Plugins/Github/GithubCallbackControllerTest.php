@@ -258,6 +258,65 @@ final class GithubCallbackControllerTest extends TestCase
         $this->assertStringNotContainsString('access-token', $response->headers['Location'] ?? '');
     }
 
+    /**
+     * SRV-M18 REWORK leg (review server__pm Major): the GitHub browser callback
+     * was the "linked GitHub identity signs in around the wall" vector the
+     * original finding named. A held account is refused by the shared
+     * hold-guard inside createTokensForUser() BEFORE any mint, answered in
+     * this surface's shipped refusal voice — errorRedirect() with the fixed
+     * code, no session credentials on the response.
+     *
+     * This test goes RED at 3e3e47a8 (the parent): there the callback mints a
+     * full cookie session for the held account.
+     */
+    public function test_callback_held_account_is_refused_before_any_mint(): void
+    {
+        $http = new FakeOAuth2HttpClient();
+        $http->queue('POST', GithubOAuthProvider::TOKEN_URL, 200, (string) json_encode([
+            'access_token' => 'gho_test',
+        ]));
+        $http->queue('GET', GithubOAuthProvider::USER_API_URL, 200, (string) json_encode([
+            'id' => 583231,
+            'login' => 'octocat',
+            'name' => 'The Octocat',
+            'email' => 'octocat@github.com',
+        ]));
+
+        $store = new InMemoryOAuth2StateStore();
+        $this->seedState($store, 'sid-held');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('findOrCreateByExternalId')
+            ->with('github', 'github.583231', 'octocat@github.com', 'The Octocat')
+            ->willReturn('user-1');
+        $userRepo->method('mustChangePassword')
+            ->with('user-1')
+            ->willReturn(true);
+
+        $jwt = $this->createMock(JwtHandler::class);
+        $jwt->expects($this->never())->method('createAccessToken');
+        $jwt->expects($this->never())->method('createRefreshToken');
+
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider($http),
+            $userRepo,
+            $jwt,
+            $store,
+        );
+
+        $response = $controller->callback($this->callbackRequest('sid-held', '/app'), []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app?error=password_change_required', $response->headers['Location'] ?? '');
+
+        // Only the spent correlation EXPIRY may ride; no session credential.
+        foreach ($response->cookies as $cookie) {
+            $this->assertSame(self::CORRELATION_COOKIE, $cookie['name']);
+            $this->assertSame('', $cookie['value']);
+            $this->assertSame(0, $cookie['maxAge']);
+        }
+    }
+
     public function test_callback_provider_auth_failure_redirects_with_error(): void
     {
         $http = new FakeOAuth2HttpClient();

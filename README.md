@@ -1422,7 +1422,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
-| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, and while the flag is set the account is **held** — no route mints a new session: password sign-in and refresh are refused, and provider sign-in plus the passkey (WebAuthn), quick-connect and profile-switch mints all refuse at `AuthManager`'s token seam ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
+| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, and while the flag is set the account is **held** — no route mints a new session: password sign-in and refresh are refused, and provider sign-in plus the passkey (WebAuthn), quick-connect and profile-switch mints all refuse at `AuthManager`'s token seam; the SRV-M18 rework closed the legs that mint outside `AuthManager` too — the OIDC and GitHub browser callbacks (answered a `?error=password_change_required` redirect with no cookies) and the hub-token exchange refuse through the same shared guard, and OPDS HTTP-Basic streaming is refused for a held account ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
 | POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
 | POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
 | POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
@@ -1799,7 +1799,20 @@ SRV-M17 maps the distinct 403. The passkey entry point `WebAuthnController::fini
 no longer walks around the hold: like quick-connect approval and the profile switch, it mints
 through `AuthManager::buildAuthResponse()`, which consults `must_change_password` at the seam
 itself and mints nothing for a held account (WebAuthn ships **enabled** by default in
-`config/auth.php`, so this gate is load-bearing). Full recovery is ONE CLI step:
+`config/auth.php`, so this gate is load-bearing). **SRV-M18 rework (review server__pm)** closed
+the legs that used to mint outside `AuthManager` entirely: the OIDC and GitHub browser callbacks
+now call the same shared guard — `PasswordChangeRequiredException::refuseIfHeld()` — before their
+mint and answer a held account with the refusal shape these surfaces already ship, a `302` back to
+the allowlisted return target carrying `?error=password_change_required` with no session cookies;
+and the hub-token exchange (`POST /api/v1/auth/hub-token`) refuses through the guard before
+issuing `server_session_token` — until SRV-M17 maps it, that typed refusal answers the router's
+central `500`, the same interim the passkey leg documents. The wall is now universal on the mint
+side: `MintSeamLawTripwireTest` enumerates every access-token and refresh-token call site in
+`src/` and turns red until any new one is gated behind the guard. The hold also covers the OPDS
+HTTP-Basic streaming surface: `AuthManager::verifyCredentials()` answers a held account with its
+contract's silent refusal, so the compromised password can neither mint nor keep streaming, and
+the refusal charges the per-IP brute-force budget exactly like any other failed check does (the
+disclosed M-5 throttle semantics). Full recovery is ONE CLI step:
 `user:reset-password` sets a new password AND clears
 `must_change_password` itself (live-session revocation rides the same
 `tokens_not_valid_after` stamp):

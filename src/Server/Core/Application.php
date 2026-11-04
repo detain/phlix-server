@@ -3605,6 +3605,16 @@ class Application
                     'test-server-id',
                 ),
                 new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
+                // SRV-M18 rework: the mint consults the account-hold flag, so
+                // even the legacy no-container helper needs the repo — same
+                // dummy-connection shape as getAuthController()'s fallback.
+                new \Phlix\Auth\UserRepository(new \Phlix\Common\Database\PhlixMySQLConnection(
+                    '127.0.0.1',
+                    3306,
+                    'phlix',
+                    'root',
+                    'password'
+                )),
             );
         }
 

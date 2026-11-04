@@ -24,6 +24,7 @@ use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LoggerFactory;
@@ -542,7 +543,22 @@ final class OidcCallbackController
                 );
             }
 
-            $tokens = $this->createTokensForUser($userId);
+            try {
+                $tokens = $this->createTokensForUser($userId);
+            } catch (PasswordChangeRequiredException) {
+                // SRV-M18 rework (review server__pm): a held account is
+                // answered like every other callback sign-in refusal — the
+                // fixed code on the allowlisted redirect, NO cookies. Caught
+                // here so it never falls into the generic ?error=internal arm.
+                LoggerFactory::get(LogChannels::AUTH)->warning(
+                    'OIDC sign-in refused: the account carries the must-change-password hold',
+                    ['user_id' => $userId],
+                );
+
+                return $this->clearCorrelation(
+                    (new Response())->status(302)->header('Location', $redirectUri . '?error=password_change_required'),
+                );
+            }
 
             // Finding 1 (HIGH) — deliver the freshly-minted access + refresh
             // tokens as HttpOnly+Secure+SameSite=Lax cookies (never in the URL,
@@ -858,6 +874,19 @@ final class OidcCallbackController
      */
     private function createTokensForUser(string $userId): array
     {
+        // SRV-M18 rework (review server__pm): this leg minted full sessions
+        // around the must-change-password hold — the browser-callback analogue
+        // of the seam the finding named. The refusal law is the shared guard
+        // every minter calls; callback() answers it the way this surface
+        // answers every other sign-in refusal (fixed-code redirect, no
+        // cookies).
+        PasswordChangeRequiredException::refuseIfHeld(
+            $this->userRepository,
+            null,
+            $userId,
+            'oidc_callback',
+        );
+
         $accessToken = $this->jwtHandler->createAccessToken($userId);
         $refreshToken = $this->jwtHandler->createRefreshToken($userId);
 

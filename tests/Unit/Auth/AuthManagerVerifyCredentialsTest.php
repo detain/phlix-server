@@ -99,4 +99,42 @@ final class AuthManagerVerifyCredentialsTest extends TestCase
 
         $this->assertNull($this->manager($repo)->verifyCredentials('alice', 'topsecret123'));
     }
+
+    /**
+     * SRV-M18 REWORK scope decision (review server__pm [Minor], EXTENDED):
+     * the hold covers the OPDS HTTP-Basic surface too — the admin reset flow
+     * stamps the flag precisely because the password is trusted-but-
+     * compromised, so a compromised password must not keep streaming while the
+     * SPA is walled. This method's contract is silent nulls and the arm
+     * honours it: no exception, no audit row.
+     *
+     * This test goes RED at 3e3e47a8 (the parent): there the held account
+     * still streams (the check returns 'user-42').
+     */
+    public function testReturnsNullForHeldAccount(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findByUsername')->willReturn(['id' => 'user-42', 'status' => 'active']);
+        $repo->method('verifyPassword')->with('user-42', 'topsecret123')->willReturn(true);
+        $repo->method('mustChangePassword')->with('user-42')->willReturn(true);
+
+        $this->assertNull($this->manager($repo)->verifyCredentials('alice', 'topsecret123'));
+    }
+
+    /**
+     * The hold consult happens only AFTER the credentials verify and the
+     * account proves active — never before. That ordering keeps the extra
+     * SELECT from becoming an account-enumeration oracle and matches the
+     * documented refusal shape (a held refusal is indistinguishable from any
+     * other silent null).
+     */
+    public function testHeldAccountFlagIsConsultedOnlyAfterCredentialsVerify(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findByUsername')->willReturn(['id' => 'user-42', 'status' => 'active']);
+        $repo->method('verifyPassword')->willReturn(false);
+        $repo->expects($this->never())->method('mustChangePassword');
+
+        $this->assertNull($this->manager($repo)->verifyCredentials('alice', 'wrong'));
+    }
 }

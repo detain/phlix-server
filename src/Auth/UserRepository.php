@@ -1414,8 +1414,13 @@ class UserRepository
      * S7+F1: When an admin resets a password, the flag marks the account as
      * held: no new session is minted while it is set (SRV-M18 widened the
      * refusal from the two password legs to EVERY token-minting path —
-     * login, refresh, provider sign-in, and the passkey/quick-connect/
-     * profile-switch mints that converge on {@see \Phlix\Auth\AuthManager::buildAuthResponse()}).
+     * login, refresh, provider sign-in, the passkey/quick-connect/
+     * profile-switch mints that converge on {@see \Phlix\Auth\AuthManager::buildAuthResponse()},
+     * and — the rework leg — the OIDC/GitHub browser callbacks and the
+     * hub-token exchange, all behind the single
+     * {@see \Phlix\Auth\PasswordChangeRequiredException::refuseIfHeld()}
+     * guard; the OPDS HTTP-Basic surface consults it too, so the hold covers
+     * streaming as well as minting).
      *
      * @param string $userId         Local user UUID.
      * @param bool   $mustChange     Whether the user must change their password.
@@ -1440,8 +1445,12 @@ class UserRepository
      *
      * S7+F1: Gates login/refresh to require a password change when the flag is
      * set; SRV-M18 (review server__pm) widened the wall — every token-minting
-     * path (provider sign-in included, and every external minter through
-     * {@see \Phlix\Auth\AuthManager::buildAuthResponse()}) consults it too.
+     * path (provider sign-in included, every external minter through
+     * {@see \Phlix\Auth\AuthManager::buildAuthResponse()}, and the OAuth
+     * callback + hub-token legs through the shared
+     * {@see \Phlix\Auth\PasswordChangeRequiredException::refuseIfHeld()}
+     * guard) consults it too, as does the OPDS HTTP-Basic surface via
+     * {@see \Phlix\Auth\AuthManager::verifyCredentials()}.
      *
      * @param string $userId Local user UUID.
      *

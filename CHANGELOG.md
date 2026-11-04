@@ -100,6 +100,39 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Sign-in around the admin force-change wall is closed everywhere: the OIDC
+  and GitHub browser callbacks and the hub-token exchange now honor the
+  `must_change_password` hold, and so does OPDS HTTP-Basic (SRV-M18 rework,
+  review server__pm).** The d8c834d5 cure gated `AuthManager`'s own legs and
+  documented the law as universal, but the two plugin OAuth callbacks minted
+  full cookie sessions by calling the JWT handler directly and
+  `POST /api/v1/auth/hub-token` minted a server bearer the same way — a held
+  account could still sign in by clicking "Sign in with GitHub/OIDC". The
+  refusal law is now single-sourced in
+  `PasswordChangeRequiredException::refuseIfHeld()` and every mint site
+  calls it: the seam's inline check was folded into the guard (its shipped
+  audit shape and tests unchanged), the callbacks refuse before
+  `createTokensForUser()` and answer their own shipped redirect voice —
+  `?error=password_change_required`, zero cookies — and the hub-token leg
+  refuses before the exchange token exists (typed 500 interim until SRV-M17
+  maps it, like the passkey/quick-connect legs). Scope decision on the
+  reviewer's OPDS [Minor]: EXTENDED, not scoped — a compromised password can
+  now neither mint nor keep streaming; `verifyCredentials()` answers a held
+  account with its contract's silent null, charging the per-IP brute-force
+  budget like any other refusal (disclosed). New red-measured held-account
+  legs in `OidcCallbackControllerTest` / `GithubCallbackControllerTest` /
+  `HubTokenControllerTest` / `AuthManagerVerifyCredentialsTest` (all four
+  verified RED at 3e3e47a8), plus `MintSeamLawTripwireTest`: a token-walk
+  over `src/` pinning the exact set of token-minting files, that each gated
+  minter calls the guard, and that the one inert carve-out
+  (`SyncPlayAuthMiddleware::createToken`, zero callers) stays unwired until
+  gated. README rows, the exception/seam/UserRepository/AdminUserController
+  docblocks and the latch-test header now read TRUE at tip: with every minter
+  behind the hold, no route can mint a session around it. `HubTokenController`
+  gains a required `UserRepository` constructor param (all construction
+  sites — container binding, legacy no-container fallback, tests — updated in
+  lockstep). Zero new wire codes, zero migrations; every shipped envelope
+  byte-identical.
 - **README Architecture tree now maps all 24 top-level `src/` subsystems —
   machine-pinned both ways.** The tree stopped at Server/Session/Media/Auth/
   Common, omitting 19 real subsystems (Access, Admin, AirPlay, Casting,
@@ -112,7 +145,6 @@ House discipline this file maintains (established by review W-min90/91/92):
   detail is exactly what rotted before. The empty `.gitkeep` placeholder
   `src/Session/Playback/` stays unlisted: the map documents territory, not
   intentions. [review server__ipd]
-
 - **README collection-route cites re-anchored to the shipped lines —
   `CollectionRoutesReadmeCitesTest` was RED (all 9 datasets) at master.**
   `8bb435cf` recorded the SRV-M2 cite-table rotation in its message, but its

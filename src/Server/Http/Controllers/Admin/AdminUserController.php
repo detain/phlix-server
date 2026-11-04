@@ -492,7 +492,15 @@ final class AdminUserController
      * (`WebAuthnController::finishAuthentication()`), quick-connect approval
      * and profile-switch mints all converge on
      * AuthManager::buildAuthResponse(), which refuses a held account at that
-     * seam before minting anything.
+     * seam before minting anything. The rework closed the three legs that
+     * minted outside AuthManager: the OIDC and GitHub browser callbacks
+     * (answered `?error=password_change_required`, no cookies) and the
+     * hub-token exchange (`HubTokenController`) all call the shared
+     * `PasswordChangeRequiredException::refuseIfHeld()` guard first, and the
+     * OPDS HTTP-Basic surface (`AuthManager::verifyCredentials()`) answers a
+     * held account with its own silent refusal — so the hold covers minting
+     * AND streaming. A `tests/Unit/Auth/MintSeamLawTripwireTest` scan pins
+     * the enumeration: any new token-minting site reddens it until gated.
      *
      * M-SERVER-33 (docs truth): no shipped surface delivers or consumes this
      * token — there is no mailer leg and no reset-completion endpoint. The

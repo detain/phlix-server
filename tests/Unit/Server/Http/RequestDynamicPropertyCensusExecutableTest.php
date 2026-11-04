@@ -1022,7 +1022,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // WorkermanVersionRequirementTruthTest.php (README Workerman version
     // truth pin, review server__devops SRV-m18). Measured from the phpunit
     // red (2055), not predicted.
-    private const EXPECTED_PHP_FILES = 2055;
+    // +1 2055→2056: this rework adds tests/Unit/Auth/
+    // MintSeamLawTripwireTest.php (token-site enumeration pin of the
+    // must-change-password mint law, SRV-M18 rework, review server__pm).
+    // Measured from the phpunit red (2056), not predicted.
+    // +1 2056→2057 landed unrotated with 0acd8194 (disclosed owed landing,
+    // same precedent as the a86e0999 reads row above): the SRV-M3 pin test
+    // tests/Unit/Platform/ArchitectureTreeCoversSrcSubsystemsTest.php joined
+    // the tree; this rotation carries it. Measured from the phpunit red
+    // (2057), not predicted.
+    private const EXPECTED_PHP_FILES = 2057;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1131,8 +1140,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * sites — its new test touches no Request root (probe-proven: 459
      * measured with the new file on disk). Measured from the phpunit red
      * (459), not predicted.
+     * +1 459→460 by the SRV-M18 rework (this commit): the held-account
+     * callback test in OidcCallbackControllerTest seeds
+     * `$request->headers['Host']` — a bracket write, counted here per the
+     * M-SERVER-48 law; zero src/ reads added. Measured from the phpunit
+     * red (460), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 459;
+    private const EXPECTED_DECLARED_READS = 460;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1378,7 +1392,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 8bb435cf (server self-detail GET, review xrepo__server-ui). This cure
     // adds zero sites on either denominator — its file-count +1 is its only
     // census delta. Measured from the phpunit red (1152), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1152;
+    // +4 1152→1156 by the SRV-M18 rework (this commit): the Oidc held-
+    // callback test seeds $request->query (1), and the HubToken held-leg
+    // test seeds $request->method + $request->path + $request->body (3) —
+    // sanctioned harness-seed sites; zero src/ writes added. Measured from
+    // the phpunit red (1156), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1156;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

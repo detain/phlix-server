@@ -136,6 +136,16 @@ class Response
      * `Cache-Control: no-store` for the staleness-safe default (see below),
      * and encodes the data with pretty printing.
      *
+     * The Content-Type deliberately carries no `; charset=utf-8` parameter
+     * (INFO-SERVER-19). RFC 8259 fixes JSON text encoding to UTF-8 and
+     * forbids redefining it via charset, so the parameter is inert here; the
+     * two raw hand-built early-exit envelopes that bypass this class (the
+     * CSRF 403 and the router 500 API fallback in Workerman/HttpHandler)
+     * spell it out per their decoration law. Both forms are equivalent to
+     * every conforming client — this server itself treats them identically
+     * when it strips Content-Type parameters — so the asymmetry is cosmetic
+     * by decision, not a wire inconsistency to "fix".
+     *
      * @param array<string, mixed> $data The data to encode as JSON
      * @param int|null $statusCode Optional HTTP status code override
      * @return self For method chaining

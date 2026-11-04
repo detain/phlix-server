@@ -571,6 +571,17 @@ class WebSocketServer
      * - A client that offered the `bearer` subprotocol and passes the gate gets
      *   it echoed on the 101 ({@see echoBearerSubprotocol()}).
      *
+     * Origin posture (INFO-SERVER-31): the `Origin` header is deliberately NOT
+     * checked at handshake. The estate's WS clients are native apps (Roku,
+     * Tizen, console, mobile) and the browser SPA — and WS auth never rides a
+     * cookie: the only credential carriers are the explicit `bearer` WebSocket
+     * subprotocol and the legacy `?token=` query above, both consumed verbatim
+     * from the upgrade request. A cross-site page therefore has no ambient
+     * credential to smuggle; presenting or guessing a valid token is the whole
+     * gate, which an origin allow-list cannot strengthen. Adding one would
+     * only break the native clients (they send no `Origin` at all), so the
+     * handshake stays origin-agnostic by decision, not by omission.
+     *
      * @param TcpConnection $connection The Workerman TCP connection.
      * @param Request       $request    The parsed WebSocket upgrade request.
      * @return void

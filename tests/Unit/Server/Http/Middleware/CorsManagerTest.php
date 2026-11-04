@@ -221,6 +221,11 @@ class CorsManagerTest extends TestCase
             'x-forwarded-for',   // ditto
             'x-real-ip',         // ditto
             'host',              // forbidden header name in fetch(); never allowable
+            // hub→server relay identity: written verbatim-trusted only inside the
+            // loopback tunnel (RelayConsumer path), must NEVER be browser-advertised
+            // or a cross-origin page could forge hub-asserted user identity. Listed
+            // defensively — today no src/ getHeader() literal reads it.
+            'x-phlix-relay-user',
         ];
 
         $root = dirname(__DIR__, 5) . '/src';

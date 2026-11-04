@@ -142,6 +142,16 @@ class RemoteSubtitleController
     /**
      * Map a {@see SubtitleFetchService} download result to an HTTP response.
      *
+     * The 429 body carries `downloadsRemaining`/`resetTimeUtc` in camelCase
+     * while the estate's HTTP wire convention is otherwise snake_case. That
+     * spelling is deliberate and load-bearing, not an oversight (INFO-SERVER-06):
+     * the keys mirror the provider-plane vocabulary of SubtitleFetchService and
+     * SubtitleProviderQuotaRepository, and phlix-ui reads them live by these
+     * exact names (SubtitleSearch.vue renders the reset-time variant from
+     * `resetTimeUtc`), pinned by its client.subtitles tests. Renaming them is a
+     * coordinated cross-repo wire change (server + ui + its fixtures), so it
+     * must ride a contract wave — never a lone cosmetic fix here.
+     *
      * @param array{
      *     status: string,
      *     track?: array<string, mixed>,

@@ -56,6 +56,41 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Endgame gate 2: `@phlix/ui` v0.99.15 re-pinned, and the served `/app`
+  bundle regenerated.** [endgame gate2]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.14 →
+    v0.99.15 (tag object `74c9e1e3`, peel `36c04fbe` == master,
+    ls-remote-verified). The lock diff, cut with the CI-exact toolchain
+    (node 24.20.0, bundled npm 11.19.0, userconfig nulled), is minimal 7+/7−:
+    root echo, the ui node's version/resolved/integrity, and the syncplay
+    edge the new tag declares — `#v0.1.6` → `#v0.1.7`. contracts stays
+    `0.5.5@e2159816…` (ui v0.99.15 did not move it). The hoisted syncplay
+    node's re-resolution needed a TARGETED ADVANCE: `npm install
+    --package-lock-only` rotated the declared edge but left the stale
+    `08168774…` node line standing (an S450-class npm behaviour); the
+    corrected lock is idempotent under a fresh npm run, and a from-scratch
+    `npm ci` after wiping `node_modules` installs bytes diff-identical to
+    the v0.1.7 tag's `dist/` — the ui release lane's cache-reuse hazard,
+    checked for and proven absent here. Installed `@phlix/ui` dist hashes
+    (`phlix-ui.js 3bad5b07…`, `player.js 330cc731…`) match the v0.99.15
+    release register's consumer-target figures. web-ui `node --test`: 33/33.
+  - *Served bundle.* `public/assets/app/` regenerated from the new lock
+    with the same CI-pinned toolchain — output wiped, built twice, both
+    runs aggregating to md5 `b6436788924ecf098a546889b705afb1` under the
+    printed recipe `find public/assets/app -type f | sort | xargs md5sum |
+    md5sum` (that recipe re-derives the v0.99.14 era's `0468c3c8…` exactly
+    from the pre-regen tree — the bookkeeping proof the w7-behavior
+    reviewer-Info asked lanes to print). The 200-file set holds; the bundle
+    now embeds the v0.99.15 leave-confirm copy ("Others lose sync if you
+    host") and the ui version stamp reads 0.99.15, both grepped from the
+    built tree — the copy absent from its v0.99.14 predecessor. The README
+    "UI truth at this tip" line flips to v0.99.15 alongside. The
+    bundle-aware PHP cohort (`WebUiBundleGateTest`, `ViteAssetsMemoTest`,
+    `SharedUiControllerCspNonceTest`, `HttpHandlerServeStaticTest`,
+    `PublicFrontControllerRemovalGuardTest`, `NginxAssetLocationTest`) runs
+    42/365 green against the regenerated tree — zero era pins moved,
+    nothing rotated from red.
+
 - **Closeout docs-truth batch (srv-w4 duty; reviews server__pm lineage,
   server__minortail, server__dba M18RW-R3).** The README
   "Locked by the admin `reset-password` endpoint" paragraph now states the

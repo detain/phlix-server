@@ -73,11 +73,11 @@ class DashControllerTest extends TestCase
 
     public function testGetManifestReturnsMpdUrl(): void
     {
-        $res = $this->controller()->getManifest(new Request(), ['job_id' => 'job-1']);
+        $res = $this->controller()->getManifest(new Request(), ['job_id' => 'c6a4eb7f-9bd8-4148-8ee3-6b69e726ac54']);
         $this->assertSame(200, $res->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($res->body, true);
-        $this->assertSame('/dash/job-1/manifest.mpd', $body['manifest_url']);
+        $this->assertSame('/dash/c6a4eb7f-9bd8-4148-8ee3-6b69e726ac54/manifest.mpd', $body['manifest_url']);
         $this->assertSame('DASH', $body['protocol']);
     }
 
@@ -95,8 +95,8 @@ class DashControllerTest extends TestCase
 
     public function testServesMpdWithDashContentType(): void
     {
-        $this->writeJobFile('job-2', 'manifest.mpd', '<?xml version="1.0"?><MPD></MPD>');
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-2', 'file' => 'manifest.mpd']);
+        $this->writeJobFile('8ce1146b-ce68-4c16-a190-81ac10c9beb1', 'manifest.mpd', '<?xml version="1.0"?><MPD></MPD>');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '8ce1146b-ce68-4c16-a190-81ac10c9beb1', 'file' => 'manifest.mpd']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/dash+xml', $res->headers['Content-Type']);
@@ -106,8 +106,8 @@ class DashControllerTest extends TestCase
 
     public function testServesM4sSegment(): void
     {
-        $this->writeJobFile('job-3', 'chunk-1-00002.m4s', 'AUDIOBYTES');
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-3', 'file' => 'chunk-1-00002.m4s']);
+        $this->writeJobFile('4ca55e47-0a3c-42b1-85d0-d49e5c6a817e', 'chunk-1-00002.m4s', 'AUDIOBYTES');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '4ca55e47-0a3c-42b1-85d0-d49e5c6a817e', 'file' => 'chunk-1-00002.m4s']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
@@ -116,13 +116,13 @@ class DashControllerTest extends TestCase
 
     public function testServeFile404WhenMissing(): void
     {
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-x', 'file' => 'manifest.mpd']);
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'ac162bda-8cd3-4125-b506-2c3508f44a6b', 'file' => 'manifest.mpd']);
         $this->assertSame(404, $res->statusCode);
     }
 
     public function testServeFileRejectsTraversal(): void
     {
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-3', 'file' => '..']);
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '4ca55e47-0a3c-42b1-85d0-d49e5c6a817e', 'file' => '..']);
         $this->assertSame(400, $res->statusCode);
     }
 
@@ -168,16 +168,16 @@ class DashControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-9', $variant, $index, $audioId)
+            ->with('545d36e0-7173-4c40-b9d4-2f87c3c3c107', $variant, $index, $audioId)
             ->willReturnCallback(function () use ($file): string {
                 // Produce the file the way the real encode does, so the static
                 // serve below has something to hand back.
-                $this->writeJobFile('job-9', $file, 'FMP4BYTES');
-                return "{$this->segmentDir}/job-9/{$file}";
+                $this->writeJobFile('545d36e0-7173-4c40-b9d4-2f87c3c3c107', $file, 'FMP4BYTES');
+                return "{$this->segmentDir}/545d36e0-7173-4c40-b9d4-2f87c3c3c107/{$file}";
             });
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => $file]);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => $file]);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
@@ -192,13 +192,13 @@ class DashControllerTest extends TestCase
      */
     public function testTheManifestItselfNeverTriggersAnEncode(): void
     {
-        $this->writeJobFile('job-9', 'manifest.mpd', '<?xml version="1.0"?><MPD></MPD>');
+        $this->writeJobFile('545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'manifest.mpd', '<?xml version="1.0"?><MPD></MPD>');
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('ensureSegment');
         $manager->expects($this->never())->method('ensurePlaylistRegenerated');
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'manifest.mpd']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'manifest.mpd']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/dash+xml', $res->headers['Content-Type']);
@@ -212,12 +212,12 @@ class DashControllerTest extends TestCase
      */
     public function testAMpegTsSegmentNameIsNotADashOnDemandArtefact(): void
     {
-        $this->writeJobFile('job-9', 'seg-v1080p-00042.ts', 'TSBYTES');
+        $this->writeJobFile('545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'seg-v1080p-00042.ts', 'TSBYTES');
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('ensureSegment');
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'seg-v1080p-00042.ts']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'seg-v1080p-00042.ts']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp2t', $res->headers['Content-Type']);
@@ -233,7 +233,7 @@ class DashControllerTest extends TestCase
         $manager->expects($this->once())->method('ensureSegment')->willReturn(null);
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'seg-v4321p-00000.m4s']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'seg-v4321p-00000.m4s']);
 
         $this->assertSame(404, $res->statusCode);
         /** @var array<string, mixed> $body */
@@ -250,11 +250,11 @@ class DashControllerTest extends TestCase
     {
         // The file is deliberately PRESENT: the point is that a null transcoder
         // takes the refusal branch before the static lookup can hide it.
-        $this->writeJobFile('job-9', 'seg-v1080p-00000.m4s', 'STALEBYTES');
+        $this->writeJobFile('545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'seg-v1080p-00000.m4s', 'STALEBYTES');
 
         $res = $this->controller()->serveFile(
             new Request(),
-            ['job_id' => 'job-9', 'file' => 'seg-v1080p-00000.m4s']
+            ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'seg-v1080p-00000.m4s']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -275,7 +275,7 @@ class DashControllerTest extends TestCase
         $manager->expects($this->never())->method('sweepSegmentCache');
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'seg-v1080p-00000.m4s']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'seg-v1080p-00000.m4s']);
 
         $this->assertSame(503, $res->statusCode);
         $this->assertSame('1', $res->headers['Retry-After']);
@@ -296,7 +296,7 @@ class DashControllerTest extends TestCase
         $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'seg-a0-00001.m4s']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'seg-a0-00001.m4s']);
 
         $this->assertSame(503, $res->statusCode);
         $this->assertSame('3', $res->headers['Retry-After']);
@@ -318,14 +318,14 @@ class DashControllerTest extends TestCase
         $manager->expects($this->never())->method('ensureSegment');
         $manager->expects($this->once())
             ->method('ensurePlaylistRegenerated')
-            ->with('job-9')
+            ->with('545d36e0-7173-4c40-b9d4-2f87c3c3c107')
             ->willReturnCallback(function (): bool {
-                $this->writeJobFile('job-9', 'manifest.mpd', '<?xml version="1.0"?><MPD/>');
+                $this->writeJobFile('545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'manifest.mpd', '<?xml version="1.0"?><MPD/>');
                 return true;
             });
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => 'manifest.mpd']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => 'manifest.mpd']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertStringContainsString('<MPD/>', $this->bodyOf($res));
@@ -343,7 +343,7 @@ class DashControllerTest extends TestCase
         $manager->expects($this->never())->method('getJobMediaItemId');
 
         $res = (new DashController($this->segmentDir, $manager))
-            ->serveFile(new Request(), ['job_id' => 'job-9', 'file' => '../seg-v1080p-00000.m4s']);
+            ->serveFile(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107', 'file' => '../seg-v1080p-00000.m4s']);
 
         $this->assertSame(400, $res->statusCode);
     }
@@ -360,6 +360,105 @@ class DashControllerTest extends TestCase
             ->serveFile(new Request(), ['job_id' => '', 'file' => 'manifest.mpd']);
 
         $this->assertSame(400, $res->statusCode);
+    }
+
+    /**
+     * The DASH twin of the HLS traversal law (2026-11-03 review
+     * server__secaudit, Critical — identical hole, identical cure). Each shape
+     * used to interpolate raw into "{$segmentDir}/{$jobId}" below the
+     * file-only isSafeFilename() gate. Refusal reuses this controller's exact
+     * pre-existing 400 envelope ('Invalid request', capital-I — the shape
+     * stays byte-identical, no new wire surface).
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function traversalJobIdShapes(): array
+    {
+        return [
+            'bare dot-dot' => ['..'],
+            'dot-dot chain' => ['../..'],
+            'decoded traversal (S435 arrival shape)' => ['../../etc/passwd'],
+            'percent form undecoded' => ['%2e%2e%2f%2e%2e%2fetc%2fpasswd'],
+            'dot-slash prefix' => ['./secret'],
+            'uppercase uuid' => ['BE04FD51-BD8E-4ABB-885E-6048C18FCF48'],
+            'uuid without hyphens' => ['be04fd51bd8e42bb885e6048c18fcf48'],
+            'valid uuid welded to traversal' => ['782d718e-f1be-47ff-a8c5-03ec72451230/../../etc'],
+        ];
+    }
+
+    /**
+     * @dataProvider traversalJobIdShapes
+     */
+    public function testTraversalShapedJobIdsAreRefusedWithTheExistingFourHundredEnvelope(string $jobId): void
+    {
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'manifest.mpd']);
+        $this->assertSame(400, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'Invalid request'], $body);
+    }
+
+    public function testGetManifestRefusesTraversalShapedJobIds(): void
+    {
+        $res = $this->controller()->getManifest(new Request(), ['job_id' => '../../etc/passwd']);
+        $this->assertSame(400, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'Invalid request'], $body);
+    }
+
+    /**
+     * Full wire chain, DASH side: boundary decode proven by the spy leg, the
+     * production handler refuses the same request the finding's URL would make.
+     */
+    public function testPercentEncodedTraversalIsDecodedAtTheRouterBoundaryAndRefusedByTheGate(): void
+    {
+        $encoded = '/dash/%2e%2e%2f%2e%2e%2fsecret/manifest.mpd';
+
+        $spyRouter = new \Phlix\Server\Http\Router();
+        $seen = null;
+        $capture = function (Request $req, array $params) use (&$seen): \Phlix\Server\Http\Response {
+            $seen = $params;
+            return new \Phlix\Server\Http\Response();
+        };
+        $spyRouter->get('/dash/{job_id}/{file}', $capture);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = $encoded;
+        $_SERVER['SERVER_PROTOCOL'] = 'HTTP/1.1';
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+        $spyRouter->dispatch(Request::fromGlobals());
+        $this->assertIsArray($seen, 'the spy rail must have been reached through the real matcher');
+        $this->assertSame('../../secret', $seen['job_id'], 'S435: the boundary hands handlers the decoded segment');
+
+        $router = new \Phlix\Server\Http\Router();
+        $router->get('/dash/{job_id}/{file}', [$this->controller(), 'serveFile']);
+        $response = $router->dispatch(Request::fromGlobals());
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(['error' => 'Invalid request'], $body);
+    }
+
+    /**
+     * Defense-in-depth: a VALID-UUID job dir symlinked out of the base streams
+     * nothing (realpath containment answers the ordinary missing-file 404).
+     */
+    public function testSymlinkedJobDirectoryOutsideTheSegmentBaseIsNotStreamed(): void
+    {
+        $jobId = '2f222222-2222-4222-8222-222222222222';
+        $outside = sys_get_temp_dir() . '/phlix_dash_escape_' . uniqid();
+        mkdir($outside, 0755, true);
+        file_put_contents("{$outside}/manifest.mpd", "EXFILTRATED\n");
+        $link = "{$this->segmentDir}/{$jobId}";
+        if (!@symlink($outside, $link)) {
+            $this->markTestSkipped('symlinks are unavailable on this filesystem');
+        }
+
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'manifest.mpd']);
+        $this->assertSame(404, $res->statusCode);
+
+        @unlink($link);
+        $this->rrmdir($outside);
     }
 
     private function rrmdir(string $dir): void

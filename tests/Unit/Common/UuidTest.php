@@ -90,4 +90,43 @@ final class UuidTest extends TestCase
         $this->assertSame(36, strlen($expected));
         $this->assertSame(36, strlen($actual));
     }
+
+    /**
+     * isV4() is the acceptance contract the transcode segment routes lean on
+     * (2026-11-03 review server__secaudit, Critical cure): every id the mint
+     * produces must pass, and every traversal/garbage/foreign-shape must not.
+     */
+    public function testIsV4AcceptsEverythingTheMintProduces(): void
+    {
+        for ($i = 0; $i < 20; $i++) {
+            $this->assertTrue(Uuid::isV4(Uuid::v4()));
+        }
+    }
+
+    public function testIsV4RefusesEveryShapeThatIsNotACanonicalV4(): void
+    {
+        $rejects = [
+            '',
+            '..',
+            '../..',
+            '../../etc/passwd',
+            '%2e%2e%2f%2e%2e%2fetc%2fpasswd',
+            '550e8400-e29b-41d4-a716-446655440000/',
+            '550e8400-e29b-41d4-a716-446655440000/../x',
+            '550E8400-E29B-41D4-A716-446655440000',
+            '550e8400e29b41d4a716446655440000',
+            '550e8400-e29b-41d4-a716-44665544000',
+            '550e8400-e29b-41d4-a716-4466554400000',
+            '550e8400-e29b-51d4-a716-446655440000',
+            'zt0e8400-e29b-41d4-a716-446655440000',
+        ];
+        foreach ($rejects as $value) {
+            $this->assertFalse(Uuid::isV4($value), $value);
+        }
+    }
+
+    public function testIsV4AcceptsTheCanonicalExampleId(): void
+    {
+        $this->assertTrue(Uuid::isV4('550e8400-e29b-41d4-a716-446655440000'));
+    }
 }

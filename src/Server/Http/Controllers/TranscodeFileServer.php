@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Common\Uuid;
 use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
@@ -51,13 +52,29 @@ trait TranscodeFileServer
      * @param Request $request The incoming request (for `Range` / conditional GET).
      * @param string  $dir     Absolute job directory (empty → 400).
      * @param string  $file    Requested filename within the job dir.
+     * @param string  $withinBaseDir Optional trusted base: when non-empty the
+     *     job dir must RESOLVE (realpath) inside it — defense-in-depth behind
+     *     the handlers' {@see isSafeJobId()} gate, so even a planted symlink
+     *     cannot stream bytes from outside the segment tree (2026-11-03 review
+     *     server__secaudit, Critical). A dir that does not exist or escapes the
+     *     base answers the SAME 404 the missing file already answers — no new
+     *     oracle, no new envelope.
      *
      * @return Response The file response, or a 304/400/404/416 status.
      */
-    private function serveJobFile(Request $request, string $dir, string $file): Response
+    private function serveJobFile(Request $request, string $dir, string $file, string $withinBaseDir = ''): Response
     {
         if ($dir === '' || !$this->isSafeFilename($file)) {
             return (new Response())->status(400)->json(['error' => 'Invalid request']);
+        }
+
+        if ($withinBaseDir !== '') {
+            $base = realpath($withinBaseDir);
+            $resolved = realpath($dir);
+            if ($base === false || $resolved === false || !str_starts_with($resolved, $base . DIRECTORY_SEPARATOR)) {
+                return (new Response())->status(404)->json(['error' => 'Segment not found']);
+            }
+            $dir = $resolved;
         }
 
         $path = $dir . '/' . $file;
@@ -235,6 +252,26 @@ trait TranscodeFileServer
             return false;
         }
         return preg_match('/^[A-Za-z0-9._-]+$/', $file) === 1;
+    }
+
+    /**
+     * True when the value is a canonical UUID v4 — the ONLY shape a transcode
+     * job id has ever had ({@see \Phlix\Media\Transcoding\TranscodeManager}
+     * mints ids via {@see Uuid::v4()}).
+     *
+     * The 2026-11-03 security review (server__secaudit, Critical) named the
+     * missing arm of this exact predicate: `{job_id}` is matched against the
+     * still-percent-encoded path but rawurldecoded once at the router boundary
+     * (S435), so a `%2e%2e%2f` sequence arrives downstream as a literal
+     * `../` segment. The file arm of the pair ({@see isSafeFilename()}) was
+     * always enforced; the job-id arm was not, and the id is interpolated into
+     * the served path. A UUID shape check is not a heuristic here: it is the
+     * exact generator contract, so it accepts every real id and rejects every
+     * traversal shape by construction.
+     */
+    private function isSafeJobId(string $jobId): bool
+    {
+        return Uuid::isV4($jobId);
     }
 
     /**

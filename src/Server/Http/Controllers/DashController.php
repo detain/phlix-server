@@ -84,6 +84,10 @@ class DashController
         if ($jobId === '') {
             return (new Response())->status(400)->json(['error' => 'Job ID is required']);
         }
+        if (!$this->isSafeJobId($jobId)) {
+            // Pointer echo only — mirror of the HLS arm; refuse at the boundary.
+            return (new Response())->status(400)->json(['error' => 'Invalid request']);
+        }
 
         return (new Response())->json([
             'manifest_url' => "/dash/{$jobId}/manifest.mpd",
@@ -125,7 +129,10 @@ class DashController
     {
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
-        if ($jobId === '' || !$this->isSafeFilename($file)) {
+        // Job-id arm added by the 2026-11-03 security review cure
+        // (server__secaudit, Critical): identical hole to the HLS rail — the
+        // id is interpolated into $dir below. 400 envelope stays byte-identical.
+        if (!$this->isSafeJobId($jobId) || !$this->isSafeFilename($file)) {
             return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
@@ -183,6 +190,6 @@ class DashController
             $this->transcodeManager?->ensurePlaylistRegenerated($jobId);
         }
 
-        return $this->serveJobFile($request, $dir, $file);
+        return $this->serveJobFile($request, $dir, $file, $this->segmentDir);
     }
 }

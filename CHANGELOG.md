@@ -79,6 +79,38 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Any authenticated member could read arbitrary files on the host through
+  the HLS/DASH segment routes: the `job_id` path parameter was interpolated
+  into the served filesystem path unvalidated.** `{job_id}` matches the raw
+  percent-encoded path but is rawurldecoded once at the router boundary
+  (S435), so `GET /hls/%2e%2e%2f%2e%2e%2fetc%2fpasswd/...` arrived at the
+  handlers as a literal `../../etc/passwd` segment; the entry check was only
+  `!== ''`, the filename gate never looked at the id, and
+  `HlsStreamer::getJobDirectory()` / the DASH twin interpolated the value
+  verbatim into the served path before `is_file()` +
+  {@see \Phlix\Server\Http\Response::withFile()}. Reading the JWT/signed-url
+  secrets off disk meant full authentication forgery. The cure installs the
+  generator contract as the boundary law: transcode job ids are minted
+  exclusively by `Uuid::v4()` (the historical generator was shape-identical),
+  so both controllers now refuse any id that is not a canonical lowercase v4
+  UUID through a new `isSafeJobId()` arm, reusing each route's existing 400
+  envelope byte-identically — no new wire codes. Same gate on the JSON
+  pointer arms (`getPlaylist`/`getManifest`). Defense in depth:
+  `serveJobFile()` gained an optional trusted-base parameter whose realpath
+  containment answers the ordinary missing-file 404 for anything resolving
+  outside the segment tree (planted symlinks included), and both streamers'
+  `getJobDirectory()` now fail-loud on non-UUID ids so future internal
+  callers cannot silently re-inherit the hole. `Uuid` gained `isV4()` beside
+  the mint it validates. Regression evidence: traversal-shaped ids (bare
+  `..`, decoded `../../`, the percent form, uppercase/no-hyphen/near-miss
+  UUIDs) refuse with the exact envelopes in both controller suites; a
+  real-Router wire test proves the decoded arrival shape (spy leg) and the
+  gate's 400 (production leg); a symlinked job dir outside the base streams
+  nothing. Measured red at the parent convicted 24 of the new/reworked
+  cases, zero collateral. Fixture job ids in the touched suites became
+  canonical UUIDs — the old `job-N` literals encoded the very laxness the
+  cure removes.
+  [review server__secaudit 2026-11-03, Critical]
 - **The pre-release checklist demanded a coverage bar the repo cannot meet.**
   `RELEASE_PROCESS.md` carried "Coverage >= 80%" while the CI floor is
   `MIN_COVERAGE=40` and measured coverage sits at the 65%-era AGENTS.md records —

@@ -95,6 +95,11 @@ class HlsController
         if ($jobId === '') {
             return (new Response())->status(400)->json(['error' => 'Job ID is required']);
         }
+        if (!$this->isSafeJobId($jobId)) {
+            // Pointer echo only — but a garbage id here becomes a request the
+            // serveFile rail must then refuse; answer at the boundary instead.
+            return (new Response())->status(400)->json(['error' => 'invalid request']);
+        }
 
         return (new Response())->json([
             'playlist_url' => "/hls/{$jobId}/master.m3u8",
@@ -144,7 +149,11 @@ class HlsController
     {
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
-        if ($jobId === '' || !$this->isSafeFilename($file)) {
+        // Job-id arm added by the 2026-11-03 security review cure
+        // (server__secaudit, Critical): the empty-string check let every
+        // traversal shape through, and the id is interpolated into the served
+        // path. The 400 envelope stays byte-identical to the file-arm's.
+        if (!$this->isSafeJobId($jobId) || !$this->isSafeFilename($file)) {
             return (new Response())->status(400)->json(['error' => 'invalid request']);
         }
 
@@ -229,7 +238,7 @@ class HlsController
         // A missing `media_voriginal.m3u8` is therefore now a plain 404, exactly
         // like any other genuinely absent rung.
 
-        return $this->serveJobFile($request, $dir, $file);
+        return $this->serveJobFile($request, $dir, $file, $this->hlsStreamer->getSegmentDirectory());
     }
 
     /**

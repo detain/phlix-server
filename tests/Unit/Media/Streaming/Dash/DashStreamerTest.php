@@ -95,9 +95,9 @@ class DashStreamerTest extends TestCase
 
     public function testTheJobIdBecomesTheMpdId(): void
     {
-        $mpd = $this->dashStreamer->generateMasterMpd('job-abc', [$this->videoSet()], 12.0);
+        $mpd = $this->dashStreamer->generateMasterMpd('25521eaa-1649-4e23-9414-786bd11bca5d', [$this->videoSet()], 12.0);
 
-        $this->assertStringContainsString('id="job-abc"', $mpd);
+        $this->assertStringContainsString('id="25521eaa-1649-4e23-9414-786bd11bca5d"', $mpd);
     }
 
     public function testTheAdaptationSetCacheRecordsTheHighestRepresentationBandwidth(): void
@@ -193,30 +193,30 @@ class DashStreamerTest extends TestCase
 
     public function testGetMasterMpdUrl(): void
     {
-        $url = $this->dashStreamer->getMasterMpdUrl('job-123');
+        $url = $this->dashStreamer->getMasterMpdUrl('4535cc6a-0a25-4d69-a0f2-6fdc6804f749');
 
-        $this->assertEquals('/dash/job-123/manifest.mpd', $url);
+        $this->assertEquals('/dash/4535cc6a-0a25-4d69-a0f2-6fdc6804f749/manifest.mpd', $url);
     }
 
     public function testGetAdaptationSetMpdUrl(): void
     {
-        $url = $this->dashStreamer->getAdaptationSetMpdUrl('job-123', 1);
+        $url = $this->dashStreamer->getAdaptationSetMpdUrl('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', 1);
 
-        $this->assertEquals('/dash/job-123/1/manifest.mpd', $url);
+        $this->assertEquals('/dash/4535cc6a-0a25-4d69-a0f2-6fdc6804f749/1/manifest.mpd', $url);
     }
 
     public function testGetSegmentPath(): void
     {
-        $path = $this->dashStreamer->getSegmentPath('job-123', 0, 5);
+        $path = $this->dashStreamer->getSegmentPath('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', 0, 5);
 
-        $this->assertStringContainsString('job-123', $path);
+        $this->assertStringContainsString('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', $path);
         $this->assertStringContainsString('segment_0_00005', $path);
         $this->assertStringEndsWith('.m4s', $path);
     }
 
     public function testSaveMpd(): void
     {
-        $jobId = 'test-job';
+        $jobId = 'be04fd51-bd8e-4abb-885e-6048c18fcf48';
         $content = '<?xml version="1.0"?><MPD></MPD>';
         $filename = 'manifest.mpd';
 
@@ -229,7 +229,7 @@ class DashStreamerTest extends TestCase
 
     public function testSaveSegment(): void
     {
-        $jobId = 'test-job';
+        $jobId = 'be04fd51-bd8e-4abb-885e-6048c18fcf48';
         $setId = 0;
         $segmentNumber = 1;
         $content = 'segment data';
@@ -258,7 +258,7 @@ class DashStreamerTest extends TestCase
 
     public function testGetJobDirectory(): void
     {
-        $jobId = 'test-job';
+        $jobId = 'be04fd51-bd8e-4abb-885e-6048c18fcf48';
         $dir = $this->dashStreamer->getJobDirectory($jobId);
 
         $this->assertEquals("{$this->segmentDir}/{$jobId}", $dir);
@@ -266,8 +266,24 @@ class DashStreamerTest extends TestCase
 
     public function testGetSegmentUrl(): void
     {
-        $url = $this->dashStreamer->getSegmentUrl('job-123', 0, 5);
+        $url = $this->dashStreamer->getSegmentUrl('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', 0, 5);
 
-        $this->assertEquals('/dash/job-123/0/segment_00005.m4s', $url);
+        $this->assertEquals('/dash/4535cc6a-0a25-4d69-a0f2-6fdc6804f749/0/segment_00005.m4s', $url);
+    }
+
+    /**
+     * Fail-loud shape law — the DASH twin (2026-11-03 review server__secaudit,
+     * Critical).
+     */
+    public function testGetJobDirectoryRefusesNonUuidShapes(): void
+    {
+        foreach (['..', '../..', '../../etc/passwd', 'job-1', ''] as $shape) {
+            try {
+                $this->dashStreamer->getJobDirectory($shape);
+                $this->fail('getJobDirectory accepted a non-UUID id: ' . $shape);
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('canonical UUID', $e->getMessage());
+            }
+        }
     }
 }

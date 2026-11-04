@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Streaming\Dash;
 
 use DOMDocument;
+use Phlix\Common\Uuid;
 
 /**
  * DASH Streamer - Generates DASH MPD manifests and manages segment files.
@@ -396,6 +397,13 @@ class DashStreamer
      */
     public function getJobDirectory(string $jobId): string
     {
+        // Fail-loud shape law — the Dash twin of the HlsStreamer arm (2026-11-03
+        // review server__secaudit, Critical); wire callers are gated upstream.
+        if (!Uuid::isV4($jobId)) {
+            throw new \InvalidArgumentException(
+                'Transcode job id must be a canonical UUID v4; got a non-id-shaped value',
+            );
+        }
         return "{$this->segmentDir}/{$jobId}";
     }
 

@@ -75,9 +75,9 @@ class HlsStreamerTest extends TestCase
 
     public function testGetSegmentPath(): void
     {
-        $path = $this->hlsStreamer->getSegmentPath('job-123', 0, 5);
+        $path = $this->hlsStreamer->getSegmentPath('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', 0, 5);
 
-        $this->assertStringContainsString('job-123', $path);
+        $this->assertStringContainsString('4535cc6a-0a25-4d69-a0f2-6fdc6804f749', $path);
         $this->assertStringContainsString('segment_0_005', $path);
         $this->assertStringEndsWith('.ts', $path);
     }
@@ -91,16 +91,16 @@ class HlsStreamerTest extends TestCase
 
     public function testGetPlaylistUrl(): void
     {
-        $url = $this->hlsStreamer->getPlaylistUrl('job-abc');
+        $url = $this->hlsStreamer->getPlaylistUrl('25521eaa-1649-4e23-9414-786bd11bca5d');
 
-        $this->assertStringContainsString('hls/job-abc/playlist.m3u8', $url);
+        $this->assertStringContainsString('hls/25521eaa-1649-4e23-9414-786bd11bca5d/playlist.m3u8', $url);
     }
 
     public function testGetVariantPlaylistUrl(): void
     {
-        $url = $this->hlsStreamer->getVariantPlaylistUrl('job-abc', 1);
+        $url = $this->hlsStreamer->getVariantPlaylistUrl('25521eaa-1649-4e23-9414-786bd11bca5d', 1);
 
-        $this->assertStringContainsString('hls/job-abc/stream_1.m3u8', $url);
+        $this->assertStringContainsString('hls/25521eaa-1649-4e23-9414-786bd11bca5d/stream_1.m3u8', $url);
     }
 
     public function testGetSegmentCountReturnsZeroForEmptyJob(): void
@@ -139,9 +139,32 @@ class HlsStreamerTest extends TestCase
 
     public function testGetJobDirectory(): void
     {
-        $jobId = 'test-job';
+        $jobId = 'be04fd51-bd8e-4abb-885e-6048c18fcf48';
         $dir = $this->hlsStreamer->getJobDirectory($jobId);
 
         $this->assertEquals("{$this->segmentDir}/{$jobId}", $dir);
+    }
+
+    /**
+     * Fail-loud shape law (2026-11-03 review server__secaudit, Critical): the
+     * raw interpolation is now only callable with a canonical v4 id. Wire
+     * callers gate upstream with the 400; this arm exists so a FUTURE internal
+     * caller cannot silently re-inherit the traversal hole.
+     */
+    public function testGetJobDirectoryRefusesNonUuidShapes(): void
+    {
+        foreach (['..', '../..', '../../etc/passwd', 'job-1', ''] as $shape) {
+            try {
+                $this->hlsStreamer->getJobDirectory($shape);
+                $this->fail('getJobDirectory accepted a non-UUID id: ' . $shape);
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('canonical UUID', $e->getMessage());
+            }
+        }
+    }
+
+    public function testGetSegmentDirectoryExposesTheTrustedBase(): void
+    {
+        $this->assertSame($this->segmentDir, $this->hlsStreamer->getSegmentDirectory());
     }
 }

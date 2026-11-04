@@ -104,7 +104,7 @@ class TranscodeServeParentalTest extends TestCase
     public function testHlsServeBlocksOverCapJobBeforeProducingSegment(): void
     {
         $manager = $this->createMock(TranscodeManager::class);
-        $manager->method('getJobMediaItemId')->with('job-x')->willReturn('m-mature');
+        $manager->method('getJobMediaItemId')->with('ac162bda-8cd3-4125-b506-2c3508f44a6b')->willReturn('m-mature');
         // Security invariant: no segment is produced for an over-cap job.
         $manager->expects($this->never())->method('ensureSegment');
 
@@ -115,7 +115,7 @@ class TranscodeServeParentalTest extends TestCase
             $this->gate($this->pg13Filter(), false, ['m-mature' => 'R'])
         );
 
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-x', 'file' => 'seg-v1080p-00000.ts']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ac162bda-8cd3-4125-b506-2c3508f44a6b', 'file' => 'seg-v1080p-00000.ts']);
         $this->assertSame(404, $resp->statusCode);
     }
 
@@ -136,7 +136,7 @@ class TranscodeServeParentalTest extends TestCase
     {
         foreach (['init-v1080p.m4s', 'seg-v1080p-00000.m4s'] as $file) {
             $manager = $this->createMock(TranscodeManager::class);
-            $manager->method('getJobMediaItemId')->with('job-x')->willReturn('m-mature');
+            $manager->method('getJobMediaItemId')->with('ac162bda-8cd3-4125-b506-2c3508f44a6b')->willReturn('m-mature');
             $manager->expects($this->never())->method('ensureSegment');
 
             $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
@@ -146,7 +146,7 @@ class TranscodeServeParentalTest extends TestCase
                 $this->gate($this->pg13Filter(), false, ['m-mature' => 'R'])
             );
 
-            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-x', 'file' => $file]);
+            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ac162bda-8cd3-4125-b506-2c3508f44a6b', 'file' => $file]);
             $this->assertSame(404, $resp->statusCode, "{$file} must be gated");
         }
     }
@@ -161,12 +161,12 @@ class TranscodeServeParentalTest extends TestCase
     {
         foreach (['init-v1080p.m4s', 'seg-v1080p-00000.m4s'] as $file) {
             $manager = $this->createMock(TranscodeManager::class);
-            $manager->method('getJobMediaItemId')->with('job-ok')->willReturn('m-family');
+            $manager->method('getJobMediaItemId')->with('ff7fd4a5-c000-4841-9701-9b0d6f211b82')->willReturn('m-family');
             $manager->expects($this->once())
                 ->method('ensureSegment')
                 ->willReturnCallback(function () use ($file): string {
-                    $this->writeSeg('job-ok', $file);
-                    return "{$this->segmentDir}/job-ok/{$file}";
+                    $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', $file);
+                    return "{$this->segmentDir}/ff7fd4a5-c000-4841-9701-9b0d6f211b82/{$file}";
                 });
 
             $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
@@ -176,17 +176,17 @@ class TranscodeServeParentalTest extends TestCase
                 $this->gate($this->pg13Filter(), false, ['m-family' => 'PG'])
             );
 
-            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => $file]);
+            $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => $file]);
             $this->assertSame(200, $resp->statusCode, "{$file} must be served for a within-cap job");
         }
     }
 
     public function testHlsServeAllowsWithinCapJob(): void
     {
-        $this->writeSeg('job-ok', 'master.m3u8');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'master.m3u8');
 
         $manager = $this->createMock(TranscodeManager::class);
-        $manager->method('getJobMediaItemId')->with('job-ok')->willReturn('m-family');
+        $manager->method('getJobMediaItemId')->with('ff7fd4a5-c000-4841-9701-9b0d6f211b82')->willReturn('m-family');
 
         $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
         $controller = new HlsController(
@@ -196,13 +196,13 @@ class TranscodeServeParentalTest extends TestCase
         );
 
         // A playlist file (no segment production) is served for an allowed job.
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => 'master.m3u8']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'master.m3u8']);
         $this->assertSame(200, $resp->statusCode);
     }
 
     public function testHlsServeUnfilteredForOwner(): void
     {
-        $this->writeSeg('job-ok', 'master.m3u8');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'master.m3u8');
 
         $manager = $this->createMock(TranscodeManager::class);
         // Owner → null filter → job→media lookup never happens.
@@ -215,16 +215,16 @@ class TranscodeServeParentalTest extends TestCase
             $this->gate($this->pg13Filter(), true, ['m-mature' => 'NC-17'])
         );
 
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => 'master.m3u8']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'master.m3u8']);
         $this->assertSame(200, $resp->statusCode);
     }
 
     public function testDashServeBlocksOverCapJob(): void
     {
-        $this->writeSeg('job-x', 'manifest.mpd');
+        $this->writeSeg('ac162bda-8cd3-4125-b506-2c3508f44a6b', 'manifest.mpd');
 
         $manager = $this->createMock(TranscodeManager::class);
-        $manager->method('getJobMediaItemId')->with('job-x')->willReturn('m-mature');
+        $manager->method('getJobMediaItemId')->with('ac162bda-8cd3-4125-b506-2c3508f44a6b')->willReturn('m-mature');
 
         $controller = new DashController(
             $this->segmentDir,
@@ -232,16 +232,16 @@ class TranscodeServeParentalTest extends TestCase
             $this->gate($this->pg13Filter(), false, ['m-mature' => 'R'])
         );
 
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-x', 'file' => 'manifest.mpd']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ac162bda-8cd3-4125-b506-2c3508f44a6b', 'file' => 'manifest.mpd']);
         $this->assertSame(404, $resp->statusCode);
     }
 
     public function testDashServeAllowsWithinCapJob(): void
     {
-        $this->writeSeg('job-ok', 'manifest.mpd');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'manifest.mpd');
 
         $manager = $this->createMock(TranscodeManager::class);
-        $manager->method('getJobMediaItemId')->with('job-ok')->willReturn('m-family');
+        $manager->method('getJobMediaItemId')->with('ff7fd4a5-c000-4841-9701-9b0d6f211b82')->willReturn('m-family');
 
         $controller = new DashController(
             $this->segmentDir,
@@ -249,7 +249,7 @@ class TranscodeServeParentalTest extends TestCase
             $this->gate($this->pg13Filter(), false, ['m-family' => 'PG'])
         );
 
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => 'manifest.mpd']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'manifest.mpd']);
         $this->assertSame(200, $resp->statusCode);
     }
 
@@ -270,7 +270,7 @@ class TranscodeServeParentalTest extends TestCase
      */
     public function testAnAnonymousSignedHlsFetchIsStillServed(): void
     {
-        $this->writeSeg('job-ok', 'master.m3u8');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'master.m3u8');
 
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('getJobMediaItemId');
@@ -285,7 +285,7 @@ class TranscodeServeParentalTest extends TestCase
         $anonymous = new Request();
         $this->assertNull($anonymous->userId, 'fixture must really be anonymous');
 
-        $resp = $controller->serveFile($anonymous, ['job_id' => 'job-ok', 'file' => 'master.m3u8']);
+        $resp = $controller->serveFile($anonymous, ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'master.m3u8']);
         $this->assertSame(200, $resp->statusCode);
     }
 
@@ -294,7 +294,7 @@ class TranscodeServeParentalTest extends TestCase
      */
     public function testAnAnonymousSignedDashFetchIsStillServed(): void
     {
-        $this->writeSeg('job-ok', 'manifest.mpd');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'manifest.mpd');
 
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->never())->method('getJobMediaItemId');
@@ -306,18 +306,18 @@ class TranscodeServeParentalTest extends TestCase
         );
 
         $anonymous = new Request();
-        $resp = $controller->serveFile($anonymous, ['job_id' => 'job-ok', 'file' => 'manifest.mpd']);
+        $resp = $controller->serveFile($anonymous, ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'manifest.mpd']);
         $this->assertSame(200, $resp->statusCode);
     }
 
     public function testDashServeUnfilteredWhenGateUnwired(): void
     {
-        $this->writeSeg('job-ok', 'manifest.mpd');
+        $this->writeSeg('ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'manifest.mpd');
 
         // Legacy construction (no manager / no gate) → strict no-op serve.
         $controller = new DashController($this->segmentDir);
 
-        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'job-ok', 'file' => 'manifest.mpd']);
+        $resp = $controller->serveFile($this->cappedRequest(), ['job_id' => 'ff7fd4a5-c000-4841-9701-9b0d6f211b82', 'file' => 'manifest.mpd']);
         $this->assertSame(200, $resp->statusCode);
     }
 }

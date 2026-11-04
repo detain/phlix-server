@@ -76,6 +76,27 @@ final readonly class Uuid
     }
 
     /**
+     * The canonical shape {@see v4()} emits: lowercase 8-4-4-4-12 hex with the
+     * version/variant nibbles. Transcode job ids (and every other `Uuid::v4()`
+     * primary key) match this and nothing else has ever been minted, so it is
+     * also the acceptance test for an id that arrived from a URL.
+     */
+    private const V4_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/';
+
+    /**
+     * True when the value is exactly a canonical UUID v4 string.
+     *
+     * Boundary use: request params reach file paths verbatim after the
+     * router's S435 rawurldecode, so a job id interpolated into a filesystem
+     * path must first be PROVEN to be one (Parse don't validate) — a UUID
+     * cannot contain a separator, a dot-dot, or a NUL.
+     */
+    public static function isV4(string $value): bool
+    {
+        return preg_match(self::V4_PATTERN, $value) === 1;
+    }
+
+    /**
      * Prevent instantiation — static methods only.
      */
     private function __construct()

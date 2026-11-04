@@ -70,12 +70,12 @@ class HlsControllerTest extends TestCase
 
     public function testGetPlaylistReturnsMasterUrl(): void
     {
-        $res = $this->controller()->getPlaylist(new Request(), ['job_id' => 'job-9']);
+        $res = $this->controller()->getPlaylist(new Request(), ['job_id' => '545d36e0-7173-4c40-b9d4-2f87c3c3c107']);
         $this->assertSame(200, $res->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($res->body, true);
-        $this->assertSame('/hls/job-9/master.m3u8', $body['playlist_url']);
-        $this->assertSame('job-9', $body['job_id']);
+        $this->assertSame('/hls/545d36e0-7173-4c40-b9d4-2f87c3c3c107/master.m3u8', $body['playlist_url']);
+        $this->assertSame('545d36e0-7173-4c40-b9d4-2f87c3c3c107', $body['job_id']);
     }
 
     public function testGetPlaylistReturns400WhenJobIdEmpty(): void
@@ -92,8 +92,8 @@ class HlsControllerTest extends TestCase
 
     public function testServesMasterPlaylistWithHlsContentType(): void
     {
-        $this->writeJobFile('job-1', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:7\nmedia_0.m3u8\n");
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-1', 'file' => 'master.m3u8']);
+        $this->writeJobFile('c6a4eb7f-9bd8-4148-8ee3-6b69e726ac54', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:7\nmedia_0.m3u8\n");
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'c6a4eb7f-9bd8-4148-8ee3-6b69e726ac54', 'file' => 'master.m3u8']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $res->headers['Content-Type']);
@@ -104,8 +104,8 @@ class HlsControllerTest extends TestCase
     public function testServesMediaPlaylistVerbatim(): void
     {
         $playlist = "#EXTM3U\n#EXT-X-MAP:URI=\"init-0.m4s\"\n#EXTINF:2.0,\nchunk-0-00001.m4s\n";
-        $this->writeJobFile('job-2', 'media_0.m3u8', $playlist);
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-2', 'file' => 'media_0.m3u8']);
+        $this->writeJobFile('8ce1146b-ce68-4c16-a190-81ac10c9beb1', 'media_0.m3u8', $playlist);
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '8ce1146b-ce68-4c16-a190-81ac10c9beb1', 'file' => 'media_0.m3u8']);
 
         $this->assertSame(200, $res->statusCode);
         // Served verbatim — relative segment URIs are kept (no rewriting).
@@ -114,8 +114,8 @@ class HlsControllerTest extends TestCase
 
     public function testServesFmp4SegmentWithVideoMp4ContentType(): void
     {
-        $this->writeJobFile('job-3', 'chunk-0-00001.m4s', 'SEGMENTBYTES');
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-3', 'file' => 'chunk-0-00001.m4s']);
+        $this->writeJobFile('4ca55e47-0a3c-42b1-85d0-d49e5c6a817e', 'chunk-0-00001.m4s', 'SEGMENTBYTES');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '4ca55e47-0a3c-42b1-85d0-d49e5c6a817e', 'file' => 'chunk-0-00001.m4s']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
@@ -125,15 +125,15 @@ class HlsControllerTest extends TestCase
 
     public function testServesInitSegment(): void
     {
-        $this->writeJobFile('job-4', 'init-0.m4s', 'INIT');
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-4', 'file' => 'init-0.m4s']);
+        $this->writeJobFile('782d718e-f1be-47ff-a8c5-03ec72451230', 'init-0.m4s', 'INIT');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '782d718e-f1be-47ff-a8c5-03ec72451230', 'file' => 'init-0.m4s']);
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('INIT', $this->bodyOf($res));
     }
 
     public function testServeFile404WhenMissing(): void
     {
-        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'nope', 'file' => 'master.m3u8']);
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => '76272dc4-faf6-4073-b711-f58c736830d2', 'file' => 'master.m3u8']);
         $this->assertSame(404, $res->statusCode);
     }
 
@@ -146,7 +146,7 @@ class HlsControllerTest extends TestCase
             ->method('ensureSegment')
             // A5: signature is (jobId, variant, index); the legacy unprefixed
             // seg-NNNNN.ts match passes null for the variant (A6 adds variant parsing).
-            ->with('job-seg', null, 5)
+            ->with('a44f47c6-fad6-4ea8-a960-8facb6f4daf9', null, 5)
             ->willReturnCallback(function (string $jobId, ?string $variant, int $index): string {
                 $this->writeJobFile($jobId, 'seg-00005.ts', 'TSBYTES');
                 return "{$this->segmentDir}/{$jobId}/seg-00005.ts";
@@ -154,7 +154,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+            ['job_id' => 'a44f47c6-fad6-4ea8-a960-8facb6f4daf9', 'file' => 'seg-00005.ts']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -169,7 +169,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+            ['job_id' => 'a44f47c6-fad6-4ea8-a960-8facb6f4daf9', 'file' => 'seg-00005.ts']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -182,7 +182,7 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-mv', '1080p', 42)
+            ->with('0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', '1080p', 42)
             ->willReturnCallback(function (string $jobId, ?string $variant, int $index): string {
                 $this->writeJobFile($jobId, 'seg-v1080p-00042.ts', 'MVBYTES');
                 return "{$this->segmentDir}/{$jobId}/seg-v1080p-00042.ts";
@@ -190,7 +190,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-mv', 'file' => 'seg-v1080p-00042.ts']
+            ['job_id' => '0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', 'file' => 'seg-v1080p-00042.ts']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -205,7 +205,7 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-orig', 'original', 7)
+            ->with('1af3b9aa-5977-47b3-b212-5ed017707f9b', 'original', 7)
             ->willReturnCallback(function (string $jobId, ?string $variant, int $index): string {
                 $this->writeJobFile($jobId, 'seg-voriginal-00007.ts', 'ORIGBYTES');
                 return "{$this->segmentDir}/{$jobId}/seg-voriginal-00007.ts";
@@ -213,7 +213,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-orig', 'file' => 'seg-voriginal-00007.ts']
+            ['job_id' => '1af3b9aa-5977-47b3-b212-5ed017707f9b', 'file' => 'seg-voriginal-00007.ts']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -227,12 +227,12 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-mv', '480p', 3)
+            ->with('0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', '480p', 3)
             ->willReturn(null);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-mv', 'file' => 'seg-v480p-00003.ts']
+            ['job_id' => '0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', 'file' => 'seg-v480p-00003.ts']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -245,12 +245,12 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-mv', '720p', 12)
+            ->with('0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', '720p', 12)
             ->willThrowException(new SegmentBusyException('busy'));
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-mv', 'file' => 'seg-v720p-00012.ts']
+            ['job_id' => '0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', 'file' => 'seg-v720p-00012.ts']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -265,11 +265,11 @@ class HlsControllerTest extends TestCase
         $manager->expects($this->never())->method('ensureSegment');
 
         $playlist = "#EXTM3U\n#EXT-X-VERSION:7\n#EXTINF:2.0,\nseg-v1080p-00000.ts\n";
-        $this->writeJobFile('job-pl', 'media_v1080p.m3u8', $playlist);
+        $this->writeJobFile('8ccf1fa0-8f9b-4fb8-b528-7a917803a200', 'media_v1080p.m3u8', $playlist);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-pl', 'file' => 'media_v1080p.m3u8']
+            ['job_id' => '8ccf1fa0-8f9b-4fb8-b528-7a917803a200', 'file' => 'media_v1080p.m3u8']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -284,11 +284,11 @@ class HlsControllerTest extends TestCase
         $manager->expects($this->never())->method('ensureSegment');
 
         $playlist = "#EXTM3U\n#EXT-X-VERSION:7\nseg-voriginal-00000.ts\n";
-        $this->writeJobFile('job-pl2', 'media_voriginal.m3u8', $playlist);
+        $this->writeJobFile('035f816e-b14f-4723-a7bc-19acf2cf8514', 'media_voriginal.m3u8', $playlist);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-pl2', 'file' => 'media_voriginal.m3u8']
+            ['job_id' => '035f816e-b14f-4723-a7bc-19acf2cf8514', 'file' => 'media_voriginal.m3u8']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -314,15 +314,15 @@ class HlsControllerTest extends TestCase
             . "media_v1080p.m3u8\n"
             . "#EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720,CODECS=\"avc1.64001F,mp4a.40.2\"\n"
             . "media_v720p.m3u8\n";
-        $this->writeJobFile('job-fold', 'master.m3u8', $master);
+        $this->writeJobFile('fd824f32-7436-4804-bb14-413d3e8b926a', 'master.m3u8', $master);
         $top = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2.0,\nseg-v1080p-00000.ts\n";
-        $this->writeJobFile('job-fold', 'media_v1080p.m3u8', $top);
-        $this->writeJobFile('job-fold', 'media_v720p.m3u8', "#EXTM3U\nseg-v720p-00000.ts\n");
+        $this->writeJobFile('fd824f32-7436-4804-bb14-413d3e8b926a', 'media_v1080p.m3u8', $top);
+        $this->writeJobFile('fd824f32-7436-4804-bb14-413d3e8b926a', 'media_v720p.m3u8', "#EXTM3U\nseg-v720p-00000.ts\n");
         // media_voriginal.m3u8 intentionally NOT written (the pre-v9 folded shape).
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-fold', 'file' => 'media_voriginal.m3u8']
+            ['job_id' => 'fd824f32-7436-4804-bb14-413d3e8b926a', 'file' => 'media_voriginal.m3u8']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -342,7 +342,7 @@ class HlsControllerTest extends TestCase
         $regenerated = "#EXTM3U\n#EXT-X-VERSION:7\n#EXTINF:2.0,\nseg-voriginal-00000.ts\n";
         $manager->expects($this->once())
             ->method('ensurePlaylistRegenerated')
-            ->with('job-regen')
+            ->with('73f6b49c-29de-4878-b0c7-1a8a77e56e61')
             ->willReturnCallback(function (string $jobId) use ($regenerated): bool {
                 $this->writeJobFile($jobId, 'media_voriginal.m3u8', $regenerated);
                 return true;
@@ -350,11 +350,11 @@ class HlsControllerTest extends TestCase
 
         // Dir exists but the Original playlist does not — the swept-then-replayed
         // signed-URL case.
-        $this->writeJobFile('job-regen', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:7\n");
+        $this->writeJobFile('73f6b49c-29de-4878-b0c7-1a8a77e56e61', 'master.m3u8', "#EXTM3U\n#EXT-X-VERSION:7\n");
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-regen', 'file' => 'media_voriginal.m3u8']
+            ['job_id' => '73f6b49c-29de-4878-b0c7-1a8a77e56e61', 'file' => 'media_voriginal.m3u8']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -373,14 +373,14 @@ class HlsControllerTest extends TestCase
             . "media_voriginal.m3u8\n"
             . "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640029,mp4a.40.2\"\n"
             . "media_v1080p.m3u8\n";
-        $this->writeJobFile('job-orig-pl', 'master.m3u8', $master);
+        $this->writeJobFile('26212ecf-c89a-4329-a247-9882c114ac9a', 'master.m3u8', $master);
         $orig = "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2.0,\nseg-voriginal-00000.ts\n";
-        $this->writeJobFile('job-orig-pl', 'media_voriginal.m3u8', $orig);
-        $this->writeJobFile('job-orig-pl', 'media_v1080p.m3u8', "#EXTM3U\nseg-v1080p-00000.ts\n");
+        $this->writeJobFile('26212ecf-c89a-4329-a247-9882c114ac9a', 'media_voriginal.m3u8', $orig);
+        $this->writeJobFile('26212ecf-c89a-4329-a247-9882c114ac9a', 'media_v1080p.m3u8', "#EXTM3U\nseg-v1080p-00000.ts\n");
 
         $res = $this->controller()->serveFile(
             new Request(),
-            ['job_id' => 'job-orig-pl', 'file' => 'media_voriginal.m3u8']
+            ['job_id' => '26212ecf-c89a-4329-a247-9882c114ac9a', 'file' => 'media_voriginal.m3u8']
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -394,12 +394,12 @@ class HlsControllerTest extends TestCase
         $master = "#EXTM3U\n#EXT-X-VERSION:3\n"
             . "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640029,mp4a.40.2\"\n"
             . "media_v1080p.m3u8\n";
-        $this->writeJobFile('job-unk', 'master.m3u8', $master);
-        $this->writeJobFile('job-unk', 'media_v1080p.m3u8', "#EXTM3U\nseg-v1080p-00000.ts\n");
+        $this->writeJobFile('3964cf8a-ecc8-42ee-b02f-2de9ac1e9b42', 'master.m3u8', $master);
+        $this->writeJobFile('3964cf8a-ecc8-42ee-b02f-2de9ac1e9b42', 'media_v1080p.m3u8', "#EXTM3U\nseg-v1080p-00000.ts\n");
 
         $res = $this->controller()->serveFile(
             new Request(),
-            ['job_id' => 'job-unk', 'file' => 'media_v2160p.m3u8']
+            ['job_id' => '3964cf8a-ecc8-42ee-b02f-2de9ac1e9b42', 'file' => 'media_v2160p.m3u8']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -424,7 +424,7 @@ class HlsControllerTest extends TestCase
         foreach ($bad as $file) {
             $res = $this->controller($manager)->serveFile(
                 new Request(),
-                ['job_id' => 'job-bad', 'file' => $file]
+                ['job_id' => '9de09d47-ade5-4a29-8a9f-f77fc3c8d831', 'file' => $file]
             );
             $this->assertContains(
                 $res->statusCode,
@@ -442,7 +442,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+            ['job_id' => 'a44f47c6-fad6-4ea8-a960-8facb6f4daf9', 'file' => 'seg-00005.ts']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -464,7 +464,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+            ['job_id' => 'a44f47c6-fad6-4ea8-a960-8facb6f4daf9', 'file' => 'seg-00005.ts']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -478,13 +478,13 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-mv', '720p', 12)
+            ->with('0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', '720p', 12)
             ->willThrowException(new SegmentCacheFullException('cache full'));
         $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-mv', 'file' => 'seg-v720p-00012.ts']
+            ['job_id' => '0dae76a0-13a5-4fe4-9fd6-6b8194b7fd49', 'file' => 'seg-v720p-00012.ts']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -497,7 +497,7 @@ class HlsControllerTest extends TestCase
         // (playlists/static files still serve).
         $res = $this->controller(null)->serveFile(
             new Request(),
-            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+            ['job_id' => 'a44f47c6-fad6-4ea8-a960-8facb6f4daf9', 'file' => 'seg-00005.ts']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -505,9 +505,9 @@ class HlsControllerTest extends TestCase
 
     public function testServeFileRejectsPathTraversal(): void
     {
-        $this->writeJobFile('job-5', 'master.m3u8', 'x');
+        $this->writeJobFile('87ed2112-516f-4238-be83-715f83a7407d', 'master.m3u8', 'x');
         foreach (['../master.m3u8', '..', 'a/b', 'secret.php', ''] as $bad) {
-            $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-5', 'file' => $bad]);
+            $res = $this->controller()->serveFile(new Request(), ['job_id' => '87ed2112-516f-4238-be83-715f83a7407d', 'file' => $bad]);
             $this->assertContains($res->statusCode, [400, 404], "filename '{$bad}' must not be served");
             $this->assertNotSame(200, $res->statusCode);
         }
@@ -520,11 +520,11 @@ class HlsControllerTest extends TestCase
         // Content-Range from the offset/length passed to withFile()).
         // A static fMP4 segment (immutable, served directly by serveJobFile — no
         // transcoder gate) exercises the file-streaming Range path.
-        $this->writeJobFile('job-r', 'chunk-0-00001.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('622d1172-02ca-4e6a-9989-c11a105b8230', 'chunk-0-00001.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=2-5';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r', 'file' => 'chunk-0-00001.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '622d1172-02ca-4e6a-9989-c11a105b8230', 'file' => 'chunk-0-00001.m4s']);
 
         $this->assertSame(206, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
@@ -537,11 +537,11 @@ class HlsControllerTest extends TestCase
     public function testSegmentOpenEndedRangeReturns206ToEof(): void
     {
         // `bytes=6-` (no end) → from offset 6 to EOF.
-        $this->writeJobFile('job-r2', 'chunk-0-00002.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('5fb34b5e-f21f-4e58-8bc1-6717a4509521', 'chunk-0-00002.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=6-';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r2', 'file' => 'chunk-0-00002.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '5fb34b5e-f21f-4e58-8bc1-6717a4509521', 'file' => 'chunk-0-00002.m4s']);
 
         $this->assertSame(206, $res->statusCode);
         $this->assertSame(6, $res->fileOffset);
@@ -552,11 +552,11 @@ class HlsControllerTest extends TestCase
     public function testSegmentUnsatisfiableRangeReturns416(): void
     {
         // start-pos itself is past EOF — genuinely unsatisfiable, still 416.
-        $this->writeJobFile('job-r3', 'chunk-0-00003.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('264b5235-70ed-45d4-8507-200684eadc74', 'chunk-0-00003.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=50-60';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r3', 'file' => 'chunk-0-00003.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '264b5235-70ed-45d4-8507-200684eadc74', 'file' => 'chunk-0-00003.m4s']);
 
         $this->assertSame(416, $res->statusCode);
         $this->assertSame('bytes */10', $res->headers['Content-Range']);
@@ -569,11 +569,11 @@ class HlsControllerTest extends TestCase
         // start with an over-long last-byte-pos MUST be clamped to EOF and answered
         // 206, not rejected with 416 (a conforming client/cache can send
         // `bytes=0-999999999` against a segment it hasn't measured yet).
-        $this->writeJobFile('job-r5', 'chunk-0-00005.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('56bedcee-7ba0-4991-8ca4-a11fddac4a61', 'chunk-0-00005.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=0-999999999';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r5', 'file' => 'chunk-0-00005.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '56bedcee-7ba0-4991-8ca4-a11fddac4a61', 'file' => 'chunk-0-00005.m4s']);
 
         $this->assertSame(206, $res->statusCode);
         $this->assertSame(0, $res->fileOffset);
@@ -585,11 +585,11 @@ class HlsControllerTest extends TestCase
     {
         // Reviewer S3 round-1 finding 2 (INFO): `bytes=-N` ("last N bytes") is now
         // honoured instead of falling through to a whole-file 200.
-        $this->writeJobFile('job-r6', 'chunk-0-00006.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('adedbd03-cb54-4923-8839-1d8c98b998a6', 'chunk-0-00006.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=-4';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r6', 'file' => 'chunk-0-00006.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => 'adedbd03-cb54-4923-8839-1d8c98b998a6', 'file' => 'chunk-0-00006.m4s']);
 
         $this->assertSame(206, $res->statusCode);
         $this->assertSame(6, $res->fileOffset);
@@ -601,11 +601,11 @@ class HlsControllerTest extends TestCase
     {
         // A suffix larger than the file just clamps to byte 0 — the whole file,
         // still satisfiable, still 206 (matches common server behaviour/RFC intent).
-        $this->writeJobFile('job-r7', 'chunk-0-00007.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('f20b73e6-d035-45bf-ac05-44647f79eed8', 'chunk-0-00007.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=-999';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r7', 'file' => 'chunk-0-00007.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => 'f20b73e6-d035-45bf-ac05-44647f79eed8', 'file' => 'chunk-0-00007.m4s']);
 
         $this->assertSame(206, $res->statusCode);
         $this->assertSame(0, $res->fileOffset);
@@ -616,11 +616,11 @@ class HlsControllerTest extends TestCase
     public function testSegmentZeroLengthSuffixRangeReturns416(): void
     {
         // `bytes=-0` is not a valid suffix-length per RFC 7233 §2.1 — unsatisfiable.
-        $this->writeJobFile('job-r8', 'chunk-0-00008.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('1ab55630-77e3-481b-a8c1-62d1fb3ba0e7', 'chunk-0-00008.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=-0';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r8', 'file' => 'chunk-0-00008.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '1ab55630-77e3-481b-a8c1-62d1fb3ba0e7', 'file' => 'chunk-0-00008.m4s']);
 
         $this->assertSame(416, $res->statusCode);
         $this->assertSame('bytes */10', $res->headers['Content-Range']);
@@ -631,11 +631,11 @@ class HlsControllerTest extends TestCase
     {
         // We only support a single range; a multi-range value is ignored and the
         // whole file is streamed (a valid RFC 7233 fallback).
-        $this->writeJobFile('job-r4', 'chunk-0-00004.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('060061d4-26d6-4693-9269-4c17814df954', 'chunk-0-00004.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=0-2,4-6';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r4', 'file' => 'chunk-0-00004.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '060061d4-26d6-4693-9269-4c17814df954', 'file' => 'chunk-0-00004.m4s']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame(0, $res->fileOffset);
@@ -650,11 +650,11 @@ class HlsControllerTest extends TestCase
         // parseRange() with a satisfiable start (`$start < $fileSize` is TRUE), the
         // one satisfiability branch the `bytes=50-60` test can't reach (there the
         // start is itself past EOF so the earlier `$start < $fileSize` short-circuits).
-        $this->writeJobFile('job-r9', 'chunk-0-00010.m4s', 'ABCDEFGHIJ');
+        $this->writeJobFile('19fb7da4-35be-4a27-a1f4-1ad29e1482a1', 'chunk-0-00010.m4s', 'ABCDEFGHIJ');
         $req = new Request();
         $req->headers['Range'] = 'bytes=5-2';
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r9', 'file' => 'chunk-0-00010.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => '19fb7da4-35be-4a27-a1f4-1ad29e1482a1', 'file' => 'chunk-0-00010.m4s']);
 
         $this->assertSame(416, $res->statusCode);
         $this->assertSame('bytes */10', $res->headers['Content-Range']);
@@ -665,14 +665,14 @@ class HlsControllerTest extends TestCase
     {
         // Immutable (max-age=31536000) segments answer a conditional GET with 304
         // when If-Modified-Since matches the file mtime — no body re-sent.
-        $this->writeJobFile('job-c', 'chunk-0-00009.m4s', 'TSBYTES');
-        $path = "{$this->segmentDir}/job-c/chunk-0-00009.m4s";
+        $this->writeJobFile('ec3dfe52-6020-4fa7-8bdb-f40a81a00846', 'chunk-0-00009.m4s', 'TSBYTES');
+        $path = "{$this->segmentDir}/ec3dfe52-6020-4fa7-8bdb-f40a81a00846/chunk-0-00009.m4s";
         $lastModified = gmdate('D, d M Y H:i:s', (int) filemtime($path)) . ' GMT';
 
         $req = new Request();
         $req->headers['If-Modified-Since'] = $lastModified;
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-c', 'file' => 'chunk-0-00009.m4s']);
+        $res = $this->controller()->serveFile($req, ['job_id' => 'ec3dfe52-6020-4fa7-8bdb-f40a81a00846', 'file' => 'chunk-0-00009.m4s']);
 
         $this->assertSame(304, $res->statusCode);
         $this->assertSame($lastModified, $res->headers['Last-Modified']);
@@ -683,14 +683,14 @@ class HlsControllerTest extends TestCase
     {
         // Playlists are `no-cache` (they may be rewritten during the encode), so a
         // matching If-Modified-Since must still serve the full body, not 304.
-        $this->writeJobFile('job-c2', 'media_0.m3u8', "#EXTM3U\n");
-        $path = "{$this->segmentDir}/job-c2/media_0.m3u8";
+        $this->writeJobFile('cb5eb37d-86b6-42d2-9f35-547f5c1c36c9', 'media_0.m3u8', "#EXTM3U\n");
+        $path = "{$this->segmentDir}/cb5eb37d-86b6-42d2-9f35-547f5c1c36c9/media_0.m3u8";
         $lastModified = gmdate('D, d M Y H:i:s', (int) filemtime($path)) . ' GMT';
 
         $req = new Request();
         $req->headers['If-Modified-Since'] = $lastModified;
 
-        $res = $this->controller()->serveFile($req, ['job_id' => 'job-c2', 'file' => 'media_0.m3u8']);
+        $res = $this->controller()->serveFile($req, ['job_id' => 'cb5eb37d-86b6-42d2-9f35-547f5c1c36c9', 'file' => 'media_0.m3u8']);
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('no-cache', $res->headers['Cache-Control']);
@@ -739,17 +739,17 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-fmp4', $variant, $index, $audioId)
+            ->with('7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', $variant, $index, $audioId)
             ->willReturnCallback(function () use ($file): string {
                 // Produce the file the way the real encode does, so the static
                 // serve below has something to hand back.
-                $this->writeJobFile('job-fmp4', $file, 'FMP4BYTES');
-                return "{$this->segmentDir}/job-fmp4/{$file}";
+                $this->writeJobFile('7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', $file, 'FMP4BYTES');
+                return "{$this->segmentDir}/7ca0dfb1-30a9-46e1-be10-c348cb77f3a7/{$file}";
             });
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-fmp4', 'file' => $file]
+            ['job_id' => '7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', 'file' => $file]
         );
 
         $this->assertSame(200, $res->statusCode);
@@ -771,25 +771,25 @@ class HlsControllerTest extends TestCase
      */
     public function testTheExtXMapInitIsProducedOnDemandRatherThanAssumedPresent(): void
     {
-        $this->assertFileDoesNotExist("{$this->segmentDir}/job-map/init-v240p.m4s");
+        $this->assertFileDoesNotExist("{$this->segmentDir}/7058e92c-e224-41fd-bafd-210421af5bfc/init-v240p.m4s");
 
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-map', '240p', 0, null)
+            ->with('7058e92c-e224-41fd-bafd-210421af5bfc', '240p', 0, null)
             ->willReturnCallback(function (): string {
-                $this->writeJobFile('job-map', 'init-v240p.m4s', 'INITBYTES');
-                return "{$this->segmentDir}/job-map/init-v240p.m4s";
+                $this->writeJobFile('7058e92c-e224-41fd-bafd-210421af5bfc', 'init-v240p.m4s', 'INITBYTES');
+                return "{$this->segmentDir}/7058e92c-e224-41fd-bafd-210421af5bfc/init-v240p.m4s";
             });
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-map', 'file' => 'init-v240p.m4s']
+            ['job_id' => '7058e92c-e224-41fd-bafd-210421af5bfc', 'file' => 'init-v240p.m4s']
         );
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('INITBYTES', $this->bodyOf($res));
-        $this->assertFileExists("{$this->segmentDir}/job-map/init-v240p.m4s");
+        $this->assertFileExists("{$this->segmentDir}/7058e92c-e224-41fd-bafd-210421af5bfc/init-v240p.m4s");
     }
 
     /**
@@ -801,12 +801,12 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-fmp4', '4321p', 0, null)
+            ->with('7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', '4321p', 0, null)
             ->willReturn(null);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-fmp4', 'file' => 'seg-v4321p-00000.m4s']
+            ['job_id' => '7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', 'file' => 'seg-v4321p-00000.m4s']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -823,11 +823,11 @@ class HlsControllerTest extends TestCase
      */
     public function testWithoutATranscoderAnFmp4RequestIs404NotASilentStaticServe(): void
     {
-        $this->writeJobFile('job-nom', 'seg-v1080p-00000.m4s', 'STALEBYTES');
+        $this->writeJobFile('fbca6550-5913-4ebb-864e-d788e886c783', 'seg-v1080p-00000.m4s', 'STALEBYTES');
 
         $res = $this->controller(null)->serveFile(
             new Request(),
-            ['job_id' => 'job-nom', 'file' => 'seg-v1080p-00000.m4s']
+            ['job_id' => 'fbca6550-5913-4ebb-864e-d788e886c783', 'file' => 'seg-v1080p-00000.m4s']
         );
 
         $this->assertSame(404, $res->statusCode);
@@ -846,13 +846,13 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-fmp4', '720p', 12, null)
+            ->with('7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', '720p', 12, null)
             ->willThrowException(new SegmentBusyException('busy'));
         $manager->expects($this->never())->method('sweepSegmentCache');
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-fmp4', 'file' => 'seg-v720p-00012.m4s']
+            ['job_id' => '7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', 'file' => 'seg-v720p-00012.m4s']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -873,13 +873,13 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-fmp4', null, 0, 'a0')
+            ->with('7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', null, 0, 'a0')
             ->willThrowException(new SegmentCacheFullException('cache full'));
         $manager->expects($this->once())->method('sweepSegmentCache')->willReturn(0);
 
         $res = $this->controller($manager)->serveFile(
             new Request(),
-            ['job_id' => 'job-fmp4', 'file' => 'init-a0.m4s']
+            ['job_id' => '7ca0dfb1-30a9-46e1-be10-c348cb77f3a7', 'file' => 'init-a0.m4s']
         );
 
         $this->assertSame(503, $res->statusCode);
@@ -908,10 +908,10 @@ class HlsControllerTest extends TestCase
             'media_v1080p.m3u8' => "#EXTM3U\n",
         ];
         foreach ($static as $file => $bytes) {
-            $this->writeJobFile('job-static', $file, $bytes);
+            $this->writeJobFile('c261f532-7b3f-4bd8-bf8b-441bbc281c97', $file, $bytes);
             $res = $this->controller($manager)->serveFile(
                 new Request(),
-                ['job_id' => 'job-static', 'file' => $file]
+                ['job_id' => 'c261f532-7b3f-4bd8-bf8b-441bbc281c97', 'file' => $file]
             );
             $this->assertSame(200, $res->statusCode, "{$file} must still serve statically");
             $this->assertSame($bytes, $this->bodyOf($res), "{$file} bytes");
@@ -932,10 +932,10 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-rng', '240p', 1, null)
+            ->with('95ffd7bd-2971-4fe2-b2c1-e6eeeff358bd', '240p', 1, null)
             ->willReturnCallback(function (): string {
-                $this->writeJobFile('job-rng', 'seg-v240p-00001.m4s', 'ABCDEFGHIJ');
-                return "{$this->segmentDir}/job-rng/seg-v240p-00001.m4s";
+                $this->writeJobFile('95ffd7bd-2971-4fe2-b2c1-e6eeeff358bd', 'seg-v240p-00001.m4s', 'ABCDEFGHIJ');
+                return "{$this->segmentDir}/95ffd7bd-2971-4fe2-b2c1-e6eeeff358bd/seg-v240p-00001.m4s";
             });
 
         $req = new Request();
@@ -943,7 +943,7 @@ class HlsControllerTest extends TestCase
 
         $res = $this->controller($manager)->serveFile(
             $req,
-            ['job_id' => 'job-rng', 'file' => 'seg-v240p-00001.m4s']
+            ['job_id' => '95ffd7bd-2971-4fe2-b2c1-e6eeeff358bd', 'file' => 'seg-v240p-00001.m4s']
         );
 
         $this->assertSame(206, $res->statusCode);
@@ -973,7 +973,7 @@ class HlsControllerTest extends TestCase
         foreach ($bad as $file) {
             $res = $this->controller($manager)->serveFile(
                 new Request(),
-                ['job_id' => 'job-bad', 'file' => $file]
+                ['job_id' => '9de09d47-ade5-4a29-8a9f-f77fc3c8d831', 'file' => $file]
             );
             $this->assertContains(
                 $res->statusCode,
@@ -982,6 +982,121 @@ class HlsControllerTest extends TestCase
             );
             $this->assertNotSame(200, $res->statusCode);
         }
+    }
+
+    /**
+     * 2026-11-03 security review (server__secaudit, Critical): `{job_id}` is
+     * matched against the RAW percent-encoded path and rawurldecoded exactly
+     * once at the router boundary (S435), so a `%2e%2e%2f` sequence reaches the
+     * handler as a literal `../` segment — and the value used to flow, only
+     * empty-checked, straight into {@see HlsStreamer::getJobDirectory()} and
+     * the served path. The cure is the UUID-shape arm at the entry gate: real
+     * ids are minted exclusively by Uuid::v4(), so shape-equality accepts every
+     * genuine job and refuses every traversal shape. The 400 envelope stays
+     * byte-identical to the file arm's pre-existing one — no new wire surface.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function traversalJobIdShapes(): array
+    {
+        return [
+            'bare dot-dot' => ['..'],
+            'dot-dot chain' => ['../..'],
+            'decoded traversal (S435 arrival shape)' => ['../../etc/passwd'],
+            'percent form undecoded' => ['%2e%2e%2f%2e%2e%2fetc%2fpasswd'],
+            'dot-slash prefix' => ['./secret'],
+            'uppercase uuid' => ['BE04FD51-BD8E-4ABB-885E-6048C18FCF48'],
+            'uuid without hyphens' => ['be04fd51bd8e42bb885e6048c18fcf48'],
+            'valid uuid welded to traversal' => ['782d718e-f1be-47ff-a8c5-03ec72451230/../../etc'],
+        ];
+    }
+
+    /**
+     * @dataProvider traversalJobIdShapes
+     */
+    public function testTraversalShapedJobIdsAreRefusedWithTheExistingFourHundredEnvelope(string $jobId): void
+    {
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'master.m3u8']);
+        $this->assertSame(400, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'invalid request'], $body);
+    }
+
+    /**
+     * The pointer-echo arm carries the same law: a traversal-shaped id never
+     * even becomes a URL. Empty keeps its own pre-existing envelope.
+     */
+    public function testGetPlaylistRefusesTraversalShapedJobIds(): void
+    {
+        $res = $this->controller()->getPlaylist(new Request(), ['job_id' => '../../etc/passwd']);
+        $this->assertSame(400, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'invalid request'], $body);
+    }
+
+    /**
+     * Full wire chain: the exact attack shape from the finding. A Router at
+     * production config compiles {job_id} to [^/]+ over the raw path, decodes
+     * once at the boundary (proven by the spy leg below), and the registered
+     * controller gate answers 400 — bytes outside the segment base never
+     * resolve.
+     */
+    public function testPercentEncodedTraversalIsDecodedAtTheRouterBoundaryAndRefusedByTheGate(): void
+    {
+        $encoded = '/hls/%2e%2e%2f%2e%2e%2fsecret/master.m3u8';
+
+        // Leg 1 — boundary proof: the same rail with a spy handler receives
+        // the DECODED traversal. Without this leg the 400 below could be
+        // matching a mere typo; this is what makes the encoded form load-bearing.
+        $spyRouter = new \Phlix\Server\Http\Router();
+        $seen = null;
+        $capture = function (Request $req, array $params) use (&$seen): \Phlix\Server\Http\Response {
+            $seen = $params;
+            return new \Phlix\Server\Http\Response();
+        };
+        $spyRouter->get('/hls/{job_id}/{file}', $capture);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = $encoded;
+        $_SERVER['SERVER_PROTOCOL'] = 'HTTP/1.1';
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+        $spyRouter->dispatch(Request::fromGlobals());
+        $this->assertIsArray($seen, 'the spy rail must have been reached through the real matcher');
+        $this->assertSame('../../secret', $seen['job_id'], 'S435: the boundary hands handlers the decoded segment');
+
+        // Leg 2 — the production handler on the same Router refuses it.
+        $router = new \Phlix\Server\Http\Router();
+        $router->get('/hls/{job_id}/{file}', [$this->controller(), 'serveFile']);
+        $response = $router->dispatch(Request::fromGlobals());
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(['error' => 'invalid request'], $body);
+    }
+
+    /**
+     * Defense-in-depth arm: even a VALID-UUID job dir that is a symlink out of
+     * the segment base streams nothing — serveJobFile's realpath containment
+     * answers the same 404 a missing file already answers.
+     */
+    public function testSymlinkedJobDirectoryOutsideTheSegmentBaseIsNotStreamed(): void
+    {
+        $jobId = '1f111111-1111-4111-8111-111111111111';
+        $outside = sys_get_temp_dir() . '/phlix_hls_escape_' . uniqid();
+        mkdir($outside, 0755, true);
+        file_put_contents("{$outside}/master.m3u8", "EXFILTRATED\n");
+        $link = "{$this->segmentDir}/{$jobId}";
+        if (!@symlink($outside, $link)) {
+            $this->markTestSkipped('symlinks are unavailable on this filesystem');
+        }
+
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'master.m3u8']);
+        $this->assertSame(404, $res->statusCode);
+
+        $this->assertSame(false, str_contains($this->bodyOf($res), 'EXFILTRATED'));
+        @unlink($link);
+        $this->rrmdir($outside);
     }
 
     private function rrmdir(string $dir): void

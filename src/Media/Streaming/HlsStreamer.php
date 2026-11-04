@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Streaming;
 
+use Phlix\Common\Uuid;
+
 /**
  * HLS Streamer - Generates HLS playlists and manages segment files.
  *
@@ -362,7 +364,27 @@ class HlsStreamer
      */
     public function getJobDirectory(string $jobId): string
     {
+        // Fail-loud shape law (2026-11-03 review server__secaudit, Critical):
+        // ids reaching this seam are already gated at the wire (HlsController
+        // refuses non-UUID job ids with the existing 400); this arm makes the
+        // raw-interpolation dangerous-to-misuse for any FUTURE caller instead
+        // of silently inheriting today's hole.
+        if (!Uuid::isV4($jobId)) {
+            throw new \InvalidArgumentException(
+                'Transcode job id must be a canonical UUID v4; got a non-id-shaped value',
+            );
+        }
         return "{$this->segmentDir}/{$jobId}";
+    }
+
+    /**
+     * The trusted base directory every job directory lives under — the
+     * containment authority the file-serving handlers pass to
+     * {@see \Phlix\Server\Http\Controllers\TranscodeFileServer::serveJobFile()}.
+     */
+    public function getSegmentDirectory(): string
+    {
+        return $this->segmentDir;
     }
 
     /**

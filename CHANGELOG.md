@@ -93,6 +93,32 @@ House discipline this file maintains (established by review W-min90/91/92):
   `MediaItemShaper::shape()`, pinned at both legs (SQL projection + wire
   value) by new tests. Zero schema, zero new routes, zero contract moves: the
   key was already in the shape()'s whitelisted 27 since c42e166a.
+- **Media browse now honors the FilterBar's type chips and max-rating cap, and a
+  member's watch history answers on both wire paths (review xrepo__server-ui).**
+  Two server Majors landed mid-window without lines here — the CHANGELOG file
+  belonged to a concurrent lane that wave (disclosed in the xrepo closeout
+  register); this is the collected entry, one per cure:
+  - *Browse filters (03bf5c2b).* `GET /api/v1/media` silently ignored the SPA's
+    `types[]` chips and `maxRating`: `ItemRepository` now declares the
+    13-member `TYPES` vocabulary (matching the contracts `MediaType` union)
+    and `buildFilters()` gained the type-IN arm plus the
+    `(rating_score IS NULL OR rating_score <= ?)` cap — unrated items survive
+    a ceiling, the deliberate asymmetry against the existing floor, documented
+    in place. `WebPortalRouter::extractMediaQueryParams()` parses the boundary
+    vocabulary-filtered, deduped, degrade-absent so unknown members can never
+    reach SQL. Eleven new tests (`ItemRepositoryTest` +6,
+    `WebPortalRouterMediaTest` +5), red-measured pre-cure.
+  - *Watch history on both wire paths (a86e0999).* The SPA's WatchHistoryPage
+    fetches `GET /api/v1/users/me/history` and its `GET /api/v1/me/history`
+    alias twin, but only the DELETE legs existed — the page 404ed for every
+    member. Both GETs now serve from `WebPortalRouter`: 401 / 404-no-profile /
+    503-unwired idioms verbatim, S80 profile resolution, one batched
+    `findByIds` (M-SERVER-16 law), the rating gate applied to RAW rows
+    pre-shape, and the `{id, media, progress 0..1 (completed→1.0),
+    updated_at}` envelope; both openapi ops added, and the S65 route-template
+    pin 349→350 with the wire-path guard manifest +2 rows rotated in the same
+    commit from measured reds. Eight new `WebPortalRouterWatchHistoryGetTest`
+    cases.
 - **CORS preflight now advertises every header the server actually reads and the
   SPA actually sends (SRV-M16, review server__fedev).** `ALLOW_HEADERS` listed
   only `Authorization, Content-Type, X-Device-Id` while `src/` reads

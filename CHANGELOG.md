@@ -100,6 +100,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The bare-metal exposure note said `install.sh` opens "only `:8096`" in ufw —
+  it opens more, and an operator auditing firewall exposure from that sentence
+  would mis-size the surface (review server__docmaint, SRV-m16).** Measured:
+  the direct-bind path adds the HTTP port AND DLNA `1900/udp`
+  (`scripts/install.sh` ufw block); the managed-HAProxy path adds `80/tcp`,
+  `443/tcp` and `1900/udp`. The note's warning half — `:8097` is never opened,
+  pin or proxy it — stayed true and now reads: opens the HTTP port (plus
+  `1900/udp`, and `80`/`443` in the managed-proxy path), never `:8097`.
+
 - **The environment census no longer promises a row that does not exist: the
   anidb cross-reference said `PHLIX_ANIDB_CACHE_DIR` "is itself a row below",
   and the census has no such row (review server__docmaint, SRV-m15).** The

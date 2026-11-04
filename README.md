@@ -989,8 +989,9 @@ return [
 ```
 > **Exposure note (bare metal).** The shipped defaults bind **both** listeners
 > to `0.0.0.0` — and the WebSocket worker on `:8097` is plaintext, JWT-bearing
-> traffic. `install.sh` opens only `:8096` in `ufw`; if the firewall is inactive
-> the WS port is an internet-facing plaintext service on every interface.
+> traffic. `install.sh` opens the HTTP port in `ufw` — plus DLNA `1900/udp`, and
+> `80`/`443` in the managed-HAProxy path — but never `:8097`; if the firewall is
+> inactive the WS port is an internet-facing plaintext service on every interface.
 > Pin it (`PHLIX_WS_HOST=127.0.0.1`) and front it with TLS (`reverse-proxy/`,
 > `deploy/haproxy.cfg`), or firewall `8097` closed yourself. The docker
 > examples loopback-pin by default for exactly this reason.

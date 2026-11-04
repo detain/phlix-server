@@ -79,6 +79,29 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **48d8bb8f's workflow cure over-claimed, and RELEASE_PROCESS.md survived
+  the same sweep.** README asserted there is "no feature-branch/squash-merge
+  ceremony in this repository's history" — false: master carries 26 merge
+  commits (newest PR #800, 2026-09-25). The claim now reads the bounded truth
+  (zero merges in the 300+ commits since). Same prose class, same repo,
+  missed by that sweep: RELEASE_PROCESS.md still prescribed a release branch
+  ("### 1. Create release branch"), a pull request ("### 4. Create pull
+  request", "After PR merge:") and a hotfix branch/`merge --no-ff` ceremony
+  the repo never ran — releases actually land as direct master commits
+  (v1.2.3 = `c17bb9ec`) with `scripts/release.sh` pushing master, then the
+  tag. All three steps now state the practiced flow with in-place correction
+  notes. Docs only; the pinned "GitHub Actions will:" trigger/mirrors section
+  is untouched (`ReleaseWorkflowTest` green on the new bytes).
+  [review server__writer]
+- **The installer's own `--help` was SRV-M5's last "(optional)" holdout.**
+  The newcomer finding's headline defect was every doc calling the TMDB key
+  optional; the README flag row got the "optional for the installer, required
+  for provider metadata" reword, but `scripts/install.sh --help` — the counsel
+  a literal walker reads DURING the install the quickstart defers to — kept the
+  bare qualifier. The usage row now mirrors the cured wording, wrapped in the
+  table's existing continuation style. Help text only: `bash -n` clean; the
+  `--help` render diffs to exactly this row; the three installer-text test
+  classes read none of it (grep-verified). [review server__newcomer]
 - **The [Unreleased] CHANGELOG cites that SRV-M2 explicitly named were left stale.**
   The server__docmaint recommendation reached past the ten README rows: the M28
   entry inside the editable `## [Unreleased]` still cited

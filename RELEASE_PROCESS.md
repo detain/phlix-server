@@ -95,13 +95,18 @@ What actually governs interop today:
 
 ## Release steps
 
-### 1. Create release branch
+### 1. Start from current master
 
 ```bash
 git checkout master
 git pull
-git checkout -b release/v1.2.0
 ```
+
+Releases land as direct commits on `master`. (This page previously prescribed
+a release branch here; no release branch exists in the repo's release history
+— v1.2.3 is the direct master commit `c17bb9ec` — and `scripts/release.sh`
+itself closes by printing `git push && git push origin v$NEW_VERSION`. The
+branch+PR ceremony was fiction and has been corrected to the practiced flow.)
 
 ### 2. Update version
 
@@ -142,18 +147,17 @@ Generate changelog:
 git log --pretty=format:"- %s" v1.1.0..HEAD
 ```
 
-### 4. Create pull request
+### 4. Commit and push on master
 
 ```bash
 git add .
-git commit -m "Release v1.2.0"
-git push -u origin release/v1.2.0
-gh pr create --title "Release v1.2.0" --body "Release notes..."
+git commit -m "Release v1.2.0: <one-line summary>"
+git push
 ```
 
 ### 5. Tag and release
 
-After PR merge:
+After pushing `master`:
 ```bash
 git tag v1.2.0
 git push origin v1.2.0
@@ -344,26 +348,17 @@ For critical security issues:
 
 For critical bugs in production:
 
-1. Create hotfix branch from tag:
+1. Commit the fix directly on `master` (it is always the releasable HEAD)
+   and test it.
+2. Bump the patch version with `./scripts/release.sh patch`.
+3. Tag and push both:
    ```bash
-   git checkout -b hotfix/v1.2.1 v1.2.0
-   ```
-
-2. Fix and test
-
-3. Merge to master and tag:
-   ```bash
-   git checkout master
-   git merge --no-ff hotfix/v1.2.1
    git tag v1.2.1
-   git push origin v1.2.1
+   git push && git push origin v1.2.1
    ```
 
-4. Delete hotfix branch:
-   ```bash
-   git branch -d hotfix/v1.2.1
-   git push origin --delete hotfix/v1.2.1
-   ```
+(Former revisions of this section prescribed a hotfix branch, `merge --no-ff`
+and branch deletion — the same fictional ceremony corrected at step 1 above.)
 
 ## Release integrity (signing: NOT SHIPPED)
 

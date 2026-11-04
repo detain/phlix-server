@@ -1852,8 +1852,9 @@ Full operator + contributor docs live on the
 Development happens **directly on `master`**: one logical change per commit
 with a `type(scope):` conventional subject (e.g. `fix(collections): …`),
 pushed to `master` where CI is the review backstop. There is no
-feature-branch/squash-merge ceremony in this repository's history; the
-older phase-plan flow that used one was retired to the external
+feature-branch/squash-merge ceremony in current practice — master's last
+merge commit was PR #800 (2026-09-25), and the 300+ commits since are all
+direct; the older phase-plan flow that used one was retired to the external
 [phlix-docs](https://detain.github.io/phlix-docs) site. Fork-based
 contributors are the exception: they work on a branch in their fork and
 open a pull request, which a maintainer reviews and lands — see

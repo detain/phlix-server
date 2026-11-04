@@ -610,7 +610,7 @@ class UserRepository
         $id = $this->generateUuid();
         $passwordRaw = $data['password'] ?? '';
         if (!is_string($passwordRaw)) {
-            throw new \InvalidArgumentException('password must be a string');
+            throw new \InvalidArgumentException('The password must be text.');
         }
         $passwordHash = password_hash($passwordRaw, PASSWORD_ARGON2ID);
 
@@ -684,7 +684,7 @@ class UserRepository
         if (isset($data['password'])) {
             $passwordRaw = $data['password'];
             if (!is_string($passwordRaw)) {
-                throw new \InvalidArgumentException('password must be a string');
+                throw new \InvalidArgumentException('The password must be text.');
             }
             $sets[] = 'password_hash = ?';
             $values[] = password_hash($passwordRaw, PASSWORD_ARGON2ID);
@@ -912,7 +912,10 @@ class UserRepository
     private function validateThemeId(mixed $theme): string
     {
         if (!is_string($theme) || $theme === '') {
-            throw new \InvalidArgumentException('theme must be a known theme id string');
+            throw new \InvalidArgumentException(sprintf(
+                'The theme must be one of: %s.',
+                implode(', ', $this->knownThemeIds())
+            ));
         }
 
         if (in_array($theme, BuiltInThemes::IDS, true) || $this->themeSources?->has($theme) === true) {

@@ -129,6 +129,22 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **End-user error copy now speaks English.** Four validation refusals that
+  ride straight to the browser said `password must be a string` (twice —
+  user create and update), `theme must be a known theme id string` (a blank
+  or typed theme PUT — it now names the valid themes, matching its
+  `Unknown theme` sibling two lines below), and `Refresh token missing
+  subject` (the claim is called a user id by people, not by JWT). The
+  group-cap refusal prose `Maximum group limit reached` became `This server
+  can't create more watch groups right now.` — its dotted
+  `syncplay.group_limit_reached` code is unchanged beside it (the code is
+  wire contract and localized clients read the code; only the copy moved).
+  A new `UserFacingErrorCopyTest` pins the shipped sentences byte-for-byte
+  and forbids the retired phrases in the three audited files; the S431
+  file-count denominator rotates 2064 to 2065 for the added test file,
+  measured from the phpunit red, not predicted (review server__copywriter,
+  SRV-m42).
+
 - **Forward-note (census figures): the SRV-m43 S431 re-pin landed on wrong
   numbers.** The `d0c948b0` entry below says the declared-writes denominator
   rotates 1170 to 1174 “measured in a clean tip worktree plus this diff” —

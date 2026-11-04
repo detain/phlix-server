@@ -703,7 +703,7 @@ class SyncPlayManager
         if (count($this->groups) >= self::MAX_GROUPS) {
             return [
                 'success' => false,
-                'error' => 'Maximum group limit reached',
+                'error' => 'This server can\'t create more watch groups right now.',
                 'error_code' => 'syncplay.group_limit_reached',
             ];
         }

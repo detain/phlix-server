@@ -1442,7 +1442,7 @@ class AuthManager
 
         $userId = self::asString($payload['sub'] ?? null);
         if ($userId === '') {
-            throw new \InvalidArgumentException('Refresh token missing subject');
+            throw new \InvalidArgumentException('Refresh token is missing its user id');
         }
 
         // S1 security fix: the token may be cryptographically valid but the

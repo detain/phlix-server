@@ -1059,7 +1059,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // NotificationPluginEgressRedirectTest.php (live loopback 302 fixture: the
     // guarded egress never follows a redirect, review server__secaudit);
     // measured from the rebased-tip count (2063) plus this file, not predicted.
-    private const EXPECTED_PHP_FILES = 2064;
+    // +1 2064→2065: SRV-m42 adds tests/Unit/Auth/UserFacingErrorCopyTest.php
+    // (retired-jargon copy tripwire over UserRepository/AuthManager/
+    // SyncPlayManager, review server__copywriter); measured from the phpunit
+    // red (2065) at tip 61e3a662, not predicted.
+    private const EXPECTED_PHP_FILES = 2065;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

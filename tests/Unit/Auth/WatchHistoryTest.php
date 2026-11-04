@@ -698,6 +698,7 @@ class WatchHistoryTest extends TestCase
      */
     public function testGetNextUpRailCarriesRealLibraryIdForPlaylistCreate(): void
     {
+        /** @var string|null $episodeSql captured from the closure's query arm — psalm cannot see the by-ref write. */
         $episodeSql = null;
 
         $this->db->method('query')->willReturnCallback(

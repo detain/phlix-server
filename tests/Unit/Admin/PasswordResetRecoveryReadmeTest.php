@@ -56,6 +56,18 @@ use ReflectionMethod;
  * messages below rotated to the gated truth (measured red at the cure);
  * the historical r1-r4 paragraphs above stay verbatim.
  *
+ * SRV-M17 closeout (docs-truth batch 2026-11-04): the README paragraph still
+ * carried the pre-M17 interim ("no HTTP boundary maps the exception — bare
+ * 500; the 403 envelope is NOT shipped") after the mapping had shipped. The
+ * prose flipped to the served truth and the pins rotated WITH it: the login
+ * and provider refusal sentences now REQUIRE the distinct 403 and forbid the
+ * retired 500 / not-shipped / until-SRV-M17 wording, and the wire-code pin
+ * flipped from README-absence to presence — exactly the flip this file's r1
+ * note designed ("only ever flips when a real emitter ships"). The hub-token
+ * leg keeps disclosing its still-interim central 500 (SRV-M17's scope did not
+ * include it), which now carries the paragraph-level 500 presence pin that the
+ * login sentence no longer does.
+ *
  * @package Phlix\Tests\Unit\Admin
  */
 final class PasswordResetRecoveryReadmeTest extends TestCase
@@ -244,8 +256,16 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
      * every prior pin's presence (exception+500 on the password leg, 401 +
      * no exception on the refresh leg, the entry-point names somewhere in the
      * paragraph) is KEPT, re-scoped to the gated truth.
+     *
+     * SRV-M17 closeout rotation (this batch, measured red at the stale
+     * README): the shipped 403 mapping replaces the interim story — the
+     * login and provider sentences must now name the distinct 403 and must
+     * NOT re-grow the retired 500 / not-shipped / until-SRV-M17 interim
+     * phrasing, and the wire-code pin flipped to PRESENCE as its r1 design
+     * note always intended. Method renamed accordingly (the "Unshipped
+     * WireCode" it asserted is shipped).
      */
-    public function testRefusalStoryTellsShippedTruthNotTheUnshippedWireCode(): void
+    public function testRefusalStoryTellsShippedTruthIncludingTheShippedWireCode(): void
     {
         $readme = self::readme();
         $exception = (new ReflectionClass(PasswordChangeRequiredException::class))->getShortName();
@@ -261,18 +281,23 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
         $this->assertStringContainsString(
             $exception,
             $paragraph,
-            "the refusal story must name the exception class the HTTP error log reports ('{$exception}')"
+            "the refusal story must name the refusing exception class ('{$exception}')"
         );
         $this->assertStringContainsString(
             '500',
             $paragraph,
-            'the refusal story must state the status the served path actually answers (the r1-cured 403 was fiction)'
+            'the story must keep disclosing the one leg (hub-token) whose typed refusal still '
+            . 'answers the router central 500 (SRV-M17 did not map it; the login sentence no '
+            . 'longer carries this pin — measured: the hub-token interim sentence is the carrier)'
         );
 
-        $this->assertStringNotContainsString(
+        $this->assertStringContainsString(
             PasswordChangeRequiredException::ERROR_CODE,
-            $readme,
-            'no shipped emitter places this code on the wire, so the README must not present it as a wire contract'
+            $paragraph,
+            'SRV-M17 shipped real emitters of the 403 + {error, code} envelope, so the refusal '
+            . 'story must document the wire code (this pin flipped from README-absence to '
+            . 'presence exactly as its r1 note designed — a drop-back to prose without the code '
+            . 're-signals the pre-M17 fiction state)'
         );
 
         // r4 leg attribution: split the flattened paragraph into sentences
@@ -317,9 +342,19 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
                 "the login-leg refusal sentence must name {$exception}: '{$sentence}'"
             );
             $this->assertStringContainsString(
+                '403',
+                $sentence,
+                "the login-leg refusal sentence must state the distinct 403 SRV-M17 shipped: '{$sentence}'"
+            );
+            $this->assertStringNotContainsString(
                 '500',
                 $sentence,
-                "the login-leg refusal sentence must state the unmapped-exception 500: '{$sentence}'"
+                'the retired unmapped-500 interim must not re-enter the login-leg sentence: ' . "'{$sentence}'"
+            );
+            $this->assertStringNotContainsString(
+                'not shipped',
+                $sentence,
+                'the retired envelope-not-shipped fiction must not re-enter the login-leg sentence: ' . "'{$sentence}'"
             );
         }
         foreach ($providerSentences as $sentence) {
@@ -329,10 +364,15 @@ final class PasswordResetRecoveryReadmeTest extends TestCase
                 "the provider-leg refusal sentence must name {$exception}: '{$sentence}'"
             );
             $this->assertStringContainsString(
-                '503',
+                '403',
                 $sentence,
-                'the provider-leg refusal sentence must state the fail-closed '
-                . "503 its controller arm answers: '{$sentence}'"
+                "the provider-leg refusal sentence must state the distinct 403 SRV-M17 shipped: '{$sentence}'"
+            );
+            $this->assertStringNotContainsString(
+                'until SRV-M17',
+                $sentence,
+                'the retired until-SRV-M17 interim framing must not '
+                . "re-enter the provider-leg sentence: '{$sentence}'"
             );
         }
         foreach ($refreshSentences as $sentence) {

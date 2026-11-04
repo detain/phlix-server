@@ -18,6 +18,12 @@ use function is_string;
 /**
  * Resolves the authenticated relay principal to a server-side user (S301).
  *
+ * Single-source hub-principal → server-identity resolution: the relay path
+ * (`RelayConsumer`) and the hub-token exchange (`HubTokenController`, SRV-M18
+ * RW2 cure) are siblings over the SAME mapping law and the same id-space
+ * reasoning — this class is the estate's hub-linkage reader, not a
+ * relay-exclusive helper (review server__dba, M18RW-R3 currency note).
+ *
  * ## What the relay principal IS (measured)
  *
  * The hub authenticates the relay session itself (the server opens the tunnel

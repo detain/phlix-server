@@ -29,7 +29,9 @@ use PHPUnit\Framework\TestCase;
  * is instantiated inline as `new AuthMiddleware()` at nineteen sites in
  * `Application.php`, and several surfaces — the pre-router fast paths, the
  * direct-play `/media/{id}/stream` route — never reach a middleware group at all.
- * Both entry points (`HttpHandler` and `public/index.php`) call this one method.
+ * Both callers were HTTP entry points — the live `HttpHandler` and the
+ * since-deleted `public/index.php` front controller — and both call this one
+ * method, so the publication cannot drift per entry point.
  */
 final class RequestAuthenticatorProfileContextTest extends TestCase
 {

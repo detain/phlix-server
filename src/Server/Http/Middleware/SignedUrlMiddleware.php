@@ -28,8 +28,9 @@ use Phlix\Server\Http\Response;
  * via ANY of three mechanisms, tried in order:
  *
  *  1. **Existing session** — `$request->userId` is already populated from a
- *     Bearer header or the `phlix_session` cookie by the HTTP entry point (see
- *     `public/index.php` and {@see \Phlix\Server\Workerman\HttpHandler}). This is
+ *     Bearer header or the `phlix_session` cookie by the HTTP entry point (the
+ *     live one is {@see \Phlix\Server\Workerman\HttpHandler}; the deleted
+ *     `public/index.php` front controller populated it the same way). This is
  *     what makes the in-browser player keep working untouched: hls.js attaches
  *     the Bearer token to every segment XHR via `xhrSetup`, and same-origin
  *     `<img>`/`<video>` send the session cookie automatically.

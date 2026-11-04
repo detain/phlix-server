@@ -19,9 +19,11 @@ use Phlix\Server\Http\Controllers\AuthController;
  *
  * C6/B4: This class extracts the auth resolution logic that was previously
  * duplicated between {@see \Phlix\Server\Workerman\HttpHandler} and
- * `public/index.php`. Both entry points now delegate to this collaborator
- * so the cookie-fallback behavior and media-stream authorization cannot
- * drift apart.
+ * `public/index.php`. The Workerman handler delegates here; the second such
+ * caller was the now-deleted `public/index.php` front controller, and any
+ * revived HTTP entry point must delegate to this collaborator rather than
+ * re-implement, so the cookie-fallback behavior and media-stream
+ * authorization cannot drift apart.
  *
  * The collaborator:
  *  1. Resolves the bearer token OR falls back to the `phlix_session` cookie.
@@ -82,8 +84,9 @@ final class RequestAuthenticator
         $request->userId = $auth['user_id'];
 
         // S80: publish the session's profile in the SAME place, on the SAME pass,
-        // for BOTH entry points (the Workerman handler and `public/index.php` each
-        // call this method before dispatch). Doing it here rather than in a
+        // for every HTTP entry point (the Workerman handler calls this method
+        // before dispatch; the deleted `public/index.php` front controller was
+        // the second such caller). Doing it here rather than in a
         // middleware is deliberate: `AuthMiddleware` is instantiated inline as
         // `new AuthMiddleware()` at nineteen sites in `Application.php` and would
         // have to grow a dependency at all nineteen, and several surfaces —

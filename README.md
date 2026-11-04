@@ -1032,7 +1032,8 @@ every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
 `start.php`, `bin/` and `scripts/` — if a knob is not here, no in-repo PHP code reads
 it. (Externally vendored plugins may resolve additional knobs inside this process —
 the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is one such example: plugin code reads it,
-no in-repo source does, so it deliberately has no row in this census.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
+no in-repo PHP code does (the installer's shell paths seed and honour it — census rows
+enumerate PHP reads), so it deliberately has no row in this census.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
 everything else has a safe default. "Secret?" marks values that must never be
 logged or committed. The "Restart" column uses four values: **yes** =
 read once at boot (bind, container/config construction) — a new value applies
@@ -1812,15 +1813,16 @@ is a force-change-and-revoke button, not a reset the affected user can complete:
 hashed reset token, sets `must_change_password`, and kills the account's sessions — and **no
 shipped endpoint delivers or consumes that token**. While the flag is set the account is held —
 no route mints a new session — and the legs answer differently: a **password login** is refused
-by `PasswordChangeRequiredException` — no HTTP boundary maps that exception yet, so the served
-path answers a bare `500 Internal Server Error` (the HTTP error log names the exception class);
-the distinct `403`-with-code envelope the exception was written for is **not** shipped. A token
+by `PasswordChangeRequiredException`, and SRV-M17 shipped the HTTP mapping the exception was
+written for: the served path answers the distinct `403` + `{error, code}` envelope
+(`auth.password_change_required`) with no session minted. A token
 **refresh** is refused by a plain `InvalidArgumentException`, which `AuthController::refresh`
 catches and answers `401` + `{error}` (no code field). Provider sign-in through
 `AuthManager::loginWithProvider` is refused with `PasswordChangeRequiredException` **before any
-success bookkeeping** (SRV-M18, review server__pm); its controller arm's generic
-`RuntimeException` catch answers `503` + `provider_unavailable` — fail closed, no token, until
-SRV-M17 maps the distinct 403. The passkey entry point `WebAuthnController::finishAuthentication`
+success bookkeeping** (SRV-M18, review server__pm); SRV-M17 moved that typed refusal ahead of
+the controller arm's generic `RuntimeException` catch, so the hold answers the same distinct
+`403` envelope instead of the mislabeled `provider_unavailable` (genuine provider failures
+still fail closed with a `503`, no token). The passkey entry point `WebAuthnController::finishAuthentication`
 no longer walks around the hold: like quick-connect approval and the profile switch, it mints
 through `AuthManager::buildAuthResponse()`, which consults `must_change_password` at the seam
 itself and mints nothing for a held account (WebAuthn ships **enabled** by default in
@@ -1830,8 +1832,9 @@ now call the same shared guard — `PasswordChangeRequiredException::refuseIfHel
 mint and answer a held account with the refusal shape these surfaces already ship, a `302` back to
 the allowlisted return target carrying `?error=password_change_required` with no session cookies;
 and the hub-token exchange (`POST /api/v1/auth/hub-token`) refuses through the guard before
-issuing `server_session_token` — until SRV-M17 maps it, that typed refusal answers the router's
-central `500`, the same interim the passkey leg documents. The wall is now universal on the mint
+issuing `server_session_token`; SRV-M17's 403 mapping did not take this leg into its scope, so
+the typed refusal still answers the router's central `500` here (interim — unlike the passkey
+leg, which SRV-M17 mapped). The wall is now universal on the mint
 side: `MintSeamLawTripwireTest` enumerates every access-token and refresh-token call site in
 `src/` and turns red until any new one is gated behind the guard. The hold also covers the OPDS
 HTTP-Basic streaming surface: `AuthManager::verifyCredentials()` answers a held account with its

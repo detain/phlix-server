@@ -33,6 +33,35 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Closeout docs-truth batch (srv-w4 duty; reviews server__pm lineage,
+  server__minortail, server__dba M18RW-R3).** The README
+  "Locked by the admin `reset-password` endpoint" paragraph now states the
+  SRV-M17 truth the prose predates: the password-login and provider legs
+  answer the distinct `403` + `{error, code}` envelope `dd9c848c` shipped
+  (the bare-500 / "not shipped" / "until SRV-M17 maps" interim wording is
+  gone), while the hub-token leg keeps its honest typed-`500` interim —
+  `dd9c848c` never took that leg into scope. `PasswordResetRecoveryReadmeTest`
+  rotated in the same commit as the flip (house one-commit doc/golden-pair
+  law): login/provider sentence pins now REQUIRE the `403` and forbid the
+  retired interim phrasing, and the wire-code pin flipped from README-absence
+  to presence — exactly the flip its own r1 note designed ("only ever flips
+  when a real emitter ships"); new-phrasing teeth measured RED at the stale
+  README (1 failure). Docs currency in-path: the env census's anidb example
+  re-hedged to "no in-repo PHP code" (the installer's shell paths seed and
+  honour `PHLIX_ANIDB_CACHE_DIR` — the m15 survivor); the two present-tense
+  `public/index.php` zombie docblocks (`RequestAuthenticator`,
+  `SignedUrlMiddleware`) and the same family in
+  `RequestAuthenticatorProfileContextTest`'s header are now
+  conditional/historical; `RelayIdentityResolver`'s class header gained its
+  currency line (sibling consumers over one mapping law, not relay-exclusive).
+  Test-side: the chunked HEAD+BODY+END request leg got its own
+  forwarded-strip pin (`RelayConsumerTest`; strip-mutation teeth: exactly
+  1 red, census inert — zero seed sites added). The relay-127 bucket
+  disclosure sentence (review server__m16b Info) rode the concurrent docs
+  commit `1afd76fc` — recorded here, verbatim history intact. The owed
+  SRV-M17/SRV-M11/SRV-M9 CHANGELOG records land under `### Fixed` below, and
+  the `b1f13dc1` "unrated linkage" typo is forward-noted there.
+
 - **Forward-note: the `must_change_password` README truth-flip rode `48e2c560`,
   and the red-wave belongs there — not to the SRV-M18 cure (review server__pm
   lineage, majors-R1/T3 minors).** `48e2c560` (a symlink-containment
@@ -99,6 +128,54 @@ House discipline this file maintains (established by review W-min90/91/92):
     `NginxAssetLocationTest`) runs 42/365 green against the regenerated tree.
 
 ### Fixed
+
+- **Forward-note (wording): the `b1f13dc1` entry says refusing unlinked hub
+  principals would enforce "an unrated linkage policy" — the intended word is
+  "unruled" (as in that commit's own message: no policy of ours rules the
+  unlinked state). The landed text stands verbatim; this note corrects the
+  reading (review server__dba, M18RW-R3 Info).**
+
+- **Deferred record (owed by the `FIX-SRV-MAJORS-WAVE3` srv-w4 closeout): the
+  account hold answers its `403` contract on the legs `dd9c848c` mapped
+  (SRV-M17, review server__pm).** Before the cure the typed
+  `PasswordChangeRequiredException` refusal threw on five served legs that
+  mapped none of them — `AuthController::login`'s password leg, `ldapLogin`
+  (swallowed by its generic `RuntimeException` catch into a misleading `503
+  provider_unavailable`), `WebAuthnController::finishAuthentication`,
+  `QuickConnectController::token` and `ProfilesController::switchProfile` — so
+  the router answered a bare `500`. Each leg now catches the typed exception
+  and answers `403` + `{error, code}` (browser legs redirect
+  `/login?error=`), always WITHOUT minting a session; zero new wire codes
+  (`auth.password_change_required` was already in the vendored contracts
+  registry — the README pin's r1 design-note flip rode this closeout). The
+  refresh leg keeps its pre-existing plain-`InvalidArgumentException` → `401`
+  mapping. The hub-token leg is explicitly NOT in `dd9c848c`'s scope: its
+  typed refusal still answers the router's central `500` interim. Census
+  rotated IN the adding commit from measured red (files 2061→2062,
+  declared-writes 1157→1164 — harness seeds only).
+
+- **Deferred record (same closeout): newsletter subject tokens interpolate
+  (SRV-M11, review server__copywriter; shipped `bf8f3a3d`).** `renderSubject()`
+  returned the config string verbatim behind a vacuous self-reassign vestige —
+  an admin writing `{$week_start}` got the literal token in every subject line.
+  The two advertised date tokens now interpolate by plain `str_replace`;
+  deliberately NOT Smarty `string:` evaluation (a deployment config string is
+  not template code — the trust boundary is stated in the docblock).
+  `DEFAULT_SUBJECT` single-sources the fallback; non-string templates keep the
+  prior fallback semantics. +3 tests, red-at-parent measured on the token leg.
+
+- **Deferred record (same closeout): the stale-group sweep tears down
+  completely (SRV-M9, review server__asphp; shipped `08266743`).**
+  `cleanupStaleGroups()` performed exactly two unsets: no `unindexGroup()` —
+  `connectionToMember` entries stranded forever (the later socket close cannot
+  recover them once `memberToGroup` is gone) and the blunt unset also clobbered
+  a member's NEWER group mapping; no `removeSnapshot()` — the sole
+  `syncplay_snapshots` DELETE path, so REST rails served ghost rooms and the
+  table grew unboundedly on the never-restarted resident `:8097` worker. The
+  loop now mirrors the sibling teardown paths (identity-checked unindex,
+  leave-empty snapshot removal, operator-visible log line). New
+  `SyncPlayStaleTeardownTest` 2 pins, red-at-parent 2 measured; census files
+  2062→2063, writes held.
 
 - **The login, register, refresh, provider-login, quick-connect, profile-switch
   and `GET /api/v1/me` responses stop shipping the credential columns of the

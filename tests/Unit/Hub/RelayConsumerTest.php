@@ -1558,6 +1558,78 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * SRV-M16 follow-up (review server__srphp Info, closeout batch 2026-11-04):
+     * the chunked HEAD+BODY+END request leg must carry the SAME forwarded-
+     * stripping law as the single-frame leg pinned above. `RelayHttpRequestHead`
+     * itself performs zero header stripping — the leg is protected ONLY by its
+     * convergence into buildRequest(), the single `new ServerRequest()` site
+     * in src/. This pin drives a forged X-Real-IP + x-forwarded-* family
+     * through the HEAD frame to the END-triggered dispatch: RED if the chunk
+     * accumulator ever bypasses the funnel (e.g. builds the request directly).
+     */
+    public function test_the_forwarded_family_is_stripped_on_the_chunked_head_leg_too(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $requestId = 0x90000011;
+        $body = 'relay-strip-probe';
+        $head = (new \Phlix\Shared\Relay\RelayHttpRequestHead(
+            'POST',
+            '/api/v1/auth/register',
+            '',
+            [
+                'Content-Type' => 'application/octet-stream',
+                'X-Phlix-Relay-User' => 'user-42',
+                'X-Real-IP' => '9.9.9.9',
+                'X-Forwarded-For' => '6.6.6.6',
+                'X-Forwarded-Host' => 'evil.test',
+            ],
+        ))->withBodySize(strlen($body));
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeHead($head),
+        ));
+        foreach (\Phlix\Shared\Relay\RelayHttpRequestCodec::chunkBody($body) as $bodyChunk) {
+            $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, $requestId, $bodyChunk));
+        }
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeEnd(),
+        ));
+
+        $this->assertNotNull($captured, 'the END chunk must dispatch the reassembled request');
+        foreach ($captured->headers as $name => $_value) {
+            $lower = strtolower((string) $name);
+            $this->assertStringNotContainsString(
+                'real-ip',
+                $lower,
+                'the chunked head leg must not let a producer-supplied X-Real-IP survive',
+            );
+            $this->assertStringStartsNotWith(
+                'x-forwarded-',
+                $lower,
+                'the chunked head leg must not let the x-forwarded-* family survive',
+            );
+        }
+        $this->assertSame(
+            '127.0.0.1',
+            $captured->getTrustedClientIp(),
+            'chunked-leg relay traffic must key to the loopback marker exactly like the single-frame leg',
+        );
+    }
+
+    /**
      * CONTROL against an over-broad strip: ordinary client headers still cross
      * the tunnel (device identity and content-type ride every legit SPA call)
      * and the hub-stamped principal still lands. RED IF THE CURE BLINDS THE

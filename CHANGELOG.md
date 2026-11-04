@@ -129,6 +129,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Forward-correction: the chunked-head-leg forwarded-strip pin now actually
+  ships.** The closeout-batch entry above (commit `947f7de8`) asserts a
+  test-side companion — "the chunked HEAD+BODY+END request leg got its own
+  forwarded-strip pin (`RelayConsumerTest`)" — but none of that commit's seven
+  files touches `tests/Unit/Hub/RelayConsumerTest.php`; at review time the pin
+  existed only as uncommitted working-tree dirt, the phantom-closeout-in-ledger
+  class this estate's law prohibits. The landed entry stays verbatim per the
+  append-only discipline (the unrated-typo forward-note in `947f7de8` itself is
+  the precedent); THIS commit is the real ship and this entry the ledger truth.
+  What shipped: `test_the_forwarded_family_is_stripped_on_the_chunked_head_leg_too`
+  drives forged `X-Real-IP` + `x-forwarded-*` through a HEAD→BODY→END chunked
+  request to the END-triggered dispatch and asserts the family never survives
+  the `buildRequest()` funnel and the leg keys to the loopback marker —
+  extending the SRV-M16 single-frame pins to the accumulator leg. Mutation
+  teeth, both measured at tip `87616b0f` on scratch worktrees: removing the
+  funnel's forwarded-strip clause reddens exactly the 3-test SRV-M16 family
+  (the two pre-existing single-frame pins + this one; the DTO-leg XFF re-pin
+  stays green by design), and the leg-specific threat the pin guards — a chunk
+  accumulator bypassing the funnel — reddens exactly 1 test, this pin. Suite:
+  `RelayConsumerTest` 102/522 green at tip. Gates: `phpcs-tests.xml` exit 0 and
+  phpstan (tests config) clean on the file; the `--standard=PSR12` before/after
+  delta is the file's own snake_case method-name convention (excluded per the
+  S128 ruleset's measurement, the CI PSR12 leg targets src/ only). No
+  production change, zero new wire codes, src/ census inert — no seed sites
+  added. [review server__srphp]
+
 - **End-user error copy now speaks English.** Four validation refusals that
   ride straight to the browser said `password must be a string` (twice —
   user create and update), `theme must be a known theme id string` (a blank

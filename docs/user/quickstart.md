@@ -20,6 +20,12 @@ Pick ONE path; each ends with a running server whose portal listens on
   its Prerequisites block first; it names the apt packages the other two paths
   do for you.
 
+There is no `.env` or `.env.example` in this repo, by design: Phlix has no
+dotenv loader. Environment variables reach the server through the systemd
+unit's `EnvironmentFile=/etc/phlix/env` (or your shell when you run
+`start.php` by hand); manually-run scripts pull the same file in via
+`scripts/bootstrap_env.php`, which never overrides a variable already set.
+
 ## 2. Create the admin account
 
 Open the portal, choose **Register**, and create your account. The **first**

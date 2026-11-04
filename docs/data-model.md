@@ -34,6 +34,22 @@ a fresh database. The operator-facing migration workflow lives in
   header), never applied by `migrate`. The ordinal law means nothing for files
   the glob cannot see.
 
+## Forward-only law: recovery is restore-from-backup
+
+There are no down-migrations: nothing in `migrations/` carries a paired
+rollback and `MigrationRunner` has no reverse concept. The recovery path
+for a migration that went wrong is **restore a BackupManager archive
+(mysqldump-based, admin UI) and re-migrate** — not writing a rollback file.
+
+That stance is also why hand-editing an already-applied file is almost
+never the answer: the ledger treats a file whose checksum has DIVERGED as
+not-yet-correctly-applied and **re-runs the whole file** on every installed
+machine (with a warning, then refreshes the checksum). To stop a shipped
+statement from running on new and old machines alike, use the
+checksum-neutral full-line version-gate directive instead (the 050/051
+case narrated in `src/Common/Database/MigrationRunner.php`), or add a
+forward fix-up file taking the next free ordinal.
+
 ## Collections vs. media_collections (the classic confusion)
 
 Two unrelated families share a noun:

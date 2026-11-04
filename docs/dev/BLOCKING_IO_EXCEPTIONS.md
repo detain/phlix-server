@@ -15,16 +15,18 @@ the call does not belong on this list — move it off the event loop.
 
 ## Blast radius, once
 
-`start.php` sets `$httpWorker->count = $httpListen['workerCount']` (default 14, via `ListenEndpoints`). Workerman/Swoole runs many
-coroutines per worker process, so a blocking syscall freezes **every connection
-that worker is currently serving**, not just the caller's — one worker is ~1/14
-of HTTP capacity. The WS worker (`start.php`, `$wsWorker->count = 1`), the hub-heartbeat worker
-(`$hubHeartbeatWorker`), the background-timer worker (`$backgroundTimerWorker`)
-and the relay-tunnel worker (`$relayTunnelWorker`) are all `count = 1`, so a stall there is a 100% outage of that
-subsystem. Exceptions 1–7 are all HTTP-side; Exception 8 is the one resident
-exception in this register, and it was placed on its **own** dedicated
-`count = 1` worker (`phlix-natpmp-maintenance`, `start.php`) precisely so
-its stall costs nothing outside the NAT-PMP maintenance subsystem.
+`start.php` sets `$httpWorker->count = $httpListen['workerCount']` (default
+14, via `ListenEndpoints`). Workerman/Swoole runs many coroutines per worker
+process, so a blocking syscall freezes **every connection that worker is
+currently serving**, not just the caller's — one worker is ~1/14 of HTTP
+capacity. The WS worker (`start.php`, `$wsWorker->count = 1`), the
+hub-heartbeat worker (`$hubHeartbeatWorker`), the background-timer worker
+(`$backgroundTimerWorker`) and the relay-tunnel worker (`$relayTunnelWorker`)
+are all `count = 1`, so a stall there is a 100% outage of that subsystem.
+Exceptions 1–7 are all HTTP-side; Exception 8 is the one resident exception
+in this register, and it was placed on its **own** dedicated `count = 1`
+worker (`phlix-natpmp-maintenance`, `start.php`) precisely so its stall
+costs nothing outside the NAT-PMP maintenance subsystem.
 
 ---
 

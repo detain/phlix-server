@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\Dto\UserRow;
 use Phlix\Auth\PasswordPolicy;
 use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
@@ -92,9 +93,18 @@ final class AdminUserController
      * (or active|disabled) narrows the list — used by the admin UI to render
      * the pending-approval queue (S1). Each row includes the `status` column.
      *
+     * The rows arrive already credential-free: {@see UserRepository::findAll()}
+     * and {@see UserRepository::listByStatus()} hydrate through
+     * {@see UserRow::forWire()}, so `password_hash`, `password_reset_token` and
+     * `provider_data` structurally cannot reach this response (SRV-M12). This
+     * method must keep serializing the repository rows verbatim — a future
+     * "enrichment" that re-reads a raw row (e.g. via `findById()`) has to pass
+     * it through the same helper first.
+     *
      * @param Request|null $request The HTTP request (optional `status` query).
      *
-     * @return Response 200 { users: User[] }
+     * @return Response 200 { users: User[] } — wire-safe rows, never the raw
+     *         users-table rows (no credential columns; see above).
      */
     public function list(?Request $request = null): Response
     {
@@ -229,10 +239,18 @@ final class AdminUserController
     /**
      * Get a single user by ID.
      *
+     * `findById()` deliberately returns the RAW row (the authentication paths
+     * need `password_hash`), so the wire redaction that
+     * {@see UserRepository::findAll()} and {@see UserRepository::listByStatus()}
+     * apply at their source has to happen HERE for this endpoint — same secret
+     * set, same helper (SRV-M12: every wire-boundary read of a raw user row
+     * goes through {@see UserRow::forWire()}).
+     *
      * @param Request               $request The HTTP request (unused body).
      * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
-     * @return Response 200 { user: User } | 404 { error }
+     * @return Response 200 { user: User } (credential columns stripped) |
+     *         404 { error }
      */
     public function get(Request $request, array $params): Response
     {
@@ -241,7 +259,8 @@ final class AdminUserController
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
-        return (new Response())->json(['user' => $user]);
+
+        return (new Response())->json(['user' => UserRow::forWire($user)]);
     }
 
     /**

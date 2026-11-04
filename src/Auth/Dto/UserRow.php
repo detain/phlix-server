@@ -28,6 +28,14 @@ use Phlix\Common\Util\RowMap;
  */
 final class UserRow
 {
+    /**
+     * The users-table columns that carry credential material and therefore
+     * must never cross a wire or terminal boundary inside a row handed to a
+     * caller. {@see self::forWire()} is the sole consumer; the docblock there
+     * carries the full rationale.
+     */
+    private const SECRET_COLUMNS = ['password_hash', 'password_reset_token', 'provider_data'];
+
     private function __construct()
     {
     }
@@ -64,6 +72,54 @@ final class UserRow
             return (string) $value;
         }
         return null;
+    }
+
+    /**
+     * Drop every credential-bearing column from a raw users row so the result
+     * can be serialized to a boundary (an HTTP response, a CLI JSON stream).
+     *
+     * This is the estate's ONE definition of the users-table secret set
+     * (SRV-M12, review server__dba): the admin user-list leaked precisely
+     * because redaction lived as a per-caller convention (`AuthManager::getUser()`
+     * unsetting one column, `UserListCommand` keeping its own list). Every
+     * wire-boundary read of a raw user row now passes through here, and
+     * `tests/Unit/Auth/UserRowWireRedactionTest.php` pins that no second
+     * definition of the set appears anywhere in src/.
+     *
+     * The set:
+     * - `password_hash` — the Argon2id password credential itself.
+     * - `password_reset_token` — the Argon2id hash of a live one-time reset
+     *   selector (migration 041); disclosure enables offline cracking and,
+     *   paired with any reset surface, replay.
+     * - `provider_data` — the external-provider payload JSON (migration 009),
+     *   which carries provider access/refresh tokens and private claims.
+     *
+     * Account-state columns (`status`, `must_change_password`,
+     * `password_reset_expires_at`, `tokens_not_valid_after`, …) are NOT in the
+     * set: they carry no secret entropy — a reset expiry is inert without its
+     * token — and the admin surfaces documented in README and the console
+     * client read them.
+     *
+     * Pure: returns a new array; never mutates the input. Authentication paths
+     * (`UserRepository::findById()` and friends) deliberately keep the RAW
+     * row — `password_verify()` needs `password_hash` in hand; redacting those
+     * would break login.
+     *
+     * @param array<string, mixed> $row Raw users-table row.
+     *
+     * @return array<string, mixed> The same row minus {@see self::SECRET_COLUMNS};
+     *         every other key (and the relative order of what remains) is
+     *         untouched.
+     *
+     * @since SRV-M12 (2026-11-04, review server__dba)
+     */
+    public static function forWire(array $row): array
+    {
+        foreach (self::SECRET_COLUMNS as $column) {
+            unset($row[$column]);
+        }
+
+        return $row;
     }
 
     /**

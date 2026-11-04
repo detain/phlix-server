@@ -1039,7 +1039,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // WebhookServiceSsrfTest.php (delivery SSRF re-validation pin, review
     // server__secaudit), completing the staircase this pair measured red at
     // 2059.
-    private const EXPECTED_PHP_FILES = 2059;
+    // +1 2059→2060: the SRV-M12 cure adds tests/Unit/Auth/
+    // UserRowWireRedactionTest.php (admin user-list wire-redaction pins + the
+    // single-source SECRET-set tripwire, review server__dba); measured from the
+    // phpunit red (2060), not predicted.
+    private const EXPECTED_PHP_FILES = 2060;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1405,7 +1409,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // test seeds $request->method + $request->path + $request->body (3) —
     // sanctioned harness-seed sites; zero src/ writes added. Measured from
     // the phpunit red (1156), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1156;
+    // +1 1156→1157 by the SRV-M12 cure: its pin test seeds $request->query
+    // once (the ?status= admin-list conviction) — a declared member, the S427
+    // license intact; zero src/ writes. Measured from the phpunit red (1157),
+    // not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1157;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

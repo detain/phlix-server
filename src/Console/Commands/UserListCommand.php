@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Console\Commands;
 
+use Phlix\Auth\Dto\UserRow;
 use Phlix\Auth\UserRepository;
 use Phlix\Console\Commands\Concerns\JsonOutput;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -34,11 +35,15 @@ use function sprintf;
  * Without `--status` every account is listed; with it, only the matching
  * cohort (`pending`, `active` or `disabled` — the three values
  * {@see UserRepository::listByStatus()} understands). Whatever the source, the
- * rows come from a repository that does a `SELECT *`, so this command is
- * responsible for dropping the secret-bearing columns
- * ({@see self::SENSITIVE_COLUMNS}) before anything reaches the terminal or a
- * JSON document — a CLI operator must not be able to exfiltrate password hashes
- * this way any more than the admin list endpoint leaks them.
+ * rows come from a repository whose result sets can carry the secret-bearing
+ * columns, so this command redacts every row through the estate's single
+ * source of truth — {@see UserRow::forWire()} (the SRV-M12 cure for the
+ * per-caller lists that kept drifting) — before anything reaches the terminal
+ * or a JSON document. Both repository methods feeding this command already
+ * redact at their source; this call is deliberate defense-in-depth: a CLI
+ * operator must not be able to exfiltrate password hashes this way any more
+ * than the admin list endpoint leaks them, whatever a future repository change
+ * hands back.
  *
  * With `--json` the (redacted) rows are emitted under the shared
  * `{"ok":true,"data":[...]}` envelope; otherwise a fixed-width human table is
@@ -49,12 +54,6 @@ use function sprintf;
 final class UserListCommand extends Command
 {
     use JsonOutput;
-
-    /**
-     * Columns stripped from every row before output. `SELECT *` returns them;
-     * neither a terminal nor a JSON stream should ever echo them.
-     */
-    private const SENSITIVE_COLUMNS = ['password_hash', 'password_reset_token', 'provider_data'];
 
     /** The three account statuses {@see UserRepository::listByStatus()} accepts. */
     private const STATUSES = ['pending', 'active', 'disabled'];
@@ -119,7 +118,7 @@ final class UserListCommand extends Command
             return Command::FAILURE;
         }
 
-        $rows = array_map(static fn(array $row): array => self::publicRow($row), $rows);
+        $rows = array_map(UserRow::forWire(...), $rows);
 
         if ($this->isJsonMode($input)) {
             $this->emitJsonSuccess($output, $rows);
@@ -153,22 +152,6 @@ final class UserListCommand extends Command
         }
 
         return Command::SUCCESS;
-    }
-
-    /**
-     * Drop the secret-bearing columns from a raw user row.
-     *
-     * @param array<string, mixed> $row
-     *
-     * @return array<string, mixed>
-     */
-    private static function publicRow(array $row): array
-    {
-        foreach (self::SENSITIVE_COLUMNS as $column) {
-            unset($row[$column]);
-        }
-
-        return $row;
     }
 
     /**

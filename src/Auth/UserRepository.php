@@ -429,16 +429,18 @@ class UserRepository
     /**
      * Return all users.
      *
-     * @return array<int, array<string, mixed>> Array of user rows
+     * The row set behind `GET /api/v1/admin/users`. Hydrated through
+     * {@see UserRow::forWire()}: credential columns (`password_hash`,
+     * `password_reset_token`, `provider_data`) never leave this method, so no
+     * consumer of the admin listing can serialize them (SRV-M12).
+     *
+     * @return array<int, array<string, mixed>> Array of wire-safe user rows
      */
     public function findAll(): array
     {
         $result = $this->db->query('SELECT * FROM users');
-        if (!is_array($result)) {
-            return [];
-        }
-        /** @var array<int, array<string, mixed>> */
-        return $result;
+
+        return array_map(UserRow::forWire(...), RowMap::listFromMixed($result));
     }
 
     /**
@@ -511,10 +513,13 @@ class UserRepository
      * Backs the admin "pending approval" queue
      * (`GET /api/v1/admin/users?status=pending`).
      *
+     * Hydrated through {@see UserRow::forWire()} like {@see findAll()}: the
+     * credential columns never reach a caller of the admin listing (SRV-M12).
+     *
      * @param string $status One of 'pending', 'active', 'disabled'.
      *
-     * @return array<int, array<string, mixed>> Matching user rows (empty when
-     *         the status is invalid or no rows match).
+     * @return array<int, array<string, mixed>> Matching wire-safe user rows
+     *         (empty when the status is invalid or no rows match).
      *
      * @since S1 (signup approval gate)
      */
@@ -523,12 +528,10 @@ class UserRepository
         if (!in_array($status, ['pending', 'active', 'disabled'], true)) {
             return [];
         }
+
         $result = $this->db->query('SELECT * FROM users WHERE status = ?', [$status]);
-        if (!is_array($result)) {
-            return [];
-        }
-        /** @var array<int, array<string, mixed>> */
-        return $result;
+
+        return array_map(UserRow::forWire(...), RowMap::listFromMixed($result));
     }
 
     /**

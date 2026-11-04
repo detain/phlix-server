@@ -100,6 +100,44 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The admin user endpoints stop serializing the credential columns of the
+  `users` table — `GET /api/v1/admin/users` (every cohort) and
+  `GET /api/v1/admin/users/{id}` no longer ship `password_hash`,
+  `password_reset_token` or `provider_data` over HTTP (review server__dba,
+  SRV-M12).** Both listing readers were bare unpaginated `SELECT *` and the
+  controller handed the rows to `json()` untouched, so every admin poll of the
+  user list (or the signup queue) carried each account's Argon2id password
+  hash, the Argon2id hash of its live one-time reset selector and the external
+  provider payload (which holds provider access/refresh tokens) into the
+  browser's memory, any proxy or debug tool, and any future response logger.
+  The root cause was the per-caller convention: `AuthManager::getUser()`
+  remembered to unset `password_hash`, `UserListCommand` kept its own private
+  three-column list, and the admin list forgot entirely. The estate now has ONE
+  definition of the set — `UserRow::forWire()` behind `UserRow::SECRET_COLUMNS`
+  (the same trio `UserListCommand` had independently ratified) — which
+  `UserRepository::findAll()` and `UserRepository::listByStatus()` apply at
+  their source, so a credential column can no longer reach an admin-listing
+  caller by forgetting, and `AdminUserController::get()` (which legitimately
+  reads the raw `findById()` row the authentication paths need) routes that one
+  row through the same helper. `UserListCommand` now defers to the shared
+  helper (its duplicate list retired, defensive call kept); the login lookups
+  (`findById`/`findByUsername`/`findByEmail`) deliberately stay RAW —
+  `password_verify()` needs the hash, and a pin asserts that so the cure can
+  never regress into breaking login. Operational state (`status`,
+  `must_change_password`, `password_reset_expires_at`,
+  `tokens_not_valid_after`, …) still ships: the vendored admin SPA and the
+  console client read those columns and none of them carries secret entropy.
+  Pinned by `UserRowWireRedactionTest` (nine cases, eight red at parent): the
+  hydration law on both readers, the wire shape of all three admin responses
+  (no credential key survives, no `argon2id`/token literal appears in the body,
+  the rendered columns survive), helper purity and key order, the raw-auth
+  guard, and a `token_get_all` tripwire asserting the secret set is declared in
+  exactly one src/ file (red at parent, where the console command carried a
+  second copy) plus call-site pins that all three consumers go through
+  `forWire()`. The S431 census staircases continue 2059 to 2060 with the pin
+  file and 1156 to 1157 with its one sanctioned `$request->query` seed.
+  [server__dba]
+
 - **Webhook deliveries re-validate the stored URL through the SSRF guard on
   every attempt — a subscription can no longer POST to a target the guard
   would refuse (review server__secaudit).** The unsigned subscription

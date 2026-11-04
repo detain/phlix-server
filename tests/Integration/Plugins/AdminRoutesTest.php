@@ -14,6 +14,7 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
@@ -100,6 +101,9 @@ final class AdminRoutesTest extends TestCase
      */
     public static array $mintedPluginDirs = [];
 
+    /** @var list<string> HTTP-log capture dirs armed by individual tests. */
+    private array $httpLogDirs = [];
+
     protected function tearDown(): void
     {
         parent::tearDown();
@@ -107,6 +111,47 @@ final class AdminRoutesTest extends TestCase
             RecursiveDelete::remove($dir);
         }
         self::$mintedPluginDirs = [];
+        foreach ($this->httpLogDirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+        $this->httpLogDirs = [];
+        LoggerFactory::reset();
+    }
+
+    /**
+     * Point LoggerFactory's HTTP channel at a throwaway file for the rest of
+     * this test (drained + reset in tearDown()). aa57aaca (INFO-SERVER-51 E2
+     * site-3) moved testCredentials' exception detail OFF the wire and INTO
+     * this log, so the legs that used to read upstream text out of the
+     * response body read it here instead. Same idiom as the E2W pins in
+     * PluginAdminControllerTest (estate captured-logger pattern).
+     */
+    private function armHttpLogCapture(): string
+    {
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix_e2w_ari_log_' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $this->httpLogDirs[] = $dir;
+        $path                = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($path, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        return $path;
     }
 
     protected function setUp(): void
@@ -878,8 +923,15 @@ final class AdminRoutesTest extends TestCase
         // (OMDb's `?apikey=…` is the in-tree example). Relaying getMessage()
         // verbatim would put the operator's plaintext key in the JSON body.
         //
-        // Assert the CONSEQUENCE: the secret is ABSENT from the whole response,
-        // not merely that some masking flag was set.
+        // aa57aaca (INFO-SERVER-51 E2 site-3) closed the relay itself: the
+        // raw-Throwable arm now answers the FIXED COPY in the byte-identical
+        // 200 envelope, and the scrubbed cause goes to the HTTP LOG only. The
+        // wire never carries upstream text at all — so this test pins both
+        // halves of the new law: the fixed envelope on the response, and the
+        // surviving (still redacted) diagnostic in the log.
+        //
+        // Assert the CONSEQUENCE: the secret is ABSENT from the whole response
+        // AND from the log — not merely that some masking flag was set.
         $this->users->register('admin-1', true);
         $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
         $entry = new FakeCredentialTestingPlugin();
@@ -888,6 +940,7 @@ final class AdminRoutesTest extends TestCase
         );
         $this->loader->entryInstance = $entry;
 
+        $logPath  = $this->armHttpLogCapture();
         $response = $this->router->dispatch($this->request(
             'POST',
             '/api/v1/admin/plugins/phlix-plugin-demo/test',
@@ -899,11 +952,22 @@ final class AdminRoutesTest extends TestCase
         $this->assertStringNotContainsString('s3cr3t-live-key', $response->body);
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
-        $this->assertFalse($body['success']);
-        $this->assertStringContainsString('Credential test failed', $body['message']);
-        // Redacted, not merely truncated — the surrounding diagnostic survives.
-        $this->assertStringContainsString('omdbapi.com', $body['message']);
-        $this->assertStringContainsString('***', $body['message']);
+        // Byte-exact envelope: the whole body is pinned, so a future key on
+        // this 200 response is a deliberate, reviewed move, never an accident.
+        $this->assertSame(
+            ['success' => false, 'message' => 'Credential test failed.'],
+            $body,
+        );
+        // Redacted, not merely truncated — the surrounding diagnostic survives,
+        // in the server-side log: an OMDb-shaped ?apikey= URL must not persist
+        // the key on disk either (aa57aaca routes the message through
+        // redactSubmittedSecrets on its way to the channel log).
+        $log = (string) file_get_contents($logPath);
+        $this->assertStringContainsString('Plugin credential test failed: phlix-plugin-demo', $log);
+        $this->assertStringContainsString('RuntimeException', $log);
+        $this->assertStringContainsString('omdbapi.com', $log);
+        $this->assertStringContainsString('***', $log);
+        $this->assertStringNotContainsString('s3cr3t-live-key', $log);
     }
 
     public function test_test_credentials_redacts_a_secret_echoed_by_the_plugin_itself(): void
@@ -980,14 +1044,18 @@ final class AdminRoutesTest extends TestCase
 
     public function test_test_credentials_keeps_short_non_credential_values_readable(): void
     {
-        // The length floor exists so diagnostics stay useful: a short, non-secret
-        // value like a locale must NOT be scrubbed out of the message.
+        // The length floor exists so diagnostics stay useful: a short,
+        // non-secret value like a locale must NOT be scrubbed out. Since
+        // aa57aaca the thrown-path wire carries NO upstream text at all
+        // (fixed copy), so this law now governs the LOG LINE the message
+        // travels into — the locale value must survive the log scrub.
         $this->users->register('admin-1', true);
         $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
         $entry = new FakeCredentialTestingPlugin();
         $entry->throwable = new \RuntimeException('unsupported language "en"');
         $this->loader->entryInstance = $entry;
 
+        $logPath  = $this->armHttpLogCapture();
         $response = $this->router->dispatch($this->request(
             'POST',
             '/api/v1/admin/plugins/phlix-plugin-demo/test',
@@ -998,19 +1066,30 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
-        $this->assertStringContainsString('unsupported language "en"', $body['message']);
+        $this->assertSame(
+            ['success' => false, 'message' => 'Credential test failed.'],
+            $body,
+        );
+        $this->assertStringNotContainsString('unsupported language', $response->body);
+        // Context is JSON-encoded onto the line, so the inner quotes arrive
+        // escaped — the exact bytes the probe of the channel format showed.
+        $log = (string) file_get_contents($logPath);
+        $this->assertStringContainsString('unsupported language \\"en\\"', $log);
     }
 
     public function test_test_credentials_redacts_a_short_value_the_manifest_flags_secret(): void
     {
-        // Below the length floor, but manifest-declared secret → still redacted.
-        // This is the branch that proves the two rules are independent.
+        // Below the length floor, but manifest-declared secret → still
+        // redacted. This is the branch that proves the two rules are
+        // independent — since aa57aaca on the LOG LINE the cause travels
+        // into (the wire is fixed copy and proves itself by absence).
         $this->users->register('admin-1', true);
         $this->loader->installed[] = $this->fixturePluginWithSecretSetting('phlix-plugin-demo');
         $entry = new FakeCredentialTestingPlugin();
         $entry->throwable = new \RuntimeException('rejected pin 1234');
         $this->loader->entryInstance = $entry;
 
+        $logPath  = $this->armHttpLogCapture();
         $response = $this->router->dispatch($this->request(
             'POST',
             '/api/v1/admin/plugins/phlix-plugin-demo/test',
@@ -1021,8 +1100,13 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
-        $this->assertStringNotContainsString('1234', $body['message']);
-        $this->assertStringContainsString('***', $body['message']);
+        $this->assertSame(
+            ['success' => false, 'message' => 'Credential test failed.'],
+            $body,
+        );
+        $log = (string) file_get_contents($logPath);
+        $this->assertStringContainsString('rejected pin ***', $log);
+        $this->assertStringNotContainsString('rejected pin 1234', $log);
     }
 
     public function test_enable_404_for_unknown_plugin(): void

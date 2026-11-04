@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayStateStore;
@@ -167,10 +169,7 @@ final class AdminHubController
                 'expiresIn' => $result->expiresIn,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('hub pair', 'Failed to start hub pairing.', $e);
         }
     }
 
@@ -250,10 +249,7 @@ final class AdminHubController
                 'message' => 'Claim is still pending.',
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('hub poll', 'Failed to poll claim status.', $e);
         }
     }
 
@@ -300,10 +296,7 @@ final class AdminHubController
                 'success' => true,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('hub complete', 'Failed to complete hub pairing.', $e);
         }
     }
 
@@ -329,10 +322,7 @@ final class AdminHubController
                 'success' => true,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('hub unenroll', 'Failed to unenroll from the hub.', $e);
         }
     }
 
@@ -364,10 +354,7 @@ final class AdminHubController
                 'receivedAt' => date('c'),
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('hub heartbeat', 'Failed to send hub heartbeat.', $e);
         }
     }
 
@@ -448,10 +435,7 @@ final class AdminHubController
                 'fqdn' => $result->fqdn,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('subdomain claim', 'Failed to claim subdomain.', $e);
         }
     }
 
@@ -491,10 +475,7 @@ final class AdminHubController
                 'success' => true,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('subdomain release', 'Failed to release subdomain.', $e);
         }
     }
 
@@ -624,10 +605,7 @@ final class AdminHubController
                 'message' => $message,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('relay enable', 'Failed to enable relay tunnel.', $e);
         }
     }
 
@@ -665,10 +643,7 @@ final class AdminHubController
                 'message' => 'Relay disabled; the tunnel will disconnect on the next server reload.',
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('relay disable', 'Failed to disable relay tunnel.', $e);
         }
     }
 
@@ -741,10 +716,7 @@ final class AdminHubController
                 'latencySource' => 'persisted',
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('relay ping', 'Failed to ping relay tunnel.', $e);
         }
     }
 
@@ -810,10 +782,7 @@ final class AdminHubController
                 'success' => true,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('port-forward enable', 'Failed to enable port forwarding.', $e);
         }
     }
 
@@ -844,10 +813,7 @@ final class AdminHubController
                 'success' => true,
             ]);
         } catch (Throwable $e) {
-            return (new Response())->status(500)->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ]);
+            return $this->internalFailure('port-forward disable', 'Failed to disable port forwarding.', $e);
         }
     }
 
@@ -895,6 +861,34 @@ final class AdminHubController
     // ─────────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Single-source failure answer for EVERY raw-`Throwable` catch arm in this
+     * controller (INFO-SERVER-51, R17-03 law extended to HTTP): the wire keeps
+     * the unchanged 500 envelope `{success:false, message:<fixed copy>}` and
+     * carries NO exception text — the real cause (class + message, which for a
+     * filesystem/HTTP failure embeds server paths and upstream URLs) goes to the
+     * server-side log only. A raw-Throwable arm that echoes `$e->getMessage()`
+     * here would ship internal state to any authenticated admin client body.
+     *
+     * @param string    $context Endpoint label for the log line (no user data).
+     * @param string    $copy    The fixed, curated operator copy for the wire.
+     * @param Throwable $e       The caught failure; logged, never quoted.
+     *
+     * @return Response 500 JSON {success:false, message:$copy}.
+     */
+    private function internalFailure(string $context, string $copy, Throwable $e): Response
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error(
+            'Admin hub endpoint failed: ' . $context,
+            ['exception' => get_class($e), 'message' => $e->getMessage()]
+        );
+
+        return (new Response())->status(500)->json([
+            'success' => false,
+            'message' => $copy,
+        ]);
+    }
 
     /**
      * Returns the hub enrollment data from the JSON config file.

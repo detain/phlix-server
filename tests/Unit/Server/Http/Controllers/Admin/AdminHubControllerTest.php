@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Controllers\Admin\AdminHubController;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -29,6 +31,9 @@ final class AdminHubControllerTest extends TestCase
 
     /** @var string|false Saved PHLIX_RELAY_DISABLED env so tests can restore it. */
     private string|false $savedEnv;
+
+    /** @var list<string> Throwaway logger dirs created by the E2W pins. */
+    private array $loggerDirs = [];
 
     protected function setUp(): void
     {
@@ -55,6 +60,15 @@ final class AdminHubControllerTest extends TestCase
         } else {
             putenv('PHLIX_RELAY_DISABLED=' . $this->savedEnv);
         }
+
+        foreach ($this->loggerDirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+        $this->loggerDirs = [];
+        LoggerFactory::reset();
 
         parent::tearDown();
     }
@@ -442,5 +456,176 @@ final class AdminHubControllerTest extends TestCase
         self::assertStringNotContainsString('system(', $source, 'no system() shell out in the event loop');
         self::assertStringNotContainsString('events-', $source, 'no daily log-file scrape');
         self::assertStringNotContainsString('shell_exec', $source, 'no shell_exec in the event loop');
+    }
+
+    // ---------------------------------------------------------------------
+    // INFO-SERVER-51 (E2 cluster, 2026-11-04): the raw-Throwable catch arms of
+    // this controller must answer with the FIXED copy inside the byte-identical
+    // 500 envelope `{success:false, message:<copy>}`, log class + cause to the
+    // server-side stream, and NEVER echo $e->getMessage() onto the wire. At the
+    // parent every arm below leaked the filesystem path or upstream prose of
+    // the caught error into the admin JSON body (the estate R17-03 law, here
+    // extended from the WS layer to HTTP; idiom = the cured
+    // TranscodeController RuntimeException arm / M-SERVER-05 envelope test).
+    // Zero new wire codes; status stays 500.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Drive an arm, assert the fixed wire copy, assert the caught exception's
+     * own text (which embeds scratch paths / echoed input) appears nowhere in
+     * the body, and assert it DID reach the captured log (class + message).
+     *
+     * @param array<string, mixed> $expectBody Decoded envelope expected verbatim.
+     */
+    private function assertE2WEnvelope(
+        Response $response,
+        string $logPath,
+        string $expectContext,
+        string $expectClass,
+        string $leakNeedle,
+        array $expectBody
+    ): void {
+        self::assertSame(500, $response->statusCode);
+        self::assertSame($expectBody, json_decode((string) $response->body, true));
+        self::assertStringNotContainsString($leakNeedle, (string) $response->body);
+
+        $log = is_file($logPath) ? (string) file_get_contents($logPath) : '';
+        self::assertStringContainsString($expectContext, $log, 'endpoint context reached the log');
+        self::assertStringContainsString($expectClass, $log, 'exception class reached the log');
+        self::assertStringContainsString($leakNeedle, $log, 'the cause itself is log-only, not wire');
+    }
+
+    /**
+     * Point LoggerFactory at a throwaway stream handler (the estate
+     * captured-logger idiom from AdminSettingsControllerErrorEnvelopeTest).
+     */
+    private function initCapturedLogger(): string
+    {
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix-e2w-log-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+        $this->loggerDirs[] = $dir;
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        return $logPath;
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     */
+    private function postBody(array $body): Request
+    {
+        $request = $this->request();
+        $request->body = $body;
+
+        return $request;
+    }
+
+    public function testHubPairFailureAnswersFixedCopyAndLogsTheCause(): void
+    {
+        $logPath = $this->initCapturedLogger();
+        // Corrupt key material: getOrCreateKeyPair() rejects the PEM and its
+        // message quotes the ABSOLUTE key path — exactly the internal state a
+        // leaking arm would have shipped to the admin client.
+        file_put_contents($this->dir . '/hub-server-key.pem', 'e2w-not-a-pem');
+
+        $response = $this->controller()->hubPair(
+            $this->postBody(['hubUrl' => 'https://hub.e2w.test', 'serverName' => 'E2W']),
+            []
+        );
+
+        $this->assertE2WEnvelope(
+            $response,
+            $logPath,
+            'Admin hub endpoint failed: hub pair',
+            'InvalidArgumentException',
+            'hub-server-key.pem',
+            ['success' => false, 'message' => 'Failed to start hub pairing.']
+        );
+    }
+
+    public function testHubPollFailureAnswersFixedCopyAndLogsTheCause(): void
+    {
+        $logPath = $this->initCapturedLogger();
+
+        // Malformed claimId: pollClaimStatus() parses it at its own boundary and
+        // throws BEFORE any network — its message echoes the rejected token.
+        $response = $this->controller()->hubPoll(
+            $this->postBody(['claimId' => 'bad.id.e2w', 'hubUrl' => 'https://hub.e2w.test']),
+            []
+        );
+
+        $this->assertE2WEnvelope(
+            $response,
+            $logPath,
+            'Admin hub endpoint failed: hub poll',
+            'HubClientException',
+            'bad.id.e2w',
+            ['success' => false, 'message' => 'Failed to poll claim status.']
+        );
+    }
+
+    public function testHubCompleteFailureAnswersFixedCopyAndLogsTheCause(): void
+    {
+        $logPath = $this->initCapturedLogger();
+        // configDir is a FILE: storeEnrollment() fails its temp-file step and
+        // names the path it could not write into.
+        $blockedDir = $this->dir . '/not-a-dir';
+        file_put_contents($blockedDir, 'e2w');
+
+        $response = (new AdminHubController(null, $blockedDir))->hubComplete(
+            $this->postBody([
+                'enrollmentJwt' => 'jwt',
+                'hubJwksUrl' => 'https://hub.e2w.test/.well-known/jwks.json',
+                'serverId' => 'srv-1',
+                'hubUrl' => 'https://hub.e2w.test',
+            ]),
+            []
+        );
+
+        $this->assertE2WEnvelope(
+            $response,
+            $logPath,
+            'Admin hub endpoint failed: hub complete',
+            'RuntimeException',
+            'not-a-dir',
+            ['success' => false, 'message' => 'Failed to complete hub pairing.']
+        );
+    }
+
+    public function testNoCatchArmEchoesExceptionTextOntoTheWire(): void
+    {
+        // Source tripwire for the arms no unit drive can reach deterministically
+        // (hub unenroll / heartbeat, subdomain claim/release, relay enable/
+        // disable/ping, port-forward enable/disable — the store is null-safe or
+        // the vector is network-only). All 12 leak arms share one shape and now
+        // share one exit: $this->internalFailure(). Reddening: ANY restored
+        // `'message' => $e->getMessage()` or arm bypassing the helper.
+        $source = file_get_contents(
+            dirname(__DIR__, 6) . '/src/Server/Http/Controllers/Admin/AdminHubController.php'
+        );
+        self::assertIsString($source);
+
+        // The ONLY remaining `'message' => $e->getMessage()` is the sanctioned
+        // log-context line inside internalFailure() — one occurrence, server-side
+        // only. A restored wire echo makes this 2+; a swallowed cause makes it 0.
+        self::assertSame(1, substr_count($source, "'message' => " . '$' . "e->getMessage()"));
+        self::assertSame(12, substr_count($source, 'return $this->internalFailure('));
+        self::assertSame(1, substr_count($source, 'LoggerFactory::get(LogChannels::HTTP)->error('));
+        self::assertStringContainsString("['exception' => get_class(\$e), 'message' => \$e->getMessage()]", $source);
     }
 }

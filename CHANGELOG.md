@@ -79,6 +79,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Newsletter queue collapses no longer pick the row that loses the user's
+  delivery.** `migrations/125_newsletter_queue_user_week_unique.sql` deduped
+  `(user_id, week_start)` groups by keeping the EARLIEST row: a pending retry
+  queued behind an earliest-`failed` row was deleted — and because
+  `NewsletterSender::processQueue()` treats `failed` as terminal, that pending
+  row was the only retry vector for the week, so the user was silently never
+  mailed — while a later `sent` row deleted behind an earliest-`failed` row
+  erased the proof of delivery and under-counted the queue stats. The
+  survivor rule is amended IN PLACE to status precedence
+  `sent` > `pending` > `failed` (then `created_at`, then `id`), the in-file
+  docblock's "the survivor carries the group's full status/attempts history"
+  sentence is rewritten to truth (each row carries only its own), and
+  `tests/Integration/Admin/NewsletterQueueDedupMigration125RealDbTest.php`
+  executes the survivor choice on real MySQL — its four precedence arms red at
+  the keep-earliest parent, green on the amended file. Disclosure for
+  already-migrated databases: the amended file re-applies as a zero-row no-op
+  (the UNIQUE forbids duplicates), and rows the old rule deleted are NOT
+  recoverable from this migration — some users may have missed one newsletter
+  week with no trace in the queue; post-cure installs keep the pending-retry
+  survivor, so an admin re-fire of a week whose retry row still stands
+  delivers again. Major-1 of the 2026-11-04 campaign-diff review.
 - **Deferred #54 follow-through: `NewsletterSender::queueAll` now consumes its
   INSERT IGNORE verdict through the `WriteResult` helper.** The original
   `a7536372` hand-rolled `$created !== null` — CI's

@@ -991,7 +991,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // BootIdentityTest.php + tests/Unit/Session/SyncPlay/
     // SyncPlayBridgeOwnerStampTest.php. Measured from the phpunit red (2046),
     // not predicted — the S431 forward-fix precedent.
-    private const EXPECTED_PHP_FILES = 2046;
+    // +1 2046→2047: this cure added tests/Integration/Admin/
+    // NewsletterQueueDedupMigration125RealDbTest.php (migration-125 survivor
+    // precedence, review major-1). Measured from the phpunit red (2047).
+    private const EXPECTED_PHP_FILES = 2047;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

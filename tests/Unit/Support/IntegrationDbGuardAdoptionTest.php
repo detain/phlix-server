@@ -522,7 +522,13 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // rotation rides this rework commit, not the wave commit that added the
     // test — see review fixlog/W-rWSRV-A__r1.md D1).
     // Measured from the phpunit red (79), not predicted.
-    private const EXPECTED_ADOPTERS = 79;
+    // 79→80 by the campaign-diff review major-1 cure (2026-11-04):
+    // +tests/Integration/Admin/NewsletterQueueDedupMigration125RealDbTest.php
+    // (real-MySQL proof of the migration-125 survivor precedence — sent >
+    // pending > failed — over throwaway phlix_srpcure_* databases; the arms
+    // red on the keep-earliest parent, green on the amended file).
+    // Measured from the phpunit red (80), not predicted.
+    private const EXPECTED_ADOPTERS = 80;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

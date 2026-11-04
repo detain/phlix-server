@@ -9,6 +9,7 @@ use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
@@ -34,6 +35,14 @@ final class PluginUpdateServiceTest extends TestCase
     protected function tearDown(): void
     {
         SsrfGuard::reset();
+        foreach ($this->capturedLoggerDirs as $dir) {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+        $this->capturedLoggerDirs = [];
+        LoggerFactory::reset();
         parent::tearDown();
     }
 
@@ -43,6 +52,27 @@ final class PluginUpdateServiceTest extends TestCase
         . \Phlix\Plugins\Catalog\CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
     private const ANIDB_REPO = 'https://github.com/detain/phlix-plugin-anidb';
     private const ANIDB_MANIFEST_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugin-anidb/HEAD/plugin.json';
+
+    /** @var list<string> Captured-logger scratch dirs (INFO-SERVER-62 log pins). */
+    private array $capturedLoggerDirs = [];
+
+    /**
+     * Planted transport prose for the INFO-SERVER-62 pins: shaped like the real
+     * thing (cURL failure embedding the upstream URL) and carrying one unique
+     * marker string — the whole laundering law is that this prose reaches the
+     * PLUGINS log and NEVER a client-visible string.
+     */
+    private const TRANSPORT_PROSE = 'cURL error 7: Failed to connect to the catalog repository '
+        . '[S62-LAUNDER-MARKER-9f3c] at ' . self::ANIDB_MANIFEST_RAW;
+
+    /**
+     * The byte-identical client-facing string for a transport failure:
+     * checkUpdates' own row prefix + the service's fixed curated copy. Any
+     * rewording of either half must be a DELIBERATE contract change that
+     * rotates this pin — that is the point (the estate's pin-a-cure law).
+     */
+    private const CURATED_ROW_ERROR = 'Could not read the latest version: '
+        . 'The plugin manifest could not be fetched from its catalog repository.';
 
     /** A catalog listing one plugin (anidb). */
     private function catalogBody(): string
@@ -277,5 +307,103 @@ final class PluginUpdateServiceTest extends TestCase
         self::assertCount(1, $result['updated']);
         self::assertSame('phlix-plugin-anidb', $result['updated'][0]['name']);
         self::assertSame([], $result['failed']);
+    }
+
+    // ------------------------------------------------------------------
+    // INFO-SERVER-62 teeth (review server__secaudit / srvtail-R1, 2026-11-04):
+    // fetchLatestVersion()'s transport-failure rethrow used to carry
+    // $e->getMessage() — upstream-URL prose — which checkUpdates() echoed into
+    // the row a client reads. The cure answers the byte-identical curated copy
+    // and routes the REAL prose to the PLUGINS log only. Red at the parent arm
+    // BOTH directions (prose in row / no log record); the pre-existing pins
+    // (assertNotNull($row['error'])) could not see either direction — which is
+    // why the R1 review filed this as a Major.
+    // ------------------------------------------------------------------
+
+    /**
+     * Service whose manifest fetcher fails with the planted transport prose
+     * while the catalog itself resolves (so the row is `checkable`).
+     */
+    private function launderingService(PluginLoader $loader): PluginUpdateService
+    {
+        return new PluginUpdateService(
+            $loader,
+            $this->catalogService(),
+            static function (string $url, int $timeout): string {
+                throw new \RuntimeException(self::TRANSPORT_PROSE);
+            },
+        );
+    }
+
+    /**
+     * Estate captured-logger seam (the aa57aaca/87616b0f idiom): a temp logger
+     * config routed to a stream file so the test asserts exactly what the
+     * PLUGINS channel received. Scratch dir tracked for tearDown cleanup.
+     */
+    private function capturePluginsLog(): string
+    {
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix_s62_log_' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $this->capturedLoggerDirs[] = $dir;
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        return $logPath;
+    }
+
+    public function test_transport_failure_row_carries_the_curated_copy_and_never_the_exception_prose(): void
+    {
+        /** @var PluginLoader&MockInterface $loader */
+        $loader = Mockery::mock(PluginLoader::class);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+
+        $result = $this->launderingService($loader)->checkUpdates();
+        $row = $result['updates'][0];
+
+        self::assertTrue($row['checkable']);
+        self::assertNull($row['latest_version']);
+        self::assertFalse($row['update_available']);
+        // The whole laundering law in one line: the row carries the byte-
+        // identical curated copy — NEVER the transport exception's prose.
+        self::assertSame(self::CURATED_ROW_ERROR, $row['error']);
+        self::assertStringNotContainsString('S62-LAUNDER-MARKER-9f3c', (string) $row['error']);
+    }
+
+    public function test_transport_failure_routes_the_real_prose_to_the_plugins_log_only(): void
+    {
+        $logPath = $this->capturePluginsLog();
+
+        /** @var PluginLoader&MockInterface $loader */
+        $loader = Mockery::mock(PluginLoader::class);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+
+        $result = $this->launderingService($loader)->checkUpdates();
+        $row = $result['updates'][0];
+
+        // Log half of the law: the real cause (message + class + repo) is
+        // preserved on the PLUGINS channel — a cure that silently deleted the
+        // diagnostic would stay invisible to the row-only pin, so both halves
+        // need teeth.
+        self::assertFileExists($logPath, 'the transport failure logged nothing at all');
+        $log = (string) file_get_contents($logPath);
+        self::assertStringContainsString('plugins.ERROR: Plugin manifest fetch failed', $log);
+        self::assertStringContainsString('S62-LAUNDER-MARKER-9f3c', $log);
+        self::assertStringContainsString('phlix-plugin-anidb', $log);
+        // And it stays log-ONLY: the client-facing row never carries it.
+        self::assertStringNotContainsString('S62-LAUNDER-MARKER-9f3c', (string) $row['error']);
     }
 }

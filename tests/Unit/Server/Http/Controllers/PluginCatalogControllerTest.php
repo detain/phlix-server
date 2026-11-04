@@ -242,10 +242,90 @@ final class PluginCatalogControllerTest extends TestCase
         $this->assertArrayNotHasKey(PluginCatalogService::KEY_CHANNEL, $this->store);
     }
 
+    // ------------------------------------------------------------------
+    // INFO-SERVER-62 teeth at the HTTP boundary (review server__secaudit /
+    // srvtail-R1, 2026-11-04): the laundering cure must be visible in the
+    // exact bytes a client reads, not only in the service row.
+    // ------------------------------------------------------------------
+
+    public function test_updates_leg_surfaces_the_curated_row_never_transport_prose(): void
+    {
+        $body = json_encode([
+            'name' => 'Phlix Official Plugins',
+            'plugins' => [
+                ['name' => 'phlix-plugin-anidb', 'repo' => 'https://github.com/detain/phlix-plugin-anidb'],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->expect($this->loader, 'listInstalled')
+            ->once()
+            ->andReturn([$this->fixturePlugin('phlix-plugin-anidb', enabled: true)]);
+
+        $controller = $this->controller(
+            [self::DEFAULT_RAW => $body],
+            static function (string $url, int $timeout): string {
+                throw new \RuntimeException(
+                    'cURL error 7: Failed to connect to the catalog repository [S62-LAUNDER-MARKER-9f3c]',
+                );
+            },
+        );
+
+        $response = $controller->updates($this->makeRequest('admin-1'), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $payload = $this->decode($response->body);
+        $this->assertSame(0, $payload['available']);
+        /** @var list<array<string, mixed>> $updates */
+        $updates = $payload['updates'];
+        $this->assertCount(1, $updates);
+        // Byte-identical curated copy in the body the client reads…
+        $this->assertSame(
+            'Could not read the latest version: '
+                . 'The plugin manifest could not be fetched from its catalog repository.',
+            $updates[0]['error'],
+        );
+        // …and the transport exception's prose is absent from EVERY byte.
+        $this->assertStringNotContainsString('S62-LAUNDER-MARKER-9f3c', $response->body);
+    }
+
+    /**
+     * The update-refusal 404 envelope, byte-identical: code
+     * `plugin.update.no_source` + update()'s OWN curated copy. Honest scoping
+     * (srvtail-R1 Info fold): this leg never fetches a manifest, so the cured
+     * rethrow's prose is NOT part of this message's provenance — arming the
+     * fetcher with a planted-prose thrower and asserting its absence pins
+     * exactly that truth (the refusal path was entirely unpinned before).
+     */
+    public function test_update_refusal_answers_the_no_source_envelope_with_curated_copy(): void
+    {
+        $this->expect($this->loader, 'install')->never();
+
+        $controller = $this->controller(
+            [],
+            static function (string $url, int $timeout): string {
+                throw new \RuntimeException('cURL error 7: catalog repository [S62-LAUNDER-MARKER-9f3c]');
+            },
+        );
+
+        $response = $controller->updatePlugin($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-orphan']);
+
+        $this->assertSame(404, $response->statusCode);
+        $this->assertSame([
+            'error' => 'Plugin "phlix-plugin-orphan" is not in any configured catalog, '
+                . 'so it has no source to update from.',
+            'code' => 'plugin.update.no_source',
+        ], $this->decode($response->body));
+        $this->assertStringNotContainsString('S62-LAUNDER-MARKER-9f3c', $response->body);
+        $this->assertStringNotContainsString('could not be fetched', $response->body);
+    }
+
     /**
      * @param array<string, string> $catalogBodies
+     * @param (callable(string, int): string)|null $manifestFetcher Override for the
+     *        update-check manifest fetcher (INFO-SERVER-62 pins pass a planted-
+     *        prose thrower); defaults to one that fails every fetch.
      */
-    private function controller(array $catalogBodies): PluginCatalogController
+    private function controller(array $catalogBodies, ?callable $manifestFetcher = null): PluginCatalogController
     {
         $settings = $this->createMock(SettingsRepository::class);
         $settings->method('getEffective')->willReturnCallback(
@@ -267,13 +347,11 @@ final class PluginCatalogControllerTest extends TestCase
             },
         );
 
-        $updates = new PluginUpdateService(
-            $this->loader,
-            $service,
-            static function (string $url, int $timeout) {
-                throw new \RuntimeException('update fetch disabled');
-            },
-        );
+        $updateFetcher = $manifestFetcher ?? static function (string $url, int $timeout) {
+            throw new \RuntimeException('update fetch disabled');
+        };
+
+        $updates = new PluginUpdateService($this->loader, $service, $updateFetcher);
 
         return new PluginCatalogController($service, $this->loader, $this->audit, $updates);
     }

@@ -214,12 +214,16 @@ final class PluginUpdateService
             $body = ($this->fetcher)($url, self::FETCH_TIMEOUT);
         } catch (\Throwable $e) {
             // INFO-SERVER-62 (E2 laundering leg): transport errors surface as
-            // exception text embedding the upstream URL, and every downstream
-            // reader of this rethrow echoes getMessage() into an admin client
-            // body (checkUpdates row 'error', the update 404 copy). The wire
-            // carries the fixed curated copy; class + cause go to the log
-            // only — the estate E2 law exactly as the E2W wave's
-            // internalFailure() ships it.
+            // exception text embedding the upstream URL, and checkUpdates()
+            // echoes this rethrow's getMessage() into the row a client reads
+            // (HTTP 200 body). The wire carries the fixed curated copy; class
+            // + cause go to the log only — the estate E2 law exactly as the
+            // E2W wave's internalFailure() ships it. (The update() refusal
+            // 404 copy is curated by update() itself; it never reaches this
+            // leg. Srvtail-R1 overstatement folded 2026-11-04.) Teeth:
+            // PluginUpdateServiceTest::test_transport_failure_* and
+            // PluginCatalogControllerTest::test_updates_leg_surfaces_* —
+            // all three redden on reverting this block.
             LoggerFactory::get(LogChannels::PLUGINS)->error(
                 'Plugin manifest fetch failed',
                 ['repo' => $repo, 'exception' => get_class($e), 'message' => $e->getMessage()]

@@ -33,6 +33,30 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **The plugin-update laundering record is corrected in a newer entry (its
+  own discipline), and the cure now has test teeth.** The landed entry
+  "INFO tail: a dead WS auth superglobal rail is gone, and the plugin-update
+  rethrow stopped laundering transport prose into client JSON" claimed the
+  laundered prose "reached admin client bodies through every downstream echo
+  (the checkUpdates row `error`, the update leg's 404 copy)". Only the first
+  half is true: `fetchLatestVersion()`'s rethrow is read by `checkUpdates()`
+  alone; the update refusal's 404 copy is curated by `update()` itself and
+  never sees that message (srvtail-R1 Info — the landed narrative
+  over-scoped; the shipped cure was and is correct). Srvtail-R1's Major was
+  the absent teeth: reverting the fixed-copy+log-only block kept every
+  plugin-family test green. Three pins now red exactly under that revert —
+  `PluginUpdateServiceTest::test_transport_failure_row_carries_the_curated_
+  copy_and_never_the_exception_prose` (byte-identical curated row, planted
+  prose absent), `test_transport_failure_routes_the_real_prose_to_the_plugins_
+  log_only` (estate temp-stream captured-logger seam: class + message + repo
+  on the PLUGINS channel), and `PluginCatalogControllerTest::
+  test_updates_leg_surfaces_the_curated_row_never_transport_prose` (same law
+  at the HTTP body). A fourth, `test_update_refusal_answers_the_no_source_
+  envelope_with_curated_copy`, answers the 404 `plugin.update.no_source`
+  envelope byte-identical with a prose-throwing fetcher armed — pinning the
+  honest scoping above at the wire. Behavior unchanged; zero new wire codes.
+  [review server__secaudit / srvtail-R1 Major + Info]
+
 - **Append-only restoration record (procedural note; no code, no sentence
   rewritten).** The entry below printed "Fifteen raw-`Throwable` catch arms"
   when commit 194b278f landed AND pushed it; commit f758546c then changed

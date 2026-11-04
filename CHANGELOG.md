@@ -34,7 +34,7 @@ House discipline this file maintains (established by review W-min90/91/92):
 ### Security
 
 - **Admin and plugin endpoints stopped echoing exception text to clients.**
-  Fifteen raw-`Throwable` catch arms answered the (otherwise byte-identical)
+  Fourteen raw-`Throwable` catch arms answered the (otherwise byte-identical)
   JSON envelope with `$e->getMessage()` embedded: twelve
   `AdminHubController` remote-access arms — shipping absolute key-file paths,
   upstream hub URLs and echoed rejected input to any authenticated admin

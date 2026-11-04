@@ -65,6 +65,11 @@ final class FirstAdminElectionBackfill109RealDbTest extends TestCase
         '001_initial_schema.sql',
         '004_admin_user_flag.sql',
         '037_users_status.sql',
+        // The upgraded shape must carry every users column production reads on
+        // the register/login response mint path (AuthManager's hold-check leg
+        // SELECTs must_change_password, added by 1da9f7b1); any real 108-era DB
+        // already has 041 (users-only ALTER, AFTER status from 037).
+        '041_users_password_reset_fields.sql',
         '107_users_tokens_not_valid_after.sql',
         '108_first_admin_election.sql',
     ];

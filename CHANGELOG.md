@@ -79,6 +79,16 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The [Unreleased] CHANGELOG cites that SRV-M2 explicitly named were left stale.**
+  The server__docmaint recommendation reached past the ten README rows: the M28
+  entry inside the editable `## [Unreleased]` still cited
+  `Application.php:2194-2218`, its `POST /api/v1/playlists` alias at `:2210`, and
+  the ownership docblock at `:2162-2189` — the same drifted block the README rows
+  were re-pinned from. The lane's "history stays verbatim" justification applies to
+  DATED sections only; house discipline makes `[Unreleased]` editable, and the new
+  tripwire covers README rows only, so these cites would have aged silently.
+  Re-anchored to the measured tip lines (`:2209-2229`, alias `:2221`, docblock
+  `:2173-2200`); Application.php itself untouched. [review server__docmaint]
 - **A crashing SyncPlay message handler no longer mails its raw exception text
   to the connecting peer.** The dispatch catch-all in `SyncPlayManager` answered
   `HANDLER_ERROR` with `$e->getMessage()` verbatim — the exact leak the sibling
@@ -1564,9 +1574,9 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 - **The shipped Collections/Playlists feature gains its README documentation (review
   server__pm M28):** the whole CRUD surface — 11 registrations in
-  `Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2194-2218`,
-  incl. the `POST /api/v1/playlists` alias at `:2210`), the `created_by` ownership
-  docblock at `:2162-2189`, the `112_collections_created_by.sql` migration and every
+  `Application::loadCollectionRoutes()` (`src/Server/Core/Application.php:2209-2229`,
+  incl. the `POST /api/v1/playlists` alias at `:2221`), the `created_by` ownership
+  docblock at `:2173-2200`, the `112_collections_created_by.sql` migration and every
   OpenAPI path — shipped, yet README.md mentioned the feature nowhere: a member could
   not discover that lists are owner-scoped (`actorSees()` own+legacy-NULL,
   `actorManages()` owner-only with foreign/legacy rows admin-only), that every ownership

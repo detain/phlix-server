@@ -79,6 +79,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Dead `@see plans/...` pointers in the alias-compat shim docblock.** The
+  two provenance references named `plans/expansion/b.1-shared-design.md` and
+  `plans/expansion/b.3-shared-consume.md`, but no `plans/` directory exists
+  in the tree — the plan set was retired into phlix-docs (`77e681fd`). They
+  now point at the live carriers of the same content: the phlix-docs plugin
+  SDK page (the canonical move table) and the in-repo interface bridge file.
+  [review server__ipd]
 - **Stale autowire cite in the README smart-collections bullet.** The prose
   pointed at `MediaServicesProvider.php:899` for the
   `SmartPlaylistRefreshSubscriber::autowire()` registration; the line moved

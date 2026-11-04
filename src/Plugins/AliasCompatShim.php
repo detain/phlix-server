@@ -21,8 +21,12 @@
  * `interface … extends …` declaration in
  * `src/Plugins/Contract/LifecycleInterface.php` instead.
  *
- * @see plans/expansion/b.1-shared-design.md §4.1 — the canonical move table.
- * @see plans/expansion/b.3-shared-consume.md — the step that introduced this file.
+ * @see https://detain.github.io/phlix-docs/dev/plugin-sdk — the canonical move
+ *      table (formerly plans/expansion/b.1-shared-design.md §4.1; the plans
+ *      set was retired into phlix-docs in commit 77e681fd).
+ * @see src/Plugins/Contract/LifecycleInterface.php — the interface-bridge
+ *      companion (formerly plans/expansion/b.3-shared-consume.md — the step
+ *      that introduced this file).
  */
 
 declare(strict_types=1);

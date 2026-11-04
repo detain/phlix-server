@@ -252,6 +252,43 @@ final class PreRouterFastPathsSyntheticSessionBucketTest extends TestCase
     }
 
     /**
+     * INFO-SERVER-18 twin conviction: on the direct-play path the canonical
+     * client header supplies the real bucket (pre-fix this ladder knew only
+     * the legacy spelling, so header-only clients landed in the synthetic
+     * slot here while the middleware honoured the same stream as `sess-fp`).
+     */
+    public function testPhlixSessionIdHeaderSuppliesRealBucketOnDirectPlay(): void
+    {
+        $response = $this->makeFastPaths()->dispatch($this->streamRequest([
+            'X-Device-Id' => 'device-1',
+            'X-Phlix-Session-Id' => 'sess-fp',
+        ]));
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->statusCode);
+        $insert = $this->lastInsert();
+        self::assertSame('sess-fp', $insert['binds'][2] ?? null);
+        self::assertStringStartsNotWith('synthetic:', (string) $insert['binds'][2]);
+    }
+
+    /**
+     * Precedence twin: canonical outranks legacy on both paths identically.
+     */
+    public function testCanonicalHeaderOutranksLegacyOnDirectPlay(): void
+    {
+        $response = $this->makeFastPaths()->dispatch($this->streamRequest([
+            'X-Device-Id' => 'device-1',
+            'X-Phlix-Session-Id' => 'sess-canonical',
+            'X-Session-Id' => 'sess-legacy',
+        ]));
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->statusCode);
+        $insert = $this->lastInsert();
+        self::assertSame('sess-canonical', $insert['binds'][2] ?? null);
+    }
+
+    /**
      * The cap now bites sessionless direct-play traffic: one synthetic slot,
      * limit 1, a second DISTINCT device is refused 429 — pre-fix both slipped
      * through uncounted.

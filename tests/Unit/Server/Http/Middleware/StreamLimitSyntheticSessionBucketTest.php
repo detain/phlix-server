@@ -281,4 +281,74 @@ final class StreamLimitSyntheticSessionBucketTest extends TestCase
         $this->assertIsArray($binds);
         $this->assertSame('sess-real', $binds[2], 'a supplied session_id must never be overridden');
     }
+
+    /**
+     * INFO-SERVER-18 conviction: the CANONICAL client header supplies the real
+     * bucket. Pre-fix the ladder knew only the legacy spelling, so a header-
+     * only first-party client (which sends exactly `X-Phlix-Session-ID`) fell
+     * through to the synthetic (profile, device) bucket — a different slot
+     * than the query-carrying path would have used for the same stream.
+     */
+    public function testCanonicalPhlixSessionIdHeaderSuppliesRealBucket(): void
+    {
+        $db = $this->scriptedDb();
+        $service = $this->service($db);
+
+        $this->assertNull($this->middleware($service)->__invoke(
+            $this->request(['X-Device-ID' => 'dev-9', 'X-Phlix-Session-ID' => 'sess-hdr'])
+        ));
+
+        $binds = $this->insertBinds();
+        $this->assertIsArray($binds);
+        $this->assertSame('sess-hdr', $binds[2], 'the canonical header must be honoured verbatim');
+        $this->assertStringStartsNotWith('synthetic:', (string) $binds[2]);
+    }
+
+    /**
+     * The legacy spelling keeps working (fallback, not removal).
+     */
+    public function testLegacySessionIdHeaderStillSuppliesRealBucket(): void
+    {
+        $db = $this->scriptedDb();
+        $service = $this->service($db);
+
+        $this->assertNull($this->middleware($service)->__invoke(
+            $this->request(['X-Device-ID' => 'dev-9', 'X-Session-ID' => 'sess-legacy'])
+        ));
+
+        $binds = $this->insertBinds();
+        $this->assertIsArray($binds);
+        $this->assertSame('sess-legacy', $binds[2], 'legacy header stays a working carrier');
+    }
+
+    /**
+     * Ladder precedence, pinned so a future reshuffle cannot silently
+     * flip it: query wins over canonical header; canonical beats legacy.
+     */
+    public function testSessionIdLadderPrecedenceIsQueryThenCanonicalThenLegacy(): void
+    {
+        $db = $this->scriptedDb();
+        $service = $this->service($db);
+
+        $this->assertNull($this->middleware($service)->__invoke(
+            $this->request(
+                ['X-Device-ID' => 'dev-9', 'X-Phlix-Session-ID' => 'sess-canonical', 'X-Session-ID' => 'sess-legacy'],
+                ['session_id' => 'sess-query']
+            )
+        ));
+        $binds = $this->insertBinds();
+        $this->assertIsArray($binds);
+        $this->assertSame('sess-query', $binds[2], 'the query param stays first in the ladder');
+
+        $this->log = [];
+        $this->sessionRowExists = false;
+        $this->assertNull($this->middleware($service)->__invoke(
+            $this->request(
+                ['X-Device-ID' => 'dev-9', 'X-Phlix-Session-ID' => 'sess-canonical', 'X-Session-ID' => 'sess-legacy']
+            )
+        ));
+        $binds = $this->insertBinds();
+        $this->assertIsArray($binds);
+        $this->assertSame('sess-canonical', $binds[2], 'canonical header outranks the legacy spelling');
+    }
 }

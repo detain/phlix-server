@@ -31,14 +31,12 @@ return [
         // worker's count is NOT configurable (count=1 law: one
         // authoritative SyncPlayManager).
         'count' => 'auto',
-        // NOTE (honest, R14-06): NOT wired. Workerman's stdout capture
-        // (Worker::$stdoutFile) is deliberately left unset — the systemd
-        // unit routes raw process stdout to the journal
-        // (`StandardOutput=journal`) and the container captures it
-        // likewise; redirecting it into a repo file here would mute both.
-        // Application-level logs go through Monolog — see
-        // PHLIX_LOG_STDOUT / PHLIX_LOG_LEVEL in the README env table.
-        'stdout_file' => __DIR__ . '/../.logs/stdout.log',
+        // NOTE (R14-06): deliberately NO 'stdout_file' key here. Workerman's
+        // stdout capture (Worker::$stdoutFile) stays unset — the systemd unit
+        // routes raw process stdout to the journal (`StandardOutput=journal`)
+        // and the container captures it likewise; redirecting it into a repo
+        // file would mute both. Application-level logs go through Monolog —
+        // see PHLIX_LOG_STDOUT / PHLIX_LOG_LEVEL in the README env table.
         'pid_file' => '/var/run/phlix/pid',
     ],
     'process' => [

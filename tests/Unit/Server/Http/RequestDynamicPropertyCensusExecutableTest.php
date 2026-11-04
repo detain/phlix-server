@@ -1467,7 +1467,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // pinned 1174/460 — re-measured from the phpunit red (1175/461) at the
     // rebased tip 947f7de8 in a clean worktree, forward-corrected in this
     // commit (the 1170→1171 stepped over it mid-flight).
-    private const EXPECTED_DECLARED_WRITES = 1175;
+    // +1 1175→1176 by ee526b05 (INFO-SERVER-51 E2 site-1, a foreign lane's
+    // AdminHubControllerTest internalFailure harness seeding $request->body —
+    // sanctioned harness-seed site; zero src/ writes). That commit shipped
+    // with the pin unmoved; measured-red here proves pre-existence: a clean
+    // ee526b05 worktree measures 1176 while ALL of this lane's files are
+    // reverted (each individually bisected), and this lane's own edits add
+    // only getHeader() method calls — not property writes — on Request roots.
+    // Rotated forward in the first commit that lands atop it (this one),
+    // attribution to the adding change per the 1170→1171 lesson above.
+    private const EXPECTED_DECLARED_WRITES = 1176;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -7,6 +7,14 @@ on:
   pull_request:
     branches: [ master, main ]
 
+# Serialize image builds per ref: concurrent pushes of the same branch/tag
+# raced on the mutable ghcr tags (last-writer-wins, half-built layers sharing
+# one cache key). cancel-in-progress stays FALSE — a superseded run must not
+# abandon a push mid-publish; runs queue behind the current one instead.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}

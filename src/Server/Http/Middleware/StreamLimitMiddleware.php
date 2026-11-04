@@ -217,6 +217,25 @@ final class StreamLimitMiddleware
     /**
      * Extract the session ID from the request.
      *
+     * Ladder (INFO-SERVER-18, review server__fedev): query param → canonical
+     * header → legacy header. The canonical spelling is the one the estate's
+     * clients actually send — the API client and the transcode module set
+     * exactly `X-Phlix-Session-ID` on every request, and CorsManager
+     * advertises it on ALLOW_HEADERS — while this ladder previously knew
+     * only the legacy `X-Session-ID` form. Header-only clients (no query
+     * session id) therefore fell through to the synthetic (profile, device)
+     * bucket, so the same physical stream could occupy a DIFFERENT slot on
+     * the query-carrying HLS path than on the header-carrying direct path —
+     * exactly the doubling the SSOT helper above exists to prevent.
+     *
+     * Trust boundary, stated honestly: every carrier here is client-declared
+     * by design. The M-3 defense is the SYNTHETIC DEFAULT on omission (the
+     * cap cannot be dodged by never sending an id), not secrecy of the id;
+     * a client rotating invented ids burns a distinct slot per invented row
+     * against its own profile's cap and the 60 s silent-row sweep reclaims
+     * them. PreRouterFastPaths::getStreamSessionId() is the direct-play twin
+     * of this ladder — the two MUST stay byte-identical in precedence.
+     *
      * @param Request $request The incoming request.
      *
      * @return string|null The session ID, or null if not found.
@@ -235,7 +254,13 @@ final class StreamLimitMiddleware
             return $sessionId;
         }
 
-        // Try X-Session-ID header
+        // Canonical header — the spelling every first-party client sends.
+        $sessionId = $request->getHeader('X-Phlix-Session-ID');
+        if (is_string($sessionId) && $sessionId !== '') {
+            return $sessionId;
+        }
+
+        // Legacy X-Session-ID header, kept working as a fallback.
         $sessionId = $request->getHeader('X-Session-ID');
         if (is_string($sessionId) && $sessionId !== '') {
             return $sessionId;

@@ -669,6 +669,13 @@ final class PreRouterFastPaths
     /**
      * Extract the session ID from a request for stream tracking.
      *
+     * Direct-play TWIN of StreamLimitMiddleware::getSessionId() (INFO-SERVER-18):
+     * same precedence — query param, then the canonical client header, then
+     * the legacy spelling. A device that streams through both paths must
+     * resolve the SAME id on both, or it occupies two slots and the
+     * per-profile cap under-counts; see the middleware's ladder docblock for
+     * the full trust-boundary statement.
+     *
      * @param Request $request The request being served.
      */
     private function getStreamSessionId(Request $request): ?string
@@ -679,7 +686,13 @@ final class PreRouterFastPaths
             return $sessionId;
         }
 
-        // X-Session-ID header
+        // Canonical header — the spelling first-party clients actually send.
+        $sessionId = $request->getHeader('x-phlix-session-id');
+        if (is_string($sessionId) && $sessionId !== '') {
+            return $sessionId;
+        }
+
+        // Legacy header, kept working as a fallback.
         $sessionId = $request->getHeader('x-session-id');
         if (is_string($sessionId) && $sessionId !== '') {
             return $sessionId;

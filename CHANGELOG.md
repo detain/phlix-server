@@ -152,6 +152,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Direct-play stream limiting now honours the canonical `X-Phlix-Session-ID`
+  header.** Both session-id ladders — `StreamLimitMiddleware::getSessionId()`
+  (router/HLS path) and its pre-router twin
+  `PreRouterFastPaths::getStreamSessionId()` (direct `/media/{id}/stream`
+  path) — previously knew only the legacy `X-Session-ID` spelling, while the
+  estate's first-party clients (the API client and the transcode module, on
+  every request) send exactly `X-Phlix-Session-ID`. A header-only client
+  therefore fell through to the synthetic (profile, device) bucket, so the
+  same physical stream could occupy different slots depending on which path
+  answered it — undercutting the shared-bucket law the M-3 synthetic default
+  exists to enforce. The ladders now read query → canonical header → legacy
+  header, identically on both paths, with the legacy spelling kept working as
+  a fallback; +5 conviction legs (canonical honoured on both paths, legacy
+  fallback pinned, precedence query > canonical > legacy pinned on both). The
+  carriers stay client-declared by design: the M-3 property is the
+  synthetic-default-on-omission, not id secrecy — stated at the ladder
+  docblock. [review server__fedev, INFO-SERVER-18]
+
 - **Forward-correction: the chunked-head-leg forwarded-strip pin now actually
   ships.** The closeout-batch entry above (commit `947f7de8`) asserts a
   test-side companion — "the chunked HEAD+BODY+END request leg got its own

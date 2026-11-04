@@ -174,8 +174,8 @@ Examples:
   # Update an existing install to the latest master (preserves env + secrets)
   sudo bash install.sh --update -y
 
-  # Update and switch to a different branch / tag
-  sudo bash install.sh --update --branch v0.2.0 -y
+  # Update and switch to a different branch / tag (published tags: 'git tag -l')
+  sudo bash install.sh --update --branch v1.2.3 -y
 EOF
 }
 

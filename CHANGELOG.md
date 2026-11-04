@@ -100,6 +100,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The copy-pasteable version-pin example pinned a tag that does not exist:
+  `--branch v0.2.0` is not a release — the repo's tags start at v1.0.0, and
+  both the README section and the installer's own `--help` carried the dead
+  ref (review server__newcomer, SRV-m26).** A deliberate pinner following the
+  docs hit a checkout failure mid-update. Both examples now use a live tag
+  (`v1.2.3` = the current VERSION) and each site names where published tags
+  actually live (Releases / `git tag -l`), so the example ages honestly rather
+  than pointing at a fictional era.
+
 - **The bare-metal exposure note said `install.sh` opens "only `:8096`" in ufw —
   it opens more, and an operator auditing firewall exposure from that sentence
   would mis-size the surface (review server__docmaint, SRV-m16).** Measured:

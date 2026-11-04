@@ -744,10 +744,12 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/
   | sudo bash -s -- --update -y
 ```
 
-Pin to a specific tag or branch with `--branch`:
+Pin to a specific tag or branch with `--branch` (published tags: the GitHub
+Releases page, or `git tag -l` in a clone — `v0.x` refs predate the server's
+tag scheme and will fail checkout):
 
 ```bash
-sudo bash /var/www/phlix/scripts/install.sh --update --branch v0.2.0 -y
+sudo bash /var/www/phlix/scripts/install.sh --update --branch v1.2.3 -y
 ```
 
 `--update` discovers the install path from the systemd unit's `WorkingDirectory`, fetches code

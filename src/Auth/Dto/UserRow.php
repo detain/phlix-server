@@ -82,8 +82,12 @@ final class UserRow
      * (SRV-M12, review server__dba): the admin user-list leaked precisely
      * because redaction lived as a per-caller convention (`AuthManager::getUser()`
      * unsetting one column, `UserListCommand` keeping its own list). Every
-     * wire-boundary read of a raw user row now passes through here, and
-     * `tests/Unit/Auth/UserRowWireRedactionTest.php` pins that no second
+     * wire-boundary read enumerated by the mechanical `->getUser(` call-site
+     * census in `tests/Unit/Auth/UserRowWireRedactionTest.php` and by its
+     * pinned admin-surface consumers passes through here — SRV-m43 closed
+     * the fourth consumer family over which the earlier unconditional
+     * "every read" wording claimed enforcement the tests did not yet have.
+     * The same test pins set equality of that census and that no second
      * definition of the set appears anywhere in src/.
      *
      * The set:

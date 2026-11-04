@@ -243,8 +243,10 @@ final class AdminUserController
      * need `password_hash`), so the wire redaction that
      * {@see UserRepository::findAll()} and {@see UserRepository::listByStatus()}
      * apply at their source has to happen HERE for this endpoint — same secret
-     * set, same helper (SRV-M12: every wire-boundary read of a raw user row
-     * goes through {@see UserRow::forWire()}).
+     * set, same helper (SRV-M12: the wire-boundary reads of raw user rows
+     * enumerated by the mechanical call-site census in
+     * `UserRowWireRedactionTest` — the admin surfaces plus the SRV-m43
+     * `getUser()` family — go through {@see UserRow::forWire()}).
      *
      * @param Request               $request The HTTP request (unused body).
      * @param array<string, string> $params  Path parameters ({id} — a UUID string).

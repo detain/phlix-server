@@ -53,7 +53,9 @@ use Workerman\Timer;
  * moment-of-use doctrine the signed sibling {@see WebhookDispatcher}
  * enforces — so a row poisoned after creation (direct DB write, restore)
  * cannot reach loopback/link-local/private targets, and every retry
- * re-resolves DNS so the rebinding window stays closed.
+ * re-resolves DNS so each attempt's target is vetted at check time (a
+ * connect-time rebind inside the guard→socket window is the disclosed
+ * bounded residual, per the U3 ratification).
  * {@see self::createSubscription()} additionally guards at write time
  * inside the service, independent of controller-side validation.
  *
@@ -242,7 +244,8 @@ class WebhookService
         // Moment-of-use SSRF re-validation (SRV-M20): mirror the sibling
         // WebhookDispatcher doctrine — a stored row poisoned after creation
         // (or via a direct DB write/restore) must never reach internal space,
-        // and every retry re-evaluates it (DNS-rebinding window closes).
+        // and every retry re-evaluates it at check time (connect-time rebind
+        // inside the guard→socket window is the disclosed bounded residual).
         $refusal = $this->ssrfRefusal($delivery);
         if ($refusal !== null) {
             $this->handleFailedDelivery($delivery, $refusal);

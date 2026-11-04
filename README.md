@@ -398,7 +398,7 @@ playing the same kind of item — the party syncs playback positions, not catalo
    and can rewind/fast-forward the whole group through the host gate. Chat and
    typing indicators live in the same dialog; the queue holds up to 1000 items.
 
-Stuck? See [A SyncPlay / watch group gets stuck](#a-syncplay-watch-group-gets-stuck).
+Stuck? See [A SyncPlay / watch group gets stuck](#a-syncplay--watch-group-gets-stuck).
 
 ### Subtitles (choosing them)
 

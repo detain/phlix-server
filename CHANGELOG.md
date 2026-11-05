@@ -96,6 +96,23 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The per-response security-header policy went from two live DB point-
+  SELECTs to at most one store hit per key per second.**
+  `SecurityHeadersPolicy::hstsMaxAgeSeconds()` and `frameOptions()` each ran a
+  live `SettingsRepository::getEffective()` on EVERY response (the repo
+  config-cache covers file defaults only — SettingsRepository.php:112-135 —
+  so both reads hit MySQL on the hot dispatch path; INV-A P6). A per-key
+  in-process memo now mirrors the phlix-hub `MaintenanceGate` idiom —
+  `MEMO_TTL_SECONDS = 1`, strict-`<` expiry, injectable clock for tests,
+  resolved (coerced) values only, so a memoised read is byte-identical to a
+  cold one and a poisoned cache is structurally impossible. The documented
+  trade: an admin edit lands within one second instead of "the very next
+  response" — per-decision-bounded staleness BY DESIGN under the resident-
+  worker law (de573d6e precedent), law-pinned: two reads inside the bound hit
+  the store once, the first read at `t+1` re-reads, the two keys are memoised
+  independently, and the bound itself is constant-pinned. XFO/HSTS wire
+  output is otherwise byte-ident. [playback-lag forensics INV-A, C3]
+
 - **Wave 5: `@phlix/ui` v0.99.16 re-pinned, and the served `/app`
   bundle regenerated.** [wave-5 cascade]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.15 →

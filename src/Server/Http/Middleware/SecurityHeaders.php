@@ -47,7 +47,7 @@ use Phlix\Server\Http\Response;
  */
 final class SecurityHeaders
 {
-    /** @var SecurityHeadersPolicy Per-request effective values (live reads) */
+    /** @var SecurityHeadersPolicy Per-response effective values (one-second memoised live reads) */
     private SecurityHeadersPolicy $policy;
 
     /**

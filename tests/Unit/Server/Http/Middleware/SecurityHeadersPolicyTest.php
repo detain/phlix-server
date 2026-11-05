@@ -120,4 +120,126 @@ final class SecurityHeadersPolicyTest extends TestCase
 
         return new SecurityHeadersPolicy($settings);
     }
+
+    // ---- C3 (playback-lag cure, INV-A P6): the one-second in-process memo ----
+
+    /**
+     * Counting store double: every getEffective() increments $calls keyed by
+     * the dotted settings key (by-reference array counter — typed clean for
+     * phpstan, unlike an unparameterised ArrayObject).
+     *
+     * @param array<string, mixed>  $values
+     * @param array<string, int>    $calls
+     * @param callable():int        $clock
+     */
+    private function countingPolicy(array $values, array &$calls, callable $clock): SecurityHeadersPolicy
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings
+            ->method('getEffective')
+            ->willReturnCallback(static function (string $key) use ($values, &$calls): mixed {
+                $calls[$key] = (int) ($calls[$key] ?? 0) + 1;
+
+                return $values[$key] ?? null;
+            });
+
+        return new SecurityHeadersPolicy($settings, $clock);
+    }
+
+    public function test_two_reads_within_one_second_hit_the_store_once(): void
+    {
+        // INV-A P6 defect: BOTH header values were a live DB point-SELECT per
+        // response (SettingsRepository::getEffective covers config-cache for
+        // FILE defaults only — SettingsRepository.php:112-135) on the hot
+        // dispatch path. Cure: a one-second in-process memo per key, the
+        // phlix-hub MaintenanceGate idiom. Red at parent: each call to
+        // hstsMaxAgeSeconds() re-read the store, so the counter reached 3.
+        $values = [SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 3600];
+        $calls = [];
+        $policy = $this->countingPolicy($values, $calls, static fn (): int => 100);
+
+        for ($round = 0; $round < 3; $round++) {
+            self::assertSame(3600, $policy->hstsMaxAgeSeconds());
+        }
+
+        self::assertSame([SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 1], $calls);
+    }
+
+    public function test_a_change_is_picked_up_once_the_one_second_bound_passes(): void
+    {
+        // The bound is EXACTLY one second: written at t, the memo serves for
+        // t itself, and the first read at t+1 goes back to the store — an
+        // admin PUT lands on a response within one second of the tick
+        // boundary, never later (per-decision-bounded staleness BY DESIGN,
+        // documented in the class docblock; resident-worker precedent
+        // de573d6e).
+        $tick = 100;
+        $clock = static function () use (&$tick): int {
+            return $tick;
+        };
+        $value = 3600;
+        $calls = [];
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings
+            ->method('getEffective')
+            ->willReturnCallback(static function (string $key) use (&$value, &$calls): mixed {
+                $calls[$key] = (int) ($calls[$key] ?? 0) + 1;
+
+                return $key === SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE ? $value : null;
+            });
+        $policy = new SecurityHeadersPolicy($settings, $clock);
+
+        for ($round = 0; $round < 3; $round++) {
+            self::assertSame(3600, $policy->hstsMaxAgeSeconds());
+            if ($round === 1) {
+                // Mid-window store change (the admin PUT shape): inside the
+                // same second the memo serves the RESOLVED old value — the
+                // one bound is the documented promise, not a bug.
+                $value = 7200;
+            }
+        }
+
+        self::assertSame([SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 1], $calls);
+
+        // t + MEMO_TTL_SECONDS: strict-`<` expiry means the first read at
+        // exactly t+1 goes back to the store and the new value reaches the
+        // wire.
+        $tick = 101;
+        self::assertSame(7200, $policy->hstsMaxAgeSeconds());
+        self::assertSame(2, $calls[SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE]);
+    }
+
+    public function test_each_key_is_memoised_independently_and_the_wire_pair_is_unchanged(): void
+    {
+        // Two memos, no cross-talk: each key pays at most one store read per
+        // second, and a memoised read resolves through the SAME coercion as a
+        // cold one (zero mutation of wire behavior — the header pair stays
+        // byte-identical to the pre-memo path).
+        $values = [
+            SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 60,
+            SecurityHeadersPolicy::SETTING_KEY_FRAME_OPTIONS => 'deny',
+        ];
+        $calls = [];
+        $policy = $this->countingPolicy($values, $calls, static fn (): int => 500);
+
+        for ($round = 0; $round < 5; $round++) {
+            self::assertSame(60, $policy->hstsMaxAgeSeconds());
+            self::assertSame('DENY', $policy->frameOptions());
+        }
+
+        self::assertSame([
+            SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 1,
+            SecurityHeadersPolicy::SETTING_KEY_FRAME_OPTIONS => 1,
+        ], $calls);
+    }
+
+    public function test_the_memo_bound_is_the_one_second_constant(): void
+    {
+        // The bound is the law operators are promised in the class docblock;
+        // rotating it must be a deliberate edit through this pin.
+        $reflection = new \ReflectionClass(SecurityHeadersPolicy::class);
+        $bound = $reflection->getConstant('MEMO_TTL_SECONDS');
+
+        self::assertSame(1, $bound);
+    }
 }

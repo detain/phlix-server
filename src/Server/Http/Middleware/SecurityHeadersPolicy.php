@@ -31,10 +31,18 @@ use Phlix\Admin\SettingsRepository;
  * ## Read path
  *
  * Class (a) LIVE: `SecurityHeaders::decorate()` runs per request inside
- * `HttpHandler::__invoke()`, and both values are read through
- * {@see SettingsRepository::getEffective()} at that moment — an admin edit
- * applies to the very next response, no restart. `restart: false` is the
- * truth for both keys.
+ * `HttpHandler::__invoke()`. Both values resolve through
+ * {@see SettingsRepository::getEffective()} — but ONE live DB point-SELECT
+ * per key per second, not per response (playback-lag cure C3, INV-A P6):
+ * an in-process memo mirrors the phlix-hub `MaintenanceGate` idiom
+ * (`MEMO_TTL_SECONDS = 1`, strict-`<` expiry, injectable clock for tests).
+ * An admin edit therefore applies to a response within one second —
+ * per-decision-bounded staleness BY DESIGN, the same trade the de573d6e
+ * resident-worker law contemplates: the bound is the promise, the store is
+ * never skipped. The key is that the memo holds the RESOLVED (coerced)
+ * value, so a memoised read and a cold read are byte-identical; null store,
+ * unreadable store and out-of-band rows all resolve exactly as before.
+ * `restart: false` stays the truth for both keys, one second at a time.
  *
  * ## What is DELIBERATELY not exposed
  *
@@ -101,15 +109,33 @@ final class SecurityHeadersPolicy
     public const FRAME_OPTIONS = ['DENY', 'SAMEORIGIN', 'NONE'];
 
     /**
+     * Memo TTL in seconds for the live settings read — the phlix-hub
+     * MaintenanceGate bound. Law-pinned by
+     * SecurityHeadersPolicyTest::test_the_memo_bound_is_the_one_second_constant;
+     * rotating it is a deliberate act through that pin.
+     */
+    private const MEMO_TTL_SECONDS = 1;
+
+    /** @var array{value:int, expiresAt:int}|null HSTS resolved-value memo. */
+    private ?array $hstsMemo = null;
+
+    /** @var array{value:string, expiresAt:int}|null XFO resolved-value memo. */
+    private ?array $frameMemo = null;
+
+    /**
      * @param SettingsRepository|null $settings Effective-settings store. NULL
      *        degrades to the shipped constants.
      *
      *        NOTE for DI: PHP-DI SKIPS optional constructor parameters during
      *        autowiring, so any binding that needs the settings honoured must
      *        name this parameter explicitly (see CoreServicesProvider).
+     * @param callable():int|null     $clock    Injectable second clock for the
+     *        one-second memo (tests pin it; production uses time()). NULL is
+     *        the production shape — also skipped by PHP-DI autowiring.
      */
     public function __construct(
         private readonly ?SettingsRepository $settings = null,
+        private readonly mixed $clock = null,
     ) {
     }
 
@@ -121,6 +147,51 @@ final class SecurityHeadersPolicy
      * an out-of-policy pin. 0 is honoured (clear-the-pin signal).
      */
     public function hstsMaxAgeSeconds(): int
+    {
+        $now = $this->now();
+        if ($this->hstsMemo !== null && $now < $this->hstsMemo['expiresAt']) {
+            return $this->hstsMemo['value'];
+        }
+
+        $value = $this->readHstsMaxAge();
+        /** @var array{value:int, expiresAt:int} $memo */
+        $memo = ['value' => $value, 'expiresAt' => $now + self::MEMO_TTL_SECONDS];
+        $this->hstsMemo = $memo;
+
+        return $value;
+    }
+
+    /**
+     * The X-Frame-Options verdict for this response.
+     *
+     * @return string One of {@see self::FRAME_OPTIONS}; anything unrecognised
+     *         yields the shipped default, never an arbitrary string (this
+     *         method's return value goes into a header verbatim — parse at the
+     *         boundary, emit a member of the closed set).
+     */
+    public function frameOptions(): string
+    {
+        $now = $this->now();
+        if ($this->frameMemo !== null && $now < $this->frameMemo['expiresAt']) {
+            return $this->frameMemo['value'];
+        }
+
+        $value = $this->readFrameOptions();
+        /** @var array{value:string, expiresAt:int} $memo */
+        $memo = ['value' => $value, 'expiresAt' => $now + self::MEMO_TTL_SECONDS];
+        $this->frameMemo = $memo;
+
+        return $value;
+    }
+
+    /**
+     * Live store read for the HSTS max-age — memoized by the ONLY caller
+     * {@see self::hstsMaxAgeSeconds()}. Failure shape untouched by the memo:
+     * null store / thrown read / garbage row all resolve to the shipped
+     * constant BEFORE the value is stored, so a poisoned one-second cache is
+     * structurally impossible.
+     */
+    private function readHstsMaxAge(): int
     {
         if ($this->settings === null) {
             return self::DEFAULT_HSTS_MAX_AGE;
@@ -137,14 +208,10 @@ final class SecurityHeadersPolicy
     }
 
     /**
-     * The X-Frame-Options verdict for this response.
-     *
-     * @return string One of {@see self::FRAME_OPTIONS}; anything unrecognised
-     *         yields the shipped default, never an arbitrary string (this
-     *         method's return value goes into a header verbatim — parse at the
-     *         boundary, emit a member of the closed set).
+     * Live store read for the XFO verdict — same no-poison law as
+     * {@see self::readHstsMaxAge()}.
      */
-    public function frameOptions(): string
+    private function readFrameOptions(): string
     {
         if ($this->settings === null) {
             return self::DEFAULT_FRAME_OPTIONS;
@@ -165,6 +232,21 @@ final class SecurityHeadersPolicy
         }
 
         return self::DEFAULT_FRAME_OPTIONS;
+    }
+
+    /**
+     * Current second per the injected clock (production: time()).
+     */
+    private function now(): int
+    {
+        if (is_callable($this->clock)) {
+            /** @var int $tick */
+            $tick = ($this->clock)();
+
+            return $tick;
+        }
+
+        return time();
     }
 
     /**

@@ -1161,10 +1161,24 @@ breaks hls.js, and scale widths are forced even (`force_divisible_by=2` in the v
 | `HLS_CACHE_MAX_BYTES` | `8 GiB` | no | yes | `config/server.php` → `hls.` |
 | `HLS_CACHE_MAX_AGE` | `10800` s | no | yes | `config/server.php` → `hls.` |
 | `HLS_MIN_DISK_SPACE_BYTES` | `524288000` (500 MiB) | no | yes | `config/server.php` → `hls.` — free-space floor; below it the segment cache is swept and encodes answer `503` + `Retry-After: 3` instead of `ENOSPC` |
+| `PHLIX_SEGMENT_DIR` | `sys_get_temp_dir()/phlix_hls` | no | yes | `config/server.php` → `hls.segment_dir` — location of the HLS segment cache; see the persistence note below |
 | `PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS` / `PHLIX_HLS_RELAY_MAX_SEGMENTS` | see `config/hls_relay.php` | no | yes | `config/hls_relay.php` |
 | `PREFERRED_ACCELERATOR` | `` (auto) | no | yes | `config/transcoding.php` |
 | `TONE_MAPPING_MODE` | `none` | no | yes | `config/transcoding.php` |
 | `PREFER_HDR_OUTPUT` | `false` | no | yes | `config/transcoding.php` |
+
+**Segment-cache persistence (`PHLIX_SEGMENT_DIR`).** Unset, the cache keeps its
+historical default `sys_get_temp_dir()/phlix_hls` — byte-identical to every
+pre-C5 install. But the shipped systemd unit runs `PrivateTmp=true`, so that path
+is a per-start scratch namespace: every deploy/restart silently wipes the cache
+and each cold first-play re-pays 3–6.6 s of inline segment transcode. Deployers
+should set this to a persistent, writable absolute path — `install.sh` provisions
+`/var/phlix/hls` (created, owned, and granted via the unit's `ReadWritePaths`, and
+exported in the unit + env file). The 8 GiB LRU budget, the 3 h idle TTL and the
+free-space floor govern the chosen directory exactly like the temp default. An
+unusable value (relative, non-writable, or uncreatable) **aborts boot** with an
+actionable message (`SegmentCacheDirectory`) — never a silent fallback, because a
+quietly-broken cache is invisible until playback gets slow.
 
 #### Storage paths
 

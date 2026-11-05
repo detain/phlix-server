@@ -38,6 +38,14 @@ Environment="PHLIX_ENV=production"
 # it at /var/cache/phlix/anidb (also in ReadWritePaths below) gives it a real
 # persistent home instead of PrivateTmp's per-start scratch.
 Environment="PHLIX_ANIDB_CACHE_DIR=/var/cache/phlix/anidb"
+# Persistent home for the HLS segment cache (config/server.php hls.segment_dir).
+# The unset default is sys_get_temp_dir()/phlix_hls — INSIDE PrivateTmp's
+# per-start namespace, so every restart wiped the whole cache and each cold
+# first-play re-paid 3–6.6 s of inline segment transcode (FIELD-hub-phlix).
+# /var/phlix/hls (also in ReadWritePaths below) keeps transcoded segments across
+# restarts; the 8 GiB / 3 h budget sweeps it identically. An unusable value
+# aborts boot fail-loud instead of silently degrading every playback.
+Environment="PHLIX_SEGMENT_DIR=/var/phlix/hls"
 EnvironmentFile=/etc/phlix/env
 
 StandardOutput=journal
@@ -66,7 +74,10 @@ ProtectHome=true
 # /var/cache/phlix/anidb is the anidb plugin's persistent title-dump cache
 # (PHLIX_ANIDB_CACHE_DIR above); without it here ProtectSystem=strict keeps it
 # read-only and the plugin's index write fails (the /var/artwork lesson).
-ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork /var/subtitles /var/cache/phlix/anidb
+# /var/phlix/hls is the persistent HLS segment cache (PHLIX_SEGMENT_DIR above);
+# listed explicitly beside its /var/phlix parent so the grant is visible per
+# subsystem like every other writable path here.
+ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c /var/www/phlix/var /var/artwork /var/subtitles /var/cache/phlix/anidb /var/phlix/hls
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

@@ -96,6 +96,35 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **`PHLIX_SEGMENT_DIR` lets the HLS segment cache live outside `PrivateTmp` —
+  it can now survive restarts.** The cache defaulted to
+  `sys_get_temp_dir()/phlix_hls`, and the shipped systemd unit runs
+  `PrivateTmp=true`: that directory was a per-start scratch namespace, so EVERY
+  deploy/restart silently wiped the whole segment cache and cold first-plays
+  re-paid 3.0–6.6 s per 6 s segment in synchronous inline transcode
+  (FIELD-hub-phlix trace, Nov 4). `config/server.php` resolves
+  `hls.segment_dir` through `EnvConfig::text` — unset/empty stays
+  byte-identical to the historical default; `install.sh` provisions the
+  persistent path (`/var/phlix/hls`: created, owned, retrofitted into existing
+  units' `ReadWritePaths` + `Environment=`, and backfilled into the env file via
+  `phlix_ensure_env_key`, which preserves an operator-set value). An unusable
+  override aborts boot FAIL-LOUD in the master, pre-fork, through the new
+  `SegmentCacheDirectory::assertUsable` (empty / relative / existing
+  non-directory / non-writable / uncreatable each refuse with an
+  operator-actionable message naming the knob) — a silent fallback was
+  deliberately rejected: a quietly broken cache is invisible until playback is
+  slow, which is exactly the incident this knob exists to prevent. The 8 GiB LRU
+  budget, the 3 h idle TTL and the free-space floor key off the SAME resolved
+  directory and govern either location identically (law-pinned against a
+  non-temp path in `TranscodeManagerPersistentCacheBudgetTest`). This commit
+  also lands the HOST-1 T7 must-fix in the same file it touches: the update tail
+  `[ "$prev_commit" = "$new_commit" ] && info …` was `do_update`'s LAST
+  statement, so every REAL commit-changing update returned 1 — under `set -e`
+  the bare call then aborted the script exit 1 AFTER restart and health had
+  already succeeded, making a successful update look like a failure (mirrors
+  the hub's cure: if-form + explicit `return 0`). [FIELD-hub-phlix, HOST-1 T7;
+  playback-lag cure C5 — segment cache survives restarts]
+
 - **A knob-forced `PHLIX_LOG_LEVEL=debug` now confesses its per-request cost
   exactly once at boot.** `PHLIX_LOG_LEVEL` went LIVE in 4ab3ffc3 (R3-08), so
   a host carrying `debug` lowers EVERY level-driven handler and each served

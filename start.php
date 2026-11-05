@@ -30,6 +30,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Config\EffectiveConfig;
+use Phlix\Media\Transcoding\SegmentCacheDirectory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Runtime\BootIdentity;
@@ -90,6 +91,29 @@ LoggerFactory::init($config['logger_config_path']);
 $verboseFloorDisclosure = StructuredLogger::verboseFloorDisclosure();
 if ($verboseFloorDisclosure !== null) {
     LoggerFactory::get(LogChannels::APPLICATION)->warning($verboseFloorDisclosure);
+}
+
+// C5 (FIELD-hub-phlix): the HLS segment cache must be WRITABLE at boot.
+// `hls.segment_dir` honors PHLIX_SEGMENT_DIR so the cache can live OUTSIDE
+// the unit's PrivateTmp namespace (install.sh provisions /var/phlix/hls) and
+// survive restarts. A misprovisioned override would otherwise boot "fine"
+// and silently re-pay the cold-cache tax — 3–6.6 s of inline transcode per
+// first-played segment — forever; that is a misconfiguration, so refuse to
+// start with a clear, actionable message, pre-fork, exactly like the
+// JWT-secret gate in section 0. Unset env keeps the historical temp default,
+// which still runs the same check (a machine with an unwritable /tmp now
+// learns it at boot instead of mid-playback). A non-string value is left to
+// the provider's documented runtime fallbacks — the guard covers the shape
+// config/server.php actually ships.
+$segmentDir = is_array($config['hls'] ?? null) ? ($config['hls']['segment_dir'] ?? null) : null;
+if (is_string($segmentDir)) {
+    try {
+        SegmentCacheDirectory::assertUsable($segmentDir);
+    } catch (\RuntimeException $e) {
+        fwrite(STDERR, $e->getMessage() . "\n");
+        error_log($e->getMessage());
+        exit(1);
+    }
 }
 
 // S445/MED-1(1): pin the SyncPlay write-through bridge's shared secret HERE,

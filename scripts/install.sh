@@ -52,6 +52,15 @@ ANIDB_CACHE_DIR="$(grep -m1 -E '^PHLIX_ANIDB_CACHE_DIR=' "$ENV_FILE" 2>/dev/null
 # fails with "Read-only file system". Honour an operator override in the env file.
 SUBTITLE_DIR="$(grep -m1 -E '^SUBTITLE_STORAGE_PATH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 [ -n "$SUBTITLE_DIR" ] || SUBTITLE_DIR="/var/subtitles"
+# Persistent home for the HLS segment cache (config/server.php resolves it from
+# PHLIX_SEGMENT_DIR; unset means sys_get_temp_dir()/phlix_hls). The shipped unit
+# runs PrivateTmp=true, so the temp default is a per-start namespace: EVERY
+# deploy/restart silently wipes the cache and each cold first-play re-pays 3–6.6 s
+# of inline segment transcode (the FIELD-hub-phlix playback trace). Like
+# ANIDB_CACHE_DIR it MUST be a systemd ReadWritePath. Honour an operator override
+# already recorded in the env file.
+SEGMENT_DIR="$(grep -m1 -E '^PHLIX_SEGMENT_DIR=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+[ -n "$SEGMENT_DIR" ] || SEGMENT_DIR="/var/phlix/hls"
 
 DB_HOST="127.0.0.1"
 DB_PORT="3306"
@@ -1418,7 +1427,7 @@ do_update() {
 	# binds ReadWritePaths at start), so create them here, ahead of the chown.
 	mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR" \
 		"$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache" \
-		"$ARTWORK_DIR" "$SUBTITLE_DIR" "$ANIDB_CACHE_DIR"
+		"$ARTWORK_DIR" "$SUBTITLE_DIR" "$ANIDB_CACHE_DIR" "$SEGMENT_DIR"
 	# Restore ownership the install was running with.
 	if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
 		chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
@@ -1426,6 +1435,7 @@ do_update() {
 		chown "$repo_owner:$repo_owner" "$ARTWORK_DIR" 2>/dev/null || true
 		chown "$repo_owner:$repo_owner" "$SUBTITLE_DIR" 2>/dev/null || true
 		chown -R "$repo_owner:$repo_owner" "$ANIDB_CACHE_DIR" 2>/dev/null || true
+		chown "$repo_owner:$repo_owner" "$SEGMENT_DIR" 2>/dev/null || true
 	fi
 
 	# 4. Apply migrations. Re-running on each update is safe: the runner keeps a
@@ -1561,6 +1571,37 @@ do_update() {
 		systemctl daemon-reload >/dev/null 2>&1 || true
 	fi
 
+	# 4h-C. Ensure the systemd unit can WRITE the persistent HLS segment cache
+	# ($SEGMENT_DIR, default /var/phlix/hls) AND exports its location (C5). Since
+	# C5 config/server.php resolves PHLIX_SEGMENT_DIR into `hls.segment_dir`;
+	# without the ReadWritePaths entry ProtectSystem=strict keeps the dir read-only
+	# (the /var/artwork lesson), and without the Environment= line the daemon keeps
+	# using the PrivateTmp-wiped temp dir — the cache dies on every restart and
+	# cold first-plays re-pay the inline-transcode latency (FIELD-hub-phlix). An
+	# unusable override aborts boot fail-loud (SegmentCacheDirectory), so provision
+	# it here: create + chown first (a missing ReadWritePath fails the unit at
+	# 226/NAMESPACE), then append the exact path only when absent, then inject the
+	# env export right after the existing PHLIX_ENV line, only when absent.
+	# Idempotent, mirrors 4h/4h-B.
+	mkdir -p "$SEGMENT_DIR" 2>/dev/null || true
+	chown -R "$SERVICE_USER:$SERVICE_USER" "$SEGMENT_DIR" 2>/dev/null || true
+	if [ -f "$SERVICE_FILE" ] &&
+		grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null &&
+		! awk -v p="$SEGMENT_DIR" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+		log "Adding $SEGMENT_DIR to systemd ReadWritePaths (persistent HLS segment cache)"
+		sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $SEGMENT_DIR|" "$SERVICE_FILE"
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
+	if [ -f "$SERVICE_FILE" ] &&
+		grep -q '^Environment="PHLIX_ENV=' "$SERVICE_FILE" 2>/dev/null &&
+		! grep -q '^Environment="PHLIX_SEGMENT_DIR=' "$SERVICE_FILE" 2>/dev/null; then
+		log "Adding PHLIX_SEGMENT_DIR=$SEGMENT_DIR to systemd unit Environment"
+		sed -i "/^Environment=\"PHLIX_ENV=/a Environment=\"PHLIX_SEGMENT_DIR=$SEGMENT_DIR\"" "$SERVICE_FILE"
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
+
 	# 4i. Kernel/resource tuning (Workerman kernel-optimization appendix). Two
 	# halves, because they use two different mechanisms:
 	#
@@ -1620,6 +1661,12 @@ LimitNOFILE=1048576\\
 	log "Ensuring required env keys are present"
 	phlix_ensure_env_key "$ENV_FILE" JWT_SECRET "$(rand_hex 32)" \
 		"JWT signing secret (REQUIRED) — auth JWTs + HMAC-derived media signed URLs."
+	# C5: record the persistent HLS segment cache location. A real, non-empty
+	# PHLIX_SEGMENT_DIR is preserved (an operator who pointed the cache elsewhere
+	# keeps their path); installs predating C5 gain the provisioned default so the
+	# cache starts surviving PrivateTmp restarts from the next boot.
+	phlix_ensure_env_key "$ENV_FILE" PHLIX_SEGMENT_DIR "$SEGMENT_DIR" \
+		"Persistent HLS segment cache dir — survives restarts (PrivateTmp wipes the temp default). Unusable values abort boot."
 
 	# 4f-B. Backfill the DB_* keys config/database.php actually reads. Older
 	# installs wrote ONLY DB_PASSWORD + the PHLIX_DATABASE_* aliases (which the
@@ -1691,7 +1738,18 @@ LimitNOFILE=1048576\\
 	log "Phlix Media Server update complete."
 	info "Branch : $BRANCH"
 	info "Commit : $prev_commit -> $new_commit"
-	[ "$prev_commit" = "$new_commit" ] && info "(already up to date)"
+	if [ "$prev_commit" = "$new_commit" ]; then
+		info "(already up to date)"
+	fi
+
+	# do_update runs as a bare statement under `set -euo pipefail` (see the
+	# `if [ "$ACTION" = "update" ]` dispatch below), so its return value becomes
+	# the script's exit status. Return success explicitly: without this the final
+	# command above evaluates to 1 whenever the commit actually changed (i.e. a
+	# real update — the common case), which under `set -e` aborts the script
+	# before the trailing `exit 0` and makes a successful update look like a
+	# failure to anyone checking $?.
+	return 0
 }
 
 if [ "$ACTION" = "update" ]; then
@@ -2052,6 +2110,16 @@ PHLIX_ENV=production
 # reads this after an explicit ctor arg / cache_dir setting, before falling
 # back to sys_get_temp_dir().
 PHLIX_ANIDB_CACHE_DIR=${ANIDB_CACHE_DIR}
+
+# Persistent home for the HLS segment cache (transcoded variants + segments;
+# config/server.php hls.segment_dir). Unset, the default
+# sys_get_temp_dir()/phlix_hls lives INSIDE the unit's PrivateTmp namespace and
+# is wiped on every restart — each cold first-play then re-pays 3–6.6 s of
+# inline segment transcode. Keep this line so the cache survives restarts; the
+# 8 GiB / 3 h budget governs it identically wherever it lives. An unusable
+# value (relative, non-writable, uncreatable) aborts boot with a clear message
+# rather than silently degrading playback.
+PHLIX_SEGMENT_DIR=${SEGMENT_DIR}
 
 # --- Optional integrations (uncomment / fill in to enable) ---
 $([ -n "$TMDB_API_KEY" ] && printf 'TMDB_API_KEY=%s\n' "$TMDB_API_KEY" || printf '#TMDB_API_KEY=\n')

@@ -139,9 +139,17 @@ return [
     // TranscodeManager writes there and HlsController/HlsStreamer read from the
     // very same directory. It defaults to a writable temp path so on-demand
     // transcoding works out of the box without provisioning /var/segments.
+    // Env override: PHLIX_SEGMENT_DIR — under systemd's PrivateTmp the temp
+    // default is a per-start scratch namespace, so every deploy/restart wipes
+    // the cache and each cold first-play re-pays 3–6.6 s of inline transcode
+    // (FIELD-hub-phlix). Deployers point this at a persistent, writable path
+    // (install.sh provisions /var/phlix/hls) to keep the cache across
+    // restarts; the 8 GiB / 3 h budget governs it identically. An unusable
+    // value (relative, non-writable, uncreatable) aborts boot in start.php
+    // with a clear message — never a silent fallback (SegmentCacheDirectory).
     // `base_url` is only used to build absolute playlist URLs for casting.
     'hls' => [
-        'segment_dir' => sys_get_temp_dir() . '/phlix_hls',
+        'segment_dir' => EnvConfig::text('PHLIX_SEGMENT_DIR', sys_get_temp_dir() . '/phlix_hls'),
         'base_url' => 'http://localhost:8096',
         // Target HLS segment duration (seconds). 6s is the Apple-recommended
         // default and keeps the segment count (and per-request overhead) sane.

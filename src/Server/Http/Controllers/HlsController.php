@@ -204,6 +204,26 @@ class HlsController
                     ->status(503)
                     ->header('Retry-After', '3')
                     ->json(['error' => 'segment cache full']);
+            } catch (\InvalidArgumentException $e) {
+                // INV-A P3 (playback-lag cure): the argv-boundary gate in
+                // FfmpegRunner::argvParam() throws synchronously inside the
+                // per-request command build when the job's PERSISTED
+                // segment_params row holds a value outside the allowlist
+                // (hand-edited row, restored backup, older generator). Before
+                // this arm the IAE escaped to the router and every segment of
+                // that job answered 500 — an hls.js retry storm on exactly the
+                // legacy jobs. Answer the codebase's transient envelope (the
+                // 063c59b6 LiveTV not-materialized precedent; no new wire
+                // code): a genuinely stuck row keeps the player patient rather
+                // than fatal, and the operator learns the job id below. The
+                // exception message is deliberately NOT forwarded — it names
+                // the rejected param slot; the disclosure line carries the
+                // job id only, never persisted param values.
+                error_log('hls: segment command build refused for job ' . $jobId . '; repair or re-mint the job row');
+                return (new Response())
+                    ->status(503)
+                    ->header('Retry-After', '2')
+                    ->json(['error' => 'segment build refused']);
             }
             if ($ready === null) {
                 return (new Response())->status(404)->json(['error' => 'segment unavailable']);

@@ -175,6 +175,20 @@ class DashController
                     ->status(503)
                     ->header('Retry-After', '3')
                     ->json(['error' => 'segment cache full']);
+            } catch (\InvalidArgumentException $e) {
+                // INV-A P3 (playback-lag cure), mirrored from the HLS rail: a
+                // persisted segment_params row outside the ffmpeg argv allowlist
+                // makes the synchronous command build inside ensureSegment()
+                // throw; the IAE must not escape into a per-segment 500 storm
+                // on DASH clients. Same transient envelope (503 + Retry-After,
+                // 063c59b6 precedent, no new wire code), same disclosure law:
+                // the error_log names the job id only, never the rejected
+                // param slot prose carried by the exception message.
+                error_log('dash: segment command build refused for job ' . $jobId . '; repair or re-mint the job row');
+                return (new Response())
+                    ->status(503)
+                    ->header('Retry-After', '2')
+                    ->json(['error' => 'segment build refused']);
             }
             if ($ready === null) {
                 return (new Response())->status(404)->json(['error' => 'segment unavailable']);

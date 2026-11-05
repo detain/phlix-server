@@ -29,6 +29,9 @@ class DashControllerTest extends TestCase
 {
     private string $segmentDir;
 
+    /** Captured destination of error_log() for the disclosure-law pins. */
+    private ?string $logFile = null;
+
     protected function setUp(): void
     {
         $this->segmentDir = sys_get_temp_dir() . '/phlix_dashctl_' . uniqid();
@@ -37,6 +40,11 @@ class DashControllerTest extends TestCase
 
     protected function tearDown(): void
     {
+        ini_restore('error_log');
+        if ($this->logFile !== null && is_file($this->logFile)) {
+            @unlink($this->logFile);
+        }
+        $this->logFile = null;
         $this->rrmdir($this->segmentDir);
     }
 
@@ -303,6 +311,64 @@ class DashControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($res->body, true);
         $this->assertSame('segment cache full', $body['error']);
+    }
+
+    public function testSegmentCommandBuildRefusalAnswers503NotAnEscapingError(): void
+    {
+        // INV-A P3 cure (playback-lag): the same argv-boundary InvalidArgumentException
+        // thrown synchronously by ensureSegment()'s command build escapes to the
+        // router here as on the HLS rail — mirrored transient envelope (503 +
+        // Retry-After per the 063c59b6 precedent, flat {error}, no new wire code)
+        // keeps a legacy segment_params row from 500-storming every DASH segment.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('2d5e8f1a-3b7c-4d9e-a1f2-3c4d5e6f7a8b', '1080p', 0)
+            ->willThrowException(new \InvalidArgumentException(
+                'transcode segment param "tone_map_filter" is outside the ffmpeg argv allowlist;'
+                . ' refusing to build the command'
+            ));
+
+        $res = (new DashController($this->segmentDir, $manager))->serveFile(
+            new Request(),
+            ['job_id' => '2d5e8f1a-3b7c-4d9e-a1f2-3c4d5e6f7a8b', 'file' => 'seg-v1080p-00000.m4s']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('2', $res->headers['Retry-After'] ?? null);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'segment build refused'], $body);
+    }
+
+    public function testSegmentCommandBuildRefusalErrorLogsJobIdOnly(): void
+    {
+        // Operator disclosure law, mirrored from the HLS rail: one error_log line
+        // naming the JOB id; no param prose from the exception rides into it.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureSegment')
+            ->willThrowException(new \InvalidArgumentException(
+                'transcode segment param "tone_map_filter" is outside the ffmpeg argv allowlist;'
+                . ' refusing to build the command'
+            ));
+
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-dash03-log-');
+        $this->logFile = $logFile;
+        ini_set('error_log', $logFile);
+
+        $res = (new DashController($this->segmentDir, $manager))->serveFile(
+            new Request(),
+            ['job_id' => '2d5e8f1a-3b7c-4d9e-a1f2-3c4d5e6f7a8b', 'file' => 'seg-v1080p-00000.m4s']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $log = (string) file_get_contents($logFile);
+        $this->assertStringContainsString('2d5e8f1a-3b7c-4d9e-a1f2-3c4d5e6f7a8b', $log);
+        $this->assertStringNotContainsString(
+            'tone_map_filter',
+            $log,
+            'the refusal detail stays out of the controller line — job id only'
+        );
     }
 
     /**

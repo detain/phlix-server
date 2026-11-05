@@ -263,6 +263,25 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A poisoned `segment_params` row can no longer 500-storm every segment of
+  a job.** The per-request on-demand segment build (`TranscodeManager::
+  ensureSegment()` → `FfmpegRunner::argvParam()`) throws
+  `InvalidArgumentException` when a job's PERSISTED segment params hold a
+  value outside the ffmpeg argv allowlist (hand-edited row, restored backup,
+  older generator) — but the HLS and DASH segment serve arms caught only the
+  two `RuntimeException` siblings (`SegmentBusyException`,
+  `SegmentCacheFullException`), so that argv-boundary refusal escaped to the
+  router as a per-segment 500 and hls.js/DASH clients hammered it as a
+  retry storm exactly on the legacy jobs the playback-lag forensics (INV-A
+  P3) fingered. Each serve arm now answers the codebase's transient envelope
+  — 503 + `Retry-After: 2` (the 063c59b6 LiveTV not-materialized precedent),
+  flat `{error}` body, no new wire code — plus ONE operator disclosure
+  `error_log` line naming the job id only; the exception's param-slot prose
+  is deliberately not forwarded and persisted param values never reach the
+  log. Red-first at parent: the four new controller pins errored verbatim
+  with the escaping IAE; stripping the new catch arms reddens exactly them
+  again. [playback-lag forensics INV-A, C2]
+
 - **A watch party no longer dies mid-film at an hour of host-command
   silence.** The :8097 stale-group sweep judged liveness on
   `GroupState::$lastActivityAt`, which only host-command paths (join/leave/

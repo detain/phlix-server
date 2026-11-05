@@ -25,6 +25,9 @@ class HlsControllerTest extends TestCase
     private string $segmentDir;
     private HlsStreamer $streamer;
 
+    /** Captured destination of error_log() for the disclosure-law pins. */
+    private ?string $logFile = null;
+
     protected function setUp(): void
     {
         $this->segmentDir = sys_get_temp_dir() . '/phlix_hlsctl_' . uniqid();
@@ -34,6 +37,11 @@ class HlsControllerTest extends TestCase
 
     protected function tearDown(): void
     {
+        ini_restore('error_log');
+        if ($this->logFile !== null && is_file($this->logFile)) {
+            @unlink($this->logFile);
+        }
+        $this->logFile = null;
         $this->rrmdir($this->segmentDir);
     }
 
@@ -255,6 +263,69 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(503, $res->statusCode);
         $this->assertSame('1', $res->headers['Retry-After'] ?? null);
+    }
+
+    public function testSegmentCommandBuildRefusalAnswers503NotAnEscapingError(): void
+    {
+        // INV-A P3 cure (playback-lag): a persisted transcode_jobs.segment_params
+        // row outside the ffmpeg argv allowlist makes FfmpegRunner::argvParam()
+        // throw InvalidArgumentException synchronously inside ensureSegment().
+        // Before the cure that IAE escaped to the router — every segment of the
+        // job answered 500 and hls.js retried the storm. The serve arm now
+        // answers the codebase's transient envelope: 503 + Retry-After (the
+        // 063c59b6 LiveTV not-materialized precedent), flat {error} body, no
+        // new wire code.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('7f6a2b1c-9d4e-4a3b-8c7d-1e2f3a4b5c6d', null, 3)
+            ->willThrowException(new \InvalidArgumentException(
+                'transcode segment param "video_codec" is outside the ffmpeg argv allowlist;'
+                . ' refusing to build the command'
+            ));
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => '7f6a2b1c-9d4e-4a3b-8c7d-1e2f3a4b5c6d', 'file' => 'seg-00003.ts']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('2', $res->headers['Retry-After'] ?? null);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($res->body, true);
+        $this->assertSame(['error' => 'segment build refused'], $body);
+    }
+
+    public function testSegmentCommandBuildRefusalErrorLogsJobIdOnly(): void
+    {
+        // Operator disclosure law: exactly one error_log line naming the JOB id;
+        // the persisted param VALUES (and even the param-name prose of the
+        // exception message) never enter it — FfmpegRunner::argvParam() already
+        // logged the offending slot name to the transcoding channel itself.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureSegment')
+            ->willThrowException(new \InvalidArgumentException(
+                'transcode segment param "video_codec" is outside the ffmpeg argv allowlist;'
+                . ' refusing to build the command'
+            ));
+
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hls03-log-');
+        $this->logFile = $logFile;
+        ini_set('error_log', $logFile);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => '7f6a2b1c-9d4e-4a3b-8c7d-1e2f3a4b5c6d', 'file' => 'seg-00003.ts']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $log = (string) file_get_contents($logFile);
+        $this->assertStringContainsString('7f6a2b1c-9d4e-4a3b-8c7d-1e2f3a4b5c6d', $log);
+        $this->assertStringNotContainsString(
+            'video_codec',
+            $log,
+            'the refusal detail stays out of the controller line — job id only'
+        );
     }
 
     public function testServesPerVariantMediaPlaylistAsStaticFile(): void

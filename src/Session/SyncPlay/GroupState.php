@@ -754,6 +754,15 @@ class GroupState
      * caller has already resolved server-derived identity, so false means a
      * race (member left concurrently) and the report is simply dropped.
      *
+     * A stored report is GROUP LIVENESS: like every other mutator here it
+     * stamps {@see $lastActivityAt}, so a watch party mid-film — whose only
+     * inbound traffic is the 5 s position report while no host command
+     * lands — survives the stale sweep (playback-lag cure C1, INV-B
+     * 2026-11-05). This mirrors the hub relay, which stamps roomActivity on
+     * every echo ({@see phlix-hub src/SyncPlay/SyncPlayRelayWorker.php});
+     * before this stamp the :8097 sweep tore down actively-watching groups
+     * at GROUP_TIMEOUT of host-command silence.
+     *
      * @param string $memberId  Server-derived member identity
      * @param int    $positionMs Reported playback position in milliseconds
      * @param int    $nowMs      Wall-clock milliseconds of ingestion (caller-supplied
@@ -770,6 +779,7 @@ class GroupState
             'position' => $positionMs,
             'at_ms' => $nowMs,
         ];
+        $this->lastActivityAt = time();
 
         return true;
     }

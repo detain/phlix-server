@@ -263,6 +263,23 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A watch party no longer dies mid-film at an hour of host-command
+  silence.** The :8097 stale-group sweep judged liveness on
+  `GroupState::$lastActivityAt`, which only host-command paths (join/leave/
+  set-host/media/play/pause/seek/queue/chat) stamped — the 5 s
+  `playback_sync` position reports that ARE a room's only traffic during a
+  movie counted as zero activity. Past `GROUP_TIMEOUT` without a command the
+  next 300 s sweep tore the group down (INFO "Group timed out due to
+  inactivity", snapshot row deleted, every member's next report answered
+  NOT_IN_GROUP — silent mid-film death, rejoin churn, backward-jump replay).
+  `recordMemberPosition()` now stamps group liveness beside the position
+  store, mirroring the hub relay (immune by construction since it stamps
+  roomActivity on every echo); the defect was orthogonal to the Nov-2
+  anchor-advance cure and as old as SyncPlay itself. Law pins: a group
+  seeded stale whose member reports now SURVIVES the sweep whole, and
+  genuine silence past the timeout still tears down (a report is liveness,
+  not a liveness license). [playback-lag forensics INV-B, C1]
+
 - **The header-name census tripwire reads code, not prose.**
   `CorsManagerTest`'s SRV-M16 tripwire walks `src/` for client-reachable
   header reads (`getHeader('X-*')` literals and `$_SERVER['HTTP_*']` reads)

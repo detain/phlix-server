@@ -96,6 +96,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **A knob-forced `PHLIX_LOG_LEVEL=debug` now confesses its per-request cost
+  exactly once at boot.** `PHLIX_LOG_LEVEL` went LIVE in 4ab3ffc3 (R3-08), so
+  a host carrying `debug` lowers EVERY level-driven handler and each served
+  request pays ~10 synchronous Monolog writes — and with `PHLIX_LOG_STDOUT`
+  those writes can block the event loop on log backpressure (INV-A P2). The
+  cure is DISCLOSURE, never an override: `StructuredLogger` gains
+  `verboseFloorDisclosure()` (null unless the resolved knob floor is below
+  info) and `start.php` writes its one warning line through the application
+  channel in the master, pre-fork — one line per boot, none per worker.
+  Unset/empty/unknown values resolve to no override and stay silent by law
+  (a fail-soft inert knob has nothing to confess). [playback-lag forensics
+  INV-A, C4]
+
 - **The per-response security-header policy went from two live DB point-
   SELECTs to at most one store hit per key per second.**
   `SecurityHeadersPolicy::hstsMaxAgeSeconds()` and `frameOptions()` each ran a

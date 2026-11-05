@@ -180,6 +180,53 @@ class LogEnvironmentKnobsTest extends TestCase
         $this->assertStringContainsString('empty-is-unset-visible', $this->probeLog());
     }
 
+    // ---- C4 (INV-A P2, playback-lag forensics): the boot disclosure ----
+
+    public function test_a_debug_floor_is_disclosed_naming_the_knob_and_its_cost(): void
+    {
+        // PHLIX_LOG_LEVEL went LIVE in 4ab3ffc3 — a live host carrying
+        // `debug` pays ~10 synchronous Monolog writes per served request,
+        // and in stdout mode those writes can BLOCK the event loop on
+        // docker json-file backpressure. The cure is disclosure, never an
+        // override: the boot resolver names both. Red at parent: the
+        // resolver method did not exist (undefined-method Error).
+        putenv(LogChannels::LOG_LEVEL_ENV . '=debug');
+
+        $message = StructuredLogger::verboseFloorDisclosure();
+
+        $this->assertIsString($message);
+        $this->assertStringContainsString(LogChannels::LOG_LEVEL_ENV, $message);
+        $this->assertStringContainsString('debug', $message);
+        $this->assertStringContainsString('10', $message, 'the per-request write cost is the point');
+        $this->assertStringContainsString(
+            LogChannels::LOG_STDOUT_ENV,
+            $message,
+            'the backpressure stall is the other half of the cost'
+        );
+    }
+
+    public function test_the_boot_disclosure_stays_silent_at_info_and_above(): void
+    {
+        // info is the ship posture and everything stricter is quieter — no
+        // line. Unknown/empty/unset values resolve to NO override (the
+        // shipped per-handler floors stand), which is equally not a knob-
+        // induced sub-info floor: silence for all of them keeps the one-shot
+        // boot line meaningful.
+        foreach (['info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'] as $name) {
+            putenv(LogChannels::LOG_LEVEL_ENV . '=' . $name);
+            $this->assertNull(StructuredLogger::verboseFloorDisclosure(), $name . ' must stay silent');
+        }
+
+        putenv(LogChannels::LOG_LEVEL_ENV . '=DEBUG');
+        $this->assertIsString(StructuredLogger::verboseFloorDisclosure(), 'case-folded debug still discloses');
+        putenv(LogChannels::LOG_LEVEL_ENV . '=not-a-level');
+        $this->assertNull(StructuredLogger::verboseFloorDisclosure(), 'inert unknown value must stay silent');
+        putenv(LogChannels::LOG_LEVEL_ENV . '=');
+        $this->assertNull(StructuredLogger::verboseFloorDisclosure(), 'empty must stay silent');
+        putenv(LogChannels::LOG_LEVEL_ENV);
+        $this->assertNull(StructuredLogger::verboseFloorDisclosure(), 'unset must stay silent');
+    }
+
     private function probeLog(): string
     {
         return (string) file_get_contents($this->tempDir . '/probe.log');

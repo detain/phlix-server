@@ -336,6 +336,50 @@ class StructuredLogger implements LoggerInterface
         return in_array($name, self::LEVEL_NAMES, true) ? $name : null;
     }
 
+    /**
+     * The one-shot boot disclosure for a knob-forced sub-info global floor
+     * (playback-lag cure C4, INV-A P2) — the resolver {@see
+     * self::verboseFloorLevel()} plus its warning copy.
+     *
+     * PHLIX_LOG_LEVEL went LIVE in 4ab3ffc3: at `debug` EVERY level-driven
+     * handler loosens, so each served request pays ~10 synchronous Monolog
+     * writes, and with PHLIX_LOG_STDOUT those writes can BLOCK the event
+     * loop on docker json-file backpressure (a whole worker stalls on a
+     * log drain, not just the logging request). The cure is DISCLOSURE, not
+     * an override: the operator's knob always wins; this line makes its
+     * per-request price visible exactly once per boot, emitted by start.php
+     * in the master before fork (never per-worker).
+     *
+     * @return string|null The warning text when the resolved global floor is
+     *         below info, null when there is nothing to say.
+     */
+    public static function verboseFloorDisclosure(): ?string
+    {
+        $level = self::verboseFloorLevel();
+        if ($level === null) {
+            return null;
+        }
+
+        return 'boot disclosure: ' . LogChannels::LOG_LEVEL_ENV . '=' . $level
+            . ' lowers every level-driven handler below info — each served request then pays'
+            . ' ~10 synchronous Monolog writes, and PHLIX_LOG_STDOUT can block the event loop on'
+            . ' log backpressure; intended for diagnosis windows, not steady-state playback hosts.';
+    }
+
+    /**
+     * The knob-resolved floor name when it is strictly below info, else null.
+     * Of {@see self::LEVEL_NAMES} the accepted vocabulary has exactly one
+     * sub-info entry; an inert knob (unset/empty/unknown — null override)
+     * is NOT a knob-induced floor and stays silent by law, keeping the
+     * one-shot boot line meaningful.
+     */
+    private static function verboseFloorLevel(): ?string
+    {
+        $override = self::envLevelOverride();
+
+        return $override === 'debug' ? $override : null;
+    }
+
     public function emergency(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Emergency, $message, $context);

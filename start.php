@@ -26,6 +26,7 @@ use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\RateLimit\RateLimiterInterface;
 use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Config\EffectiveConfig;
@@ -78,6 +79,18 @@ $config['web_portal']         = array_merge(
 );
 
 LoggerFactory::init($config['logger_config_path']);
+
+// C4 (INV-A P2): one-shot boot disclosure when PHLIX_LOG_LEVEL forces the
+// global floor below info — at debug every served request pays ~10 sync
+// Monolog writes (stdout mode can stall the event loop on log backpressure).
+// Disclosure only, never an override; runs in the MASTER pre-fork, so the
+// line appears exactly once per boot. StructuredLogger::verboseFloorDisclosure
+// stays null for unset/empty/unknown values (an inert knob has nothing to
+// confess) and at info-and-above.
+$verboseFloorDisclosure = StructuredLogger::verboseFloorDisclosure();
+if ($verboseFloorDisclosure !== null) {
+    LoggerFactory::get(LogChannels::APPLICATION)->warning($verboseFloorDisclosure);
+}
 
 // S445/MED-1(1): pin the SyncPlay write-through bridge's shared secret HERE,
 // pre-fork, so every forked worker (14 HTTP publishers + the WS listener + the

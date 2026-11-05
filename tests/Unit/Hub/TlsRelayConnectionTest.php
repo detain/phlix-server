@@ -211,6 +211,20 @@ final class ScriptedTlsRelayConnection extends TlsRelayConnection
         // The scripted driver says "crypto done" — the scripted world agrees.
         return true;
     }
+
+    /**
+     * Seed the inherited protected parent state (`socket`, `status`) from
+     * INSIDE the connection hierarchy — assignments that live lexically in
+     * the test class would trip psalm's UndefinedThisPropertyAssignment even
+     * though Closure::bind retargets $this to the connection at runtime.
+     *
+     * @param resource $socket
+     */
+    public function seedAsConnecting($socket): void
+    {
+        $this->socket = $socket;
+        $this->status = TcpConnection::STATUS_CONNECTING;
+    }
 }
 
 /**
@@ -427,14 +441,13 @@ final class TlsRelayConnectionTest extends TestCase
             $errored++;
         };
 
-        $socket = $this->makeSocket();
         // `socket` and `status` are protected on the vendored parent; the
         // unix pair has no peer name, so parent::checkConnection() lands in
-        // its address-less fail branch.
-        (function () use ($socket): void {
-            $this->socket = $socket;
-            $this->status = TcpConnection::STATUS_CONNECTING;
-        })->call($conn);
+        // its address-less fail branch. The seeder below assigns from INSIDE
+        // the connection hierarchy (a test-class-lexical Closure::bind would
+        // trip psalm's UndefinedThisPropertyAssignment in the CI tests corpus).
+        $socket = $this->makeSocket();
+        $conn->seedAsConnecting($socket);
         $conn->checkConnection();
 
         self::assertSame(0, $conn->performCalls, 'the TLS drive must never run for a non-ssl transport');

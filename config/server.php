@@ -154,6 +154,15 @@ return [
         // Target HLS segment duration (seconds). 6s is the Apple-recommended
         // default and keeps the segment count (and per-request overhead) sane.
         'segment_seconds' => 6,
+        // C6 (playback-lag): head-start window — the number of top-rung
+        // segments a freshly created HLS job pre-generates in the background
+        // (via the same on-demand producer, launch-only) instead of letting
+        // the first reader build each one inline at 3–6.6s on a cache-cold
+        // boot (FIELD-hub-phlix). 0 disables the head start; the read-time
+        // producer is untouched either way, so this only controls whether the
+        // first window is already encoding when the playlist lands. Env
+        // override: PHLIX_SEGMENT_PREWARM_SEGMENTS.
+        'prewarm_segments' => EnvConfig::integer('PHLIX_SEGMENT_PREWARM_SEGMENTS', 3),
         // Ceiling on simultaneous on-demand segment encodes across all jobs. Each
         // segment is a full decode+encode; unbounded concurrency (many viewers, or
         // one viewer's timed-out retries) saturates the CPU so every encode slows

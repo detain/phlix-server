@@ -1,0 +1,341 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Tests\Unit\Media\Transcoding;
+
+use PHPUnit\Framework\TestCase;
+use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\TranscodeManager;
+use Workerman\MySQL\Connection;
+
+/**
+ * C6 (playback-lag) — a freshly created HLS job pre-generates its first window.
+ *
+ * FIELD-hub-phlix proved the cold-playback mechanics: on a cache-wiped boot
+ * (PrivateTmp + the temp-dir segment cache) every 6 s segment is built INLINE
+ * inside the reader's request — 3.0–6.6 s per segment — because the producer
+ * only ever ran at READ time. The cure: when `ensureHlsJob()` commits a new
+ * job row, immediately kick the EXISTING per-segment producer (the same
+ * `produceSegment()` reservation/cap/dedup machinery) for the top-rung init
+ * segment + first few fragments, in LAUNCH-ONLY mode (`waitForEncode=false`):
+ * fire the detached encode and return — nobody waits, and the reader's first
+ * request finds either the published file (ready path) or an honest in-flight
+ * state (wait-fast path), never a cold inline build it must pay for itself.
+ *
+ * The laws pinned here are exactly the constraints the cure must not violate:
+ *
+ *  1. creation launches the first window on the TOP rung (`original`, the id
+ *     the FIELD traces show the client requesting), names the real segment
+ *     filenames, and carries the fMP4 `init_file` so the atomic publish chain
+ *     emits `init-voriginal.m4s` BEFORE the first fragment;
+ *  2. the pre-gen is capped by the SAME `maxConcurrentSegments` ceiling — when
+ *     the box is already at capacity, creation still completes (busy-safe);
+ *  3. the inline read path is UNTOUCHED when no pre-gen ran: `ensureSegment()`
+ *     still launches-and-waits exactly as it always did (this is not a
+ *     replacement of the on-demand producer, only a head start);
+ *  4. a reader arriving while the pre-gen produced the file gets the cache hit
+ *     WITHOUT launching a duplicate (no double-build racing the inline path);
+ *  5. the window is bounded: out-of-range indices end the loop, and the knob
+ *     (0) disables pre-generation entirely without breaking anything.
+ *
+ * Every capture happens through the `FfmpegRunner` mock — no real ffmpeg, no
+ * sockets, no sleeps: `startSegmentEncode` is stubbed to publish the final
+ * file synchronously so launch-only vs wait semantics are observable purely
+ * through call counts and returned paths.
+ */
+final class TranscodeManagerPrewarmTest extends TestCase
+{
+    private string $segmentDir;
+    private string $inputPath;
+
+    protected function setUp(): void
+    {
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_pw_' . uniqid('', true);
+        mkdir($this->segmentDir, 0755, true);
+        $this->inputPath = $this->segmentDir . '/in.mkv';
+        file_put_contents($this->inputPath, 'x');
+    }
+
+    protected function tearDown(): void
+    {
+        $this->rrmdir($this->segmentDir);
+    }
+
+    /**
+     * Law 1: creating the job launches the first window (3 segments by default)
+     * on the top rung, with the exact filenames a reader will request.
+     */
+    public function test_job_creation_launches_the_first_window_on_the_top_rung(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 3, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused']);
+        $this->assertCount(3, $launches, 'creation must pre-generate exactly the 3-segment window');
+        foreach ([0, 1, 2] as $i) {
+            $this->assertSame(
+                sprintf('seg-voriginal-%05d.m4s', $i),
+                basename($launches[$i]['out']),
+                'window index ' . $i . ' must publish the top-rung segment name'
+            );
+            $this->assertSame(
+                'init-voriginal.m4s',
+                basename((string) $launches[$i]['init']),
+                'the pre-gen encode must carry the init file so the publish chain emits it first'
+            );
+        }
+        $this->assertSame(0.0, $launches[0]['start']);
+        $this->assertSame(12.0, $launches[2]['start'], 'window segments encode their own offsets');
+    }
+
+    /**
+     * Law 5a: the knob disables pre-generation outright — creation must behave
+     * exactly like today (write playlists, commit the row, launch nothing).
+     */
+    public function test_prewarm_zero_disables_the_head_start(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused']);
+        $this->assertSame([], $launches);
+    }
+
+    /**
+     * Law 4: the reader's first request hits the PRE-GENERATED file without
+     * launching a second encode — the whole point of the head start.
+     */
+    public function test_first_read_is_served_from_the_prewarm_without_a_duplicate_build(): void
+    {
+        $launches = [];
+        $db = $this->jobDb();
+        $manager = $this->manager($db, $this->recordingRunner($launches), 3, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+
+        $served = $manager->ensureSegment($jobId, 'original', 0);
+
+        $this->assertSame($launches[0]['out'], $served, 'the reader must get the pre-generated file');
+        $this->assertCount(3, $launches, 'a cache hit must not launch anything');
+    }
+
+    /**
+     * Law 3: with pre-generation disabled (the busy/late/flag-off world), the
+     * inline on-demand path still launches and waits EXACTLY as it always did.
+     * The cure is additive; it never replaces the read-time producer.
+     */
+    public function test_inline_path_is_intact_when_no_prewarm_ran(): void
+    {
+        $launches = [];
+        $db = $this->jobDb();
+        $manager = $this->manager($db, $this->recordingRunner($launches), 0, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+
+        $served = $manager->ensureSegment($jobId, 'original', 4);
+
+        $this->assertIsString($served);
+        $this->assertSame('seg-voriginal-00004.m4s', basename($served));
+        $this->assertCount(1, $launches, 'the reader itself paid the inline build, once');
+        $this->assertSame($served, $launches[0]['out']);
+    }
+
+    /**
+     * Law 2: the pre-gen obeys the shared encode cap. When the box is already
+     * at `maxConcurrentSegments`, the head start must STOP EARLY and job
+     * creation must still complete — a busy server never fails a play request
+     * because the optional background window could not be launched.
+     */
+    public function test_prewarm_is_busy_safe_under_the_encode_cap(): void
+    {
+        // A foreign in-flight encode occupying the single global slot. The cap
+        // check globs segment_dir/*/seg-*.part-???????? live.
+        $rival = $this->segmentDir . '/rival';
+        mkdir($rival, 0755, true);
+        file_put_contents($rival . '/seg-x.part-12345678', '');
+
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 3, 1);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused'], 'creation must complete even when the pre-gen is capped out');
+        $this->assertSame([], $launches, 'no pre-gen encode may exceed the cap');
+    }
+
+    /**
+     * Law 5b: the window is bounded by the timeline — with only 5 segments of
+     * content (25 s / 6 s) and a knob of 7, pre-generation stops at the last
+     * real segment instead of throwing or looping past the end.
+     */
+    public function test_prewarm_window_stops_at_the_end_of_the_timeline(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 7, null);
+
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertCount(5, $launches, 'duration bounds the window: ceil(25/6) = 5');
+        $this->assertSame('seg-voriginal-00004.m4s', basename($launches[4]['out']));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // harness
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * A db double that captures the transcode_jobs INSERT and answers the
+     * job-row read (`FROM transcode_jobs WHERE id = ?`) with a row derived from
+     * exactly those params — the memoized `jobRowEntry` path in the manager then
+     * sees the same job the creation wrote. Launch recording lives in the
+     * ffmpeg double ({@see recordingRunner()}), not here.
+     */
+    private function jobDb(): Connection
+    {
+        $db = $this->createMock(Connection::class);
+        $inserted = null;
+        $db->method('query')->willReturnCallback(
+            /** @param list<mixed>|null $params */
+            /** @return list<array<string, mixed>> */
+            function (string $sql, ?array $params = null) use (&$inserted): array {
+                if (str_contains($sql, 'INSERT INTO transcode_jobs')) {
+                    $inserted = $params;
+                    return [];
+                }
+                if (str_contains($sql, 'key_hash = ?') && str_contains($sql, 'IN (')) {
+                    return [];
+                }
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return [['c' => 0]];
+                }
+                if (str_contains($sql, 'FROM media_streams')) {
+                    return [];
+                }
+                if (str_contains($sql, 'FROM media_items')) {
+                    return [['path' => $this->inputPath]];
+                }
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
+                    if (!is_array($inserted)) {
+                        return [];
+                    }
+                    // Placeholder map of the creation INSERT (positional ?):
+                    // 0 id, 1 media_item_id, 2 input_path, 3 output_path,
+                    // 4 hls_dir, 5 profile, 6 key_hash, 7 width, 8 height,
+                    // 9 bandwidth, 10 subtitle_tracks, 11 duration_seconds,
+                    // 12 segment_seconds, 13 segment_params, 14 variants.
+                    return [[
+                        'id' => $inserted[0],
+                        'media_item_id' => $inserted[1],
+                        'input_path' => $inserted[2],
+                        'output_path' => $inserted[3],
+                        'hls_dir' => $inserted[4],
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'duration_seconds' => $inserted[11],
+                        'segment_seconds' => $inserted[12],
+                        'segment_params' => $inserted[13],
+                        'variants' => $inserted[14],
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        return $db;
+    }
+
+    /**
+     * Runner mock: `startSegmentEncode` publishes the final file synchronously
+     * (the detached real chain takes seconds; the test needs only the observable
+     * launch) and records what it was asked to build.
+     *
+     * @param list<array{out:string,start:float,init:?string}> $launches
+     */
+    private function recordingRunner(array &$launches): FfmpegRunner
+    {
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
+        $ff->method('startSegmentEncode')->willReturnCallback(
+            /** @param array<string, mixed> $params */
+            static function (
+                string $inputPath,
+                string $outFile,
+                float $start,
+                float $duration,
+                array $params
+            ) use (&$launches): int {
+                $launches[] = [
+                    'out' => $outFile,
+                    'start' => $start,
+                    'init' => is_string($params['init_file'] ?? null) ? $params['init_file'] : null,
+                ];
+                file_put_contents($outFile, 'encoded');
+                return 4242;
+            }
+        );
+
+        return $ff;
+    }
+
+    private function manager(Connection $db, FfmpegRunner $ff, int $prewarm, ?int $maxConcurrent): TranscodeManager
+    {
+        return new TranscodeManager(
+            $db,
+            $ff,
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            $maxConcurrent,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            $prewarm
+        );
+    }
+
+    private function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path)) {
+                $this->rrmdir($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        @rmdir($dir);
+    }
+}

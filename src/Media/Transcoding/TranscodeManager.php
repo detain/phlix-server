@@ -97,6 +97,12 @@ class TranscodeManager
     private int $minDiskSpaceBytes;
 
     /**
+     * C6: number of top-rung segments a fresh job pre-generates at creation
+     * (0 disables). See {@see self::PREWARM_SEGMENT_COUNT}.
+     */
+    private int $prewarmSegments;
+
+    /**
      * SV-3.3(1A): loudness-normalization target params threaded from
      * `config/ffmpeg.php`'s `loudness` block via {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider},
      * or null when loudnorm is disabled/unconfigured. Shape when set:
@@ -490,6 +496,11 @@ class TranscodeManager
      *                                  literal `4`, so the shipped config key and its admin-UI
      *                                  setting were both completely inert — an admin who followed
      *                                  the setting's own help text and set 8 still got 4.
+     * @param int|null $prewarmSegments C6 head-start window: top-rung segments the
+     *                                  creation path pre-generates in the background
+     *                                  (see {@see self::PREWARM_SEGMENT_COUNT}). Null →
+     *                                  the shipped default; 0 → disabled (pure read-time
+     *                                  producer, the pre-C6 behavior).
      *
      * @example
      * ```php
@@ -512,7 +523,8 @@ class TranscodeManager
         ?int $minDiskSpaceBytes = null,
         ?array $loudnormParams = null,
         ?int $maxConcurrentTranscodes = null,
-        ?EncodeSettings $encodeSettings = null
+        ?EncodeSettings $encodeSettings = null,
+        ?int $prewarmSegments = null
     ) {
         // NULL degrades to the shipped literals, so direct-construction call
         // sites (tests, CLI) behave exactly as before. PHP-DI skips optional
@@ -549,6 +561,10 @@ class TranscodeManager
         $this->minDiskSpaceBytes = ($minDiskSpaceBytes !== null && $minDiskSpaceBytes > 0)
             ? $minDiskSpaceBytes
             : self::SEGMENT_CACHE_MIN_FREE_BYTES;
+        // C6: null → shipped default; anything at/below zero (incl. negative,
+        // clamped) disables the head start and leaves the read-time producer
+        // exactly as it was.
+        $this->prewarmSegments = max(0, $prewarmSegments ?? self::PREWARM_SEGMENT_COUNT);
         // SV-3.3(1A): stored verbatim (the provider is the sole normaliser). Kept
         // INERT — no encode path reads it yet; sub-step 1B will.
         $this->loudnormParams = $loudnormParams;
@@ -864,6 +880,14 @@ class TranscodeManager
             $this->ffmpeg->startDetached('true', $hlsDir, $extractCmds);
         }
 
+        // C6 (playback-lag): background head start — commit is done, the
+        // playlists exist, so begin encoding the top rung's first window NOW
+        // instead of making the first reader build it inline (FIELD: 3.0–6.6 s
+        // per 6 s segment on a cache-cold boot). Best-effort by construction:
+        // every failure mode inside stops the window and leaves creation
+        // untouched (see {@see prewarmFirstSegments()}).
+        $prewarmed = $this->prewarmFirstSegments($jobId);
+
         $this->logger->info('On-demand HLS job created', [
             'job_id' => $jobId,
             'media_item_id' => $mediaItemId,
@@ -873,6 +897,7 @@ class TranscodeManager
             'video_codec' => $segParams['video_codec'] ?? null,
             'audio_codec' => $segParams['audio_codec'] ?? null,
             'subtitle_tracks' => count($tracks),
+            'prewarmed_segments' => $prewarmed,
         ]);
 
         return [
@@ -904,6 +929,30 @@ class TranscodeManager
      * latency equals encode time.
      */
     private const SEGMENT_MAX_WAIT_MS = 30000;
+
+    /**
+     * C6 (playback-lag): how many top-rung segments a freshly created job
+     * pre-generates in the background before anyone asks for them.
+     *
+     * FIELD-hub-phlix measured the cold-cache cost of the read-time-only
+     * producer: 6 s segments building 3.0–6.6 s INLINE inside the reader's own
+     * request, right after every deploy/restart wipes the temp-dir cache. A
+     * job's first window is the ONLY part of the timeline whose timing the
+     * server controls — the client will request segments 0..N within a second
+     * of the playlist landing — so the creation path kicks the SAME producer
+     * (same reservation/cap/dedup machinery, `waitForEncode=false`) for this
+     * many fragments now instead of paying for them at read time. The init
+     * segment rides along: the fMP4 publish chain writes `init-v{id}.m4s`
+     * before the first fragment (S56 invariant), so pre-generating segment 0
+     * pre-generates the init too.
+     *
+     * 3 ≈ 18 s of content — enough for a player to start and buffer while the
+     * rest of the timeline's demand becomes genuinely client-shaped (seek
+     * targets are unpredictable; the first window is not). Overridable via
+     * `config['hls']['prewarm_segments']` / env `PHLIX_SEGMENT_PREWARM_SEGMENTS`;
+     * 0 disables the head start (read-time producer unchanged).
+     */
+    private const PREWARM_SEGMENT_COUNT = 3;
 
     /**
      * Default ceiling on simultaneous on-demand segment encodes across ALL jobs.
@@ -998,6 +1047,26 @@ class TranscodeManager
      */
     public function ensureSegment(string $jobId, ?string $variant, int $index, ?string $audioId = null): ?string
     {
+        return $this->ensureSegmentInternal($jobId, $variant, $index, $audioId, true);
+    }
+
+    /**
+     * C6 (playback-lag): the request-facing `ensureSegment()` semantics with the
+     * WAIT folded out. `waitForEncode=false` is the pre-generation mode used by
+     * {@see prewarmFirstSegments()}: produce (or dedup) the segment and return
+     * as soon as the encode is launched — the caller is a background head
+     * start, not a client whose request is blocked on the bytes. The audio-
+     * rendition branch has no launch-only mode (pre-gen never passes
+     * `$audioId`; see the scope note at the {@see prewarmFirstSegments()} call
+     * site in `ensureHlsJob()`).
+     */
+    private function ensureSegmentInternal(
+        string $jobId,
+        ?string $variant,
+        int $index,
+        ?string $audioId,
+        bool $waitForEncode
+    ): ?string {
         $entry = $this->jobRowEntry($jobId);
         if ($entry === null || $index < 0) {
             return null;
@@ -1054,7 +1123,7 @@ class TranscodeManager
             // and so carries NO job-level container either — merge the persisted
             // `segment_format` back in (see applySegmentFormat()).
             $segParams = $this->applySegmentFormat($row, $segParams);
-            return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
+            return $this->produceSegment($jobId, $row, $variant, $index, $segParams, $waitForEncode);
         }
 
         // Legacy single-variant job (variants IS NULL) — byte-identical to pre-A5:
@@ -1078,7 +1147,7 @@ class TranscodeManager
         // concrete subtitle_burn_in path/format FfmpegRunner consumes.
         $segParams = $this->applySubtitleBurnIn($row, $segParams);
 
-        return $this->produceSegment($jobId, $row, null, $index, $segParams);
+        return $this->produceSegment($jobId, $row, null, $index, $segParams, $waitForEncode);
     }
 
     /**
@@ -1265,7 +1334,8 @@ class TranscodeManager
         array $row,
         ?string $variantId,
         int $index,
-        array $segParams
+        array $segParams,
+        bool $waitForEncode = true
     ): ?string {
         $segSeconds = is_numeric($row['segment_seconds'] ?? null)
             ? (int) $row['segment_seconds']
@@ -1370,6 +1440,51 @@ class TranscodeManager
                     'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
                 );
             }
+        }
+
+        // C6 (playback-lag): LAUNCH-ONLY mode — the background head start.
+        // Everything above (dedup snapshot, SV-4.1 reserve-before-glob, the SV
+        // capacity ceiling) already ran, so a pre-gen launch cannot double-
+        // build, and a saturated box answers with the SAME SegmentBusyException
+        // the read path uses (the pre-gen loop catches it and stops; job
+        // creation never fails on it). Unlike the inline branch below, this
+        // mode:
+        //  - takes NO waiter slot (nobody is waiting), so disconnect-kill
+        //    ref-counting is untouched,
+        //  - registers the encode with NO relay cancel group — the create
+        //    request disconnecting must not kill the pre-generation that
+        //    exists to outlive it; `timeout <n>` remains the stuck-encode
+        //    backstop exactly as on the piggyback path,
+        //  - LEAVES the reservation + registry entry in place: the documented
+        //    reconcile self-heal (completed file → unset + releaseSegmentProcess)
+        //    retires it, and the cache-hit branch above this block fires on the
+        //    published file long before any lingering record matters.
+        // If a sibling encode for this exact final is already in flight
+        // (!$reserved), the head start simply gives up — the reader will meet
+        // the same wait-fast piggyback it meets today.
+        if (!$waitForEncode) {
+            if (!$reserved) {
+                return null;
+            }
+            try {
+                $this->touchJobDir($dir);
+                $this->ensureDiskSpace();
+                $this->ffmpeg->startSegmentEncode(
+                    $inputPath,
+                    $final,
+                    $start,
+                    $segLen,
+                    $segParams,
+                    $final,
+                    null,
+                );
+            } catch (\Throwable $e) {
+                // The reservation must not leak when the launch itself fails —
+                // mirrors the inline finally's compare-and-clear.
+                $this->clearReservationIfMine($final, $myGen);
+                throw $e;
+            }
+            return $final;
         }
 
         $launched = false;
@@ -1490,6 +1605,94 @@ class TranscodeManager
         }
 
         return is_file($final) ? $final : null;
+    }
+
+    /**
+     * C6 (playback-lag): the creation-time head start — pre-generate the top
+     * rung's init segment + first window in the background.
+     *
+     * Kicks the SAME producer a reader would (`ensureSegmentInternal()` with
+     * `waitForEncode=false`), so every existing law holds unchanged: the
+     * SV-4.1 reserve-before-glob dedup means a pre-gen can never double-build
+     * a segment some other worker is already encoding; the SV capacity ceiling
+     * answers over-capacity with `SegmentBusyException`, which this loop treats
+     * as STOP EARLY — job creation must never fail because the optional head
+     * start could not be launched, and a busy box simply delivers the old
+     * read-time behavior. `SegmentCacheFullException` (ENOSPC guard) and the
+     * argv-allowlist `InvalidArgumentException` (C2) likewise stop the loop:
+     * they are real signals the next READER will surface honestly via its own
+     * 503 arms — the pre-gen must not sweep or rewrite anything on its way
+     * past them (the controller arms own the cache sweep law).
+     *
+     * Scope (deliberate, minimal): the TOP rung only (`original` — the id
+     * FIELD's traces show the client requesting first), video-bearing segments
+     * only (an audio-group rendition's fragments are not the cold-start
+     * blocker: the first read pays for what is requested, and hls.js starts
+     * from the top variant), and the shipped window length — lower rungs and
+     * the rest of the timeline stay purely demand-shaped.
+     *
+     * Failures here are INVISIBLE to the play request by design: the worst
+     * case is exactly the pre-C6 world (cold inline build at read time).
+     *
+     * @return int number of encodes actually launched (0 in the disabled,
+     *              reused-row, non-advertised, capped or capped-early cases)
+     */
+    private function prewarmFirstSegments(string $jobId): int
+    {
+        if ($this->prewarmSegments <= 0) {
+            return 0;
+        }
+
+        $entry = $this->jobRowEntry($jobId);
+        if ($entry === null) {
+            return 0; // defensive: the row we just committed is not visible
+        }
+        $row = $entry['row'];
+
+        // Resolve the pre-gen target rung exactly the way `ensureSegmentInternal`
+        // will: multi-variant jobs take the ladder's `original` rung; legacy
+        // single-variant rows (variants IS NULL) take the unprefixed null rung.
+        $variantId = null;
+        $variantsRaw = $row['variants'] ?? null;
+        if (is_string($variantsRaw) && $variantsRaw !== '') {
+            $decoded = $entry['variants'];
+            if (!is_array($decoded)) {
+                return 0;
+            }
+            $original = $decoded['original'] ?? null;
+            if (!is_array($original) || !is_string($original['id'] ?? null)) {
+                return 0; // not a ladder shape we recognise — hands off
+            }
+            $variantId = $original['id'];
+        }
+
+        $launched = 0;
+        try {
+            for ($i = 0; $i < $this->prewarmSegments; $i++) {
+                if ($this->ensureSegmentInternal($jobId, $variantId, $i, null, false) === null) {
+                    break; // out of range / already in flight elsewhere / refused — stop
+                }
+                $launched++;
+            }
+        } catch (SegmentBusyException | SegmentCacheFullException | \InvalidArgumentException $e) {
+            $this->logger->info('HLS prewarm window stopped early', [
+                'job_id' => $jobId,
+                'segments_launched' => $launched,
+                'reason' => $e->getMessage(),
+            ]);
+            return $launched;
+        } catch (\Throwable $e) {
+            // Creation must survive ANY pre-gen defect: the play request is
+            // already served by the committed row + playlists.
+            $this->logger->info('HLS prewarm window aborted', [
+                'job_id' => $jobId,
+                'segments_launched' => $launched,
+                'reason' => $e->getMessage(),
+            ]);
+            return $launched;
+        }
+
+        return $launched;
     }
 
     /**

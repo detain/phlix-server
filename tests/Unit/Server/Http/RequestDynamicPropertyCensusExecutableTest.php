@@ -1071,7 +1071,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // HubEnrollmentRefusalEnvelopeTest.php (flat {error, code} envelope pins
     // over the hub-enrollment refusal legs, review server__secnet); measured
     // from the phpunit red (2067) at tip b815e7d4, not predicted.
-    private const EXPECTED_PHP_FILES = 2067;
+    // +4 2067→2071: the segment-cache lane (C5) adds src/Media/Transcoding/
+    // SegmentCacheDirectory.php plus tests/Unit/Media/Transcoding/
+    // SegmentCacheDirectoryTest.php, tests/Unit/Config/SegmentCacheDirConfigTest.php
+    // and tests/Unit/Media/Transcoding/TranscodeManagerPersistentCacheBudgetTest.php;
+    // DISCLOSED LATE ROTATION — the C5 commit (ac28d353) shipped without stepping
+    // this denominator; the drift surfaced as the battery red (2072) below.
+    // +1 2071→2072: C6 adds tests/Unit/Media/Transcoding/
+    // TranscodeManagerPrewarmTest.php; 2072 measured from the phpunit battery red,
+    // not predicted.
+    private const EXPECTED_PHP_FILES = 2072;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

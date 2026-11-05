@@ -286,6 +286,50 @@ final class TranscodeServicesProviderTest extends TestCase
     }
 
     /**
+     * C6 wiring: a configured `prewarm_segments` (from `hls.prewarm_segments`,
+     * itself env-driven by PHLIX_SEGMENT_PREWARM_SEGMENTS) is threaded through to
+     * the TranscodeManager, so the head-start window is operator-tunable — and
+     * `0` disables it — without touching code.
+     */
+    public function test_provider_threads_configured_prewarm_window(): void
+    {
+        $manager = $this->resolveManagerWithHlsConfig([
+            'segment_dir' => '/tmp/phlix_hls',
+            'segment_seconds' => 6,
+            'prewarm_segments' => 5,
+        ]);
+
+        $this->assertSame(5, $this->readPrewarmSegments($manager));
+    }
+
+    /**
+     * C6 default-on law: with NO `prewarm_segments` config key the provider passes
+     * null and the TranscodeManager applies its own PREWARM_SEGMENT_COUNT (3) —
+     * the head start ships enabled, not behind off-by-default theater. The literal
+     * is the golden (same pin style as the 500 MiB ENOSPC default above); rotating
+     * the const is a deliberate, measured-red act.
+     */
+    public function test_provider_defaults_prewarm_window_to_three(): void
+    {
+        $manager = $this->resolveManagerWithHlsConfig([
+            'segment_dir' => '/tmp/phlix_hls',
+            'segment_seconds' => 6,
+        ]);
+
+        $this->assertSame(3, $this->readPrewarmSegments($manager));
+    }
+
+    private function readPrewarmSegments(TranscodeManager $manager): int
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, 'prewarmSegments');
+        $p->setAccessible(true);
+        $value = $p->getValue($manager);
+        $this->assertIsInt($value);
+
+        return $value;
+    }
+
+    /**
      * SV-3.3(1A): resolves the singleton {@see TranscodeManager} through the
      * provider with an arbitrary `ffmpeg` config sub-array (merged over the standard
      * paths) so the loudness-normalization plumbing can be asserted directly off the

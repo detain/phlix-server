@@ -96,6 +96,29 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **A freshly created HLS job now encodes its opening window in the background
+  instead of making the first viewer pay for it.** Job creation only ever
+  wrote the playlists; every segment — including the very first ones, whose
+  timing the server COULD control — was produced lazily inside the reader's
+  own request. On a cache-cold boot (the `PrivateTmp` wipe below made that
+  every deploy) FIELD-hub-phlix measured those inline builds at 3.0–6.6 s per
+  6 s segment: rubber-band lag on open. Now, the moment the job row commits,
+  the creation path kicks the SAME on-demand producer for the top rung's
+  first `prewarm_segments` fragments (default 3, env
+  `PHLIX_SEGMENT_PREWARM_SEGMENTS`, `0` disables) in launch-only mode: the
+  SV-4.1 reserve-before-glob dedup and the segment-concurrency ceiling apply
+  unchanged — a pre-gen can never double-build a segment another worker holds,
+  and on a saturated box it stops early and the reader simply meets the old
+  wait-fast path. The fMP4 publish chain writes the init segment ahead of the
+  first fragment, so the cold-start pair (init + window) lands before the
+  player asks. Best-effort by construction: every pre-gen failure (busy,
+  cache-full, refused params, even an internal defect) is logged and job
+  creation completes exactly as before — the worst case is the pre-change
+  world. Audio-group renditions and lower rungs stay demand-shaped; only the
+  top rung's opening window is predictable enough to pre-generate honestly.
+  [FIELD-hub-phlix; playback-lag cure C6 — cold playback must not transcode
+  inline]
+
 - **`PHLIX_SEGMENT_DIR` lets the HLS segment cache live outside `PrivateTmp` —
   it can now survive restarts.** The cache defaulted to
   `sys_get_temp_dir()/phlix_hls`, and the shipped systemd unit runs

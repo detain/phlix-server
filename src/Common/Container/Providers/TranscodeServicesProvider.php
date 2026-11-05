@@ -75,6 +75,13 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
         $segmentSeconds = is_int($hlsConfig['segment_seconds'] ?? null)
             ? $hlsConfig['segment_seconds'] : 6;
 
+        // C6 (playback-lag): the creation-time head-start window. Resolved the
+        // same shape as the sibling knobs — absent/non-int → null, letting the
+        // TranscodeManager apply its shipped default (3). IMPORTANT: 0 is a
+        // REAL value here (disable), not "absent", hence is_int and not ?: .
+        $prewarmSegments = is_int($hlsConfig['prewarm_segments'] ?? null)
+            ? $hlsConfig['prewarm_segments'] : null;
+
         // On-demand segment concurrency ceiling + cache budget. Null lets the
         // TranscodeManager apply its own safe defaults.
         $maxConcurrentSegments = is_int($hlsConfig['max_concurrent_segments'] ?? null)
@@ -185,6 +192,7 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 ) use (
                     $segmentDir,
                     $segmentSeconds,
+                    $prewarmSegments,
                     $maxConcurrentSegments,
                     $cacheMaxBytes,
                     $cacheMaxAge,
@@ -264,7 +272,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         // (read-path class (a) LIVE). Resolving it here instead
                         // would freeze the value into this once-per-worker
                         // factory result and make the keys restart-only.
-                        new EncodeSettings(self::optionalSettings($c))
+                        new EncodeSettings(self::optionalSettings($c)),
+                        // Position 17 (C6): the head-start window from
+                        // `config['hls']['prewarm_segments']` / env
+                        // PHLIX_SEGMENT_PREWARM_SEGMENTS; null → the manager's
+                        // own shipped default, 0 → disabled (see resolution above).
+                        $prewarmSegments
                     );
 
                     // SV-4.2-disconnect (SS-2): make the shared per-worker

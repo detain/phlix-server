@@ -1162,6 +1162,7 @@ breaks hls.js, and scale widths are forced even (`force_divisible_by=2` in the v
 | `HLS_CACHE_MAX_AGE` | `10800` s | no | yes | `config/server.php` → `hls.` |
 | `HLS_MIN_DISK_SPACE_BYTES` | `524288000` (500 MiB) | no | yes | `config/server.php` → `hls.` — free-space floor; below it the segment cache is swept and encodes answer `503` + `Retry-After: 3` instead of `ENOSPC` |
 | `PHLIX_SEGMENT_DIR` | `sys_get_temp_dir()/phlix_hls` | no | yes | `config/server.php` → `hls.segment_dir` — location of the HLS segment cache; see the persistence note below |
+| `PHLIX_SEGMENT_PREWARM_SEGMENTS` | `3` | no | yes | `config/server.php` → `hls.prewarm_segments` — how many top-rung segments a new job pre-generates in the background at creation; `0` disables the head start (segments are then built purely at read time, the pre-C6 behavior) |
 | `PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS` / `PHLIX_HLS_RELAY_MAX_SEGMENTS` | see `config/hls_relay.php` | no | yes | `config/hls_relay.php` |
 | `PREFERRED_ACCELERATOR` | `` (auto) | no | yes | `config/transcoding.php` |
 | `TONE_MAPPING_MODE` | `none` | no | yes | `config/transcoding.php` |

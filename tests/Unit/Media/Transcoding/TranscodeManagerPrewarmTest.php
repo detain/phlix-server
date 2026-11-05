@@ -7,6 +7,9 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Server\Http\RequestContext;
+use ReflectionMethod;
+use ReflectionProperty;
 use Workerman\MySQL\Connection;
 
 /**
@@ -37,7 +40,23 @@ use Workerman\MySQL\Connection;
  *  4. a reader arriving while the pre-gen produced the file gets the cache hit
  *     WITHOUT launching a duplicate (no double-build racing the inline path);
  *  5. the window is bounded: out-of-range indices end the loop, and the knob
- *     (0) disables pre-generation entirely without breaking anything.
+ *     (0) disables pre-generation entirely without breaking anything;
+ *  6. the launch-only leg GIVES UP (returns null — the loop's stop signal) when
+ *     a sibling encode already holds this exact final: no redundant duplicate
+ *     launch, and the sibling's reservation is left untouched;
+ *  7. launch-only encodes take NO waiter slot and join NO relay cancel group —
+ *     the head start exists precisely to outlive the create request;
+ *  8. a THROWN launch clears its own reservation (mirroring the inline
+ *     finally's compare-and-clear), so a segment is never stranded as a
+ *     phantom in-flight that every later drive gives up on.
+ *
+ * Laws 6-8 are the executable teeth for the review register
+ * (.reviews/2026-11-05/REVIEW-playback-program.md, C6 minors M1/M2): the
+ * reviewer's own mutation probes deleted/flipped each corresponding leg and
+ * the full 661-test Transcoding directory stayed green — they were un-pinned.
+ * They drive the PRIVATE launch-only seam (`ensureSegmentInternal(..., false)`
+ * — reflection is the honest route; the public `ensureSegment()` always waits)
+ * and observe the cancel-registry args of `FfmpegRunner::startSegmentEncode`.
  *
  * Every capture happens through the `FfmpegRunner` mock — no real ffmpeg, no
  * sockets, no sleeps: `startSegmentEncode` is stubbed to publish the final
@@ -186,6 +205,154 @@ final class TranscodeManagerPrewarmTest extends TestCase
         $this->assertSame('seg-voriginal-00004.m4s', basename($launches[4]['out']));
     }
 
+    /**
+     * Law 6 (register M1): the launch-only leg's give-up branch
+     * (`if (!$reserved) return null;` inside `if (!$waitForEncode)` —
+     * TranscodeManager.php:1466-1468) must refuse to double-build a final a
+     * sibling encode already holds. The reviewer deleted the branch and the
+     * whole 661-test directory stayed green: this is the missing tooth.
+     *
+     * The state exercised is exactly what C6 leaves behind ON PURPOSE (the
+     * launch leg RETAINS reservation + registry entry, :1458-1461): the
+     * synchronously published file of window segment 1 is unlinked (encode in
+     * flight, not yet published) and a sibling `.part-12345678` temp
+     * materialises the claim — the very name shape
+     * `reconcileInFlightSegments()` maps back to the final, so the pin stays
+     * true whether or not the ≤1 s reconcile throttle lets the next glob run.
+     * Re-driving the exact private seam the prewarm loop uses must now return
+     * null (its break signal, :1673) without launching a fourth encode.
+     */
+    public function test_launch_only_leg_gives_up_when_a_sibling_already_holds_the_segment(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 3, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+        $this->assertCount(3, $launches);
+
+        $final = $launches[1]['out'];
+        $this->assertNotSame($launches[0]['out'], $final);
+        unlink($final);
+        file_put_contents($final . '.part-12345678', '');
+
+        $reservation = $this->segmentReservation($manager, $final);
+        $this->assertNotNull($reservation, 'C6 law: the launch leg keeps its registry entry for the in-flight final');
+
+        $again = $this->driveLaunchOnly($manager, $jobId, 'original', 1);
+
+        $this->assertNull($again, 'launch-only must give up when the reservation is not its own to take');
+        $this->assertCount(3, $launches, 'giving up must not launch a duplicate encode of the in-flight segment');
+        $this->assertFalse(is_file($final), 'the give-up path must not publish anything');
+        $this->assertSame(
+            $reservation,
+            $this->segmentReservation($manager, $final),
+            'the give-up path must not clobber the sibling reservation it did not own'
+        );
+    }
+
+    /**
+     * Law 7 (register M2): the C6 docblock declares the launch-only leg "takes
+     * NO waiter slot" and "registers the encode with NO relay cancel group"
+     * (TranscodeManager.php:1452-1457) — prewarm encodes must OUTLIVE the
+     * create request. That law was unobservable at the call site: flipping
+     * `waitForEncode` false → true in the prewarm loop (:1672) survived the
+     * entire directory (the reviewer's probe), because the synchronous-publish
+     * mock makes wait vs no-wait behave identically from the outside.
+     *
+     * The pin arms the request's relay cancel group (the exact state
+     * RelayConsumer sets for a relay-served create request) and captures the
+     * full seven-argument launch contract: the inline leg would thread
+     * `RequestContext::getRelayCancelGroup()` into arg 7 and had already run
+     * `incrementSegmentWaiter()` before launching (:1496, :1525-1533). Prewarm
+     * must pass a literal null cancel group, carry the final as cancel key
+     * (arg 6, :1472-1480), and leave every waiter counter at zero — sampled
+     * INSIDE the launch and re-checked after the window completes.
+     */
+    public function test_prewarm_launches_take_no_waiter_slot_and_no_relay_cancel_group(): void
+    {
+        $launches = [];
+        /** @var TranscodeManager|null $managerRef wire for the in-launch waiter probe */
+        $managerRef = null;
+        $manager = $this->manager($this->jobDb(), $this->capturingRunner($launches, $managerRef), 3, null);
+        $managerRef = $manager;
+
+        RequestContext::setRelayCancelGroup('relay-chan-77');
+        try {
+            $result = $manager->ensureHlsJob('media-1', 'web');
+        } finally {
+            RequestContext::clearRelayCancelGroup();
+        }
+
+        $this->assertFalse($result['reused']);
+        $this->assertCount(3, $launches);
+        foreach ($launches as $i => $launch) {
+            $this->assertNull(
+                $launch['cancelGroup'],
+                'prewarm encode ' . $i . ' must not join the create request cancel group — the disconnect-kill'
+                    . " for the create request must never reap the head start built to outlive it"
+            );
+            $this->assertSame($launch['out'], $launch['cancelKey'], 'the registry cancel key is the final path');
+            $this->assertSame(
+                0,
+                $launch['waitersAtLaunch'],
+                'launch-only takes NO waiter slot — 1 here means the leg flipped to waitForEncode=true'
+            );
+        }
+        foreach ($launches as $launch) {
+            $this->assertSame(0, $manager->waiterCount($launch['out']), 'waiter counters stay at zero — no leak');
+        }
+    }
+
+    /**
+     * Law 8 (register M2 sub-observation): the launch-only catch clears its own
+     * reservation via `clearReservationIfMine()` when the detached spawn THROWS
+     * (TranscodeManager.php:1481-1485) — the mirror of the inline finally's
+     * compare-and-clear. A leaked reservation makes the segment look
+     * permanently in flight: law 6 then makes EVERY later launch-only drive
+     * give up on a file nobody is actually encoding. The register noted the
+     * catch had no execution pin at all.
+     *
+     * Seam: a runner double whose first attempt throws (creation still
+     * completes — the prewarm window catch aborts the loop, law 2's family).
+     * The re-drive of the same index must then SUCCEED. Honest bounds: the
+     * stale-grace is 5 s (SEGMENT_INFLIGHT_STALE_GRACE_MS) and reconcile is
+     * 1 s-throttled, so the mutation stays red for any re-drive within five
+     * seconds of creation — the test itself never approaches a second.
+     */
+    public function test_failed_launch_clears_its_reservation_so_the_next_drive_can_build(): void
+    {
+        $launches = [];
+        /** @var TranscodeManager|null $managerRef */
+        $managerRef = null;
+        $manager = $this->manager(
+            $this->jobDb(),
+            $this->capturingRunner($launches, $managerRef, true),
+            3,
+            null
+        );
+        $managerRef = $manager;
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+
+        $this->assertFalse($result['reused'], 'a throwing prewarm launch must never fail job creation');
+        $this->assertCount(0, $launches, 'the failed attempt threw before any encode was recorded');
+
+        $again = $this->driveLaunchOnly($manager, $jobId, 'original', 0);
+
+        $this->assertIsString(
+            $again,
+            'the launch-failure catch must clear its reservation — a stale entry strands the segment'
+        );
+        $this->assertSame($launches[0]['out'], $again);
+        $this->assertCount(1, $launches, 'the re-drive re-reserved and launched exactly once');
+        $this->assertNotNull(
+            $this->segmentReservation($manager, $again),
+            'the successful re-drive holds a fresh reservation, retained under the C6 law'
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────
@@ -318,6 +485,108 @@ final class TranscodeManagerPrewarmTest extends TestCase
             null,
             $prewarm
         );
+    }
+
+    /**
+     * Runner double capturing the FULL seven-argument launch contract of
+     * `FfmpegRunner::startSegmentEncode` — the two cancel-registry args plus a
+     * waiter-slot sample taken INSIDE the launch, the only place launch-only
+     * vs inline is observable against a synchronous-publish double (mirrors
+     * the established in-launch probe, TranscodeManagerTest.php:3352-3393).
+     * `$throwOnFirstAttempt` models a failing detached spawn for the
+     * reservation-leak pin. Probe/colour stubs match {@see recordingRunner()}.
+     *
+     * @param list<array{out:string,start:float,cancelKey:?string,cancelGroup:?string,waitersAtLaunch:int}> $launches
+     */
+    private function capturingRunner(
+        array &$launches,
+        ?TranscodeManager &$managerRef,
+        bool $throwOnFirstAttempt = false
+    ): FfmpegRunner {
+        $attempts = 0;
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
+        $ff->method('startSegmentEncode')->willReturnCallback(
+            /**
+             * @param array<string, mixed> $params
+             */
+            function (
+                string $inputPath,
+                string $outFile,
+                float $start,
+                float $duration,
+                array $params,
+                ?string $cancelKey,
+                ?string $cancelGroup
+            ) use (
+                &$launches,
+                &$managerRef,
+                $throwOnFirstAttempt,
+                &$attempts
+            ): int {
+                $attempts++;
+                if ($throwOnFirstAttempt && $attempts === 1) {
+                    throw new \RuntimeException('SIMULATED prewarm launch failure (detached spawn refused)');
+                }
+                assert($managerRef instanceof TranscodeManager);
+                $launches[] = [
+                    'out' => $outFile,
+                    'start' => $start,
+                    'cancelKey' => $cancelKey,
+                    'cancelGroup' => $cancelGroup,
+                    'waitersAtLaunch' => $managerRef->waiterCount($outFile),
+                ];
+                file_put_contents($outFile, 'encoded');
+
+                return 4242;
+            }
+        );
+
+        return $ff;
+    }
+
+    /**
+     * Drive the private launch-only seam the prewarm loop itself uses:
+     * `ensureSegmentInternal($jobId, $variant, $index, null, false)` (call
+     * site TranscodeManager.php:1672). Reflection is the honest route — the
+     * public `ensureSegment()` always runs the waiting leg.
+     */
+    private function driveLaunchOnly(TranscodeManager $manager, string $jobId, ?string $variant, int $index): mixed
+    {
+        $method = new ReflectionMethod(TranscodeManager::class, 'ensureSegmentInternal');
+        $method->setAccessible(true);
+
+        return $method->invokeArgs($manager, [$jobId, $variant, $index, null, false]);
+    }
+
+    /**
+     * Read one worker-local reservation entry ({@see
+     * TranscodeManager::$segmentEncodesInFlight}) — the sibling state laws 6/8
+     * turn on. Null means nothing holds this final: free to reserve.
+     *
+     * @return array{at: int, gen: int}|null
+     */
+    private function segmentReservation(TranscodeManager $manager, string $final): ?array
+    {
+        $property = new ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
+        $property->setAccessible(true);
+        /** @var array<string, array{at: int, gen: int}> $map */
+        $map = $property->getValue($manager);
+
+        return $map[$final] ?? null;
     }
 
     private function rrmdir(string $dir): void

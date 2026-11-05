@@ -95,6 +95,17 @@ final class RelayConsumer
     private const STATE_ACTIVE = 'active';
 
     /**
+     * F-1b/A3 belt layer 3: maximum seconds between sending HELLO (transport
+     * and WS upgrade are then done) and receiving HELLO_ACK. Healthy paths
+     * ack sub-second; the point is to bound LIES. If any future failure mode
+     * makes `onConnect` fire while the tunnel is not actually usable — the
+     * F-1b incident's false TLS `true` did exactly that — the tunnel dies
+     * visibly inside the deadline and reconnects bounded, instead of holding
+     * a silent ESTAB forever (the H3-2 class, killed at the protocol leg).
+     */
+    public const HELLO_ACK_TIMEOUT_SECONDS = 20.0;
+
+    /**
      * Truthful client IP for every relayed request. All relay traffic egresses
      * from this server's own loopback HTTP listener, so loopback is the real
      * origin. We never derive the IP from the producer-suppliable
@@ -192,6 +203,13 @@ final class RelayConsumer
 
     /** @var int|null */
     private ?int $heartbeatTimer = null;
+
+    /**
+     * One-shot HELLO_ACK deadline timer id (F-1b); null when not armed. The
+     * sentinel is null — never 0 — because timer ids may legitimately start
+     * at 0 (M-S1 law, see {@see \Phlix\Hub\TlsRelayConnection::$handshakeTimerId}).
+     */
+    private ?int $helloAckTimer = null;
 
     /**
      * M1 (asphp review): monotonic seconds ({@see hrtime()}) of the most recent
@@ -558,6 +576,9 @@ final class RelayConsumer
             $this->reconnectTimer = null;
         }
 
+        // F-1b: a stopping consumer must not leave a deadline alarm armed.
+        $this->cancelHelloAckDeadline();
+
         if ($this->heartbeatTimer !== null) {
             Timer::del($this->heartbeatTimer);
             $this->heartbeatTimer = null;
@@ -890,6 +911,10 @@ final class RelayConsumer
         $this->connection->onConnect = function (AsyncTcpConnection $conn) use ($enrollmentJwt): void {
             $this->logger->info('RelayConsumer connected; sending HELLO');
             $this->sendHello($enrollmentJwt);
+            // F-1b/A3: bound the un-ACKED window. A transport that reports
+            // itself connected but cannot carry a relay handshake must die
+            // visibly and reconnect, never sit silently ESTABLISHED (H3-2).
+            $this->armHelloAckDeadline();
         };
 
         $this->logger->debug('RelayConsumer::connect() setting onMessage callback');
@@ -1329,6 +1354,8 @@ final class RelayConsumer
             $this->closeTunnel();
             return;
         }
+
+        $this->cancelHelloAckDeadline();
 
         $this->state = self::STATE_ACTIVE;
         $this->reconnectAttempts = 0;
@@ -3331,6 +3358,10 @@ final class RelayConsumer
         // the next tunnel starts unpaused) instead of leaking across reconnects.
         $this->resetTunnelFlowControl();
 
+        // F-1b: the deadline belongs to the DEAD tunnel; never leave an armed
+        // alarm to bite the next one (re-arm happens in the onConnect closure).
+        $this->cancelHelloAckDeadline();
+
         if ($this->heartbeatTimer !== null) {
             Timer::del($this->heartbeatTimer);
             $this->heartbeatTimer = null;
@@ -3413,6 +3444,93 @@ final class RelayConsumer
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Arm (exactly once, replacing any stale arming) the HELLO_ACK deadline
+     * for the tunnel that just sent its HELLO. F-1b/A3 belt layer 3.
+     */
+    private function armHelloAckDeadline(): void
+    {
+        $this->cancelHelloAckDeadline();
+
+        $timerId = $this->scheduleHelloAckTimer(self::HELLO_ACK_TIMEOUT_SECONDS);
+        if ($timerId !== null) {
+            $this->helloAckTimer = $timerId;
+        }
+    }
+
+    /**
+     * Timer seam: one-shot alarm that enforces the HELLO_ACK deadline. Tests
+     * override this to observe arm wiring without a running event loop (the
+     * Workerman Timer facade only works inside a worker, same constraint the
+     * reconnect-scheduling arm above already accepts).
+     */
+    protected function scheduleHelloAckTimer(float $delaySeconds): ?int
+    {
+        try {
+            /** @var int $timerId */
+            $timerId = Timer::add($delaySeconds, function (): void {
+                $this->enforceHelloAckDeadline();
+            }, [], false);
+
+            return $timerId;
+        } catch (Throwable $e) {
+            // No loop → no live tunnel either; the deadline is a belt, and a
+            // belt that cannot fasten must never be the reason startup fails.
+            $this->logger->debug('RelayConsumer: HELLO_ACK deadline scheduling unavailable; continuing unarmed', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Cancel the HELLO_ACK deadline: the tunnel went active, died, or the
+     * consumer is stopping. Field clears FIRST — an already-fired or
+     * unrunnable alarm is equally gone; only the deletion is opportunistic.
+     */
+    private function cancelHelloAckDeadline(): void
+    {
+        if ($this->helloAckTimer === null) {
+            return;
+        }
+
+        $timerId = $this->helloAckTimer;
+        $this->helloAckTimer = null;
+
+        try {
+            Timer::del($timerId);
+        } catch (Throwable $e) {
+            $this->logger->debug('RelayConsumer: HELLO_ACK deadline deletion skipped', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Enforce the HELLO_ACK deadline: still stuck in HANDSHAKING (HELLO sent,
+     * no ACK) means the transport lied about being usable — tear it down
+     * VISIBLY; closeTunnel → onClose → handleDisconnect runs the bounded
+     * reconnect ladder. Void once active or already gone. Public for direct
+     * invocation from tests, mirroring {@see self::checkTunnelLiveness()}.
+     */
+    public function enforceHelloAckDeadline(): bool
+    {
+        $this->helloAckTimer = null;
+
+        if ($this->state !== self::STATE_HANDSHAKING) {
+            return false;
+        }
+
+        $this->logger->warning(
+            'RelayConsumer: no HELLO_ACK after sending HELLO; tearing tunnel down and reconnecting',
+            ['timeout_seconds' => self::HELLO_ACK_TIMEOUT_SECONDS]
+        );
+        $this->closeTunnel();
+
+        return true;
     }
 
     /**

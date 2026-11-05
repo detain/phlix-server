@@ -135,6 +135,58 @@ final class SwooleRuntime
     }
 
     /**
+     * The OR of the TLS-stream hook bits this Swoole build exposes
+     * (`SWOOLE_HOOK_SSL`, `SWOOLE_HOOK_TLS`); 0 when neither is defined.
+     *
+     * These are the bits that make `stream_socket_enable_crypto()` a
+     * coroutine call. Under them the final handshake flight (Certificate
+     * + ClientKeyExchange + Finished) can be reported written into the
+     * coroutine buffer while `enable_crypto()` returns TRUE — and never
+     * reach the wire (F-1b host forensics: `bytes_sent:1533`,
+     * `data_segs_out:1`, zero network syscalls under strace, hub mirror
+     * saw only the ClientHello). The relay tunnel worker excludes them;
+     * see {@see self::relayTunnelHookMask()}.
+     *
+     * @since 1.2.5
+     */
+    public static function tlsHookFlags(): int
+    {
+        $flags = 0;
+        foreach (['SWOOLE_HOOK_SSL', 'SWOOLE_HOOK_TLS'] as $name) {
+            if (defined($name)) {
+                $flags |= (int) constant($name);
+            }
+        }
+
+        return $flags;
+    }
+
+    /**
+     * The hook mask the relay-tunnel worker installs: the runtime mask with
+     * the TLS-stream bits removed.
+     *
+     * The tunnel is a single long-lived outbound TLS connection driven by
+     * `TlsRelayConnection`'s explicit pass-walk. With the bits removed
+     * `stream_socket_enable_crypto()` is PHP's NATIVE openssl call again —
+     * the exact semantics the host Select-loop proof exercised (the relay
+     * loop was never coroutine-dependent; `Events\Swoole` without these
+     * bits behaves like Select for these streams: `vendor/workerman`'s own
+     * `TcpConnection::baseRead()` documents the read-ahead hazard as a hook
+     * property, "PHP's native openssl stream has neither behaviour").
+     * Other workers keep the full curated mask; the delivery probe is a
+     * curl-class probe and cannot sense these bits, so the corroboration
+     * gate on the handshake is the per-dial proof.
+     *
+     * @param mixed $config The full server config array.
+     *
+     * @since 1.2.5
+     */
+    public static function relayTunnelHookMask(mixed $config): int
+    {
+        return self::runtimeHookMask($config) & ~self::tlsHookFlags();
+    }
+
+    /**
      * The OR of the libcurl hook bits this Swoole build exposes
      * (`SWOOLE_HOOK_CURL`, `SWOOLE_HOOK_NATIVE_CURL`); 0 when neither exists.
      *

@@ -1049,6 +1049,27 @@ try {
     $relayTunnelWorker->name = 'phlix-relay-tunnel';
     $relayTunnelWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
+        // F-1b: this worker's async TLS handshake must run NATIVE. The
+        // SWOOLE_HOOK_SSL|TLS bits inside the curated mask make
+        // stream_socket_enable_crypto a coroutine call that can return TRUE
+        // with the handshake's final flight stranded in the coroutine write
+        // buffer and never on the wire (host forensics: bytes_sent:1533,
+        // data_segs_out:1, zero network syscalls — the false-success ESTAB of
+        // the F-1b incident; {@see \Phlix\Hub\TlsRelayConnection} class
+        // header). This worker exists to drive that one tunnel, so drop the
+        // bits here ONLY — every other worker keeps the full curated mask.
+        // The delivery probe is a curl-class probe and cannot sense these
+        // bits; the corroboration gate + entry watchdog + HELLO_ACK deadline
+        // in the tunnel classes are the per-dial proof.
+        if (extension_loaded('swoole')) {
+            $relayMask = \Phlix\Server\Runtime\SwooleRuntime::relayTunnelHookMask($config);
+            \Phlix\Server\Runtime\HookDelivery::enforce($relayMask);
+            Worker::log(sprintf(
+                '[phlix] worker #%d relay-tunnel TLS hook exclusion applied: mask=0x%04x (native enable_crypto)',
+                (int) (getmypid() ?: -1),
+                $relayMask
+            ));
+        }
         // Effective-config overlay, mirroring the HTTP worker.
         // {@see \Phlix\Config\EffectiveConfig}
         $config = EffectiveConfig::bootstrapAndOverlay($config);

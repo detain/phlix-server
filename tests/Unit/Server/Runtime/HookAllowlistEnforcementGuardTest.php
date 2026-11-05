@@ -44,7 +44,11 @@
  *      background-timer worker; pinned so a new worker type that forgets the
  *      hook reddens a number instead of shipping silently;
  *   5. the survival token is code-resident here and absent from the
- *      production bootstrap.
+ *      production bootstrap;
+ *   6. (F-1b) the relay-tunnel worker is the ONE worker that narrows the
+ *      delivered mask afterwards — dropping the SWOOLE_HOOK_SSL|TLS bits the
+ *      false-`true` TLS regime needs (see TlsRelayConnection class header) —
+ *      pinned at exactly one site so no other worker's blast radius grows.
  *
  * @package Phlix\Tests\Unit\Server\Runtime
  */
@@ -206,6 +210,35 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
             . 'point removed, is the census this pins. Re-pinned 6→7 by the NAT-PMP '
             . 'full-RFC-citizenship lane (2026-10-01), which added the seventh body WITH '
             . 'the re-assert, measured from the phpunit red.'
+        );
+    }
+
+    /**
+     * F-1b rule 6: the relay-tunnel worker narrows its OWN delivered mask to
+     * exclude the TLS-stream bits (the curated 0x42fe regime is exactly where
+     * enable_crypto can return TRUE with the final flight stranded — host
+     * forensics in .reviews/2026-11-05/HOST-3.md). Pinned on the tokenized
+     * (comment-stripped) bootstrap: re-assert, THEN narrow, then enforce —
+     * and at EXACTLY one site estate-wide, so no other worker's blast radius
+     * grows.
+     */
+    public function test_relay_tunnel_worker_narrows_tls_hook_bits_at_exactly_one_site(): void
+    {
+        $start = self::code(self::START_PHP);
+
+        self::assertMatchesRegularExpression(
+            '/\$relayTunnelWorker->name = \'phlix-relay-tunnel\'.*?'
+                . '\$applyCuratedCoroutineHooks\(\);.*?'
+                . 'SwooleRuntime::relayTunnelHookMask\(\$config\).*?'
+                . 'HookDelivery::enforce\(\$relayMask\);/s',
+            $start,
+            'F-1b: the relay-tunnel worker must re-assert the curated mask, then enforce the TLS-narrowed one'
+        );
+
+        self::assertSame(
+            1,
+            substr_count($start, 'relayTunnelHookMask'),
+            'F-1b: exactly one narrowing site estate-wide — every other worker keeps the full curated mask'
         );
     }
 

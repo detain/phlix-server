@@ -37,11 +37,19 @@ final class RecordingTlsEventLoop implements EventInterface
     public int $delayCalls = 0;
     public int $offDelayCalls = 0;
 
+    /**
+     * FIRST timer id handed out is 0 — mirroring Workerman's own
+     * `Events\Event::delay()` (M-S1 of the F-1 review: a watchdog-armed
+     * sentinel that compares against 0 reads this very id as "never armed"
+     * and leaks the timer; this double reddens any such regression).
+     */
+    private int $nextTimerId = 0;
+
     public function delay(float $delay, callable $func, array $args = []): int
     {
         $this->delayCalls++;
         $this->timeoutCb = $func;
-        return 1;
+        return $this->nextTimerId++;
     }
 
     public function offDelay(int $timerId): bool
@@ -153,6 +161,11 @@ final class ScriptedTlsRelayConnection extends TlsRelayConnection
     /** @var list<bool|int> */
     private array $script = [];
 
+    private bool $productionCorroboration = false;
+
+    /** Observability for the delegation pin (F-1b/A3). */
+    public int $performCalls = 0;
+
     /**
      * @param list<bool|int> $script
      */
@@ -161,14 +174,42 @@ final class ScriptedTlsRelayConnection extends TlsRelayConnection
         $this->script = $script;
     }
 
+    /**
+     * Route corroboration back to the PRODUCTION method (reads the real
+     * stream's crypto meta) for the F-1b false-positive scenario.
+     */
+    public function useProductionCorroboration(): void
+    {
+        $this->productionCorroboration = true;
+    }
+
     protected function performTlsHandshake(): bool|int
     {
+        $this->performCalls++;
+
         if ($this->script === []) {
             // Default: keep asking (incomplete) rather than inventing a result.
             return 0;
         }
 
         return array_shift($this->script);
+    }
+
+    /**
+     * The scripted world stands in for the crypto RESULT, so it must also
+     * stand in for the corroborated verdict that result would produce — the
+     * scripted tests pin the DRIVE state machine, not openssl. The
+     * false-positive test opts back into production corroboration (see
+     * {@see self::useProductionCorroboration()}).
+     */
+    protected function corroborateTlsCompletion(): bool
+    {
+        if ($this->productionCorroboration) {
+            return parent::corroborateTlsCompletion();
+        }
+
+        // The scripted driver says "crypto done" — the scripted world agrees.
+        return true;
     }
 }
 
@@ -177,6 +218,10 @@ final class ScriptedTlsRelayConnection extends TlsRelayConnection
  * inbound→outbound alternation a real TLS flight exchange produces, must tear
  * down (fire onClose) on a failure/FIN during the handshake, and must never
  * strand — bounded by a watchdog.
+ *
+ * F-1b extends the law: the watchdog bounds from ENTRY (before any branch),
+ * and a completion is only honored when the stream's own crypto meta
+ * corroborates it — the hooked-Swoole false `true` must die, never establish.
  *
  * Token [RELAYTLSF1WDRIVE7Q2K].
  *
@@ -283,10 +328,14 @@ final class TlsRelayConnectionTest extends TestCase
     }
 
     /**
-     * When the very first pass completes (small flight, synchronous), no watch
-     * must be armed at all.
+     * F-1b/A3 LAW ROTATION (was: `test_immediate_completion_arms_nothing`,
+     * `delayCalls === 0`): the watchdog is armed at drive ENTRY, before the
+     * first pass — so an immediately-completing handshake arms it and then
+     * cancels it. The old law WAS the H3-2 hole: production's false `true`
+     * completed "immediately" (+45 ms) and nothing bounded it. Rotation
+     * measured from the red this rewrite expects against the old behavior.
      */
-    public function test_immediate_completion_arms_nothing(): void
+    public function test_immediate_completion_arms_then_cancels_the_watchdog(): void
     {
         $loop = new RecordingTlsEventLoop();
         $conn = $this->makeConnection($loop);
@@ -299,7 +348,98 @@ final class TlsRelayConnectionTest extends TestCase
 
         self::assertSame(TcpConnection::STATUS_ESTABLISHED, $conn->getStatus());
         self::assertFalse($conn->isHandshakeDriving());
-        self::assertSame(0, $loop->delayCalls, 'no watchdog for an already-complete handshake');
+        self::assertSame(1, $loop->delayCalls, 'watchdog armed at entry, BEFORE the first pass');
+        self::assertSame(1, $loop->offDelayCalls, 'a corroborated completion must cancel it again');
+        self::assertNull($loop->timeoutCb, 'no pending timeout may survive completion');
+    }
+
+    /**
+     * THE F-1b scenario, deterministic: the driver reports `true` on a stream
+     * that is not TLS at all (the hooked-Swoole false success wrote only a
+     * ClientHello; the stream denies establishment). Production corroboration
+     * must convert the lie into a teardown — onConnect NEVER fires, onClose
+     * does, and the entry watchdog is cancelled (no stale timer).
+     */
+    public function test_completion_reported_without_stream_corroboration_tears_down(): void
+    {
+        $loop = new RecordingTlsEventLoop();
+        $conn = $this->makeConnection($loop);
+        $conn->useProductionCorroboration();
+
+        $closed = false;
+        $errored = 0;
+        $connected = false;
+        $conn->onConnect = function () use (&$connected): void {
+            $connected = true;
+        };
+        $conn->onClose = function () use (&$closed): void {
+            $closed = true;
+        };
+        $conn->onError = function () use (&$errored): void {
+            $errored++;
+        };
+
+        $conn->queueHandshake([true]);
+        $socket = $this->makeSocket();
+        $conn->beginTlsHandshake($socket, '127.0.0.1:8802');
+
+        self::assertSame(TcpConnection::STATUS_CLOSED, $conn->getStatus(), 'an uncorroborated completion is a FAILURE');
+        self::assertFalse($connected, 'H3-2 law: onConnect must NEVER ride an uncorroborated completion');
+        self::assertTrue($closed, 'the teardown must be visible to the caller (reconnect drive)');
+        self::assertSame(1, $errored);
+        self::assertSame(1, $loop->delayCalls, 'watchdog armed at entry even for a false `true`');
+        self::assertSame(1, $loop->offDelayCalls, 'the teardown must cancel the watchdog');
+    }
+
+    /**
+     * The pure predicate behind corroboration, pinned on every meta shape a
+     * stream can hand back (measured PHP shape: `protocol` is a non-empty
+     * string only on an established TLS transport; the key is absent before).
+     */
+    public function test_crypto_meta_predicate_accepts_only_established_shapes(): void
+    {
+        self::assertTrue(TlsRelayConnection::cryptoMetaEstablished(['protocol' => 'TLSv1.3']));
+        self::assertTrue(TlsRelayConnection::cryptoMetaEstablished([
+            'protocol' => 'TLSv1.2',
+            'cipher_name' => 'ECDHE-RSA-AES256-GCM-SHA384',
+        ]));
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished(null), 'absent crypto block = not established');
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished([]));
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished(['protocol' => '']));
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished(['protocol' => null]));
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished(['protocol' => 123]));
+        self::assertFalse(TlsRelayConnection::cryptoMetaEstablished('yes'));
+    }
+
+    /**
+     * A3 plaintext-leg byte-identity: a non-ssl transport delegates VERBATIM
+     * to the vendored parent — none of this class's machinery may run there.
+     * A unix-pair socket has no peer name, so the parent takes its
+     * connect-fail branch; the pin is what this class never did.
+     */
+    public function test_plaintext_transport_delegates_verbatim_to_parent(): void
+    {
+        $loop = new RecordingTlsEventLoop();
+        $conn = $this->makeConnection($loop);
+
+        $errored = 0;
+        $conn->onError = function () use (&$errored): void {
+            $errored++;
+        };
+
+        $socket = $this->makeSocket();
+        // `socket` and `status` are protected on the vendored parent; the
+        // unix pair has no peer name, so parent::checkConnection() lands in
+        // its address-less fail branch.
+        (function () use ($socket): void {
+            $this->socket = $socket;
+            $this->status = TcpConnection::STATUS_CONNECTING;
+        })->call($conn);
+        $conn->checkConnection();
+
+        self::assertSame(0, $conn->performCalls, 'the TLS drive must never run for a non-ssl transport');
+        self::assertSame(0, $loop->delayCalls, 'no handshake watchdog on the delegated leg');
+        self::assertGreaterThan(0, $errored, 'the vendored fail branch ran — delegation, not theater');
     }
 
     /**

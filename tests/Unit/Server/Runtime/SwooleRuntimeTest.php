@@ -175,4 +175,42 @@ final class SwooleRuntimeTest extends TestCase
             'a cURL hook inside the safe mask would blind the behavioural delivery probe'
         );
     }
+
+    public function test_tls_hook_flags_cover_the_tls_stream_bits_this_swoole_exposes(): void
+    {
+        if (!defined('SWOOLE_HOOK_SSL') || !defined('SWOOLE_HOOK_TLS')) {
+            self::markTestSkipped('ext-swoole not loaded — no TLS stream hook constants to resolve.');
+        }
+
+        $tls = SwooleRuntime::tlsHookFlags();
+        self::assertSame(
+            ((int) SWOOLE_HOOK_SSL) | ((int) SWOOLE_HOOK_TLS),
+            $tls,
+            'both stream-TLS bits must be captured: leaving one in keeps enable_crypto a coroutine call (F-1b)'
+        );
+        // Unlike the cURL bits (F-1b: the curated mask INCLUDES these — that is
+        // exactly the regime defect the relay worker narrows around).
+        self::assertNotSame(
+            0,
+            SwooleRuntime::safeHookFlags() & $tls,
+            'if the curated allowlist ever stops containing the TLS bits, the relay narrowing premise changes — re-derive'
+        );
+    }
+
+    public function test_relay_tunnel_hook_mask_is_the_runtime_mask_minus_tls_bits(): void
+    {
+        $runtime = SwooleRuntime::runtimeHookMask([]);
+        $relay = SwooleRuntime::relayTunnelHookMask([]);
+
+        self::assertSame($runtime & ~SwooleRuntime::tlsHookFlags(), $relay);
+        self::assertSame(0, $relay & SwooleRuntime::tlsHookFlags(), 'no TLS stream bit may survive the narrowing');
+
+        // The escape hatch keeps working: an explicit mask narrows too.
+        self::assertSame(
+            0x2,
+            SwooleRuntime::relayTunnelHookMask(['coroutine' => ['hook_flags' => 0x2 | SwooleRuntime::tlsHookFlags()]])
+        );
+        // A disabled runtime stays fully unhooked (mask 0), TLS bits included.
+        self::assertSame(0, SwooleRuntime::relayTunnelHookMask(['coroutine' => ['enabled' => false]]));
+    }
 }

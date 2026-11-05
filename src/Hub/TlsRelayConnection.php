@@ -72,13 +72,50 @@ use Workerman\Connection\TcpConnection;
  * {@see TcpConnection::$sslHandshakeCompleted} is genuinely `true` so the
  * upgrade request is encrypted.
  *
- * ## F-2 / F-3 dispositions
+ * ## F-1b — the cure's first regime miss, and the in-regime re-cure
+ *
+ * The drive above was host-proved on a RAW Select loop. Production is NOT
+ * that regime: the relay worker runs `Events\Swoole` with the estate's curated
+ * hook mask 0x42fe, which INCLUDES `SWOOLE_HOOK_SSL|SWOOLE_HOOK_TLS`. Under
+ * those bits `stream_socket_enable_crypto()` is a coroutine call that can
+ * return TRUE — its own state machine believes every flight was written —
+ * while the final flight sits stranded in the coroutine write buffer and NEVER
+ * reaches the wire (host forensics: `bytes_sent:1533`, `data_segs_out:1`, zero
+ * network syscalls under strace, the hub mirror saw only the ClientHello). The
+ * `true` return then fired `establish()` at +45 ms: a FALSE SUCCESS inside
+ * ESTABLISHED, with no watchdog armed (it sat on the `0` branch only), no
+ * `onClose`, no reconnect — the stall class moved, it did not die (H3-2).
+ *
+ * Primary cure (the regime itself): the relay-tunnel worker installs the
+ * curated mask WITHOUT the SSL/TLS bits
+ * (`SwooleRuntime::relayTunnelHookMask()`), making `enable_crypto` native in
+ * this worker — the exact semantics the Select proof exercised.
+ * `Events\Swoole` without those bits treats these streams like Select: vendor
+ * `TcpConnection::baseRead()` documents the read-ahead/buffering hazard as a
+ * HOOK property ("PHP's native openssl stream has neither behaviour"), not a
+ * loop property, and the relay loop was never coroutine-dependent.
+ *
+ * Belt layers, each pinning a different failure shape, regime-independent:
+ * 1. NO completion on the driver return alone — {@see self::confirmCompletion()}
+ *    corroborates the stream's crypto meta BEFORE any ESTABLISHED callback; a
+ *    `true` the stream itself cannot confirm is a failure (destroy → onClose →
+ *    bounded reconnect).
+ * 2. The watchdog is armed at handshake ENTRY — before the first pass — so any
+ *    branch, including a false `true`, is bounded; an unresolvable handshake
+ *    can never become an unbounded silent ESTAB.
+ * 3. `RelayConsumer::HELLO_ACK_TIMEOUT_SECONDS` bounds the post-establish lie:
+ *    HELLO sent but no HELLO_ACK within the deadline → visible teardown +
+ *    bounded reconnect (kills the silent-ESTAB class at the protocol leg).
+ *
+ * ## F-2 / F-3 dispositions (F-1b-corrected)
  *
  * - F-2 (the "connected; sending HELLO" log reading as optimistic): that log
- *   lives in the tunnel's `onConnect`, which fires only from
- *   {@see self::establish()} below — i.e. strictly AFTER a genuine handshake
- *   completion. It can no longer fire on a stalled/half-negotiated socket, so
- *   there is no pre-handshake success log to move.
+ *   lives in the tunnel's `onConnect`, which now fires only from a
+ *   CORROBORATED {@see self::establish()}. The pre-fix production incident
+ *   proved the original wording was a design assumption, not a fact: a false
+ *   `true` DID ride it. With layers 1–3 above the log cannot become a silent
+ *   lie — a false completion either fails corroboration loudly BEFORE the log,
+ *   or dies inside the bounded ack deadline after it.
  * - F-3 (a FIN during a parked handshake is invisible to the server): both the
  *   inbound and the outbound pass now re-enter the drive and treat a
  *   failed/EOF {@see self::performTlsHandshake()} as terminal (`destroy()` →
@@ -103,8 +140,14 @@ class TlsRelayConnection extends AsyncTcpConnection
      */
     public const HANDSHAKE_TIMEOUT_SECONDS = 15.0;
 
-    /** Event-loop timer id for the handshake watchdog; 0 when not armed. */
-    private int $handshakeTimerId = 0;
+    /**
+     * Event-loop timer id for the handshake watchdog; null when not armed.
+     * MUST NOT use 0 as the sentinel: Workerman's `Events\Event::delay()`
+     * hands out 0 as its FIRST timer id (measured, M-S1 in the independent
+     * review of F-1), so an id-0 watchdog would read as "never armed" and leak
+     * uncancelled. `null` is armed-state-honest for every loop implementation.
+     */
+    private ?int $handshakeTimerId = null;
 
     /** True while the handshake state machine still holds an event watch. */
     private bool $handshakeArmed = false;
@@ -164,8 +207,9 @@ class TlsRelayConnection extends AsyncTcpConnection
     }
 
     /**
-     * Enter the handshake drive. Runs the first `enable_crypto` pass and, when it
-     * reports incomplete, arms the inbound watch (plus the one-shot watchdog).
+     * Enter the handshake drive: arm the watchdog FIRST, run the first
+     * `enable_crypto` pass, then branch — every terminal route (true/false) is
+     * bounded from entry, and only the incomplete state parks on a watch.
      *
      * @param resource $socket  The TCP-established, non-blocking client socket.
      * @param string   $address Peer `host:port` from `stream_socket_get_name`.
@@ -177,10 +221,15 @@ class TlsRelayConnection extends AsyncTcpConnection
         $this->socket = $socket;
         $this->status = TcpConnection::STATUS_CONNECTING;
 
+        // F-1b/A3: bound the handshake BEFORE the first branch — a false
+        // `true`, a lost watch, or a silent peer can never become an unbounded
+        // silent ESTAB. Cancelled only on corroborated completion or teardown.
+        $this->armHandshakeWatchdog($address);
+
         $result = $this->performTlsHandshake();
 
         if ($result === true) {
-            $this->completeTlsHandshake($address);
+            $this->confirmCompletion($address);
             return;
         }
 
@@ -190,18 +239,39 @@ class TlsRelayConnection extends AsyncTcpConnection
         }
 
         // $result === 0 : incomplete. This is the state Workerman's stock driver
-        // abandons. Arm the inbound watch + watchdog.
-        $this->armInboundWatch($address, true);
+        // abandons. Arm the inbound watch (watchdog already armed at entry).
+        $this->armInboundWatch($address);
     }
 
     /**
-     * Watch the socket for inbound bytes (the peer's next flight) and, on first
-     * arm, schedule the handshake watchdog.
+     * Schedule the handshake watchdog EXACTLY ONCE, at drive entry (F-1b/A3).
+     * The arm-once guard compares against null — never 0 — because timer ids
+     * may legitimately start at 0 (M-S1).
      *
-     * @param string $address     Peer `host:port`.
-     * @param bool   $withWatchdog Schedule {@see self::HANDSHAKE_TIMEOUT_SECONDS} (once).
+     * @param string $address Peer `host:port`.
      */
-    private function armInboundWatch(string $address, bool $withWatchdog): void
+    private function armHandshakeWatchdog(string $address): void
+    {
+        $loop = $this->eventLoop;
+        if ($loop === null || $this->handshakeTimerId !== null) {
+            return;
+        }
+
+        $this->handshakeTimerId = $loop->delay(
+            self::HANDSHAKE_TIMEOUT_SECONDS,
+            function () use ($address): void {
+                $this->onHandshakeTimeout($address);
+            }
+        );
+    }
+
+    /**
+     * Watch the socket for inbound bytes (the peer's next flight). The watchdog
+     * is NOT armed here — it is armed at {@see self::beginTlsHandshake()} entry.
+     *
+     * @param string $address Peer `host:port`.
+     */
+    private function armInboundWatch(string $address): void
     {
         $loop = $this->eventLoop;
         if ($loop === null) {
@@ -212,15 +282,6 @@ class TlsRelayConnection extends AsyncTcpConnection
         $loop->onReadable($this->socket, function () use ($address): void {
             $this->onInboundReadiness($address);
         });
-
-        if ($withWatchdog && $this->handshakeTimerId === 0) {
-            $this->handshakeTimerId = $loop->delay(
-                self::HANDSHAKE_TIMEOUT_SECONDS,
-                function () use ($address): void {
-                    $this->onHandshakeTimeout($address);
-                }
-            );
-        }
     }
 
     /**
@@ -237,7 +298,7 @@ class TlsRelayConnection extends AsyncTcpConnection
         $result = $this->performTlsHandshake();
 
         if ($result === true) {
-            $this->completeTlsHandshake($address);
+            $this->confirmCompletion($address);
             return;
         }
 
@@ -285,7 +346,7 @@ class TlsRelayConnection extends AsyncTcpConnection
         $result = $this->performTlsHandshake();
 
         if ($result === true) {
-            $this->completeTlsHandshake($address);
+            $this->confirmCompletion($address);
             return;
         }
 
@@ -295,7 +356,7 @@ class TlsRelayConnection extends AsyncTcpConnection
         }
 
         // 0 : nothing more to write; resume waiting for the peer's next flight.
-        $this->armInboundWatch($address, false);
+        $this->armInboundWatch($address);
     }
 
     /**
@@ -304,7 +365,7 @@ class TlsRelayConnection extends AsyncTcpConnection
      */
     private function onHandshakeTimeout(string $address): void
     {
-        $this->handshakeTimerId = 0;
+        $this->handshakeTimerId = null;
 
         if ($this->status !== TcpConnection::STATUS_CONNECTING) {
             return;
@@ -329,7 +390,67 @@ class TlsRelayConnection extends AsyncTcpConnection
     }
 
     /**
-     * Handshake done: disarm the phase watches and finish establishing.
+     * F-1b/A3: the driver reported `true` — CORROBORATE at the stream level
+     * BEFORE any ESTABLISHED callback fires. A completion the stream itself
+     * cannot confirm (no crypto meta: the transport is not actually TLS) is a
+     * FAILURE: destroy → onClose → the caller's bounded reconnect. The driver
+     * return alone is never trusted.
+     */
+    private function confirmCompletion(string $address): void
+    {
+        if (!$this->corroborateTlsCompletion()) {
+            $this->failHandshake(
+                'completion reported by the driver but not corroborated by the stream crypto meta'
+            );
+            return;
+        }
+
+        $this->completeTlsHandshake($address);
+    }
+
+    /**
+     * Corroboration seam: read the live stream's crypto meta. Kept separate
+     * from {@see self::confirmCompletion()} so the scripted drive tests can
+     * pin the gate verdicts independently of the scripted driver result, and
+     * the false-positive test can exercise THIS production method.
+     */
+    protected function corroborateTlsCompletion(): bool
+    {
+        if (!is_resource($this->socket)) {
+            return false;
+        }
+
+        /** @var array<string, mixed> $meta */
+        $meta = stream_get_meta_data($this->socket);
+
+        return self::cryptoMetaEstablished($meta['crypto'] ?? null);
+    }
+
+    /**
+     * Pure predicate: does this `crypto` stream-metadata block have the shape
+     * of an ESTABLISHED TLS transport? Native openssl streams carry the block
+     * (with a non-empty `protocol`) only AFTER a successful enable_crypto;
+     * before it the key is absent entirely. Under a Swoole TLS hook the block
+     * can exist while flights are still buffered — which is exactly why the
+     * relay worker UN-HOOKS those bits (the mask is the cure); this predicate
+     * is the belt that fails any completion the native stream denies.
+     *
+     * @param mixed $crypto The `crypto` entry of `stream_get_meta_data()`.
+     */
+    public static function cryptoMetaEstablished(mixed $crypto): bool
+    {
+        if (!is_array($crypto)) {
+            return false;
+        }
+
+        $protocol = $crypto['protocol'] ?? null;
+
+        return is_string($protocol) && $protocol !== '';
+    }
+
+    /**
+     * Handshake done AND corroborated: disarm the phase watches and finish
+     * establishing. Reached only via {@see self::confirmCompletion()}.
      */
     private function completeTlsHandshake(string $address): void
     {
@@ -402,14 +523,14 @@ class TlsRelayConnection extends AsyncTcpConnection
     {
         $loop = $this->eventLoop;
         if ($loop === null) {
-            $this->handshakeTimerId = 0;
+            $this->handshakeTimerId = null;
             $this->handshakeArmed = false;
             return;
         }
 
-        if ($this->handshakeTimerId !== 0) {
+        if ($this->handshakeTimerId !== null) {
             $loop->offDelay($this->handshakeTimerId);
-            $this->handshakeTimerId = 0;
+            $this->handshakeTimerId = null;
         }
 
         $loop->offReadable($this->socket);

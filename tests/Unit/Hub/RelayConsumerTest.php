@@ -3619,4 +3619,67 @@ class RelayConsumerTest extends TestCase
         self::assertFalse($consumer->checkTunnelLiveness(), 'pingTimeout < 1 disables the watchdog (documented knob semantics)');
         self::assertFalse($this->hub->closed);
     }
+
+    // ---------------------------------------------------------------------
+    // F-1b/A3 belt layer 3: the HELLO_ACK deadline — a transport that lies
+    // about being usable (the hooked-Swoole false TLS `true` did) must die
+    // VISIBLY inside a bound, never sit silently ESTABLISHED (H3-2).
+    // ---------------------------------------------------------------------
+
+    public function testHelloAckDeadlineReapsATunnelStuckWithoutAck(): void
+    {
+        $consumer = $this->createConsumer();
+        $consumer->start();
+        $this->hub->fireConnect(); // HELLO sent — no ack: state parks in handshaking
+
+        self::assertSame('handshaking', $this->consumerState($consumer, 'state'));
+
+        self::assertTrue(
+            $consumer->enforceHelloAckDeadline(),
+            'a HELLO that never got its ACK is a dead tunnel, not a patient one',
+        );
+        self::assertTrue(
+            $this->hub->closed,
+            'the reap must close the tunnel socket (onClose → handleDisconnect → bounded reconnect ladder)',
+        );
+        self::assertSame('disconnected', $this->consumerState($consumer, 'state'));
+    }
+
+    public function testHelloAckDeadlineIsVoidOnceAckedOrNotStarted(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer); // connect + HELLO_ACK — deadline already cancelled
+
+        self::assertFalse($consumer->enforceHelloAckDeadline(), 'an acked tunnel must never be reaped by the deadline');
+        self::assertFalse($this->hub->closed);
+
+        $fresh = $this->createConsumer();
+        self::assertFalse($fresh->enforceHelloAckDeadline(), 'a consumer that never dialed has nothing to reap');
+    }
+
+    /**
+     * Structural pins (same idiom as the start.php delegation guard in
+     * RelayTunnelBootTest): RelayConsumer is final, so the arm/cancel wiring
+     * is pinned at the source level — deleting any call site reddens this.
+     */
+    public function testHelloAckDeadlineWiringIsPinned(): void
+    {
+        $path = dirname(__DIR__, 3) . '/src/Hub/RelayConsumer.php';
+        $source = file_get_contents($path);
+        self::assertIsString($source, 'the consumer source must be readable for the wiring pin');
+
+        // The onConnect closure that logs the connect must ALSO arm the
+        // deadline right after the HELLO — the arm-then-unsent hole is what
+        // let H3-2 sit silent for 26 minutes.
+        self::assertMatchesRegularExpression(
+            '/RelayConsumer connected; sending HELLO.*?\$this->sendHello\(\$enrollmentJwt\);.*?\$this->armHelloAckDeadline\(\);.*?\};/s',
+            $source,
+            'F-1b: the HELLO-sending onConnect closure must arm the ack deadline'
+        );
+
+        // One arm site; four cancel sites (arm-replace, ack-success,
+        // disconnect, stop) — any dropped limb reopens an unbounded window.
+        self::assertSame(1, substr_count($source, '$this->armHelloAckDeadline();'));
+        self::assertSame(4, substr_count($source, '$this->cancelHelloAckDeadline();'));
+    }
 }

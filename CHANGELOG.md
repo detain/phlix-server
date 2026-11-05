@@ -377,6 +377,41 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The relay tunnel no longer reports a false TLS "connected" and sits on a
+  silent ESTAB on the production host — the in-regime re-cure of F-1.** The
+  driver fix above missed its target regime: production runs the `Events\Swoole`
+  loop under the curated `0x42fe` hook mask, which INCLUDES
+  `SWOOLE_HOOK_SSL|TLS`, so `stream_socket_enable_crypto()` is the
+  coroutine-hooked variant — it returns TRUE once the ClientHello has merely
+  landed in the coroutine's write buffer (measured in-regime again: `onConnect`
+  fires +16 ms after dial while kernel accounting stays frozen at
+  `bytes_sent:1533 data_segs_out:1` for the whole 26 s window; the HELLO
+  strands un-sent too). F-1 armed its handshake watchdog only on the `0`
+  (incomplete) branch, so a false TRUE walked straight past it into an
+  unbounded silent ESTAB logging a lying "connected; sending HELLO".
+  The root cause is fixed at the bootstrap: the relay-tunnel worker narrows
+  its own hook mask to `0x429e` (`SwooleRuntime::relayTunnelHookMask()` — the
+  runtime mask minus the TLS stream bits) so `enable_crypto` is native, the
+  exact semantics the Select-loop proof of F-1 ran under (the vendored
+  `baseRead` docblock confirms the buffering hazards are hook properties, not
+  loop ones). Blast radius is that one single-connection worker; the
+  loop-static seams (blocking-curl TLS branch, TCP-hooked MySQL pool) are
+  untouched. Three independent belts hold regardless of regime (F-1b): (1)
+  completion must be corroborated by the stream's crypto meta before
+  `onConnect`; (2) the handshake watchdog is armed at `beginTlsHandshake()`
+  ENTRY, before any return branch — and its armed-sentinel is `?int`, because
+  the first id from `Event::delay()` IS 0 and a `> 0` style check silently
+  treats an armed watchdog as unarmed (M-S1); (3) `RelayConsumer` arms a
+  bounded 20 s HELLO_ACK deadline right after sending HELLO, so even a fully
+  believed false-positive tears down into the normal bounded-backoff reconnect
+  instead of lying connected forever. Measured red teeth: stripping
+  corroboration convicts exactly 1 test, the entry-arm 5, the sentinel
+  regression 3, deadline wiring strips 1 structural + 1 semantic each, and the
+  start.php narrowing strip convicts its guard test (mask-identity teeth are
+  CI-only — no swoole on the dev box). Plaintext and local legs remain
+  byte-identical, delegation-pinned. Zero wire change; no new error codes.
+  [F-1b; HOST-3 H3-1/H3-2; REVIEW-F1 M-S1]
+
 - **The hub relay tunnel's `wss://` TLS handshake no longer strands mid-negotiation.**
   On the production host (PHP 8.5 / Swoole 6.2.1) the relay dial to
   `wss://hub.phlix.is.cc:8802` froze with the kernel accounting for exactly one

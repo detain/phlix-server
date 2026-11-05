@@ -96,6 +96,38 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The 2026-11-04 symfony advisory flush is cleared — lock-only re-vendor of
+  the five affected `symfony/*` components.** The Coding Standards `Security
+  Audit` job (`php scripts/security-audit-check.php`, which blocks any advisory
+  against `composer.lock`) went red on that day's push CI — the sole red, the
+  other workflows stayed green, and the review register attributes it to the
+  external advisory wave (published 2026-11-04T11:43Z, first conviction at tip
+  `fddfef88`, run 42076212140), deferring remediation to this lock-only lane.
+  The flush flagged 8 advisories across 5 locked packages — `symfony/config`
+  (GHSA-5jff-8h8q-r5qx, XXE through the `XmlUtils` parse path),
+  `symfony/filesystem` (GHSA-6prc-h956-hxjq, path-prefix escape via `://`),
+  `symfony/http-foundation` (CVE-2026-118514 `HEAD`-method bypass;
+  GHSA-3h27-hjv7-fqjx path-rule matching; GHSA-xg2q-4rrq-657q
+  `private_ranges` trusted-proxy handling; GHSA-5mx8-mwrp-5693 host-derived
+  redirect URL generation), `symfony/http-kernel` (GHSA-wg5q-m2ww-f3c9 inline
+  fragments forwarded headers) and `symfony/yaml` (GHSA-hwfg-qwvh-2wfx
+  exponential-time parse) — all patched in the 7.4.23 releases. `composer
+  update` on exactly the five names resolves inside the declared ranges:
+  `v7.4.17 → v7.4.23` (`symfony/config`; the other four were `v7.4.21 →
+  v7.4.23`), `composer.json` untouched — the only root constraint among them is
+  `symfony/yaml: ^7.0`, the rest arrive transitively — the lock diff is limited
+  to the five bumped nodes (30+/30−: version, references, urls, time), the
+  content-hash is unchanged, and the unflagged symfony neighbors stay as they
+  were. Gate evidence: audit script exit 0 (`Security audit passed`),
+  `composer validate --strict --no-check-publish` clean, both phpstan corpora
+  zero errors, both phpcs corpora zero errors, the S180 prober's undecided set
+  still matches `probe-baseline.json` exactly (a vendor-only change rotates no
+  count), and the full local suite battery green across the union of the two
+  ext-swoole host lanes — every observed red (19 files: coroutine/HTTP-client
+  parent segfaults and real-composer child segfaults, signal 11) reproduced
+  identically under the PRE-bump lock in a control clone, i.e. the host's
+  `swoole 6.0.2-dev` build, zero attribution to the bump.
+
 - **A freshly created HLS job now encodes its opening window in the background
   instead of making the first viewer pay for it.** Job creation only ever
   wrote the playlists; every segment — including the very first ones, whose

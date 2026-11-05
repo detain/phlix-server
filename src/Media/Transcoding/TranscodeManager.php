@@ -988,6 +988,13 @@ class TranscodeManager
      *                     retryable state the caller surfaces as HTTP 503.
      * @throws SegmentCacheFullException When the segment cache filesystem is low on
      *                     disk space (SV-1.9). The caller should sweep and retry.
+     * @throws \InvalidArgumentException When the job's persisted `segment_params`
+     *                     row holds a value outside the ffmpeg argv allowlist — the
+     *                     synchronous command build inside this call (via
+     *                     {@see \Phlix\Media\Transcoding\FfmpegRunner::argvParam()})
+     *                     refuses it (INV-A P3, playback-lag cure C2). Transient
+     *                     for the player: the HLS/DASH serve arms answer the same
+     *                     retryable 503 envelope as the two arms above.
      */
     public function ensureSegment(string $jobId, ?string $variant, int $index, ?string $audioId = null): ?string
     {

@@ -313,8 +313,9 @@ final class TlsRelayConnectionTest extends TestCase
 
         $closed = false;
         $errored = 0;
-        $conn->onConnect = function (): void {
-            self::fail('onConnect must not fire when the handshake fails');
+        $connected = false;
+        $conn->onConnect = function () use (&$connected): void {
+            $connected = true;
         };
         $conn->onClose = function () use (&$closed): void {
             $closed = true;
@@ -329,6 +330,7 @@ final class TlsRelayConnectionTest extends TestCase
 
         self::assertSame(TcpConnection::STATUS_CLOSED, $conn->getStatus());
         self::assertTrue($closed);
+        self::assertFalse($connected, 'onConnect must NOT fire when the handshake fails (F-2 truth)');
         self::assertSame(1, $errored);
         self::assertFalse($loop->writableArmed, 'watches disarmed after teardown');
     }
@@ -344,8 +346,9 @@ final class TlsRelayConnectionTest extends TestCase
 
         $closed = false;
         $errored = 0;
-        $conn->onConnect = function (): void {
-            self::fail('onConnect must not fire when the handshake fails');
+        $connected = false;
+        $conn->onConnect = function () use (&$connected): void {
+            $connected = true;
         };
         $conn->onClose = function () use (&$closed): void {
             $closed = true;
@@ -363,6 +366,7 @@ final class TlsRelayConnectionTest extends TestCase
 
         self::assertSame(TcpConnection::STATUS_CLOSED, $conn->getStatus());
         self::assertTrue($closed, 'a failed handshake pass must fire onClose (F-3)');
+        self::assertFalse($connected, 'onConnect must NOT fire when the handshake fails (F-2 truth)');
         self::assertSame(1, $errored, 'the failure must surface once via onError');
     }
 

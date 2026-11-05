@@ -100,9 +100,12 @@ use Workerman\Connection\TcpConnection;
  *    corroborates the stream's crypto meta BEFORE any ESTABLISHED callback; a
  *    `true` the stream itself cannot confirm is a failure (destroy → onClose →
  *    bounded reconnect).
- * 2. The watchdog is armed at handshake ENTRY — before the first pass — so any
- *    branch, including a false `true`, is bounded; an unresolvable handshake
- *    can never become an unbounded silent ESTAB.
+ * 2. The watchdog is armed at handshake ENTRY — before the first pass — so the
+ *    pre-established phase is never unbounded: it bounds false `true`s belt 1
+ *    catches, a lost inbound watch, and a peer that accepts TCP then goes
+ *    silent. It does NOT bound the incident's false `true`: that one reports
+ *    crypto meta, so belt 1 passes and establish cancels this watchdog
+ *    microseconds after arming — for that shape, layer 3 is the bound.
  * 3. `RelayConsumer::HELLO_ACK_TIMEOUT_SECONDS` bounds the post-establish lie:
  *    HELLO sent but no HELLO_ACK within the deadline → visible teardown +
  *    bounded reconnect (kills the silent-ESTAB class at the protocol leg).

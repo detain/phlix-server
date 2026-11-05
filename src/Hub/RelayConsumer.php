@@ -3461,10 +3461,14 @@ final class RelayConsumer
     }
 
     /**
-     * Timer seam: one-shot alarm that enforces the HELLO_ACK deadline. Tests
-     * override this to observe arm wiring without a running event loop (the
-     * Workerman Timer facade only works inside a worker, same constraint the
-     * reconnect-scheduling arm above already accepts).
+     * Timer seam: one-shot alarm that enforces the HELLO_ACK deadline. The
+     * class is final — no test overrides this seam. The arm wiring is pinned
+     * structurally by the source scan in
+     * RelayConsumerTest::testHelloAckDeadlineWiringIsPinned() and
+     * behaviorally through the public enforce seam below, which tests call
+     * directly without a running event loop (the Workerman Timer facade only
+     * works inside a worker, same constraint the reconnect-scheduling arm
+     * above already accepts).
      */
     protected function scheduleHelloAckTimer(float $delaySeconds): ?int
     {

@@ -377,6 +377,29 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The hub relay tunnel's `wss://` TLS handshake no longer strands mid-negotiation.**
+  On the production host (PHP 8.5 / Swoole 6.2.1) the relay dial to
+  `wss://hub.phlix.is.cc:8802` froze with the kernel accounting for exactly one
+  data segment sent (the 1533-byte ClientHello) and the hub's flight received,
+  ACKed and never answered — a silent ESTAB the worker sat on for 26+ minutes,
+  while a blocking-socket probe to the same endpoint completed TLSv1.3 fine. The
+  async path, not TLS, was broken: Workerman 5.2.3's
+  `AsyncTcpConnection::checkConnection()` re-enters an incomplete
+  `stream_socket_enable_crypto()` on a READABLE watch only, and its private
+  `checkSslHandshake()` does not re-arm at all after the first inbound pass — so
+  when the client must WRITE its flight triggered by that pass (TLS 1.3
+  `Finished`), nothing ever drives it. The relay now dials TLS through
+  `Phlix\Hub\TlsRelayConnection`, which re-enters the handshake across the
+  inbound→outbound alternation a real flight exchange produces, arms a single
+  transient writable pass per inbound event (never a permanent one, so a drained
+  socket cannot busy-spin the level-triggered loop), treats a failed/EOF pass and
+  a bounded 15 s handshake watchdog as terminal (`destroy()` → `onClose`, letting
+  the relay reconnect instead of parking), and fires `onConnect` — and so the
+  "connected; sending HELLO" trace — only after a genuine handshake completion.
+  Plaintext (`ws://`) and local legs are untouched (the subclass delegates
+  verbatim to the vendored parent when `transport !== 'ssl'`). Zero wire or
+  protocol change; no new error codes. (F-1; F-2/F-3 dispositions.)
+
 - **A poisoned `segment_params` row can no longer 500-storm every segment of
   a job.** The per-request on-demand segment build (`TranscodeManager::
   ensureSegment()` → `FfmpegRunner::argvParam()`) throws

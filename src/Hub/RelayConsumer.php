@@ -1011,7 +1011,15 @@ final class RelayConsumer
             'protocol' => $transport['protocol'],
         ]);
 
-        $connection = new AsyncTcpConnection($transport['address'], $transport['context']);
+        // F-1: a wss:// hub tunnel MUST use TlsRelayConnection, whose handshake
+        // drive re-enters enable_crypto on BOTH readable and writable (and fails
+        // closed on a FIN/timeout). The vendored AsyncTcpConnection re-arms on
+        // readable ONLY, which strands the handshake once the peer flight is
+        // consumed with nothing left to read (the 26-minute silent ESTAB). A
+        // plaintext (ws://) tunnel keeps the stock connection unchanged.
+        $connection = $transport['useTls']
+            ? new TlsRelayConnection($transport['address'], $transport['context'])
+            : new AsyncTcpConnection($transport['address'], $transport['context']);
         // S301 live-proof finding: the CLIENT-side protocol is Ws, never
         // Websocket (see {@see resolveHubTransport()} for the measured proof).
         $connection->protocol = $transport['protocol'];

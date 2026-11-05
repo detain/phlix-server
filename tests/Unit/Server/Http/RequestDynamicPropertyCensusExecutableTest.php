@@ -1080,7 +1080,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +1 2071→2072: C6 adds tests/Unit/Media/Transcoding/
     // TranscodeManagerPrewarmTest.php; 2072 measured from the phpunit battery red,
     // not predicted.
-    private const EXPECTED_PHP_FILES = 2072;
+    // +2 2072-2074: the F-1 relay TLS-handshake drive adds
+    // src/Hub/TlsRelayConnection.php plus its red-first drive test
+    // tests/Unit/Hub/TlsRelayConnectionTest.php; 2074 measured from the phpunit
+    // battery red at tip 622bdbc9, not predicted.
+    private const EXPECTED_PHP_FILES = 2074;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

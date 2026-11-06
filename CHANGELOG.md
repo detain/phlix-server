@@ -507,6 +507,36 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Multi-audio titles now play sound through the pinned-'Original'
+  quality path, and existing job directories self-heal on first request.**
+  The silence had a second, client-shaped half that today's earlier rung-
+  playlist fix could not reach: the pinned player (hls.js 1.7.4) parses
+  media playlists WITHOUT any `#EXT-X-MEDIA` handling — its router decides
+  "media playlist" from `#EXTINF`/`#EXT-X-TARGETDURATION` and populates
+  `audioTracks` ONLY from the master-path parse — so declaring the audio
+  group inside each video rung's `media_v{id}.m3u8` (earlier today, during
+  the playback-lag program) was spec-invalid for that parser and provably
+  inert: a live haproxy capture against a job written with those bytes
+  showed master → `media_voriginal.m3u8` → video segments only, zero
+  `media_a`/`seg-a` requests. This commit supersedes that approach (the
+  old entry stays as verbatim history): every VIDEO rung now also gets a
+  per-rung mini-master index `media_v{id}_master.m3u8` — the exact master
+  shape restricted to that one variant, group lines rendered through the
+  same single-source method as the master itself — which is what the
+  client loads for a direct rung selection (single-level ABR is a no-op;
+  the `aud` group collects, `DEFAULT=YES` auto-selects, and the
+  already-wired track menu activates). The bare rungs go back to their
+  original no-group bytes, and the index is ALWAYS written — a single-
+  audio/muxed rung gets a legal one-variant master, so the client's URL
+  rule is uniform across both shapes. Pre-existing job dirs (every title
+  transcoded before this fix, the live multiaudio samples included) heal
+  without deleting anything: the regeneration rail fires when a playlist
+  is missing, and its master-only presence check is extended to a
+  rung↔index count — a client's first `media_v*_master.m3u8` request
+  against a pre-fix directory triggers one idempotent full rewrite. The
+  playlist law tests are rewritten to the new law, red-first against the
+  pre-fix tree; `master.m3u8`, the audio-only playlists, and the MPD do
+  not move. (playback-lag program, Fix A′′, 2026-11-06.)
 - **On-demand HLS segments on a GPU-less server now honour the thread cap
   and the configured preset.** With hardware acceleration enabled and
   preferred (both defaults), segment assembly asked the hwaccel path for a

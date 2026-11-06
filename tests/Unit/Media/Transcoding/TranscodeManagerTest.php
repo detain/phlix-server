@@ -2852,6 +2852,14 @@ class TranscodeManagerTest extends TestCase
         $dir = $this->capturedJobInsert($captured)['hls_dir'];
 
         $playlists = glob("{$dir}/media_v*.m3u8") ?: [];
+        // Fix A′′ (2026-11-06): `media_v*.m3u8` now also matches the per-rung
+        // mini-master INDEXES, which are master-shaped documents, not media
+        // playlists — this case compares rung TIMELINES, so the indexes are
+        // excluded by shape (they carry no `#EXTINF`), not by assumption.
+        $playlists = array_values(array_filter(
+            $playlists,
+            static fn (string $file): bool => preg_match('/_master\.m3u8$/', $file) !== 1
+        ));
         $this->assertGreaterThanOrEqual(2, count($playlists));
         $normalised = null;
         $checked = 0;

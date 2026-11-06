@@ -2991,7 +2991,8 @@ class TranscodeManager
      * Multi-variant path (A5+): `$variants` is the highest-first list from
      * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} — one
      * `media_v{id}.m3u8` per variant (segment TIMING is IDENTICAL across variants;
-     * only the encode target differs), plus a master listing the ABR-SWITCHABLE
+     * only the encode target differs) plus its Fix A′′ mini-master index
+     * `media_v{id}_master.m3u8`, and a master listing the ABR-SWITCHABLE
      * subset of them ({@see switchableVariants()}: every variant except a copy and
      * except a transcode `original` that duplicates the top rung — both of which
      * still get their own playlist for explicit selection). Legacy path
@@ -3003,14 +3004,17 @@ class TranscodeManager
      * the master (NAME/LANGUAGE/DEFAULT/AUTOSELECT per track), writes one
      * audio-only playlist per track keyed on its AUDIO-RELATIVE index
      * (`media_a0.m3u8` = first audio stream), and ties every video variant to
-     * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`. Fix 3
-     * (2026-11-06): the same group lines are ALSO declared inside every VIDEO
-     * rung's `media_v{id}.m3u8` — rung segments are `-an`, and a client that
-     * loads a rung playlist directly (the pinned-'original' path; copy rungs
-     * never appear in the master at all) would otherwise find no audio. Both
-     * renderers share {@see audioGroupRenditionLines()}, so the two views of
-     * the group cannot drift. The audio-only playlists carry NO group lines
-     * (self-describing) and single-audio/legacy jobs keep their exact bytes.
+     * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`. Fix A′′
+     * (2026-11-06, superseding Fix 3's same-day in-rung emit): the writer also
+     * emits a per-rung mini-master index `media_v{id}_master.m3u8` for EVERY
+     * video rung — the master's exact shape restricted to that one variant —
+     * because a direct rung load (the pinned-'Original'/quality path; copy
+     * rungs never appear in the master at all) can only discover the group
+     * through a MASTER-parsed document: hls.js 1.7.4's media-playlist parser
+     * has no `EXT-X-MEDIA` case at all. The index and the master share
+     * {@see audioGroupRenditionLines()}, so the two views of the group cannot
+     * drift. The bare VIDEO and audio-only playlists carry NO group lines and
+     * keep their pre-Fix-3 bytes for every job shape.
      *
      * fMP4 path (S57): `$segmentFormat` selects the container flavour, and the
      * branch is INSIDE the builders rather than at a call site — this method has
@@ -3069,9 +3073,9 @@ class TranscodeManager
 
         // P3B-S3 multi-audio: emit audio groups + audio-only playlists when available.
         $hasMultiAudio = is_array($audioTracks) && count($audioTracks) > 1;
-        // Fix 3: ONE group decision feeds all three renderers (master, video
-        // rungs, MPD), so what the rungs advertise and what the master
-        // advertises cannot disagree by construction.
+        // Fix A′′: ONE group decision feeds all renderers (master, the per-rung
+        // mini-master indexes, MPD), so what an index advertises and what the
+        // master advertises cannot disagree by construction.
         $audioGroup = $hasMultiAudio ? $audioTracks : null;
 
         // SV-4.6: restrict the master's switchable ABR set — see switchableVariants().
@@ -3109,14 +3113,29 @@ class TranscodeManager
             }
         }
 
-        // Write one media playlist per video variant. Fix 3: every RUNG carries
-        // the group (its segments are `-an`), so a client that selects a rung
-        // directly — including the copy/'original' rungs withheld from the
-        // master by SV-4.6 — still discovers the audio renditions.
+        // Write one media playlist per video variant — plus ONE mini-master
+        // INDEX per rung (Fix A′′, 2026-11-06, superseding Fix 3's in-rung
+        // emit). The rung playlist keeps its original no-group bytes: hls.js
+        // parses media playlists with NO `#EXT-X-MEDIA` handling at all, so
+        // Fix 3's lines sat there inert (proven live: rung-direct playback
+        // stayed silent with them emitted). Sound for a DIRECT rung load is
+        // discoverable only from a master-shaped document — the index is
+        // exactly `buildMultiVariantMaster()` over a one-rung set: single
+        // level (no-op for ABR), the identical `aud` group when the job has
+        // one, and this rung as its only URI. ALWAYS emitted: with no group
+        // (single-audio/muxed) it is a legal one-variant master, so the
+        // client needs one uniform `media_v{id}_master.m3u8` rule for both
+        // shapes. The copy-'original' rung withheld from the master by
+        // SV-4.6 gets one too — it is precisely the rung whose pinned direct
+        // load caused the silence.
         foreach ($variants as $variant) {
             file_put_contents(
                 "{$dir}/media_v{$variant->id}.m3u8",
-                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat, $audioGroup)
+                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat)
+            );
+            file_put_contents(
+                "{$dir}/media_v{$variant->id}_master.m3u8",
+                $this->buildMultiVariantMaster([$variant], $audioGroup, $segmentFormat)
             );
         }
 
@@ -3633,26 +3652,31 @@ class TranscodeManager
     /**
      * The `#EXT-X-MEDIA:TYPE=AUDIO` rendition lines of the shared `aud` group.
      *
-     * SINGLE SOURCE OF TRUTH for those lines' exact bytes (Fix 3): the master
-     * ({@see buildMultiVariantMaster()}) and every VIDEO rung media playlist
-     * ({@see buildMediaPlaylist()}) of the same job render the group through
-     * this one method, so the two can never drift — a rung advertising a
-     * different attribute set, order, or DEFAULT pick than its own master is
-     * precisely the class of defect that leaves hls.js with an empty track
-     * list on one path and two conflicting ones on another. The rendering is
-     * lifted verbatim out of the master builder: the master's shipped bytes
-     * (pinned by S57 flag-off goldens in
+     * SINGLE SOURCE OF TRUTH for those lines' exact bytes: the master
+     * ({@see buildMultiVariantMaster()}) and every per-rung mini-master index
+     * (the same builder invoked with a one-rung set from
+     * {@see writeVodPlaylists()}) render the group through this one method, so
+     * the two can never drift — an index advertising a different attribute
+     * set, order, or DEFAULT pick than its own master is precisely the class
+     * of defect that leaves hls.js with an empty track list on one path and
+     * two conflicting ones on another. The rendering is lifted verbatim out of
+     * the master builder: the master's shipped bytes (pinned by S57 flag-off
+     * goldens in
      * {@see \Phlix\Tests\Unit\Media\Transcoding\TranscodeManagerPlaylistFormatTest})
      * do not move.
      *
-     * Why the rungs need the lines at all: a multi-audio job encodes every
-     * video rung `-an` ({@see ensureSegmentInternal()}'s `video_only`), and a
-     * client that loads a rung playlist DIRECTLY — the pinned-'original'/
-     * quality path, and hls.js has no supported API to graft a group off a
-     * separate master onto a bare playlist — would otherwise discover zero
-     * audio tracks and play silently. The `URI=` values are relative and the
-     * audio-only playlists live in the SAME job directory, so the lines carry
-     * over unchanged.
+     * Why per-rung indexes need the lines at all: a multi-audio job encodes
+     * every video rung `-an` ({@see ensureSegmentInternal()}'s `video_only`),
+     * and the lines are ONLY ever parsed from a master-shaped document —
+     * hls.js 1.7.4's media-playlist parser has no `EXT-X-MEDIA` case, so the
+     * Fix 3 experiment of emitting them inside the bare rungs played exactly
+     * as silent as not emitting them (live-confirmed: zero `media_a`/`seg-a`
+     * requests against rung-carrying playlists). A client that selects a rung
+     * DIRECTLY — the pinned-'Original'/quality path, whose variant is learned
+     * from the POST /transcode JSON and which SV-4.6 may withhold from the
+     * master entirely — therefore loads this group's index instead. The
+     * `URI=` values are relative and the audio-only playlists live in the SAME
+     * job directory, so the lines carry over unchanged.
      *
      * @param list<array{
      *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
@@ -3700,6 +3724,12 @@ class TranscodeManager
      * Emits one `#EXT-X-STREAM-INF` (with BANDWIDTH / RESOLUTION / CODECS from the
      * Rendition) + `media_v{id}.m3u8` per variant, preserving the caller's order
      * (highest-first per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}).
+     * TWO products come from this one builder ({@see writeVodPlaylists()}): the
+     * job's `master.m3u8` over the ABR-switchable set, and — Fix A′′ — each rung's
+     * `media_v{id}_master.m3u8` mini-master index over a ONE-rung set, which is
+     * what makes a DIRECT rung load able to discover the `aud` group at all
+     * (hls.js parses `#EXT-X-MEDIA` only on the master path). A one-variant set
+     * is legal HLS: single-level "ABR" is simply a fixed rendition.
      *
      * When `$audioTracks` is non-null (P3B-S3), emits ALL audio renditions as
      * `#EXT-X-MEDIA:TYPE=AUDIO` entries under ONE shared `GROUP-ID="aud"` before
@@ -3732,8 +3762,9 @@ class TranscodeManager
         $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
         // P3B-S3: one shared audio group, one rendition per track, before the
-        // video stream infs. Fix 3: rendered by audioGroupRenditionLines() —
-        // the single source of truth shared with the video rung playlists.
+        // video stream infs. Fix A′′: rendered by audioGroupRenditionLines() —
+        // the single source of truth shared with the per-rung mini-master
+        // indexes (same builder, one-rung set).
         if (is_array($audioTracks)) {
             foreach (self::audioGroupRenditionLines($audioTracks) as $renditionLine) {
                 $lines[] = $renditionLine;
@@ -3809,16 +3840,6 @@ class TranscodeManager
      * @param string|null $variantId  Rendition id for `seg-v{id}-NNNNN.ts`, or null
      *                                for the legacy unprefixed `seg-NNNNN.ts`.
      * @param string      $format     The job's container (`mpegts` | `fmp4`).
-     * @param list<array{
-     *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
-     * }>|null $audioGroupTracks Fix 3 — the `aud` group descriptors this job
-     *     carries: the exact list `writeVodPlaylists()` renders into the master
-     *     via {@see audioGroupRenditionLines()}, or null for a job with no
-     *     group (single-audio, muxed, legacy). Rung segments of a multi-audio
-     *     job are `-an` video-only, so a client that loads this playlist
-     *     directly must find the group here; the lines ride after the header
-     *     tags, before the first Media Segment — and before the container's
-     *     `EXT-X-MAP`, which still precedes every segment it governs.
      *
      * @return string Media playlist text.
      */
@@ -3826,8 +3847,7 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         ?string $variantId,
-        string $format = EncodeSettings::FORMAT_MPEGTS,
-        ?array $audioGroupTracks = null
+        string $format = EncodeSettings::FORMAT_MPEGTS
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
@@ -3840,15 +3860,6 @@ class TranscodeManager
             '#EXT-X-MEDIA-SEQUENCE:0',
             '#EXT-X-INDEPENDENT-SEGMENTS',
         ];
-        // Fix 3: a multi-audio job's video rungs must be self-describing for
-        // audio (their segments carry none — `-an`). Byte-identical output is
-        // guaranteed for every playlist that passes null here, which is every
-        // single-audio and legacy job.
-        if ($audioGroupTracks !== null && $audioGroupTracks !== []) {
-            foreach (self::audioGroupRenditionLines($audioGroupTracks) as $renditionLine) {
-                $lines[] = $renditionLine;
-            }
-        }
         if ($format === EncodeSettings::FORMAT_FMP4) {
             $lines[] = '#EXT-X-MAP:URI="' . self::initSegmentFileName($variantId) . '"';
         }
@@ -5348,7 +5359,8 @@ class TranscodeManager
      * both rebuilt from the persisted `variants` ladder JSON and handed to the same
      * {@see writeVodPlaylists()} writer. Anything this method fails to reconstruct
      * becomes a permanent 404 for the rest of the job's life, because the master is
-     * written first and its presence short-circuits every later call.
+     * written first and its presence — with the Fix A′′ rung↔index count —
+     * short-circuits every later call to this method.
      *
      * Returns true if playlists are present (either pre-existing or successfully
      * regenerated), false if the job row doesn't exist or lacks the data needed to
@@ -5362,8 +5374,16 @@ class TranscodeManager
     {
         $dir = "{$this->segmentDir}/{$jobId}";
 
-        // Already present — nothing to do.
-        if (is_file("{$dir}/master.m3u8")) {
+        // Already present — nothing to do. Fix A′′: master presence alone is no
+        // longer "present": a PRE-FIX directory (master + rungs, zero per-rung
+        // mini-master indexes) would short-circuit forever here, and its
+        // silent-rung defect could never heal — the HlsController rail only
+        // ever calls this when a playlist file is MISSING, and the missing
+        // `media_v{id}_master.m3u8` is exactly the file whose absence keeps an
+        // existing title silent. The cheap rung↔index COUNT below (a dir-name
+        // scan, no content reads) is what turns a client's first index request
+        // into a full idempotent rewrite of the set.
+        if (is_file("{$dir}/master.m3u8") && self::miniMasterSetComplete($dir)) {
             return true;
         }
 
@@ -5534,6 +5554,45 @@ class TranscodeManager
         );
 
         return is_file("{$dir}/master.m3u8");
+    }
+
+    /**
+     * Fix A′′ — does the job directory's video-rung set carry its full
+     * per-rung mini-master index set?
+     *
+     * The cheap completeness law behind {@see ensurePlaylistRegenerated()}'s
+     * early return: the writer emits EXACTLY one `media_v{id}_master.m3u8`
+     * per `media_v{id}.m3u8`, so equal COUNTS of the two families mean the
+     * set is complete (an id whose rung exists but whose index does not is
+     * precisely what the heal must rewrite). Counts are taken from directory
+     * entries only — no content reads, no stat per file — and the rung
+     * pattern excludes indexes by construction (`_master` contains an
+     * underscore, which the rung id class `[a-z0-9]` never does; the id
+     * allowlist is {@see isUsableRenditionId()}, mirrored by the serve
+     * side). A legacy single-variant directory holds zero of each family —
+     * equal counts — and short-circuits exactly as the pre-Fix-A′′
+     * master-only check did.
+     */
+    private static function miniMasterSetComplete(string $dir): bool
+    {
+        $entries = scandir($dir);
+        if (!is_array($entries)) {
+            // Unreadable: not "complete" — fall through and let the regen
+            // body make the honest call (it mkdirs or returns false).
+            return false;
+        }
+
+        $rungs = 0;
+        $indexes = 0;
+        foreach ($entries as $entry) {
+            if (preg_match('/^media_v[a-z0-9]+\.m3u8$/i', $entry) === 1) {
+                $rungs++;
+            } elseif (preg_match('/^media_v[a-z0-9]+_master\.m3u8$/i', $entry) === 1) {
+                $indexes++;
+            }
+        }
+
+        return $rungs === $indexes;
     }
 
     /**

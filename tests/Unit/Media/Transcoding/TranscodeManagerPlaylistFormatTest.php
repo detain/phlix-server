@@ -182,7 +182,17 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
         $this->write($dir, $this->transcodeLadder(), $this->audioTracks(), null);
 
         $files = glob($dir . '/*.m3u8') ?: [];
-        $this->assertCount(5, $files, 'master + 2 video + 2 audio: the fixture must actually write playlists');
+        // Fix A′′ (2026-11-06): +2 — every video rung also gets its
+        // `media_v{id}_master.m3u8` mini-master index (a MASTER-shaped
+        // document, because hls.js only ever reads `#EXT-X-MEDIA` groups off
+        // the master parse; the bare rung's `-an` silence could not be cured
+        // inside a media playlist). The index is additive: the five
+        // pre-fix files keep their exact bytes.
+        $this->assertCount(
+            7,
+            $files,
+            'master + 2 video rungs + 2 rung indexes + 2 audio: the fixture must actually write playlists'
+        );
 
         foreach ($files as $file) {
             $text = (string) file_get_contents($file);
@@ -340,6 +350,13 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
             'media_a1.m3u8' => 'init-a1.m4s',
             'media_v1080p.m3u8' => 'init-v1080p.m4s',
             'media_v720p.m3u8' => 'init-v720p.m4s',
+            // Fix A′′: the per-rung mini-master indexes are master-shaped,
+            // so they join the EXT-X-MAP-less side of the table (a master
+            // names no init of its own) — and the job's container still
+            // moves their `#EXT-X-VERSION`, which is why they are here at
+            // all: flavour law applies to EVERY file the writer emits.
+            'media_v1080p_master.m3u8' => null,
+            'media_v720p_master.m3u8' => null,
         ];
         foreach ($expected as $name => $init) {
             $this->assertFileExists("{$dir}/{$name}");

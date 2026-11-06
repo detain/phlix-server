@@ -55,8 +55,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
           git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
           cd /tmp/php-uv
-          git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
-          test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21
+          git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+          test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e
           phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 
@@ -418,8 +418,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
           git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
           cd /tmp/php-uv
-          git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
-          test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21
+          git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+          test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e
           phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 

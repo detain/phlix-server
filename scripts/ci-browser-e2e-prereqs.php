@@ -26,7 +26,8 @@
  *
      * ⚠ [[S309]] was live in this repo: a CI job cloned `bwoebi/php-uv` at an UNPINNED
      * HEAD over the network and a TLS hiccup redded an unrelated PR; that clone is now
-     * pinned to `670a609efc36c9043be37bae4126f06ed30fde21` (see
+     * pinned to `e56d640371a5d99eea2e9437cf4739c82e82d99e` (php-uv tag v0.3.1,
+     * HEAD of bwoebi/php-uv as of the 2026-11-06 rotation; see
      * `tests/Unit/Support/ThirdPartyClonePinGuardTest.php`). Adding another unpinned
      * network fetch to the job that decides merges would be a regression against it. So:
  *

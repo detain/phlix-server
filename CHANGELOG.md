@@ -96,6 +96,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **php-uv's pin rotates from a nearly three-year-old commit to upstream
+  v0.3.1.** `scripts/install.sh`, `docker/Dockerfile.base`'s `ARG PHP_UV_REF`
+  and the three CI "Build and enable php-uv" workflow steps all carried
+  `670a609` (dated 2023-12-03); they rotate together to `e56d640` (2026-10-02
+  — the commit the lightweight tag `v0.3.1` points to and upstream HEAD of
+  bwoebi/php-uv at authoring, both re-verified via `git ls-remote` in-lane).
+  The 11-commit delta taken: the issue-118 orphan-ADDREF fix (refcount leaks
+  in the `uv_fs` paths — the substantive one for long-running daemons), PHP
+  8.6 build + arginfo hygiene, and CI/packaging glue; a skim of the remaining
+  `php_uv.c` hunks shows the socket-to-fd conversion changes are the
+  `XtOffsetOf`→`offsetof` macro rewrite only — no stream/TLS semantics move.
+  The owner had already updated the live host before this entry; the repo
+  change is fresh-install and CI-reproduction parity (HOST-5 addendum #5).
+  `ThirdPartyClonePinGuardTest::PHP_UV_PIN` moves in the same commit —
+  measured red before the re-pin was exactly its three uv legs, green at the
+  14/244 baseline after; `scripts/ci-browser-e2e-prereqs.php`'s pinning-prose
+  names the new commit. The hub repo's uv pin rotates in its own lane.
+
 - **The base-image build chain is digest-pinned; the ~50-minute rebuild tax on
   unrelated commits is gone.** `docker/Dockerfile.base` FROMed the floating
   `php:${PHP_VERSION}-cli-alpine` tag, so every upstream re-push of that tag

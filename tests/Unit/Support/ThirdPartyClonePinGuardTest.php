@@ -77,8 +77,21 @@ final class ThirdPartyClonePinGuardTest extends TestCase
     /** S482 survival marker for the install.sh sweep — code string, not comment. */
     private const INSTALL_SH_MARK = 'S482INSTALLX9P1';
 
-    /** The one php-uv commit the base image, CI and install.sh must agree on (full 40-hex SHA). */
-    private const PHP_UV_PIN = '670a609efc36c9043be37bae4126f06ed30fde21';
+    /**
+     * The one php-uv commit the base image, CI and install.sh must agree on (full 40-hex SHA).
+     *
+     * Rotated 2026-11-06 (HOST-5 addendum #5, owner ruling) from 670a609 — dated
+     * 2023-12-03, nearly three years stale — to upstream HEAD e56d640, the tag
+     * v0.3.1 commit of bwoebi/php-uv (HEAD and the lightweight tag verified by
+     * `git ls-remote` at authoring). The 11-commit delta taken: the issue-118
+     * orphan-ADDREF refcount-leak fix in the uv_fs paths (the substantive one
+     * for long-running daemons), PHP 8.6 build + arginfo hygiene, and CI/
+     * packaging glue; the socket-to-fd conversion hunks are the XtOffsetOf→
+     * offsetof macro rewrite only — no stream/TLS semantic change. The hub
+     * repo's own uv pin rotates in a sibling hub lane (deliberate divergence
+     * window until that push lands).
+     */
+    private const PHP_UV_PIN = 'e56d640371a5d99eea2e9437cf4739c82e82d99e';
 
     private const PHP_UV_URL = 'https://github.com/bwoebi/php-uv.git';
 

@@ -513,12 +513,15 @@ phlix_build_uv() {
 	# clone reaches only the tip, so the fixed SHA would go uncheckoutable the
 	# moment the 0.3.x branch moves), detached checkout, and a rev-parse
 	# self-verify so a bad pin fails loud before anything is installed.
+	# 2026-11-06 (HOST-5 addendum #5, owner): pin rotated from 670a609 (2023-12-03,
+	# nearly three years stale at the time) to upstream HEAD e56d640 = tag v0.3.1 —
+	# see the PHP_UV rotation note in docker/Dockerfile.base for the delta taken.
 	git clone https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
 	(
 		cd "$tmp/php-uv"
-		git checkout --quiet --detach 670a609efc36c9043be37bae4126f06ed30fde21
-		test "$(git rev-parse HEAD)" = 670a609efc36c9043be37bae4126f06ed30fde21 ||
-			die "php-uv did not detach to the pinned commit 670a609efc36c9043be37bae4126f06ed30fde21."
+		git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+		test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e ||
+			die "php-uv did not detach to the pinned commit e56d640371a5d99eea2e9437cf4739c82e82d99e."
 		phpize
 		./configure --with-uv
 		make -j"$(nproc)"

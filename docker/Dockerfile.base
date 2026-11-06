@@ -195,7 +195,16 @@ ARG SWOOLE_IOURING=0
 # happens on the next phlix-base rebuild (CI cadence stays owner-side).
 # ----------------------------------------------------------------------------
 ARG SWOOLE_REF=v6.2.4
-ARG PHP_UV_REF=670a609efc36c9043be37bae4126f06ed30fde21
+# 2026-11-06 (HOST-5 addendum #5, owner): PHP_UV_REF rotated 670a609 (dated
+# 2023-12-03 — nearly three years stale) to upstream HEAD e56d640, which is
+# the tag v0.3.1 commit. Delta taken (11 commits): the issue-118 orphan
+# ADDREF fix (uv_fs refcount leaks — the one this estate's long-running
+# daemons care about), PHP 8.6 build + arginfo hygiene, and CI/packaging
+# glue; the socket-to-fd conversion hunks are only the XtOffsetOf-to-
+# offsetof macro rewrite, no stream/TLS semantic change. scripts/install.sh
+# mirrors this exact commit (S482 parity, guard-enforced). The hub repo's
+# uv pin rotates in its own lane.
+ARG PHP_UV_REF=e56d640371a5d99eea2e9437cf4739c82e82d99e
 
 # Build and install swoole
 RUN git clone --depth=1 --branch "${SWOOLE_REF}" https://github.com/swoole/swoole-src.git /tmp/swoole \

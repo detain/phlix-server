@@ -1049,23 +1049,27 @@ try {
     $relayTunnelWorker->name = 'phlix-relay-tunnel';
     $relayTunnelWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
-        // F-1b: this worker's async TLS handshake must run NATIVE. The
-        // SWOOLE_HOOK_SSL|TLS bits inside the curated mask make
-        // stream_socket_enable_crypto a coroutine call that can return TRUE
-        // with the handshake's final flight stranded in the coroutine write
-        // buffer and never on the wire (host forensics: bytes_sent:1533,
-        // data_segs_out:1, zero network syscalls — the false-success ESTAB of
-        // the F-1b incident; {@see \Phlix\Hub\TlsRelayConnection} class
-        // header). This worker exists to drive that one tunnel, so drop the
-        // bits here ONLY — every other worker keeps the full curated mask.
-        // The delivery probe is a curl-class probe and cannot sense these
-        // bits; the corroboration gate + entry watchdog + HELLO_ACK deadline
-        // in the tunnel classes are the per-dial proof.
+        // F-1b: DECLARATIVE per-bit exclusion for this worker's async TLS
+        // handshake. The SWOOLE_HOOK_SSL|TLS bits inside the curated mask
+        // make stream_socket_enable_crypto a coroutine call that returns
+        // TRUE with the handshake's final flight stranded in the coroutine
+        // write buffer, never on the wire (host forensics: bytes_sent:1533,
+        // data_segs_out:1, zero network syscalls — the false-success ESTAB
+        // of the F-1b incident; {@see \Phlix\Hub\TlsRelayConnection} class
+        // header). MEASURED TRUTH: dropping the bits HERE is inert on the
+        // production Swoole build — once any hook is live in the process the
+        // openssl swap does not revert; only a never-hooked worker on the
+        // Select loop completes (fix register 2026-11-05, architecture
+        // decision open). The block stays as the per-bit intent + forward
+        // compat; the load-bearing bounds are the entry watchdog and the
+        // HELLO_ACK deadline in the tunnel classes, both proven bounding
+        // live. The delivery probe is a curl-class probe and cannot sense
+        // these bits.
         if (extension_loaded('swoole')) {
             $relayMask = \Phlix\Server\Runtime\SwooleRuntime::relayTunnelHookMask($config);
             \Phlix\Server\Runtime\HookDelivery::enforce($relayMask);
             Worker::log(sprintf(
-                '[phlix] worker #%d relay-tunnel TLS hook exclusion applied: mask=0x%04x (native enable_crypto)',
+                '[phlix] worker #%d relay-tunnel TLS hook exclusion applied: mask=0x%04x (declarative; belts bound)',
                 (int) (getmypid() ?: -1),
                 $relayMask
             ));

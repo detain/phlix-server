@@ -377,6 +377,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Forward correction to the entry below (F-1b design (ii) measured inert —
+  belts now carry the bound, full cure is an open architecture decision).**
+  Host forensics after deploying the above re-ran the identical dial on the
+  production box across the full mask matrix: the relay worker's per-bit
+  `SSL|TLS` exclusion (design (ii)) still strands at `bytes_sent:1533` /
+  `data_segs_out:1`, as does a master-side mask whose TLS bits were never
+  enabled anywhere and a verifiable `Runtime::setHookFlags()` replacement —
+  once ANY Swoole hook is live in the process the openssl swap does not
+  revert, and the async handshake's final flight stays stranded. The stream's
+  crypto meta is populated (`TLSv1.3`) inside that stall, so the corroboration
+  gate (belt 1) cannot discriminate the incident's shape either. The only
+  client-side regime PROVEN to complete is a worker in a process that never
+  called `enableCoroutine`, on the Select loop (full handshake on the wire,
+  HELLO delivered, hub-side reject logged). What the entry above DOES deliver
+  live: the H3-2 silent-ESTAB is dead as a class — production now shows the
+  HELLO_ACK deadline reaping the stalled tunnel at a measured 20.006 s with a
+  bounded backoff reconnect, converting the infinite silent hang into a
+  visible, self-healing cycle. The tunnel still never establishes until the
+  architecture decision lands (hookless-worker bootstrap, separate hookless
+  tunnel process, or a coroutine-native TLS client); the mask narrowing and
+  its wiring stay in place as declarative per-bit intent and forward-compat.
+  [F-1b-correction; FIX-RELAY-TLS-CLIENT-B register 2026-11-05]
 - **The relay tunnel no longer reports a false TLS "connected" and sits on a
   silent ESTAB on the production host — the in-regime re-cure of F-1.** The
   driver fix above missed its target regime: production runs the `Events\Swoole`

@@ -145,7 +145,9 @@ final class SwooleRuntime
      * reach the wire (F-1b host forensics: `bytes_sent:1533`,
      * `data_segs_out:1`, zero network syscalls under strace, hub mirror
      * saw only the ClientHello). The relay tunnel worker excludes them;
-     * see {@see self::relayTunnelHookMask()}.
+     * see {@see self::relayTunnelHookMask()} — and note that exclusion is
+     * MEASURED INERT on the production Swoole build (any active hook
+     * strands the async `enable_crypto`; see its docblock).
      *
      * @since 1.2.5
      */
@@ -165,17 +167,33 @@ final class SwooleRuntime
      * The hook mask the relay-tunnel worker installs: the runtime mask with
      * the TLS-stream bits removed.
      *
-     * The tunnel is a single long-lived outbound TLS connection driven by
-     * `TlsRelayConnection`'s explicit pass-walk. With the bits removed
-     * `stream_socket_enable_crypto()` is PHP's NATIVE openssl call again —
-     * the exact semantics the host Select-loop proof exercised (the relay
-     * loop was never coroutine-dependent; `Events\Swoole` without these
-     * bits behaves like Select for these streams: `vendor/workerman`'s own
-     * `TcpConnection::baseRead()` documents the read-ahead hazard as a hook
-     * property, "PHP's native openssl stream has neither behaviour").
-     * Other workers keep the full curated mask; the delivery probe is a
-     * curl-class probe and cannot sense these bits, so the corroboration
-     * gate on the handshake is the per-dial proof.
+     * INTENT: with the bits removed, `stream_socket_enable_crypto()` should
+     * be PHP's NATIVE openssl call again — the semantics the host Select-loop
+     * proof exercised (the relay loop was never coroutine-dependent;
+     * `Events\Swoole` without these bits should behave like Select for these
+     * streams: `vendor/workerman`'s own `TcpConnection::baseRead()` documents
+     * the read-ahead hazard as a hook property, "PHP's native openssl stream
+     * has neither behaviour").
+     *
+     * MEASURED REALITY (F-1b, production host, swoole 6.2.1-dev): the
+     * narrowing is INERT for the stall. The same dial strands at
+     * `bytes_sent:1533`/`data_segs_out:1` (a) under this narrowed mask,
+     * (b) under a MASTER mask whose TLS bits were never enabled anywhere,
+     * and (c) after `Swoole\Runtime::setHookFlags()` verifiably replaces the
+     * flags — once ANY hook is live in the process, the openssl function
+     * swap does not revert and async `enable_crypto` keeps stranding its
+     * final flight in a coroutine buffer. The only client-side regime proven
+     * to complete is a worker in a process that NEVER called
+     * `enableCoroutine`, on the Select loop — the F-1 proof regime. This
+     * mask stays wired as the declarative per-bit intent (forward-compat if
+     * a future build honors bit-level swaps); the functional fix is an
+     * open architecture decision (host forensics campaign F-1b, full mode
+     * matrix recorded in the fix register for 2026-11-05). Until it lands, the
+     * load-bearing defenses are {@see \Phlix\Hub\TlsRelayConnection}'s entry
+     * watchdog and `RelayConsumer::HELLO_ACK_TIMEOUT_SECONDS`, both proven
+     * bounding the stall live (visible teardown + bounded backoff). Other
+     * workers keep the full curated mask; the delivery probe is a curl-class
+     * probe and cannot sense these bits.
      *
      * @param mixed $config The full server config array.
      *

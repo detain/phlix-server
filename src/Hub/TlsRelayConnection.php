@@ -86,20 +86,31 @@ use Workerman\Connection\TcpConnection;
  * ESTABLISHED, with no watchdog armed (it sat on the `0` branch only), no
  * `onClose`, no reconnect — the stall class moved, it did not die (H3-2).
  *
- * Primary cure (the regime itself): the relay-tunnel worker installs the
- * curated mask WITHOUT the SSL/TLS bits
- * (`SwooleRuntime::relayTunnelHookMask()`), making `enable_crypto` native in
- * this worker — the exact semantics the Select proof exercised.
- * `Events\Swoole` without those bits treats these streams like Select: vendor
- * `TcpConnection::baseRead()` documents the read-ahead/buffering hazard as a
- * HOOK property ("PHP's native openssl stream has neither behaviour"), not a
- * loop property, and the relay loop was never coroutine-dependent.
+ * The shipped "primary cure" (the regime itself): the relay-tunnel worker
+ * installs the curated mask WITHOUT the SSL/TLS bits
+ * (`SwooleRuntime::relayTunnelHookMask()`), INTENDED to make `enable_crypto`
+ * native in this worker — the semantics the Select proof exercised.
+ * MEASURED INERT on the estate's production Swoole build (6.2.1-dev): the
+ * identical dial strands at 1533/1 under the narrowed mask, under a mask
+ * whose TLS bits were NEVER enabled anywhere (master-side 0x429e), and after
+ * `Runtime::setHookFlags()` replaces the flags — the function swap does not
+ * revert once any hook is live in the process. The ONLY client-side regime
+ * proven to complete in-host is a ZERO-HOOK worker (no `enableCoroutine`
+ * call ever) on the Select loop — F-1's original proof regime. The mask
+ * narrowing stays wired as the declarative statement of that intent (and a
+ * forward-compat pin if a future build honors per-bit swaps); the functional
+ * fix is an architecture decision the lane report records as BLOCKED
+ * (hookless-worker bootstrap, separate hookless tunnel process, or a
+ * coroutine-native TLS client).
  *
  * Belt layers, each pinning a different failure shape, regime-independent:
  * 1. NO completion on the driver return alone — {@see self::confirmCompletion()}
  *    corroborates the stream's crypto meta BEFORE any ESTABLISHED callback; a
  *    `true` the stream itself cannot confirm is a failure (destroy → onClose →
- *    bounded reconnect).
+ *    bounded reconnect). Measured limit (host scratch, hooked regime): the
+ *    incident's false `true` carries a POPULATED crypto meta (`TLSv1.3`) —
+ *    the meta lies along with the return there — so belt 1 does NOT catch
+ *    that shape; belt 3 is its only live bound.
  * 2. The watchdog is armed at handshake ENTRY — before the first pass — so the
  *    pre-established phase is never unbounded: it bounds false `true`s belt 1
  *    catches, a lost inbound watch, and a peer that accepts TCP then goes

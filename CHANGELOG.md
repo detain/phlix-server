@@ -121,6 +121,45 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Your theme choice now follows your account: `@phlix/ui` v0.99.20 re-pinned to
+  v0.99.21, and the served `/app` bundle regenerated.** [theme persistence 2026-11-06 / S498 write-path law]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.20 →
+    v0.99.21 (tag object `bf70c58f`, peel `01acaa12` == ui master tip,
+    ls-remote-verified). v0.99.21 is the client half of per-user theme
+    persistence this server already serves: the Appearance picker now reads and
+    writes the account's `theme` through `GET`/`PUT /api/v1/users/me/settings`
+    (once-per-login adoption — the server value wins for known ids, any failure
+    is a silent no-op; 1 s-debounced burst-coalescing PUTs with an echo guard
+    so a value that came FROM the server never gets PUT back), discloses
+    catalogue failures and save-locally-only states in the panel, force-refreshes
+    the theme catalogue at mount so a just-enabled ui-theme plugin appears
+    without a page reload, and the Plugins page says plainly that themes land
+    per-user. Plugin-slug writes are admitted by the S498 registry
+    reconciliation this tip shipped at `d37eff05`. `package-lock.json` surgical
+    4+/4- (root echo + the ui node triple) via the CI-exact toolchain
+    (node 24.20.0 + bundled npm 11.19.0, `NPM_CONFIG_USERCONFIG=/dev/null`);
+    v0.99.21 moves no declared edge, so contracts `#v0.5.6` and syncplay
+    `#v0.1.7` hold. Supply chain: fresh `npm ci` installs bytes-identical to
+    the codeload tag tarball (26,780,271 B; `diff -r` over `dist/` exit 0);
+    `phlix-ui.js` `7e4c16b5`, `player.js` `fcb3596c`, PlayerPage chunk
+    `5b5ac827`, umd `02e3caac`/`d0442d37` — all match the release register.
+  - *Bundle regen.* `/app` (`public/assets/app`) rebuilt with the same pinned
+    toolchain, `emptyOutDir` wipe, deterministic ×2 (`diff -r` clean) — both
+    builds aggregate md5sum-recipe `493eb83323799d9f75a048396322fcd9` (the
+    identical recipe reproduced v0.99.20's recorded `3c4d6380…` on that tree;
+    200-file set holds; content-hash names rotate with the new ui carriers,
+    incl. `PlayerPage-BTz2s3yI-BZjUkcci.js` `1e84724b`); stamp reads
+    `0.99.21`, zero `0.99.20` residue, zero old-carrier files. Law greps live
+    in the emitted bundle (`index-D0dCfFFm.js`): the `users/me/settings`
+    GET/PUT calls and the `/api/v1/themes` catalogue fetch. README
+    UI-truth line flips. Bundle-aware PHP cohort (WebUiBundleGate,
+    ViteAssetsMemo, SharedUiControllerCspNonce, HttpHandlerServeStatic,
+    PublicFrontControllerRemovalGuard, NginxAssetLocation) 42/365 green
+    against the regenerated tree — exact-to-baseline, zero era pins moved;
+    LicenseHeaderGuard 5/11 and BrowserE2EGate 21/127 green; web-ui
+    `node --test` 33/33. `S253` web-ui.yml (rebuild + byte-exact git-diff gate
+    on node 24.20.0) is the CI attestation.
+
 - **URL-contract cure completes: `@phlix/ui` v0.99.19 re-pinned to v0.99.20, and
   the served `/app` bundle regenerated.** [playback incident 2026-11-06 / URL-contract law]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.19 →

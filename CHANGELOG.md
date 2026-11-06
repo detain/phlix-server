@@ -377,6 +377,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The F-1c relay-role laws gained the two teeth a review found missing, and a
+  stale docblock sentence was corrected.** Review 2026-11-05/REVIEW-F1c
+  measured that an added second per-worker `$worker->eventLoop = Select::class`
+  override (its probe MT-D) slipped all six guard clauses while the worker
+  census kept counting the now-inert delivery call; the guard now pins the
+  override EXCLUSIVE to the relay-tunnel registration (assignment-target
+  whitelist, Select bound exactly once — MT-D reddens it, mutation-proven).
+  The bootstrap additionally pins, as a source-scan law, that start.php never
+  references the `Workerman\Coroutine` namespace: the coroutine Context class
+  memoizes its driver from `Worker::$eventLoopClass` at first load, so a
+  master-path load would hand the Select relay child the Swoole driver and
+  crash-loop its boot on exchangeArray()-on-null before any belt can fire
+  (exactly-one-red per new law; tree behavior unchanged — tests + prose only).
+  `SwooleRuntime::tlsHookFlags()` now tells the F-1c truth: the relay worker
+  is born unhooked and excludes nothing by mask; `relayTunnelHookMask()`
+  stays belt-only. Guard suite 6→8 tests, baseline 8/8 green.
+  [F-1c-minors; REVIEW-F1c M1-M3]
+
 - **The relay tunnel now runs on the event-loop regime that actually completes
   its TLS handshake in production (F-1c).** The F-1b correction above left the
   tunnel stalled because every hook-side exclusion still lived inside a

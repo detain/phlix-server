@@ -56,7 +56,19 @@
  *      TLS on the production host (mask matrix: per-bit exclusion INERT,
  *      Select+inherited-hooks crash-loop; Select+never-hooked COMPLETES).
  *      The bootstrap-wide absence of any `relayTunnelHookMask` wiring is
- *      pinned too: the helper stays belt-only (unit-tested), unwired.
+ *      pinned too: the helper stays belt-only (unit-tested), unwired;
+ *   7. (F-1c minors round M2 — convicts reviewer probe MT-D, which slipped all
+ *      six original clauses with 0 reds) the Select override is EXCLUSIVE to
+ *      the relay-tunnel registration: the only `$var->eventLoop =` assignment
+ *      target in the bootstrap is `$relayTunnelWorker`, and Select is bound
+ *      exactly once. A second per-worker override would silently opt that role
+ *      out of curated-mask delivery through the rule-6 gate while rule 4's
+ *      bare-call census still counted its no-op call;
+ *   8. (F-1c minors round M3) the bootstrap text never references the
+ *      `Workerman\Coroutine` namespace — a master-path load would freeze the
+ *      Swoole context driver before the child flips the loop to Select and
+ *      crash-loop every relay child at boot (load-order invariant; see the
+ *      method docblock).
  *
  * @package Phlix\Tests\Unit\Server\Runtime
  */
@@ -283,6 +295,90 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
             0,
             substr_count($start, 'relayTunnelHookMask'),
             'F-1c: the F-1b narrowing is unwired from the bootstrap — the helper is belt-only'
+        );
+    }
+
+    /**
+     * F-1c minors round, law 7 (M2; red-first via reviewer probe MT-D). Rule 6
+     * pins that the relay-tunnel registration binds Select — but alone it is
+     * silent about a SECOND per-worker override anywhere else: adding
+     * `$httpWorker->eventLoop = Select::class;` passed all six original
+     * clauses (measured 0 reds in the review clone). The role gate keys on the
+     * global Worker::$eventLoopClass, so such a copy would silently opt an
+     * otherwise-hooked worker out of curated-mask delivery while rule 4's
+     * bare-call census still counted its now-inert call.
+     *
+     * Shape honesty: a static scan cannot know which runtime role a variable
+     * names, so the enforceable form is the assignment TARGET text — every
+     * `$var->eventLoop =` in the bootstrap must be the relay-tunnel
+     * registration variable. Renaming that variable reddens this law together
+     * with rule 6's binding regex (same contract, same name), and a rename
+     * that kept both in step would be visible at review — the same trust
+     * budget every other clause here spends on the file's own identifiers.
+     */
+    public function test_select_override_is_exclusive_to_the_relay_tunnel_worker(): void
+    {
+        $start = self::code(self::START_PHP);
+
+        preg_match_all('/\$([A-Za-z_][A-Za-z0-9_]*)->eventLoop\s*=/', $start, $targets);
+        $distinct = array_values(array_unique($targets[1]));
+        self::assertSame(
+            ['relayTunnelWorker'],
+            $distinct,
+            'F-1c/M2: the per-worker eventLoop override belongs to the relay-tunnel'
+            . ' registration ALONE — every other role keeps the Swoole loop the master'
+            . ' assigns globally (rule 6). A second override silently opts that worker'
+            . ' out of curated-mask delivery through the role gate (probe MT-D).'
+            . ' Offending target(s): ' . implode(', ', $distinct) . '.'
+        );
+
+        self::assertSame(
+            1,
+            substr_count($start, '->eventLoop = Select::class;'),
+            'F-1c/M2: the Select binding must appear EXACTLY once in the bootstrap —'
+            . ' one override, one role.'
+        );
+    }
+
+    /**
+     * F-1c minors round, law 8 (M3; red-first via a master-path class_exists
+     * injection). The relay child boots crash-free only while
+     * `Workerman\Coroutine\Context` FIRST AUTOLOADS inside the child — i.e.
+     * after `forkOneWorkerForLinux()` has flipped `Worker::$eventLoopClass` to
+     * Select from `$worker->eventLoop` (vendor workerman v5.2.3
+     * Worker.php:1777-1778). Context.php memoizes its driver (`??=`) from that
+     * SAME static at first load: had the class loaded on the master path
+     * (static still Swoole), the flip would inherit Context\Swoole while
+     * run()'s Fiber branch still executes `Context::destroy()` — calling
+     * `Coroutine::getContext()->exchangeArray([])` outside a coroutine, an
+     * exchangeArray-on-null crash-loop before the worker ever serves (the
+     * invariant documented at start.php:204-213; no belt can catch it — the
+     * child dies at boot).
+     *
+     * Scope honesty: this pins start.php's own comment-stripped text —
+     * `use` imports, qualified calls, and string literals (class_exists /
+     * autoload forms) all reference the namespace. It does NOT (and cannot)
+     * pin vendor autoload ordering: a future vendor file that loads Context at
+     * require time is a review-visible dependency change, and Timer, Select
+     * and TcpConnection were verified coroutine-load-free at the F-1c review.
+     */
+    public function test_bootstrap_never_loads_the_coroutine_namespace(): void
+    {
+        $start = self::code(self::START_PHP);
+
+        // One-or-more literal backslashes between the two words: convicts
+        // `Workerman\Coroutine` (import/FQCN) and `Workerman\\Coroutine`
+        // (double-quoted literal text) alike; comment stripping already ran,
+        // so prose can never convict this law.
+        preg_match_all('/Workerman\\\\+Coroutine/', $start, $references);
+        self::assertSame(
+            [],
+            array_values(array_unique($references[0])),
+            'F-1c/M3: the master-path bootstrap must never reference the'
+            . ' Workerman\\Coroutine namespace — Context memoizes its driver from'
+            . ' Worker::$eventLoopClass at first load, so a master-time load hands'
+            . ' the Select relay child the Swoole driver and its boot crash-loops on'
+            . ' exchangeArray()-on-null (start.php:204-213).'
         );
     }
 

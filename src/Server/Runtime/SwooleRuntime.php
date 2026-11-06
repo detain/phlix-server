@@ -144,10 +144,12 @@ final class SwooleRuntime
      * coroutine buffer while `enable_crypto()` returns TRUE — and never
      * reach the wire (F-1b host forensics: `bytes_sent:1533`,
      * `data_segs_out:1`, zero network syscalls under strace, hub mirror
-     * saw only the ClientHello). The relay tunnel worker excludes them;
-     * see {@see self::relayTunnelHookMask()} — and note that exclusion is
-     * MEASURED INERT on the production Swoole build (any active hook
-     * strands the async `enable_crypto`; see its docblock).
+     * saw only the ClientHello). The relay tunnel worker would exclude them;
+     * since F-1c it excludes NOTHING by mask — the worker is born unhooked on
+     * the Select loop, and {@see self::relayTunnelHookMask()} is belt-only
+     * (unit-tested, unwired). Note that mask exclusion was MEASURED INERT on
+     * the production Swoole build anyway (any active hook strands the async
+     * `enable_crypto`; see its docblock).
      *
      * @since 1.2.5
      */

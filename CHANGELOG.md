@@ -468,6 +468,43 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A directly-loaded video quality playlist now carries its audio.** Titles
+  whose source has MULTIPLE audio tracks encode every video rung `-an`
+  (P3B-S3: sound lives only in the `media_a{N}.m3u8` renditions), and until now
+  the `#EXT-X-MEDIA:TYPE=AUDIO` group naming those renditions was announced
+  ONLY inside `master.m3u8`. A client that loads a rung playlist DIRECTLY — the
+  pinned-'original'/'quality' path, and the stream-COPY original never appears
+  in the master at all — has no supported way (hls.js included) to graft a
+  group from a separate master onto a bare playlist, so it discovered ZERO
+  audio tracks and played SILENT (FIELD-hub-phlix haproxy trace: 18 video
+  segment requests, 0 audio requests). `buildMediaPlaylist()` now declares the
+  SAME group inside every VIDEO rung's `media_v{id}.m3u8`; the relative
+  `URI="media_a{N}.m3u8"` values are already correct because the playlists
+  share the job directory. Anti-drift law: the lines render from ONE method
+  (`audioGroupRenditionLines()`) shared by master and rungs — the existing S57
+  flag-off master goldens pin the extraction byte-identical, and the new suite
+  asserts rung lines EQUAL the master's (attribute order included), not merely
+  present. Invariants pinned: audio-only playlists gain no group lines (they
+  are the group's members); single-audio/muxed and legacy jobs are
+  byte-identical to the pre-fix bytes; both containers stamp the group
+  (`fmp4` — the shipped default — puts the lines before the `EXT-X-MAP`, which
+  still precedes every segment it governs; `mpegts` — the rollback and every
+  pre-S60 job — likewise). Honest stale-playlist caveat: media playlists are
+  write-once at job creation (the writer's only other caller,
+  `ensurePlaylistRegenerated()`, fires when the LRU sweep removed the whole
+  directory — which then comes back self-describing, so evicted jobs
+  self-heal). An intact pre-fix directory keeps its silent playlists until it
+  is evicted or recreated; the cure for a known-silent title is
+  `DELETE FROM transcode_jobs WHERE media_item_id = ?` — the next playback
+  request rebuilds the job with the fixed playlists — and
+  `SELECT id FROM transcode_jobs WHERE variants LIKE '%"audio_tracks"%'`
+  enumerates the stale multi-audio set. `JOB_KEY_VERSION` was deliberately NOT
+  bumped: invalidating every cached job fleet-wide to fix a
+  playlist-text defect is the bigger hammer. Fix 3 (playback-lag program),
+  2026-11-06; `TranscodeManagerAudioGroupPlaylistTest` (9 cases, red-first
+  6/9 at the parent, mutation-toothed) with the S431 census rotated
+  2076→2077 from its measured red in this same commit.
+
 - **A software-encode box keeps its on-demand segments responsive: the
   creation-time prewarm window may now hold at most half the global segment
   ceiling, and each software libx264 encode carries a bounded `-threads`

@@ -3003,7 +3003,14 @@ class TranscodeManager
      * the master (NAME/LANGUAGE/DEFAULT/AUTOSELECT per track), writes one
      * audio-only playlist per track keyed on its AUDIO-RELATIVE index
      * (`media_a0.m3u8` = first audio stream), and ties every video variant to
-     * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`.
+     * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`. Fix 3
+     * (2026-11-06): the same group lines are ALSO declared inside every VIDEO
+     * rung's `media_v{id}.m3u8` — rung segments are `-an`, and a client that
+     * loads a rung playlist directly (the pinned-'original' path; copy rungs
+     * never appear in the master at all) would otherwise find no audio. Both
+     * renderers share {@see audioGroupRenditionLines()}, so the two views of
+     * the group cannot drift. The audio-only playlists carry NO group lines
+     * (self-describing) and single-audio/legacy jobs keep their exact bytes.
      *
      * fMP4 path (S57): `$segmentFormat` selects the container flavour, and the
      * branch is INSIDE the builders rather than at a call site — this method has
@@ -3062,6 +3069,10 @@ class TranscodeManager
 
         // P3B-S3 multi-audio: emit audio groups + audio-only playlists when available.
         $hasMultiAudio = is_array($audioTracks) && count($audioTracks) > 1;
+        // Fix 3: ONE group decision feeds all three renderers (master, video
+        // rungs, MPD), so what the rungs advertise and what the master
+        // advertises cannot disagree by construction.
+        $audioGroup = $hasMultiAudio ? $audioTracks : null;
 
         // SV-4.6: restrict the master's switchable ABR set — see switchableVariants().
         $switchableVariants = self::switchableVariants($variants);
@@ -3082,7 +3093,7 @@ class TranscodeManager
 
         $masterPlaylist = $this->buildMultiVariantMaster(
             $switchableVariants,
-            $hasMultiAudio ? $audioTracks : null,
+            $audioGroup,
             $segmentFormat
         );
         file_put_contents("{$dir}/master.m3u8", $masterPlaylist);
@@ -3098,11 +3109,14 @@ class TranscodeManager
             }
         }
 
-        // Write one media playlist per video variant.
+        // Write one media playlist per video variant. Fix 3: every RUNG carries
+        // the group (its segments are `-an`), so a client that selects a rung
+        // directly — including the copy/'original' rungs withheld from the
+        // master by SV-4.6 — still discovers the audio renditions.
         foreach ($variants as $variant) {
             file_put_contents(
                 "{$dir}/media_v{$variant->id}.m3u8",
-                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat)
+                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id, $segmentFormat, $audioGroup)
             );
         }
 
@@ -3117,7 +3131,7 @@ class TranscodeManager
             $height,
             $bandwidth,
             $mpdVariants,
-            $hasMultiAudio ? $audioTracks : null,
+            $audioGroup,
             $segmentFormat
         );
     }
@@ -3617,6 +3631,70 @@ class TranscodeManager
     }
 
     /**
+     * The `#EXT-X-MEDIA:TYPE=AUDIO` rendition lines of the shared `aud` group.
+     *
+     * SINGLE SOURCE OF TRUTH for those lines' exact bytes (Fix 3): the master
+     * ({@see buildMultiVariantMaster()}) and every VIDEO rung media playlist
+     * ({@see buildMediaPlaylist()}) of the same job render the group through
+     * this one method, so the two can never drift — a rung advertising a
+     * different attribute set, order, or DEFAULT pick than its own master is
+     * precisely the class of defect that leaves hls.js with an empty track
+     * list on one path and two conflicting ones on another. The rendering is
+     * lifted verbatim out of the master builder: the master's shipped bytes
+     * (pinned by S57 flag-off goldens in
+     * {@see \Phlix\Tests\Unit\Media\Transcoding\TranscodeManagerPlaylistFormatTest})
+     * do not move.
+     *
+     * Why the rungs need the lines at all: a multi-audio job encodes every
+     * video rung `-an` ({@see ensureSegmentInternal()}'s `video_only`), and a
+     * client that loads a rung playlist DIRECTLY — the pinned-'original'/
+     * quality path, and hls.js has no supported API to graft a group off a
+     * separate master onto a bare playlist — would otherwise discover zero
+     * audio tracks and play silently. The `URI=` values are relative and the
+     * audio-only playlists live in the SAME job directory, so the lines carry
+     * over unchanged.
+     *
+     * @param list<array{
+     *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
+     * }> $audioTracks Audio-track descriptors ({@see buildAudioTrackDescriptors()}).
+     *
+     * @return list<string> One `#EXT-X-MEDIA:` line per track, in descriptor
+     *     order — exactly one carries `DEFAULT=YES` ({@see defaultAudioPosition()}).
+     */
+    private static function audioGroupRenditionLines(array $audioTracks): array
+    {
+        // Exactly one DEFAULT=YES — see defaultAudioPosition(), which the
+        // MPD's `Role value="main"` audio set also uses (S58).
+        $defaultPos = self::defaultAudioPosition($audioTracks);
+        $lines = [];
+        foreach ($audioTracks as $position => $track) {
+            // The AUDIO-RELATIVE index keys the per-track playlist filename
+            // (media_a0.m3u8 = first audio stream). Fall back to the list
+            // position defensively.
+            $relIndex = is_int($track['index'] ?? null) ? $track['index'] : $position;
+            $lang = is_string($track['language'] ?? null) ? $track['language'] : 'und';
+            $name = is_string($track['label'] ?? null) && $track['label'] !== ''
+                ? $track['label']
+                : ('Track ' . ($relIndex + 1));
+            $isDefault = $position === $defaultPos;
+            $attrs = 'TYPE=AUDIO'
+                . ',GROUP-ID="aud"'
+                . ',NAME="' . self::m3u8Attr($name) . '"';
+            if ($lang !== '' && $lang !== 'und') {
+                $attrs .= ',LANGUAGE="' . self::m3u8Attr($lang) . '"';
+            }
+            $attrs .= ',DEFAULT=' . ($isDefault ? 'YES' : 'NO')
+                . ',AUTOSELECT=YES'
+                // URI is required for hls.js to locate the audio-only playlist;
+                // relative, so the client requests /hls/{job}/media_a{N}.m3u8.
+                . ',URI="media_a' . $relIndex . '.m3u8"';
+            $lines[] = '#EXT-X-MEDIA:' . $attrs;
+        }
+
+        return $lines;
+    }
+
+    /**
      * Builds the multi-variant HLS master playlist text.
      *
      * Emits one `#EXT-X-STREAM-INF` (with BANDWIDTH / RESOLUTION / CODECS from the
@@ -3654,33 +3732,11 @@ class TranscodeManager
         $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
         // P3B-S3: one shared audio group, one rendition per track, before the
-        // video stream infs.
+        // video stream infs. Fix 3: rendered by audioGroupRenditionLines() —
+        // the single source of truth shared with the video rung playlists.
         if (is_array($audioTracks)) {
-            // Exactly one DEFAULT=YES — see defaultAudioPosition(), which the
-            // MPD's `Role value="main"` audio set also uses (S58).
-            $defaultPos = self::defaultAudioPosition($audioTracks);
-            foreach ($audioTracks as $position => $track) {
-                // The AUDIO-RELATIVE index keys the per-track playlist filename
-                // (media_a0.m3u8 = first audio stream). Fall back to the list
-                // position defensively.
-                $relIndex = is_int($track['index'] ?? null) ? $track['index'] : $position;
-                $lang = is_string($track['language'] ?? null) ? $track['language'] : 'und';
-                $name = is_string($track['label'] ?? null) && $track['label'] !== ''
-                    ? $track['label']
-                    : ('Track ' . ($relIndex + 1));
-                $isDefault = $position === $defaultPos;
-                $attrs = 'TYPE=AUDIO'
-                    . ',GROUP-ID="aud"'
-                    . ',NAME="' . self::m3u8Attr($name) . '"';
-                if ($lang !== '' && $lang !== 'und') {
-                    $attrs .= ',LANGUAGE="' . self::m3u8Attr($lang) . '"';
-                }
-                $attrs .= ',DEFAULT=' . ($isDefault ? 'YES' : 'NO')
-                    . ',AUTOSELECT=YES'
-                    // URI is required for hls.js to locate the audio-only playlist;
-                    // relative, so the client requests /hls/{job}/media_a{N}.m3u8.
-                    . ',URI="media_a' . $relIndex . '.m3u8"';
-                $lines[] = '#EXT-X-MEDIA:' . $attrs;
+            foreach (self::audioGroupRenditionLines($audioTracks) as $renditionLine) {
+                $lines[] = $renditionLine;
             }
         }
 
@@ -3753,6 +3809,16 @@ class TranscodeManager
      * @param string|null $variantId  Rendition id for `seg-v{id}-NNNNN.ts`, or null
      *                                for the legacy unprefixed `seg-NNNNN.ts`.
      * @param string      $format     The job's container (`mpegts` | `fmp4`).
+     * @param list<array{
+     *     index:int, stream_index?:int, language:string, label:string, default:bool, codec:string
+     * }>|null $audioGroupTracks Fix 3 — the `aud` group descriptors this job
+     *     carries: the exact list `writeVodPlaylists()` renders into the master
+     *     via {@see audioGroupRenditionLines()}, or null for a job with no
+     *     group (single-audio, muxed, legacy). Rung segments of a multi-audio
+     *     job are `-an` video-only, so a client that loads this playlist
+     *     directly must find the group here; the lines ride after the header
+     *     tags, before the first Media Segment — and before the container's
+     *     `EXT-X-MAP`, which still precedes every segment it governs.
      *
      * @return string Media playlist text.
      */
@@ -3760,7 +3826,8 @@ class TranscodeManager
         float $duration,
         int $segSeconds,
         ?string $variantId,
-        string $format = EncodeSettings::FORMAT_MPEGTS
+        string $format = EncodeSettings::FORMAT_MPEGTS,
+        ?array $audioGroupTracks = null
     ): string {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         $count = (int) ceil($duration / $segSeconds);
@@ -3773,6 +3840,15 @@ class TranscodeManager
             '#EXT-X-MEDIA-SEQUENCE:0',
             '#EXT-X-INDEPENDENT-SEGMENTS',
         ];
+        // Fix 3: a multi-audio job's video rungs must be self-describing for
+        // audio (their segments carry none — `-an`). Byte-identical output is
+        // guaranteed for every playlist that passes null here, which is every
+        // single-audio and legacy job.
+        if ($audioGroupTracks !== null && $audioGroupTracks !== []) {
+            foreach (self::audioGroupRenditionLines($audioGroupTracks) as $renditionLine) {
+                $lines[] = $renditionLine;
+            }
+        }
         if ($format === EncodeSettings::FORMAT_FMP4) {
             $lines[] = '#EXT-X-MAP:URI="' . self::initSegmentFileName($variantId) . '"';
         }

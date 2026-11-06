@@ -1098,7 +1098,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 2076 measured from the phpunit red at local tip 73a98001, not predicted.
     // DISCLOSED LATE ROTATION — the adding commit (73a98001) shipped without
     // stepping this denominator; the drift surfaced as this lane's battery red.
-    private const EXPECTED_PHP_FILES = 2076;
+    // +1 2076→2077: Fix 3 (playback-lag) adds tests/Unit/Media/Transcoding/
+    // TranscodeManagerAudioGroupPlaylistTest.php (self-describing video-rung
+    // media playlists: multi-audio `-an` rungs carried ZERO #EXT-X-MEDIA
+    // announcements outside the master, so a client loading a rung directly
+    // played silent); 2077 measured from the phpunit red at local tip
+    // 11e22571, not predicted.
+    private const EXPECTED_PHP_FILES = 2077;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

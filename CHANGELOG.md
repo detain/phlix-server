@@ -121,6 +121,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Video playback in the web player presents its full frame rate again: `@phlix/ui` v0.99.21
+  re-pinned to v0.99.22, and the served `/app` bundle regenerated.** [player fps 2026-11-06]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.21 → v0.99.22 (tag
+    object `abc9566c`, peel `a4ede939` == ui master tip, ls-remote-verified). v0.99.22 stops
+    the player page from re-rasterising live CSS blurs on every video repaint — the poster
+    backdrop and the ambient glow are pre-rendered to small bitmaps (no `filter`/`mask-image`
+    on the playing path) and the hidden chrome drops its `backdrop-filter`. Field-measured on
+    Firefox (RTX 3060 Ti): ~6–9 presented fps → ~24 with the page filters gone, decode healthy
+    throughout (0 dropped); headless Firefox A/B of the built SPA against the live server 17 →
+    23.75. `package-lock.json` surgical 4+/4- (root echo + the ui node triple),
+    `NPM_CONFIG_USERCONFIG=/dev/null` npm 11 `--package-lock-only`; v0.99.22 moves no declared
+    edge (contracts `#v0.5.6`, syncplay `#v0.1.7` hold). Fresh `npm ci` installs the tag's
+    `dist/` (`phlix-ui.js` `a3a8aa84`, `player.js` `dfa05bb1`, byte-identical to the ui tree).
+  - *Bundle regen.* `/app` (`public/assets/app`) rebuilt, deterministic ×2 (`diff -r` clean),
+    aggregate md5sum-recipe `bcac5f36c3076933aca690087cfab856`, 198 files in `assets/`; stamp
+    reads `0.99.22` (`index-2z1PMaI0.js`), zero `0.99.21` residue; carrier
+    `PlayerPage-BbWPOZn8-BEENg20Z.js` carries `is-preblurred`. Bundle-aware PHP cohort
+    (WebUiBundleGate 10/56, ViteAssetsMemo 4/7, SharedUiControllerCspNonce 5/35,
+    HttpHandlerServeStatic 10/50, PublicFrontControllerRemovalGuard 9/168,
+    NginxAssetLocation 4/49), LicenseHeaderGuard 5/11, BrowserE2EGate 21/127, web-ui
+    `node --test` 33/33 — all green. README UI-truth line flips. Zero PHP files touched.
+
 - **Your theme choice now follows your account: `@phlix/ui` v0.99.20 re-pinned to
   v0.99.21, and the served `/app` bundle regenerated.** [theme persistence 2026-11-06 / S498 write-path law]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.20 →

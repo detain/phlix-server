@@ -1084,7 +1084,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // src/Hub/TlsRelayConnection.php plus its red-first drive test
     // tests/Unit/Hub/TlsRelayConnectionTest.php; 2074 measured from the phpunit
     // battery red at tip 622bdbc9, not predicted.
-    private const EXPECTED_PHP_FILES = 2074;
+    // +1 2074→2075: the dev-hop lane adds tests/Unit/Plugins/Installer/
+    // HttpInstallerGitHubHopTest.php (GitHub archive→codeload vetted-hop
+    // predicate table; dev-channel install cure); 2075 measured from the phpunit
+    // red in CI run 42160212024 and reproduced locally, not predicted.
+    // DISCLOSED LATE ROTATION — the adding commit (45922861) shipped without
+    // stepping this denominator; the drift surfaced as that run's single red.
+    private const EXPECTED_PHP_FILES = 2075;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -1090,7 +1090,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // red in CI run 42160212024 and reproduced locally, not predicted.
     // DISCLOSED LATE ROTATION — the adding commit (45922861) shipped without
     // stepping this denominator; the drift surfaced as that run's single red.
-    private const EXPECTED_PHP_FILES = 2075;
+    // +1 2075→2076: the hwaccel probe-selection lane adds
+    // tests/Unit/Media/Transcoding/Hwaccel/VendorProbe/
+    // HwaccelVendorProbeEncoderSelectionTest.php (codec-correct encoder maps
+    // for the *_vaapi/*_qsv/*_amf/*_v4l2m2m/*_videotoolbox families — the
+    // alphabetical `-encoders` list made av1_* the positional first match);
+    // 2076 measured from the phpunit red at local tip 73a98001, not predicted.
+    // DISCLOSED LATE ROTATION — the adding commit (73a98001) shipped without
+    // stepping this denominator; the drift surfaced as this lane's battery red.
+    private const EXPECTED_PHP_FILES = 2076;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

@@ -31,7 +31,25 @@ ARG PHP_VERSION=8.3
 # hub image BUILD is unaffected because its Dockerfile only COPYs config. It
 # needs the same daemon-only treatment; recorded in the step worklog.
 # ----------------------------------------------------------------------------
-FROM php:${PHP_VERSION}-cli-alpine
+# HOST-5 (2026-11-05): DIGEST-PINNED. `php:<ver>-cli-alpine` is a floating
+# tag — upstream re-tags it without notice, and every layer below silently
+# loses its build cache. Measured on consecutive master runs: 50f02166 built
+# in 38s with 8 CACHED layers at 00:47Z (base resolving to sha256:5f8cf041…);
+# ca46ef96 paid a full 49m24s rebuild at 01:20Z with ZERO cached layers —
+# identical Dockerfile, the only delta being upstream's re-tag to
+# sha256:66e726c3…. The GHA + registry caches (S163 rounds 4/5) cannot
+# survive that: the FROM resolution is the root of every chain key. Pinning
+# the immutable multi-arch index digest makes cache breaks a deliberate act,
+# and keeps the two heavy swoole compiles (#17 1365.8s amd64, #21 1398.7s
+# arm64-under-QEMU) behind a hit until someone chooses to move this line.
+#
+# Rotation law — same doctrine as the SWOOLE_REF / PHP_UV_REF pins below:
+# move this digest only in a security-reviewed lane, reading the new index
+# digest from `docker buildx imagetools inspect php:<ver>-cli-alpine`, and
+# carry tests/Unit/Docker/DockerEntrypointTest.php's BASE_PHP_ALPINE_DIGEST
+# constant in the same commit. A `docker pull` refresh is not a rotation.
+# ----------------------------------------------------------------------------
+FROM php:${PHP_VERSION}-cli-alpine@sha256:66e726c387bd539888c3d05f4e2c8b03c85566805a02476fdfb7ca8d3592c2db
 
 # Install system deps and PHP extensions.
 # `supervisor` stays — it is the process manager the runtime images use.

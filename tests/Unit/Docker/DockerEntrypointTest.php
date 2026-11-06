@@ -1352,6 +1352,19 @@ class DockerEntrypointTest extends TestCase
      * description of a PUBLISHED artefact and still named the base image this
      * branch replaced. Tie the prose to the Dockerfile so it cannot drift again.
      */
+    /**
+     * The immutable multi-arch index digest `docker/Dockerfile.base` FROMs.
+     * HOST-5: the floating `php:<ver>-cli-alpine` tag broke every downstream
+     * build-cache chain when upstream re-tagged it (measured: a test-only
+     * commit paid a 49m24s full rebuild, zero CACHED layers, while the run
+     * 33 minutes earlier hit 8 cached layers in 38s). Pinning turns cache
+     * breaks into deliberate acts. Rotating this digest is a security-
+     * reviewed lane: move it together with the FROM line — the Dockerfile's
+     * rotation-law comment states how to read the new one.
+     */
+    private const BASE_PHP_ALPINE_DIGEST =
+        '66e726c387bd539888c3d05f4e2c8b03c85566805a02476fdfb7ca8d3592c2db';
+
     public function testTheDockerReadmeNamesTheBaseImageTheBaseDockerfileActuallyUses(): void
     {
         $root = dirname(__DIR__, 3);
@@ -1360,10 +1373,26 @@ class DockerEntrypointTest extends TestCase
 
         self::assertSame(
             1,
-            preg_match('/^FROM\s+php:\$\{PHP_VERSION\}-(\S+)\s*$/m', $base, $m),
-            'docker/Dockerfile.base must FROM an official php image'
+            preg_match(
+                '/^FROM\s+php:\$\{PHP_VERSION\}-([a-z0-9.\-]+)@sha256:([0-9a-f]{64})\s*$/m',
+                $base,
+                $m
+            ),
+            'docker/Dockerfile.base must FROM an official php image pinned to '
+            . 'an immutable @sha256: digest (HOST-5: a floating tag lets an '
+            . 'upstream re-tag silently invalidate the entire buildcache chain)'
         );
         $flavour = $m[1];
+
+        self::assertSame(
+            self::BASE_PHP_ALPINE_DIGEST,
+            $m[2],
+            'HOST-5: docker/Dockerfile.base FROMs php:${PHP_VERSION}-' . $flavour
+            . ' at digest ' . $m[2] . ' but the pinned digest is '
+            . self::BASE_PHP_ALPINE_DIGEST . '. Moving the base image is a '
+            . 'deliberate, security-reviewed rotation: carry this constant and '
+            . 'the FROM line in the same commit (rotation law: Dockerfile comment).'
+        );
 
         self::assertMatchesRegularExpression(
             '/^\|\s*`Dockerfile`\s*\|[^|]*`php:8\.3-' . preg_quote($flavour, '/') . '`/m',

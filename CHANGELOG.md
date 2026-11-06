@@ -96,6 +96,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The base-image build chain is digest-pinned; the ~50-minute rebuild tax on
+  unrelated commits is gone.** `docker/Dockerfile.base` FROMed the floating
+  `php:${PHP_VERSION}-cli-alpine` tag, so every upstream re-push of that tag
+  re-rooted the buildcache chain while the Dockerfile itself never moved:
+  measured on consecutive master runs, 50f02166 hit 8 CACHED layers in 38s at
+  00:47Z, and 33 minutes later ca46ef96 — same Dockerfile, a test-only diff —
+  paid 49m24s with zero cached layers, recompiling Swoole twice (amd64
+  1365.8s + arm64-under-QEMU 1398.7s). The GHA + registry caches wired in the
+  S163 rounds were healthy and correctly invoked; they simply cannot survive a
+  moving foundation. The `FROM` now pins the immutable multi-arch index digest
+  (`@sha256:66e726c3…`, re-verified live at authoring) with a rotation law in
+  the file's own idiom — deliberate, security-reviewed moves only, the same
+  doctrine as the `SWOOLE_REF`/`PHP_UV_REF` pins below it.
+  `DockerEntrypointTest::testTheDockerReadmeNamesTheBaseImageTheBaseDockerfileActuallyUses`
+  is the tripwire, tightened from tag-only to fail loud if the pin floats or
+  rotates without the constant moving in the same commit; `docker/README.md`
+  carries the precision note. No workflow change: `.github/workflows/docker.yml`
+  needed none — the forensics found its caching fully wired since S163.
+  [HOST-5 / owner brief 2026-11-05: "look where the time is being used …
+  maybe implement caching into that to speed it up"]
+
 - **The production install path no longer installs or enables Xdebug, and
   `--update` now disarms existing enablements.** Owner ruling on the HOST-5
   fault evidence: every observed production fault in the swoole era — the 6/6

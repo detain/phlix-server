@@ -169,6 +169,15 @@ build jobs `needs: docker-base`, so the base is always fresh before they pull
 it. The hub image is built by *this* (server) repo's workflow, so the base lives
 here even though hub consumes it.
 
+**HOST-5 (2026-11-05) precision:** the cache-hit guarantee above held only for
+*local* changes while the base `FROM` floated on the `php:<ver>-cli-alpine`
+tag — an upstream re-push of that tag re-rooted every chain key silently, and
+a test-only commit paid a full 49m24s rebuild (38s with 8 CACHED layers when
+the tag held). The `FROM` now carries an immutable `@sha256:` digest with a
+rotation law (deliberate, security-reviewed moves only — see the comment in
+`Dockerfile.base`), so an unrelated commit rides the cache again regardless of
+upstream churn.
+
 > The `ghcr.io/detain/phlix-base` package should be **public** (or readable by
 > the workflow's `GITHUB_TOKEN`) so pull-request builds can pull it — PR runs
 > build the base but do not push it, and fall back to the last published

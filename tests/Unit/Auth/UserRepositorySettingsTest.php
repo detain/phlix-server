@@ -4,10 +4,17 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Auth;
 
+use DateTimeImmutable;
 use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Theming\ThemeSourceInterface;
 use Phlix\Theming\ThemeSourceRegistry;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Workerman\MySQL\Connection;
 
 /**
@@ -19,6 +26,14 @@ use Workerman\MySQL\Connection;
  * ({@see \Phlix\Theming\BuiltInThemes::IDS} ∪ ids registered in the wired
  * ThemeSourceRegistry) or updateSettings() throws BEFORE any write — the
  * pre-S85 fossil whitelist silently dropped every theme while answering 200.
+ *
+ * And since the 2026-11-06 settings-path cure it pins the write-path fleet
+ * reconciliation: a payload carrying `theme` first reconciles this worker's
+ * registry through the S498 {@see ThemeRegistryFleetSync} (so a theme enabled
+ * on a PEER worker validates even when this worker never served a themes GET
+ * since), while a payload without `theme` never touches the plugin arm, and a
+ * reconciliation that itself fails degrades to the stale registry with an
+ * error_log trace instead of crashing the settings write.
  */
 final class UserRepositorySettingsTest extends TestCase
 {
@@ -301,5 +316,310 @@ final class UserRepositorySettingsTest extends TestCase
             $this->assertStringContainsString('nocturne', $e->getMessage());
             $this->assertStringContainsString('acme-noir', $e->getMessage());
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Settings-path fleet reconciliation (2026-11-06 cure): a theme enabled on
+    // a peer worker must be writable on THIS worker even when this process has
+    // never served a themes GET since the enable. The write path reconciles
+    // through the same S498 ThemeRegistryFleetSync the read path uses — never a
+    // duplicated stamp/rebuild implementation.
+    // -----------------------------------------------------------------
+
+    /**
+     * One durable `plugins` row, built exactly like the S498 guard's fixture
+     * (tests/Unit/Plugins/ThemeRegistryFleetSyncTest.php) so the stamp fold and
+     * the rebuild loop consume it identically to production.
+     */
+    private function pluginRow(string $name, bool $enabled, string $version = '1.0.0'): InstalledPlugin
+    {
+        return new InstalledPlugin(
+            id: 'id-' . $name,
+            manifest: Manifest::fromArray([
+                'name' => $name,
+                'version' => $version,
+                'phlix_min_server_version' => '0.10.0',
+                'type' => 'ui-theme',
+                'entry' => 'Phlix\\TestEntry\\' . preg_replace('/[^A-Za-z]/', '', $name),
+                'events' => [],
+            ]),
+            enabled: $enabled,
+            installedAt: new DateTimeImmutable(),
+            settings: [],
+            directory: sys_get_temp_dir() . '/phlix_settings_reconcile_' . $name,
+        );
+    }
+
+    private function themeSource(string $sourceName, string $themeId): ThemeSourceInterface
+    {
+        return new class ($sourceName, $themeId) implements ThemeSourceInterface {
+            public function __construct(
+                private readonly string $source,
+                private readonly string $theme,
+            ) {
+            }
+
+            public function themeSourceName(): string
+            {
+                return $this->source;
+            }
+
+            /** @return list<array<array-key, mixed>> */
+            public function providedThemes(): array
+            {
+                return [[
+                    'id' => $this->theme,
+                    'name' => ucfirst($this->theme),
+                    'dark' => true,
+                    'extends' => null,
+                    'tokens' => ['--bg' => '#08070a'],
+                ]];
+            }
+        };
+    }
+
+    /**
+     * Fleet sync bound to $registry, over a loader whose durable truth is
+     * exactly $enabledRows, each row's entry providing the theme named by
+     * $themeById[plugin name].
+     *
+     * @param list<InstalledPlugin> $enabledRows
+     * @param array<string, string> $themeById plugin name => theme id
+     */
+    private function syncOver(
+        ThemeSourceRegistry $registry,
+        array $enabledRows,
+        array $themeById
+    ): ThemeRegistryFleetSync {
+        $loader = $this->createMock(PluginLoader::class);
+        $loader->method('listInstalled')->willReturn($enabledRows);
+        $loader->method('getEnabled')->willReturn($enabledRows);
+        $loader->method('getEntryInstance')->willReturnCallback(
+            fn (string $name): ThemeSourceInterface => $this->themeSource($name . '-source', $themeById[$name])
+        );
+
+        return new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+    }
+
+    public function test_theme_enabled_on_a_peer_worker_persists_on_a_never_flushed_worker(): void
+    {
+        // The defect: this worker's registry is its stale boot generation
+        // (empty here) because a peer served the enable and this worker has
+        // not run a themes GET since. Pre-cure, validateThemeId() consults
+        // this stale registry and throws "Unknown theme" → a spurious 400
+        // whose message lists only the OLD live ids.
+        $registry = new ThemeSourceRegistry();
+        $durable = [$this->pluginRow('phlix-plugin-acme', true)];
+
+        $loader = $this->createMock(PluginLoader::class);
+        $loader->method('listInstalled')->willReturn($durable);
+        $loader->method('getEnabled')->willReturn($durable);
+        $loader->method('getEntryInstance')->willReturn(
+            $this->themeSource('acme-themes', 'acme-noir')
+        );
+        $sync = new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+
+        $captured = [];
+        $db = $this->recordingDb($captured);
+
+        $repo = new UserRepository($db, $registry, $sync);
+        $repo->updateSettings('user-1', ['theme' => 'acme-noir']);
+
+        $this->assertTrue($registry->has('acme-noir'), 'reconcile adopted the peer enable');
+        $this->assertCount(1, $captured);
+        $this->assertStringContainsString('UPDATE user_profiles SET active_theme_id = ?', $captured[0][0]);
+        $this->assertSame(['acme-noir', 'user-1'], $captured[0][1]);
+    }
+
+    public function test_reconciliation_runs_before_validation_not_after(): void
+    {
+        // Ordering proof the first test cannot give alone: the submitted id is
+        // durable-only, so a validate-first flip throws here, and a
+        // reconcile-after-write flip breaks the marker order — both directions
+        // of the reconcile-before-validate law are pinned by this one test.
+        $sequence = [];
+        $durable = [$this->pluginRow('phlix-plugin-acme', true)];
+
+        $loader = $this->createMock(PluginLoader::class);
+        $loader->method('listInstalled')->willReturnCallback(
+            function () use (&$sequence, $durable): array {
+                $sequence[] = 'stamp-read';
+                return $durable;
+            }
+        );
+        $loader->method('getEnabled')->willReturnCallback(
+            function () use (&$sequence, $durable): array {
+                $sequence[] = 'rebuild';
+                return $durable;
+            }
+        );
+        $loader->method('getEntryInstance')->willReturn(
+            $this->themeSource('acme-themes', 'acme-new')
+        );
+
+        $registry = $this->registryWithPluginTheme('acme-noir');
+        $sync = new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $bindings = []) use (&$sequence): array {
+                $sequence[] = 'settings-write';
+                return [];
+            }
+        );
+
+        // The submitted id is durable-only (absent from the stale registry):
+        // with validation flipped ahead of the reconcile this throws, so the
+        // marker sequence is only reachable under reconcile-before-validate.
+        $repo = new UserRepository($db, $registry, $sync);
+        $repo->updateSettings('user-1', ['theme' => 'acme-new']);
+
+        $this->assertSame(
+            ['stamp-read', 'rebuild', 'settings-write'],
+            $sequence,
+            'the durable stamp must be read (and, cold, the registry rebuilt) BEFORE the theme is validated '
+            . 'and before any settings write',
+        );
+    }
+
+    public function test_rejection_message_names_ids_live_only_after_reconciliation(): void
+    {
+        // After reconcile the reject envelope (flat {error} in the router; the
+        // exception message here) lists the CURRENT live ids — including a
+        // slug that only durable truth knows about.
+        $registry = $this->registryWithPluginTheme('acme-noir');
+        $durable = [
+            $this->pluginRow('phlix-plugin-acme', true),
+            $this->pluginRow('phlix-plugin-second', true),
+        ];
+        $sync = $this->syncOver($registry, $durable, [
+            'phlix-plugin-acme' => 'acme-noir',
+            'phlix-plugin-second' => 'acme-bright',
+        ]);
+
+        $captured = [];
+        $db = $this->recordingDb($captured);
+
+        $repo = new UserRepository($db, $registry, $sync);
+
+        try {
+            $repo->updateSettings('user-1', ['theme' => 'ghost']);
+            $this->fail('Expected InvalidArgumentException for an unknown theme');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('Unknown theme "ghost"', $e->getMessage());
+            $this->assertStringContainsString(
+                'acme-bright',
+                $e->getMessage(),
+                'the valid-ids list must be rebuilt from durable truth, not the stale registry',
+            );
+        }
+
+        $this->assertSame([], $captured, 'a rejected payload changes zero rows');
+    }
+
+    public function test_non_theme_settings_put_never_touches_the_plugin_arm(): void
+    {
+        // Zero extra work for the overwhelmingly common PUT: the loader must
+        // not be consulted at all when no `theme` key is present.
+        $loader = $this->createMock(PluginLoader::class);
+        $loader->expects($this->never())->method('listInstalled');
+        $loader->expects($this->never())->method('getEnabled');
+        $loader->expects($this->never())->method('getEntryInstance');
+
+        $registry = new ThemeSourceRegistry();
+        $sync = new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+
+        $captured = [];
+        $db = $this->recordingDb($captured);
+
+        $repo = new UserRepository($db, $registry, $sync);
+        $repo->updateSettings('user-1', ['max_streams' => 5]);
+
+        $this->assertCount(1, $captured, 'the settings upsert itself still runs');
+        $this->assertStringContainsString('INSERT INTO user_settings', $captured[0][0]);
+    }
+
+    public function test_a_failing_reconcile_degrades_to_the_stale_registry_and_still_writes(): void
+    {
+        // Fail-safe law: the settings write must never crash because the
+        // reconciliation's own durable read failed. Validation proceeds
+        // against the process registry (pre-cure behavior) and the failure
+        // leaves an error_log trace — no wire change either way.
+        $errorLogFile = '/tmp/opencode/phlix-settings-reconcile-errorlog-probe.log';
+        if (file_exists($errorLogFile)) {
+            unlink($errorLogFile);
+        }
+        $previousErrorLog = ini_get('error_log');
+        ini_set('error_log', $errorLogFile);
+
+        try {
+            $loader = $this->createMock(PluginLoader::class);
+            $loader->method('listInstalled')->willThrowException(
+                new RuntimeException('simulated durable read failure')
+            );
+
+            $registry = $this->registryWithPluginTheme('acme-noir');
+            $sync = new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+
+            $captured = [];
+            $db = $this->recordingDb($captured);
+
+            $repo = new UserRepository($db, $registry, $sync);
+            $repo->updateSettings('user-1', ['theme' => 'acme-noir']);
+
+            $this->assertCount(1, $captured);
+            $this->assertStringContainsString('UPDATE user_profiles SET active_theme_id = ?', $captured[0][0]);
+
+            $this->assertFileExists($errorLogFile, 'the skipped reconcile must leave a trace');
+            $this->assertStringContainsString(
+                'theme registry reconcile skipped',
+                (string) file_get_contents($errorLogFile),
+            );
+        } finally {
+            ini_set('error_log', (string) $previousErrorLog);
+        }
+    }
+
+    public function test_a_failing_reconcile_still_rejects_unknown_themes_against_the_stale_registry(): void
+    {
+        // The degrade is to yesterday's behavior, not to a rubber stamp: with
+        // the plugin arm down, an id the process registry does not know still
+        // throws with the stale live-id list, before any write.
+        $loader = $this->createMock(PluginLoader::class);
+        $loader->method('listInstalled')->willThrowException(
+            new RuntimeException('simulated durable read failure')
+        );
+
+        $registry = $this->registryWithPluginTheme('acme-noir');
+        $sync = new ThemeRegistryFleetSync($loader, $registry, $this->createMock(StructuredLogger::class));
+
+        $captured = [];
+        $db = $this->recordingDb($captured);
+
+        $repo = new UserRepository($db, $registry, $sync);
+
+        try {
+            $repo->updateSettings('user-1', ['theme' => 'ghost']);
+            $this->fail('Expected InvalidArgumentException despite the degraded reconcile');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('Unknown theme "ghost"', $e->getMessage());
+            $this->assertStringContainsString('acme-noir', $e->getMessage());
+        }
+
+        $this->assertSame([], $captured);
+    }
+
+    public function test_repository_without_a_wired_fleet_sync_keeps_the_old_validation_law(): void
+    {
+        // Unwired harnesses (unit constructions, partial containers) keep the
+        // pre-cure behavior byte-identically: built-ins ∪ current registry.
+        $captured = [];
+        $db = $this->recordingDb($captured);
+
+        $repo = new UserRepository($db, $this->registryWithPluginTheme('acme-noir'));
+        $repo->updateSettings('user-1', ['theme' => 'acme-noir']);
+
+        $this->assertCount(1, $captured);
+        $this->assertStringContainsString('UPDATE user_profiles SET active_theme_id = ?', $captured[0][0]);
     }
 }

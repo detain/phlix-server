@@ -24,8 +24,10 @@ use PHPUnit\Framework\TestCase;
  * AC2: "invalidation mechanism pinned by a guard test". The behaviour pins
  * below prove the stamp contract (what moves it, what must NOT move it) and
  * that the flush lands exactly on the log line carrying the step marker; the
- * wiring pins prove the two production call sites (controller + provider)
- * still hold it. The live pool proof — two resident workers converging over
+ * wiring pins prove the production call sites still hold it — the themes read
+ * path (controller + provider) and, since the 2026-11-06 cure, the settings
+ * write path (UserRepository reconcile-before-validate + its container wiring).
+ * The live pool proof — two resident workers converging over
  * a shared durable table — is
  * {@see \Phlix\Tests\Integration\Theming\CrossWorkerThemeRegistryFleetFlushTest};
  * this file is the unit-grade tripwire for regressions in the mechanism.
@@ -405,6 +407,67 @@ final class ThemeRegistryFleetSyncTest extends TestCase
             $source,
             'the production ThemesController must be built with a fleet sync bound to that loader and the '
             . 'SAME container-scoped registry it serves from',
+        );
+    }
+
+    public function test_the_settings_write_path_reconciles_before_validating_a_theme(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/src/Auth/UserRepository.php',
+        );
+
+        $reconcileCall = strpos($source, '$this->reconcileThemeRegistry();');
+        $validateCall = strpos($source, '$this->validateThemeId($settings');
+
+        $this->assertNotFalse(
+            $reconcileCall,
+            'updateSettings() must run the fleet reconcile through ThemeRegistryFleetSync before '
+            . 'validating a submitted theme (2026-11-06 settings-path cure)',
+        );
+        $this->assertNotFalse($validateCall);
+        $this->assertLessThan(
+            $validateCall,
+            $reconcileCall,
+            'reconcile-before-validate: a flipped order re-opens the stale-registry 400 this cure closes',
+        );
+
+        // The fail-safe arm must stay fail-safe: the reconcile error is caught
+        // and traced to error_log, never rethrown into the settings write.
+        $this->assertStringContainsString(
+            'theme registry reconcile skipped',
+            $source,
+            'the degraded-reconcile trace must stay greppable in the log tail',
+        );
+    }
+
+    public function test_the_container_wires_the_fleet_sync_into_the_settings_write_path(): void
+    {
+        $authSource = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/src/Common/Container/Providers/AuthServicesProvider.php',
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/->constructorParameter\(\s*\'themeFleetSync\',\s*factory\(/',
+            $authSource,
+            'the container-built UserRepository must receive the fleet sync — PHP-DI skips optional ctor '
+            . 'params during autowiring, so without this pin every real settings write silently keeps the '
+            . 'stale-registry law',
+        );
+        $this->assertStringContainsString(
+            '$c->get(ThemeRegistryFleetSync::class)',
+            $authSource,
+            'the guarded factory must resolve the CANONICAL container entry, not a private rebuild of it',
+        );
+
+        $pluginsSource = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/src/Common/Container/Providers/PluginsProvider.php',
+        );
+
+        $this->assertMatchesRegularExpression(
+            '/ThemeRegistryFleetSync::class => factory\(/',
+            $pluginsSource,
+            'the fleet sync has one canonical container home beside its PluginLoader — the settings path '
+            . 'resolves it through get(), it must not rot into an unbuildable autowire guess',
         );
     }
 }

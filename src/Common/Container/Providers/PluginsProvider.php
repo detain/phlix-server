@@ -30,8 +30,10 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
 use Phlix\Plugins\Signature\TrustedSignaturesConfig;
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Theming\ThemeSourceRegistry;
 use Psr\Container\ContainerInterface;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -208,6 +210,39 @@ final class PluginsProvider implements ServiceProviderInterface
                         $themeSourceRegistry,
                         $metadataWriterRegistry,
                     );
+                }
+            ),
+
+            // S498: canonical home of the theme-registry reconciler, beside
+            // the loader it folds. The themes READ path has built its own
+            // instance inline with the controller since S498; this binding is
+            // for consumers that need the same convergence on a WRITE path —
+            // UserRepository::updateSettings() before validating a submitted
+            // theme (2026-11-06 settings-path cure). PHP-DI caches per
+            // container, so a worker carries exactly one stamp tracker here.
+            // Deliberate degradation to null when the plugin arm cannot be
+            // built: a settings write must never fail because of the
+            // reconciler's own construction (the repository then keeps the
+            // pre-cure validation law, and the skip is traced in error_log).
+            ThemeRegistryFleetSync::class => factory(
+                static function (ContainerInterface $c): ?ThemeRegistryFleetSync {
+                    try {
+                        /** @var PluginLoader $loader */
+                        $loader = $c->get(PluginLoader::class);
+                        /** @var ThemeSourceRegistry $registry */
+                        $registry = $c->get(ThemeSourceRegistry::class);
+
+                        return new ThemeRegistryFleetSync(
+                            $loader,
+                            $registry,
+                            LoggerFactory::get(LogChannels::PLUGINS),
+                        );
+                    } catch (Throwable $e) {
+                        error_log('plugins: theme fleet sync unavailable; settings theme validation '
+                            . "falls back to this process' registry: " . $e->getMessage());
+
+                        return null;
+                    }
                 }
             ),
 

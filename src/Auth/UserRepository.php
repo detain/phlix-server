@@ -14,6 +14,7 @@ namespace Phlix\Auth;
 use Phlix\Auth\Dto\UserRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Theming\BuiltInThemes;
 use Phlix\Theming\ThemeSourceRegistry;
 use Workerman\MySQL\Connection;
@@ -47,6 +48,15 @@ class UserRepository
      */
     private ?ThemeSourceRegistry $themeSources;
 
+    /**
+     * S498 pool-freshness reconciler for the theme write path (2026-11-06
+     * cure): consulted before validating a submitted theme so a peer worker's
+     * enable is visible even when this worker never served a themes GET
+     * since. Null in unwired harnesses — then theme validation keeps exactly
+     * the pre-cure law (built-ins ∪ this process's registry).
+     */
+    private ?ThemeRegistryFleetSync $themeFleetSync;
+
     // NOTE: These caches were previously `private static`, which made them
     // process-wide (shared across every UserRepository instance in the same
     // Workerman worker / PHPUnit process). Under PHPUnit's default
@@ -79,16 +89,23 @@ class UserRepository
      * @param ThemeSourceRegistry|null $themeSources Container singleton holding
      *        the enabled plugin theme ids; null restricts theme writes to the
      *        built-in ids ({@see BuiltInThemes::IDS}) only.
+     * @param ThemeRegistryFleetSync|null $themeFleetSync S498 reconciler run
+     *        before theme validation on settings writes carrying a `theme`
+     *        value; null (unwired harness) keeps the pre-cure validation law.
      *
      * @example
      * ```php
      * $repo = new UserRepository($dbConnection);
      * ```
      */
-    public function __construct(Connection $db, ?ThemeSourceRegistry $themeSources = null)
-    {
+    public function __construct(
+        Connection $db,
+        ?ThemeSourceRegistry $themeSources = null,
+        ?ThemeRegistryFleetSync $themeFleetSync = null
+    ) {
         $this->db = $db;
         $this->themeSources = $themeSources;
+        $this->themeFleetSync = $themeFleetSync;
     }
 
     /**
@@ -796,7 +813,11 @@ class UserRepository
      *        - default_content_rating: Default content rating filter
      *        - transcoding_preferences: Array of transcoding options
      *        - theme: A live theme id — {@see BuiltInThemes::IDS} or a plugin
-     *          theme registered in the wired ThemeSourceRegistry. Persisted to
+     *          theme registered in the wired ThemeSourceRegistry. A payload
+     *          carrying this key first reconciles this worker's registry
+     *          against the durable plugin state (S498 fleet sync, 2026-11-06
+     *          settings-path cure), so a theme enabled on any worker is
+     *          writable here immediately. Persisted to
      *          user_profiles.active_theme_id, not user_settings.
      *          CLEARING IS NOT SUPPORTED (v1 law): there is deliberately no
      *          API path that resets active_theme_id back to NULL — a null (or
@@ -829,9 +850,18 @@ class UserRepository
         // EMPTY intersection with the live id namespace, so every theme ever
         // PUT was silently dropped while the endpoint still answered 200.
         // Validation runs before any query: a rejected payload changes zero rows.
-        $validatedTheme = array_key_exists('theme', $settings)
-            ? $this->validateThemeId($settings['theme'])
-            : null;
+        $validatedTheme = null;
+        if (array_key_exists('theme', $settings)) {
+            // Reconcile before validating (2026-11-06 settings-path cure): a
+            // peer worker's enable is durable truth the moment it commits, but
+            // it is invisible HERE until this process's registry catches up. A
+            // worker that never served a themes GET since the enable would
+            // otherwise 400 the exact slug the client just saw in
+            // GET /api/v1/themes. Payloads without `theme` skip the plugin arm
+            // entirely — zero added work on the common path.
+            $this->reconcileThemeRegistry();
+            $validatedTheme = $this->validateThemeId($settings['theme']);
+        }
 
         // Build a parallel column list and bound-value list. We keep the column
         // names and the placeholders separate so the INSERT and the UPDATE
@@ -943,6 +973,33 @@ class UserRepository
         // array_values: sort() widens list<string> to a keyed array in
         // static analysis; the merge result is structurally re-listed.
         return array_values(array_merge(BuiltInThemes::IDS, $pluginIds));
+    }
+
+    /**
+     * Fold the durable `plugins` table into this worker's theme registry
+     * before the write path consults it (2026-11-06 settings-path cure).
+     *
+     * Delegates to the SAME S498 {@see ThemeRegistryFleetSync} the themes read
+     * path uses — stamp fold and rebuild exist in exactly one implementation.
+     *
+     * Deliberately fail-safe: if the reconcile's own durable read throws (e.g.
+     * a DB blip), the settings write must not crash because of it. The failure
+     * leaves an error_log trace and validation proceeds against the process
+     * registry — exactly the pre-cure behavior, never worse. The wire contract
+     * is identical either way: a rejected theme still surfaces as the router's
+     * existing flat {"error": message} 400, with no new error codes.
+     */
+    private function reconcileThemeRegistry(): void
+    {
+        if ($this->themeFleetSync === null) {
+            return;
+        }
+
+        try {
+            $this->themeFleetSync->flushIfStale();
+        } catch (\Throwable $e) {
+            error_log('settings: theme registry reconcile skipped: ' . $e->getMessage());
+        }
     }
 
     /**

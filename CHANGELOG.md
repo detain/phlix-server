@@ -652,6 +652,33 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A freshly-enabled theme plugin is immediately selectable via settings
+  on every worker, not just the one that served the enable.** The S498
+  fleet-sync reconciled a worker's theme registry only on the READ path
+  (`GET /api/v1/themes`), while the settings WRITE path validated a
+  submitted theme against the raw process-local registry — so a member who
+  PUT the just-enabled plugin slug to `PUT /api/v1/users/me/settings`
+  could land on one of the ~13 workers that had never served a themes
+  request since the enable and receive a spurious `Unknown theme "<slug>"`
+  400 whose message listed only the OLD live ids. Cure: `UserRepository::
+  updateSettings()` reconciles through the very same
+  `ThemeRegistryFleetSync::flushIfStale()` BEFORE validating, and only
+  when the payload actually carries `theme` — theme-free PUTs do zero
+  extra work (pinned). The sync gained a canonical container binding in
+  `PluginsProvider` (one stamp tracker per worker, shared by both arms;
+  `ThemesController` keeps its existing wiring untouched) and is injected
+  into `UserRepository` by a GUARDED `constructorParameter` in
+  `AuthServicesProvider`: subset harnesses and any resolution failure
+  degrade to `null` — the pre-cure validation law, `error_log`-traced —
+  never crash auth boot, and a reconcile whose own stamp read throws is
+  swallowed to the same stale-registry fallback so a settings write never
+  fails for the reconciliation's own error. The reject envelope is
+  unchanged (flat `{"error": ...}`, no new wire codes); after a
+  successful reconcile it simply names the CURRENT live ids, including
+  the slug just enabled elsewhere.
+  [S498 settings-path arm, `UserRepositorySettingsTest` ×7 new +
+  `ThemeRegistryFleetSyncTest` wiring pins ×2]
+
 - **A reload during a segment encode no longer leaves a phantom lock that
   starves later players.** When a detached segment encode is killed
   mid-flight — the client disconnecting triggers a group-TERM — the

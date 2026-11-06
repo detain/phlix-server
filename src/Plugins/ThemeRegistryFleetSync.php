@@ -40,9 +40,13 @@ use Throwable;
  * broadcast channel a plain `http://` worker group does not have, each worker
  * re-derives a STAMP from that shared table on the next theme request:
  *
- *  - {@see flushIfStale()} is called by {@see \Phlix\Server\Http\Controllers\ThemesController}
- *    before it serves; it folds `name:enabled:version` of every installed row
- *    into one sha1 and compares it with the stamp this process last observed.
+ *  - {@see flushIfStale()} is called before either consumer serves from the
+ *    registry: {@see \Phlix\Server\Http\Controllers\ThemesController} on the
+ *    themes READ path, and — since the 2026-11-06 settings-path cure —
+ *    {@see \Phlix\Auth\UserRepository::updateSettings()} on the settings WRITE
+ *    path whenever the payload carries a `theme` value. It folds
+ *    `name:enabled:version` of every installed row into one sha1 and compares
+ *    it with the stamp this process last observed.
  *  - Equal (the overwhelmingly common case) → zero rebuild work; the request
  *    costs one indexed read of a ≤tens-of-rows table on an auth-gated,
  *    low-QPS endpoint — NOT a per-request heavy scan.
@@ -76,9 +80,12 @@ use Throwable;
  * what S498 targets. The rebuild path deliberately does NOT run
  * `onEnable()`, subscribe events, or touch the metadata/subtitle/writer
  * registries: those keep their existing boot-time-only wiring, byte-for-byte
- * unchanged behavior. A settings-only `updateSettings()` does not move the
- * stamp — faithfully so: even the handling worker's registry is not refreshed
- * by an settings update today.
+ * unchanged behavior. A settings write can never MOVE the stamp — it writes
+ * zero rows to `plugins`; since the 2026-11-06 cure a theme-carrying
+ * `updateSettings()` does READ it (via {@see flushIfStale()} before
+ * validating the submitted theme), so a peer worker's enable becomes writable
+ * on every worker immediately instead of only once that worker next serves a
+ * themes GET.
  *
  * ## Failure posture
  *

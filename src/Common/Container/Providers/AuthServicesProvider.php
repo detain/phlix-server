@@ -34,6 +34,7 @@ use Phlix\Common\RateLimit\RateLimiter;
 use Phlix\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Media\RecommendationService;
+use Phlix\Plugins\ThemeRegistryFleetSync;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\Auth\QuickConnectController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -346,8 +347,35 @@ final class AuthServicesProvider implements ServiceProviderInterface
             // enabled plugin themes. It must be the container singleton — the
             // same instance PluginLoader enables into and ThemesController
             // lists from — never a fresh `new ThemeSourceRegistry()`.
+            // `themeFleetSync` follows the same law since the 2026-11-06
+            // settings-path cure: a theme-carrying PUT reconciles this
+            // worker's registry through the S498 sync before validating, so a
+            // peer worker's enable never 400s against a stale process view.
+            // The value is a GUARDED factory, not a bare get(): harnesses that
+            // register AuthServicesProvider WITHOUT PluginsProvider must
+            // resolve null (the pre-cure validation law) rather than let
+            // PHP-DI's autowire fallback explode the UserRepository chain —
+            // exactly the failure a bare get() produced in
+            // AuthServicesProviderControllerWiringTest at the cure's first
+            // shape. In the stock container the inner get() lands on
+            // PluginsProvider's canonical binding: one stamp tracker per
+            // worker, shared with every other consumer.
             UserRepository::class => autowire()
-                ->constructorParameter('themeSources', get(ThemeSourceRegistry::class)),
+                ->constructorParameter('themeSources', get(ThemeSourceRegistry::class))
+                ->constructorParameter('themeFleetSync', factory(
+                    static function (ContainerInterface $c): ?ThemeRegistryFleetSync {
+                        try {
+                            $candidate = $c->get(ThemeRegistryFleetSync::class);
+                        } catch (\Throwable $e) {
+                            error_log('auth: theme fleet sync unavailable for this container; settings theme '
+                                . 'validation keeps the process-local law: ' . $e->getMessage());
+
+                            return null;
+                        }
+
+                        return $candidate instanceof ThemeRegistryFleetSync ? $candidate : null;
+                    }
+                )),
 
             // S46: the `user_identities` join table (migration 092) repository.
             // Autowired — it needs only a Workerman MySQL Connection, resolved

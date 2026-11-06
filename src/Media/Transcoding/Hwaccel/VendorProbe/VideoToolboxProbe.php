@@ -25,10 +25,15 @@ use Psr\Log\LoggerInterface;
  */
 class VideoToolboxProbe implements VendorProbeInterface
 {
+    use CodecEncoderMapping;
+
     private const VENDOR_NAME = 'videotoolbox';
 
     /** Every VideoToolbox encoder ffmpeg lists is named `<codec>` + this suffix. */
     private const ENCODER_SUFFIX = '_videotoolbox';
+
+    /** The codec whose encoder names the capability's default line. */
+    private const PRIMARY_CODEC = 'h264';
 
     public function getVendorName(): string
     {
@@ -67,12 +72,13 @@ class VideoToolboxProbe implements VendorProbeInterface
         // hijack every rung). Key the capability by codec; see the
         // encoderForCodec() docblock on HwaccelCapability for the footgun law.
         $encoders_by_codec = $this->mapEncodersByCodec($encoders);
+        $primary_encoder = $this->primaryCodecEncoder($encoders_by_codec, $encoders);
         $supported_codecs = $this->detectSupportedCodecs($encoders);
 
         return new HwaccelCapability(
             vendor: self::VENDOR_NAME,
-            encoder: $encoders_by_codec['h264'] ?? $encoders[0],
-            decoder: $encoders[0],
+            encoder: $primary_encoder,
+            decoder: $primary_encoder,
             supports_hdr_tone_mapping: true,
             supported_codecs: $supported_codecs,
             supported_profiles: ['baseline', 'main', 'high'],
@@ -134,33 +140,6 @@ class VideoToolboxProbe implements VendorProbeInterface
         }
 
         return array_unique($encoders);
-    }
-
-    /**
-     * Parses the probed `<codec>_videotoolbox` names into a codec-keyed encoder
-     * map so rung-time selection never depends on the alphabetical probe order.
-     *
-     * @param array<int, string> $encoders
-     * @return array<string, string>
-     */
-    private function mapEncodersByCodec(array $encoders): array
-    {
-        $by_codec = [];
-
-        foreach ($encoders as $encoder) {
-            if (!str_ends_with($encoder, self::ENCODER_SUFFIX)) {
-                continue;
-            }
-
-            $codec = substr($encoder, 0, -strlen(self::ENCODER_SUFFIX));
-            if ($codec === '') {
-                continue;
-            }
-
-            $by_codec[$codec] = $encoder;
-        }
-
-        return $by_codec;
     }
 
     /**

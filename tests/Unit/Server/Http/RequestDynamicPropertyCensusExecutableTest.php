@@ -1104,7 +1104,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // announcements outside the master, so a client loading a rung directly
     // played silent); 2077 measured from the phpunit red at local tip
     // 11e22571, not predicted.
-    private const EXPECTED_PHP_FILES = 2077;
+    // +1 2077→2078: the probe-hygiene commit adds src/Media/Transcoding/
+    // Hwaccel/VendorProbe/CodecEncoderMapping.php (the five vendor probes'
+    // byte-identical mapEncodersByCodec() extracted to one trait, plus the
+    // codec-correct primary-codec selector that the display-only `decoder:`
+    // field now shares with `encoder:`); 2078 measured from the phpunit red,
+    // not predicted.
+    private const EXPECTED_PHP_FILES = 2078;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

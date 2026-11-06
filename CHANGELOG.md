@@ -468,6 +468,24 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The `hwaccel:probe` table stops introducing a vendor's AV1 name for its
+  H.264 capability.** Every codec-suffixed vendor probe (VAAPI, QSV, AMF,
+  V4L2, VideoToolbox) took the capability's `decoder:` field from
+  `$encoders[0]` — the alphabetical head of `ffmpeg -encoders` — so wherever
+  the AV1 encoder existed the DISPLAY line read `av1_*` beside the probe's
+  actual H.264 `encoder:`. It is display-only (sole consumer: the
+  `hwaccel:probe` command's table), but the whole point of the 73a98001
+  probe-chain cure was to stop treating alphabetical order as semantics;
+  `decoder:` now takes the same primary-codec expression `encoder:` uses,
+  falling back to the honest first entry only when the probe never saw the
+  primary codec. The same commit extracts the five byte-identical
+  `mapEncodersByCodec()` bodies into one `CodecEncoderMapping` trait —
+  behavior-preserving, the existing selection suite held untouched. Review
+  hygiene (a)/(b) of the playback-lag program, 2026-11-06; pinned by the
+  codec-correct-decoder case in `HwaccelVendorProbeEncoderSelectionTest`
+  (red-first at the parent: `av1_vaapi` ≠ `h264_vaapi`), S431 census rotated
+  2077→2078 from its measured red in the same commit.
+
 - **A directly-loaded video quality playlist now carries its audio.** Titles
   whose source has MULTIPLE audio tracks encode every video rung `-an`
   (P3B-S3: sound lives only in the `media_a{N}.m3u8` renditions), and until now

@@ -215,4 +215,66 @@ LISTING;
         $this->assertSame('hevc_v4l2m2m', $capability->encoderForCodec('hevc'));
         $this->assertSame('vp8_v4l2m2m', $capability->encoderForCodec('vp8'));
     }
+
+    /**
+     * Review hygiene (b): the capability's `decoder:` field is display-only
+     * (the sole consumer is the `hwaccel:probe` command's table), but it took
+     * `$encoders[0]` — the alphabetically first encoder — so every mapped
+     * vendor probe DISPLAYED its AV1 name while encoding H.264. It now takes
+     * the probe's primary-codec entry through the same expression as
+     * `encoder:`, and this case pins that it is NOT the av1-first name on any
+     * of the five codec-mapped probes.
+     */
+    public function test_the_display_decoder_is_codec_correct_not_alphabetical_first(): void
+    {
+        $ffmpeg = $this->fakeFfmpeg();
+
+        $vaapi = (new class () extends VaapiProbe {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        })->probe($ffmpeg);
+        $qsv = (new class () extends QsvProbe {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        })->probe($ffmpeg);
+        $amf = (new class () extends AmfProbe {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        })->probe($ffmpeg);
+        $v4l2 = (new class () extends V4L2Probe {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        })->probe($ffmpeg);
+        $videotoolbox = (new class () extends VideoToolboxProbe {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        })->probe($ffmpeg);
+
+        $this->assertInstanceOf(HwaccelCapability::class, $vaapi);
+        $this->assertInstanceOf(HwaccelCapability::class, $qsv);
+        $this->assertInstanceOf(HwaccelCapability::class, $amf);
+        $this->assertInstanceOf(HwaccelCapability::class, $v4l2);
+        $this->assertInstanceOf(HwaccelCapability::class, $videotoolbox);
+
+        $this->assertSame('h264_vaapi', $vaapi->decoder);
+        $this->assertSame('h264_qsv', $qsv->decoder);
+        $this->assertSame('h264_amf', $amf->decoder);
+        $this->assertSame('h264_v4l2m2m', $v4l2->decoder);
+        $this->assertSame('h264_videotoolbox', $videotoolbox->decoder);
+
+        // The bug witness, per vendor: the alphabetical head of each block.
+        $this->assertNotSame('av1_vaapi', $vaapi->decoder);
+        $this->assertNotSame('av1_qsv', $qsv->decoder);
+        $this->assertNotSame('av1_amf', $amf->decoder);
+    }
 }

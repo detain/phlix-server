@@ -468,6 +468,45 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Core update check self-heals when the Fastly-hosted marker leg times
+  out — it now falls back to `api.github.com` (mirrors hub `ad97e0cd`).**
+  The owner symptom "Update check is not working — read
+  185.199.111.133:443 timeout after 10 seconds" is a dead Fastly anycast
+  POP, not a dead marker: `raw.githubusercontent.com` answers from
+  `185.199.108-111.x`, and Workerman's `AsyncTcpConnection`/
+  `ConnectionPool` dials ONLY the first `getaddrinfo` answer, so one dead
+  POP poisons every check on the operator's host regardless of the other
+  three addresses (curl survives there because it tries them all). The
+  marker leg is unrecoverable from such a host by retry alone. So a FAILED
+  fetch of a raw-github marker now re-issues ONCE against
+  `https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}`
+  with `Accept: application/vnd.github.raw` — that host lives on GitHub's
+  own `140.82.x` infrastructure, NOT Fastly — and the raw-accept response
+  is the bare file bytes, so `MAX_BODY_BYTES` and the downstream
+  `MARKER_PATTERN` are unaffected. One fallback leg, no ladder, running
+  through the SAME single-shot `$complete` latch, so a caller still gets
+  exactly one completion; a fallback failure combines both messages
+  (`<primary> (fallback: <secondary>)`); a successful primary leg still
+  costs exactly one request; non-github URLs — an operator mirror via
+  `PHLIX_UPDATES_MARKER_URL` or the `updates.marker_url` `server_settings`
+  override — deliberately get NO second request. The change lives inside
+  `AsyncVersionMarkerFetcher`, so the `VersionMarkerFetcherInterface` and
+  the config surface are unchanged; error provenance is unchanged too
+  (`vendor/workerman/http-client/src/ConnectionPool.php`
+  `read <addr> timeout after <n> seconds`, surfaced as
+  `CoreUpdateStatus.lastError` by the admin updates controller).
+- Tests: `AsyncVersionMarkerFetcherTest` grows 16→24 — a raw-github error
+  falls back and succeeds; both legs failing combine their messages; a
+  non-github error does not; a github success does not; the byte cap
+  re-applies to the fallback body; the ref/path are carried verbatim for
+  master / a version tag / a nested path. The `CapturingHttpClient` double
+  now records every leg, with its scalar `$url`/`$options` still mirroring
+  the last request so the single-leg tests read unchanged. Mutation probes
+  M1 (strip the fallback: exactly the six fallback-dependent tests red),
+  M2 (widen the trigger to any URL: the four non-github completion pins
+  red) and M3 (drop the Accept header: exactly the fall-back-and-succeed
+  test red) each redden their covering tests.
+
 - **Dev-channel plugin installs work again: the legitimate GitHub
   archive→codeload hop is now followed as a controlled re-request.** The owner
   symptom "installing theme plugins from the dev channel fails with HTTP

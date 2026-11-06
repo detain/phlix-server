@@ -86,22 +86,19 @@ use Workerman\Connection\TcpConnection;
  * ESTABLISHED, with no watchdog armed (it sat on the `0` branch only), no
  * `onClose`, no reconnect — the stall class moved, it did not die (H3-2).
  *
- * The shipped "primary cure" (the regime itself): the relay-tunnel worker
- * installs the curated mask WITHOUT the SSL/TLS bits
- * (`SwooleRuntime::relayTunnelHookMask()`), INTENDED to make `enable_crypto`
- * native in this worker — the semantics the Select proof exercised.
- * MEASURED INERT on the estate's production Swoole build (6.2.1-dev): the
- * identical dial strands at 1533/1 under the narrowed mask, under a mask
- * whose TLS bits were NEVER enabled anywhere (master-side 0x429e), and after
- * `Runtime::setHookFlags()` replaces the flags — the function swap does not
- * revert once any hook is live in the process. The ONLY client-side regime
- * proven to complete in-host is a ZERO-HOOK worker (no `enableCoroutine`
- * call ever) on the Select loop — F-1's original proof regime. The mask
- * narrowing stays wired as the declarative statement of that intent (and a
- * forward-compat pin if a future build honors per-bit swaps); the functional
- * fix is an architecture decision the lane report records as BLOCKED
- * (hookless-worker bootstrap, separate hookless tunnel process, or a
- * coroutine-native TLS client).
+ * The cure (F-1c, host-proven regime): this worker's child runs the SELECT
+ * event loop and is NEVER hooked — no `enableCoroutine` call ever lands in
+ * its process (the master stopped pre-enabling; the re-assert closure
+ * role-gates Select children out). On this build the per-bit alternatives
+ * are dead ends: the SSL|TLS mask exclusion is INERT (the openssl swap is
+ * sticky once any hook is live), and Select WITH inherited hooks crash-loops
+ * ('API must be called in the coroutine'). Select + never-hooked is the one
+ * regime measured to put the full handshake on the wire on the production
+ * host (hub decrypted the HELLO), and it is native PHP openssl — the exact
+ * semantics this pass-walk and the original F-1 Select proof were written
+ * for. `SwooleRuntime::relayTunnelHookMask()` survives belt-only
+ * (unit-tested, unwired) for a future build that honors bit-level swaps;
+ * the layers below stay armed as the net regardless of regime.
  *
  * Belt layers, each pinning a different failure shape, regime-independent:
  * 1. NO completion on the driver return alone — {@see self::confirmCompletion()}

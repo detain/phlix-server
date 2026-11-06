@@ -45,10 +45,18 @@
  *      hook reddens a number instead of shipping silently;
  *   5. the survival token is code-resident here and absent from the
  *      production bootstrap;
- *   6. (F-1b) the relay-tunnel worker is the ONE worker that narrows the
- *      delivered mask afterwards — dropping the SWOOLE_HOOK_SSL|TLS bits the
- *      false-`true` TLS regime needs (see TlsRelayConnection class header) —
- *      pinned at exactly one site so no other worker's blast radius grows.
+ *   6. (F-1c, rotating the F-1b narrowing rule) the relay-tunnel worker is
+ *      the ONE role born unhooked: its registration binds
+ *      `$worker->eventLoop = Select::class` before `onWorkerStart`, the
+ *      re-assert closure role-gates itself OFF whenever the loop is Select
+ *      (the bare call census of rule 4 stays intact — the gate is in the
+ *      shared body, never by deleting wiring), and the MASTER never calls
+ *      `Runtime::enableCoroutine` — the pre-fork enable made the swap
+ *      inheritable and thereby poisoned the only regime measured to complete
+ *      TLS on the production host (mask matrix: per-bit exclusion INERT,
+ *      Select+inherited-hooks crash-loop; Select+never-hooked COMPLETES).
+ *      The bootstrap-wide absence of any `relayTunnelHookMask` wiring is
+ *      pinned too: the helper stays belt-only (unit-tested), unwired.
  *
  * @package Phlix\Tests\Unit\Server\Runtime
  */
@@ -204,41 +212,77 @@ final class HookAllowlistEnforcementGuardTest extends TestCase
         self::assertSame(
             7,
             substr_count($start, '$applyCuratedCoroutineHooks();'),
-            'S433: the curated-mask re-assert must run in exactly seven onWorkerStart bodies '
-            . '(http, ws, hub-heartbeat, background-timers, relay-tunnel, managed, '
+            'S433: the curated-mask re-assert must be CALLED from exactly seven onWorkerStart '
+            . 'bodies (http, ws, hub-heartbeat, background-timers, relay-tunnel, managed, '
             . 'natpmp-maintenance) — an eighth worker type added without it, or a delivery '
             . 'point removed, is the census this pins. Re-pinned 6→7 by the NAT-PMP '
             . 'full-RFC-citizenship lane (2026-10-01), which added the seventh body WITH '
-            . 'the re-assert, measured from the phpunit red.'
+            . 'the re-assert, measured from the phpunit red. F-1c note: the call site is '
+            . 'the census unit; the relay-tunnel call executes the shared body only for '
+            . 'hooked children — the body role-gates Select workers out (rule 6).'
         );
     }
 
     /**
-     * F-1b rule 6: the relay-tunnel worker narrows its OWN delivered mask to
-     * exclude the TLS-stream bits (the curated 0x42fe regime is exactly where
-     * enable_crypto can return TRUE with the final flight stranded — host
-     * forensics in .reviews/2026-11-05/HOST-3.md). Pinned on the tokenized
-     * (comment-stripped) bootstrap: re-assert, THEN narrow, then enforce —
-     * and at EXACTLY one site estate-wide, so no other worker's blast radius
-     * grows.
+     * F-1c (rotating the F-1b narrowing site, measured-red first): the cure
+     * regime proven on the production host is Select-loop + NEVER-HOOKED
+     * (per-bit mask exclusion is inert — the openssl function swap is sticky
+     * once any hook is live; and Select with inherited hooks crash-loops
+     * 'API must be called in the coroutine'). So: the relay-tunnel
+     * registration binds Select BEFORE onWorkerStart; the shared re-assert
+     * closure role-gates itself off for Select children (rule 4's bare-call
+     * census survives — gating is in the body, not by deleting wiring); the
+     * master never enables coroutine hooks pre-fork (children install
+     * physically themselves: the Swoole adapter constructor plus each
+     * non-relay worker's enforceAndVerify); and the F-1b bootstrap narrowing
+     * is gone (helper belt-only). Every clause reddens if weakened: strip
+     * the gate → the closure-regex asserts; re-add master enableCoroutine →
+     * the notContains assert; delete the Select binding → the registration
+     * regex; re-wire the narrowing → the count asserts.
      */
-    public function test_relay_tunnel_worker_narrows_tls_hook_bits_at_exactly_one_site(): void
+    public function test_relay_tunnel_worker_is_born_unhooked_on_select(): void
     {
         $start = self::code(self::START_PHP);
+        $body = self::reassertClosureBody($start);
 
         self::assertMatchesRegularExpression(
-            '/\$relayTunnelWorker->name = \'phlix-relay-tunnel\'.*?'
-                . '\$applyCuratedCoroutineHooks\(\);.*?'
-                . 'SwooleRuntime::relayTunnelHookMask\(\$config\).*?'
-                . 'HookDelivery::enforce\(\$relayMask\);/s',
+            '/\$relayTunnelWorker->eventLoop = Select::class;.*?\$relayTunnelWorker->onWorkerStart/s',
             $start,
-            'F-1b: the relay-tunnel worker must re-assert the curated mask, then enforce the TLS-narrowed one'
+            'F-1c: the relay-tunnel registration must bind the Select event loop before onWorkerStart'
+        );
+
+        self::assertMatchesRegularExpression(
+            '/if \(Worker::\$eventLoopClass === Select::class\) \{ return; \}/',
+            $body,
+            'F-1c: the re-assert closure must role-gate Select children out of hook delivery entirely'
+        );
+        $gate = strpos($body, 'Worker::$eventLoopClass === Select::class');
+        $enforce = strpos($body, 'HookDelivery::enforceAndVerify');
+        self::assertNotFalse($gate);
+        self::assertNotFalse($enforce);
+        self::assertLessThan($enforce, $gate, 'F-1c: the role gate must precede the delivery call.');
+
+        self::assertStringContainsString(
+            'Worker::$eventLoopClass = \Workerman\Events\Swoole::class;',
+            $start,
+            'F-1c: every OTHER worker role keeps the Swoole loop — the master assigns it'
+            . ' globally and ONLY the relay-tunnel registration deviates via its own'
+            . ' $worker->eventLoop override. Swapping the global assignment to Select'
+            . ' would silently unhook the http/ws/heartbeat/timer/managed/natpmp workers.'
+        );
+
+        self::assertStringNotContainsString(
+            'Runtime::enableCoroutine',
+            $start,
+            'F-1c: the master must NEVER pre-enable coroutine hooks — a hooked master'
+            . ' poisons the relay child (sticky swap; Select+hooks crash-loops). Children'
+            . ' install physically via HookDelivery (S433).'
         );
 
         self::assertSame(
-            1,
+            0,
             substr_count($start, 'relayTunnelHookMask'),
-            'F-1b: exactly one narrowing site estate-wide — every other worker keeps the full curated mask'
+            'F-1c: the F-1b narrowing is unwired from the bootstrap — the helper is belt-only'
         );
     }
 

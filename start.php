@@ -39,6 +39,7 @@ use Phlix\Server\Runtime\PidFile;
 use Phlix\Server\Workerman\HttpHandler;
 use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Stats\Metrics\MetricsFlushService;
+use Workerman\Events\Select;
 use Workerman\Worker;
 
 require __DIR__ . '/vendor/autoload.php';
@@ -193,12 +194,24 @@ if ($pidFilePath === null) {
 // worker callback runs inside a real Swoole coroutine where getContext() is valid.
 if (extension_loaded('swoole')) {
     Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
-    if (\Phlix\Server\Runtime\SwooleRuntime::coroutineEnabled($config)) {
-        // Enable the CURATED coroutine hook mask in the master so children inherit
-        // it. resolveHookFlags() handles Swoole 5/6 constant differences (e.g.
-        // SWOOLE_HOOK_SOCKET was removed in Swoole 6).
-        \Swoole\Runtime::enableCoroutine(\Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config));
-    }
+    // F-1c: the master deliberately does NOT enable coroutine hooks pre-fork.
+    // A pre-fork enable made the openssl function swap INHERITABLE, and the
+    // swap is sticky: no per-bit exclusion afterwards can un-hook a child
+    // (production-host mask matrix: narrowed mask, never-TLS-enabled master
+    // mask, and a verified setHookFlags replacement ALL still stranded the
+    // async TLS handshake at bytes_sent:1533; a Select child of a hooked
+    // master crash-looped 'API must be called in the coroutine'). The one
+    // regime that completes the relay TLS handshake is a child that was
+    // NEVER hooked on the Select loop — which requires an unhooked master.
+    // Non-relay children install hooks physically themselves: the Swoole
+    // event-adapter constructor re-asserts, and every hooked worker's
+    // onWorkerStart delivers+proves the curated mask via HookDelivery
+    // (S433 — the only physically-effective API path). The static assignment
+    // above stays pre-fork: it keeps run()'s coroutine-dispatch and
+    // Coroutine\Context's driver resolution consistent per child (the
+    // exchangeArray-on-null crash loop the original comment documented);
+    // the relay child's $worker->eventLoop override flips that static inside
+    // its own process before run() dispatches, selecting the Fiber branch.
 } else {
     trigger_error(
         'Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.',
@@ -224,8 +237,14 @@ if (extension_loaded('swoole')) {
 // getOptions() read. A worker whose configured mask did not land throws at
 // startup: the loud crash-loop IS the feature — running without the allowlist
 // is the site-down state this whole mitigation exists to prevent.
+// F-1c: the body's first act is the role gate — Select-loop children (the
+// relay-tunnel worker) are NEVER hooked; delivery is gated by role, not by
+// deleting any call site (the seven-site census in the guard stands).
 // {@see \Phlix\Server\Runtime\HookDelivery} {@see SwooleRuntime}
 $applyCuratedCoroutineHooks = static function () use ($config): void {
+    if (Worker::$eventLoopClass === Select::class) {
+        return;
+    }
     if (!extension_loaded('swoole')) {
         return;
     }
@@ -1047,33 +1066,27 @@ try {
     $relayTunnelWorker = new Worker();
     $relayTunnelWorker->count = 1;
     $relayTunnelWorker->name = 'phlix-relay-tunnel';
+    // F-1c (the cure regime, host-proven on this estate's production build):
+    // this worker runs the Select event loop and is NEVER hooked. Workerman
+    // reads $worker->eventLoop inside the child before run() dispatches, so
+    // this per-worker override flips $eventLoopClass to Select in this
+    // process only — the coroutine dispatcher then takes the plain-Fiber
+    // branch and no Swoole hook is ever installed here (the master no longer
+    // pre-enables either; see the F-1c note at the top of this file). The
+    // mask matrix that forced this: per-bit SSL|TLS exclusion was measured
+    // INERT (the openssl swap is sticky once live), Select with inherited
+    // hooks crash-looped, and only Select + never-hooked drove the full TLS
+    // handshake to completion on the wire — the exact regime
+    // {@see \Phlix\Hub\TlsRelayConnection}'s pass-walk and F-1's original
+    // Select proof were written for. The relay loop was never
+    // coroutine-dependent: timers, the local TCP proxies and the state-store
+    // file I/O are all Select-native. The shared re-assert call below
+    // role-gates itself off for this worker (rule 6 in
+    // HookAllowlistEnforcementGuardTest); the corroboration gate, entry
+    // watchdog and HELLO_ACK deadline belts stay armed as the net.
+    $relayTunnelWorker->eventLoop = Select::class;
     $relayTunnelWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
         $applyCuratedCoroutineHooks();
-        // F-1b: DECLARATIVE per-bit exclusion for this worker's async TLS
-        // handshake. The SWOOLE_HOOK_SSL|TLS bits inside the curated mask
-        // make stream_socket_enable_crypto a coroutine call that returns
-        // TRUE with the handshake's final flight stranded in the coroutine
-        // write buffer, never on the wire (host forensics: bytes_sent:1533,
-        // data_segs_out:1, zero network syscalls — the false-success ESTAB
-        // of the F-1b incident; {@see \Phlix\Hub\TlsRelayConnection} class
-        // header). MEASURED TRUTH: dropping the bits HERE is inert on the
-        // production Swoole build — once any hook is live in the process the
-        // openssl swap does not revert; only a never-hooked worker on the
-        // Select loop completes (fix register 2026-11-05, architecture
-        // decision open). The block stays as the per-bit intent + forward
-        // compat; the load-bearing bounds are the entry watchdog and the
-        // HELLO_ACK deadline in the tunnel classes, both proven bounding
-        // live. The delivery probe is a curl-class probe and cannot sense
-        // these bits.
-        if (extension_loaded('swoole')) {
-            $relayMask = \Phlix\Server\Runtime\SwooleRuntime::relayTunnelHookMask($config);
-            \Phlix\Server\Runtime\HookDelivery::enforce($relayMask);
-            Worker::log(sprintf(
-                '[phlix] worker #%d relay-tunnel TLS hook exclusion applied: mask=0x%04x (declarative; belts bound)',
-                (int) (getmypid() ?: -1),
-                $relayMask
-            ));
-        }
         // Effective-config overlay, mirroring the HTTP worker.
         // {@see \Phlix\Config\EffectiveConfig}
         $config = EffectiveConfig::bootstrapAndOverlay($config);

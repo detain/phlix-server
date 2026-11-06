@@ -377,6 +377,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The relay tunnel now runs on the event-loop regime that actually completes
+  its TLS handshake in production (F-1c).** The F-1b correction above left the
+  tunnel stalled because every hook-side exclusion still lived inside a
+  process whose master had ALREADY swapped the openssl handlers before forking
+  — the swap is sticky on this Swoole build. The master now never pre-enables
+  coroutine hooks; each hooked worker still installs and behaviourally proves
+  the curated allowlist itself (S433 unchanged for http/ws/heartbeat/timers/
+  managed/natpmp), and the relay-tunnel worker is born unhooked and runs the
+  Select event loop (`$worker->eventLoop = Select::class` at its registration)
+  — the one regime measured on the production host to put the full ClientHello
+  + Certificate/Finished flight on the wire and have the hub decrypt the HELLO.
+  The re-assert closure role-gates Select children out of hook delivery (the
+  seven-call census stands; the gate is in the shared body, no wiring
+  removed). `relayTunnelHookMask()` remains belt-only (tested, unwired) for a
+  future build honoring bit-level swaps; the corroboration gate, entry
+  watchdog and 20 s HELLO_ACK deadline all stay armed as the net. Guard rule 6
+  rotated from the F-1b narrowing pin to the F-1c role-gate law (Select
+  binding, closure gate before the delivery call, master-enable absence,
+  global Swoole-loop preservation, unwired helper — each clause
+  mutation-proven to redden exactly once). [F-1c]
+
 - **Forward correction to the entry below (F-1b design (ii) measured inert —
   belts now carry the bound, full cure is an open architecture decision).**
   Host forensics after deploying the above re-ran the identical dial on the

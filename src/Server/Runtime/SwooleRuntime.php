@@ -164,36 +164,26 @@ final class SwooleRuntime
     }
 
     /**
-     * The hook mask the relay-tunnel worker installs: the runtime mask with
-     * the TLS-stream bits removed.
+     * The hook mask the relay-tunnel worker WOULD install: the runtime mask
+     * with the TLS-stream bits removed.
      *
-     * INTENT: with the bits removed, `stream_socket_enable_crypto()` should
-     * be PHP's NATIVE openssl call again — the semantics the host Select-loop
-     * proof exercised (the relay loop was never coroutine-dependent;
-     * `Events\Swoole` without these bits should behave like Select for these
-     * streams: `vendor/workerman`'s own `TcpConnection::baseRead()` documents
-     * the read-ahead hazard as a hook property, "PHP's native openssl stream
-     * has neither behaviour").
-     *
-     * MEASURED REALITY (F-1b, production host, swoole 6.2.1-dev): the
-     * narrowing is INERT for the stall. The same dial strands at
-     * `bytes_sent:1533`/`data_segs_out:1` (a) under this narrowed mask,
-     * (b) under a MASTER mask whose TLS bits were never enabled anywhere,
-     * and (c) after `Swoole\Runtime::setHookFlags()` verifiably replaces the
-     * flags — once ANY hook is live in the process, the openssl function
-     * swap does not revert and async `enable_crypto` keeps stranding its
-     * final flight in a coroutine buffer. The only client-side regime proven
-     * to complete is a worker in a process that NEVER called
-     * `enableCoroutine`, on the Select loop — the F-1 proof regime. This
-     * mask stays wired as the declarative per-bit intent (forward-compat if
-     * a future build honors bit-level swaps); the functional fix is an
-     * open architecture decision (host forensics campaign F-1b, full mode
-     * matrix recorded in the fix register for 2026-11-05). Until it lands, the
-     * load-bearing defenses are {@see \Phlix\Hub\TlsRelayConnection}'s entry
-     * watchdog and `RelayConsumer::HELLO_ACK_TIMEOUT_SECONDS`, both proven
-     * bounding the stall live (visible teardown + bounded backoff). Other
-     * workers keep the full curated mask; the delivery probe is a curl-class
-     * probe and cannot sense these bits.
+     * STATUS (F-1c): BELT-ONLY — unit-tested, NOT wired into the bootstrap.
+     * The production-host mode matrix measured the exclusion INERT: the same
+     * dial strands at `bytes_sent:1533`/`data_segs_out:1` (a) under this
+     * narrowed mask, (b) under a MASTER mask whose TLS bits were never
+     * enabled anywhere, and (c) after `Swoole\Runtime::setHookFlags()`
+     * verifiably replaces the flags — once ANY hook is live in the process,
+     * the openssl function swap does not revert and async `enable_crypto`
+     * keeps stranding its final flight in a coroutine buffer. The shipped
+     * cure is the worker regime itself: the relay-tunnel child runs the
+     * Select loop, never hooked (see {@see \Phlix\Hub\TlsRelayConnection}'s
+     * class header and start.php's F-1c notes). This helper stays as the
+     * declarative per-bit intent and a forward-compat pin if a future Swoole
+     * build honors bit-level swaps; until then the load-bearing defenses are
+     * {@see \Phlix\Hub\TlsRelayConnection}'s entry watchdog and
+     * `RelayConsumer::HELLO_ACK_TIMEOUT_SECONDS`, both proven bounding the
+     * stall live (visible teardown + bounded backoff). The delivery probe is
+     * a curl-class probe and cannot sense these bits.
      *
      * @param mixed $config The full server config array.
      *

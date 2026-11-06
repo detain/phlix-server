@@ -169,15 +169,24 @@ The unit applies several sandbox directives:
 - `RuntimeDirectory=phlix` — systemd creates and chowns `/run/phlix` on
   each start (for the PID file at `config/server.php` `pid_file`)
 
-PHP Xdebug (host installs): `scripts/install.sh` drops a
-`/etc/php/*/fpm/conf.d/zz-xdebug.ini` on every host deploy — mode is off by
-default and the request trigger is now random per install (never the
-publicly-known `devdebug`; minors M-SERVER-73). On production hosts remove
-the file (`sudo rm /etc/php/*/fpm/conf.d/zz-xdebug.ini`) or keep `XDEBUG_MODE`
-off and never export it; when you do debug, rotate the trigger
-(`XDEBUG_TRIGGER=$(openssl rand -hex 12)`, re-run) when finished — the trigger
-is shared host-wide, and a known value plus a reachable PHP turns any request
-into a trace into the shared `/tmp/xdebug`.
+PHP Xdebug (host installs): **the production path no longer enables it** (owner
+ruling 2026-11-06, on the HOST-5 fault evidence). Earlier releases installed
+`php-xdebug` and wrote a `zz-xdebug.ini` into the PHP conf.d scan dir (cli on
+these hosts — there is no fpm anywhere) with mode off by default and a random
+per-install trigger (never the publicly-known `devdebug`; minors M-SERVER-73 /
+W-min104 era). That whole shape is retired: a dormant-but-LOADED extension was
+not acceptable because every observed production fault in the swoole era —
+scratch probes AND pre-rebuild worker exits, both build eras — was a general
+protection fault inside `xdebug.so` at coroutine teardown (xdebug's op-line/
+stack instrumentation racing swoole's context free). `scripts/install.sh` now
+drops `php-xdebug` from the apt list on fresh installs and, on install re-runs
+and `--update`, removes any xdebug enablement file it finds
+(`/etc/php/*/{cli,fpm}/conf.d/*xdebug*.ini` + `phpdismod xdebug`), printing a
+one-time notice of what it removed. It never purges the package: keep it
+installed on a dev box and deliberately `phpenmod xdebug` when debugging —
+then `phpdismod xdebug` (or let the next `--update` do it) before that box
+serves traffic again. HOST-6 verified the live equivalent of this change on the
+production host: 0 xdebug segments across all 38 processes, 0 new faults.
 
 ## Troubleshooting
 

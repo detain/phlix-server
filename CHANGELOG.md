@@ -96,6 +96,36 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The production install path no longer installs or enables Xdebug, and
+  `--update` now disarms existing enablements.** Owner ruling on the HOST-5
+  fault evidence: every observed production fault in the swoole era — the 6/6
+  post-rebuild scratch-probe traps and the 3 pre-rebuild exit-139 worker
+  deaths alike — was a general protection fault INSIDE `xdebug.so` at
+  coroutine teardown (kernel-attributed, zero incidents in `swoole.so`), and
+  the extension sat in EVERY production process at `mode=develop` (HOST-5 Q8;
+  the estate's own CI idiom strips xdebug for the same toolchain-interference
+  reason). HOST-6 verified the manually-applied equivalent live: 0 xdebug
+  segments across all 38 server+hub processes, 0 new faults. Mechanics:
+  `scripts/install.sh` drops `php-xdebug` from the fresh-install apt list (the
+  package self-enables via `conf.d/20-xdebug.ini` on install, so shipping it
+  WAS enabling it) and the whole `zz-xdebug.ini` writer + `XDEBUG_*` trigger
+  machinery is retired — the shipped-disabled posture was the right shape for
+  a debug-only risk, but the crash fingerprint is produced by the extension
+  being LOADED at coroutine shutdown, not by an active debug session. New
+  `phlix_disarm_xdebug()` runs on install re-runs and `--update` (section 2c,
+  beside the swoole skip-gate family, same idempotent-repair idiom): removes
+  `/etc/php/*/{cli,fpm}/conf.d/*xdebug*.ini` enablements plus `phpdismod
+  xdebug`, prints a one-time notice naming what it removed and why, and is
+  fail-soft throughout — missing tools or permissions warn, never abort an
+  update. The package itself is deliberately never purged (dev boxes keep it
+  dormant; `phpenmod xdebug` remains the operator's own deliberate act).
+  README + `systemd/README.md` carry the truth; the docker images are
+  unaffected (they never installed the extension — `docker/php.ini`'s opt-in
+  stanza stays as the documented dev seam); CI coverage tooling is untouched
+  (`phpunit.yml` runs PCOV; the syncplay-e2e job's setup-php coverage driver
+  is CI-side). Historical entries describing the shipped-disabled era remain
+  verbatim per this file's forward-history law.
+
 - **The from-source Swoole recipe now builds release v6.2.4 (tag commit
   `c7e514509451beafd4d70ce5b78943d51e76381c`) instead of v6.2.1.** The owner
   rebuilt the production extension on hub.phlix at v6.2.4 with the canonical

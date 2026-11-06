@@ -548,6 +548,53 @@ phlix_install_swoole_uv() {
 	[ "$need_uv" = "yes" ] && phlix_build_uv
 }
 
+# Xdebug — production disarm (2026-11-06, owner ruling on HOST-5 Q6/Q8;
+# HOST-6 verified the same one-command change live: 0 xdebug segments across
+# all 38 server+hub processes, 0 new faults). Idempotent, runs on BOTH the
+# fresh-install path and `--update`, so hosts provisioned by a release that
+# enabled Xdebug get repaired and hosts that never had it are untouched.
+#
+# WHY: every observed production fault in the swoole era — 6/6 post-rebuild
+# scratch-probe traps and the 3 pre-rebuild exit-139s alike — was a general
+# protection fault INSIDE xdebug.so at coroutine shutdown (a coroutine-SHUTDOWN
+# interaction: Socket::peek → ReactorEpoll::del → ssl_shutdown under op-line
+# instrumentation), and the vendored xdebug was `mode=develop` in EVERY
+# production process, including the hub's SSL listener workers. xdebug is the
+# host's only demonstrated fault generator in this era; develop mode is pure
+# overhead on production SSL workers.
+#
+# LAW: remove the ENABLEMENT files (apt's auto-linked `20-xdebug.ini` and this
+# installer's own legacy `zz-xdebug.ini`), never the PACKAGE — a dev box may
+# keep php-xdebug installed and deliberately re-enable it (`phpenmod xdebug`).
+# FAIL-SOFT by design: a missing phpdismod, an absent conf.d, or a permissions
+# refusal WARNS and continues; an update must never abort over a debug-extension
+# file. The one-time notice prints only when something was actually removed.
+phlix_disarm_xdebug() {
+	local sapi f removed=""
+	for sapi in cli fpm; do
+		for f in /etc/php/*/"$sapi"/conf.d/*xdebug*.ini; do
+			# Unmatched glob and dangling links: -L still sees the symlink itself.
+			[ -e "$f" ] || [ -L "$f" ] || continue
+			if rm -f "$f" 2>/dev/null; then
+				removed="$removed $f"
+			else
+				warn "Could not remove xdebug enablement $f (permissions?) — production must not boot with xdebug; remove it manually: sudo rm '$f'"
+			fi
+		done
+	done
+	if command -v phpdismod >/dev/null 2>&1; then
+		# Debian's own un-enablement, belt-and-braces (also clears SAPIs the
+		# glob above cannot see, e.g. phpdbg). Refusal here is a warning only:
+		# the conf.d sweep has already done the production-critical work.
+		phpdismod xdebug >/dev/null 2>&1 ||
+			warn "phpdismod xdebug returned non-zero (permissions?) — continuing; conf.d sweep above already removed what it could."
+	fi
+	if [ -n "$removed" ]; then
+		info "Xdebug disarmed on this host — removed enablement(s):$removed"
+		info "Reason: every observed production crash (both swoole eras) was a general protection fault inside xdebug.so at coroutine teardown (HOST-5 Q6/Q8; HOST-6 live verification). Production workers must not boot with xdebug. The package stays installed: re-enable deliberately with 'phpenmod xdebug' on a dev box only, and remove it again before that box serves traffic."
+	fi
+}
+
 # Preflight: Workerman needs process-control / posix / socket primitives that
 # some hardened php.ini setups disable. Fail loudly (and early) if any are
 # listed in disable_functions so the operator gets an actionable message
@@ -1423,6 +1470,14 @@ do_update() {
 	log "Ensuring Swoole + php-uv extensions are installed"
 	phlix_install_swoole_uv
 
+	# 2c. Xdebug production disarm (2026-11-06, owner ruling on HOST-5 Q6/Q8):
+	# hosts provisioned by a release that enabled xdebug (apt php-xdebug +
+	# legacy zz-xdebug.ini) get the enablements removed here, so an update can
+	# no longer leave the coroutine-teardown GPF generator loaded in production
+	# workers. Fail-soft + idempotent; the package itself is never purged.
+	log "Ensuring Xdebug is disarmed on the production path"
+	phlix_disarm_xdebug
+
 	# 3. Clear Smarty compile cache so templates pick up changes immediately.
 	if [ -d "$INSTALL_PATH/templates_c" ]; then
 		log "Clearing Smarty compile cache"
@@ -1856,8 +1911,18 @@ apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 # fileinfo, iconv, posix and sockets ship in php8.3-common (pulled by php-cli);
 # dom/libxml/simplexml come with php-xml; hash, json, filter, openssl, pcntl,
 # random, sodium and zlib are built into the php8.3-cli binary on Ubuntu 24.04.
+#
+# php-xdebug REMOVED from this list (2026-11-06, owner ruling on HOST-5 Q6/Q8):
+# the apt package self-enables (conf.d/20-xdebug.ini) on every SAPI it sees, and
+# every observed production fault in the swoole era — 6/6 scratch-probe traps
+# post-rebuild plus the 3 pre-rebuild exit-139s — was a general protection
+# fault INSIDE xdebug.so at coroutine teardown, zero in swoole.so. Fresh
+# installs no longer get it; hosts that have it from an earlier release are
+# disarmed by phlix_disarm_xdebug (enablement files removed; the package itself
+# is deliberately never purged — dev boxes keep it dormant and re-enable at
+# will). Production workers must not boot with xdebug loaded.
 apt-get install -y \
-	php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-ldap php-xdebug \
+	php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-ldap \
 	mysql-server ffmpeg >/dev/null
 if [ "$SKIP_HAPROXY" = "yes" ]; then
 	info "Skipping HAProxy install (--no-proxy)."
@@ -1891,61 +1956,18 @@ phlix_check_disabled_functions
 log "Ensuring Swoole + php-uv extensions are installed"
 phlix_install_swoole_uv
 
-# Xdebug — install and configure
-# Default is OFF; set XDEBUG_MODE env var to enable (e.g., XDEBUG_MODE=develop,trace)
-log "Installing and configuring Xdebug"
-mkdir -p /tmp/xdebug
-XDEBUG_INI="$(phlix_php_confd_dir)/zz-xdebug.ini"
-# The trigger value gates every debug/trace session (xdebug.start_with_request
-# = trigger). It used to ship the publicly-known `devdebug` default, so anyone
-# who knew it — and could reach PHP at all — could start host-wide traces into
-# the shared /tmp/xdebug (disk-filling DoS + request-flow disclosure). Like the
-# docker examples (docker/examples/.env.example), the trigger is now random per
-# install unless the operator exports XDEBUG_TRIGGER.
-if [ -n "${XDEBUG_TRIGGER:-}" ]; then
-	XDEBUG_TRIGGER_RESOLVED="$XDEBUG_TRIGGER"
-else
-	# openssl preferred, /dev/urandom fallback; a failing producer yields an
-	# empty string which the guard below turns into a loud abort (never a
-	# half-written ini, never a disabled gate). `|| true` keeps set -e out of
-	# the way so the guard, not errexit, owns the message.
-	XDEBUG_TRIGGER_RESOLVED="$({ openssl rand -hex 12 2>/dev/null || od -An -tx1 -N12 /dev/urandom 2>/dev/null; } | tr -d ' \n' || true)"
-fi
-# An empty trigger_value DISABLES the gate (every request would start a
-# session) — fail loudly rather than write a file with a hole in it.
-if [ -z "$XDEBUG_TRIGGER_RESOLVED" ]; then
-	die "Could not derive an Xdebug trigger value (neither XDEBUG_TRIGGER, openssl, nor /dev/urandom worked)"
-fi
-cat >"$XDEBUG_INI" <<XDEBUG_EOF
-; Default mode is OFF - use XDEBUG_MODE env var to enable
-; Options: off, develop, trace, debug (can combine with comma: "develop,trace")
-xdebug.mode = \${XDEBUG_MODE:-off}
-xdebug.start_with_request = trigger
-; Random per install (minors M-SERVER-73, W-min104): read it back from this
-; file when enabling the debugger, or set XDEBUG_TRIGGER=<openssl rand -hex 12>
-; and re-run to choose/rotate your own. Never printed to stdout on purpose.
-xdebug.trigger_value = "$XDEBUG_TRIGGER_RESOLVED"
-xdebug.trace_output_dir = /tmp/xdebug
-xdebug.max_nesting_level = 512
-xdebug.collect_assignments = 1
-xdebug.collect_return_value = 1
-XDEBUG_EOF
-info "Xdebug installed: mode=\${XDEBUG_MODE:-off}; trigger value is random per install (root-only in $XDEBUG_INI — deliberately not echoed)"
-info "Xdebug trigger is shared host-wide: to debug, read the value from the ini (or set XDEBUG_TRIGGER=\$(openssl rand -hex 12) and re-run); rotate/remove it when done. On production hosts prefer deleting the file entirely: rm /etc/php/*/fpm/conf.d/zz-xdebug.ini"
-
-# Xdebug toggle helpers — call these to enable/disable xdebug at runtime
-# Usage: source /path/to/install.sh && phlix_xdebug_enable
-phlix_xdebug_enable() {
-	export XDEBUG_MODE="develop,trace"
-	sed -i 's/^xdebug\.mode = .*/xdebug.mode = develop,trace/' "$XDEBUG_INI" 2>/dev/null || true
-	info "Xdebug enabled: mode=develop,trace"
-}
-
-phlix_xdebug_disable() {
-	export XDEBUG_MODE="off"
-	sed -i 's/^xdebug\.mode = .*/xdebug.mode = off/' "$XDEBUG_INI" 2>/dev/null || true
-	info "Xdebug disabled"
-}
+# Xdebug — production disarm (was: install + configure). The apt list no longer
+# carries php-xdebug (fresh installs never get the enablement), and
+# phlix_disarm_xdebug repairs hosts that carry enablements from an earlier
+# release (apt's auto-linked 20-xdebug.ini, this installer's legacy
+# zz-xdebug.ini). Rationale + fail-soft law in the function's header; owner
+# ruling 2026-11-06 on HOST-5 Q6/Q8. The old block shipped mode=off by default
+# with a random per-install trigger (M-SERVER-73 / W-min104 era) — the fault
+# class is the LOAD itself at coroutine teardown (every crash in the HOST-5
+# evidence set, both build eras), so a dormant-by-config gate was not enough:
+# the extension must not load in production workers at all.
+log "Ensuring Xdebug is disarmed on the production path"
+phlix_disarm_xdebug
 
 # ---------------------------------------------------------------------------
 # 2. Service user + directories

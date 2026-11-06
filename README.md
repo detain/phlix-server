@@ -695,11 +695,13 @@ auto-renewing Let's Encrypt certificate.
 > `disable_functions` preflight — see
 > [Swoole & php-uv on Linux](https://detain.github.io/phlix-docs/install/linux#swoole-php-uv-coroutine-runtime).
 
-> It also installs the **Xdebug** package and writes a `zz-xdebug.ini` that ships **disabled**
-> (`xdebug.mode` follows the `XDEBUG_MODE` env, default `off`, with a random per-install debug
-> trigger): nothing ever runs in a debug/trace mode unless you enable it explicitly, and on
-> production hosts the file should be removed outright — recipe and rotation law live in
-> [`systemd/README.md`](systemd/README.md).
+> It no longer installs or enables **Xdebug** anywhere on the production path: the apt list
+> dropped `php-xdebug` (fresh hosts never get it), `--update` and re-runs disarm any enablement
+> left by an earlier release (apt's `20-xdebug.ini` / the legacy `zz-xdebug.ini` are removed; the
+> package is never purged — re-enable with `phpenmod xdebug` on a dev box only). Rationale: every
+> observed production crash in the swoole era was a general protection fault inside `xdebug.so`
+> at coroutine teardown — the extension must not load in production workers. History of the
+> shipped-disabled era and the removal mechanics: [`systemd/README.md`](systemd/README.md).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash

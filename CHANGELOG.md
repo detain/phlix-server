@@ -96,6 +96,28 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The from-source Swoole recipe now builds release v6.2.4 (tag commit
+  `c7e514509451beafd4d70ce5b78943d51e76381c`) instead of v6.2.1.** The owner
+  rebuilt the production extension on hub.phlix at v6.2.4 with the canonical
+  flag set plus temporary debug/trace logging, and HOST-5 verified the rebuild
+  live: hooked-TLS ClientHello write-stall CURED (the 6.2.3 release fixed the
+  coroutine-socket io_uring×TLS read/write bug behind the F-1 stall class),
+  io_uring + uring_socket ACTIVE and healthy on the production kernel, and the
+  update path cannot downgrade the running binary — `phlix_build_swoole`
+  skips whenever the extension is loaded, so this rotation only reaches FRESH
+  installs, bringing them to parity with the ratified production build. Moved
+  together, per the S482 one-commit rule: `scripts/install.sh` clone tag +
+  rev-parse self-verify, `docker/Dockerfile.base` `ARG SWOOLE_REF`, and the
+  guard test's recorded tag/SHA pair (`ThirdPartyClonePinGuardTest` — which
+  measured 2 convictions on the partial rotation before its constants moved).
+  The configure flags are UNCHANGED (Q9 verdict: keep all; `--enable-debug-log`
+  / `--enable-trace-log` stay out of the recipes — diagnostic-only, journald
+  flood). The S200 kernel-floor measurements stay recorded verbatim; a dated
+  note documents that the 6.9 floor was measured on 6.2.1 and is treated as
+  binding on 6.2.4 until re-measured. The tag is lightweight — `git ls-remote
+  refs/tags/v6.2.4` resolves directly to the pinned commit, re-verified at
+  this re-pin; `ARG PHP_UV_REF` untouched.
+
 - **The 2026-11-04 symfony advisory flush is cleared — lock-only re-vendor of
   the five affected `symfony/*` components.** The Coding Standards `Security
   Audit` job (`php scripts/security-audit-check.php`, which blocks any advisory

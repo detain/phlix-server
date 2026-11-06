@@ -430,10 +430,10 @@ phlix_build_swoole() {
 	# install LOUD before anything is compiled — if you hit it, re-verify the
 	# tag upstream, then re-pin here AND docker/Dockerfile.base together (the
 	# guard test holds the recorded SHA too and must move in the same commit).
-	git clone --depth=1 --branch v6.2.1 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+	git clone --depth=1 --branch v6.2.4 https://github.com/swoole/swoole-src.git "$tmp/swoole"
 	swoole_head="$(git -C "$tmp/swoole" rev-parse HEAD)"
-	test "$swoole_head" = 163f173caa7b1e2391d5dfec5969a12d8c76cc02 ||
-		die "swoole-src tag v6.2.1 resolved to $swoole_head, not the pinned commit 163f173caa7b1e2391d5dfec5969a12d8c76cc02 — upstream moved the tag; verify it before compiling."
+	test "$swoole_head" = c7e514509451beafd4d70ce5b78943d51e76381c ||
+		die "swoole-src tag v6.2.4 resolved to $swoole_head, not the pinned commit c7e514509451beafd4d70ce5b78943d51e76381c — upstream moved the tag; verify it before compiling."
 	(
 		cd "$tmp/swoole"
 		phpize
@@ -460,6 +460,15 @@ phlix_build_swoole() {
 		# here. Kernel-gating the host build is a behavior change deliberately
 		# not made in this docs cure (flagged as a code question in the
 		# server__devops review).
+		#
+		# 2026-11-06 (HOST-5, pin moved to v6.2.4 above): the owner's rebuilt
+		# production binary (v6.2.4 / c7e5145, kernel 7.0) carries both uring
+		# flags ACTIVE and healthy — `php --ri swoole` reports io_uring +
+		# uring_socket enabled, and the relay regime is unaffected either way.
+		# v6.2.3 fixed the coroutine-socket io_uring×TLS read/write bug behind
+		# the F-1 stall class, which corroborates KEEPING them. The 6.9 floor
+		# above was measured on 6.2.1 and has NOT been re-measured on 6.2.4 —
+		# treat it as binding on pre-6.9 hosts until a lane measures otherwise.
 		./configure \
 			--enable-swoole \
 			--enable-sockets \

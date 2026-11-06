@@ -169,8 +169,14 @@ ARG SWOOLE_IOURING=0
 #
 # To move: bump the ref, rebuild the base, and re-run
 # `scripts/docker-boot-smoke.sh` for all three images.
+#
+# 2026-11-06 (HOST-5): moved v6.2.1 -> v6.2.4 — the owner's rebuilt production
+# binary, ratified by live verification on hub.phlix (v6.2.4 = c7e51450945,
+# lightweight tag, ls-remote-verified at re-pin). scripts/install.sh and the
+# S482 guard moved in the same commit. Boot-gate re-validation of this base
+# happens on the next phlix-base rebuild (CI cadence stays owner-side).
 # ----------------------------------------------------------------------------
-ARG SWOOLE_REF=v6.2.1
+ARG SWOOLE_REF=v6.2.4
 ARG PHP_UV_REF=670a609efc36c9043be37bae4126f06ed30fde21
 
 # Build and install swoole

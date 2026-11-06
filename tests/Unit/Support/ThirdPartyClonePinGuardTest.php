@@ -85,15 +85,17 @@ final class ThirdPartyClonePinGuardTest extends TestCase
     private const SWOOLE_URL = 'https://github.com/swoole/swoole-src.git';
 
     /** The swoole release tag docker/Dockerfile.base ARG SWOOLE_REF carries (S482). */
-    private const SWOOLE_TAG = 'v6.2.1';
+    private const SWOOLE_TAG = 'v6.2.4';
 
     /**
      * The commit SWOOLE_TAG resolved to when S482 pinned it (re-verified via
      * `git ls-remote` at filing). install.sh self-verifies against it so a
      * force-moved tag fails the bare-metal install loudly; move it here, in
      * install.sh, and in Dockerfile.base's ARG in ONE commit when re-pinning.
+     * Moved 2026-11-06 (v6.2.1/163f173… -> v6.2.4/c7e5145…, HOST-5 ratified
+     * production binary); re-verified via `git ls-remote` at that re-pin.
      */
-    private const SWOOLE_SHA = '163f173caa7b1e2391d5dfec5969a12d8c76cc02';
+    private const SWOOLE_SHA = 'c7e514509451beafd4d70ce5b78943d51e76381c';
 
     /** install.sh: repo-root-relative path swept by the S482 legs. */
     private const INSTALL_SH = __DIR__ . '/../../../scripts/install.sh';

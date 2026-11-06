@@ -96,6 +96,42 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **A silent video now stays silent on paper too: HLS/DASH codec
+  declarations tell the truth about audio.** Under the shipped client
+  contract (phlix-ui 3174b805), a rung's `CODECS` attribute is what
+  announces "this media has an audio track" — hls.js surfaces it and the
+  player synthesizes the single 'Original' entry from it. The mini-master
+  wave made that announcement load-bearing, and the archaeology found the
+  announcement was not always true: `AbrLadder` stamps `mp4a.40.2` into
+  every rung's CODECS unconditionally, while a source with ZERO audio
+  streams encodes through `-map 0:a:0?` — an optional mapping that maps
+  nothing. Silent titles therefore grew a phantom, dead 'Original' track.
+  The fix is one persisted truth plus one renderer rule: job creation now
+  writes the probe's audio-stream count into the ladder JSON
+  (`audio_stream_count`), and when that count is 0 and no shared `aud`
+  group exists, `buildMultiVariantMaster()` strips the audio entry from
+  every `#EXT-X-STREAM-INF CODECS` (master AND each `media_v*_master.m3u8`
+  index — one flag, one builder, no drift), with the MPD representations
+  following through the same S58 `videoOnlyCodecs()` helper, whose
+  docblock now names both manifests. A muxed single-audio source (count 1)
+  keeps its `mp4a.40.2` claim — the segments genuinely carry AAC — which
+  is the shape the player's synthesized entry was written for, now pinned
+  as law on both the creation and regeneration paths. Pre-law persisted
+  rows carry no count key at all: they regenerate byte-for-byte as before
+  (absence means unknown, never zero) — their stale phantom claim lives
+  only in already-cached directories until eviction rewrites them,
+  disclosed rather than silently rewritten under a running job. The
+  `> 1`-gate on `audio_tracks` stays BY LAW: persisting a one-element
+  group would flip every rung `-an` while no `media_a` rendition exists
+  to carry the sound — guaranteed silence; the CODECS attribute is the
+  muxed case's honest carrier. `JOB_KEY_VERSION` and
+  `EncodeSettings::fingerprint()` do not move: the declaration is
+  derived-at-render, and the key hash never covered the variants blob —
+  no re-encode is forced. Mutation-toothed: disabling the strip, stripping
+  on the wrong shapes, dropping the persisted count, or forgetting it on
+  the regen path each reddens exactly its pins. [playback-lag program /
+  AUDIO-DECLARATION law, server half of ui contract 3174b805]
+
 - **Playback-lag wave: `@phlix/ui` v0.99.16 re-pinned, and the served `/app`
   bundle regenerated.** [wave-playback-fix]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.16 →

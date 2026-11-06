@@ -821,6 +821,19 @@ class TranscodeManager
         $audioTracks = count($audioStreams) > 1 ? $this->buildAudioTrackDescriptors($audioStreams) : null;
 
         $ladderArray = $ladder->toArray();
+        // AUDIO-DECLARATION law (2026-11-06): persist the source's audio-stream
+        // COUNT so the playlist writers can tell a muxed single-audio job (rung
+        // segments genuinely carry AAC — CODECS must keep claiming `mp4a.40.2`)
+        // from a silent source (`-map 0:a:0?` mapped NOTHING — CODECS must stop
+        // claiming it). The `audio_tracks` group mechanism above stays `> 1`-
+        // gated BY LAW: persisting a one-element group would flip every rung
+        // `-an` ({@see audioTracksOf()}'s non-null rule) while no `media_a`
+        // rendition exists to carry the sound — guaranteed silence. The count
+        // is inert to every existing reader ({@see audioTracksOf()} reads
+        // `audio_tracks`, {@see getJobVariants()} reads `renditions`/
+        // `original`); rows written before this law lack the key entirely and
+        // keep their pre-law bytes (absent = unknown, never "zero").
+        $ladderArray['audio_stream_count'] = count($audioStreams);
         if ($audioTracks !== null) {
             $ladderArray['audio_tracks'] = $audioTracks;
         }
@@ -863,7 +876,11 @@ class TranscodeManager
             // which an admin flipping the setting between computeSegmentParams()
             // and this line wrote playlists for a container the job will never
             // produce.
-            self::segmentFormatOf($segParams)
+            self::segmentFormatOf($segParams),
+            // AUDIO-DECLARATION law: the same truth just persisted, from the
+            // same in-hand probe — creation bytes and regen bytes of a silent
+            // job must agree by construction, not by re-derivation.
+            count($audioStreams)
         );
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
@@ -3153,6 +3170,10 @@ class TranscodeManager
      * @param string $segmentFormat The JOB's container ({@see segmentFormatOf()} /
      *     {@see segmentFormatOfRow()}) — NEVER {@see EncodeSettings::segmentFormat()},
      *     see the S57 note above.
+     * @param int|null $sourceAudioStreamCount The count of SOURCE audio streams
+     *     persisted in the ladder JSON (`audio_stream_count`, both production
+     *     callers) — see the AUDIO-DECLARATION law below. Null (legacy rows
+     *     written before the law) leaves every byte exactly as it was.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -3163,7 +3184,8 @@ class TranscodeManager
         ?int $bandwidth,
         ?array $variants = null,
         ?array $audioTracks = null,
-        string $segmentFormat = EncodeSettings::FORMAT_MPEGTS
+        string $segmentFormat = EncodeSettings::FORMAT_MPEGTS,
+        ?int $sourceAudioStreamCount = null
     ): void {
         if ($variants === null) {
             // Legacy single-variant path (BC for pre-A5 jobs / callers).
@@ -3186,6 +3208,17 @@ class TranscodeManager
         // master advertises cannot disagree by construction.
         $audioGroup = $hasMultiAudio ? $audioTracks : null;
 
+        // AUDIO-DECLARATION law (2026-11-06): with no shared group, the rung
+        // segments are audio's only possible home — and for a source with ZERO
+        // audio streams they carry none (`-map 0:a:0?` is optional by design).
+        // Such a job must stop advertising `mp4a.40.2`: the client contract
+        // reads CODECS as "this media has an audio track" (phlix-ui 3174b805's
+        // codecStringCarriesAudio → a synthesized single 'Original' entry), and
+        // a phantom declaration renders a track that can never play. ONE flag
+        // gates the master AND every mini-master (same builder, same call
+        // decision) so the two views can never disagree about silence either.
+        $declareSilentVideo = $audioGroup === null && $sourceAudioStreamCount === 0;
+
         // SV-4.6: restrict the master's switchable ABR set — see switchableVariants().
         $switchableVariants = self::switchableVariants($variants);
 
@@ -3206,7 +3239,8 @@ class TranscodeManager
         $masterPlaylist = $this->buildMultiVariantMaster(
             $switchableVariants,
             $audioGroup,
-            $segmentFormat
+            $segmentFormat,
+            $declareSilentVideo
         );
         file_put_contents("{$dir}/master.m3u8", $masterPlaylist);
 
@@ -3243,7 +3277,7 @@ class TranscodeManager
             );
             file_put_contents(
                 "{$dir}/media_v{$variant->id}_master.m3u8",
-                $this->buildMultiVariantMaster([$variant], $audioGroup, $segmentFormat)
+                $this->buildMultiVariantMaster([$variant], $audioGroup, $segmentFormat, $declareSilentVideo)
             );
         }
 
@@ -3259,7 +3293,8 @@ class TranscodeManager
             $bandwidth,
             $mpdVariants,
             $audioGroup,
-            $segmentFormat
+            $segmentFormat,
+            $sourceAudioStreamCount
         );
     }
 
@@ -3330,6 +3365,8 @@ class TranscodeManager
      * @param list<Rendition>|null                $variants       ABR-switchable variants, or null for legacy.
      * @param list<array<string, mixed>>|null     $audioTracks    Audio descriptors when the job has an audio group.
      * @param string                              $segmentFormat  The job's container (`mpegts` | `fmp4`).
+     * @param int|null                            $sourceAudioStreamCount AUDIO-DECLARATION law — see
+     *     {@see writeVodPlaylists()}; null (legacy) keeps every byte as it was.
      *
      * @since S58
      */
@@ -3342,7 +3379,8 @@ class TranscodeManager
         ?int $bandwidth,
         ?array $variants,
         ?array $audioTracks,
-        string $segmentFormat
+        string $segmentFormat,
+        ?int $sourceAudioStreamCount = null
     ): void {
         if ($segmentFormat !== EncodeSettings::FORMAT_FMP4) {
             return;
@@ -3355,7 +3393,8 @@ class TranscodeManager
                 $height,
                 $bandwidth,
                 $variants,
-                $audioTracks
+                $audioTracks,
+                $sourceAudioStreamCount
             );
             if ($sets === []) {
                 $this->logger->warning('No DASH adaptation set could be built; manifest.mpd not written', [
@@ -3407,6 +3446,8 @@ class TranscodeManager
      * @param int|null                        $bandwidth   Legacy single-variant bandwidth (bps).
      * @param list<Rendition>|null            $variants    ABR-switchable variants, or null for legacy.
      * @param list<array<string, mixed>>|null $audioTracks Audio descriptors, or null when audio is muxed.
+     * @param int|null                        $sourceAudioStreamCount AUDIO-DECLARATION law — see
+     *     {@see writeVodPlaylists()}; null (legacy) keeps every byte as it was.
      *
      * @return list<AdaptationSet> Video set first, then one per audio track. Empty when nothing is describable.
      *
@@ -3418,13 +3459,19 @@ class TranscodeManager
         ?int $height,
         ?int $bandwidth,
         ?array $variants,
-        ?array $audioTracks
+        ?array $audioTracks,
+        ?int $sourceAudioStreamCount = null
     ): array {
         $segSeconds = self::normalizedSegmentSeconds($segSeconds);
         // A separate audio group means the video renditions were encoded `-an`
         // (see segmentParamsForRendition()'s `video_only`), so their CODECS must
-        // not keep advertising the AAC track that is no longer in them.
+        // not keep advertising the AAC track that is no longer in them. The
+        // AUDIO-DECLARATION law adds the sibling case: a source with ZERO audio
+        // streams has nothing muxed either, and DASH reads `@codecs` as the
+        // exhaustive contents of each Representation even more strictly than
+        // HLS reads STREAM-INF CODECS.
         $hasAudioGroup = $audioTracks !== null && $audioTracks !== [];
+        $stripAudioCodec = $hasAudioGroup || $sourceAudioStreamCount === 0;
 
         $video = $this->buildMpdVideoAdaptationSet(
             $segSeconds,
@@ -3432,7 +3479,7 @@ class TranscodeManager
             $height,
             $bandwidth,
             $variants,
-            $hasAudioGroup
+            $stripAudioCodec
         );
         if ($video === null) {
             return [];
@@ -3483,7 +3530,9 @@ class TranscodeManager
      * @param int|null             $height        Legacy single-variant height.
      * @param int|null             $bandwidth     Legacy single-variant bandwidth (bps).
      * @param list<Rendition>|null $variants      ABR-switchable variants, or null for legacy.
-     * @param bool                 $hasAudioGroup True when audio lives in its own renditions.
+     * @param bool                 $stripAudioCodec True when the video Representations carry no
+     *     audio — either a shared audio group owns the sound ({@see buildMpdAdaptationSets()})
+     *     or the AUDIO-DECLARATION law proved the source silent.
      *
      * @since S58
      */
@@ -3493,7 +3542,7 @@ class TranscodeManager
         ?int $height,
         ?int $bandwidth,
         ?array $variants,
-        bool $hasAudioGroup
+        bool $stripAudioCodec
     ): ?AdaptationSet {
         if ($variants === null) {
             // Legacy single-variant job: `media_0.m3u8` over unprefixed
@@ -3501,7 +3550,7 @@ class TranscodeManager
             // the representation id is the playlist's own `0`.
             $representations = [new Representation(
                 '0',
-                $hasAudioGroup ? self::videoOnlyCodecs(self::LEGACY_CODECS) : self::LEGACY_CODECS,
+                $stripAudioCodec ? self::videoOnlyCodecs(self::LEGACY_CODECS) : self::LEGACY_CODECS,
                 $bandwidth !== null && $bandwidth > 0 ? $bandwidth : self::LEGACY_BANDWIDTH,
                 $width !== null && $width > 0 ? $width : 0,
                 $height !== null && $height > 0 ? $height : 0
@@ -3515,7 +3564,7 @@ class TranscodeManager
             foreach ($variants as $variant) {
                 $representations[] = new Representation(
                     $variant->id,
-                    $hasAudioGroup ? self::videoOnlyCodecs($variant->codecs) : $variant->codecs,
+                    $stripAudioCodec ? self::videoOnlyCodecs($variant->codecs) : $variant->codecs,
                     $variant->bandwidth(),
                     $variant->width,
                     $variant->height
@@ -3543,12 +3592,16 @@ class TranscodeManager
     /**
      * Strips the audio codec from an HLS `CODECS` string.
      *
-     * A multi-audio job's video segments are encoded `-an`, so a Representation
-     * over them must not claim `mp4a.40.2` — a DASH client reads `@codecs` as
-     * the exhaustive list of what the Representation's segments contain and will
-     * set up a decoder (and, on some players, a `MediaSource` sourceBuffer) for
-     * an audio track that never arrives. The HLS master keeps the full string
-     * because there `CODECS` describes the variant PLUS its `AUDIO=` group.
+     * Two truthful cases: a multi-audio job's video segments are encoded `-an`,
+     * so a Representation over them must not claim `mp4a.40.2` — on the MPD a
+     * DASH client reads `@codecs` as the exhaustive list of what the
+     * Representation's segments contain and will set up a decoder (and, on some
+     * players, a `MediaSource` sourceBuffer) for an audio track that never
+     * arrives; on the HLS side the AUDIO-DECLARATION law applies the same strip
+     * to silent-source jobs (zero audio streams, no group), where the claim
+     * would synthesize a phantom track client-side. A multi-audio job's HLS
+     * master keeps the full string because there `CODECS` describes the variant
+     * PLUS its `AUDIO=` group.
      *
      * Falls back to the input when stripping would leave nothing, so a future
      * audio-only rendition can never end up with an empty `@codecs`.
@@ -3859,13 +3912,18 @@ class TranscodeManager
      *     `#EXT-X-VERSION` moves: BANDWIDTH/RESOLUTION/CODECS and every `#EXT-X-MEDIA`
      *     URI are identical in both containers, which is what lets the client code
      *     (`phlix-ui`'s quality menu, which resolves levels by height) stay untouched.
+     * @param bool $declareSilentVideo AUDIO-DECLARATION law ({@see writeVodPlaylists()}):
+     *     true strips the audio codec entry from every STREAM-INF CODECS, because the
+     *     rung segments provably carry no audio (zero source audio streams, no group
+     *     to carry it). False — including every legacy null — keeps shipped bytes.
      *
      * @return string Master playlist text.
      */
     private function buildMultiVariantMaster(
         array $variants,
         ?array $audioTracks = null,
-        string $format = EncodeSettings::FORMAT_MPEGTS
+        string $format = EncodeSettings::FORMAT_MPEGTS,
+        bool $declareSilentVideo = false
     ): string {
         $lines = ['#EXTM3U', '#EXT-X-VERSION:' . self::playlistVersion($format)];
 
@@ -3880,9 +3938,15 @@ class TranscodeManager
         }
 
         foreach ($variants as $variant) {
+            // AUDIO-DECLARATION law: a silent job's CODECS must not claim an
+            // audio entry — hls.js surfaces STREAM-INF `audioCodec` to the
+            // client contract (phlix-ui codecStringCarriesAudio), so the claim
+            // IS the advertisement. Same strip helper the MPD uses, so video-
+            // only codec hygiene has one definition across both manifests.
+            $codecs = $declareSilentVideo ? self::videoOnlyCodecs($variant->codecs) : $variant->codecs;
             $attrs = 'BANDWIDTH=' . $variant->bandwidth()
                 . ',RESOLUTION=' . $variant->resolution()
-                . ',CODECS="' . $variant->codecs . '"';
+                . ',CODECS="' . $codecs . '"';
             // P3B-S3: every variant references the ONE shared audio group.
             if (is_array($audioTracks)) {
                 $attrs .= ',AUDIO="aud"';
@@ -5620,6 +5684,14 @@ class TranscodeManager
                 }
             }
 
+            // AUDIO-DECLARATION law: the persisted source truth. ABSENT (any
+            // non-numeric shape, including every pre-law row) stays null —
+            // "unknown", never "zero" — so a legacy job regenerates byte-for-
+            // byte what it always did.
+            $audioStreamCount = is_numeric($decoded['audio_stream_count'] ?? null)
+                ? (int) $decoded['audio_stream_count']
+                : null;
+
             $this->writeVodPlaylists(
                 $dir,
                 $duration,
@@ -5629,7 +5701,8 @@ class TranscodeManager
                 $bandwidth,
                 $variants,
                 $audioTracks,
-                $segmentFormat
+                $segmentFormat,
+                $audioStreamCount
             );
 
             return is_file("{$dir}/master.m3u8");

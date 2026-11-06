@@ -2723,8 +2723,12 @@ class TranscodeManagerTest extends TestCase
         $variantsJson = $this->capturedVariantsJson($captured);
 
         // Exactly what AbrLadder produces for the SAME SourceProfile → genuinely usable.
+        // AUDIO-DECLARATION law rotation (2026-11-06): the persisted blob now
+        // carries the source audio-stream count (1 here — the probe above);
+        // the ladder half is still byte-for-byte AbrLadder output.
         $expected = (string) json_encode(
             (new AbrLadder())->build(SourceProfile::fromSourceMetadata($source), 'web')->toArray()
+            + ['audio_stream_count' => 1]
         );
         $this->assertSame($expected, $variantsJson);
 
@@ -2752,6 +2756,8 @@ class TranscodeManagerTest extends TestCase
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
         $variantsJson = $this->capturedVariantsJson($captured);
 
+        // AUDIO-DECLARATION law rotation (2026-11-06), same as the sibling
+        // probe-fallback golden above.
         $expected = (string) json_encode(
             (new AbrLadder())->build(
                 new SourceProfile(
@@ -2765,6 +2771,7 @@ class TranscodeManagerTest extends TestCase
                 ),
                 'web'
             )->toArray()
+            + ['audio_stream_count' => 1]
         );
         $this->assertSame($expected, $variantsJson);
 
@@ -4242,6 +4249,8 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame([0, 1], array_column($decoded['audio_tracks'], 'index'));
         $this->assertSame([1, 2], array_column($decoded['audio_tracks'], 'stream_index'));
         $this->assertSame([true, false], array_column($decoded['audio_tracks'], 'default'));
+        // AUDIO-DECLARATION law: the source count is persisted alongside.
+        $this->assertSame(2, $decoded['audio_stream_count']);
     }
 
     public function testSingleAudioSourceEmitsNoAudioGroup(): void
@@ -4267,6 +4276,58 @@ class TranscodeManagerTest extends TestCase
         $decoded = json_decode($this->capturedVariantsJson($captured), true);
         $this->assertIsArray($decoded);
         $this->assertArrayNotHasKey('audio_tracks', $decoded);
+
+        // AUDIO-DECLARATION law: the muxed truth persists as count 1, and the
+        // declaration follows — the rungs DO carry AAC, so master and every
+        // mini-master keep claiming it (this is the shape whose silent claim
+        // the ui's synthesized 'Original' entry was written for).
+        $this->assertSame(1, $decoded['audio_stream_count']);
+        $this->assertStringContainsString('mp4a.40.2', $master);
+        $indexFiles = glob("{$dir}/media_v*_master.m3u8") ?: [];
+        $this->assertNotEmpty($indexFiles);
+        foreach ($indexFiles as $indexFile) {
+            $this->assertStringContainsString('mp4a.40.2', (string) file_get_contents($indexFile), basename($indexFile));
+        }
+    }
+
+    /**
+     * AUDIO-DECLARATION law, creation half (the third shape, and THE defect):
+     * a source with NO audio streams persists count 0, and nothing it
+     * publishes may claim an audio codec. Pre-law bytes claimed
+     * `mp4a.40.2` on video-only segments — under the shipped ui contract
+     * (phlix-ui 3174b805 codecStringCarriesAudio) that phantom claim
+     * renders a dead 'Original' track on silent titles.
+     */
+    public function testVideoOnlySourcePersistsZeroAndDeclaresNoAudioAnywhere(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+
+        $decoded = json_decode($this->capturedVariantsJson($captured), true);
+        $this->assertIsArray($decoded);
+        $this->assertSame(0, $decoded['audio_stream_count']);
+        $this->assertArrayNotHasKey('audio_tracks', $decoded);
+
+        // Every published document: master, indexes, legacy none — zero audio
+        // claims, zero group lines. (The bare rung playlists never had either.)
+        $documents = array_merge([$dir . '/master.m3u8'], glob("{$dir}/media_v*_master.m3u8") ?: []);
+        $this->assertNotEmpty($documents);
+        foreach ($documents as $document) {
+            $text = (string) file_get_contents($document);
+            $this->assertStringNotContainsString('mp4a', $text, basename($document));
+            $this->assertStringNotContainsString('#EXT-X-MEDIA:TYPE=AUDIO', $text, basename($document));
+            $this->assertStringNotContainsString('AUDIO=', $text, basename($document));
+        }
     }
 
     /**

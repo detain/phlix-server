@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Streaming\Dash\AdaptationSet;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -162,6 +163,49 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
         . "AUDIO=\"aud\"\n"
         . "media_voriginal.m3u8\n";
 
+    // ─────────────────────────────────────────────────────────────────
+    // AUDIO-DECLARATION law (2026-11-06, this file's second same-day
+    // contract). Fix A′′ made audio DISCOVERABLE; this law makes it
+    // TRUTHFUL. The rung CODECS attribute is the client contract: hls.js
+    // surfaces STREAM-INF `audioCodec` and phlix-ui 3174b805
+    // (hls-playback.ts codecStringCarriesAudio → Player.vue
+    // hasOriginalAudio) synthesizes the single 'Original' track entry
+    // from it. Three shapes, three truths:
+    //
+    //  * muxed single-audio (count 1, no group): the segments DO carry
+    //    AAC (`-map 0:a:0`, `-c:a aac`/copy) → CODECS keeps `mp4a.40.2`
+    //    and the UI's 'Original' entry is real. No group lines — there
+    //    are no `media_a` renditions to point at. (Pre-existing bytes,
+    //    pinned as law here.)
+    //  * multi-audio (group): AUDIO="aud" + rendition lines carry the
+    //    truth; combined CODECS stays (it describes variant PLUS group —
+    //    and the renditions ARE aac re-encodes). (Pinned by the Fix A′′
+    //    goldens above; re-pinned here WITH the count set, proving the
+    //    group wins over the flag.)
+    //  * silent source (count 0): `-map 0:a:0?` is OPTIONAL — it mapped
+    //    NOTHING. Every declaration must go: no group lines (never had
+    //    any) AND no audio codec entry (the defect this law cures: the
+    //    pre-law bytes claimed `mp4a.40.2` on video-only segments, so
+    //    silent titles grew a phantom 'Original').
+    //
+    // Legacy null (rows persisted before the law, no `audio_stream_count`
+    // key): unknown ≠ zero — the pre-law bytes stand, disclosed.
+    // ─────────────────────────────────────────────────────────────────
+
+    /** Master over a silent two-rung ladder: every CODECS audio entry gone. */
+    private const EXPECTED_MASTER_SILENT = "#EXTM3U\n"
+        . "#EXT-X-VERSION:3\n"
+        . "#EXT-X-STREAM-INF:BANDWIDTH=5128000,RESOLUTION=1920x1080,CODECS=\"avc1.640029\"\n"
+        . "media_v1080p.m3u8\n"
+        . "#EXT-X-STREAM-INF:BANDWIDTH=3128000,RESOLUTION=1280x720,CODECS=\"avc1.640029\"\n"
+        . "media_v720p.m3u8\n";
+
+    /** A silent source's per-rung index: one level, no audio claim anywhere. */
+    private const EXPECTED_INDEX_720P_SILENT = "#EXTM3U\n"
+        . "#EXT-X-VERSION:3\n"
+        . "#EXT-X-STREAM-INF:BANDWIDTH=3128000,RESOLUTION=1280x720,CODECS=\"avc1.640029\"\n"
+        . "media_v720p.m3u8\n";
+
     private string $segmentDir;
 
     protected function setUp(): void
@@ -306,6 +350,210 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
         $this->writePlaylists($dir, $this->ladder(), $this->audioTracks(), EncodeSettings::FORMAT_MPEGTS);
 
         $this->assertStringNotContainsString('_master', (string) file_get_contents("{$dir}/master.m3u8"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // The AUDIO-DECLARATION law (see the goldens above): CODECS truth per
+    // source shape, asserted through the SAME matcher the client uses.
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Shape (b) of the shipped ui contract: a muxed single-audio job has
+     * no group to advertise, so the ONE carrier is the CODECS attribute —
+     * and it must hit the client matcher for the synthesized 'Original'
+     * entry to appear. Byte-equality against the pre-law golden proves the
+     * declaration survives untouched; the matcher assertion proves the
+     * SURVIVAL is what the ui consumes (this literal is the law
+     * TranscodeManager relied on before it was ever named).
+     */
+    public function test_a_muxed_single_audio_job_declares_audio_through_codecs_alone(): void
+    {
+        $dir = $this->segmentDir . '/declare-muxed';
+        mkdir($dir, 0755, true);
+        $this->writePlaylists($dir, $this->ladder(), null, EncodeSettings::FORMAT_MPEGTS, 1);
+
+        $index = (string) file_get_contents("{$dir}/media_v720p_master.m3u8");
+        $this->assertSame(self::EXPECTED_INDEX_720P_NO_GROUP, $index);
+        $this->assertSame([], $this->groupLines($index));
+        foreach ($this->codecsOf($index) as $codecs) {
+            $this->assertTrue(
+                $this->uiCarriesAudio($codecs),
+                'muxed rungs must match phlix-ui codecStringCarriesAudio: ' . $codecs
+            );
+        }
+
+        // Legacy unknown (pre-law rows, null) and muxed (count 1) render the
+        // SAME bytes — the strip keys on ZERO alone, never on absence.
+        $legacyDir = $this->segmentDir . '/declare-muxed-legacy';
+        mkdir($legacyDir, 0755, true);
+        $this->writePlaylists($legacyDir, $this->ladder(), null, EncodeSettings::FORMAT_MPEGTS);
+        $this->assertSame(
+            $index,
+            (string) file_get_contents("{$legacyDir}/media_v720p_master.m3u8")
+        );
+    }
+
+    /**
+     * Shape (c) — THE DEFECT. A zero-audio source's segments carry no sound
+     * (`-map 0:a:0?` mapped nothing), so no document may claim an audio
+     * codec. Red against pre-law bytes: the rung CODECS shipped as
+     * `avc1.640029,mp4a.40.2` and silent titles grew a phantom 'Original'.
+     */
+    public function test_a_silent_source_index_declares_no_audio(): void
+    {
+        $dir = $this->segmentDir . '/declare-silent-index';
+        mkdir($dir, 0755, true);
+        $this->writePlaylists($dir, $this->ladder(), null, EncodeSettings::FORMAT_MPEGTS, 0);
+
+        $index = (string) file_get_contents("{$dir}/media_v720p_master.m3u8");
+        $this->assertSame(self::EXPECTED_INDEX_720P_SILENT, $index);
+        $this->assertStringNotContainsString('AUDIO=', $index);
+        $this->assertStringNotContainsString('mp4a', $index);
+        foreach ($this->codecsOf($index) as $codecs) {
+            $this->assertFalse($this->uiCarriesAudio($codecs), $codecs);
+        }
+    }
+
+    /** The master takes the same strip as its indexes — one flag, one truth. */
+    public function test_a_silent_source_master_declares_no_audio(): void
+    {
+        $dir = $this->segmentDir . '/declare-silent-master';
+        mkdir($dir, 0755, true);
+        $this->writePlaylists($dir, $this->ladder(), null, EncodeSettings::FORMAT_MPEGTS, 0);
+
+        $this->assertSame(
+            self::EXPECTED_MASTER_SILENT,
+            (string) file_get_contents("{$dir}/master.m3u8")
+        );
+    }
+
+    /**
+     * Shape (a): the group always wins over the flag — with a group present
+     * the combined CODECS (variant PLUS `AUDIO=` group semantics) and the
+     * rendition lines must not move, count ≥ 2 notwithstanding. A mutation
+     * that stripped alongside a group would break the multi-audio sound
+     * announcement exactly as loudly as the phantom fix would silence it.
+     */
+    public function test_the_declaration_law_never_touches_a_grouped_job(): void
+    {
+        $dir = $this->segmentDir . '/declare-grouped';
+        mkdir($dir, 0755, true);
+        $this->writePlaylists($dir, $this->ladder(), $this->audioTracks(), EncodeSettings::FORMAT_MPEGTS, 2);
+
+        $this->assertSame(
+            self::EXPECTED_INDEX_720P_MPEGTS,
+            (string) file_get_contents("{$dir}/media_v720p_master.m3u8")
+        );
+        $this->assertSame(
+            self::EXPECTED_MASTER,
+            (string) file_get_contents("{$dir}/master.m3u8")
+        );
+    }
+
+    /**
+     * DASH carries the same law: `@codecs` is the EXHAUSTIVE contents of a
+     * Representation — even stricter than HLS. Group case keeps its pre-law
+     * strip (S58); the silent case joins it; the muxed case keeps claiming.
+     */
+    public function test_the_declaration_law_reaches_the_dash_representations(): void
+    {
+        $strip = function (?int $count): array {
+            $sets = $this->buildSets($count);
+            $codecs = [];
+            foreach ($sets as $set) {
+                if ($set->contentType !== 'video') {
+                    continue;
+                }
+                foreach ($set->representations as $representation) {
+                    $codecs[] = $representation->codecs;
+                }
+            }
+
+            return $codecs;
+        };
+
+        $this->assertSame(
+            ['avc1.640029', 'avc1.640029'],
+            $strip(0),
+            'silent video Representations advertise video only'
+        );
+        $this->assertSame(
+            ['avc1.640029,mp4a.40.2', 'avc1.640029,mp4a.40.2'],
+            $strip(1),
+            'muxed single-audio keeps its honest claim'
+        );
+        // The S58 group case must be driven with REAL descriptors — the
+        // strip is a function of the group, not of the count alone (a count
+        // with descriptors lost to corruption stays muxed on disk, and the
+        // claim remains true of those segments).
+        $grouped = function (?int $count): array {
+            $sets = $this->buildSets($count, $this->audioTracks());
+            $codecs = [];
+            foreach ($sets as $set) {
+                if ($set->contentType !== 'video') {
+                    continue;
+                }
+                foreach ($set->representations as $representation) {
+                    $codecs[] = $representation->codecs;
+                }
+            }
+
+            return $codecs;
+        };
+        $this->assertSame(
+            ['avc1.640029', 'avc1.640029'],
+            $grouped(2),
+            'the S58 group strip still applies (audio lives in its own sets)'
+        );
+        $this->assertSame(
+            ['avc1.640029,mp4a.40.2', 'avc1.640029,mp4a.40.2'],
+            $strip(null),
+            'pre-law bytes do not move'
+        );
+    }
+
+    /**
+     * Regeneration must REPLAY the persisted count, not re-derive (and not
+     * forget): an evicted silent job that came back claiming `mp4a.40.2`
+     * would re-grow the phantom on every cache sweep.
+     */
+    public function test_regeneration_replays_the_persisted_audio_count(): void
+    {
+        $row = $this->silentSourceRow('declare-regen-silent', 0);
+        $manager = new TranscodeManager($this->rowDb($row), $this->createMock(FfmpegRunner::class), $this->segmentDir);
+        $this->assertTrue($manager->ensurePlaylistRegenerated('declare-regen-silent'));
+
+        // The row is an fMP4 job: the goldens are mpegts-shaped, so the
+        // flavour shifts exactly as the shipped S57 law requires (the
+        // container branch lives inside the builders; VERSION is the ONLY
+        // byte that moves for a master-shaped document).
+        $fmp4 = static fn (string $master): string =>
+            str_replace('#EXT-X-VERSION:3', '#EXT-X-VERSION:7', $master);
+        $this->assertSame(
+            $fmp4(self::EXPECTED_INDEX_720P_SILENT),
+            (string) file_get_contents("{$row['hls_dir']}/media_v720p_master.m3u8")
+        );
+        $this->assertSame(
+            $fmp4(self::EXPECTED_MASTER_SILENT),
+            (string) file_get_contents("{$row['hls_dir']}/master.m3u8")
+        );
+    }
+
+    /**
+     * …and a pre-law row (key absent) regenerates EXACTLY its old bytes —
+     * absence means unknown, never zero. The false claim inside such rows
+     * is disclosed, not silently rewritten under an evicted job.
+     */
+    public function test_regeneration_of_a_pre_law_row_keeps_its_bytes(): void
+    {
+        $row = $this->silentSourceRow('declare-regen-legacy', null);
+        $manager = new TranscodeManager($this->rowDb($row), $this->createMock(FfmpegRunner::class), $this->segmentDir);
+        $this->assertTrue($manager->ensurePlaylistRegenerated('declare-regen-legacy'));
+
+        $this->assertSame(
+            str_replace('#EXT-X-VERSION:3', '#EXT-X-VERSION:7', self::EXPECTED_INDEX_720P_NO_GROUP),
+            (string) file_get_contents("{$row['hls_dir']}/media_v720p_master.m3u8")
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -504,12 +752,125 @@ final class TranscodeManagerAudioGroupPlaylistTest extends TestCase
      *
      * @param list<Rendition>                 $variants
      * @param list<array<string, mixed>>|null $audioTracks
+     * @param int|null                        $sourceAudioStreamCount AUDIO-DECLARATION
+     *     law input; null models a pre-law persisted row.
      */
-    private function writePlaylists(string $dir, array $variants, ?array $audioTracks, string $format): void
-    {
+    private function writePlaylists(
+        string $dir,
+        array $variants,
+        ?array $audioTracks,
+        string $format,
+        ?int $sourceAudioStreamCount = null
+    ): void {
         $m = new ReflectionMethod(TranscodeManager::class, 'writeVodPlaylists');
         $m->setAccessible(true);
-        $m->invokeArgs($this->manager(), [$dir, 25.0, 6, 1920, 1080, 5000000, $variants, $audioTracks, $format]);
+        $m->invokeArgs(
+            $this->manager(),
+            [$dir, 25.0, 6, 1920, 1080, 5000000, $variants, $audioTracks, $format, $sourceAudioStreamCount]
+        );
+    }
+
+    /**
+     * The MPD adaptation sets for the same ladder, through the real builder.
+     *
+     * @param list<array<string, mixed>>|null $audioTracks
+     *
+     * @return list<AdaptationSet>
+     */
+    private function buildSets(?int $sourceAudioStreamCount, ?array $audioTracks = null): array
+    {
+        $m = new ReflectionMethod(TranscodeManager::class, 'buildMpdAdaptationSets');
+        $m->setAccessible(true);
+        $sets = $m->invokeArgs(
+            $this->manager(),
+            [6, 1920, 1080, 5000000, $this->ladder(), $audioTracks, $sourceAudioStreamCount]
+        );
+        $this->assertIsArray($sets);
+
+        return $sets;
+    }
+
+    /**
+     * A persisted multi-variant row WITHOUT `audio_tracks` — the shape both
+     * the muxed single-audio job and the silent source share on disk, told
+     * apart only by the (possibly absent) `audio_stream_count` key.
+     *
+     * @return array<string, mixed>
+     */
+    private function silentSourceRow(string $id, ?int $audioStreamCount): array
+    {
+        $ladderArray = [
+            'renditions' => [[
+                'id' => '1080p',
+                'label' => '1080p',
+                'width' => 1920,
+                'height' => 1080,
+                'bitrate' => 5128000,
+                'video_bitrate' => 4600000,
+                'codecs' => 'avc1.640029,mp4a.40.2',
+                'is_original' => false,
+                'is_copy' => false,
+            ], [
+                'id' => '720p',
+                'label' => '720p',
+                'width' => 1280,
+                'height' => 720,
+                'bitrate' => 3128000,
+                'video_bitrate' => 2800000,
+                'codecs' => 'avc1.640029,mp4a.40.2',
+                'is_original' => false,
+                'is_copy' => false,
+            ]],
+        ];
+        if ($audioStreamCount !== null) {
+            $ladderArray['audio_stream_count'] = $audioStreamCount;
+        }
+
+        return [
+            'id' => $id,
+            'hls_dir' => $this->segmentDir . '/' . $id,
+            'duration_seconds' => 25,
+            'segment_seconds' => 6,
+            'segment_params' => json_encode(['video_codec' => 'libx264', 'segment_format' => 'fmp4']),
+            'variants' => (string) json_encode($ladderArray),
+        ];
+    }
+
+    /**
+     * Every `CODECS="…"` value of a master-shaped playlist, in order.
+     *
+     * @return list<string>
+     */
+    private function codecsOf(string $playlist): array
+    {
+        $count = preg_match_all('/CODECS="([^"]*)"/', $playlist, $m);
+        $this->assertIsInt($count);
+        $this->assertGreaterThan(0, $count, 'a master-shaped playlist always carries CODECS');
+
+        return $m[1];
+    }
+
+    /**
+     * MIRROR of the client contract — phlix-ui 3174b805
+     * `src/player/hls-playback.ts` codecStringCarriesAudio: split the csv,
+     * trim, lowercase, and test each entry against the audio-family
+     * prefixes. Hard-coded deliberately: if the ui matcher ever moves, this
+     * pin reddens HERE first and the two halves of the contract re-negotiate
+     * in the open, instead of silently losing the 'Original' entry (or
+     * re-growing the phantom).
+     */
+    private function uiCarriesAudio(string $codecs): bool
+    {
+        foreach (explode(',', $codecs) as $entry) {
+            $entry = strtolower(trim($entry));
+            foreach (['mp4a', 'ac-3', 'ec-3', 'opus'] as $prefix) {
+                if (str_starts_with($entry, $prefix)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function manager(): TranscodeManager

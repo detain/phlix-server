@@ -167,6 +167,11 @@ class NewsletterGenerator
         ]);
 
         $subject = $this->renderSubject($smarty);
+        // SH-014 (review server__fedev #6): the template's <title>/<h1>
+        // print {$subject}, which used to be never assigned — the body always
+        // shipped the default while the envelope carried the custom subject.
+        // Assign before fetch; the template html-escapes both sites.
+        $smarty->assign('subject', $subject);
         $htmlBody = $smarty->fetch('emails/newsletter.tpl');
 
         return [
@@ -413,11 +418,15 @@ class NewsletterGenerator
         // M21 (dba-doc minor cluster / review M21): the HTML leg (tpl :306)
         // already declines one play as "1 play"; the text leg said
         // "1 plays" and "New Items Added: 0" in the same email. Same grammar
-        // rule now rides both parts.
-        $hourWord = $hours == 1.0 ? 'hour' : 'hours';
+        // rule now rides both parts. SH-010 (review server__srphp): the word
+        // rule used to loose-== a float (the estate's last loose comparison
+        // in src/) — grammar now reads the number the reader actually sees:
+        // singular only when the rendered value is exactly "1".
+        $hoursText = (string)$hours;
+        $hourWord = $hoursText === '1' ? 'hour' : 'hours';
         $text = "Your Phlix Weekly Watch Report\n";
         $text .= str_repeat('=', 40) . "\n\n";
-        $text .= "Watch Time: {$hours} {$hourWord}\n";
+        $text .= "Watch Time: {$hoursText} {$hourWord}\n";
         $text .= $newItemsCount === 1
             ? "New Items Added: 1\n\n"
             : ($newItemsCount === 0

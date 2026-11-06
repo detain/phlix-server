@@ -236,9 +236,11 @@ class Response
         // load: without a Cache-Control header browsers cache it heuristically
         // and keep referencing old hashed asset chunks after a deploy (stale UI
         // until a hard refresh). Hashed assets themselves stay immutable-cached
-        // (see HttpHandler). Callers that set their own Cache-Control after
-        // html() still win — this only seeds the default.
-        if (!isset($this->headers['Cache-Control'])) {
+        // (see HttpHandler). L-7 doctrine (SH-013, RFC 9110 §4.2): header names
+        // are case-insensitive, so the pre-set dig is the same case-insensitive
+        // hasHeader() json() uses — a caller that pre-set Cache-Control in ANY
+        // case suppresses the seed and wins; this only seeds the default.
+        if (!$this->hasHeader('Cache-Control')) {
             $this->headers['Cache-Control'] = 'no-cache';
         }
         $this->body = $html;

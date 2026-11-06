@@ -2,7 +2,7 @@
  * Client-local i18n entry point — resolves the boot locale and hands the
  * `@phlix/ui` app factory its message-catalog overrides.
  *
- * ## The seam this wires (verified against the resolved sha pin)
+ * ## The seam this wires (verified against the resolved `@phlix/ui` pin)
  *
  * `@phlix/ui` exposes a CONFIG-TIME i18n seam: `PhlixAppConfig.messages`
  * (a `PhlixMessagesConfig` = deep-partial `group.key` override map).
@@ -13,8 +13,8 @@
  * from this client (the estate i18n audit finding this wiring closes).
  *
  * Unlike the vendored-bundle clients (Tizen, Windows), this consumer's
- * `@phlix/ui` pin (a 40-hex sha on phlix-ui master) SHIPS the locale bundles
- * from its main entry — `LOCALE_MESSAGES` / `ES_MESSAGES`…`JA_MESSAGES` /
+ * `@phlix/ui` pin (resolved from `web-ui/package.json`) SHIPS the locale
+ * bundles from its main entry — `LOCALE_MESSAGES` / `ES_MESSAGES`…`JA_MESSAGES` /
  * `PhlixLocaleCode` — so there is nothing to re-vendor: the ui package IS the
  * catalog SSOT here, and ui upgrades flow through the pin.
  *
@@ -55,7 +55,7 @@
  *
  * ## Adding a 7th locale — two lines here, once ui ships it
  *
- * 1. Bump the `@phlix/ui` pin to a sha whose `LOCALE_MESSAGES` includes the tag.
+ * 1. Bump the `@phlix/ui` pin to a release whose `LOCALE_MESSAGES` includes the tag.
  * 2. Add it to `SUPPORTED_LOCALES` and one registry line:
  *    `xx: () => freshCopy(LOCALE_MESSAGES.xx)`. The registry-parity test fails
  *    until both halves agree, so a ui-side addition cannot drift unseen here.

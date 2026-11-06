@@ -275,4 +275,106 @@ class NewsletterGeneratorTest extends TestCase
 
         $this->assertSame('Your Phlix Weekly Watch Report', $result['subject']);
     }
+
+    /**
+     * SH-010 (review server__srphp): the hour-word grammar rule compared a
+     * float with a loose == — the estate's last loose comparison in src/.
+     * This token-scan tripwire keeps NewsletterGenerator.php strict-typed
+     * forever: no == or != may live in the file's operator stream.
+     */
+    public function test_the_generator_carries_no_loose_comparisons(): void
+    {
+        $source = (string) file_get_contents(dirname(__DIR__, 3) . '/src/Admin/NewsletterGenerator.php');
+
+        $looseLines = [];
+        foreach (token_get_all($source) as $token) {
+            if (is_array($token) && ($token[0] === T_IS_EQUAL || $token[0] === T_IS_NOT_EQUAL)) {
+                $looseLines[] = $token[2];
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $looseLines,
+            'loose ==/!= found in NewsletterGenerator.php on lines ' . implode(', ', $looseLines)
+            . ' — comparisons here are strict/typed by law (SH-010)'
+        );
+    }
+
+    public function test_theHourWordFollowsTheRenderedNumber(): void
+    {
+        // SH-010 typed rule: singular only when the number the reader
+        // actually sees reads exactly "1" — minutes that round to a display
+        // "1" decline singular even though the raw minutes differ.
+        $generator = new NewsletterGenerator($this->stats, $this->library, $this->db, $this->templateDir);
+        $method = new \ReflectionMethod($generator, 'generatePlainText');
+        $method->setAccessible(true);
+
+        $atOne = (string) $method->invoke($generator, 60, 0, []);
+        $this->assertStringContainsString('Watch Time: 1 hour', $atOne);
+
+        $roundsToOne = (string) $method->invoke($generator, 57, 0, []);
+        $this->assertStringContainsString('Watch Time: 1 hour', $roundsToOne);
+
+        $justPastOne = (string) $method->invoke($generator, 63, 0, []);
+        $this->assertStringContainsString('Watch Time: 1.1 hours', $justPastOne);
+
+        $halfway = (string) $method->invoke($generator, 30, 0, []);
+        $this->assertStringContainsString('Watch Time: 0.5 hours', $halfway);
+    }
+
+    /**
+     * SH-014 (review server__fedev #6): the template's <title> and <h1>
+     * referenced {$subject}, which generateForUser() never assigned — the
+     * body always shipped the default while the envelope carried the custom
+     * subject. The subject is now assigned before fetch and html-escaped at
+     * both template sites (the envelope value stays raw).
+     */
+    public function test_theRenderedEmailCarriesTheEnvelopeSubject(): void
+    {
+        $this->db->method('query')->willReturn([]);
+
+        $generator = new NewsletterGenerator(
+            $this->stats,
+            $this->library,
+            $this->db,
+            $this->templateDir,
+            ['subject_template' => 'New this week ({$week_start} to {$week_end})']
+        );
+
+        $result = $generator->generateForUser('user-123', new DateTime('2024-01-01'));
+
+        $this->assertStringContainsString(
+            '<title>New this week (Jan 1, 2024 to Jan 8, 2024)</title>',
+            $result['html_body'],
+            'the assigned subject must surface in the rendered title'
+        );
+        $this->assertStringContainsString(
+            '<h1>New this week (Jan 1, 2024 to Jan 8, 2024)</h1>',
+            $result['html_body'],
+            'the assigned subject must surface in the rendered headline'
+        );
+    }
+
+    public function test_aSpecialCharSubjectIsEscapedInTheBodyButRawInTheEnvelope(): void
+    {
+        $this->db->method('query')->willReturn([]);
+
+        $generator = new NewsletterGenerator(
+            $this->stats,
+            $this->library,
+            $this->db,
+            $this->templateDir,
+            ['subject_template' => 'Phlix <b>Weekly</b>']
+        );
+
+        $result = $generator->generateForUser('user-123', new DateTime('2024-01-01'));
+
+        $this->assertSame('Phlix <b>Weekly</b>', $result['subject']);
+        $this->assertStringContainsString(
+            '<title>Phlix &lt;b&gt;Weekly&lt;/b&gt;</title>',
+            $result['html_body']
+        );
+        $this->assertStringNotContainsString('<title>Phlix <b>Weekly</b></title>', $result['html_body']);
+    }
 }

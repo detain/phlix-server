@@ -103,6 +103,45 @@ class ResponseTest extends TestCase
         $this->assertEquals('text/html; charset=utf-8', $response->headers['Content-Type']);
     }
 
+    /**
+     * SH-013 (review server__fedev #3): json() honours the L-7 doctrine
+     * (RFC 9110 §4.2 — header field names are case-insensitive) through the
+     * case-insensitive hasHeader() dig, but html() used a case-SENSITIVE
+     * isset() dig. A caller that pre-set a lowercase 'cache-control' got the
+     * 'no-cache' seed emitted BESIDE its own value — duplicate
+     * Cache-Control headers with conflicting directives on the wire.
+     */
+    public function testHtmlSeedsNoCacheOnlyWhenNoCaseVariantIsPreSet(): void
+    {
+        $default = (new Response())->html('<p>hi</p>');
+        $this->assertSame('no-cache', $default->headers['Cache-Control']);
+
+        $canonical = (new Response())
+            ->header('Cache-Control', 'public, max-age=60')
+            ->html('<p>hi</p>');
+        $cacheKeys = array_values(array_filter(
+            array_keys($canonical->headers),
+            static fn (string $key): bool => strcasecmp($key, 'Cache-Control') === 0
+        ));
+        $this->assertSame(['Cache-Control'], $cacheKeys);
+        $this->assertSame('public, max-age=60', $canonical->headers['Cache-Control']);
+
+        $lowercase = (new Response())
+            ->header('cache-control', 'private, max-age=30')
+            ->html('<p>hi</p>');
+        $lowercaseKeys = array_values(array_filter(
+            array_keys($lowercase->headers),
+            static fn (string $key): bool => strcasecmp($key, 'Cache-Control') === 0
+        ));
+        $this->assertSame(
+            ['cache-control'],
+            $lowercaseKeys,
+            'L-7: a lowercase caller-set Cache-Control must suppress the seed, '
+            . 'not sit beside a second case-variant of the same header'
+        );
+        $this->assertSame('private, max-age=30', $lowercase->headers['cache-control']);
+    }
+
     public function testCanRedirect(): void
     {
         $response = (new Response())->redirect('https://example.com', 301);

@@ -73,6 +73,9 @@ class HubClient
     /** @var int|null Workerman timer ID. */
     private ?int $heartbeatTimer = null;
 
+    /** @var int|null Workerman timer ID of the armed (not yet fired) first tick. */
+    private ?int $firstHeartbeatTimer = null;
+
     /** @var \DateTimeImmutable|null Last heartbeat attempt timestamp. */
     private ?\DateTimeImmutable $lastHeartbeatAttempt = null;
 
@@ -511,9 +514,15 @@ class HubClient
             true,
         );
 
-        $this->scheduleTimer(
+        // SH-002 (review server__asphp #5): the one-shot's id is tracked so a
+        // stop() inside the first-tick window can cancel it; the callback
+        // retires the slot first because Workerman deletes non-persistent
+        // timers itself once they fire — cancelling the stale id afterwards
+        // would be wrong.
+        $this->firstHeartbeatTimer = $this->scheduleTimer(
             self::FIRST_HEARTBEAT_DELAY,
             function (): void {
+                $this->firstHeartbeatTimer = null;
                 $this->performHeartbeatTick();
             },
             false,
@@ -543,6 +552,23 @@ class HubClient
     protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): ?int
     {
         return \Workerman\Timer::add($interval, $callback, [], $persistent);
+    }
+
+    /**
+     * Cancel a Workerman timer (seam: overridden in tests).
+     *
+     * The counterpart of {@see scheduleTimer()}: every armed id is retired
+     * through this one protected method so a test double can prove which
+     * timers a stop actually cancelled (SH-002). `Workerman\Timer::del()`
+     * tolerates unknown ids, matching the production behavior exactly.
+     *
+     * @param int $timerId Id previously returned by scheduleTimer().
+     *
+     * @return void
+     */
+    protected function cancelTimer(int $timerId): void
+    {
+        \Workerman\Timer::del($timerId);
     }
 
     /**
@@ -629,9 +655,18 @@ class HubClient
      */
     public function stopHeartbeatLoop(): void
     {
+        $stopped = false;
         if ($this->heartbeatTimer !== null) {
-            \Workerman\Timer::del($this->heartbeatTimer);
+            $this->cancelTimer($this->heartbeatTimer);
             $this->heartbeatTimer = null;
+            $stopped = true;
+        }
+        if ($this->firstHeartbeatTimer !== null) {
+            $this->cancelTimer($this->firstHeartbeatTimer);
+            $this->firstHeartbeatTimer = null;
+            $stopped = true;
+        }
+        if ($stopped) {
             $this->logger->info('Heartbeat loop stopped');
         }
     }

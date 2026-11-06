@@ -48,7 +48,7 @@ final class NewsletterGrammarTruthTest extends TestCase
     /**
      * @param array<int, array{name: string, poster_url: string|null, play_count: int}> $topMedia
      */
-    private function render(int $newItemsCount, array $topMedia = []): string
+    private function render(int $newItemsCount, array $topMedia = [], ?string $linksBase = null): string
     {
         if (!is_dir('/tmp/opencode/srv-m1a-smarty-cache')) {
             mkdir('/tmp/opencode/srv-m1a-smarty-cache', 0777, true);
@@ -67,7 +67,7 @@ final class NewsletterGrammarTruthTest extends TestCase
             'top_media' => $topMedia,
             'user_id' => 'user-123',
             'year' => 2026,
-            'links_base' => null,
+            'links_base' => $linksBase,
         ]);
 
         return $smarty->fetch('emails/newsletter.tpl') ?: '';
@@ -137,6 +137,67 @@ final class NewsletterGrammarTruthTest extends TestCase
             'src="https://image.tmdb.org/a.jpg"',
             $html,
             'escaping must not mangle ordinary scheme/host/path characters.'
+        );
+    }
+
+    /**
+     * SH-014 (review server__fedev #5): links_base is config-derived and
+     * resolveLinksBase() only checks the scheme prefix, so a quote-bearing
+     * base URL shipped straight into three href attributes unescaped — the
+     * first `"` broke out of the attribute and the rest became live markup.
+     */
+    public function test_the_committed_template_escapes_links_base_inside_href_attributes(): void
+    {
+        $html = $this->render(0, [], 'https://x.test/" onerror="alert(1)');
+
+        self::assertStringNotContainsString(
+            '" onerror="alert(1)/app"',
+            $html,
+            'a quote-bearing links_base must not break out of the href attributes (fedev #5).'
+        );
+        self::assertStringContainsString(
+            'href="https://x.test/&quot; onerror=&quot;alert(1)/app"',
+            $html,
+            'the payload must survive only in escaped form inside the quoted attribute.'
+        );
+        self::assertStringContainsString(
+            'href="https://x.test/&quot; onerror=&quot;alert(1)/app/settings"',
+            $html,
+            'the Preferences leg carries the same escape law.'
+        );
+    }
+
+    public function test_the_committed_template_leaves_wellformed_links_base_intact(): void
+    {
+        $html = $this->render(0, [], 'https://phlix.test/base');
+
+        self::assertStringContainsString(
+            'href="https://phlix.test/base/app"',
+            $html,
+            'escaping must not mangle ordinary scheme/host/path characters in links_base.'
+        );
+    }
+
+    /**
+     * SH-014 (review server__fedev #7): the poster placeholder cell prints
+     * the item name's first character — it was the only media-derived value
+     * interpolated raw while its siblings (poster_url, alt, media-name) all
+     * carry |escape:'html'.
+     */
+    public function test_the_committed_template_escapes_the_poster_placeholder_initial(): void
+    {
+        $html = $this->render(0, [[
+            'name' => '<b>Angle Bracket',
+            'poster_url' => null,
+            'play_count' => 1,
+        ]]);
+
+        $cell = preg_replace('/.*media-poster-placeholder">\s*(.*?)\s*<\/div>.*/s', '$1', $html);
+
+        self::assertSame(
+            '&lt;',
+            is_string($cell) ? trim($cell) : $cell,
+            'the placeholder initial must render escaped, matching every sibling field.'
         );
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Hub;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\ClaimInitiateResult;
 use Phlix\Hub\ClaimStatusResult;
@@ -834,6 +835,86 @@ class HubClientTest extends TestCase
         $this->assertSame(0, $state['consecutiveFailures']);
     }
 
+    /**
+     * SH-002 (review server__asphp #5): the FIRST_HEARTBEAT_DELAY one-shot was
+     * armed without its id being tracked anywhere, so stopHeartbeatLoop()
+     * could only ever cancel the repeating loop — a stop inside the first-tick
+     * window left a live one-shot ticking heartbeats after the client was
+     * stopped. Both ids now ride the tracked cancelTimer() seam.
+     */
+    public function test_stopping_the_heartbeat_loop_cancels_both_armed_timers(): void
+    {
+        [$client] = $this->enrolledRecordingClient();
+
+        $client->startHeartbeatLoop();
+        $this->assertCount(2, $client->scheduled);
+
+        $client->stopHeartbeatLoop();
+        $this->assertSame(
+            [1, 2],
+            $client->canceled,
+            'stop must cancel BOTH the repeating loop and the first-tick one-shot'
+        );
+
+        $client->stopHeartbeatLoop();
+        $this->assertCount(
+            2,
+            $client->canceled,
+            'stop is idempotent: nulled slots are never cancelled twice'
+        );
+    }
+
+    public function test_the_fired_first_tick_retires_its_slot_before_a_later_stop(): void
+    {
+        [$client, $httpClient] = $this->enrolledRecordingClient();
+
+        $client->startHeartbeatLoop();
+
+        // Swap the enrollment-scoped real client back out for the mock so the
+        // tick lands on the in-memory test state (same ritual as the
+        // arms-and-first-tick test).
+        (new \ReflectionProperty(HubClient::class, 'httpClient'))->setValue($client, $httpClient);
+
+        ($client->scheduled[1]['callback'])();
+
+        $client->stopHeartbeatLoop();
+        $this->assertSame(
+            [1],
+            $client->canceled,
+            'a one-shot that already fired must not be cancelled again'
+        );
+    }
+
+    /**
+     * @return array{0: RecordingTimerHubClient, 1: HttpClientInterface&MockObject}
+     */
+    private function enrolledRecordingClient(): array
+    {
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], []));
+
+        $client = new RecordingTimerHubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            null,
+            518400,
+            new RelayStateStore($this->tmpDir),
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com'
+        );
+
+        return [$client, $httpClient];
+    }
+
     public function test_heartbeat_state_declares_its_refresh_cadence_for_the_staleness_gate(): void
     {
         $stateStore = new RelayStateStore($this->tmpDir);
@@ -880,6 +961,9 @@ final class RecordingTimerHubClient extends HubClient
     /** @var list<array{interval: float|int, callback: callable, persistent: bool}> */
     public array $scheduled = [];
 
+    /** @var list<int> Timer ids passed to the cancel seam, in cancel order. */
+    public array $canceled = [];
+
     protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): int
     {
         $this->scheduled[] = [
@@ -889,5 +973,10 @@ final class RecordingTimerHubClient extends HubClient
         ];
 
         return count($this->scheduled);
+    }
+
+    protected function cancelTimer(int $timerId): void
+    {
+        $this->canceled[] = $timerId;
     }
 }

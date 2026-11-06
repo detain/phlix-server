@@ -121,6 +121,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The web-ui i18n docblock cites its `@phlix/ui` seam by name, not by rotating
+  pin shape.** The header claimed the pin was "a 40-hex sha on phlix-ui master"
+  and the 7th-locale recipe repeated the same stale form — the pin has been a
+  release-tag tarball for several trains, and the era-stamp law is to never bake
+  a shape or version that rotates (verified against the resolved `@phlix/ui`
+  pin; bump "a release whose `LOCALE_MESSAGES` includes the tag").
+  Comment/docblock only: the built JS chunks stayed byte-identical and only
+  `index-2z1PMaI0.js.map` — whose `sourcesContent` embeds the docblock —
+  regenerated, carried in the same commit, deterministic ×2. (LW-037-b,
+  review-round drift-fix ruling)
+
 - **Video playback in the web player presents its full frame rate again: `@phlix/ui` v0.99.21
   re-pinned to v0.99.22, and the served `/app` bundle regenerated.** [player fps 2026-11-06]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.21 → v0.99.22 (tag
@@ -712,6 +723,52 @@ House discipline this file maintains (established by review W-min90/91/92):
     `NginxAssetLocationTest`) runs 42/365 green against the regenerated tree.
 
 ### Fixed
+
+- **Stopping the hub client heartbeat now retires every timer it armed.** The
+  `FIRST_HEARTBEAT_DELAY` one-shot was armed without keeping its Workerman timer
+  id, so `stopHeartbeatLoop()` could only ever cancel the repeating 60s loop — a
+  stop inside the first-tick window left a live one-shot that beat the heartbeat
+  (and rewrote the cross-process state file) after the client was stopped. The
+  one-shot id is now tracked beside the loop id, both are cancelled through a new
+  `cancelTimer()` seam mirroring `scheduleTimer()`, and a fired one-shot retires
+  its own slot first, so stop is exact and idempotent. Pinned by
+  `HubClientTest::test_stopping_the_heartbeat_loop_cancels_both_armed_timers` and
+  `…test_the_fired_first_tick_retires_its_slot_before_a_later_stop` (red-first
+  measured at the parent). (SH-002, review server__asphp #5)
+- **A caller-set lowercase `cache-control` now suppresses the `html()` default
+  seed.** `Response::html()` checked its pre-set dig case-SENSITIVELY while
+  `json()` had long since moved to the case-insensitive `hasHeader()` dig (L-7
+  doctrine, RFC 9110 §4.2): pre-setting `cache-control` before an `html()`
+  response emitted BOTH the caller's header and the seed `no-cache` — two
+  case-variants of the same header with conflicting directives on the wire.
+  `html()` now routes the same case-insensitive dig and its seed comment tells
+  the L-7 truth. Pinned by
+  `ResponseTest::testHtmlSeedsNoCacheOnlyWhenNoCaseVariantIsPreSet`.
+  (SH-013, review server__fedev #3)
+- **The weekly newsletter email now prints the subject it actually shipped, and
+  escapes what it interpolates.** Template sites carried through unescaped: the
+  config-derived `links_base` inside all three `href` attributes (a
+  quote-bearing base URL broke out of the attribute into live markup — the
+  generator only checks the scheme prefix), and the media placeholder cell
+  printed the item name's first raw character while every sibling field was
+  escaped. Separately, the `<title>`/`<h1>` referenced `{$subject}`, which the
+  generator never assigned: a custom subject was visible only in the envelope
+  while the body always showed the default. Those five sites now carry
+  `|escape:'html'` and the subject is assigned before fetch (the envelope value
+  stays raw). Pinned by `NewsletterGrammarTruthTest` renders of the committed
+  template plus `NewsletterGeneratorTest::test_theRenderedEmailCarriesTheEnvelopeSubject`
+  and `…test_aSpecialCharSubjectIsEscapedInTheBodyButRawInTheEnvelope`.
+  (SH-014, review server__fedev #5/#6/#7)
+- **The plain-text watch-time grammar rule no longer float-compares, and a
+  token-scan tripwire keeps NewsletterGenerator.php loose-comparison-free.**
+  `$hours == 1.0` was the last loose `==` left in `src/`; the word rule now
+  reads the string the reader actually sees — singular only when the rendered
+  number is exactly "1", so the 57–62-minute band that ROUNDS to "1" declines
+  singular by display law, not by float luck (behavior unchanged).
+  `NewsletterGeneratorTest::test_the_generator_carries_no_loose_comparisons`
+  reddens if a `==`/`!=` token ever re-enters the file;
+  `…test_theHourWordFollowsTheRenderedNumber` pins the band. (SH-010,
+  review server__srphp)
 
 - **A profile at its concurrent-stream limit is no longer locked out forever by dead
   sessions.** `StreamSessionService::registerStream()` counted active streams and

@@ -17,7 +17,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{$subject|default:'Your Phlix Weekly Watch Report'}</title>
+    <title>{$subject|default:'Your Phlix Weekly Watch Report'|escape:'html'}</title>
     <style type="text/css">
         /* Reset styles */
         body, html {
@@ -262,7 +262,7 @@
         <div class="email-content">
             <!-- Header -->
             <div class="email-header">
-                <h1>{$subject|default:'Your Phlix Weekly Watch Report'}</h1>
+                <h1>{$subject|default:'Your Phlix Weekly Watch Report'|escape:'html'}</h1>
                 <p>{$week_start|default:''} - {$week_end|default:''}</p>
             </div>
 
@@ -296,7 +296,7 @@
                             {else}
                             <div class="media-poster-placeholder">
                                 {if $media.name|strlen > 1}
-                                {$media.name|substr:0:1|upper}
+                                {$media.name|substr:0:1|upper|escape:'html'}
                                 {else}
                                 ?
                                 {/if}
@@ -319,7 +319,7 @@
                 <!-- CTA Section -->
                 {if $links_base}
                 <div class="cta-section">
-                    <a href="{$links_base}/app" class="cta-button">View in Phlix</a>
+                    <a href="{$links_base|escape:'html'}/app" class="cta-button">View in Phlix</a>
                 </div>
                 {/if}
             </div>
@@ -328,8 +328,8 @@
             <div class="email-footer">
                 {if $links_base}
                 <div class="footer-links">
-                    <a href="{$links_base}/app">Visit Phlix</a>
-                    <a href="{$links_base}/app/settings">Preferences</a>
+                    <a href="{$links_base|escape:'html'}/app">Visit Phlix</a>
+                    <a href="{$links_base|escape:'html'}/app/settings">Preferences</a>
                 </div>
                 {/if}
                 <p class="footer-text">

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Transcoding;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
@@ -145,6 +146,16 @@ class FfmpegRunner
     private ?SegmentProcessRegistry $segmentRegistry = null;
 
     /**
+     * Thread cap for the software libx264 segment encode (playback-lag wave C),
+     * or null to resolve it at build time from `PHLIX_SEGMENT_ENCODE_THREADS` /
+     * the computed default — see {@see resolveSegmentEncodeThreads()}. Wired by
+     * {@see setSegmentEncodeThreads()} from `config/ffmpeg.php`; the config
+     * value and the fallback chain agree, so wired and unwired venues behave
+     * identically under the same env.
+     */
+    private ?int $segmentEncodeThreads = null;
+
+    /**
      * Creates a new FFmpegRunner instance.
      *
      * @param string $ffmpegPath Path to FFmpeg binary (default: /usr/bin/ffmpeg)
@@ -183,6 +194,48 @@ class FfmpegRunner
     public function setSegmentProcessRegistry(SegmentProcessRegistry $registry): void
     {
         $this->segmentRegistry = $registry;
+    }
+
+    /**
+     * Wire the software-encode thread cap (playback-lag wave C).
+     *
+     * Injected via a setter (mirroring {@see setSegmentProcessRegistry()}) so
+     * the constructor signature stays untouched. Null re-enables the build-time
+     * resolution chain (`PHLIX_SEGMENT_ENCODE_THREADS` env → computed default).
+     * A value <= 0 disables the `-threads` flag on the libx264 branch (x264
+     * auto-sizing, the pre-wave-C behavior).
+     *
+     * @since playback-lag wave C
+     */
+    public function setSegmentEncodeThreads(?int $threads): void
+    {
+        $this->segmentEncodeThreads = $threads;
+    }
+
+    /**
+     * Resolve the libx264 `-threads` value: wired config value first, else the
+     * same env → default chain `config/ffmpeg.php` applies, so a hand-built
+     * runner (tests, scripts) gets production semantics for free.
+     */
+    private function resolveSegmentEncodeThreads(): int
+    {
+        return $this->segmentEncodeThreads ?? EnvConfig::integer(
+            'PHLIX_SEGMENT_ENCODE_THREADS',
+            self::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount())
+        );
+    }
+
+    /**
+     * Pure default math: floor(cores / 3) with a floor of 2 — thirds because
+     * the measured prod mix runs roughly one decoder pool + one x264 pool +
+     * headroom per active encode; the 2 floor keeps a 1–2 core box from
+     * serializing x264 into a single-thread stall.
+     *
+     * @since playback-lag wave C
+     */
+    public static function defaultSegmentEncodeThreads(int $cpuCount): int
+    {
+        return max(2, intdiv($cpuCount, 3));
     }
 
     /**
@@ -1780,6 +1833,17 @@ class FfmpegRunner
                 $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
                 $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
             }
+            // playback-lag wave C: cap the thread pool on the SOFTWARE libx264
+            // encode only (contention fairness — see config/ffmpeg.php's
+            // segment_encode_threads). Deliberately absent on the copy branch
+            // (nothing to cap), the audio builders, libx265 rungs, and every
+            // hw-accel builder (GPU venues are not the starved ones).
+            if ($videoCodec === 'libx264') {
+                $encodeThreads = $this->resolveSegmentEncodeThreads();
+                if ($encodeThreads > 0) {
+                    $cmd .= ' -threads ' . $encodeThreads;
+                }
+            }
             // Per-rung VBV ceiling (capped CRF): a quality-driven encode that still
             // never exceeds the rung's advertised BANDWIDTH. Emitted only when the
             // caller supplies the rung cap; no bare -b:v (it would disable CRF mode).
@@ -2417,6 +2481,18 @@ class FfmpegRunner
      *                                         can kill the encode by channel id
      *                                         (SV-4.2 / X1). Null for direct-LAN
      *                                         requests.
+     * @param bool                 $prewarm    True for a launch-only (C6 head
+     *                                         start) encode: its atomic-write temp
+     *                                         is tagged `.part-p<hex>` so the
+     *                                         manager's prewarm budget
+     *                                         ({@see TranscodeManager::countInFlightPrewarmEncodes()})
+     *                                         can count prewarm-occupied slots
+     *                                         across workers from the same live
+     *                                         glob as the total cap (playback-lag
+     *                                         wave A′). Untagged temps keep the
+     *                                         exact 8-hex shape; the two glob
+     *                                         families are disjoint by the leading
+     *                                         `p` (not a hex digit).
      *
      * @return int OS process id of the launched job (0 if launch failed).
      *
@@ -2430,9 +2506,10 @@ class FfmpegRunner
         float $duration,
         array $params,
         ?string $cancelKey = null,
-        ?string $cancelGroup = null
+        ?string $cancelGroup = null,
+        bool $prewarm = false
     ): int {
-        $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
+        $tmp = $outFile . '.part-' . ($prewarm ? 'p' : '') . bin2hex(random_bytes(4));
         $cancelKey ??= $outFile;
 
         // S56: on the CMAF branch the encode also emits the variant's init

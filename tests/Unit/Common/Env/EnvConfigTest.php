@@ -129,4 +129,20 @@ final class EnvConfigTest extends TestCase
 
         self::assertSame('0', EnvConfig::nullableText('PHLIX_WMIN34_NULL'));
     }
+
+    // ---- availableCpuCount() -----------------------------------------------
+
+    /**
+     * Wave C (playback-lag): the portable core count behind the software-encode
+     * thread default. The venue guarantee this pins is "a sane positive integer"
+     * on every executor (nproc → /proc/cpuinfo → 1), plus memoization — the
+     * probe must run once, so two reads are the identical value and cheap.
+     */
+    public function test_available_cpu_count_is_a_positive_int_and_memoized(): void
+    {
+        $first = EnvConfig::availableCpuCount();
+
+        self::assertGreaterThanOrEqual(1, $first);
+        self::assertSame($first, EnvConfig::availableCpuCount());
+    }
 }

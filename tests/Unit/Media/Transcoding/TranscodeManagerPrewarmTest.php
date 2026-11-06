@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\RequestContext;
 use ReflectionMethod;
@@ -48,7 +49,19 @@ use Workerman\MySQL\Connection;
  *     the head start exists precisely to outlive the create request;
  *  8. a THROWN launch clears its own reservation (mirroring the inline
  *     finally's compare-and-clear), so a segment is never stranded as a
- *     phantom in-flight that every later drive gives up on.
+ *     phantom in-flight that every later drive gives up on;
+ *  9. wave A′ (playback-lag, 2026-11-06): prewarm-initiated encodes occupy at
+ *     MOST floor(cap/2) of the global ceiling — prewarm temps are tagged
+ *     `{final}.part-p<8hex>` (a `p` is no hex digit, so the tagged family and
+ *     the normal family are disjoint glob classes), the total cap sums both
+ *     families, and an over-budget prewarm segment SKIPS SILENTLY (null → the
+ *     window loop stops) instead of throwing — on-demand production keeps the
+ *     FULL ceiling and the observed 7.9 s inline seg0 stall behind a stacked
+ *     prewarm window cannot recur;
+ *    10. a tagged temp still counts against the FULL global ceiling (an inline
+ *     reader on a saturated tree is still 503 — A′ never weakens the cap);
+ *    11. the dedup snapshot strips the prewarm tag — an in-flight prewarm
+ *     final is seen as in-flight and never re-launched by a later drive.
  *
  * Laws 6-8 are the executable teeth for the review register
  * (.reviews/2026-11-05/REVIEW-playback-program.md, C6 minors M1/M2): the
@@ -353,6 +366,134 @@ final class TranscodeManagerPrewarmTest extends TestCase
         );
     }
 
+    /**
+     * Law 9 (wave A′): the observed FIELD-hub-phlix stall — a 3-segment prewarm
+     * window stacked on top of everything the reader needed, seg0 answering
+     * 7.9 s inline on a 4-slot box. Prewarm launches may occupy at most
+     * floor(cap/2): cap 4 → budget 2, so the third window segment skips
+     * SILENTLY (the loop's own null-stop signal, never an exception) while job
+     * creation still completes and the reader keeps the FULL ceiling.
+     *
+     * The double creates the tagged `.part-p<8hex>` temp per launch WITHOUT
+     * publishing — exactly the seconds-long mid-encode state the real detached
+     * chain leaves on disk while the window loop drives the next index — so
+     * the budget reads the same live glob production reads.
+     */
+    public function test_prewarm_budget_is_half_the_ceiling_and_skips_silently(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->holdingRunner($launches), 3, 4);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused'], 'budget exhaustion must never fail job creation');
+        $this->assertCount(2, $launches, 'cap 4 → prewarm may hold at most floor(4/2) = 2 slots');
+        $this->assertSame('seg-voriginal-00000.m4s', basename($launches[0]['out']));
+        $this->assertSame('seg-voriginal-00001.m4s', basename($launches[1]['out']));
+    }
+
+    /**
+     * Law 9 (budget math, continued): cap 2 → budget 1. A two-slot box gives
+     * the head start exactly ONE slot — the floor division must not round up.
+     */
+    public function test_prewarm_budget_rounds_down_at_the_smallest_useful_ceiling(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->holdingRunner($launches), 3, 2);
+
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertCount(1, $launches, 'cap 2 → budget 1, never 2');
+    }
+
+    /**
+     * Law 9 (budget math, continued): cap 8 → budget 4. When the window fits
+     * under the budget the head start is FULLY taken — A′ is a ceiling on
+     * prewarm, never a reduction of it.
+     */
+    public function test_prewarm_window_is_untouched_while_it_fits_the_budget(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->holdingRunner($launches), 3, 8);
+
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertCount(3, $launches, 'cap 8 → budget 4 > window 3 → every segment launches');
+    }
+
+    /**
+     * Law 9 (silent-skip tooth): the over-budget refusal rolls its reservation
+     * back BEFORE returning — a stranded reservation would make the segment
+     * look in flight forever (law-8's disease on the skip path). Re-driving
+     * the skipped index answers null again, launches nothing, and holds no
+     * reservation for that final.
+     */
+    public function test_over_budget_prewarm_leaves_no_stranded_reservation(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->holdingRunner($launches), 3, 4);
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+        $this->assertCount(2, $launches);
+
+        $skippedFinal = dirname($launches[0]['out']) . '/seg-voriginal-00002.m4s';
+        $again = $this->driveLaunchOnly($manager, $jobId, 'original', 2);
+
+        $this->assertNull($again, 'the budget skip is a silent give-up, not a launch');
+        $this->assertCount(2, $launches, 'the re-drive must not sneak a third launch past the budget');
+        $this->assertNull(
+            $this->segmentReservation($manager, $skippedFinal),
+            'a skipped prewarm segment must not strand a reservation'
+        );
+    }
+
+    /**
+     * Law 10: A′ never weakens the FULL global ceiling — tagged temps are
+     * segment encodes too. Four foreign tagged temps saturate cap 4 and an
+     * inline reader still fast-fails with the 503 backpressure, so the
+     * prewarm share can never be used to smuggle the fleet past the cap.
+     */
+    public function test_tagged_prewarm_temps_count_against_the_full_global_ceiling(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 4);
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+
+        $dir = $this->segmentDir . '/' . $jobId;
+        for ($i = 0; $i < 4; $i++) {
+            file_put_contents(sprintf($dir . '/seg-voriginal-%05d.m4s.part-p%08x', $i, 0xa0 + $i), '');
+        }
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 4);
+    }
+
+    /**
+     * Law 11: the dedup snapshot maps a TAGGED temp back to its final
+     * (`.part-p?[0-9a-f]+` strip). A sibling worker's in-flight prewarm is
+     * therefore visible to the next drive for that exact segment: give up,
+     * no duplicate launch. Delete the `p?` from the regex and the snapshot
+     * misses the final — the launch-only path would re-reserve, launch, and
+     * this pin goes red on both the null and the count.
+     */
+    public function test_dedup_snapshot_strips_the_prewarm_tag(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->holdingRunner($launches), 0, null);
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+        $this->assertSame([], $launches);
+
+        $final = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00003.m4s';
+        file_put_contents($final . '.part-pffffffff', '');
+
+        $again = $this->driveLaunchOnly($manager, $jobId, 'original', 3);
+
+        $this->assertNull($again, 'a tagged in-flight final must dedup like a plain one');
+        $this->assertCount(0, $launches, 'the strip law must not re-launch the sibling\'s encode');
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────
@@ -587,6 +728,54 @@ final class TranscodeManagerPrewarmTest extends TestCase
         $map = $property->getValue($manager);
 
         return $map[$final] ?? null;
+    }
+
+    /**
+     * Runner double for the A′ laws: like {@see recordingRunner()} but the
+     * launch simulates a STILL-RUNNING encode — it materialises exactly the
+     * temp the real `FfmpegRunner::startSegmentEncode` writes for a prewarm
+     * launch (`{out}.part-p<8hex>`, 8th arg true) and publishes NOTHING. The
+     * window loop's next budget read then sees what production sees: the
+     * in-flight tagged temp. Probe/colour stubs match {@see recordingRunner()}.
+     *
+     * @param list<array{out:string,start:float,prewarm:bool}> $launches
+     */
+    private function holdingRunner(array &$launches): FfmpegRunner
+    {
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
+        $ff->method('startSegmentEncode')->willReturnCallback(
+            /** @param array<string, mixed> $params */
+            static function (
+                string $inputPath,
+                string $outFile,
+                float $start,
+                float $duration,
+                array $params,
+                ?string $cancelKey = null,
+                ?string $cancelGroup = null,
+                bool $prewarm = false
+            ) use (&$launches): int {
+                $launches[] = ['out' => $outFile, 'start' => $start, 'prewarm' => $prewarm];
+                file_put_contents($outFile . '.part-p' . bin2hex(random_bytes(4)), '');
+                return 4242;
+            }
+        );
+
+        return $ff;
     }
 
     private function rrmdir(string $dir): void

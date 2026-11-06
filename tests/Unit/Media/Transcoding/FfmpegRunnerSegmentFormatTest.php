@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
+use Phlix\Common\Env\EnvConfig;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -29,6 +30,15 @@ use PHPUnit\Framework\TestCase;
  * changes one of these strings and reds this file. And every fMP4 case is
  * paired with the corresponding MPEG-TS case over the SAME params, so a branch
  * that silently applied to both would fail one side of the pair.
+ *
+ * ## Wave C (`-threads` cap) and these literals (2026-11-06)
+ *
+ * The playback-lag wave C added `-threads N` to the software libx264 branch,
+ * with N defaulting to `max(2, floor(cores/3))` — machine-dependent. The
+ * byte-identity pair tests below therefore pin the cap OFF (0) on the runner,
+ * so they keep proving the pre-C argv literally (the zero path emits no
+ * `-threads` at all — byte-for-byte the old string). The cap's own shape is
+ * pinned separately with an explicit `setSegmentEncodeThreads(4)`.
  */
 final class FfmpegRunnerSegmentFormatTest extends TestCase
 {
@@ -47,6 +57,24 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
         . " -i '/media/in.mkv' -t 6 -map 0:v:0 -map 0:a:0? -dn -sn -c:v copy -c:a copy"
         . ' -muxdelay 0 -muxpreload 0 -output_ts_offset 0'
         . " -f mpegts '/tmp/segs/job1/seg-v720p-00042.ts'";
+
+    /**
+     * Wave C shape: the same software libx264 command with an explicit
+     * `-threads 4` spliced in directly after `-crf 23` — one clause, in the
+     * encode branch, before the VBV pair. Written out in full (not derived by
+     * string surgery on MASTER_VIDEO) so this golden reads as an independent
+     * witness of the argv position.
+     */
+    private const WAVE_C_VIDEO = "'/usr/bin/ffmpeg' -nostdin -y -hide_banner -loglevel error -ss 252"
+        . " -i '/media/in.mkv' -t 6 -map 0:v:0 -map 0:a:0? -dn -sn -c:v libx264 -preset veryfast -crf 23"
+        . ' -threads 4 -maxrate 3000000 -bufsize 6000000'
+        . ' -vf "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2"'
+        . " -force_key_frames 'expr:eq(n,0)' -pix_fmt yuv420p -profile:v high -level 4.1"
+        . ' -c:a aac -b:a 128k -ac 2 -muxdelay 0 -muxpreload 0 -output_ts_offset 252'
+        . " -f mpegts '/tmp/segs/job1/seg-v720p-00042.ts'";
+
+    /** Knob env name the default path reads (see the env-hygiene tearDown). */
+    private const THREADS_ENV = 'PHLIX_SEGMENT_ENCODE_THREADS';
 
     private const MASTER_AUDIO = "'/usr/bin/ffmpeg' -nostdin -y -hide_banner -loglevel error -ss 252"
         . " -i '/media/in.mkv' -t 6 -vn -dn -sn -map 0:a:1 -c:a aac -b:a 128k -ac 2"
@@ -70,12 +98,26 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
 
     protected function tearDown(): void
     {
+        putenv(self::THREADS_ENV);
         HwaccelRegistry::reset();
     }
 
     private function runner(): FfmpegRunner
     {
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp/segs');
+    }
+
+    /**
+     * Runner with the wave C thread cap pinned to an explicit value — the
+     * byte-identity pair tests use 0 (the flag never splices `-threads`), the
+     * cap-shape tests use 4.
+     */
+    private function runnerWithThreads(int $threads): FfmpegRunner
+    {
+        $runner = $this->runner();
+        $runner->setSegmentEncodeThreads($threads);
+
+        return $runner;
     }
 
     /**
@@ -122,7 +164,15 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
 
     public function test_flag_off_video_command_is_byte_identical_to_master(): void
     {
-        $cmd = $this->runner()->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 252.0, 6.0, $this->videoParams());
+        // Wave C note: cap pinned OFF — this proves the literal pre-C string
+        // (the `0` path splices nothing); the cap-on shape is pinned below.
+        $cmd = $this->runnerWithThreads(0)->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_TS,
+            252.0,
+            6.0,
+            $this->videoParams()
+        );
 
         $this->assertSame(self::MASTER_VIDEO, $cmd);
     }
@@ -173,10 +223,13 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
      * An explicit `segment_format => mpegts` must reach the same string as
      * omitting the key entirely — otherwise a job stamped with the shipped
      * value would diverge from a pre-S56 job.
+     *
+     * Wave C note: cap pinned OFF on both sides so the claim stays the literal
+     * origin/master string (see the class docblock).
      */
     public function test_an_explicit_mpegts_value_is_the_same_as_no_value_at_all(): void
     {
-        $runner = $this->runner();
+        $runner = $this->runnerWithThreads(0);
 
         $this->assertSame(
             self::MASTER_VIDEO,
@@ -188,6 +241,117 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
                 $this->videoParams() + ['segment_format' => 'mpegts']
             )
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave C — the software-encode `-threads` cap
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * The cap splices exactly one `-threads N` into the software libx264
+     * branch (the WAVE_C_VIDEO golden above: after `-crf 23`, before the VBV
+     * pair), and NEVER into the sibling branches over the SAME runner: the
+     * `-c:v copy` passthrough, the audio-only builder, or the libx265 rung.
+     * The cap is a software-x264 contention-fairness law, not a global flag.
+     */
+    public function test_the_wave_c_thread_cap_splices_the_video_command_only(): void
+    {
+        $runner = $this->runnerWithThreads(4);
+
+        $this->assertSame(
+            self::WAVE_C_VIDEO,
+            $runner->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 252.0, 6.0, $this->videoParams())
+        );
+
+        // Cap ON (4) and the copy rung still equals the pre-C master string.
+        $this->assertSame(
+            self::MASTER_VIDEO_COPY,
+            $runner->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 0.0, 6.0, [
+                'video_codec' => 'copy',
+                'audio_codec' => 'copy',
+            ])
+        );
+
+        // Cap ON and the audio-only builder is untouched.
+        $this->assertSame(
+            self::MASTER_AUDIO,
+            $runner->buildAudioSegmentCommand(
+                '/media/in.mkv',
+                '/tmp/segs/job1/seg-a1-00042.ts',
+                252.0,
+                6.0,
+                $this->audioParams()
+            )
+        );
+
+        // Cap ON and the HEVC software rung carries no `-threads` (deliberate
+        // scope: the prod ladder rungs are H.264; a future HEVC-cap lane can
+        // widen the branch — the absence here is the pin that says so).
+        $hevc = $runner->buildSegmentCommand('/media/in.mkv', self::OUT_TS, 252.0, 6.0, array_merge(
+            $this->videoParams(),
+            ['video_codec' => 'libx265']
+        ));
+        $this->assertStringContainsString('-c:v libx265', $hevc);
+        $this->assertStringNotContainsString('-threads', $hevc);
+    }
+
+    /**
+     * The default follows the machine's core count through the pure math —
+     * `max(2, floor(cores/3))` — pinning BOTH the helper values and that an
+     * unpinned runner on THIS box emits exactly that number.
+     */
+    public function test_the_wave_c_default_follows_the_machine_core_count(): void
+    {
+        $this->assertSame(4, FfmpegRunner::defaultSegmentEncodeThreads(12));
+        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(6));
+        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(3));
+        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(1));
+        $this->assertSame(3, FfmpegRunner::defaultSegmentEncodeThreads(9));
+        $this->assertSame(21, FfmpegRunner::defaultSegmentEncodeThreads(63));
+
+        $expected = FfmpegRunner::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount());
+        $this->assertGreaterThan(0, $expected);
+
+        $cmd = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_TS,
+            252.0,
+            6.0,
+            $this->videoParams()
+        );
+        $this->assertStringContainsString(' -threads ' . $expected . ' ', $cmd);
+    }
+
+    /**
+     * The env knob wins over both the machine default and is honoured literally
+     * at the operator's edge cases: a small value is not clamped up (the knob is
+     * an operator command, not a suggestion) and `0` DISABLES the flag — the
+     * M-SERVER-34 `EnvConfig::integer()` posture where a literal "0" must
+     * survive instead of silently becoming the default.
+     */
+    public function test_the_wave_c_env_override_wins_and_zero_disables(): void
+    {
+        putenv(self::THREADS_ENV . '=7');
+        $cmd = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_TS,
+            252.0,
+            6.0,
+            $this->videoParams()
+        );
+        $this->assertStringContainsString(' -threads 7 ', $cmd);
+
+        putenv(self::THREADS_ENV . '=0');
+        $off = $this->runner()->buildSegmentCommand(
+            '/media/in.mkv',
+            self::OUT_TS,
+            252.0,
+            6.0,
+            $this->videoParams()
+        );
+        $this->assertStringNotContainsString('-threads', $off);
+        // And with the env at 0 the builder output is again the pre-C literal.
+        $this->assertSame(self::MASTER_VIDEO, $off);
     }
 
     // ─────────────────────────────────────────────────────────────────

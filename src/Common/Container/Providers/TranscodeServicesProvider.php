@@ -115,6 +115,15 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $ffmpegConfig['max_concurrent_transcodes']
             : null;
 
+        // playback-lag wave C: the software libx264 encode thread cap. Pass the
+        // config value through when it is a real int (env-aware at the config
+        // layer; 0 = "disable the flag" is a REAL value, hence is_int and not ?:
+        // — the same M-SERVER-34 rule the C6 knob above honors). Absent/malformed
+        // → null → the runner's own env → default chain applies identically.
+        $segmentEncodeThreads = is_int($ffmpegConfig['segment_encode_threads'] ?? null)
+            ? $ffmpegConfig['segment_encode_threads']
+            : null;
+
         $loudnormParams = null;
         $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
         if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
@@ -140,7 +149,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ),
 
             FfmpegRunner::class => factory(
-                static function (ContainerInterface $c) use ($ffmpegPath, $ffprobePath, $transcodeDir): FfmpegRunner {
+                static function (ContainerInterface $c) use (
+                    $ffmpegPath,
+                    $ffprobePath,
+                    $transcodeDir,
+                    $segmentEncodeThreads
+                ): FfmpegRunner {
                     // Static cache: only instantiate once per worker process.
                     static $runner = null;
 
@@ -159,6 +173,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
 
                     $runner = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
                     $runner->setConfig($mergedConfig);
+                    // playback-lag wave C: software-encode thread cap (setter per
+                    // this constructor's documented "signature unchanged" law).
+                    $runner->setSegmentEncodeThreads($segmentEncodeThreads);
 
                     // SV-4.2: wire the segment-process registry so on-demand encode
                     // PIDs are tracked for cancellation / wait-timeout kill.

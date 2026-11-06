@@ -302,6 +302,21 @@ class TranscodeManager
     private const INFLIGHT_TEMP_GLOB = 'seg-*.part-????????';
 
     /**
+     * Glob matching ONLY the atomic-write temps of prewarm-INITIATED (C6 head
+     * start) segment encodes — playback-lag wave A′. `FfmpegRunner::
+     * startSegmentEncode()` tags those temps `{final}.part-p{8 hex}`: the leading
+     * `p` is NOT a hex digit, so this family and {@see INFLIGHT_TEMP_GLOB} are
+     * DISJOINT (a random 8-hex suffix can never collide with the tag), and the
+     * TOTAL cap counts BOTH globs summed — prewarm encodes remain full weight
+     * against the ceiling while their own share is separately countable
+     * ({@see countInFlightPrewarmEncodes()}), which is what lets prewarm be
+     * budgeted to half the box without the count lying about the whole. The exact
+     * `-p????????` length anchor keeps the CMAF `<tmp>.i`/`.s0`/`.m3u8` siblings
+     * out for the same reason S56 anchored the base pattern.
+     */
+    private const INFLIGHT_PREWARM_TEMP_GLOB = 'seg-*.part-p????????';
+
+    /**
      * Columns {@see getJobRow()} selects — the exact set its callers read. Narrowed
      * from `SELECT *` so the per-segment hot path never fetches the wide row under the
      * serialized DB mutex on a cache miss.
@@ -951,6 +966,15 @@ class TranscodeManager
      * targets are unpredictable; the first window is not). Overridable via
      * `config['hls']['prewarm_segments']` / env `PHLIX_SEGMENT_PREWARM_SEGMENTS`;
      * 0 disables the head start (read-time producer unchanged).
+     *
+     * Wave A′ (playback-lag): the window is additionally BUDGETED — prewarm
+     * encodes may occupy at most floor(maxConcurrentSegments / 2) of the
+     * global in-flight slots (see {@see prewarmInFlightBudget()}), so on
+     * prod's cap=4 box a 3-segment window launches at most 2 while the
+     * reader is arriving and the third rides the read-time producer. FIELD
+     * measured the ungoverned window's cost: creation stacked its full 3
+     * against the ceiling ahead of the first request and seg0 stalled 7.9 s
+     * INLINE for the very viewer whose head start it was.
      */
     private const PREWARM_SEGMENT_COUNT = 3;
 
@@ -1447,7 +1471,9 @@ class TranscodeManager
         // capacity ceiling) already ran, so a pre-gen launch cannot double-
         // build, and a saturated box answers with the SAME SegmentBusyException
         // the read path uses (the pre-gen loop catches it and stops; job
-        // creation never fails on it). Unlike the inline branch below, this
+        // creation never fails on it). Wave A′ adds ONE prewarm-only rule below:
+        // the head start's own floor(cap/2) budget, silent-skip on over-budget.
+        // Unlike the inline branch below, this
         // mode:
         //  - takes NO waiter slot (nobody is waiting), so disconnect-kill
         //    ref-counting is untouched,
@@ -1466,6 +1492,23 @@ class TranscodeManager
             if (!$reserved) {
                 return null;
             }
+            // playback-lag wave A′: the head start may occupy AT MOST
+            // floor(cap/2) of the global in-flight slots — and when it is over
+            // its budget it SKIPS SILENTLY (this branch's null is the loop's
+            // stop signal, :1688's family), never a SegmentBusyException, never
+            // a failure: the worst case degrades to the pre-C6 world the reader
+            // already handles (an inline build at read time). The reader's own
+            // path below keeps the FULL ceiling untouched — prewarm yields the
+            // back half of the box to demand. This is what ends the measured
+            // 7.9 s seg0-inline stall: creation could previously stack its
+            // whole window against the ceiling ahead of the first real request.
+            if ($this->countInFlightPrewarmEncodes() >= $this->prewarmInFlightBudget()) {
+                // Same compare-and-clear discipline as the cap rollback above:
+                // we reserved this slot at :1433's family and own the generation.
+                $this->clearReservationIfMine($final, $myGen);
+
+                return null;
+            }
             try {
                 $this->touchJobDir($dir);
                 $this->ensureDiskSpace();
@@ -1477,6 +1520,7 @@ class TranscodeManager
                     $segParams,
                     $final,
                     null,
+                    prewarm: true,
                 );
             } catch (\Throwable $e) {
                 // The reservation must not leak when the launch itself fails —
@@ -1635,7 +1679,9 @@ class TranscodeManager
      * case is exactly the pre-C6 world (cold inline build at read time).
      *
      * @return int number of encodes actually launched (0 in the disabled,
-     *              reused-row, non-advertised, capped or capped-early cases)
+     *              reused-row, non-advertised, capped, capped-early or
+     *              A′-budget-spent cases; the budget can stop the window below
+     *              the knob without any of the exceptions firing)
      */
     private function prewarmFirstSegments(string $jobId): int
     {
@@ -1670,7 +1716,7 @@ class TranscodeManager
         try {
             for ($i = 0; $i < $this->prewarmSegments; $i++) {
                 if ($this->ensureSegmentInternal($jobId, $variantId, $i, null, false) === null) {
-                    break; // out of range / already in flight elsewhere / refused — stop
+                    break; // out of range / sibling holds it / cap / A′ budget — stop
                 }
                 $launched++;
             }
@@ -2268,8 +2314,50 @@ class TranscodeManager
      */
     private function countInFlightSegmentEncodes(): int
     {
+        // Wave A′: the total counts BOTH families summed — untagged (on-demand)
+        // temps by the S56-exact base pattern and prewarm-tagged temps by the
+        // disjoint `p`-prefixed pattern. An encode in flight is an encode in
+        // flight for the ceiling's purposes regardless of who launched it; only
+        // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
+        // families differently.
         $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
+        $total = is_array($parts) ? count($parts) : 0;
+        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+
+        return $total + (is_array($prewarmParts) ? count($prewarmParts) : 0);
+    }
+
+    /**
+     * Count in-flight encodes that were launched by the C6 prewarm head start,
+     * across ALL jobs and ALL workers, by globbing the shared segment tree for
+     * the `.part-p{8 hex}`-tagged temps (wave A′). Same real-time-glob doctrine
+     * as {@see countInFlightSegmentEncodes()} on purpose: a memory-only per-worker
+     * view would let N workers each create a job and each stack its own head
+     * start to the FULL ceiling — the exact single-viewer rubber-band starvation
+     * this budget exists to end, just scaled by worker count. One extra glob per
+     * prewarm launch decision only (never on the reader hot path), matching the
+     * frequency argument that keeps the total-cap glob affordable.
+     */
+    private function countInFlightPrewarmEncodes(): int
+    {
+        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+
         return is_array($parts) ? count($parts) : 0;
+    }
+
+    /**
+     * The wave A′ budget: how many of the global in-flight segment slots the C6
+     * prewarm head start may occupy AT MOST, leaving at least
+     * `cap - floor(cap/2)` slots for reader-driven (on-demand) encodes. The
+     * on-demand path keeps the FULL ceiling; prewarm yields the back half.
+     *
+     * cap=4 (prod env) → 2, cap=8 (default) → 4. A cap=1 box budgets 0 — every
+     * slot belongs to demand; the head start stands down entirely, which is the
+     * honest reading of "never starve the reader you exist to serve".
+     */
+    private function prewarmInFlightBudget(): int
+    {
+        return intdiv($this->maxConcurrentSegments, 2);
     }
 
     /**
@@ -2307,13 +2395,20 @@ class TranscodeManager
         $this->lastInFlightReconcileMs = $now;
 
         $snapshot = [];
-        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        if (is_array($parts)) {
-            foreach ($parts as $part) {
-                $final = preg_replace('/\.part-[0-9a-f]+$/', '', $part);
-                if (is_string($final) && $final !== $part) {
-                    $snapshot[$final] = true;
-                }
+        // Wave A′: BOTH temp families feed the DEDUP snapshot — a reader must
+        // piggyback on an in-flight PREWARM encode of the exact segment it wants
+        // (never double-build it), and the strip regex removes the optional `p`
+        // tag so the snapshot keys are final paths for both families.
+        $baseParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
+        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+        $allParts = array_merge(
+            is_array($baseParts) ? $baseParts : [],
+            is_array($prewarmParts) ? $prewarmParts : []
+        );
+        foreach ($allParts as $part) {
+            $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);
+            if (is_string($final) && $final !== $part) {
+                $snapshot[$final] = true;
             }
         }
         $this->globalInFlightSnapshot = $snapshot;

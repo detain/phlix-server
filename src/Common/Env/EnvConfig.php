@@ -58,4 +58,57 @@ final class EnvConfig
 
         return $raw === false || $raw === '' ? null : $raw;
     }
+
+    /**
+     * Memoized answer of {@see cpuCountProbe()} — the count is a property of
+     * the machine, and a process that asks once must not shell out again.
+     */
+    private static ?int $cpuCount = null;
+
+    /**
+     * Number of CPUs usable by this process, portable across venues.
+     *
+     * PHP has no core-count API without an extension, so the chain is:
+     *  1. `nproc` (coreutils; affinity-aware — reflects taskset/cgroup limits
+     *     on every distro that ships it, which is every Linux venue here);
+     *  2. `/proc/cpuinfo` `processor:` lines (minimal images without nproc —
+     *     busybox/alpine cuts — still mount procfs);
+     *  3. `1` — the honest floor when nothing answers.
+     *
+     * Never throws, never warns (same contract as every other helper here).
+     *
+     * @since playback-lag wave C (see `config/ffmpeg.php`'s
+     *        `segment_encode_threads` default, its first consumer).
+     */
+    public static function availableCpuCount(): int
+    {
+        if (self::$cpuCount !== null) {
+            return self::$cpuCount;
+        }
+
+        return self::$cpuCount = self::cpuCountProbe();
+    }
+
+    private static function cpuCountProbe(): int
+    {
+        $out = @shell_exec('nproc 2>/dev/null');
+        if (is_string($out) && preg_match('/^\s*(\d+)\s*$/', $out, $m) === 1) {
+            $count = (int) $m[1];
+            if ($count > 0) {
+                return $count;
+            }
+        }
+
+        if (is_readable('/proc/cpuinfo')) {
+            $info = @file_get_contents('/proc/cpuinfo');
+            if (is_string($info)) {
+                $count = preg_match_all('/^processor\s*:/m', $info);
+                if (is_int($count) && $count > 0) {
+                    return $count;
+                }
+            }
+        }
+
+        return 1;
+    }
 }

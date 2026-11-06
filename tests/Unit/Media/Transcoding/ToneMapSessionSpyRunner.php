@@ -90,13 +90,18 @@ final class ToneMapSessionSpyRunner extends FfmpegRunner
         float $duration,
         array $params,
         ?string $cancelKey = null,
-        ?string $cancelGroup = null
+        ?string $cancelGroup = null,
+        bool $prewarm = false
     ): int {
+        // Signature compatibility with the wave A′ parameter; this double never
+        // spawns, so the temp tag it would produce is irrelevant here.
+        unset($prewarm);
         // Build the genuine command (the tone-map re-derive branch lives here); the
         // returned string is discarded — we only need the side effect of any
         // needsToneMapping()/getToneMappingProfile() call it would make.
         $this->buildSegmentCommand($inputPath, $outFile, $start, $duration, $params);
         file_put_contents($outFile, 'encoded');
+
         return 4242;
     }
 }

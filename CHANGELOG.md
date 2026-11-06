@@ -468,6 +468,58 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A software-encode box keeps its on-demand segments responsive: the
+  creation-time prewarm window may now hold at most half the global segment
+  ceiling, and each software libx264 encode carries a bounded `-threads`
+  cap.** FIELD-hub-phlix measured 3.2–4.7 s per 6 s segment on a 12-core GPU-less
+  host, worst a 7.9 s inline seg0 answer: the C6 head start stacked three
+  prewarm encodes at the SAME full ceiling the reader competes against, and
+  neither x264 nor the HEVC decoder was told how many threads to spawn
+  (each auto-spawned ~cores+2 — 40+ runnable threads under contention).
+  Wave A′: prewarm-initiated encodes are tagged on disk
+  (`{final}.part-p<hex>`, disjoint from the normal `.part-<hex>` family
+  because a `p` is no hex digit), the summed live glob counts them, and the
+  per-segment budget is `floor(cap/2)` — cap 4 → 2 prewarm slots, cap 8 → 4 —
+  over budget the window skips SILENTLY (job creation never fails; the reader
+  keeps the FULL ceiling and the missed segment stays demand-shaped). Wave C:
+  `buildSegmentCommand`'s software libx264 branch appends `-threads N`, N
+  from `config/ffmpeg.php`'s new `segment_encode_threads`, default
+  `max(2, floor(availableCpuCount()/3))` (portable helper: nproc →
+  /proc/cpuinfo → 1), env `PHLIX_SEGMENT_ENCODE_THREADS` overrides and a
+  literal `0` disables the flag (M-SERVER-34 posture). This is contention
+  fairness, not throughput magic: fewer encoder processes AND bounded threads
+  per process. Deliberately absent on the copy passthrough, the audio
+  builders, libx265, and every hwaccel builder; argv is persisted per job
+  (`transcode_jobs.segment_params`), so existing jobs keep their stamped
+  shape — the knob is runner-level and `EncodeSettings::fingerprint()` is
+  untouched. Goldens rotated from the measured red: the two byte-identity
+  pair tests in `FfmpegRunnerSegmentFormatTest` now pin the cap OFF (0) so
+  they keep proving the literal pre-C string (and the new `-threads 0` path
+  re-proves byte-identity end to end); wave-C shape pinned separately with an
+  explicit 4-thread golden. Census rotated 2075→2076 in its own disclosed
+  late-rotation commit (the adding file was the probe lane's
+  `HwaccelVendorProbeEncoderSelectionTest.php`). No new wire codes, no new
+  PHP files in this entry.
+  [playback-lag program / waves A′ + C]
+- **A hardware-accelerator box now encodes each ABR rung with the encoder for
+  that rung's codec — it no longer silently splices AV1 into H.264 rungs.**
+  `ffmpeg -encoders` lists its encoders alphabetically, and the VAAPI/QSV/AMF
+  (plus the V4L2-request and VideoToolbox) probes stored the first entry of the
+  filtered vendor list as the capability's encoder. `av1_vaapi` sorts before
+  `h264_vaapi`, so on a GPU host the segment builder's
+  `-c:v <capability->encoder` emitted the AV1 encoder for every rung, whatever
+  the ladder asked for — the H.264 playlist would carry AV1 video no client
+  advertises for it. Capabilities now carry a codec-correct
+  `encoders_by_codec` map parsed from the same listing, and
+  `buildHwaccelSegmentCommand` resolves `encoderForCodec()` by the rung's
+  generic codec (nvenc was already prefix-hardcoded and is untouched); the
+  primary `encoder` field stays as the h264-first legacy view. Red-first with
+  a fake-ffmpeg alphabetical listing across all five vendor families plus
+  per-rung splice pins in the runner test (late-returned repair lane; the
+  earlier claimed commits 36095810/8097b859 were phantoms — the landed object
+  is local commit `73a98001`, CHANGELOG recorded forward here per the
+  verbatim-history rule).
+  [playback-lag program / VAAPI probe fix]
 - **Core update check self-heals when the Fastly-hosted marker leg times
   out — it now falls back to `api.github.com` (mirrors hub `ad97e0cd`).**
   The owner symptom "Update check is not working — read

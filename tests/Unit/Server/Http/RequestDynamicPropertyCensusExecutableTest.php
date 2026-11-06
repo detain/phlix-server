@@ -1110,7 +1110,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // codec-correct primary-codec selector that the display-only `decoder:`
     // field now shares with `encoder:`); 2078 measured from the phpunit red,
     // not predicted.
-    private const EXPECTED_PHP_FILES = 2078;
+    // +1 2078→2079: Fix A′′′ adds tests/Unit/Media/Transcoding/
+    // TranscodeManagerStalePartTempPurgeTest.php (orphaned .part temps after
+    // group-TERM aborts pinned out of the in-flight cap, prewarm budget and
+    // cross-worker dedup snapshot once their age passes the wrapper-timeout
+    // death bound); 2079 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2079;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

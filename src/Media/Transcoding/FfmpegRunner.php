@@ -931,11 +931,18 @@ class FfmpegRunner
      * a method-level `static`, which bypassed the settings store entirely and
      * made the setting's schema `"restart": true` promise false.
      *
+     * PUBLIC since Fix A′′′ (2026-11-06) for a second consumer:
+     * {@see \Phlix\Media\Transcoding\TranscodeManager}'s dead-`.part`-temp purge
+     * derives the provable death bound of an orphaned atomic-write temp from
+     * THIS same value — the wrapper a detached encode actually runs under — so
+     * the two can never disagree by configuration drift. (Mockability of this
+     * seam in tests is the secondary, honest benefit.)
+     *
      * @return int Timeout in seconds (0 = no timeout)
      *
      * @since SV-4.2
      */
-    private function getTranscodeTimeout(): int
+    public function getTranscodeTimeout(): int
     {
         /** @var mixed $timeoutSecs */
         $timeoutSecs = \Phlix\Config\EffectiveConfig::file('ffmpeg')['transcode_timeout'] ?? null;

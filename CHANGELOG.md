@@ -507,6 +507,40 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A reload during a segment encode no longer leaves a phantom lock that
+  starves later players.** When a detached segment encode is killed
+  mid-flight — the client disconnecting triggers a group-TERM — the
+  encoder's `.part-<hex>` temp (and its sidecars) survive with no owner:
+  the launcher's registry entry is already gone, so the temp-cleaner never
+  runs again. Those orphans counted forever as LIVE encodes at all three
+  accounting sites, so one orphan permanently occupied a slot of the
+  global in-flight cap (`SEGMENT_MAX_INFLIGHT_GLOBAL`), poisoned the
+  prewarm budget (`floor(cap/2)`), and kept the cross-worker dedup
+  snapshot entry alive — a fresh requester for that segment then skipped
+  launching its own encode, rode the ≤30-second piggyback poll, and got a
+  repeating 404 "segment unavailable" — forever, because the accounting
+  is a real-time whole-tree glob (S2: no in-memory state), so no worker
+  restart clears it either. Cure: the detached generator is always wrapped in
+  `timeout -k 10 -s TERM <transcode_timeout>`, so a temp whose mtime age
+  exceeds that wrapper horizon plus a 300-second reap margin is PROVABLY
+  dead — the in-flight accounting step now unlinks such temps (own
+  per-temp hex sidecar family only, never a `{final}.part-*` glob, so a
+  sibling's live temp is untouched) before deciding what counts. The real
+  -time whole-tree glob doctrine (S2) is preserved; only the definition
+  of LIVE changed. When the wrapper is disabled by config
+  (`transcode_timeout <= 0`) there is no provable bound, so the purge
+  stands down and today's behavior is byte-preserved. Disclosed limits:
+  a fresh orphan (younger than the bound) still costs each requester one
+  piggyback-wait-then-404 until the wrapper expires it, and a tighter
+  bound would unlink LIVE temps (ffmpeg writes by fd — SV-4.2 finding #2
+  slow-but-wanted law). The captured 400 on the aborted request is
+  separately proven NOT to be the application: no app-level arm answers
+  a well-formed `/hls/{uuid}/{segment}` with 400 (bad uuid/filename are
+  400, signature denial is 401, busy/cache-full/refused are 503,
+  missing is 404); the haproxy session showing `Tr=-1 CD--` was the
+  reload tearing down its own keep-alive connection.
+  [step Fix A′′′, `TranscodeManagerStalePartTempPurgeTest`]
+
 - **Multi-audio titles now play sound through the pinned-'Original'
   quality path, and existing job directories self-heal on first request.**
   The silence had a second, client-shaped half that today's earlier rung-

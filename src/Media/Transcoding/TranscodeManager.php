@@ -317,6 +317,32 @@ class TranscodeManager
     private const INFLIGHT_PREWARM_TEMP_GLOB = 'seg-*.part-p????????';
 
     /**
+     * Fix A′′′ (2026-11-06) — slack ADDED to the detached-encode wrapper timeout
+     * before a `.part-*` / `.part-p*` atomic-write temp is declared DEAD and
+     * purged from every in-flight accounting site
+     * ({@see purgeDeadInFlightTemps()}).
+     *
+     * The bound must be provable, and only the wrapper proves death: a
+     * detached segment encode runs under
+     * `timeout -k 10 -s TERM <ffmpeg.transcode_timeout>`
+     * ({@see FfmpegRunner::getTranscodeTimeout()}, single source), so once a
+     * temp is older than timeout + this margin, NO process can legitimately
+     * own it any more — TERM fired (with its 10 s KILL grace) and the reap
+     * slack is accounted. What this cures: an orphan — a group TERM (client-
+     * abort disconnect kill, launcher teardown) that skipped the chain's
+     * `rm`/`; rm -f` publish tail while its registry entry was already gone —
+     * used to occupy a global-cap slot, a prewarm-budget slot, and the dedup
+     * snapshot for the LIFETIME of the job directory (LRU sweep is idle-based,
+     * an active title never ages out). Enough orphans meant 503 theater for
+     * every seek on the box. What this must NOT be: anything derived from
+     * `segmentMaxWaitMs` — a merely SLOW encode (the SV-4.2 finding-#2 law:
+     * slow-but-wanted finishes, it is not cancelled) writes an MPEG-TS temp by
+     * fd for the whole encode; unlinking it early kills a publish the player
+     * is still waiting on. Hence the wrapper, never the reader patience.
+     */
+    private const INFLIGHT_TEMP_DEATH_MARGIN_SECONDS = 300;
+
+    /**
      * Columns {@see getJobRow()} selects — the exact set its callers read. Narrowed
      * from `SELECT *` so the per-segment hot path never fetches the wide row under the
      * serialized DB mutex on a cache miss.
@@ -2320,11 +2346,18 @@ class TranscodeManager
         // flight for the ceiling's purposes regardless of who launched it; only
         // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
         // families differently.
+        //
+        // Fix A′′′: what the globs return first passes through
+        // {@see purgeDeadInFlightTemps()} — provably-dead orphaned temps are
+        // unlinked and stop counting. The S2 real-time whole-tree glob doctrine
+        // is untouched (this is still never derived from memory); only the
+        // definition of LIVE changed, and it changed to something the wrapper
+        // timeout can prove.
         $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        $total = is_array($parts) ? count($parts) : 0;
+        $total = is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
         $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
 
-        return $total + (is_array($prewarmParts) ? count($prewarmParts) : 0);
+        return $total + (is_array($prewarmParts) ? count($this->purgeDeadInFlightTemps($prewarmParts)) : 0);
     }
 
     /**
@@ -2342,7 +2375,77 @@ class TranscodeManager
     {
         $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
 
-        return is_array($parts) ? count($parts) : 0;
+        return is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
+    }
+
+    /**
+     * Fix A′′′ (2026-11-06) — the dead-temp law behind the orphan cure.
+     *
+     * Filters a freshly-globbed list of `.part-*` atomic-write temps down to
+     * the LIVE ones, UNLINKING each temp whose age exceeds the provable death
+     * bound ({@see INFLIGHT_TEMP_DEATH_MARGIN_SECONDS}): such a file has
+     * outlived its `timeout` wrapper and nobody can be writing it. A sidecar
+     * family (CMAF writes `<tmp>.i`, `<tmp>.s0`, `<tmp>.m3u8` beside the
+     * marker) is unlinked with its temp — keyed to THIS temp's unique hex
+     * suffix, exactly the per-temp doctrine of
+     * {@see SegmentProcessRegistry::defaultTempCleaner()}; never a
+     * `{final}.part-*` family glob, which could reach a SIBLING live temp of
+     * the same final segment.
+     *
+     * The bound is the wrapper, never reader patience: a live-but-slow encode
+     * holds its MPEG-TS temp by fd for the whole encode (SV-4.2 finding #2 —
+     * slow-but-wanted must finish), and only `timeout <N>` expiry proves a
+     * writer is gone. When the wrapper timeout is unset (`0`) there is NO
+     * provable bound, so the purge stands down entirely and behavior is
+     * byte-for-byte today's — stale-lock tax and all (disclosed in the
+     * CHANGELOG entry; the shipped config default is a finite timeout).
+     *
+     * @param list<string> $parts Globbed absolute temp paths (either family).
+     *
+     * @return list<string> The subset still plausibly owned by a live encode.
+     */
+    private function purgeDeadInFlightTemps(array $parts): array
+    {
+        $deathSeconds = $this->inflightTempDeathSeconds();
+        if ($deathSeconds <= 0 || $parts === []) {
+            return $parts;
+        }
+
+        $now = time();
+        $live = [];
+        foreach ($parts as $part) {
+            $mtime = @filemtime($part);
+            if ($mtime !== false && ($now - $mtime) <= $deathSeconds) {
+                $live[] = $part; // young — genuinely (or plausibly) encoding
+                continue;
+            }
+            // Dead (past the wrapper bound, or vanished between glob and stat —
+            // the unlink is then a no-op and counting it would only re-charge
+            // the tax to a different segment's launch).
+            @unlink($part);
+            foreach (glob($part . '.*') ?: [] as $sidecar) {
+                @unlink($sidecar);
+            }
+        }
+
+        return $live;
+    }
+
+    /**
+     * The death bound in seconds for {@see purgeDeadInFlightTemps()}, or 0
+     * when no bound is provable (wrapper disabled → purge disabled). Reads
+     * the SAME effective config the detached wrapper was built from
+     * ({@see FfmpegRunner::getTranscodeTimeout()}), per-worker, cheap
+     * (EffectiveConfig::file memoises).
+     */
+    private function inflightTempDeathSeconds(): int
+    {
+        $timeout = $this->ffmpeg->getTranscodeTimeout();
+        if ($timeout <= 0) {
+            return 0;
+        }
+
+        return $timeout + self::INFLIGHT_TEMP_DEATH_MARGIN_SECONDS;
     }
 
     /**
@@ -2399,11 +2502,16 @@ class TranscodeManager
         // piggyback on an in-flight PREWARM encode of the exact segment it wants
         // (never double-build it), and the strip regex removes the optional `p`
         // tag so the snapshot keys are final paths for both families.
+        // Fix A′′′: through the same dead-temp purge as the cap counts, so an
+        // orphaned temp stops keying dedup-once-dead at the very latest one
+        // reconcile tick after its wrapper timeout provably expired — the
+        // fresh requester then RESERVES and re-encodes instead of riding a
+        // ≤30 s piggyback poll into a 404 forever.
         $baseParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
         $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
         $allParts = array_merge(
-            is_array($baseParts) ? $baseParts : [],
-            is_array($prewarmParts) ? $prewarmParts : []
+            $this->purgeDeadInFlightTemps(is_array($baseParts) ? $baseParts : []),
+            $this->purgeDeadInFlightTemps(is_array($prewarmParts) ? $prewarmParts : [])
         );
         foreach ($allParts as $part) {
             $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);

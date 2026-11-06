@@ -27,6 +27,9 @@ class AmfProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'amf';
 
+    /** Every AMF encoder ffmpeg lists is named `<codec>` + this suffix. */
+    private const ENCODER_SUFFIX = '_amf';
+
     public function getVendorName(): string
     {
         return self::VENDOR_NAME;
@@ -56,11 +59,16 @@ class AmfProbe implements VendorProbeInterface
             return null;
         }
 
+        // `ffmpeg -encoders` lists names ALPHABETICALLY, so $encoders[0] is
+        // av1_amf wherever the AV1 AMF encoder exists — never splice it as the
+        // default. Key the capability by codec; see the encoderForCodec()
+        // docblock on HwaccelCapability for the full footgun law.
+        $encoders_by_codec = $this->mapEncodersByCodec($encoders);
         $supported_codecs = $this->detectSupportedCodecs($encoders);
 
         return new HwaccelCapability(
             vendor: self::VENDOR_NAME,
-            encoder: $encoders[0],
+            encoder: $encoders_by_codec['h264'] ?? $encoders[0],
             decoder: $encoders[0],
             supports_hdr_tone_mapping: true,
             supported_codecs: $supported_codecs,
@@ -69,6 +77,7 @@ class AmfProbe implements VendorProbeInterface
             max_resolution_h: 2160,
             max_bitrate: 40000000,
             extra_args: [],
+            encoders_by_codec: $encoders_by_codec,
         );
     }
 
@@ -122,6 +131,33 @@ class AmfProbe implements VendorProbeInterface
         }
 
         return array_unique($encoders);
+    }
+
+    /**
+     * Parses the probed `<codec>_amf` names into a codec-keyed encoder map
+     * so rung-time selection never depends on the alphabetical probe order.
+     *
+     * @param array<int, string> $encoders
+     * @return array<string, string>
+     */
+    private function mapEncodersByCodec(array $encoders): array
+    {
+        $by_codec = [];
+
+        foreach ($encoders as $encoder) {
+            if (!str_ends_with($encoder, self::ENCODER_SUFFIX)) {
+                continue;
+            }
+
+            $codec = substr($encoder, 0, -strlen(self::ENCODER_SUFFIX));
+            if ($codec === '') {
+                continue;
+            }
+
+            $by_codec[$codec] = $encoder;
+        }
+
+        return $by_codec;
     }
 
     /**

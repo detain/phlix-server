@@ -113,4 +113,50 @@ class HwaccelCapabilityTest extends TestCase
         $this->assertFalse($capability->supportsResolution(3840, 2160));
         $this->assertFalse($capability->supportsResolution(1921, 1080));
     }
+
+    /**
+     * encoderForCodec() is the per-rung resolution the hardware segment
+     * builder splices into `-c:v`: a probed codec resolves to its exact
+     * `<codec>_<vendor>` name regardless of how the probe's listing was
+     * ordered; an unknown codec (or a capability with no map at all, e.g. the
+     * hand-seeded/software shapes) falls back to the primary encoder — the
+     * pre-lookup behavior, byte-identical for every legacy construction site.
+     */
+    public function test_encoder_for_codec_resolves_map_case_insensitively_with_primary_fallback(): void
+    {
+        $mapped = new HwaccelCapability(
+            vendor: 'vaapi',
+            encoder: 'h264_vaapi',
+            decoder: 'av1_vaapi',
+            supports_hdr_tone_mapping: false,
+            supported_codecs: ['h264', 'hevc', 'av1'],
+            supported_profiles: ['main'],
+            max_resolution_w: 3840,
+            max_resolution_h: 2160,
+            max_bitrate: 40000000,
+            encoders_by_codec: ['h264' => 'h264_vaapi', 'hevc' => 'hevc_vaapi'],
+        );
+
+        $this->assertSame(['h264' => 'h264_vaapi', 'hevc' => 'hevc_vaapi'], $mapped->encoders_by_codec);
+        $this->assertSame('h264_vaapi', $mapped->encoderForCodec('h264'));
+        $this->assertSame('hevc_vaapi', $mapped->encoderForCodec('HEVC'));
+        // av1 is claimed but not mapped — resolves to the primary, never null.
+        $this->assertSame('h264_vaapi', $mapped->encoderForCodec('av1'));
+
+        $legacy = new HwaccelCapability(
+            vendor: 'software',
+            encoder: 'libx264',
+            decoder: 'libx264',
+            supports_hdr_tone_mapping: false,
+            supported_codecs: ['h264', 'hevc'],
+            supported_profiles: ['high'],
+            max_resolution_w: 3840,
+            max_resolution_h: 2160,
+            max_bitrate: 100000000,
+        );
+
+        $this->assertSame([], $legacy->encoders_by_codec);
+        $this->assertSame('libx264', $legacy->encoderForCodec('h264'));
+        $this->assertSame('libx264', $legacy->encoderForCodec('hevc'));
+    }
 }

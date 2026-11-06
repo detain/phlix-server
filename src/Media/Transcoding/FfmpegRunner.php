@@ -2092,8 +2092,12 @@ class FfmpegRunner
         }
         $cmd .= ' -dn -sn';
 
-        // Hardware video encoder
-        $cmd .= ' -c:v ' . $capability->encoder;
+        // Hardware video encoder — the codec-correct one FOR THIS RUNG. The
+        // probe boundary records every `<codec>_<vendor>` name it saw, so an
+        // H.264 rung splices h264_vaapi and an HEVC rung hevc_vaapi even
+        // though `ffmpeg -encoders` listed av1_vaapi first alphabetically
+        // (see HwaccelCapability::encoderForCodec()).
+        $cmd .= ' -c:v ' . $capability->encoderForCodec($codec);
 
         // Vendor-specific preset tuning.
         //
@@ -2175,7 +2179,7 @@ class FfmpegRunner
             // require_hdr_tone_map flag forces it.
             $needsToneMap = $require_hdr_tone_map || (
                 $this->needsToneMapping($inputPath)
-                && !in_array($capability->encoder, $hdrCapableEncoders, true)
+                && !in_array($capability->encoderForCodec($codec), $hdrCapableEncoders, true)
             );
             if ($needsToneMap) {
                 $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);

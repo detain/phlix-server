@@ -589,4 +589,105 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         $this->assertStringNotContainsString('-pix_fmt yuv420p', $cmd);
         $this->assertStringNotContainsString('-profile:v high', $cmd);
     }
+
+    /**
+     * A probe-shaped VAAPI capability — exactly what VaapiProbe builds on a
+     * full-featured box whose `ffmpeg -encoders` lists av1_vaapi FIRST
+     * alphabetically (production-verified on ffmpeg 8.0.1-3ubuntu2:
+     * av1_vaapi h264_vaapi hevc_vaapi mjpeg_vaapi mpeg2_vaapi vp8_vaapi
+     * vp9_vaapi) — must splice the CODEC-CORRECT encoder per rung: h264_vaapi
+     * on an H.264-targeted rung, hevc_vaapi on an HEVC-targeted rung. Before
+     * the per-codec lookup both rungs got av1_vaapi (the $encoders[0] bug), an
+     * AV1 stream behind an avc1-advertising master playlist.
+     */
+    public function test_hwaccel_segment_splices_codec_correct_encoder_per_rung(): void
+    {
+        $registry = $this->seedRegistry(['vaapi' => $this->probedVaapiCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $h264Cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            ['video_codec' => 'libx264'],
+        );
+        $this->assertNotNull($h264Cmd);
+        $this->assertStringContainsString('-c:v h264_vaapi', $h264Cmd);
+        $this->assertStringNotContainsString('av1_vaapi', $h264Cmd);
+
+        $hevcCmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            ['video_codec' => 'libx265'],
+        );
+        $this->assertNotNull($hevcCmd);
+        $this->assertStringContainsString('-c:v hevc_vaapi', $hevcCmd);
+        $this->assertStringNotContainsString('h264_vaapi', $hevcCmd);
+        $this->assertStringNotContainsString('av1_vaapi', $hevcCmd);
+    }
+
+    /**
+     * The `copy`-rung silent re-encode shape is a SEPARATE concern and stays
+     * exactly as it was: codecMap has no 'copy' arm, so the rung resolves to
+     * the h264 family. This guard pins that the per-codec lookup can never
+     * hand argv a null/empty encoder — `copy` still builds a concrete
+     * codec-correct `-c:v h264_vaapi`, never a bare `-c:v` and never the
+     * alphabetical av1_vaapi.
+     */
+    public function test_hwaccel_segment_copy_rung_still_reencodes_with_concrete_encoder(): void
+    {
+        $registry = $this->seedRegistry(['vaapi' => $this->probedVaapiCapability()]);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+
+        $cmd = $runner->buildHwaccelSegmentCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            0.0,
+            6.0,
+            ['video_codec' => 'copy'],
+        );
+
+        $this->assertNotNull($cmd);
+        $this->assertStringContainsString('-c:v h264_vaapi', $cmd);
+        $this->assertStringNotContainsString('-c:v copy', $cmd);
+        $this->assertStringNotContainsString('av1_vaapi', $cmd);
+    }
+
+    /**
+     * The exact capability shape VaapiProbe now returns on a production
+     * 8.0.1-3ubuntu2 VAAPI box (primary h264_vaapi, full codec map, decoder
+     * still the first probed name).
+     */
+    private function probedVaapiCapability(): HwaccelCapability
+    {
+        return new HwaccelCapability(
+            vendor: 'vaapi',
+            encoder: 'h264_vaapi',
+            decoder: 'av1_vaapi',
+            supports_hdr_tone_mapping: false,
+            supported_codecs: ['av1', 'h264', 'hevc', 'mjpeg', 'mpeg2', 'vp8', 'vp9'],
+            supported_profiles: ['main', 'main10', 'main12'],
+            max_resolution_w: 7680,
+            max_resolution_h: 4320,
+            max_bitrate: 40000000,
+            encoders_by_codec: [
+                'av1' => 'av1_vaapi',
+                'h264' => 'h264_vaapi',
+                'hevc' => 'hevc_vaapi',
+                'mjpeg' => 'mjpeg_vaapi',
+                'mpeg2' => 'mpeg2_vaapi',
+                'vp8' => 'vp8_vaapi',
+                'vp9' => 'vp9_vaapi',
+            ],
+        );
+    }
 }

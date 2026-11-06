@@ -468,6 +468,35 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Dev-channel plugin installs work again: the legitimate GitHub
+  archive→codeload hop is now followed as a controlled re-request.** The owner
+  symptom "installing theme plugins from the dev channel fails with HTTP
+  redirects are not allowed (received HTTP/1.1 302 ...)" was universal, not
+  host-specific: GitHub answers EVERY
+  `github.com/{owner}/{repo}/archive/{ref}.tar.gz` URL with a 302 hop to the
+  canonical `codeload.github.com` artifact location, and the R20-02 SSRF law
+  rejects any 3xx chain. `HttpInstaller::downloadToTemp()` now consults the new
+  pure predicate `vettedGitHubArtifactRedirect()` BEFORE the rejection: the hop
+  is taken only when the chain carries exactly one status line, it is
+  301/302/303/307/308, and its ONLY `Location:` names an `https` URL at host
+  exactly `codeload.github.com` (no port, userinfo, query or fragment) whose
+  path is the same owner/repo under `tar.gz/` (or `zip/`, matching the entry's
+  kind) with a non-empty ref. The vetted target is then RE-REQUESTED as a
+  second leg — the stream wrapper's `max_redirects=1` is untouched, nothing is
+  "followed" blindly — and the hop leg is terminal: every gate (redirect
+  rejection, error status, declared-size cap, byte pump budget, artifact
+  digest, extraction) runs on the hop response and a 3xx there is rejected
+  byte-identically. Following GitHub's canonical Location rather than
+  pre-rewriting to codeload's raw alias is what keeps the fetched bytes equal
+  to the catalog `artifactSha256` pins (computed over the codeload tarball);
+  proven live at ship gate by installing
+  `detain/phlix-plugin-phantom-violet-theme@HEAD` through the shipped path
+  (sha256 d4dc2bb3e7b212fa3e33c2ac1e867d34dd30292c4b1f16a6e3a83797f112cb4f
+  matched). Pinned by the 33-case accept/reject table in
+  `HttpInstallerGitHubHopTest`; the unchanged-law e2es in
+  `HttpInstallerRedirectE2eTest` and the M-SRV-38 pins in
+  `HttpInstallerBoundedDownloadTest` stayed green unmodified.
+
 - **The F-1c relay-role laws gained the two teeth a review found missing, and a
   stale docblock sentence was corrected.** Review 2026-11-05/REVIEW-F1c
   measured that an added second per-worker `$worker->eventLoop = Select::class`

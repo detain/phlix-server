@@ -412,6 +412,23 @@ class HttpInstaller
      * ({@see self::MAX_PACKAGE_BYTES}) with the named fetch timeout. Returns
      * the local path.
      *
+     * R20-02 (SSRF) governs every fetch leg: the response we ACT on must
+     * itself be redirect-free ({@see self::assertNoRedirectResponses()}).
+     * One controlled exception lives here, because every catalog/dev-channel
+     * source in this estate is a GitHub archive URL and GitHub answers EVERY
+     * `/archive/<ref>.<kind>` URL with a `302` hop to its canonical
+     * `codeload.github.com` artifact location (measured at diagnosis: all
+     * four shapes — HEAD, branch ref, tag ref, zip — answer 302 + a
+     * `Location:` to codeload). The hop is taken exactly once, and only when
+     * {@see self::vettedGitHubArtifactRedirect()} proves the response is a
+     * single-3xx chain whose ONLY Location names the canonical codeload path
+     * for the same owner/repo/kind. That is a deliberate RE-REQUEST of a
+     * fully vetted destination, not the wrapper following hops blindly; the
+     * hop leg then runs every gate a normal fetch runs, and it is terminal —
+     * a 3xx on the hop leg is rejected (zero multi-hop). Without this the
+     * owner-visible symptom is "installing theme plugins from the dev channel
+     * fails with HTTP redirects are not allowed (received HTTP/1.1 302 ...)".
+     *
      * @param string $sourceUrl Remote or local URL to download.
      * @param string $extension Optional suffix to preserve on the local
      *        file (e.g. `.tar.gz`) so downstream codec detection works.
@@ -438,7 +455,9 @@ class HttpInstaller
         // redirect hops the SsrfGuard never vetted; the full rationale and the
         // belt-and-suspenders chain rejection live in
         // {@see self::streamFetchOptions()} and
-        // {@see self::assertNoRedirectResponses()}.
+        // {@see self::assertNoRedirectResponses()}. The single controlled
+        // exception — the vetted GitHub archive→codeload hop — is described
+        // in {@see self::downloadToTemp()}'s docblock and executed below.
         $context = stream_context_create(self::streamFetchOptions());
 
         // M-SRV-38 (server__srphp M2): the artifact is STREAMED into the temp
@@ -459,76 +478,248 @@ class HttpInstaller
         // the SsdpDiscovery fetchOnceBounded it mirrors).
         $http_response_header = [];
 
-        $handle = @fopen($sourceUrl, 'rb', false, $context);
-        try {
-            $this->assertNoRedirectResponses($http_response_header, $sourceUrl);
-        } catch (PluginInstallException $e) {
-            // REVIEW-FIX: the redirect rejection threw WITHOUT releasing the
-            // tempnam above — every refused install left a 0-byte
-            // /tmp/phlix_plugin_* file (the S439 zero-residue census caught it
-            // the moment the e2e suite started taking this path). Release the
-            // response handle too (M-SRV-38 opened one this path never had),
-            // keep the exception byte-identical.
-            if (is_resource($handle)) {
-                fclose($handle);
+        // The URL actually being fetched, which is $sourceUrl until the ONE
+        // vetted GitHub hop (if any) is taken. Every error below names this
+        // var so an operator sees WHICH leg failed, and the existing
+        // rejection messages keep their byte-exact shape (entry-leg fetches
+        // are $sourceUrl, so their output is unchanged).
+        $fetchUrl = $sourceUrl;
+
+        // Leg 1 (entry) consults the hop predicate; the hop leg never does,
+        // making it terminal: ANY 3xx on it is rejected. One iteration per
+        // leg, so the whole download takes at most two requests.
+        $mayHop = true;
+        for (;;) {
+            $handle = @fopen($fetchUrl, 'rb', false, $context);
+
+            // The predicate runs BEFORE assertNoRedirectResponses() gets a
+            // chance to kill a legitimate hop: it returns a target only for
+            // the fully-vetted GitHub archive→codeload shape, and null for
+            // everything else — a null return falls through to the UNCHANGED
+            // rejection path, whose message stays byte-identical.
+            if ($mayHop) {
+                $hopUrl = $this->vettedGitHubArtifactRedirect($http_response_header, $fetchUrl);
+                if ($hopUrl !== null) {
+                    // Vetted hop: release THIS response handle, reset the
+                    // chain ledger, and re-enter the same fetch sequence
+                    // against the vetted target. No tempnam release here —
+                    // the download continues, it just continues elsewhere.
+                    if (is_resource($handle)) {
+                        fclose($handle);
+                    }
+                    $http_response_header = [];
+                    $fetchUrl = $hopUrl;
+                    $mayHop = false;
+                    continue;
+                }
             }
-            @unlink($localFile);
-            throw $e;
-        }
 
-        if ($handle === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
-            if (is_resource($handle)) {
-                fclose($handle);
+            try {
+                $this->assertNoRedirectResponses($http_response_header, $fetchUrl);
+            } catch (PluginInstallException $e) {
+                // REVIEW-FIX: the redirect rejection threw WITHOUT releasing
+                // the tempnam above — every refused install left a 0-byte
+                // /tmp/phlix_plugin_* file (the S439 zero-residue census caught
+                // it the moment the e2e suite started taking this path).
+                // Release the response handle too (M-SRV-38 opened one this
+                // path never had), keep the exception byte-identical.
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+                @unlink($localFile);
+                throw $e;
             }
-            @unlink($localFile);
-            throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $sourceUrl));
-        }
 
-        // Header pre-check: a DECLARED size over cap is refused before a
-        // single body byte is pumped (the cheap refusal for well-formed
-        // liars). `>` not `>=`: exactly AT cap is within the law.
-        $declared = $this->declaredContentLength($http_response_header);
-        if ($declared !== null && $declared > self::MAX_PACKAGE_BYTES) {
+            if ($handle === false || $this->isHttpErrorStatus($this->terminalResponseStatus($http_response_header))) {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+                @unlink($localFile);
+                throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $fetchUrl));
+            }
+
+            // Header pre-check: a DECLARED size over cap is refused before a
+            // single body byte is pumped (the cheap refusal for well-formed
+            // liars). `>` not `>=`: exactly AT cap is within the law.
+            $declared = $this->declaredContentLength($http_response_header);
+            if ($declared !== null && $declared > self::MAX_PACKAGE_BYTES) {
+                fclose($handle);
+                @unlink($localFile);
+                throw new PluginInstallException(sprintf(
+                    'Plugin source at %s declares %d bytes, which exceeds the %d-byte package size limit.',
+                    $fetchUrl,
+                    $declared,
+                    self::MAX_PACKAGE_BYTES,
+                ));
+            }
+
+            $out = @fopen($localFile, 'wb');
+            if ($out === false) {
+                fclose($handle);
+                @unlink($localFile);
+                throw new PluginInstallException(sprintf(
+                    'Cannot write temporary file for plugin download of %s.',
+                    $fetchUrl
+                ));
+            }
+
+            $copied = @stream_copy_to_stream($handle, $out, self::MAX_PACKAGE_BYTES + 1);
             fclose($handle);
-            @unlink($localFile);
-            throw new PluginInstallException(sprintf(
-                'Plugin source at %s declares %d bytes, which exceeds the %d-byte package size limit.',
-                $sourceUrl,
-                $declared,
-                self::MAX_PACKAGE_BYTES,
-            ));
+            fclose($out);
+
+            if ($copied === false) {
+                @unlink($localFile);
+                throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $fetchUrl));
+            }
+            if ($copied > self::MAX_PACKAGE_BYTES) {
+                // The pump read one byte PAST the budget and stopped — the body
+                // is oversized (or lied by omission). The staged partial file
+                // dies.
+                @unlink($localFile);
+                throw new PluginInstallException(sprintf(
+                    'Plugin source at %s exceeds the %d-byte package size limit.',
+                    $fetchUrl,
+                    self::MAX_PACKAGE_BYTES,
+                ));
+            }
+
+            return $localFile;
+        }
+    }
+
+    /**
+     * The ONE controlled exception to the R20-02 rejection, as a pure header
+     * predicate: given the response chain PHP's HTTP wrapper surfaced for a
+     * fetch of `$sourceUrl`, return the target of a vetted GitHub
+     * archive→codeload hop, or null when the response must fall through to
+     * the unchanged rejection path in {@see self::assertNoRedirectResponses()}.
+     *
+     * GitHub answers EVERY `https://github.com/{owner}/{repo}/archive/{ref}`
+     * URL with a 302 hop to `https://codeload.github.com/{owner}/{repo}/`
+     * `{tar.gz|zip}/...` (measured at diagnosis — the three ref shapes and
+     * the zip form all answer 302, and codeload answers 200-direct). The
+     * hop destination is vetted to the last byte of shape before it is ever
+     * re-requested; ALL of the following must hold:
+     *
+     *  - `$sourceUrl` itself is `https`, on host `github.com` or
+     *    `www.github.com`, with a path shaped exactly
+     *    `/owner/repo/archive/<ref>.tar.gz` or `/owner/repo/archive/<ref>.zip`
+     *    (owner/repo in the archive-character alphabet, so a foreign URL
+     *    form — releases, raw, codeload-direct, any other host — never
+     *    even reaches the hop logic).
+     *  - The chain carries EXACTLY ONE HTTP status line and it is one of
+     *    301/302/303/307/308 (chain length 1 — a multi-hop chain is not a
+     *    canonical GitHub answer and is refused).
+     *  - The headers carry EXACTLY ONE usable `Location` (a duplicate is
+     *    ambiguous — refused). CR and LF are stripped from the raw value
+     *    before parsing, the same response-splitting defense
+     *    assertNoRedirectResponses() names.
+     *  - The Location parses to scheme `https`, host EXACTLY
+     *    `codeload.github.com` (case-insensitive host compare), with NO
+     *    port, NO userinfo, NO query, NO fragment.
+     *  - Its path is `/{owner}/{repo}/tar.gz/<ref>` when the entry asked
+     *    for tar.gz, or `/{owner}/{repo}/zip/<ref>` when it asked for zip,
+     *    with owner/repo matching the entry case-insensitively (GitHub's
+     *    canonical Location preserves the entry's owner/repo bytes, so
+     *    case-insensitive equality is the vetting, not a loosening) and a
+     *    non-empty ref remainder.
+     *
+     * Deliberately NOT pre-rewriting the entry URL to codeload's raw alias:
+     * those aliases can produce DIFFERENT bytes than the canonical
+     * Location, and the catalog's artifactSha256 pins
+     * ({@see \Phlix\Plugins\Catalog\CatalogEntry}) are computed over the
+     * codeload tarball bytes GitHub's own hop names. Following GitHub's
+     * canonical Location is what keeps digests matching; this method is
+     * pure — it reads the surfaced chain and never touches the network.
+     *
+     * @param array<int, string> $responseHeaders The `$http_response_header`
+     *        chain the wrapper surfaced for the fetch of `$sourceUrl`.
+     * @param string             $sourceUrl       The URL that was requested.
+     *
+     * @return string|null The vetted hop target, or null (= not a vetted
+     *         GitHub hop — fall through to the general rejection).
+     */
+    private function vettedGitHubArtifactRedirect(array $responseHeaders, string $sourceUrl): ?string
+    {
+        $entry = parse_url($sourceUrl);
+        if (!is_array($entry)) {
+            return null;
+        }
+        if (strtolower((string) ($entry['scheme'] ?? '')) !== 'https') {
+            return null;
+        }
+        $entryHost = strtolower((string) ($entry['host'] ?? ''));
+        if ($entryHost !== 'github.com' && $entryHost !== 'www.github.com') {
+            return null;
+        }
+        $entryPath = (string) ($entry['path'] ?? '');
+        if (
+            preg_match(
+                '~^/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/archive/(.+)\.(tar\.gz|zip)$~',
+                $entryPath,
+                $entryMatch,
+            ) !== 1
+        ) {
+            return null;
+        }
+        $owner = $entryMatch[1];
+        $repo = $entryMatch[2];
+        $kind = $entryMatch[4];
+
+        // Exactly one status line, and it is a redirect. The wrapper surfacing
+        // two would mean it followed a hop itself (which streamFetchOptions()
+        // exists to prevent) — that is not a vetted answer, it is the chain
+        // shape the R20-02 law was written for.
+        $statusLines = [];
+        foreach ($responseHeaders as $headerLine) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})\b#', $headerLine, $statusMatch) === 1) {
+                $statusLines[] = (int) $statusMatch[1];
+            }
+        }
+        if (count($statusLines) !== 1) {
+            return null;
+        }
+        if (!in_array($statusLines[0], [301, 302, 303, 307, 308], true)) {
+            return null;
         }
 
-        $out = @fopen($localFile, 'wb');
-        if ($out === false) {
-            fclose($handle);
-            @unlink($localFile);
-            throw new PluginInstallException(sprintf(
-                'Cannot write temporary file for plugin download of %s.',
-                $sourceUrl
-            ));
+        // Exactly one usable Location header value.
+        $locations = [];
+        foreach ($responseHeaders as $headerLine) {
+            if (preg_match('#^Location:\s*(.*)$#i', $headerLine, $locationMatch) === 1) {
+                $value = str_replace(["\r", "\n"], '', trim($locationMatch[1]));
+                if ($value !== '') {
+                    $locations[] = $value;
+                }
+            }
+        }
+        if (count($locations) !== 1) {
+            return null;
         }
 
-        $copied = @stream_copy_to_stream($handle, $out, self::MAX_PACKAGE_BYTES + 1);
-        fclose($handle);
-        fclose($out);
-
-        if ($copied === false) {
-            @unlink($localFile);
-            throw new PluginInstallException(sprintf('Failed to fetch plugin source from %s.', $sourceUrl));
+        $hop = parse_url($locations[0]);
+        if (!is_array($hop)) {
+            return null;
         }
-        if ($copied > self::MAX_PACKAGE_BYTES) {
-            // The pump read one byte PAST the budget and stopped — the body is
-            // oversized (or lied by omission). The staged partial file dies.
-            @unlink($localFile);
-            throw new PluginInstallException(sprintf(
-                'Plugin source at %s exceeds the %d-byte package size limit.',
-                $sourceUrl,
-                self::MAX_PACKAGE_BYTES,
-            ));
+        if (strtolower((string) ($hop['scheme'] ?? '')) !== 'https') {
+            return null;
+        }
+        if (strtolower((string) ($hop['host'] ?? '')) !== 'codeload.github.com') {
+            return null;
+        }
+        if (isset($hop['port']) || isset($hop['user']) || isset($hop['pass'])) {
+            return null;
+        }
+        if (isset($hop['query']) || isset($hop['fragment'])) {
+            return null;
+        }
+        $hopPath = (string) ($hop['path'] ?? '');
+        $expectedPrefix = '/' . $owner . '/' . $repo . '/' . ($kind === 'zip' ? 'zip/' : 'tar.gz/');
+        if (strlen($hopPath) <= strlen($expectedPrefix) || stripos($hopPath, $expectedPrefix) !== 0) {
+            return null;
         }
 
-        return $localFile;
+        return $locations[0];
     }
 
     /**
@@ -545,7 +736,11 @@ class HttpInstaller
      * 4xx/5xx response surface for inspection instead of a bare false.
      * Belt-and-suspenders, assertNoRedirectResponses() rejects ANY 3xx seen
      * anywhere in the chain, so the wrapper's exact follow-count cannot
-     * weaken the guarantee. The 'http' section is inert for file:// and the
+     * weaken the guarantee. The one lawful departure is NOT this option
+     * loosening: the vetted GitHub archive→codeload hop
+     * ({@see self::vettedGitHubArtifactRedirect()}) is a SECOND request this
+     * class issues itself to a fully vetted destination — the wrapper still
+     * never follows anything. The 'http' section is inert for file:// and the
      * other schemes guardScheme() admits, so local installs are untouched.
      * M-SRV-38 adds the named 'timeout' ({@see self::FETCH_TIMEOUT_SECONDS}).
      *
@@ -590,6 +785,15 @@ class HttpInstaller
      * a wrapper that followed one hop before surfacing the chain cannot smuggle
      * a redirect past this gate. Non-HTTP fetches (file://) surface the empty
      * pre-initialised array (no status lines) and pass through untouched.
+     *
+     * The general law stands: every response we ACT on must itself be
+     * redirect-free. The single exception is applied BEFORE this gate, not
+     * inside it — {@see self::vettedGitHubArtifactRedirect()} recognises the
+     * canonical GitHub archive→codeload hop and downloadToTemp() RE-REQUESTS
+     * that vetted destination as a fresh leg, whose response this method then
+     * judges unchanged (a 3xx on the hop leg throws right here). Callers that
+     * let the predicate run first pass unrecognised chains through with the
+     * byte-identical message; nothing in this method itself knows about hops.
      *
      * @param array<int, string> $responseHeaders
      *

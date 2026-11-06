@@ -285,6 +285,63 @@ class TranscodeControllerTest extends TestCase
     }
 
     /**
+     * URL-contract law (2026-11-06 owner 404 incident): each variant ALSO carries
+     * a fully-signed `playlist_url` — the rung's mini-master index
+     * (`media_v{id}_master.m3u8`) — signed like every other streaming URL from the
+     * prefix-scoped job signer. A ui that loads the index for a pinned-quality pick
+     * then uses this value VERBATIM; string surgery on the signed master URL (the
+     * v0.99.19 defect: the index name was appended after the `?exp=…&sig=…` query)
+     * is never needed, and can never be correct by construction again.
+     */
+    public function testStartSignsThePerRungMiniMasterPlaylistUrlVerbatim(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn($this->jobFixture());
+        $manager->method('getJobVariants')->with('job-7')->willReturn($this->variantsFixture());
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->start(new Request(), ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array{variants: array<int, array<string, mixed>>} $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertIsArray($body['variants']);
+        $this->assertSignedUrlFor('/hls/job-7/media_v1080p_master.m3u8', (string) $body['variants'][0]['playlist_url']);
+        $this->assertSignedUrlFor('/hls/job-7/media_v720p_master.m3u8', (string) $body['variants'][1]['playlist_url']);
+        // The signature must sit BEHIND the filename — pin the exact query
+        // boundary: `…_master.m3u8?exp=…` (owner-shape regression).
+        $this->assertStringContainsString('media_v1080p_master.m3u8?', (string) $body['variants'][0]['playlist_url']);
+    }
+
+    /**
+     * The status endpoint runs the SAME signer over the SAME variant shape
+     * (one code path — `signVariantUrls()` — but the second endpoint is the one
+     * the polling client actually refreshes from, so its wire is pinned too).
+     */
+    public function testStatusSignsThePerRungMiniMasterPlaylistUrlVerbatim(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('getJobReadiness')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'completed',
+            'segments' => 12,
+            'playlist_ready' => true,
+            'progress' => 100.0,
+            'subtitles' => [],
+        ]);
+        $manager->method('dashManifestUrl')->willReturn(null);
+        $manager->method('getJobVariants')->with('job-7')->willReturn($this->variantsFixture());
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->status(new Request(), ['jobId' => 'job-7']);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array{variants: array<int, array<string, mixed>>} $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertSignedUrlFor('/hls/job-7/media_v1080p_master.m3u8', (string) $body['variants'][0]['playlist_url']);
+    }
+
+    /**
      * A legacy job (`variants IS NULL`) → `start()` includes an explicit
      * `variants: null` (backward-compatible; clients check `!= null`).
      */
@@ -381,12 +438,14 @@ class TranscodeControllerTest extends TestCase
                 'id' => '1080p', 'label' => '1080p', 'width' => 1920, 'height' => 1080,
                 'bitrate' => 5480000, 'codecs' => 'avc1.640029,mp4a.40.2',
                 'url' => '/hls/job-7/media_v1080p.m3u8',
+                'playlist_url' => '/hls/job-7/media_v1080p_master.m3u8',
                 'is_original' => false, 'is_copy' => false, 'video_bitrate' => 5000000,
             ],
             [
                 'id' => '720p', 'label' => '720p', 'width' => 1280, 'height' => 720,
                 'bitrate' => 3124000, 'codecs' => 'avc1.640029,mp4a.40.2',
                 'url' => '/hls/job-7/media_v720p.m3u8',
+                'playlist_url' => '/hls/job-7/media_v720p_master.m3u8',
                 'is_original' => false, 'is_copy' => false, 'video_bitrate' => 2800000,
             ],
         ];

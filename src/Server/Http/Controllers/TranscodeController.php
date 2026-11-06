@@ -146,7 +146,8 @@ class TranscodeController
         // Advertise the playable quality ladder so clients can build a picker
         // (D6). Null for a legacy `variants IS NULL` job (explicit key so a client
         // can reliably check `!= null` rather than guess from key absence). Each
-        // variant `url` is signed exactly like master_url/hls_url.
+        // variant's `url` AND `playlist_url` are signed exactly like
+        // master_url/hls_url.
         $variants = $this->transcodeManager->getJobVariants($job['job_id']);
 
         return (new Response())->json([
@@ -286,25 +287,35 @@ class TranscodeController
     }
 
     /**
-     * Signs the `url` of each variant in a playable-variant list.
+     * Signs every streaming URL of each variant in a playable-variant list.
      *
-     * Each variant's `url` is a per-variant media playlist under `/hls/{job}/`
-     * (unsigned, relative — {@see TranscodeManager::getJobVariants()} leaves the
-     * signing to the controller). hls.js fetches these without a Bearer header,
-     * so each is signed with the SAME prefix-scoped signer as `master_url`; the
-     * rest of the flat Rendition shape (`id`/`label`/`height`/`bitrate`/`codecs`/…)
-     * is preserved untouched.
+     * Each variant carries two per-rung media playlists under `/hls/{job}/` —
+     * `url` (the bare rung `media_v{id}.m3u8`) and `playlist_url` (its
+     * mini-master index `media_v{id}_master.m3u8`), both unsigned and relative
+     * ({@see TranscodeManager::getJobVariants()} leaves the signing to the
+     * controller). hls.js fetches these without a Bearer header on some paths,
+     * so each is signed with the SAME prefix-scoped signer as `master_url` —
+     * the signature canonicalises to the `/hls/{job}` resource, minting per URL
+     * is therefore cheap and the client may use either value VERBATIM (the
+     * 2026-11-06 incident law: never re-derive a signed URL by string surgery).
+     * The rest of the flat Rendition shape (`id`/`label`/`height`/`bitrate`/
+     * `codecs`/…) is preserved untouched; an entry without `playlist_url` (a
+     * manager predating the field) is left exactly as it came.
      *
      * @param list<array<string, mixed>> $variants The unsigned variant list.
      * @param \Closure                   $sign     Per-URL signer: `fn(mixed $url): mixed`.
      *
-     * @return list<array<string, mixed>> The variant list with each `url` signed.
+     * @return list<array<string, mixed>> The variant list with `url` and
+     *                                    `playlist_url` signed.
      */
     private static function signVariantUrls(array $variants, \Closure $sign): array
     {
         return array_map(static function (array $variant) use ($sign): array {
             if (isset($variant['url'])) {
                 $variant['url'] = $sign($variant['url']);
+            }
+            if (isset($variant['playlist_url'])) {
+                $variant['playlist_url'] = $sign($variant['playlist_url']);
             }
 
             return $variant;

@@ -5078,6 +5078,41 @@ class TranscodeManagerTest extends TestCase
         );
     }
 
+    public function testGetJobVariantsCarriesPerRungMiniMasterPlaylistUrl(): void
+    {
+        // URL-contract law (2026-11-06 owner 404 incident): every variant entry
+        // ALSO carries `playlist_url` — that rung's mini-master index, the file
+        // `writeVodPlaylists()` ships beside the bare rung
+        // (`media_v{id}_master.m3u8`). A client must never need to string-surgery
+        // the signed master URL to name it: the v0.99.19 ui appended the index
+        // name onto the master URL's WHOLE string, landing it inside the
+        // `sig=` query VALUE — every pinned-quality load then 404'd on the
+        // malformed path (hls.js fatal → "can't play"). Bare `url` stays exactly
+        // as before: it is the muxed-audio / older-server fallback the client
+        // loads when the index probe answers 'absent'.
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+            'web'
+        );
+        $ladderJson = (string) json_encode($ladder->toArray());
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'seg-job', 'variants' => $ladderJson], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $variants = $this->manager($db, $ff)->getJobVariants('seg-job');
+        $this->assertNotNull($variants);
+
+        foreach ($variants as $entry) {
+            $entryId = $this->variantId($entry);
+            // The index URL is the rung's OWN name + the mandated `_master.m3u8`
+            // suffix (server regex law: media_(v\w+|a\d+|0)\.m3u8).
+            $this->assertSame("/hls/seg-job/media_v{$entryId}_master.m3u8", $entry['playlist_url']);
+            // The two fields are DISTINCT by construction — a fix that swaps
+            // them (or points playlist_url at the bare rung) reddens both arms.
+            $this->assertSame("/hls/seg-job/media_v{$entryId}.m3u8", $entry['url']);
+        }
+    }
+
     public function testGetJobVariantsReturnsNullForLegacyJob(): void
     {
         // A legacy job (variants IS NULL) must return null so callers advertise

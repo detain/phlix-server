@@ -4303,9 +4303,10 @@ class TranscodeManager
      * entry, so the client contract is that the list contains
      * `{id: 'original', height: <source height>, ...}`. Each entry is a flat
      * {@see \Phlix\Media\Streaming\Rendition::toArray()} shape with `url` filled to
-     * that variant's own media-playlist path (relative + UNSIGNED — the caller,
-     * {@see \Phlix\Server\Http\Controllers\TranscodeController}, signs it, the same
-     * as `master_url`/`hls_url`).
+     * that variant's own media-playlist path and `playlist_url` to its mini-master
+     * index (`media_v{id}_master.m3u8`) — both relative + UNSIGNED; the caller,
+     * {@see \Phlix\Server\Http\Controllers\TranscodeController}, signs them the same
+     * as `master_url`/`hls_url`.
      *
      * Reads the persisted `variants` column (A5 writes exactly
      * {@see \Phlix\Media\Streaming\LadderResult::toArray()}:
@@ -4316,8 +4317,9 @@ class TranscodeManager
      * @param string $jobId Transcode job id.
      *
      * @return list<array<string, mixed>>|null The playable variants (each with a
-     *                                          relative unsigned `url`), or null
-     *                                          for a legacy/malformed job.
+     *                                          relative unsigned `url` and
+     *                                          `playlist_url`), or null for a
+     *                                          legacy/malformed job.
      */
     public function getJobVariants(string $jobId): ?array
     {
@@ -4373,6 +4375,13 @@ class TranscodeManager
                 $normalized[(string) $key] = $value;
             }
             $normalized['url'] = "/hls/{$jobId}/media_v{$variantId}.m3u8";
+            // The rung's MINI-MASTER index beside the bare playlist (the file
+            // `writeVodPlaylists()` always emits; hls.js needs its
+            // EXT-X-MEDIA audio group for pinned-quality loads). Ship the name
+            // on the wire so clients use it VERBATIM instead of surgically
+            // editing the signed master URL — that append-after-`?sig=` surgery
+            // is what 404'd every pinned-quality pick on 2026-11-06.
+            $normalized['playlist_url'] = "/hls/{$jobId}/media_v{$variantId}_master.m3u8";
             $out[] = $normalized;
         }
 

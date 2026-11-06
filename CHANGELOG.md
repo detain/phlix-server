@@ -31,6 +31,31 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ## [Unreleased]
 
+### Added
+
+- **Every transcode `start`/`status` variant now advertises its mini-master
+  index URL, signed.** Each playable-variant entry gains `playlist_url` —
+  the rung's `media_v{id}_master.m3u8` index (the file
+  `writeVodPlaylists()` has shipped beside every bare rung since the
+  2026-11-06 audio cure), relative and signed exactly like `url` and
+  `master_url`. Pinned-quality clients previously had to DERIVE that name by
+  editing the signed master URL; one `@phlix/ui` patch appended it after the
+  `?exp=…&sig=…` query — the filename landed inside the signature VALUE, the
+  request path lost its extension, and every pinned-quality load 404'd
+  (owner incident 2026-11-06 "can't play"). With the field shipped the
+  derivation is unnecessary — clients use the value VERBATIM. Bare `url` is
+  untouched and stays the older-server/muxed-audio fallback; `playlist_url`
+  is the only key added to the variant shape. Pinned by
+  `TranscodeManagerTest::testGetJobVariantsCarriesPerRungMiniMasterPlaylistUrl`
+  (manager shape, both keys distinct) and
+  `TranscodeControllerTest::testStartSignsThePerRungMiniMasterPlaylistUrlVerbatim`
+  / `…testStatusSignsThePerRungMiniMasterPlaylistUrlVerbatim` (wire signing +
+  the exact `…_master.m3u8?` query boundary). The signature canonicalises to
+  the `/hls/{job}` prefix (SignedUrl::canonicalResource), so minting per URL
+  costs one HMAC and one token still authorises the whole job dir. No new
+  wire codes; no migrations.
+  [playback incident 2026-11-06 / URL-contract law]
+
 ### Security
 
 - **The plugin-update laundering record is corrected in a newer entry (its

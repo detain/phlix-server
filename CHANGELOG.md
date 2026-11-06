@@ -96,6 +96,45 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Playback-lag wave: `@phlix/ui` v0.99.16 re-pinned, and the served `/app`
+  bundle regenerated.** [wave-playback-fix]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.16 →
+    v0.99.17 (tag object `4515df9c`, peel `b958fb57` == ui master tip,
+    ls-remote-verified). The functional delta is the autoplay-mute leak cure
+    the FIELD-hub-phlix no-audio report traced: one `NotAllowedError`
+    autoplay rejection no longer writes `muted: true` into the shared
+    player-store session, which had silenced every later item in the same
+    page life. The lock diff, cut with the CI-exact toolchain (node 24.20.0,
+    bundled npm 11.19.0, userconfig nulled), is minimal 4+/4−: the root echo
+    and the ui node's version/resolved/integrity triple — v0.99.17 moves no
+    declared edge, so the contracts `#v0.5.6` and syncplay `#v0.1.7` lines
+    stay put and the v0.99.16-era hoisted-node advance was not needed. The
+    lock is idempotent under a fresh npm run.
+  - *Supply chain.* A from-scratch `npm ci` after wiping `node_modules`
+    installs bytes-identical to the v0.99.17 tag payload (`dist/` diff -r
+    exit 0; the only tree delta is npm's pack-time `.gitignore`→`.npmignore`
+    rename): `phlix-ui.js e00ff69c…`, `player.js 903b503c…` equal the
+    release register's consumer-target figures. The installed `src/i18n`
+    tree is byte-identical to v0.99.16's — the release is locale-blind, so
+    the web-ui i18n seam pins stay put (node --test 33/33).
+  - *Served bundle.* `public/assets/app/` regenerated from the new lock with
+    the same CI-pinned toolchain (output dir wiped by the config's
+    `emptyOutDir`), built twice, both runs aggregating to md5
+    `aaefe403ca68a2719feba819ed7f5c5c` under the printed recipe
+      find public/assets/app -type f | sort | xargs md5sum | md5sum
+    The 200-file set holds (107 content-hashed chunk names rotate; manifest
+    and index.html follow); the bundle's ui version stamp now reads 0.99.17
+    (grepped from the built tree; zero `0.99.16` remnants, and zero 0.99.16
+    stamps anywhere in the repo's PHP/docs besides history). The README
+    "UI truth at this tip" line flips to v0.99.17 alongside. The
+    bundle-aware PHP cohort (`WebUiBundleGateTest`, `ViteAssetsMemoTest`,
+    `SharedUiControllerCspNonceTest`, `HttpHandlerServeStaticTest`,
+    `PublicFrontControllerRemovalGuardTest`, `NginxAssetLocationTest`) runs
+    42/365 green against the regenerated tree — zero era pins moved, nothing
+    rotated from red (baseline measured at the pre-bump tip identical).
+    S253 web-ui.yml gate is the CI attestation (npm ci + build + git diff
+    --exit-code public/assets/app).
+
 - **php-uv's pin rotates from a nearly three-year-old commit to upstream
   v0.3.1.** `scripts/install.sh`, `docker/Dockerfile.base`'s `ARG PHP_UV_REF`
   and the three CI "Build and enable php-uv" workflow steps all carried

@@ -2099,26 +2099,51 @@ class FfmpegRunner
         float $duration,
         array $params
     ): ?string {
+        $capability = $this->resolveHwaccelCapability($params);
+        if ($capability === null) {
+            return null;
+        }
+
+        return $this->assembleHwaccelSegmentCommand($capability, $inputPath, $outFile, $start, $duration, $params);
+    }
+
+    /**
+     * Concrete rung codec → generic registry codec key. One table shared by the
+     * capability resolution and the assembler, so the two can never disagree
+     * about which codec a rung requests.
+     */
+    private const GENERIC_CODEC_BY_RUNG = ['libx264' => 'h264', 'libx265' => 'hevc'];
+
+    /**
+     * Resolves the capability the hwaccel path would splice for these params.
+     *
+     * Single source of truth for the probe trigger + codec mapping + registry
+     * lookup, shared by {@see buildHwaccelSegmentCommand()} (direct callers)
+     * and the runtime launch selection ({@see resolveSegmentEncodeCommand()})
+     * — so the selection's vendor gate can never diverge from what the builder
+     * itself would resolve. Emits the same warning the builder has always
+     * logged when the probe resolves nothing for the rung's codec.
+     *
+     * @param array<string, mixed> $params Encode params (same as buildSegmentCommand)
+     *
+     * @return HwaccelCapability|null The resolved capability, or null when the
+     *                                probe resolves none
+     */
+    private function resolveHwaccelCapability(array $params): ?HwaccelCapability
+    {
         // Ensure hardware acceleration has been probed before we consult the
         // capability registry. The probe is idempotent (guarded by $hwaccelProbed),
-        // so this is a one-time cost per worker even though this method is on the
-        // per-segment hot path. Logged at debug level only.
+        // so this is a one-time cost per worker even though this resolution is on
+        // the per-segment hot path. Logged at debug level only.
         if (!self::$hwaccelProbed) {
-            $this->logger->debug('buildHwaccelSegmentCommand triggering probeHardwareAcceleration (was not probed)');
+            $this->logger->debug('hwaccel capability resolution triggering probeHardwareAcceleration (was not probed)');
             $this->probeHardwareAcceleration();
         } else {
-            $this->logger->debug('buildHwaccelSegmentCommand skipping probe (already probed)');
+            $this->logger->debug('hwaccel capability resolution skipping probe (already probed)');
         }
 
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
-
-        // Map software codec name to generic codec name for registry lookup
-        $codecMap = [
-            'libx264' => 'h264',
-            'libx265' => 'hevc',
-        ];
-        $codec = $codecMap[$videoCodec] ?? 'h264';
-
+        $codec = self::GENERIC_CODEC_BY_RUNG[$videoCodec] ?? 'h264';
         $require_hdr_tone_map = ($params['require_hdr_tone_map'] ?? false) === true;
 
         $capability = $this->hwaccelRegistry?->getEncoder($codec, $require_hdr_tone_map);
@@ -2126,6 +2151,39 @@ class FfmpegRunner
             $this->logger->warning('No hardware encoder found', ['codec' => $codec]);
             return null;
         }
+
+        return $capability;
+    }
+
+    /**
+     * Assembles the hwaccel-shaped segment command for a RESOLVED capability.
+     *
+     * This is the exact body {@see buildHwaccelSegmentCommand()} has always run
+     * once the registry lookup succeeded — extracted, not modified, so the
+     * runtime selection ({@see resolveSegmentEncodeCommand()}) can gate on the
+     * capability's vendor without paying the registry lookup twice. Same
+     * (capability, params) in, same command string out, byte for byte.
+     *
+     * @param HwaccelCapability    $capability The resolved (non-null) capability
+     * @param string               $inputPath  Source media file path
+     * @param string               $outFile    Absolute final segment path
+     * @param float                $start      Segment start offset in seconds
+     * @param float                $duration   Segment length in seconds
+     * @param array<string, mixed> $params     Encode params (same as buildSegmentCommand)
+     *
+     * @return string The complete FFmpeg segment command
+     */
+    private function assembleHwaccelSegmentCommand(
+        HwaccelCapability $capability,
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): string {
+        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
+        $codec = self::GENERIC_CODEC_BY_RUNG[$videoCodec] ?? 'h264';
+        $require_hdr_tone_map = ($params['require_hdr_tone_map'] ?? false) === true;
 
         $startArg = self::seconds($start);
         $durArg = self::seconds($duration);
@@ -2518,11 +2576,59 @@ class FfmpegRunner
         // per-segment); null keeps the pre-S56 single-file publish.
         $initFile = self::wantsFmp4($params) ? self::paramString($params, 'init_file') : null;
 
+        $encode = $this->resolveSegmentEncodeCommand($inputPath, $tmp, $start, $duration, $params);
+
+        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup, $initFile, $start);
+    }
+
+    /**
+     * Assembles the encode command for one on-demand segment — the FULL runtime
+     * builder-selection chain, extracted from {@see startSegmentEncode()} so
+     * the selection itself can be asserted without spawning a process (the same
+     * precedent that factored out {@see buildDetachedSegmentCommand()} in SV-4.2).
+     *
+     * Selection, in order:
+     *  - an audio-only rendition (P3B multi-audio) never touches the video
+     *    pipeline — the audio builder owns it;
+     *  - with hwaccel enabled AND preferred, a capability that resolves to a
+     *    REAL hardware vendor goes to the hwaccel builder's shape;
+     *  - everything else — disabled, not preferred, no capability at all, or a
+     *    capability that resolves to the `software` vendor — goes to the full
+     *    software builder.
+     *
+     * The software-vendor arm routing to the SOFTWARE builder is the
+     * playback-lag wave C follow-up (2026-11-06, measured on live production
+     * argv, not inferred from code): a GPU-less box with the shipped
+     * `enabled + prefer_hardware=true` defaults resolved the probe to the
+     * `software` capability, the hwaccel builder happily assembled it, and
+     * production therefore ran EVERY on-demand software rung with the builder's
+     * hardcoded `-preset:v medium` fallback and WITHOUT the wave C `-threads`
+     * contention cap — neither the operator's configured preset nor the knob
+     * ever reached the process. The hwaccel builder's software shape predates
+     * both. `vendor === 'software'` now means software SEMANTICS: the software
+     * builder owns `-threads` (wave C), the configured-preset default, the crf
+     * defaults, and the copy-rung contract. The builder's own public shape is
+     * untouched for its direct callers and pinned suites.
+     *
+     * @param string               $inputPath Source media file.
+     * @param string               $outFile   The `.part-*` temp the encode writes.
+     * @param float                $start     Segment start offset in seconds.
+     * @param float                $duration  Segment length in seconds.
+     * @param array<string, mixed> $params    Encode params (see buildSegmentCommand()).
+     *
+     * @return string The assembled FFmpeg encode command.
+     */
+    public function resolveSegmentEncodeCommand(
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): string {
         // P3B multi-audio: an audio-only rendition segment never touches the video
         // pipeline (no hwaccel, no -c:v) — it is a cheap -vn AAC extract/encode.
         if (($params['audio_only'] ?? false) === true) {
-            $encode = $this->buildAudioSegmentCommand($inputPath, $tmp, $start, $duration, $params);
-            return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup, $initFile, $start);
+            return $this->buildAudioSegmentCommand($inputPath, $outFile, $start, $duration, $params);
         }
 
         // Try hardware acceleration first if enabled AND preferred in config.
@@ -2530,18 +2636,31 @@ class FfmpegRunner
         // The merged HwAccelConfig is flat (enabled, prefer_hardware at root level).
         $hwaccelEnabled = ($this->config['enabled'] ?? false) === true;
         $preferHardware = ($this->config['prefer_hardware'] ?? true) === true;
-        $encode = null;
 
         if ($hwaccelEnabled && $preferHardware) {
-            $encode = $this->buildHwaccelSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+            $capability = $this->resolveHwaccelCapability($params);
+            // The gate: a capability that resolves to the SOFTWARE vendor is
+            // software work wearing an hwaccel config — hand it to the software
+            // builder, which owns the wave C `-threads` cap, the configured-
+            // preset default, the crf defaults, and the copy-rung contract.
+            // (See the method docblock for the live-argv measurement that
+            // motivated this.) A null capability falls through the same way the
+            // builder's own null return always did.
+            if ($capability !== null && $capability->vendor !== 'software') {
+                return $this->assembleHwaccelSegmentCommand(
+                    $capability,
+                    $inputPath,
+                    $outFile,
+                    $start,
+                    $duration,
+                    $params
+                );
+            }
         }
 
-        // Fall back to software encoding if hwaccel is disabled, unavailable, or returned null
-        if ($encode === null) {
-            $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
-        }
-
-        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup, $initFile, $start);
+        // Fall back to software encoding if hwaccel is disabled, unavailable,
+        // resolved to the software vendor, or the probe returned no capability.
+        return $this->buildSegmentCommand($inputPath, $outFile, $start, $duration, $params);
     }
 
     /**

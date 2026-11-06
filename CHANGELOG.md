@@ -507,6 +507,40 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **On-demand HLS segments on a GPU-less server now honour the thread cap
+  and the configured preset.** With hardware acceleration enabled and
+  preferred (both defaults), segment assembly asked the hwaccel path for a
+  capability; on a box without a usable GPU the probe resolves a `software`
+  vendor capability, and that path emitted `-c:v libx264 -preset:v medium`
+  — carrying neither the `segment_encode_threads` (env
+  `PHLIX_SEGMENT_ENCODE_THREADS`) `-threads` cap nor the admin-configured
+  preset (silently overridden to `medium`). Found by LIVE production
+  ffmpeg-argv capture during the 2026-11-06 playback-lag deployment: the
+  measured 3.2–4.7 s/6 s segment pace and 7.9 s cold stall were produced on
+  exactly this path, so the wave C cap had never fired in production. The
+  selection now applies a vendor=software-means-software-semantics rule: a
+  capability whose vendor is `software` (or a probe that resolves nothing)
+  is handed to `buildSegmentCommand`, which owns the thread cap, the
+  configured preset, the crf defaults, and the copy-rung contract.
+  - *Behavior change (intentional, disclosed):* on-demand software video
+    segments encode at the configured preset — `veryfast` by default,
+    admin-adjustable — instead of hardcoded `medium` (faster, honors
+    config; the bitrate/quality tradeoff shifts accordingly, acceptable),
+    and a copy ("Original") rung on a GPU-less box is a true stream copy
+    again instead of a silent libx264 re-encode.
+  - *Cache impact:* none. `EncodeSettings::fingerprint()` inputs
+    (preset/crf/audioBitrate/segmentFormat values) are untouched by the
+    routing, so transcode job keys do NOT rotate and already-produced
+    segments stay valid.
+  - *Law compat:* the hwaccel builders themselves are byte-for-byte
+    unchanged for a given (capability, params) — the pinned hardware-shape
+    suites (`HwaccelSegmentBuilderE2ETest`, the `FfmpegRunnerHwaccel*`
+    family) stay green UNMODIFIED. The selection moved to a public
+    test seam, `FfmpegRunner::resolveSegmentEncodeCommand()` (precedent:
+    `buildDetachedSegmentCommand`, SV-4.2); five runtime-assembled argv
+    tests (software cap+preset, zero-knob arm, copy rung, nvenc shape
+    unchanged, audio-only rung) cover it in `FfmpegRunnerHwaccelTest`.
+    [wave-playback-fix]
 - **The `hwaccel:probe` table stops introducing a vendor's AV1 name for its
   H.264 capability.** Every codec-suffixed vendor probe (VAAPI, QSV, AMF,
   V4L2, VideoToolbox) took the capability's `decoder:` field from

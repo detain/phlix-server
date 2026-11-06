@@ -662,6 +662,206 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         $this->assertStringNotContainsString('av1_vaapi', $cmd);
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // playback-lag wave C follow-up: the RUNTIME selection chain
+    // (FfmpegRunner::resolveSegmentEncodeCommand — what startSegmentEncode
+    // actually assembles). These drive the selection itself, not the
+    // builders in isolation: the original wave-C gap was precisely that
+    // buildSegmentCommand's -threads cap and configured preset never ran on
+    // a GPU-less production box because startSegmentEncode's hwaccel branch
+    // returned the software vendor's hwaccel-shaped command first.
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * A production-shaped on-demand multi-audio video rung: the exact key set
+     * TranscodeManager::segmentParamsForRendition() emits (EncodeSettings-driven
+     * preset/crf/audio_bitrate) plus the video_only flag the shared AUDIO-group
+     * design adds. Preset 'veryfast' is the shipped EncodeSettings default —
+     * the value the hwaccel builder's `medium` fallback silently overrode.
+     *
+     * @return array<string, mixed>
+     */
+    private function multiaudioVideoRungParams(): array
+    {
+        return [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+            'pix_fmt' => 'yuv420p',
+            'profile' => 'high',
+            'level' => '4.1',
+            'width' => 1280,
+            'height' => 720,
+            'video_bitrate' => 2800000,
+            'maxrate' => 2996000,
+            'bufsize' => 5992000,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_sample_rate' => 48000,
+            'audio_channels' => 2,
+            'video_only' => true,
+        ];
+    }
+
+    /**
+     * A runner wired exactly as production wires it on a hwaccel-enabled box:
+     * flat merged HwAccelConfig, the registry seeded to the given capabilities
+     * (the deterministic no-GPU / GPU probe outcome), and the
+     * config/ffmpeg.php `segment_encode_threads` knob threaded through
+     * setSegmentEncodeThreads() the way TranscodeServicesProvider does
+     * (the hub.phlix host pins PHLIX_SEGMENT_ENCODE_THREADS=4).
+     *
+     * @param array<string, HwaccelCapability> $capabilities
+     */
+    private function runtimeSelectionRunner(array $capabilities, int $threads): FfmpegRunner
+    {
+        $registry = $this->seedRegistry($capabilities);
+
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+        $runner->setSegmentEncodeThreads($threads);
+
+        return $runner;
+    }
+
+    /**
+     * THE cure pin: a GPU-less box (probe resolves ONLY the 'software'
+     * vendor) must assemble software rungs through the FULL software builder
+     * — the wave C `-threads` cap spliced, the configured preset honoured, the
+     * hwaccel builder's hardcoded `-preset:v medium` gone — while keeping
+     * every other property the on-demand contract already had (browser-safe
+     * 8-bit, -an on the audio-group video arm, no hardware decode flags).
+     */
+    public function test_software_runtime_selection_assembles_thread_cap_and_configured_preset(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['software' => $this->softwareCapability()], 4);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            $this->multiaudioVideoRungParams(),
+        );
+
+        $this->assertStringContainsString(' -c:v libx264', $cmd);
+        // The two things production was measured (live argv, 2026-11-06) to lack:
+        $this->assertStringContainsString(' -threads 4', $cmd);
+        $this->assertStringContainsString(' -preset veryfast', $cmd);
+        $this->assertStringNotContainsString('-preset:v medium', $cmd);
+        // The multi-audio video-only arm still carries no audio …
+        $this->assertStringContainsString(' -an', $cmd);
+        // … and the browser-safe 8-bit guarantee that motivated the OLD
+        // software arm on the hwaccel path is still delivered (the software
+        // builder applies browserSafeVideoFlags() itself):
+        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringContainsString('-profile:v high', $cmd);
+        $this->assertStringContainsString('-level 4.1', $cmd);
+        // No hardware input flags on a software rung.
+        $this->assertStringNotContainsString('-hwaccel', $cmd);
+    }
+
+    /**
+     * The knob still drives the value through the runtime path: 0 threads is
+     * an honest zero (no `-threads` at all), not a silently substituted 4.
+     * Guards the seam against hardcoding the cap instead of resolving it.
+     */
+    public function test_software_capability_runtime_selection_honours_the_zero_knob(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['software' => $this->softwareCapability()], 0);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            $this->multiaudioVideoRungParams(),
+        );
+
+        $this->assertStringNotContainsString('-threads', $cmd);
+        $this->assertStringContainsString(' -preset veryfast', $cmd);
+        $this->assertStringNotContainsString('-preset:v medium', $cmd);
+    }
+
+    /**
+     * The copy ("Original") rung routed software keeps the A4 copy contract:
+     * `-c:v copy` / `-c:a copy` with no encoder tuning at all — notably no
+     * `-threads` (wave C is deliberately absent on the copy branch, and the
+     * builder-selection change must not smuggle it in).
+     */
+    public function test_software_capability_runtime_selection_copy_rung_stays_a_copy(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['software' => $this->softwareCapability()], 4);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            ['video_codec' => 'copy', 'audio_codec' => 'copy'],
+        );
+
+        $this->assertStringContainsString(' -c:v copy', $cmd);
+        $this->assertStringContainsString(' -c:a copy', $cmd);
+        $this->assertStringNotContainsString('-threads', $cmd);
+        $this->assertStringNotContainsString('-preset', $cmd);
+    }
+
+    /**
+     * The hardware law, asserted at the RUNTIME seam (the pinned builder tests
+     * cover the builder; this covers the selection): a real nvenc capability
+     * still assembles through the hwaccel shape — `-hwaccel` input flags, the
+     * h264_nvenc encoder, the shipped `-preset:v p4` vendor tuning — and
+     * receives NONE of the software-only arms (no `-threads`, no libx264
+     * browserSafe flags). The wave C cap stays "deliberately absent on every
+     * hw-accel builder" (config/ffmpeg.php's own note).
+     */
+    public function test_nvenc_capability_runtime_selection_keeps_the_hwaccel_shape(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['nvenc' => $this->nvencCapability()], 4);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            $this->multiaudioVideoRungParams(),
+        );
+
+        $this->assertStringContainsString('-hwaccel', $cmd);
+        $this->assertStringContainsString('-c:v h264_nvenc', $cmd);
+        $this->assertStringContainsString('-preset:v p4', $cmd);
+        $this->assertStringNotContainsString(' -threads ', $cmd);
+        $this->assertStringNotContainsString('-pix_fmt', $cmd);
+        // And never the software vendor's encoder on a GPU rung.
+        $this->assertStringNotContainsString('-c:v libx264', $cmd);
+    }
+
+    /**
+     * Seam integrity for the audio-only branch: the P3B audio renditions never
+     * touch the video pipeline (the early return that used to sit INSIDE
+     * startSegmentEncode now sits inside the extracted seam — one level
+     * earlier, same contract).
+     */
+    public function test_audio_only_rung_runtime_selection_uses_the_audio_builder(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['software' => $this->softwareCapability()], 4);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            ['audio_only' => true, 'audio_codec' => 'aac', 'audio_bitrate' => '128k', 'audio_stream_index' => 1],
+        );
+
+        $this->assertStringContainsString(' -vn', $cmd);
+        $this->assertStringContainsString('-map 0:a:1', $cmd);
+        $this->assertStringNotContainsString('-c:v', $cmd);
+        $this->assertStringNotContainsString('-threads', $cmd);
+    }
+
     /**
      * The exact capability shape VaapiProbe now returns on a production
      * 8.0.1-3ubuntu2 VAAPI box (primary h264_vaapi, full codec map, decoder

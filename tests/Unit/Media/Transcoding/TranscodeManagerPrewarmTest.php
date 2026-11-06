@@ -422,6 +422,41 @@ final class TranscodeManagerPrewarmTest extends TestCase
     }
 
     /**
+     * Law 9 (budget math, terminal arm): cap 1 → `intdiv(1, 2) = 0` — the head
+     * start may occupy ZERO slots and every slot belongs to demand, so the
+     * FIRST window index already reads `count(0) >= budget(0)` and skips
+     * silently on an entirely empty tree (the docblock law at
+     * TranscodeManager.php prewarmInFlightBudget: "A cap=1 box budgets 0 —
+     * every slot belongs to demand; the head start stands down entirely").
+     * Job creation must still complete, no launch and no stranded temps may
+     * happen, AND the reader's own demand path must still get the FULL single
+     * slot — the stand-down is prewarm-only. The register's mutation probe
+     * `intdiv(cap, 2) → max(1, intdiv(cap, 2))` (giving even a cap-1 box a
+     * head-start slot) reddens the empty-launches pin below.
+     */
+    public function test_prewarm_stands_down_entirely_on_a_single_slot_box(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 3, 1);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+        $jobId = (string) $result['job_id'];
+
+        $this->assertFalse($result['reused'], 'the stand-down must never fail job creation');
+        $this->assertSame([], $launches, 'cap 1 → budget 0 → the head start launches nothing');
+        $this->assertSame(
+            [],
+            glob($this->segmentDir . '/*/seg-*.part-*') ?: [],
+            'a stood-down window must leave no in-flight temps behind'
+        );
+
+        $served = $manager->ensureSegment($jobId, 'original', 0);
+
+        $this->assertSame('seg-voriginal-00000.m4s', basename($served));
+        $this->assertCount(1, $launches, 'the demand path keeps the FULL single-slot ceiling');
+    }
+
+    /**
      * Law 9 (silent-skip tooth): the over-budget refusal rolls its reservation
      * back BEFORE returning — a stranded reservation would make the segment
      * look in flight forever (law-8's disease on the skip path). Re-driving

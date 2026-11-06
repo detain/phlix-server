@@ -96,6 +96,58 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Playback-lag wave: `@phlix/ui` v0.99.17 re-pinned to v0.99.19, and the
+  served `/app` bundle regenerated.** [wave-playback-fix]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.17 →
+    v0.99.19 (tag object `f9b89669`, peel `a6c9d466` == ui master tip,
+    ls-remote-verified). v0.99.18 was never vendored by any consumer, so this
+    single hop lands two releases: the `.18` RUNGMASTER law — the player loads
+    per-rung `media_v*_master.m3u8` mini-master indexes instead of bare rungs,
+    the only playlist shape where hls.js sees the `EXT-X-MEDIA` audio
+    renditions at all (the hub-phlix no-audio incident's cure) — plus the
+    `.19` self-safety follow-ups: a per-pick rung-probe that falls back to the
+    legacy bare rung on a 404, a synthesized 'Original' audio entry for
+    muxed-audio rungs, and stale audio-menu sync on level switches. The
+    deployed server already writes those indexes (`TranscodeManager` since
+    1035e7de) and declares their `CODECS` truthfully (994c92af); this commit
+    closes the loop on the client side. The lock diff, cut with the CI-exact
+    toolchain (node 24.20.0, bundled npm 11.19.0, userconfig nulled), is
+    minimal 4+/4−: the root echo and the ui node's version/resolved/integrity
+    triple — v0.99.19 moves no declared edge, so the contracts `#v0.5.6` and
+    syncplay `#v0.1.7` lines stay put. The lock is idempotent under a fresh
+    npm run.
+  - *Supply chain.* A from-scratch `npm ci` after wiping `node_modules`
+    installs bytes-identical to the v0.99.19 tag payload (`dist/` diff -r
+    exit 0; the only tree delta is npm's pack-time `.gitignore`→`.npmignore`
+    rename): `phlix-ui.js feadba01…`, `player.js 9af33118…`, umd `5feaea70…`,
+    and the PlayerPage carriers `kwMAZlDu.js 2aba040e…` / `DAswZ8i8.cjs
+    14a50c00…` all equal the release register's consumer-target figures. The
+    installed `src/i18n` tree is NOT byte-identical to v0.99.17's — the `.19`
+    fold adds one leaf key, `audioOriginal: 'Original'`, across en plus the
+    seven locale mirrors (523 → 524) — and the web-ui i18n seam pins hold
+    across that addition (node --test 33/33).
+  - *Served bundle.* `public/assets/app/` regenerated from the new lock with
+    the same CI-pinned toolchain (output dir wiped by the config's
+    `emptyOutDir`), built twice, both runs aggregating to md5
+    `26b10ecc6732dd386d2e9250716498e1` under the printed recipe
+      find public/assets/app -type f | sort | xargs md5sum | md5sum
+    The 200-file set holds (125 content-hashed file names rotate; manifest
+    and index.html follow); the bundle's ui version stamp now reads 0.99.19
+    (grepped from the built tree — zero v0.99.17 remnants and zero for the
+    skipped v0.99.18). Law greps over the built set: `_master.m3u8` and the
+    `rung mini-master unavailable` warning both live in the PlayerPage
+    carrier chunk — the browser now actually fetches the rung indexes the
+    server has been emitting. The README "UI truth at this tip" line flips
+    to v0.99.19 alongside. The bundle-aware PHP cohort
+    (`WebUiBundleGateTest`, `ViteAssetsMemoTest`,
+    `SharedUiControllerCspNonceTest`, `HttpHandlerServeStaticTest`,
+    `PublicFrontControllerRemovalGuardTest`, `NginxAssetLocationTest`) runs
+    42/365 green against the regenerated tree — exact-to-baseline, zero era
+    pins moved, nothing rotated from red; the two lockfile readers
+    (`LicenseHeaderGuardTest` 5/11, `BrowserE2EGateTest` 21/127) are green
+    too. S253 web-ui.yml gate is the CI attestation (npm ci + build + git
+    diff --exit-code public/assets/app).
+
 - **A silent video now stays silent on paper too: HLS/DASH codec
   declarations tell the truth about audio.** Under the shipped client
   contract (phlix-ui 3174b805), a rung's `CODECS` attribute is what

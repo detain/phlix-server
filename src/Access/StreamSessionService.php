@@ -169,16 +169,14 @@ final class StreamSessionService
 
         // Get the profile's stream limit
         $limit = $this->getStreamLimit($profileId);
-        $currentCount = $this->getActiveStreamCount($profileId);
 
-        if ($currentCount >= $limit->maxConcurrentStreams) {
-            return false;
-        }
-
-        // Clean up any stale streams first (heartbeat missed)
+        // Sweep stale streams (heartbeat missed) BEFORE counting. A pre-sweep
+        // count that short-circuited here meant a profile at its limit with only
+        // DEAD rows could never reach the sweep — every new device got 429
+        // forever (observed live: a row 80 min past its last heartbeat still
+        // held the profile's single slot).
         $this->cleanupStaleStreams();
 
-        // Re-check count after cleanup
         $currentCount = $this->getActiveStreamCount($profileId);
         if ($currentCount >= $limit->maxConcurrentStreams) {
             return false;

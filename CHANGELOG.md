@@ -691,6 +691,18 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **A profile at its concurrent-stream limit is no longer locked out forever by dead
+  sessions.** `StreamSessionService::registerStream()` counted active streams and
+  returned "limit reached" BEFORE running the stale-heartbeat sweep, so once a
+  profile's slots were held only by sessions that had gone silent (closed tab, dropped
+  device), the sweep was unreachable and every new device got `429
+  stream.limit_exceeded` ("This member profile is already streaming on the maximum
+  number of devices") until something else cleaned the table — observed live: a row
+  80 minutes past its last heartbeat held a limit-1 profile's only slot. The sweep now
+  runs first, then the single count. Pinned by
+  `StreamSessionServiceTest::testRegisterStreamSweepsStaleRowsBeforeEnforcingTheLimit`
+  (red at parent: the profile was refused; green with the fix).
+
 - **A freshly-enabled theme plugin is immediately selectable via settings
   on every worker, not just the one that served the enable.** The S498
   fleet-sync reconciled a worker's theme registry only on the READ path

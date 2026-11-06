@@ -250,4 +250,50 @@ class StreamSessionServiceTest extends TestCase
 
         $this->assertSame(0, $service->cleanupStaleStreams());
     }
+
+    /**
+     * A profile at its limit whose only occupant is a DEAD row (heartbeat long
+     * past the 60 s window) must still admit a new device: the stale sweep has
+     * to run BEFORE the limit count. It used to run after a pre-sweep count
+     * that already returned false, so the sweep was unreachable and the
+     * profile stayed locked out with 429 until some other path cleaned up
+     * (observed live: one row 80 min stale held a limit-1 profile's only slot).
+     *
+     * @return void
+     */
+    public function testRegisterStreamSweepsStaleRowsBeforeEnforcingTheLimit(): void
+    {
+        $swept = false;
+        $inserted = false;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use (&$swept, &$inserted): mixed {
+                if (str_starts_with($sql, 'SELECT 1 FROM active_streams')) {
+                    return []; // this session is new
+                }
+                if (str_starts_with($sql, 'SELECT * FROM profile_stream_limits')) {
+                    return [['profile_id' => 'p-1', 'max_concurrent_streams' => 1]];
+                }
+                if (str_starts_with($sql, 'DELETE FROM active_streams WHERE last_heartbeat_at')) {
+                    $swept = true;
+                    return 1;
+                }
+                if (str_starts_with($sql, 'SELECT COUNT(*)')) {
+                    // one stale row until the sweep removes it
+                    return [['cnt' => $swept ? 0 : 1]];
+                }
+                if (str_starts_with($sql, 'INSERT INTO active_streams')) {
+                    $inserted = true;
+                    return null;
+                }
+                return [];
+            }
+        );
+
+        $service = new StreamSessionService($db);
+
+        $this->assertTrue($service->registerStream('p-1', 'dev-new', 'sess-new'));
+        $this->assertTrue($swept, 'the stale sweep must run before the limit is enforced');
+        $this->assertTrue($inserted);
+    }
 }

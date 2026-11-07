@@ -58,12 +58,17 @@ use function DI\get;
  * The JWT signing key is env-only: `start.php` runs
  * {@see self::assertSecretConfigured()} before `Worker::runAll()`, and an
  * empty `JWT_SECRET`, the shipped {@see self::DEFAULT_JWT_SECRET} sentinel,
- * or any publicly-known placeholder refuses to boot on EVERY carrier
- * (docker, systemd, bare `php start.php`); keys shorter than
- * {@see self::MIN_SECRET_BYTES} are additionally refused outside development.
- * The `?: self::DEFAULT_JWT_SECRET` fallback in the factory below can
- * therefore surface only inside the test harness — the one environment the
- * guard exempts — never as a working default for real installs.
+ * or any publicly-known placeholder refuses to boot on every boot carrier
+ * that runs this guard (docker, systemd, bare `php start.php`); keys shorter
+ * than {@see self::MIN_SECRET_BYTES} are additionally refused outside
+ * development. The `?: self::DEFAULT_JWT_SECRET` fallback in the factory
+ * below can therefore never serve a key on a guarded boot. It is also the
+ * value the unguarded container builders (the `bin/phlix` CLI,
+ * `scripts/match-library-metadata.php`, `scripts/run-library-scan-worker.php`)
+ * bind at registration time when the env var is unset — those carriers
+ * resolve no `JwtHandler`/`AuthManager` from the container today, so the
+ * bound sentinel signs nothing; keep it that way (a new consumer there would
+ * need its carrier guarded first).
  *
  * @internal Phlix-internal service provider.
  *
@@ -77,13 +82,15 @@ final class AuthServicesProvider implements ServiceProviderInterface
      *
      * Tier 2 of {@see self::secretViolation()} compares the configured
      * `JWT_SECRET` against this exact literal and refuses to boot on every
-     * carrier when it matches, so an un-migrated deployment presenting it is
-     * stopped at startup rather than served. The constant exists so that
-     * comparison can name the string, and so the JWT factory's
-     * `getenv('JWT_SECRET') ?: self::DEFAULT_JWT_SECRET` expression has a
-     * value for the test harness (the sole environment the boot guard
-     * exempts); outside the harness that fallback can never run, because a
-     * boot carrying it was already refused.
+     * guarded boot carrier when it matches, so an un-migrated deployment
+     * presenting it is stopped at startup rather than served. The constant
+     * exists so that comparison can name the string, and so the JWT
+     * factory's `getenv('JWT_SECRET') ?: self::DEFAULT_JWT_SECRET`
+     * expression has a value for the test harness (which the boot guard
+     * exempts); on a guarded boot the refusal above stops the process
+     * before the fallback could ever sign with it, and on the unguarded
+     * CLI/script carriers the bound value has no resolving consumer (see
+     * the class header).
      */
     public const DEFAULT_JWT_SECRET = 'default-secret-change-me';
 
@@ -92,8 +99,10 @@ final class AuthServicesProvider implements ServiceProviderInterface
      * still the shipped {@see self::DEFAULT_JWT_SECRET} sentinel, or a member
      * of the publicly-known placeholder family that the docker entrypoint has
      * refused since S163 (review server__devops M11 lifted that guard from the
-     * docker carrier to EVERY carrier — systemd units and bare `php start.php`
-     * previously booted happily on `JWT_SECRET=change_me_generate_with_openssl`).
+     * docker entrypoint to every serving boot — systemd units and bare
+     * `php start.php` pass through `start.php` now and previously booted
+     * happily on `JWT_SECRET=change_me_generate_with_openssl`; the unguarded
+     * CLI container builders are covered by the class header's note).
      *
      * The secret protects far more than JWTs: {@see \Phlix\Auth\SignedUrl::fromEnv()}
      * HMAC-derives the media signed-URL key from `JWT_SECRET` whenever
@@ -222,7 +231,8 @@ final class AuthServicesProvider implements ServiceProviderInterface
      *
      * Mirror of the docker-entrypoint `phlix_is_placeholder_secret()` star
      * patterns (`change_me*|changeme*|change-me*`); review server__devops M11
-     * lifted that fail-closed posture from the docker carrier to every carrier.
+     * lifted that fail-closed posture from the docker entrypoint to every
+     * serving boot (the `start.php` path).
      * The entrypoint guard stays in place as defense-in-depth (it refuses
      * before the app process even starts).
      *

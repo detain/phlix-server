@@ -300,6 +300,44 @@ final class SystemdInstallerEnvTest extends TestCase
     }
 
     /**
+     * The retirement of `PHLIX_SECRET_KEY` from the full installer's generated
+     * env file must be permanent: the systemd carrier reads nothing from that
+     * key (it is a docker-entrypoint input), so writing it back is silent
+     * dead-config drift — the exact pre-M11 defect class the systemd template
+     * already pins absent above (testScriptNoLongerTellsThePreM11Lies), which
+     * never looked at scripts/install.sh's own heredoc. This is that same
+     * absence law for the other installer.
+     *
+     * The `JWT_SECRET=` positive control keeps the assertion honest: it is
+     * what proves the extraction actually captured the heredoc body rather
+     * than an empty string the absence check would pass vacuously.
+     */
+    public function testFullInstallerEnvHeredocNeverCarriesTheRetiredSecretKey(): void
+    {
+        $installer = (string) @file_get_contents(self::repoRoot() . '/scripts/install.sh');
+        self::assertNotSame('', $installer, 'scripts/install.sh must exist');
+        self::assertSame(
+            1,
+            preg_match('/cat >"\$ENV_FILE" <<EOF\n(.*?)\nEOF\n/s', $installer, $m),
+            'parser teeth: the installer must still write the env file through an unquoted heredoc'
+        );
+
+        self::assertStringContainsString(
+            'JWT_SECRET=',
+            $m[1],
+            'extraction control: the heredoc body must contain the boot-required JWT_SECRET line — '
+            . 'without it the absence pin below could pass on an empty capture'
+        );
+        self::assertStringNotContainsString(
+            'PHLIX_SECRET_KEY',
+            $m[1],
+            'PHLIX_SECRET_KEY is a docker-entrypoint input; the systemd carrier installed by '
+            . 'scripts/install.sh reads nothing from it, so the generated env file must not '
+            . 'carry the key again (retired from this template; must not re-grow)'
+        );
+    }
+
+    /**
      * The finding in one line: pre-M11, this value BOOTED on systemd (31 bytes
      * only tripped the length floor outside dev, and dev never refused it).
      * Post-M11 the carrier-agnostic boot guard in start.php itself must refuse

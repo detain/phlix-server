@@ -155,6 +155,36 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+- **The served web player carries the review-cure cycle: `@phlix/ui` v0.99.22 re-pinned to
+  v0.99.24, and the served `/app` bundle regenerated.** [ui review-cure wave 2026-11-07]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.22 → v0.99.24 (tag object
+    `bb418fe8`, peel `f03447d3` == ui master tip, ls-remote-verified; ui-ci 42343876710
+    attempt-1 green). v0.99.23 is deliberately SKIPPED — its dist carried a syncplay
+    `#v0.1.8` rotation that regressed inbound watch-party frame handling (ui register
+    TW-ui-23.md; the tag stands as truthful history, its replacement .24 reverts that pin).
+    .24's payload rides the whole review-cure cycle (ui w01 L7…w14 L3: focus custody, gated
+    D-pad hover arms, auth-expiry UX, `window.open` noopener sink, tokenStore guards, copy/
+    voice sweeps, configured router base, form-UX error recovery) plus contracts `#v0.5.6` →
+    `#v0.5.7`. `package-lock.json` surgical 7+/7- + `package.json` 1+/1- via npm 11
+    `--package-lock-only` with `NPM_CONFIG_USERCONFIG=/dev/null` on node 24.20.0: root echo +
+    the ui node triple + the contracts edge echo; npm left the `node_modules/@phlix/contracts`
+    resolved node stale at the v0.5.6 peel while advancing the declared edge — hand-repaired to
+    `0.5.7`/`bedfe69b` (ls-remote-verified peel of tag object `eee7e776`), then re-proven
+    lock-idempotent and installed-version-true by a fresh `npm ci` (contracts `0.5.7`, registry
+    `error-codes.json` md5 `5d1783a7…`, syncplay dist md5 `c399c3b4…` == the blessed `#v0.1.7`
+    payload). Fresh `npm ci` installs the tag's `dist/` byte-identical to the ui register's
+    consumer-target identities: `phlix-ui.js` `b000d72d…`, `player.js` `b5bfb4c6…`,
+    `phlix-ui.umd.cjs` `d4e23ca8…`, `player.umd.cjs` `ae409dea…`.
+  - *Bundle regen.* `/app` (`public/assets/app`) rebuilt on the S253-pinned node 24.20.0,
+    deterministic ×2 (`diff -r` clean), aggregate md5sum-recipe (sorted per-file md5 digest)
+    `3ea08650a7c5f267b86b001107d53d6d`, 198 files in `assets/`; stamp reads `0.99.24`
+    (`index-DDAhCsqr.js`, zero `0.99.22` residue tree-wide); ui carrier `PlayerPage-CjKjMmhk`
+    propagates as server chunk `PlayerPage-CjKjMmhk-D6kTWsPX.js`. Bundle-aware PHP cohort
+    (WebUiBundleGate 10/56, ViteAssetsMemo 4/7, SharedUiControllerCspNonce 5/35,
+    HttpHandlerServeStatic 10/50, PublicFrontControllerRemovalGuard 9/168, NginxAssetLocation
+    4/49), LicenseHeaderGuard 5/11, BrowserE2EGate 21/127, web-ui `node --test` 33/33 — all
+    green. README UI-truth line flips. Zero PHP files touched.
+
 - **The webhook event catalogue's "mirrors the shared schema" claim is now
   enforced by reading the schema.** The vocabulary pin compared the
   catalogue's literals to a literal copy of the same literals in the test —

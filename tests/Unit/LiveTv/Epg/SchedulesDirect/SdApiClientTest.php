@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\LiveTv\Epg\SchedulesDirect;
 
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\Epg\SchedulesDirect\SdApiClient;
 use PHPUnit\Framework\TestCase;
 
@@ -145,5 +146,39 @@ class SdApiClientTest extends TestCase
         // XMLTV guide cap on purpose (see constant docblock).
         $this->assertGreaterThanOrEqual(64 * 1024 * 1024, SdApiClient::MAX_RESPONSE_BYTES);
         $this->assertLessThanOrEqual(256 * 1024 * 1024, SdApiClient::MAX_RESPONSE_BYTES);
+    }
+
+    // ---- SH-020 (secaudit #4): the token-failure log must not leak the SD account username ----
+
+    public function test_fetch_token_failure_log_never_carries_the_raw_username(): void
+    {
+        // The SD host is unreachable in the suite, so fetchToken() reaches its
+        // `response === null` failure branch and logs — this drives the real
+        // logging path, not a stub.
+        $username = 'sd-account-must-not-appear@example.invalid';
+        $entries = [];
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->method('error')->willReturnCallback(
+            /** @param array<string, mixed> $context */
+            static function (string|\Stringable $message, array $context = []) use (&$entries): void {
+                $entries[] = ['message' => (string) $message, 'context' => $context];
+            }
+        );
+
+        $client = new SdApiClient('', $logger);
+        $this->assertNull($client->fetchToken($username, 'wrong-password'));
+
+        $this->assertNotEmpty($entries, 'the SD token-failure path must log at least one error');
+
+        $blob = '';
+        foreach ($entries as $entry) {
+            $blob .= $entry['message'] . json_encode($entry['context']);
+        }
+        $this->assertStringNotContainsString(
+            $username,
+            $blob,
+            'SH-020: SD token-failure logging must not carry the raw account username'
+        );
     }
 }

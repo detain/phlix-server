@@ -123,7 +123,9 @@ class SdApiClient
         $response = $this->post('/token', [], $headers);
 
         if ($response === null) {
-            $this->logger?->error('Failed to fetch SD token', ['username' => $username]);
+            $this->logger?->error('Failed to fetch SD token', [
+                'username_fingerprint' => self::usernameFingerprint($username),
+            ]);
             return null;
         }
 
@@ -137,6 +139,19 @@ class SdApiClient
 
         $this->logger?->error('SD token response missing token field', ['response' => $response]);
         return null;
+    }
+
+    /**
+     * Non-reversible fingerprint of an SD account username for failure logs.
+     *
+     * The username is an admin-configured Schedules Direct account identifier
+     * and has no place in an error log, but operators still need to correlate
+     * repeated token failures for the same account. A truncated SHA-256 gives
+     * that correlation without disclosing the identifier (SH-020).
+     */
+    private static function usernameFingerprint(string $username): string
+    {
+        return substr(hash('sha256', $username), 0, 16);
     }
 
     /**

@@ -93,6 +93,9 @@ phlix.example.com {
 #      }
 #    (Caddy 2.7+ auto-detects the WS upgrade on reverse_proxy and forwards
 #    Connection/Upgrade; long-lived sockets just need generous timeouts.)
+#    CAVEAT: ws:// carries the handshake JWT (bearer subprotocol or legacy
+#    ?token=) and all group traffic in clear — use option 2 (wss://) for
+#    anything beyond a trusted LAN. See the "Exposure note" in README.md.
 #
 # 2. TLS-terminated wss: give the WS its own hostname/port, e.g.
 #      wss://ws.phlix.example.com {

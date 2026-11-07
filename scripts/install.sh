@@ -1722,8 +1722,10 @@ LimitNOFILE=1048576\\
 
 	# 4f. Backfill env keys that newer code requires but an older install never
 	# wrote. JWT_SECRET became a hard boot requirement in 0.55.0
-	# (AuthServicesProvider::assertSecretConfigured) — an install that predates it
-	# has only PHLIX_SECRET_KEY and would now refuse to start. Generate a unique
+	# (AuthServicesProvider::assertSecretConfigured) — a legacy install that
+	# predates it can carry only the docker-only PHLIX_SECRET_KEY alias (newer
+	# installers write JWT_SECRET directly), so it would now refuse to start.
+	# Generate a unique
 	# secret and append it (idempotent: a real, non-empty JWT_SECRET is preserved).
 	log "Ensuring required env keys are present"
 	phlix_ensure_env_key "$ENV_FILE" JWT_SECRET "$(rand_hex 32)" \
@@ -1871,13 +1873,6 @@ fi
 
 # Public domain for the env file.
 PUBLIC_DOMAIN="${DOMAIN:-$(hostname -f 2>/dev/null || hostname)}"
-
-# Generate the install-wide signing secret. NOTE: the PHP runtime never reads
-# a PHLIX_SECRET_KEY environment variable (zero getenv() call sites in src/);
-# docker/docker-entrypoint.sh maps this name onto JWT_SECRET, and the native
-# env file below carries JWT_SECRET directly. Truth pinned by the definitive
-# census in README.md ("Environment variables").
-SECRET_KEY="$(rand_hex 32)"
 
 # JWT signing secret. REQUIRED: src/Common/Container/Providers/AuthServicesProvider.php
 # refuses to boot (assertSecretConfigured) when JWT_SECRET is unset or still the
@@ -2111,12 +2106,6 @@ PHLIX_TLS_ENABLED=$([ "$TLS_ENABLED" = "yes" ] && echo 1 || echo 0)
 # this file (EnvironmentFile= in the unit). Without this row a --http-port
 # install leaves the daemon on 8096 behind a proxy pointed at the custom port.
 PHLIX_HTTP_PORT=${HTTP_PORT}
-
-# 32-byte hex signing secret. Not read by the PHP runtime under this name:
-# docker/docker-entrypoint.sh maps it onto JWT_SECRET for containers; on a
-# native install the JWT_SECRET line below is the real key, and this row is a
-# container-parity alias kept so the same env file works under both supervisors.
-PHLIX_SECRET_KEY=${SECRET_KEY}
 
 # JWT signing secret (REQUIRED). The server refuses to boot without a unique,
 # non-default value: it signs auth JWTs and (HMAC-derived) media signed URLs,
@@ -2409,7 +2398,7 @@ else
 	warn "=================================================================="
 fi
 info "Service       : systemctl status $SERVICE_NAME"
-info "Env file      : ${ENV_FILE}  (DB_PASSWORD + JWT_SECRET + PHLIX_SECRET_KEY stored here)"
+info "Env file      : ${ENV_FILE}  (DB_PASSWORD + JWT_SECRET stored here)"
 # R7-09: never echo secret material into terminal scrollback / CI logs /
 # screenshot captures — point at the 0640 env file instead.
 info "Database pass : stored in ${ENV_FILE} (mode 640) — show with: sudo grep '^DB_PASSWORD=' ${ENV_FILE}"

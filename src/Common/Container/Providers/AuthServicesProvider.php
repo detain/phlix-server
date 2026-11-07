@@ -55,10 +55,15 @@ use function DI\get;
  * Registers the auth subsystem: JWT handler, user repository, auth
  * manager, profiles, watch history.
  *
- * The JWT handler is configured with a factory that reads JWT_SECRET
- * from the environment, defaulting to the existing
- * "default-secret-change-me" sentinel from public/index.php to preserve
- * parity for local installs that never set the env var.
+ * The JWT signing key is env-only: `start.php` runs
+ * {@see self::assertSecretConfigured()} before `Worker::runAll()`, and an
+ * empty `JWT_SECRET`, the shipped {@see self::DEFAULT_JWT_SECRET} sentinel,
+ * or any publicly-known placeholder refuses to boot on EVERY carrier
+ * (docker, systemd, bare `php start.php`); keys shorter than
+ * {@see self::MIN_SECRET_BYTES} are additionally refused outside development.
+ * The `?: self::DEFAULT_JWT_SECRET` fallback in the factory below can
+ * therefore surface only inside the test harness — the one environment the
+ * guard exempts — never as a working default for real installs.
  *
  * @internal Phlix-internal service provider.
  *
@@ -68,10 +73,17 @@ use function DI\get;
 final class AuthServicesProvider implements ServiceProviderInterface
 {
     /**
-     * Default JWT secret used when JWT_SECRET is not present in the
-     * environment. Matches the historical literal from public/index.php
-     * so existing deployments continue to authenticate while we migrate
-     * to the container.
+     * The historical shipped sentinel value — NOT a working default.
+     *
+     * Tier 2 of {@see self::secretViolation()} compares the configured
+     * `JWT_SECRET` against this exact literal and refuses to boot on every
+     * carrier when it matches, so an un-migrated deployment presenting it is
+     * stopped at startup rather than served. The constant exists so that
+     * comparison can name the string, and so the JWT factory's
+     * `getenv('JWT_SECRET') ?: self::DEFAULT_JWT_SECRET` expression has a
+     * value for the test harness (the sole environment the boot guard
+     * exempts); outside the harness that fallback can never run, because a
+     * boot carrying it was already refused.
      */
     public const DEFAULT_JWT_SECRET = 'default-secret-change-me';
 

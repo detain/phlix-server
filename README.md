@@ -703,14 +703,23 @@ auto-renewing Let's Encrypt certificate.
 > at coroutine teardown — the extension must not load in production workers. History of the
 > shipped-disabled era and the removal mechanics: [`systemd/README.md`](systemd/README.md).
 
+> **Supply-chain pin.** These commands fetch the installer from a **pinned
+> release tag** (`v1.2.3`), not `master`: a bare `curl … master | sudo bash` runs
+> whatever `master` holds at fetch time, as root — a supply-chain vector with no
+> pin, checksum, or review step. Bump `v1.2.3` to the newest release tag
+> (`git tag -l` in a clone, or the
+> [Releases page](https://github.com/detain/phlix-server/tags)) before installing.
+> To skip the blind pipe, download-and-inspect first, then run the local file:
+> `curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/v1.2.3/scripts/install.sh -o install.sh && sudo bash install.sh`.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/v1.2.3/scripts/install.sh | sudo bash
 ```
 
 Provision HTTPS in the same run by passing your domain and a Let's Encrypt contact email:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/v1.2.3/scripts/install.sh \
   | sudo bash -s -- --domain phlix.example.com --admin-email you@example.com
 ```
 
@@ -843,8 +852,8 @@ first's fragment and rebuilds a combined config that routes by `Host:` header.
 curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh \
   | sudo bash -s -- --domain hub.example.com --admin-email you@example.com -y
 
-# 2. Install phlix-server, also with TLS, on a different hostname.
-curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+# 2. Install phlix-server, also with TLS, on a different hostname (pin the release tag).
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/v1.2.3/scripts/install.sh \
   | sudo bash -s -- --domain phlix.example.com --admin-email you@example.com -y
 ```
 

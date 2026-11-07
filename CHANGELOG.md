@@ -58,6 +58,30 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **The documented fresh-install one-liner now fetches the installer from a
+  pinned release tag instead of `master`.** `curl -fsSL
+  https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh
+  | sudo bash` executed whatever `master` held at fetch time, as root, with no
+  pin, checksum, or review step anywhere in the docs — a supply-chain vector in
+  the primary install story. The README headline (and the "alongside phlix-hub"
+  example's server leg) now pins the current release tag (`v1.2.3`), tells the
+  operator to bump it, and adds a download-and-inspect alternative. The
+  `--update` one-liner deliberately stays on `master`: it is the exact string the
+  runtime-mirrored `updates.update_command` advertises for pulling the newest
+  release (review server__seceng-docs #9).
+- **The HAProxy and Caddy templates now warn that `ws://` puts the handshake JWT
+  on the wire in clear.** Both presented plaintext `ws://` as the default or
+  simplest way to front the `:8097` WebSocket worker with no credential caveat,
+  even though the repo's own README and systemd notes already describe that leg
+  as plaintext, JWT-bearing traffic. Each site gained a one-line caveat pointing
+  at the README exposure note and `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`
+  (review server__seceng-docs #4).
+- **A failed Schedules Direct token fetch no longer writes the account username
+  into the error log.** The `username` context key on the token-failure log line
+  is replaced by a truncated, non-reversible SHA-256 fingerprint, so operators can
+  still correlate repeated failures for one account without the admin-configured
+  identifier landing in log files (review server__secaudit #4). Red-pinned by
+  `SdApiClientTest::test_fetch_token_failure_log_never_carries_the_raw_username`.
 - **The plugin-update laundering record is corrected in a newer entry (its
   own discipline), and the cure now has test teeth.** The landed entry
   "INFO tail: a dead WS auth superglobal rail is gone, and the plugin-update
@@ -724,6 +748,33 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The `AuthServicesProvider` docblocks no longer cite the deleted
+  `public/index.php`.** Both the class header and the `DEFAULT_JWT_SECRET`
+  constant described a working sentinel fallback "from public/index.php … to
+  preserve parity for local installs that never set the env var". That CGI front
+  controller was removed by S171, and the four-tier `assertSecretConfigured` boot
+  guard refuses an empty/sentinel/placeholder `JWT_SECRET` on every carrier (and
+  short keys outside dev), so no unconfigured install ever boots on the shipped
+  sentinel — the docblock taught the wrong security posture. Both now state the
+  env-only law and explain the constant as the tier-2 comparison value and
+  test-harness fallback only (review server__seceng-docs #2).
+- **The nginx template comment no longer normalizes the retiring `?token=` auth
+  carrier.** In the "expose :8097" recipe it told operators the worker "carries
+  auth in the `?token=` query parameter" — the legacy carrier the estate is
+  retiring precisely because any proxy or load balancer that logs request URIs
+  records the JWT in plaintext. The comment now names the bearer subprotocol as
+  the target and `?token=` only as the legacy fallback, matching
+  `reverse-proxy/README.md` and `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`
+  (review server__seceng-docs #3).
+- **The full bare-metal installer no longer persists a dead `PHLIX_SECRET_KEY`.**
+  `scripts/install.sh` generated `SECRET_KEY` and wrote `PHLIX_SECRET_KEY` into
+  `/etc/phlix/env` (and advertised it in the closing banner) although nothing on
+  the systemd carrier reads it — it is a docker-entrypoint-only alias mapped onto
+  `JWT_SECRET`, and the env file already carries `JWT_SECRET` directly. The dead
+  generation, env line, and banner mention are removed, matching the already-clean
+  sibling `install/systemd.sh`; a high-entropy value that guards nothing only
+  invites future code to trust an unmanaged secret name and doubles the rotation
+  surface (review server__seceng-docs #8).
 - **Stopping the hub client heartbeat now retires every timer it armed.** The
   `FIRST_HEARTBEAT_DELAY` one-shot was armed without keeping its Workerman timer
   id, so `stopHeartbeatLoop()` could only ever cancel the repeating 60s loop — a

@@ -11,6 +11,7 @@ use Phlix\Shared\Events\Auth\UserLoggedIn;
 use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Shared\Events\Playback\PlaybackStarted;
 use Phlix\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Shared\Schema\SchemaPaths;
 use Phlix\Webhooks\WebhookEventCatalog;
 use Phlix\Webhooks\WebhookHttpClient;
 use Phlix\Webhooks\WebhookService;
@@ -324,7 +325,9 @@ final class WebhookEventVocabularyTest extends TestCase
      * Literal tripwires on the catalogue SSOT: the EVENTS list mirrors the
      * phlix-shared wire truth (webhook-events.json) plus the three live
      * user.* names, and the SPA picker in @phlix/ui mirrors this same list —
-     * any drift here reddens this pin first.
+     * any drift here reddens this pin first. {@see
+     * testCatalogueMirrorsTheVendoredSchemaLive()} is what makes the mirror
+     * word in that sentence an enforced law rather than a claim.
      */
     public function testCatalogueLiteralsArePinned(): void
     {
@@ -353,5 +356,74 @@ final class WebhookEventVocabularyTest extends TestCase
         $this->assertFalse(WebhookEventCatalog::isSubscribable('webhook.test'), 'test events are never subscribable');
         $this->assertTrue(WebhookEventCatalog::isAccepted('media.played'));
         $this->assertFalse(WebhookEventCatalog::isAccepted('media.invented'));
+    }
+
+    /**
+     * Review server__crossfe (LW-080 shape) — the catalogue's docblock claimed
+     * to "mirror the wire-truth catalogue declared by detain/phlix-shared's
+     * schemas/webhook-events.json", but the pin above compared literals to
+     * literals and never opened the schema: an event added to (or removed
+     * from) the shared wire truth left the whole pair green, silently. This
+     * test reads the ACTUAL vendored schema file at test time — the same live
+     * read AdminSettingsController performs against SchemaPaths::
+     * serverSettings() — and pins the mirror relation itself:
+     *
+     *  - every `events[].type` of the schema, in schema order, must lead the
+     *    catalogue (an 8th schema event reddens this until the catalogue and
+     *    the picker grow to match — which is the drift review's whole point);
+     *  - what follows must be exactly the three account-lifecycle names the
+     *    server emits but the shipped schema does not yet list (the widened
+     *    vocabulary is the phlix-shared cascade's to ship);
+     *  - every `reserved[].type` must stay out of the subscribable list.
+     */
+    public function testCatalogueMirrorsTheVendoredSchemaLive(): void
+    {
+        $path = SchemaPaths::webhookEvents();
+        $raw = @file_get_contents($path);
+        $this->assertIsString(
+            $raw,
+            'the vendored webhook-events.json must be readable at its SchemaPaths location ('
+            . $path . ') — composer install owns it and CI has it'
+        );
+
+        /** @var array{events?: list<array{type?: mixed}>, reserved?: list<array{type?: mixed}>} $schema */
+        $schema = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertTrue(isset($schema['events']) && is_array($schema['events']), 'the schema must carry an events list');
+        $schemaTypes = array_values(array_map(
+            function (array $event): string {
+                $this->assertTrue(
+                    isset($event['type']) && is_string($event['type']),
+                    'every schema event must carry a string type',
+                );
+                return $event['type'];
+            },
+            $schema['events']
+        ));
+
+        $this->assertSame(
+            $schemaTypes,
+            array_slice(WebhookEventCatalog::EVENTS, 0, count($schemaTypes)),
+            'the catalogue must lead with the vendored schema\'s event types, in schema order — '
+            . 'a schema widened (or narrowed) underneath the catalogue is exactly the silent drift this pin exists to end'
+        );
+
+        $this->assertSame(
+            ['user.login', 'user.logout', 'user.created'],
+            array_slice(WebhookEventCatalog::EVENTS, count($schemaTypes)),
+            'the only names the catalogue may carry beyond the shipped schema are the three live account-lifecycle '
+            . 'events (the phlix-shared cascade owns widening the schema to include them)'
+        );
+
+        $reserved = $schema['reserved'] ?? [];
+        $this->assertTrue(is_array($reserved), 'the reserved list must be an array when present');
+        foreach ($reserved as $entry) {
+            $type = is_array($entry) && isset($entry['type']) && is_string($entry['type']) ? $entry['type'] : '';
+            $this->assertNotContains(
+                $type,
+                WebhookEventCatalog::EVENTS,
+                "reserved schema event '{$type}' must never join the user-subscribable catalogue"
+            );
+        }
     }
 }

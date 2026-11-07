@@ -21,6 +21,9 @@ namespace Phlix\Webhooks;
  * that schema file does not yet list — the phlix-shared cascade owns widening
  * the shipped schema; until then this class and the admin SPA picker
  * (@phlix/ui WEBHOOK_EVENT_CATEGORIES) are the estate's live vocabulary.
+ * The mirror is enforced, not claimed: tests/Unit/Webhooks/
+ * WebhookEventVocabularyTest.php parses the vendored schema at CI time and
+ * reddens on any drift beneath this list.
  *
  * Before this catalogue existed, the emitter (WebhookEventSubscriber) used
  * media.* names while the admin subscription validator used a fictional

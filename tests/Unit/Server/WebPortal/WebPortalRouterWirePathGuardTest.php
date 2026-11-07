@@ -526,7 +526,7 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
 
         $this->assertSame(503, $response->statusCode);
         $this->assertSame(
-            ['error' => 'This feature isn\'t available on this server right now. Please try again later.'],
+            ['error' => 'Next Up isn\'t available on this server. The watch-history service isn\'t running.'],
             $this->body($response)
         );
     }

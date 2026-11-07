@@ -404,7 +404,7 @@ final class ThemeEndpointsReachabilityTest extends TestCase
             $response = $router->dispatch($this->request($path));
 
             $this->assertSame(503, $response->statusCode);
-            $this->assertSame(['error' => 'This feature isn\'t available on this server right now. Please try again later.'], $this->body($response));
+            $this->assertSame(['error' => 'Themes isn\'t available on this server. The theming service isn\'t running.'], $this->body($response));
         }
     }
 

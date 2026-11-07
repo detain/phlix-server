@@ -19,8 +19,7 @@ use InvalidArgumentException;
  *
  * Several admin surfaces accept a URL or host that the server then fetches
  * server-side: outbound webhooks ({@see \Phlix\Webhooks\WebhookDispatcher}),
- * the MQTT notification bridge ({@see \Phlix\Webhooks\Plugins\MqttPlugin} — a
- * raw `file_get_contents()` against an operator-supplied host), the plugin
+ * the plugin
  * catalog fetcher ({@see \Phlix\Plugins\Catalog\PluginCatalogService}) and the
  * plugin source resolver ({@see \Phlix\Plugins\Installer\SourceUrlResolver}).
  * Without validation an operator (or anyone who can reach an admin endpoint)

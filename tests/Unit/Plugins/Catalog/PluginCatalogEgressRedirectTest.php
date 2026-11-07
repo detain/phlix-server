@@ -34,9 +34,9 @@ use Workerman\Http\Client;
  *
  * The transport legs cannot fake the transport — the class under test IS the
  * real wrapper's redirect behaviour — so they dial a live loopback `php -S`
- * fixture (venue idiom copied from NotificationPluginEgressRedirectTest /
- * HttpInstallerRedirectE2eTest, incl. the S315 `exec` law so proc_terminate()
- * signals the server, not the shell). The fixture logs every path it SERVES;
+ * fixture (venue idiom copied from HttpInstallerRedirectE2eTest, incl. the
+ * S315 `exec` law so proc_terminate() signals the server, not the shell).
+ * The fixture logs every path it SERVES;
  * the conviction is that '/secret' never appears there.
  *
  * Red at the parent commit, per leg:

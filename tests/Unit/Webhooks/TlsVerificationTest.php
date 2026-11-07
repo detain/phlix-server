@@ -4,26 +4,21 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Webhooks;
 
-use Phlix\Webhooks\Plugins\AbstractNotificationPlugin;
-use Phlix\Webhooks\Plugins\ApprisePlugin;
-use Phlix\Webhooks\Plugins\DiscordPlugin;
-use Phlix\Webhooks\Plugins\MqttPlugin;
-use Phlix\Webhooks\Plugins\NtfyPlugin;
-use Phlix\Webhooks\Plugins\PushoverPlugin;
-use Phlix\Webhooks\Plugins\SlackPlugin;
-use Phlix\Webhooks\Plugins\TelegramPlugin;
 use Phlix\Webhooks\WebhookDispatcher;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
- * Verifies that the webhook dispatcher and every notification plugin
- * build outbound stream contexts with TLS peer verification enabled.
+ * Verifies that the webhook dispatcher builds outbound stream contexts with
+ * TLS peer verification enabled.
  *
- * Without this, a MITM on the path between Phlix and Discord / Slack /
- * Telegram / etc. could tamper with notification payloads in flight or
- * forge responses. See post-O.7 wave 1 security audit, findings L.1 + L.2.
+ * Without this, a MITM on the path between Phlix and a subscription endpoint
+ * could tamper with webhook payloads in flight or forge responses. See
+ * post-O.7 wave 1 security audit, findings L.1 + L.2 — which also covered the
+ * notification-plugin family; that family was retired (never wired into any
+ * serving path) and its legs went with it, leaving this live dispatcher
+ * coverage. The retirement itself is pinned by
+ * {@see \Phlix\Tests\Unit\Webhooks\NotificationPluginFamilyRetirementTest}.
  */
 final class TlsVerificationTest extends TestCase
 {
@@ -48,61 +43,5 @@ final class TlsVerificationTest extends TestCase
         $ssl = $dispatcher->buildSslContextOptions(['ca_bundle' => '/etc/phlix/private-ca.crt']);
 
         self::assertSame('/etc/phlix/private-ca.crt', $ssl['cafile']);
-    }
-
-    /**
-     * @return array<string, array{class-string<AbstractNotificationPlugin>}>
-     */
-    public static function notificationPluginProvider(): array
-    {
-        return [
-            'discord' => [DiscordPlugin::class],
-            'slack' => [SlackPlugin::class],
-            'telegram' => [TelegramPlugin::class],
-            'ntfy' => [NtfyPlugin::class],
-            'pushover' => [PushoverPlugin::class],
-            'apprise' => [ApprisePlugin::class],
-            'mqtt' => [MqttPlugin::class],
-        ];
-    }
-
-    /**
-     * @param class-string<AbstractNotificationPlugin> $pluginClass
-     *
-     * @dataProvider notificationPluginProvider
-     */
-    public function test_notification_plugin_ssl_options_enable_peer_verification(string $pluginClass): void
-    {
-        $plugin = new $pluginClass(['enabled' => true]);
-
-        $method = new ReflectionMethod($plugin, 'buildSslContextOptions');
-        $method->setAccessible(true);
-        $ssl = $method->invoke($plugin, []);
-
-        self::assertIsArray($ssl);
-        self::assertTrue($ssl['verify_peer']);
-        self::assertTrue($ssl['verify_peer_name']);
-        self::assertTrue($ssl['SNI_enabled']);
-        self::assertNotEmpty($ssl['cafile']);
-    }
-
-    public function test_notification_plugin_ssl_options_honors_per_provider_ca_bundle(): void
-    {
-        $plugin = new DiscordPlugin(['enabled' => true]);
-
-        $method = new ReflectionMethod($plugin, 'buildSslContextOptions');
-        $method->setAccessible(true);
-        $ssl = $method->invoke($plugin, ['ca_bundle' => '/etc/phlix/private-ca.crt']);
-
-        self::assertIsArray($ssl);
-        self::assertSame('/etc/phlix/private-ca.crt', $ssl['cafile']);
-    }
-
-    public function test_abstract_notification_default_ca_bundle_constant(): void
-    {
-        self::assertSame(
-            '/etc/ssl/certs/ca-certificates.crt',
-            AbstractNotificationPlugin::DEFAULT_CA_BUNDLE
-        );
     }
 }

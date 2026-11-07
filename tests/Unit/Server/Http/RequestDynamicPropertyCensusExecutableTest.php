@@ -1115,7 +1115,17 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // group-TERM aborts pinned out of the in-flight cap, prewarm budget and
     // cross-worker dedup snapshot once their age passes the wrapper-timeout
     // death bound); 2079 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2079;
+    // -12 2079→2067: the newsletter S340 sweep, the named-service 503 copy,
+    // and the webhook notification-plugin family retirement together move
+    // the tree +4 (src/Admin/NewsletterSchedule.php, tests/Unit/Admin/
+    // NewsletterScheduleTest.php, tests/Unit/Server/WebPortal/
+    // WebPortalRouterUnwiredServiceCopyTest.php, tests/Unit/Webhooks/
+    // NotificationPluginFamilyRetirementTest.php) and -16 (the eight
+    // Phlix\Webhooks\Plugins classes, config/notifications.php — the file
+    // walker counts it, proven by this exact arithmetic — and the seven
+    // family-only test files); 2067 measured from the phpunit red, not
+    // predicted.
+    private const EXPECTED_PHP_FILES = 2067;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1528,7 +1538,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // sanctioned Request property-write seeds (method, path, body; userId,
     // body), zero src/ writes (the cure swaps json payloads, adds no
     // Request sites). Measured from the phpunit red (1181) at tip b815e7d4.
-    private const EXPECTED_DECLARED_WRITES = 1181;
+    // +1 1181→1182: the named-service 503 copy lane adds the unwired-router
+    // harness's single sanctioned Request property-write seed (userId) in
+    // tests/Unit/Server/WebPortal/WebPortalRouterUnwiredServiceCopyTest.php;
+    // zero src/ writes (the router cure replaces 503 literals, adds no
+    // Request sites — the deleted family held none either, which is why the
+    // -16 file sweep moves only the file count). Measured from the phpunit
+    // red (1182) at tip c904aa4d, not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1182;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

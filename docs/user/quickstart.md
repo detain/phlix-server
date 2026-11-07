@@ -28,7 +28,8 @@ unit's `EnvironmentFile=/etc/phlix/env` (or your shell when you run
 
 ## 2. Create the admin account
 
-Open the portal, choose **Register**, and create your account. The **first**
+Open the portal, choose **Create an account** (the sign-in page's link; the form
+itself is headed **Create your account**), and fill it in. The **first**
 account on an empty server always becomes the active admin (and is admitted
 regardless of the signup gate). Every later self-service registration goes to
 the approval queue (see step 4) — the shipped default is `signup_mode: approval`,
@@ -49,7 +50,8 @@ key, only local NFO metadata and artwork work.
 
 ## 4. Add the household
 
-Each person registers at `/app` (`Register`) and lands in the **pending** queue;
+Each person signs up at `/app` (the **Create an account** link under the sign-in
+form) and lands in the **pending** queue;
 you approve (or reject) them from **Admin → Users** — the queue is also reachable
 from the CLI (`user:list --status=pending`, `user:approve`). Then per account:
 

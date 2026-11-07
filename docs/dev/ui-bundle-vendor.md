@@ -7,7 +7,7 @@ This document describes how to update `@phlix/ui` and rebuild the Vite assets on
 > with sudo for the few service actions). The paths shown are the installer's
 > defaults (`/var/www/phlix`, matching the README's documented layout).
 
-## Two-Level Architecture
+## Two-level architecture
 
 `@phlix/ui` is published as an npm package. `phlix-server`'s `web-ui/` imports it and runs `vite build` to produce **Vite code-split chunks** in `public/assets/app/assets/`. The player page loads those chunks at runtime — not `node_modules/@phlix/ui/dist/player.js` directly.
 
@@ -25,7 +25,7 @@ phlix-server/public/assets/app/assets/    ←  what the browser actually loads
 - `npm` installed on the build machine (local or server)
 - `rsync` for syncing built assets to the live server
 
-## Deploy Steps
+## Deploy steps
 
 ### Option A — Build locally, sync to server
 
@@ -116,7 +116,7 @@ git commit -m "chore(server): rebuild web-ui assets"
 git push
 ```
 
-## What Gets Deployed
+## What gets deployed
 
 Only the `public/assets/app/assets/` Vite chunks are served to the browser. After a build you should see:
 
@@ -131,7 +131,7 @@ public/assets/app/assets/
   ...other chunks...
 ```
 
-## Verifying the Update
+## Verifying the update
 
 **1. Check chunk hashes changed:**
 
@@ -158,30 +158,38 @@ The build may have produced chunks with **different names** (Vite's bundler uses
 ### TDZ / "can't access lexical declaration before initialization" error
 The error typically appears in `Select.vue` when a `const` variable is used in a function that runs during setup (e.g., a `{ immediate: true }` watch) before the variable's declaration line is evaluated. Fix: move the `const` declaration **before** the code that triggers it. Example — if `selectedIndex` is used in `openList()` called by an immediate watch, `selectedIndex` must be declared **before** the watch.
 
-### Hub going down during restart
-The hub requires the `HUB_JWT_SECRET` env var, provided by the hub deployment's environment file (`/etc/phlix/hub.env` below — whatever path your hub unit's `EnvironmentFile` uses; the variable itself is real: phlix-hub `config/auth.php` reads `HUB_JWT_SECRET`). Prefer the service manager over manual process surgery:
+### Hub restarts
 
-```bash
-sudo systemctl restart phlix-hub.service   # unit name per your hub install
-```
+This is the **server** runbook. Restarting the hub is the hub's own operation —
+see the hub's `@phlix/ui` rebuild runbook
+([phlix-hub `docs/ui-asset-rebuild.md`](https://github.com/detain/phlix-hub/blob/master/docs/ui-asset-rebuild.md)),
+which covers the service-manager restart, `HUB_JWT_SECRET`, and the hub's
+restart troubleshooting. A vendored-`@phlix/ui` deploy on the server never
+restarts the hub; if a deploy script appears to need one, it is the hub's
+cascade lane, not this runbook.
 
-If the hub runs unmanaged (no unit), restart it through its own entry:
+## Package-lock integrity hash
 
-```bash
-cd /srv/phlix-hub
-set -a; . /etc/phlix/hub.env; set +a
-php start.php restart
-```
-
-Avoid `pkill`/`kill <pid>` + `nohup` — it skips the daemon's orderly shutdown and races the pid file.
-
-## Package-lock Integrity Hash
-
-When updating `@phlix/ui` to a new version in `package.json`, you must also update the `integrity` SHA512 hash in `package-lock.json`. Compute it from the live GitHub tarball:
+When you update `@phlix/ui` to a new version in `package.json`, the `integrity`
+field of that package's node in `web-ui/package-lock.json` must describe the new
+tarball. npm's format is `sha512-<BASE64 digest>` — **not** hex — so the lock
+value must be the base64 of the raw SHA-512 digest, prefixed with `sha512-`.
+Compute it from the live GitHub tarball:
 
 ```bash
 # For @phlix/ui v0.Y.Z
-curl -sL "https://github.com/detain/phlix-ui/archive/refs/tags/v0.Y.Z.tar.gz" | openssl dgst -sha512 | awk '{print $NF}'
+curl -sL "https://github.com/detain/phlix-ui/archive/refs/tags/v0.Y.Z.tar.gz" \
+  | openssl dgst -sha512 -binary | openssl base64 -A
 ```
 
-Replace the `integrity` value in `web-ui/package-lock.json` before building.
+Store the output as `sha512-<output>` in the `integrity` field before building.
+(The previous recipe printed a bare hex digest — a value npm rejects outright,
+so hand-editing with it never installed.)
+
+Prefer the ordinary route when you can run npm: bump the version in
+`web-ui/package.json` and let `npm ci`/`npm install` rewrite
+`package-lock.json` (both the `resolved` URL and the `integrity`) itself —
+that is the estate's vendoring idiom and cannot produce a wrong hash. On this
+estate run it with npm 11 and `NPM_CONFIG_USERCONFIG=/dev/null`; hand-edit the
+lock only when a real install is unavailable (the pin-waves do this, and verify
+their result against the recipe above).

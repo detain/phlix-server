@@ -122,10 +122,21 @@ class NewsletterSender
     }
 
     /**
-     * Process pending newsletter queue entries.
+     * Process one batch of pending newsletter queue entries.
      *
-     * Processes up to batchSize pending rows, attempting to send each
-     * newsletter and marking as 'sent' on success or 'failed' on error.
+     * Processes up to batchSize pending rows whose attempt budget is still
+     * eligible (`attempts < max_attempts` — the SAME predicate that bounds
+     * {@see getPendingCount()} and {@see reapExhausted()}; the divergence
+     * between the two queries was the infinite-drain defect). This method
+     * NEVER drains the whole queue: each row's `@mail()` blocks the count=1
+     * background-timers worker for seconds, so the caller's sweep re-calls
+     * while progress continues under its own per-sweep cap.
+     *
+     * A row whose send raises is marked 'failed' carrying the transport
+     * message; a row the process was killed mid-attempt stays 'pending' with
+     * its budget decremented, becomes ineligible once the budget runs out,
+     * and is landed in 'failed' by {@see reapExhausted()} — so no exhausted
+     * row can hold the pending count above zero forever.
      *
      * @param int $batchSize Maximum number of entries to process
      *
@@ -247,9 +258,18 @@ class NewsletterSender
     }
 
     /**
-     * Get pending queue count.
+     * Count pending entries that are still eligible for a send attempt.
      *
-     * @return int Number of pending newsletter entries
+     * The predicate MUST stay identical to {@see processQueue}'s selection
+     * (`status = 'pending' AND attempts < max_attempts`): a row that has
+     * exhausted its attempt budget is pending in name only — no batch will
+     * ever select it — and counting it is what made the timer's
+     * `while (getPendingCount() > 0)` drain spin forever on a count=1 worker.
+     * {@see \Phlix\Admin\NewsletterSchedule::drainBounded()} additionally keeps a
+     * progress-is-zero guard, so a future predicate slip degrades to a
+     * stopped sweep, never a wedge.
+     *
+     * @return int Number of eligible pending newsletter entries
      */
     public function getPendingCount(): int
     {
@@ -257,7 +277,9 @@ class NewsletterSender
         $rows = $this->db->query(
             "SELECT COUNT(*) AS count
              FROM newsletter_queue
-             WHERE status = 'pending'"
+             WHERE status = 'pending'
+               AND attempts < ?",
+            [$this->config['max_attempts'] ?? 3]
         );
 
         $count = 0;
@@ -265,6 +287,38 @@ class NewsletterSender
             $count = (int) $rows[0]['count'];
         }
         return $count;
+    }
+
+    /**
+     * Land budget-exhausted pending rows in 'failed'.
+     *
+     * The boot/arm-time analog of MaintenanceQueueWorker::start() reaping
+     * `running` rows orphaned by a restart: a row killed mid-attempt stays
+     * 'pending' with its budget spent, invisible to processQueue and
+     * (post-alignment) to getPendingCount — this method gives it a terminal,
+     * operator-visible state with the reason, so the queue's accounting can
+     * never hide a permanently unservable row.
+     *
+     * @return int Number of rows landed in 'failed' by this call
+     */
+    public function reapExhausted(): int
+    {
+        $result = $this->db->query(
+            "UPDATE newsletter_queue
+             SET status = 'failed', error_message = ?
+             WHERE status = 'pending'
+               AND attempts >= ?",
+            [NewsletterSchedule::NOTE_EXHAUSTED_ATTEMPTS, $this->config['max_attempts'] ?? 3]
+        );
+
+        $reaped = is_numeric($result) ? (int) $result : 0;
+        if ($reaped > 0) {
+            $this->log('warning', 'Newsletter queue reaped exhausted-attempt pending rows', [
+                'count' => $reaped,
+            ]);
+        }
+
+        return $reaped;
     }
 
     /**

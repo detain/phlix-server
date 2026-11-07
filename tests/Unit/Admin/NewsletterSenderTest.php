@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Admin;
 use DateTime;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Admin\NewsletterSchedule;
 use Phlix\Admin\NewsletterSender;
 use Workerman\MySQL\Connection;
 
@@ -116,5 +117,64 @@ class NewsletterSenderTest extends TestCase
         $result = $sender->getPendingCount();
 
         $this->assertEquals(25, $result);
+    }
+
+    /**
+     * The infinite-drain cure's other half: the PENDING count must speak the
+     * same eligibility predicate as processQueue's SELECT. Pre-fix the count
+     * saw every pending row while the select refused exhausted-attempt ones —
+     * the loop between them could never terminate. This pin is SQL-shape
+     * teeth: drop the attempts clause (or its bind) and it reddens.
+     */
+    public function testGetPendingCountCarriesTheProcessQueueEligibilityPredicate(): void
+    {
+        $this->db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql): bool {
+                    return str_contains($sql, "status = 'pending'")
+                        && str_contains($sql, 'attempts < ?');
+                }),
+                $this->callback(function (array $params): bool {
+                    return $params === [3];
+                })
+            )
+            ->willReturn([['count' => '0']]);
+
+        $sender = new NewsletterSender($this->db);
+        $this->assertSame(0, $sender->getPendingCount());
+    }
+
+    public function testReapExhaustedMovesUnselectablePendingRowsToFailed(): void
+    {
+        $this->db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql): bool {
+                    return str_contains($sql, 'UPDATE newsletter_queue')
+                        && str_contains($sql, "SET status = 'failed'")
+                        && str_contains($sql, "status = 'pending'")
+                        && str_contains($sql, 'attempts >= ?');
+                }),
+                $this->callback(function (array $params): bool {
+                    return count($params) === 2
+                        && $params[0] === NewsletterSchedule::NOTE_EXHAUSTED_ATTEMPTS
+                        && $params[1] === 3;
+                })
+            )
+            ->willReturn(2);
+
+        $sender = new NewsletterSender($this->db);
+        $this->assertSame(2, $sender->reapExhausted());
+    }
+
+    public function testReapExhaustedReportsZeroWhenTheDoubleAnswersNonNumeric(): void
+    {
+        // Honest coercion: a non-int result (never from vendor UPDATE, but
+        // the guard is what keeps a weird driver from crashing the sweep).
+        $this->db->method('query')->willReturn(true);
+
+        $sender = new NewsletterSender($this->db);
+        $this->assertSame(0, $sender->reapExhausted());
     }
 }

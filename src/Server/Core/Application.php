@@ -2875,7 +2875,17 @@ class Application
                 $newsletterConfig
             );
 
-            $this->registerNewsletterTimer($sender, $generator, $sendDay, $sendHour, $batchSize);
+            /** @var \Phlix\Admin\SettingsRepository $settingsRepository */
+            $settingsRepository = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+
+            $this->registerNewsletterTimer(
+                $sender,
+                $generator,
+                $settingsRepository,
+                $sendDay,
+                $sendHour,
+                $batchSize
+            );
         } catch (\Throwable $e) {
             $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA);
             $logger->error('Failed to start newsletter timer', [
@@ -2917,8 +2927,23 @@ class Application
     /**
      * Register the newsletter timer with Workerman.
      *
+     * A due-gated 60-second sweep (the estate's S340 shape, shared with the
+     * Trakt pull-sync and the hub's S308 core-update check): every tick asks
+     * {@see \Phlix\Admin\NewsletterSchedule::runCampaign()}, which reads the
+     * persisted last-run from `server_settings` and serves the weekly slot
+     * exactly once — including catch-up when the box was down across it. The
+     * pre-S340-rewrite body gated the whole campaign on a 1-second
+     * day+hour-equality match (re-firing the full campaign every second of
+     * the send hour, and skipping weeks the box slept through) and drained
+     * the queue with an unbounded `while (getPendingCount() > 0)` (a single
+     * pending row outside the selection predicate wedged this count=1 fork
+     * permanently); see {@see \Phlix\Admin\NewsletterSchedule} for the
+     * decision law and {@see \Phlix\Admin\NewsletterSchedule::drainBounded()}
+     * for the drain bounds.
+     *
      * @param \Phlix\Admin\NewsletterSender $sender Newsletter sender instance
      * @param \Phlix\Admin\NewsletterGenerator $generator Newsletter generator instance
+     * @param \Phlix\Admin\SettingsRepository $settings Store the sweep's persisted last-run lives in
      * @param int $sendDay Day of week to send (0=Sunday)
      * @param int $sendHour Hour of day to send (0-23)
      * @param int $batchSize Number of emails per batch
@@ -2928,46 +2953,57 @@ class Application
     private function registerNewsletterTimer(
         \Phlix\Admin\NewsletterSender $sender,
         \Phlix\Admin\NewsletterGenerator $generator,
+        \Phlix\Admin\SettingsRepository $settings,
         int $sendDay,
         int $sendHour,
         int $batchSize
     ): void {
         $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA);
 
-        \Workerman\Timer::add(1, function () use ($sender, $generator, $sendDay, $sendHour, $batchSize, $logger): void {
-            $now = new \DateTime();
+        // Boot reap, the MaintenanceQueueWorker::start() precedent for this
+        // queue: rows orphaned by a kill mid-attempt (or by the pre-rewrite
+        // drain) get their terminal, honest state before any new work is
+        // queued on top of them.
+        $reaped = $sender->reapExhausted();
+        if ($reaped > 0) {
+            $logger->warning('Newsletter boot reaped exhausted-attempt pending rows', ['count' => $reaped]);
+        }
 
-            if ((int) $now->format('w') !== $sendDay) {
-                return;
+        $sweep = static function () use (
+            $sender,
+            $generator,
+            $settings,
+            $sendDay,
+            $sendHour,
+            $batchSize,
+            $logger,
+        ): void {
+            try {
+                \Phlix\Admin\NewsletterSchedule::runCampaign(
+                    $settings,
+                    $sender,
+                    $generator,
+                    $sendDay,
+                    $sendHour,
+                    $batchSize,
+                    null,
+                    $logger
+                );
+            } catch (\Throwable $e) {
+                // A campaign failure is logged, never allowed to bubble: an
+                // uncaught throw in a timer callback takes the whole
+                // background-timers worker down (the estate's S93 lesson).
+                $logger->error('Newsletter sweep failed', ['error' => $e->getMessage()]);
             }
+        };
 
-            if ((int) $now->format('G') !== $sendHour) {
-                return;
-            }
+        \Workerman\Timer::add(\Phlix\Admin\NewsletterSchedule::DEFAULT_SWEEP_SECONDS, $sweep);
 
-            $logger->info('Newsletter timer triggered', [
-                'day' => $sendDay,
-                'hour' => $sendHour,
-            ]);
-
-            $weekStart = clone $now;
-            $weekStart->modify('-7 days');
-
-            $userIds = $generator->getRecipientUserIds();
-            $queued = $sender->queueAll($userIds, $weekStart);
-
-            $logger->info('Newsletter queue created', ['count' => $queued]);
-
-            $processed = 0;
-            while ($sender->getPendingCount() > 0) {
-                $processed += $sender->processQueue($batchSize);
-            }
-
-            $logger->info('Newsletter batch processed', ['processed' => $processed]);
-
-            $stats = $sender->getDeliveryStats();
-            $logger->info('Newsletter delivery stats', $stats);
-        });
+        $logger->info('Newsletter sweep timer armed', [
+            'sweep_seconds' => \Phlix\Admin\NewsletterSchedule::DEFAULT_SWEEP_SECONDS,
+            'send_day' => $sendDay,
+            'send_hour' => $sendHour,
+        ]);
     }
 
     /**

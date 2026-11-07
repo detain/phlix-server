@@ -57,6 +57,17 @@ House discipline this file maintains (established by review W-min90/91/92):
   [playback incident 2026-11-06 / URL-contract law]
 
 ### Security
+- **A regression pin now guards the retired `PHLIX_SECRET_KEY` env line in the
+  full installer's generated env file.** When the systemd carrier retired that
+  dead key (a docker-entrypoint input the installer wrote but nothing on the
+  systemd carrier reads), the absence law was pinned only against
+  `install/systemd.sh` — the `scripts/install.sh` env heredoc could re-grow a
+  `PHLIX_SECRET_KEY=` line and stay green (mutation probe: exactly that line
+  re-added, whole suite zero red). The new
+  `SystemdInstallerEnvTest::testFullInstallerEnvHeredocNeverCarriesTheRetiredSecretKey`
+  parses the real installer's heredoc (with parser teeth) and fails the moment
+  the retired key reappears; proven red-first against the planted line and
+  green against the shipped script.
 
 - **The documented fresh-install one-liner now fetches the installer from a
   pinned release tag instead of `master`.** `curl -fsSL
@@ -144,6 +155,20 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+- **The webhook event catalogue's "mirrors the shared schema" claim is now
+  enforced by reading the schema.** The vocabulary pin compared the
+  catalogue's literals to a literal copy of the same literals in the test —
+  `detain/phlix-shared` growing an eighth webhook event (or dropping one)
+  would have left the pair green forever, the exact silent-drift class the
+  review logged. `WebhookEventVocabularyTest` now parses the vendored
+  `webhook-events.json` at test time via `SchemaPaths::webhookEvents()` (the
+  live-read idiom `AdminSettingsController` uses for the settings schema) and
+  pins that the schema's `events[].type` lead `WebhookEventCatalog::EVENTS` in
+  order, that exactly `user.login` / `user.logout` / `user.created` may trail
+  them (the widened vocabulary is the phlix-shared cascade's to ship), and
+  that the schema's `reserved` names stay outside the subscribable list. A
+  planted eighth schema event reddens exactly this pin; the catalogue
+  docblock now names the enforcer.
 
 - **The web-ui i18n docblock cites its `@phlix/ui` seam by name, not by rotating
   pin shape.** The header claimed the pin was "a 40-hex sha on phlix-ui master"
@@ -746,7 +771,122 @@ House discipline this file maintains (established by review W-min90/91/92):
     `HttpHandlerServeStaticTest`, `PublicFrontControllerRemovalGuardTest`,
     `NginxAssetLocationTest`) runs 42/365 green against the regenerated tree.
 
+
+### Removed
+
+- **The webhook notification plugin family is retired — no consumer, no path
+  back without review.** Eight classes under `Phlix\Webhooks\Plugins` (an
+  abstract base plus Apprise, Discord, MQTT, Ntfy, Pushover, Slack and
+  Telegram bridges) were never instantiated anywhere: live delivery is
+  `WebhookDispatcher` / `WebhookService` against subscription URLs, the
+  family's `config/notifications.php` was read only by the family itself, and
+  the review census spent three passes hunting a caller that does not exist.
+  Gone with them: the config file, seven family-only test files, and
+  `TlsVerificationTest`'s plugin data-provider legs (the two live dispatcher
+  TLS legs stay — that law never dies with the family). This also moots the
+  per-channel copy defects the copy review logged for these senders (a
+  time-only stamp on one brand, a doubled title on another, three tone
+  wordings) — there is no per-channel copy left here to fix. The retirement
+  is pinned by the new `tests/Unit/Webhooks/NotificationPluginFamilyRetirement
+  Test.php` — every class gone, the directory holds no PHP again, the orphan
+  config stays gone, and no first-party reference survives — the estate's
+  standard anti-resurrection tripwire. Census rotated from the measured red:
+  first-party PHP files 2079→2067 (+4 new files in this batch, −16 deleted;
+  the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
+- **The weekly newsletter can no longer wedge the background-timer worker — and a
+  week missed while the server was down now actually arrives.** The newsletter
+  timer was a `Timer::add(1, …)` gated on day-and-hour equality with the
+  configured send slot, and inside that hour its drain loop ran
+  `while (getPendingCount() > 0) { processQueue(...) }`. The predicate counted
+  every `status='pending'` row while the select only takes rows with
+  `attempts < max_attempts`, and a send attempt is bumped BEFORE the dispatch —
+  so a worker killed mid-flight (OOM, an operator restarting the very box the
+  loop wedged, or the loop's own earlier spin) leaves rows at
+  `attempts = max, status = 'pending'`: invisible to the select, still counted
+  by the predicate, and the loop spins one DB read per second forever on the
+  `count = 1` background-timers worker — a permanent subsystem outage. The
+  timer was rebuilt in the estate's S340 shape: a new `NewsletterSchedule`
+  holds the slot-aware due-decision and persists `newsletter.last_run_at` in
+  `server_settings`, so the timer is now a 60-second due-gated sweep — which
+  also cures the review's other half, the silent skip of any week the box
+  slept through (the equality gate gave exactly one hour of chances and no
+  boot catch-up). `getPendingCount()` now shares the select's eligibility
+  predicate (`AND attempts < ?`); the drain is bounded per sweep (a batch that
+  stops making progress stops the sweep instead of spinning it, and a 200-send
+  per-sweep cap frames worst-case time); and at arm time rows exhausted under
+  the old shape are reaped to `failed` with an honest note — the precedent the
+  maintenance queue's `start()` sets by reaping orphaned `running` rows. The
+  sweep anchors `week_start` to the send slot rather than the wall clock, so a
+  late catch-up keeps the content window and the migration-125
+  `(user_id, week_start)` unique key dedup stable. Pinned by the new
+  `tests/Unit/Admin/NewsletterScheduleTest.php` (slot arithmetic, the due
+  matrix, the persistence laws — persist only after the campaign's normal
+  return, a settings-store read failure defers the sweep rather than firing it
+  — campaign ordering, and the bounded-drain budget and no-progress stop) plus
+  three eligibility/reaper SQL-shape pins in `NewsletterSenderTest`. No new
+  wire codes; no migration. (review server__asphp / server__dba SH-cluster)
+
+- **Endpoints whose backing service is not wired now name themselves instead of
+  reciting a placeholder.** One sentence — "This feature isn't available on
+  this server right now. Please try again later." — answered 31 distinct
+  unwired-service failures across the web-portal router (Next Up, watch
+  history, My list, ratings, thumbs, watched markers, similar titles,
+  collections, themes, person photos, recommendations, transcode start/status,
+  playback preferences, settings, profile pictures, music-library scans), and
+  the retry promise was false for the case those arms actually serve: a
+  service that was never wired does not come up while you wait. Each arm now
+  answers the same flat `{error}` envelope at the same status (no wire codes
+  added) with copy like "Next Up isn't available on this server. The
+  watch-history service isn't running.", and the operator detail — which
+  surface, which service — is logged once on the HTTP channel inside the new
+  single `serviceUnavailable()` helper. Pinned by the new
+  `tests/Unit/Server/WebPortal/WebPortalRouterUnwiredServiceCopyTest.php`: a
+  source tripwire (the placeholder sentence is gone; exactly 31 helper call
+  sites; every named surface and service appears) plus behavior arms (503, the
+  `error` key alone, names surface + service, no "try again"). Two pre-existing
+  pins that had baked the placeholder text into expected envelopes rotated from
+  the measured red; the census write-denominator moved +1 with the new test's
+  single sanctioned harness Request seed (1181→1182).
+
+- **The quickstart's signup steps now name buttons that exist.** Both told the
+  first-time operator to choose **Register** — the portal has no Register
+  label anywhere: the sign-in page offers **Create an account** and the form
+  is headed **Create your account** (verified against the served bundle's
+  `auth.signupLink` / `auth.signupTitle` strings). Following the docs literally
+  meant hunting for a control that is not on the page.
+
+- **The vendored `@phlix/ui` runbook's integrity-hash recipe now produces the
+  hash npm actually accepts.** "Package-lock integrity hash" computed
+  `openssl dgst -sha512` hex, but `package-lock.json` requires
+  `sha512-<base64>` — the shipped `@phlix/ui` node is literally
+  `sha512-EM2wMfdGg…` — so the documented command could never produce the
+  value the file holds, and an operator who followed it hit EBADINTEGRITY with
+  technically-correct output. The section now shows the base64 form
+  (`openssl dgst -sha512 -binary | openssl base64 -A`, stored as
+  `sha512-<output>`) and points at the preferred path — bump `package.json`
+  and let `npm ci` rewrite the lock (the estate's npm-11 venue) — with the
+  hand-edit reserved for when an install is unavailable; the recipe was
+  executed against the live v0.99.22 tarball and byte-matches the shipped
+  integrity value. The hub-restart section — hub operations inside the server
+  runbook — moved to where it is written (the phlix-hub asset-rebuild
+  runbook), leaving a cross-link here, and the file's headings joined the
+  repo's sentence-case convention.
+
+- **Correction to the earlier auth-docblock truth entry: "refuses to boot on
+  every carrier" was an overstatement.** That entry (and the class-header
+  sentence it rewrote) said the boot guard refuses the shipped JWT sentinel on
+  EVERY carrier. True for the serving path — every start.php boot (docker,
+  systemd, bare `php start.php`) runs the guard — but the guard runs only
+  there: `bin/phlix` and two library scripts build the DI container
+  unguarded, where the registration-time `getenv('JWT_SECRET') ?:
+  DEFAULT_JWT_SECRET` evaluates and the sentinel binds into the JwtHandler
+  factory closure. Nothing in those carriers resolves JwtHandler or
+  AuthManager today, so nothing is signed with it — but "can never run" was
+  not the code's law. The `AuthServicesProvider` docblocks now say exactly
+  that (a guarded boot refuses; unguarded CLI carriers bind it but resolve no
+  consumer), and they carry the law forward: any new CLI consumer must run the
+  guard first. Comment/docblock only — zero behavior change.
 
 - **The `AuthServicesProvider` docblocks no longer cite the deleted
   `public/index.php`.** Both the class header and the `DEFAULT_JWT_SECRET`

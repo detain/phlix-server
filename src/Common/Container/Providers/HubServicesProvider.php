@@ -71,8 +71,14 @@ final class HubServicesProvider implements ServiceProviderInterface
         if ($configDir !== '' && $configDir[0] !== '/') {
             $configDir = dirname(__DIR__, 3) . '/' . $configDir;
         }
-        $defaultKeyPath = $configDir . '/hub-server-key.pem';
-        $keyPath = is_string($hubConfig['key_path'] ?? null) ? $hubConfig['key_path'] : $defaultKeyPath;
+        // SH-019: key-path resolution moved into the manager so EVERY
+        // construction site shares one precedence (env > legacy compat probe
+        // > var/ default); the old default birthed the private key inside the
+        // git-tracked config/ directory.
+        $keyPath = Ed25519KeyManager::resolveKeyPath(
+            is_string($hubConfig['key_path'] ?? null) ? $hubConfig['key_path'] : null,
+            $configDir
+        );
         $heartbeatInterval = is_int($hubConfig['heartbeat_interval'] ?? null) ? $hubConfig['heartbeat_interval'] : 60;
         $cacheTtl = is_int($hubConfig['jwks_cache_ttl'] ?? null) ? $hubConfig['jwks_cache_ttl'] : 900;
         $publicUrl = is_string($hubConfig['public_url'] ?? null) ? $hubConfig['public_url'] : '';

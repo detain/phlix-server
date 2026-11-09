@@ -85,6 +85,13 @@ use Phlix\Common\Logger\LogChannels;
  *                   journald and Docker log drivers can see them. The file
  *                   handlers above keep working; this handler ADDS a sink,
  *                   it never replaces one. Unset ⇒ zero behavior change.
+ *                   Container posture (SH-024): the file paths above are
+ *                   repo-relative (.logs/ INSIDE the image layer), so in
+ *                   Docker the durable app-record channel IS stdout — the
+ *                   runtime Dockerfiles now set PHLIX_LOG_STDOUT=1 in the
+ *                   image, and /var/phlix/logs carries supervisord captures
+ *                   only. systemd hosts are unaffected (they keep .logs/ on
+ *                   the host filesystem).
  *
  * LEVEL OVERRIDE (R3-08): PHLIX_LOG_LEVEL (debug/info/notice/warning|warn/
  * error/critical/alert/emergency, case-insensitive) overrides the `level`

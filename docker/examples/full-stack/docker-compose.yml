@@ -129,6 +129,8 @@ services:
       - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
       - PHLIX_HUB_URL=https://hub.example.com
       - PHLIX_LOG_LEVEL=info
+      - PHLIX_LOG_STDOUT=1  # SH-024: app records reach `docker logs` (image ENV now also sets it; kept explicit)
+      - PHLIX_JOB_QUEUE_ROOT=/var/phlix/data/jobs  # SH-024: job queues durable on the phlix_data mount
       - PHLIX_MIGRATIONS_STRICT=1
     volumes:
       - phlix_config:/var/phlix/config

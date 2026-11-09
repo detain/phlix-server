@@ -507,7 +507,22 @@ class TranscodeManager
      */
     public const DEFAULT_MAX_CONCURRENT_TRANSCODES = 4;
 
-    // Job status constants
+    // Job status constants — SH-022 schema-truth (measured at the 126-era tip; the
+    // live DB writers are the getJobReadiness() marker sync, the on-demand job INSERT
+    // (seeds 'completed' directly) and reapStaleRunningJobs(); full disposition table
+    // in docs/data-model.md "Dead schema facts"):
+    //  - STATUS_PENDING: dead AND unrepresentable — 'pending' is NOT a member of the
+    //    001 `ENUM('queued','running','completed','failed','cancelled')`, and nothing
+    //    in src/ or tests/ references this constant. Kept for external API stability
+    //    only; do not build against it.
+    //  - STATUS_RUNNING: read-side only today (cache normalisation defaults); no
+    //    writer since the on-demand cutover — the reaper's `AND status = 'running'`
+    //    exists precisely to retire such legacy corpses.
+    //  - STATUS_CANCELLED: enum member with NO writer today (no cancel endpoint or
+    //    flow produces it). The read-side carve-out in getJobReadiness() and the
+    //    SH-021 predecessor guards are deliberately pre-armed for a future cancel
+    //    flow so a 'cancelled' row is never silently resurrected or overwritten.
+    //  - 'queued' (enum DEFAULT) is likewise never written by current code.
     public const STATUS_PENDING = 'pending';
     public const STATUS_RUNNING = 'running';
     public const STATUS_COMPLETED = 'completed';
@@ -4262,16 +4277,34 @@ class TranscodeManager
         }
 
         if ($status !== $dbStatus) {
+            // SH-021: the $dbStatus short-circuit above is a CHECK, and the
+            // UPDATE below is a separate ACT — with nothing between them but
+            // disk I/O, a concurrent writer (reaper, another poller) can land
+            // a terminal transition in the gap and an unguarded write would
+            // CLOBBER it. Both syncs therefore carry the predecessor guard
+            // mirroring the read-side short-circuit exactly: only a row that
+            // is STILL neither 'completed' nor 'cancelled' at write time may
+            // be moved. NOT IN over the two terminal states, rather than the
+            // reaper's `= 'running'` (TranscodeManager's stale-job reaper,
+            // the CAS exemplar), because the readiness sync must still be able
+            // to persist the legitimate recovery a reaped-then-actually-
+            // finished job needs: 'failed' → 'completed' when the `.complete`
+            // marker shows up after the reaper already gave up on the row.
+            // 0 affected rows is the guard WORKING (someone else reached a
+            // terminal state first) — tolerated, and the row cache is
+            // invalidated either way so the next read re-derives from truth.
             if ($status === self::STATUS_COMPLETED) {
                 $this->db->query(
-                    "UPDATE transcode_jobs SET status = 'completed', progress = 100, completed_at = NOW() WHERE id = ?",
+                    "UPDATE transcode_jobs SET status = 'completed', progress = 100, completed_at = NOW()"
+                    . " WHERE id = ? AND status NOT IN ('completed', 'cancelled')",
                     [$jobId]
                 );
                 $this->invalidateJobRowCache($jobId);
             } elseif ($status === self::STATUS_FAILED) {
                 $error = $this->readFailureReason($dir);
                 $this->db->query(
-                    "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ?",
+                    "UPDATE transcode_jobs SET status = 'failed', error = ?"
+                    . " WHERE id = ? AND status NOT IN ('completed', 'cancelled')",
                     [$error, $jobId]
                 );
                 $this->invalidateJobRowCache($jobId);
@@ -4656,8 +4689,11 @@ class TranscodeManager
      * Coroutine-safe under the connection pool via an epoch guard (NOT via any DB
      * query-ordering assumption). With `pool_enabled` a reader coroutine and a writer
      * coroutine hold DIFFERENT physical connections, so a cache-miss `SELECT` and a
-     * concurrent state write (`completeJob()`/reap/cancel) are no longer serialised by
-     * a shared connection mutex and may complete in either order. The danger is a
+     * concurrent state write (this class carries exactly two DB writers — the
+     * {@see getJobReadiness()} marker sync and the stale-job reaper in
+     * {@see reapStaleRunningJobs()}; there is no `completeJob()` method, SH-022) are
+     * no longer serialised by a shared connection mutex and may complete in either
+     * order. The danger is a
      * reader whose in-flight `SELECT` returns AFTER a writer already invalidated the
      * cache: without a guard the reader would re-poison the cache with its pre-write
      * row, and — this cache has no TTL — that stale row would persist until the next

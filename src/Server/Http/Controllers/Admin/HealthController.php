@@ -266,7 +266,7 @@ final class HealthController
 
         // Manual fallback (testing / minimal scenario)
         return new HubClient(
-            new \Phlix\Hub\Ed25519KeyManager($this->configDir . '/hub-server-key.pem'),
+            new \Phlix\Hub\Ed25519KeyManager(\Phlix\Hub\Ed25519KeyManager::resolveKeyPath(null, $this->configDir)),
             new \Phlix\Hub\HttpClient('https://hub.example.com'),
             new \Phlix\Common\Logger\StructuredLogger('hub', []),
             $this->configDir,

@@ -3529,7 +3529,7 @@ class Application
         if ($this->container === null) {
             return new HubJwksController(
                 new HubClient(
-                    new \Phlix\Hub\Ed25519KeyManager('config/hub-server-key.pem'),
+                    new \Phlix\Hub\Ed25519KeyManager(\Phlix\Hub\Ed25519KeyManager::resolveKeyPath(null, 'config')),
                     new \Phlix\Hub\HttpClient('https://hub.example.com'),
                     new \Phlix\Common\Logger\StructuredLogger('hub', []),
                     'config',

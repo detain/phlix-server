@@ -24,7 +24,8 @@ use PHPUnit\Framework\TestCase;
  * an open brute-force door.
  *
  * These tests exercise the in-memory fallback store (no
- * DbLoginRateLimitStore injected) keyed on the caller-supplied IP.
+ * DbLoginRateLimitStore injected) keyed on the caller-supplied IP and — since
+ * SH-017 — on the submitted identifier's account window as well.
  */
 final class AuthManagerOpdsThrottleTest extends TestCase
 {
@@ -135,7 +136,7 @@ final class AuthManagerOpdsThrottleTest extends TestCase
         $manager->verifyCredentialsThrottled('opds-reader', 'wrong', '203.0.113.8');
     }
 
-    public function test_throttle_is_scoped_per_ip(): void
+    public function test_throttle_is_scoped_per_ip_for_different_accounts(): void
     {
         $manager = $this->manager($this->repoForKnownUser());
 
@@ -143,9 +144,38 @@ final class AuthManagerOpdsThrottleTest extends TestCase
             $this->assertNull($manager->verifyCredentialsThrottled('opds-reader', 'wrong', '203.0.113.9'));
         }
 
-        // A different e-reader on another IP is not punished by the first's
-        // exhaustions — the budget is per-IP, exactly like the login throttle.
-        $this->assertSame('user-opds', $manager->verifyCredentialsThrottled('opds-reader', 'right-pass', '198.51.100.4'));
+        // A DIFFERENT identifier from a different IP is not punished by the
+        // first client's exhaustion — the per-IP window still scopes by IP,
+        // exactly like the login throttle.
+        // (Pre-SH-017 this test let the SAME identifier retry from a fresh IP
+        // and succeed; that was the very hole the cure closes: the account
+        // budget follows the account, so IP-hopping no longer buys a clean
+        // window. The account-scope law is asserted right below.)
+        $this->assertSame(
+            'user-opds',
+            $manager->verifyCredentialsThrottled('opds-reader-2', 'right-pass', '198.51.100.4')
+        );
+    }
+
+    public function test_account_budget_survives_ip_hopping(): void
+    {
+        // SH-017 (secaudit finding 1): five failed attempts for one identifier
+        // spread over five DISTINCT IPs must still lock that identifier —
+        // pre-cure, every source IP carried its own fresh 5-attempt budget and
+        // the account could be ground at unlimited rate.
+        $manager = $this->manager($this->repoForKnownUser());
+
+        for ($i = 0; $i < 5; $i++) {
+            $this->assertNull($manager->verifyCredentialsThrottled(
+                'opds-reader',
+                'wrong',
+                '203.0.113.' . (40 + $i)
+            ));
+        }
+
+        $this->expectException(RateLimitException::class);
+        // Brand-new IP, exhausted account window — the account gate answers.
+        $manager->verifyCredentialsThrottled('opds-reader', 'right-pass', '198.51.100.99');
     }
 
     public function test_unthrottled_verify_credentials_stays_pure_for_internal_callers(): void

@@ -74,8 +74,8 @@ Two unrelated families share a noun:
 | `media_streams` | 001 | Per-item audio/subtitle/video stream rows (codec, language, default flags). |
 | `playback_state` | 001 | Resume position per (user, media item). |
 | `sessions` | 001 | Device sessions (id/name/type, activity timestamps). |
-| `transcode_jobs` | 001 | Transcoding job queue and outcomes. |
-| `api_keys` | 001 | Static API keys with scopes. |
+| `transcode_jobs` | 001 | Transcoding job queue and outcomes (see "Dead schema facts" for which status values are actually written). |
+| `api_keys` | 001 | **Dead** — table created by 001 has no readers or writers anywhere in `src/` (see "Dead schema facts"). |
 | `user_profiles` | 002 | Profile layer over accounts: parental controls, per-profile settings document (incl. `theme`). |
 | `profile_settings` | 002 | Per-profile key/value settings. |
 | `watch_history` | 002 | Completion/watch events per (user/profile, item) — Continue Watching & stats signal. |
@@ -149,13 +149,50 @@ Two unrelated families share a noun:
 | `client_heartbeats` | 106 | Consent-gated client telemetry heartbeats (AD-27/S518), one UPSERTed row per client. |
 | `first_admin_election` | 108 | Single-row sentinel serialising first-admin bootstrap (L-3). |
 | `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers (Device-M1). |
+| `login_rate_limit_account` | 126 | Per-account login failure window (SH-017) — sibling of `login_rate_limit` (074), keyed by the normalised submitted identifier instead of the client IP. |
+
+## Dead schema facts (SH-022, measured at the 126-era tip)
+
+Three pieces of shipped schema carry no live code. They are documented here —
+NOT deleted: the forward-only law above forbids editing applied files, and
+removing a live table/column requires a deliberate drop-migration decision,
+which none of these has. Pinned by
+`tests/Unit/Media/Transcoding/TranscodeJobSchemaTruthTest.php`; if a future
+feature revives one, rotate the pin in the same commit.
+
+- **`transcode_jobs` status values actually written.** The 001 column is
+  `ENUM('queued','running','completed','failed','cancelled')`. Today the only
+  DB writers are the `getJobReadiness()` marker sync (`completed`/`failed`),
+  the on-demand job INSERT (seeds `completed` directly) and
+  `reapStaleRunningJobs()` (`failed`, guarded `AND status = 'running'`).
+  Consequences: `cancelled` has **no writer at all** (no cancel endpoint or
+  flow exists — the read-side carve-out and the SH-021 predecessor guards are
+  pre-armed for a hypothetical future one); `running` rows can only be legacy
+  corpses from before the on-demand cutover (what the reaper exists to retire);
+  `queued` is the enum DEFAULT but is never explicitly written. The
+  `TranscodeManager::STATUS_PENDING` constant is dead **and unrepresentable**
+  ('pending' is not an enum member); it survives only as external API surface.
+  There is likewise no `TranscodeManager::completeJob()` method — the docblock
+  that once implied one now names the two real writers (SH-022).
+- **`api_keys` (001).** Zero readers, zero writers anywhere in `src/`. The
+  former catalog prose called it "Static API keys with scopes" — doubly wrong:
+  the feature never landed, and the table has no scopes column (id, user_id,
+  key_hash, name, created_at, expires_at). Server auth uses JWTs
+  (`AuthController`) and hub pairing tokens, not table-backed keys.
+- **`sessions.profile_id` (002:56).** Added "for multi-profile support" but
+  `SessionManager` never lists the column in any INSERT/UPDATE, so it is NULL
+  on every row. Profile identity travels in the **JWT claim** instead — the
+  honest explanations live in `src/Auth/JwtHandler.php` ("Why the JWT and not
+  `sessions.profile_id`") and `src/Auth/WatchHistory.php` (next-up resolves
+  `profileId → userId` and scopes by `user_id` because the column is always
+  NULL). Do not build new reads against the column.
 
 ## Reading notes
 
 - **Completeness:** the header claim is kept honest by measurement — as of
   this writing the distinct `CREATE TABLE` targets across `migrations/*.sql`
-  number 82, `migrations/` contains no `DROP TABLE`, and the catalog above is
-  exactly those 82 rows one-for-one. New migration → new row, or the claim
+  number 83, `migrations/` contains no `DROP TABLE`, and the catalog above is
+  exactly those 83 rows one-for-one. New migration → new row, or the claim
   goes stale the way it once did (76 rows against 82 tables).
 - "Created by" names the **first** migration whose `CREATE TABLE` reaches the
   table; later migrations may `ALTER` it (and a couple replay-guard their

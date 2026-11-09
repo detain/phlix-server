@@ -36,10 +36,70 @@ final class Ed25519KeyManager
     private ?string $kid = null;
 
     /**
+     * Resolve where the hub identity keypair lives (SH-019).
+     *
+     * Precedence, first match wins:
+     *   1. An explicit configured path (config/hub.php 'key_path', which
+     *      itself defaults from env PHLIX_HUB_KEY_PATH) — operator truth.
+     *   2. Env PHLIX_HUB_KEY_PATH — for the manual-fallback constructors
+     *      that never load config/hub.php.
+     *   3. LEGACY COMPAT PROBE: config/hub-server-key.pem when it ALREADY
+     *      EXISTS on disk. Installs paired before this cure carry their key
+     *      (and therefore their hub enrollment identity) there; silently
+     *      moving them to a fresh key would de-anchor every live pairing, so
+     *      an existing legacy file keeps winning until it is absent.
+     *   4. Default: var/hub-server-key.pem.
+     *
+     * The 4th arm is the actual cure: the git-tracked config/ directory was
+     * the DEFAULT BIRTHPLACE for a private key. No PEM is committed (the
+     * tree is clean of them and `.gitignore` now carries a blanket `*.pem`
+     * backstop), but a default that writes secret material into a VCS
+     * working directory invites the operator's own `git add -A` to capture
+     * it. var/ is the stateful home — already git-ignored per subsystem,
+     * already on the systemd ReadWritePaths list (scripts/install.sh step
+     * 4d), and created 0700 by {@see self::generateAndStoreKeyPair()} if
+     * absent.
+     *
+     * @param string|null $configuredPath A configured 'key_path' value or null.
+     * @param string|null $configDir      Directory holding config/hub.php;
+     *                                    defaults to this checkout's config/.
+     *                                    (Relative values resolve against the
+     *                                    CWD exactly as the pre-cure fallback
+     *                                    constructors did — behavior kept.)
+     *
+     * @return non-empty-string Usable key path (existence of the PARENT is
+     *                          guaranteed by the generator, not this resolver).
+     */
+    public static function resolveKeyPath(?string $configuredPath = null, ?string $configDir = null): string
+    {
+        if ($configuredPath !== null && $configuredPath !== '') {
+            return $configuredPath;
+        }
+
+        $fromEnv = getenv('PHLIX_HUB_KEY_PATH');
+        if (is_string($fromEnv) && $fromEnv !== '') {
+            return $fromEnv;
+        }
+
+        $dir = $configDir !== null && $configDir !== ''
+            ? rtrim($configDir, '/')
+            : dirname(__DIR__, 2) . '/config';
+
+        $legacy = $dir . '/hub-server-key.pem';
+        if (is_file($legacy)) {
+            return $legacy;
+        }
+
+        return dirname($dir) . '/var/hub-server-key.pem';
+    }
+
+    /**
      * Creates a new Ed25519KeyManager.
      *
      * @param string $keyPath Absolute path where the PEM-encoded Ed25519
      *                       private key is stored (or will be written).
+     *                       New callers should pass
+     *                       {@see self::resolveKeyPath()} (SH-019).
      */
     public function __construct(string $keyPath)
     {

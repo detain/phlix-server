@@ -40,7 +40,11 @@ $argv = is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : [];
 $hubUrl = rtrim(is_string($argv[1] ?? null) ? $argv[1] : '', '/');
 $serverName = is_string($argv[2] ?? null) ? $argv[2] : '';
 $configDir = __DIR__ . '/../config';
-$keyPath = $configDir . '/hub-server-key.pem';
+// SH-019: same resolver the daemon uses (env PHLIX_HUB_KEY_PATH > legacy
+// config/hub-server-key.pem compat probe > var/hub-server-key.pem default).
+// The hand-ownership helper below deliberately still chowns toward the
+// config dir OWNER when pairing lands a legacy file there.
+$keyPath = \Phlix\Hub\Ed25519KeyManager::resolveKeyPath(null, $configDir);
 $enrollmentPath = $configDir . '/hub-enrollment.json';
 $logger = LoggerFactory::get(LogChannels::HUB);
 

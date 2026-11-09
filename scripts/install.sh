@@ -1554,10 +1554,13 @@ do_update() {
 	fi
 
 	# 4e. One-off migration: ensure the install dir's config/ is in ReadWritePaths.
-	# The hub-pairing flow persists runtime state there — hub-server-key.pem (the
-	# Ed25519 private key), hub-enrollment.json and hub-subdomain.json — but
+	# The hub-pairing flow persists runtime state there — hub-enrollment.json and
+	# hub-subdomain.json, plus hub-server-key.pem (the Ed25519 private key) for
+	# installs PAIRED BEFORE SH-019, whose legacy key keeps winning the resolver's
+	# compat probe; fresh pairings now birth the key under var/ (4d above). But
 	# ProtectSystem=strict keeps config/ read-only unless listed, so "Initiate
-	# pairing" fails 500 with "Failed to write Ed25519 private key: config/...".
+	# pairing" fails 500 with "Failed to write Ed25519 private key: config/..."
+	# whenever anything still must land there.
 	# Appends the exact path only when absent, preserving operator customisation.
 	if [ -f "$SERVICE_FILE" ] &&
 		grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null &&

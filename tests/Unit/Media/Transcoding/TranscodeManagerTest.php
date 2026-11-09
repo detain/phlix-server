@@ -1743,6 +1743,127 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('not_found', $r['status']);
     }
 
+    public function testGetJobReadinessCompletionSyncCarriesThePredecessorGuard(): void
+    {
+        // SH-021 (dba-code review finding 1): the readiness sync's check
+        // (getJobRow snapshot) and its act (the UPDATE) are separate
+        // statements — an unguarded UPDATE can CLOBBER a terminal transition
+        // a concurrent writer landed in the gap. The completion sync must
+        // therefore carry the same shape of CAS as the reaper exemplar.
+        // Mutation law: strip `AND status NOT IN (...)` and this is RED.
+        $dir = $this->segmentDir . '/job-guard-c';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/.complete", '');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->manager($db, $ff)->getJobReadiness('job-guard-c');
+
+        $updates = array_values(array_filter(
+            $captured,
+            static fn (array $c): bool => str_starts_with((string) $c[0], 'UPDATE transcode_jobs')
+        ));
+        $this->assertCount(1, $updates, 'the running->completed transition persists exactly one UPDATE');
+        $this->assertStringContainsString(
+            "AND status NOT IN ('completed', 'cancelled')",
+            (string) $updates[0][0],
+            'the completion sync must not write over a row another writer already made terminal'
+        );
+    }
+
+    public function testGetJobReadinessFailureSyncCarriesThePredecessorGuard(): void
+    {
+        // SH-021, sibling arm: the failure sync carries the same guard.
+        $dir = $this->segmentDir . '/job-guard-f';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/.failed", '');
+        file_put_contents("{$dir}/ffmpeg.log", 'boom');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->manager($db, $ff)->getJobReadiness('job-guard-f');
+
+        $updates = array_values(array_filter(
+            $captured,
+            static fn (array $c): bool => str_starts_with((string) $c[0], 'UPDATE transcode_jobs')
+        ));
+        $this->assertCount(1, $updates);
+        $this->assertStringContainsString(
+            "AND status NOT IN ('completed', 'cancelled')",
+            (string) $updates[0][0],
+            'the failure sync must not write over a row another writer already made terminal'
+        );
+    }
+
+    public function testGetJobReadinessToleratesGuardedWriteAndStillInvalidatesCache(): void
+    {
+        // SH-021: 0 affected rows is the guard WORKING (someone else won the
+        // race to terminal). The sync must not treat it as an error, must
+        // still invalidate the row cache so the next reader re-derives, and
+        // must still answer this request with the disk-derived truth.
+        $dir = $this->segmentDir . '/job-race';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/.complete", '');
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @return mixed */
+            function (string $sql, ?array $params = null) use ($dir, &$captured) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
+                    return [['hls_dir' => $dir, 'status' => 'running']];
+                }
+                // The real client returns an int rowcount for UPDATE; 0 means
+                // the predecessor guard rejected our write.
+                if (str_starts_with($sql, 'UPDATE')) {
+                    return 0;
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $r = $manager->getJobReadiness('job-race');
+
+        $this->assertSame('completed', $r['status'], 'the response keeps the disk-derived truth');
+        $this->assertFalse(
+            $this->cacheHas($manager, 'job-race'),
+            'the row cache is invalidated even when the guarded write lost'
+        );
+    }
+
+    public function testGetJobReadinessNeverResurrectsACancelledRow(): void
+    {
+        // SH-021 + SH-022 together: the read side already honors 'cancelled'
+        // (nothing may derive a different state from disk markers), and the
+        // write-side predecessor guard is now the second lock on the same
+        // door for whoever adds the cancel route later.
+        $dir = $this->segmentDir . '/job-cancelled';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/.complete", '');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'cancelled'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $r = $this->manager($db, $ff)->getJobReadiness('job-cancelled');
+
+        $this->assertSame('cancelled', $r['status']);
+        $this->assertSame(
+            [],
+            array_values(array_filter(
+                $captured,
+                static fn (array $c): bool => str_starts_with((string) $c[0], 'UPDATE')
+            )),
+            'a cancelled row must see zero status writes'
+        );
+    }
+
     /**
      * Counts job-row SELECTs (the `getJobRow`/`jobRowEntry` narrowed query) captured
      * from the DB mock.

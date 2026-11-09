@@ -1137,7 +1137,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // no untrusted string may break header framing, and the generator's
     // plain-text copy now rides a real multipart/alternative to the
     // recipient); 2060 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2060;
+    // +3 2060→2063: w17L3 adds tests/Unit/Auth/AuthManagerAccountRateLimitTest.php
+    // (SH-017 per-account login budget), tests/Unit/Hub/
+    // Ed25519KeyManagerResolveKeyPathTest.php (SH-019 key-path resolution
+    // precedence + *.pem extinction pin) and tests/Unit/Media/Transcoding/
+    // TranscodeJobSchemaTruthTest.php (SH-022 dead-schema tripwires);
+    // 2063 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2063;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

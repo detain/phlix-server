@@ -34,6 +34,15 @@ class DvbtSignalEngine
     private StructuredLogger|LoggerInterface|null $logger;
 
     /**
+     * Stream output files allocated by startStreaming(), keyed by the int
+     * cast of the live proc_open resource, so stopStreaming() unlinks
+     * exactly the temp its process owned (SH-018).
+     *
+     * @var array<int, string>
+     */
+    private array $streamFilesByProcess = [];
+
+    /**
      * @param string $ffmpegPath Path to FFmpeg binary
      * @param string $dvbv5ZapPath Path to dvbv5-zap binary
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger instance
@@ -68,23 +77,32 @@ class DvbtSignalEngine
             'modulation' => $modulation,
         ]);
 
-        // Build dvbv5-zap command
-        // dvbv5-zap -a 0 -f 474000000 -m QAM64 -c /dev/null -d 0 -o output.ts
-        // Output goes to stdout which we pipe to FFmpeg
-        $outputFile = '/tmp/dvbt_stream_' . $device->adapterIndex . '_' . $device->frontendIndex . '.ts';
+        // SH-018: race-safely allocated (0600 from birth, unpredictable name)
+        // instead of the old predictable
+        // dvbt_stream_{adapter}_{frontend}.ts (fixed under the temp dir)
+        // — a world-writable-/tmp symlink-preemption overwrite target for any
+        // local co-tenant. This allocation is a placeholder 0-byte file for
+        // the planned pipeline; tune() launches nothing (legacy scaffold
+        // behavior, kept verbatim except that its command text is now built by
+        // the SAME shared argv builder as the live path, rendered for display
+        // only — the pre-cure code had two divergent sprintf escapers).
+        $outputFile = $this->allocateStreamFile($device);
 
-        $cmd = sprintf(
-            '%s -a %d -f %d -m %s -c %s -d %d -o %s 2>&1',
-            escapeshellcmd($this->dvbv5ZapPath),
-            $device->adapterIndex,
-            $frequencyHz,
-            escapeshellarg($modulation),
-            '/dev/null',
-            $device->frontendIndex,
-            $outputFile
-        );
+        $cmd = implode(' ', array_map(
+            'escapeshellarg',
+            $this->zapArgv($device, $frequencyHz, $modulation, $outputFile)
+        )) . ' 2>&1';
 
-        $this->logger?->debug('DvbtSignalEngine: executing dvbv5-zap', ['cmd' => $cmd]);
+        $this->logger?->debug('DvbtSignalEngine: planning dvbv5-zap', ['cmd' => $cmd]);
+
+        // The allocation above PROVES the name is obtainable race-safely; the
+        // placeholder itself is released immediately because tune() launches
+        // nothing (a live launcher, startStreaming(), allocates its OWN file
+        // and keeps it for the process lifetime). The legacy scaffold's URL
+        // was always aspirational — it referenced a file nothing had created
+        // — and this keeps that behavior, except the path is no longer a
+        // predictable symlink-bait.
+        @unlink($outputFile);
 
         // For now, return a placeholder ingest URL
         // In production, this would start dvbv5-zap in background and return the pipe/UDP URL
@@ -250,29 +268,25 @@ class DvbtSignalEngine
             'ffmpeg' => $this->ffmpegPath,
         ]);
 
-        $outputFile = '/tmp/dvbt_stream_' . $device->adapterIndex . '_' . $device->frontendIndex . '.ts';
+        // SH-018: race-safe 0600 temp file (see allocateStreamFile()), and the
+        // process is launched from the shared ARGV ARRAY via proc_open's
+        // shell-free form — the pre-cure shell string interpolated
+        // $this->dvbv5ZapPath RAW (the sibling builder wrapped it in
+        // escapeshellcmd; two builders, two postures, one divergence).
+        $outputFile = $this->allocateStreamFile($device);
 
-        // Build dvbv5-zap command
-        $cmd = sprintf(
-            '%s -a %d -f %d -m %s -c %s -d %d -o %s',
-            $this->dvbv5ZapPath,
-            $device->adapterIndex,
-            $frequencyHz,
-            escapeshellarg($modulation),
-            '/dev/null',
-            $device->frontendIndex,
-            $outputFile
-        );
+        $argv = $this->zapArgv($device, $frequencyHz, $modulation, $outputFile);
 
         $descriptors = [
             0 => ['file', '/dev/null', 'r'],  // stdin
-            1 => ['file', $outputFile, 'w'],  // stdout to file
+            1 => ['file', $outputFile, 'w'],  // stdout to the allocated file
             2 => ['pipe', 'w'],               // stderr to pipe
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes);
+        $process = proc_open($argv, $descriptors, $pipes);
 
         if (!is_resource($process)) {
+            @unlink($outputFile);
             throw new \RuntimeException('Failed to start dvbv5-zap process');
         }
 
@@ -280,6 +294,11 @@ class DvbtSignalEngine
         if (isset($pipes[2])) {
             fclose($pipes[2]);
         }
+
+        // Track the file against the live process so stopStreaming() can
+        // unlink it; without this the old fixed name at least got truncated
+        // on reuse, while unique temp files would accumulate per tune.
+        $this->streamFilesByProcess[(int) $process] = $outputFile;
 
         // Ingest URL - FFmpeg would read from this
         $ingestUrl = 'file://' . $outputFile;
@@ -306,7 +325,90 @@ class DvbtSignalEngine
         if (is_resource($process)) {
             proc_terminate($process, SIGTERM);
             proc_close($process);
+            // SH-018: remove the per-stream temp file we allocated for this
+            // exact process handle (the old predictable name made this a
+            // no-op implicitly; with unique temps, stopping must clean up).
+            $key = (int) $process;
+            if (isset($this->streamFilesByProcess[$key])) {
+                @unlink($this->streamFilesByProcess[$key]);
+                unset($this->streamFilesByProcess[$key]);
+            }
             $this->logger?->debug('DvbtSignalEngine: streaming stopped');
         }
+    }
+
+    /**
+     * The single dvbv5-zap argv builder both call sites share (SH-018).
+     *
+     * Pre-cure there were TWO sprintf shell strings, and the second one
+     * interpolated the configured binary path RAW while the first wrapped it
+     * in escapeshellcmd — the defense-in-depth divergence the review named.
+     * The cure goes one step further than a shared escaper: the live path
+     * (startStreaming) hands this ARGV ARRAY straight to proc_open(), which
+     * PHP executes WITHOUT a shell, so no escaping question exists at all.
+     * tune() — a legacy scaffold that only PLANS a command — renders the
+     * argv per-element through escapeshellarg purely for its debug log.
+     *
+     * @return list<string>
+     */
+    private function zapArgv(DvbtDevice $device, int $frequencyHz, string $modulation, string $outputFile): array
+    {
+        return [
+            $this->dvbv5ZapPath,
+            '-a', (string) $device->adapterIndex,
+            '-f', (string) $frequencyHz,
+            '-m', $modulation,
+            '-c', '/dev/null',
+            '-d', (string) $device->frontendIndex,
+            '-o', $outputFile,
+        ];
+    }
+
+    /**
+     * Race-safely allocate this stream's output file (SH-018).
+     *
+     * The pre-cure name `dvbt_stream_{adapter}_{frontend}.ts` (fixed under
+     * the system temp dir) was fully predictable: on a host with local co-
+     * tenants and a world-writable /tmp (anything but a single-tenant
+     * container), another user could pre-create the path as a symlink and have the server's write follow it over an
+     * arbitrary file. tempnam() is the PHP-side mkstemp: O_EXCL create with
+     * mode 0600 regardless of umask and an unpredictable name, so there is
+     * no preemption window and no symlink to follow.
+     *
+     * The name still carries the adapter/frontend pair for debuggability
+     * (integer-derived, so no traversal), and ownership is verified before
+     * the path is ever returned: a file we do not own is evidence something
+     * else got there first, and the engine refuses to write through it
+     * ("owner uid check if reading back" — nothing in-tree reads the file
+     * back in-process; FFmpeg consumes it — but the check makes the 0600
+     * birthright enforceable rather than assumed).
+     *
+     * @throws \RuntimeException When no private temp file can be created.
+     */
+    private function allocateStreamFile(DvbtDevice $device): string
+    {
+        $dir = sys_get_temp_dir();
+        $prefix = sprintf('phlix-dvbt-a%d-f%d-', $device->adapterIndex, $device->frontendIndex);
+
+        $tmp = @tempnam($dir, $prefix);
+        if ($tmp === false) {
+            throw new \RuntimeException('DvbtSignalEngine: failed to allocate DVB-T stream output file in ' . $dir);
+        }
+
+        // tempnam is 0600-from-birth; the explicit chmod keeps the guarantee
+        // stated even if a future platform deviates (same belt-and-suspenders
+        // as Ed25519KeyManager::writePrivateKeyAtomically()).
+        @chmod($tmp, 0600);
+
+        if (function_exists('posix_geteuid') && fileowner($tmp) !== posix_geteuid()) {
+            $owner = fileowner($tmp);
+            @unlink($tmp);
+            throw new \RuntimeException(
+                'DvbtSignalEngine: allocated stream file is not owned by this process'
+                    . ' (owner ' . var_export($owner, true) . ', euid ' . posix_geteuid() . ')'
+            );
+        }
+
+        return $tmp;
     }
 }

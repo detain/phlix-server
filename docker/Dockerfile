@@ -96,6 +96,23 @@ COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 # -e PHLIX_MIGRATIONS_STRICT=0 restores boot-anyway-with-banner.
 ENV PHLIX_MIGRATIONS_STRICT=1
 
+# Observability + env-posture durability (SH-024, devops review 2026-11-04):
+#  - PHLIX_LOG_STDOUT=1 arms the Monolog stdout sink (config/logger.php,
+#    LogChannels::LOG_STDOUT_ENV), so application records reach `docker logs`.
+#    Without it the container log stream carried NO app records — the
+#    /var/phlix/logs mount held only supervisord's captured stdout — while the
+#    file handlers write repo-relative `.logs/` INSIDE the image layer
+#    (ephemeral). The image now defaults the sink ON; opt out with
+#    -e PHLIX_LOG_STDOUT=0.
+#  - PHLIX_ENV=production arms the config/database.php DB-credential guard,
+#    matching the shipped systemd unit's default tier. Without it the guard
+#    was inert in every container. docker/docker-entrypoint.sh maps
+#    PHLIX_DATABASE_PASSWORD -> DB_PASSWORD, so the compose examples stay
+#    silent; operators who set neither see a warning (PHLIX_REQUIRE_DB_
+#    CREDENTIALS unset = warn-only, same as on systemd hosts).
+ENV PHLIX_LOG_STDOUT=1
+ENV PHLIX_ENV=production
+
 # The ports the DAEMON actually binds (start.php): 8096 = HTTP (REST + SPA +
 # static + /health; ZERO WebSocket-upgrade logic), 8097 = the SyncPlay
 # WebSocket worker, a SEPARATE plaintext listener — not a path on 8096.

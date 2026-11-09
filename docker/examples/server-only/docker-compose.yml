@@ -44,6 +44,8 @@ services:
       - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD:?PHLIX_DB_PASSWORD is required — see docker/examples/.env.example header (no committed default survives)}
       - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
       - PHLIX_LOG_LEVEL=info
+      - PHLIX_LOG_STDOUT=1  # SH-024: app records reach `docker logs` (image ENV now also sets it; kept explicit)
+      - PHLIX_JOB_QUEUE_ROOT=/var/phlix/data/jobs  # SH-024: transcode/metadata job queues under the phlix_data mount instead of the image layer's repo-relative var/jobs (ephemeral)
       - PHLIX_MIGRATIONS_STRICT=1
     volumes:
       - phlix_config:/var/phlix/config
@@ -68,6 +70,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # SH-024: a compose `healthcheck:` block REPLACES the image HEALTHCHECK
+      # wholesale — the Dockerfile's --start-period=90s boot grace was silently
+      # dropped for every consumer of these examples. Re-stated here so a
+      # first boot that migrates for over a minute is not flapped to unhealthy.
+      start_period: 90s
 
   mysql:
     image: mysql:8.0

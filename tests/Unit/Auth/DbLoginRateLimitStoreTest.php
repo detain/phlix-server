@@ -82,6 +82,139 @@ final class DbLoginRateLimitStoreTest extends TestCase
     }
 
     /**
+     * SH-017 (secaudit finding 1): check() with an account key consults the
+     * per-account window too, and an exhausted ACCOUNT trips even when the
+     * IP window is fresh — the cure for spread-across-IP grinding.
+     */
+    public function test_check_consults_account_window_and_trips_on_it(): void
+    {
+        $resetAt = time() + 600;
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @return mixed */
+            function (string $sql, array $params = []) use ($resetAt, &$sqls) {
+                $sqls[] = [$sql, $params];
+                if (str_contains($sql, 'login_rate_limit_account')) {
+                    return [['attempts' => 5, 'reset_at' => $resetAt]];
+                }
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+
+        try {
+            $store->check('1.2.3.4', 5, 'alice');
+            $this->fail('Expected RateLimitException from the account window.');
+        } catch (RateLimitException $e) {
+            $this->assertSame($resetAt, $e->resetAt);
+            $this->assertSame(0, $e->remaining);
+        }
+
+        // The IP window is read FIRST (074 ladder precedence preserved).
+        $this->assertStringContainsString('FROM login_rate_limit WHERE ip = ?', $sqls[0][0]);
+        $this->assertStringContainsString('FROM login_rate_limit_account WHERE identifier = ?', $sqls[1][0]);
+        $this->assertSame(['alice'], $sqls[1][1]);
+    }
+
+    /**
+     * SH-017: without an account key the check keeps the pre-cure single-
+     * window shape — no account table is touched.
+     */
+    public function test_check_without_account_key_stays_ip_only(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @return mixed */
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = $sql;
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $this->assertTrue($store->check('1.2.3.4', 5));
+        $this->assertCount(1, $sqls);
+        $this->assertStringNotContainsString('login_rate_limit_account', $sqls[0]);
+    }
+
+    /**
+     * SH-017: a failure charges BOTH window tables with one upsert each and
+     * the bounded sweep now runs over both tables too.
+     */
+    public function test_record_failed_attempt_charges_both_windows_and_sweeps_both(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @return mixed */
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = [$sql, $params];
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->recordFailedAttempt('1.2.3.4', 'alice');
+
+        $ipUpsert = array_values(array_filter(
+            $sqls,
+            static fn (array $s): bool => str_contains($s[0], 'INSERT INTO login_rate_limit (')
+        ));
+        $acctUpsert = array_values(array_filter(
+            $sqls,
+            static fn (array $s): bool => str_contains($s[0], 'INSERT INTO login_rate_limit_account (')
+        ));
+        $this->assertCount(1, $ipUpsert, 'the IP window takes its charge from one upsert');
+        $this->assertCount(1, $acctUpsert, 'the account window takes its charge from one upsert');
+        $this->assertSame('alice', $acctUpsert[0][1][0], 'the account upsert binds the identifier first');
+        $this->assertSame(
+            $acctUpsert[0][1][1],
+            $acctUpsert[0][1][3],
+            'the IF(reset_at<=?, ?, reset_at) tail reuses the same window end (params: key, resetAt, now, resetAt)'
+        );
+        $this->assertGreaterThanOrEqual(time(), (int) $acctUpsert[0][1][1]);
+
+        $sweeps = array_values(array_filter(
+            $sqls,
+            static fn (array $s): bool => str_contains($s[0], 'DELETE') && str_contains($s[0], 'LIMIT')
+        ));
+        $this->assertCount(2, $sweeps, 'the bounded sweep must keep BOTH tables from bloating');
+        $tables = array_map(
+            static fn (array $s): string => str_contains($s[0], 'login_rate_limit_account') ? 'acct' : 'ip',
+            $sweeps
+        );
+        sort($tables);
+        $this->assertSame(['acct', 'ip'], $tables);
+    }
+
+    /**
+     * SH-017: success releases BOTH budgets (a good password must not leave
+     * the account window half-charged behind it).
+     */
+    public function test_clear_removes_both_windows(): void
+    {
+        $sqls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /** @return mixed */
+            function (string $sql, array $params = []) use (&$sqls) {
+                $sqls[] = $sql;
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->clear('1.2.3.4', 'alice');
+
+        $this->assertCount(2, $sqls);
+        $this->assertStringContainsString('DELETE FROM login_rate_limit WHERE ip = ?', $sqls[0]);
+        $this->assertStringContainsString('DELETE FROM login_rate_limit_account WHERE identifier = ?', $sqls[1]);
+    }
+
+    /**
      * recordFailedAttempt() upserts the counter AND runs the bounded batch
      * sweep (DELETE ... LIMIT) that keeps the table from growing unbounded —
      * this is the core "bounded/sweep" guarantee the static array lacked.

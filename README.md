@@ -1524,7 +1524,11 @@ response-body field the guard has always shipped. Semantics, envelopes and recov
 `docs/dev/AUTH_METHOD_LOCKOUT.md`.
 
 **JWKS key format.** `GET /.well-known/jwks.json` serves this server's Ed25519
-public key from `config/hub-server-key.pem`. The reader accepts **both** the
+public key from the resolved hub identity keypair — `var/hub-server-key.pem`
+by default (SH-019: private key material no longer defaults into the git
+tree), with a compatibility probe for a pre-existing
+`config/hub-server-key.pem` and an override via config `key_path` / env
+`PHLIX_HUB_KEY_PATH`. The reader accepts **both** the
 app's native `-----BEGIN ED25519 PRIVATE KEY-----` format **and** a standard
 PKCS#8 Ed25519 key (`-----BEGIN PRIVATE KEY-----`, e.g. from
 `openssl genpkey -algorithm Ed25519`). If the key cannot be loaded, the endpoint

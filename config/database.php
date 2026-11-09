@@ -20,6 +20,14 @@ use Phlix\Common\Env\EnvConfig;
 // seeds DB_PASSWORD) are untouched — the silent empty default stays legal
 // where it is a deliberate local choice, never a production surprise.
 //
+// Posture note (SH-024): AuthServicesProvider treats ANY environment that
+// is not dev/development (and the absent case) as production-shaped by
+// default, while this guard arms only on the EXACT string 'production' —
+// the two files' fail-safe directions were chosen for their own blast
+// radii and are deliberately NOT unified. The runtime Dockerfiles now set
+// PHLIX_ENV=production in the image, so container hosts agree with the
+// systemd tier on both readings.
+//
 // The $GLOBALS latch makes both effects fire ONCE per process: config files
 // are cached per worker by Phlix\Config\EffectiveConfig, but direct consumers
 // (BackupManager, SsdpAdvertiser) `include` this file again at runtime, and

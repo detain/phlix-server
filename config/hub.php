@@ -42,7 +42,11 @@ return [
 
     'enrollment_renewal_threshold' => EnvConfig::integer('PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD', 86400),  // renew if expiring within 24h
 
-    'key_path' => __DIR__ . '/hub-server-key.pem',
+    // SH-019: NO default identity key lives in this tracked directory (or
+    // anywhere in git) anymore. The manager resolves the path:
+    // PHLIX_HUB_KEY_PATH > a pre-existing legacy config/hub-server-key.pem
+    // (compat probe for installs paired before the cure) > var/hub-server-key.pem.
+    'key_path' => EnvConfig::nullableText('PHLIX_HUB_KEY_PATH'),
 
     'config_dir' => __DIR__,
 

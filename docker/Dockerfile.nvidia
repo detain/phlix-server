@@ -109,6 +109,13 @@ COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 # Dev opt-out: -e PHLIX_MIGRATIONS_STRICT=0 restores boot-anyway-with-banner.
 ENV PHLIX_MIGRATIONS_STRICT=1
 
+# SH-024 durability posture — see docker/Dockerfile for the full rationale:
+# stdout log sink ON by default (app records reach `docker logs`; opt out
+# -e PHLIX_LOG_STDOUT=0) and PHLIX_ENV=production arming the database.php
+# credential guard like the systemd tier.
+ENV PHLIX_LOG_STDOUT=1
+ENV PHLIX_ENV=production
+
 # The ports start.php actually binds. `EXPOSE 80 443` described the deleted
 # nginx; nothing has ever listened on 443. 8097 is the SyncPlay WS worker —
 # a SEPARATE plaintext listener, not a path on 8096.

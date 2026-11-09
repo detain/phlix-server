@@ -648,36 +648,75 @@ class AuthManager
     }
 
     /**
-     * Check if the client IP has exceeded the rate limit.
+     * Normalize a submitted identifier into the SH-017 account-window key.
+     *
+     * trim + casefold: `Bob` and `bob ` are the SAME account budget, and a
+     * key left raw would let an attacker stretch a lockout by varying case
+     * or trailing space. The identifier is charged from the REQUEST, before
+     * any lookup, so unknown identifiers are charged too — symmetric with
+     * the known-user failures, denying an enumeration attacker the "free
+     * attempt on typo'd names" ladder asymmetry (the timing oracle at L-1
+     * already refuses to distinguish them; the budget must not either).
+     *
+     * @return string '' (never used as a window key — callers treat it as
+     *                "no account dimension") when nothing survives normalization.
+     */
+    private static function accountThrottleKey(string $identifier): string
+    {
+        return mb_strtolower(trim($identifier));
+    }
+
+    /**
+     * Check whether this attempt is allowed: the client IP window first, then
+     * the submitted-account window (SH-017).
      *
      * Uses the injected DbLoginRateLimitStore when available (production, shared
      * across all workers). Falls back to the static in-memory store for tests /
      * legacy callers that did not inject a store.
      *
-     * @throws RateLimitException When rate limit is exceeded
+     * @throws RateLimitException When either budget is exceeded
      */
-    private function checkRateLimit(string $ip): void
+    private function checkRateLimit(string $ip, string $accountKey): void
     {
         if ($this->loginRateLimitStore !== null) {
-            $this->loginRateLimitStore->check($ip, self::RATE_LIMIT_MAX_ATTEMPTS);
+            $this->loginRateLimitStore->check(
+                $ip,
+                self::RATE_LIMIT_MAX_ATTEMPTS,
+                $accountKey !== '' ? $accountKey : null
+            );
             return;
         }
 
         // Fallback to in-memory store (tests / legacy)
+        $this->checkFallbackWindow($ip);
+        if ($accountKey !== '') {
+            // 'acct:' namespace keeps an identifier that literally IS an IP
+            // string (usernames allow dots) from eating that IP's budget.
+            $this->checkFallbackWindow('acct:' . $accountKey);
+        }
+    }
+
+    /**
+     * One in-memory window of the fallback store (pre-SH-017 body, keyed).
+     *
+     * @throws RateLimitException When this window is over budget
+     */
+    private function checkFallbackWindow(string $storeKey): void
+    {
         $now = time();
 
-        if (!isset(self::$rateLimitStore[$ip])) {
+        if (!isset(self::$rateLimitStore[$storeKey])) {
             return;
         }
 
         // Read-only copy: nothing below writes through $record (the cleanup
         // unsets the store entry directly), so the reference this used to take
         // was not load-bearing.
-        $record = self::$rateLimitStore[$ip];
+        $record = self::$rateLimitStore[$storeKey];
 
         // Clean up expired records
         if ($record['reset_at'] <= $now) {
-            unset(self::$rateLimitStore[$ip]);
+            unset(self::$rateLimitStore[$storeKey]);
             return;
         }
 
@@ -690,25 +729,40 @@ class AuthManager
     }
 
     /**
-     * Record a failed authentication attempt for rate limiting.
+     * Record a failed authentication attempt against BOTH brute-force budgets
+     * — the client IP window and the submitted-account window (SH-017).
      *
      * Uses the injected DbLoginRateLimitStore when available (production, shared
      * across all workers). Falls back to the static in-memory store for tests /
      * legacy callers that did not inject a store.
      */
-    private function recordFailedAttempt(string $ip): void
+    private function recordFailedAttempt(string $ip, string $accountKey): void
     {
         if ($this->loginRateLimitStore !== null) {
-            $this->loginRateLimitStore->recordFailedAttempt($ip);
+            $this->loginRateLimitStore->recordFailedAttempt(
+                $ip,
+                $accountKey !== '' ? $accountKey : null
+            );
             return;
         }
 
         // Fallback to in-memory store (tests / legacy)
+        $this->recordFallbackAttempt($ip);
+        if ($accountKey !== '') {
+            $this->recordFallbackAttempt('acct:' . $accountKey);
+        }
+    }
+
+    /**
+     * Charge one window of the static in-memory fallback store.
+     */
+    private function recordFallbackAttempt(string $storeKey): void
+    {
         $now = time();
 
-        if (!isset(self::$rateLimitStore[$ip])) {
+        if (!isset(self::$rateLimitStore[$storeKey])) {
             $this->boundFallbackStore($now);
-            self::$rateLimitStore[$ip] = [
+            self::$rateLimitStore[$storeKey] = [
                 'attempts' => 0,
                 'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
             ];
@@ -720,7 +774,7 @@ class AuthManager
          * @psalm-suppress UnsupportedPropertyReferenceUsage Psalm cannot model a
          *   reference taken into a static property; the code is correct.
          */
-        $record = &self::$rateLimitStore[$ip];
+        $record = &self::$rateLimitStore[$storeKey];
 
         // Reset if window has expired
         if ($record['reset_at'] <= $now) {
@@ -774,21 +828,29 @@ class AuthManager
     }
 
     /**
-     * Clear rate limit data for a client IP after successful auth.
+     * Clear rate limit data after successful auth: the client IP window and,
+     * when given, the submitted-account window (SH-017 — the budget follows
+     * the account too, so a good password must release it there as well).
      *
      * Uses the injected DbLoginRateLimitStore when available (production, shared
      * across all workers). Falls back to the static in-memory store for tests /
      * legacy callers that did not inject a store.
      */
-    private function clearRateLimit(string $ip): void
+    private function clearRateLimit(string $ip, string $accountKey): void
     {
         if ($this->loginRateLimitStore !== null) {
-            $this->loginRateLimitStore->clear($ip);
+            $this->loginRateLimitStore->clear(
+                $ip,
+                $accountKey !== '' ? $accountKey : null
+            );
             return;
         }
 
         // Fallback to in-memory store (tests / legacy)
         unset(self::$rateLimitStore[$ip]);
+        if ($accountKey !== '') {
+            unset(self::$rateLimitStore['acct:' . $accountKey]);
+        }
     }
 
     /**
@@ -1068,7 +1130,8 @@ class AuthManager
      *     leg's refusal to the distinct 403 envelope; the typed throw itself is pre-existing)
      * @throws AccountInactiveException If credentials are valid but the account
      *         is not 'active' (pending approval or disabled) — no tokens issued.
-     * @throws RateLimitException If the client IP has exceeded the rate limit.
+     * @throws RateLimitException If the client IP or the submitted account
+     *         identifier has exceeded the login rate limit (SH-017).
      *
      * @example
      * ```php
@@ -1078,7 +1141,10 @@ class AuthManager
     public function login(string $username, string $password, string $deviceId): array
     {
         $clientIp = $this->getClientIp();
-        $this->checkRateLimit($clientIp);
+        // SH-017: the account budget is keyed on the SUBMITTED identifier,
+        // computed before any lookup so unknown identifiers are charged too.
+        $accountKey = self::accountThrottleKey($username);
+        $this->checkRateLimit($clientIp, $accountKey);
 
         // F7: when password sign-in is switched off (`auth.password.enabled`),
         // refuse BEFORE any identifier lookup or credential compare — the
@@ -1091,7 +1157,7 @@ class AuthManager
         // its budget.
         if (!$this->passwordMethodAvailable()) {
             $this->userRepository->burnPasswordVerifyTime($password);
-            $this->recordFailedAttempt($clientIp);
+            $this->recordFailedAttempt($clientIp, $accountKey);
             $this->auditLogger->logFailedAuth('auth_method_disabled', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -1111,7 +1177,7 @@ class AuthManager
         // spends, or response timing enumerates usernames.
         if ($user === null || $userId === null) {
             $this->userRepository->burnPasswordVerifyTime($password);
-            $this->recordFailedAttempt($clientIp);
+            $this->recordFailedAttempt($clientIp, $accountKey);
             $this->auditLogger->logFailedAuth('invalid_credentials', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -1119,7 +1185,7 @@ class AuthManager
             throw new \InvalidArgumentException('Invalid username or password');
         }
         if (!$this->userRepository->verifyPassword($userId, $password)) {
-            $this->recordFailedAttempt($clientIp);
+            $this->recordFailedAttempt($clientIp, $accountKey);
             $this->auditLogger->logFailedAuth('invalid_credentials', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -1158,7 +1224,7 @@ class AuthManager
             throw new PasswordChangeRequiredException();
         }
 
-        $this->clearRateLimit($clientIp);
+        $this->clearRateLimit($clientIp, $accountKey);
 
         // Update last login
         $this->userRepository->updateLastLogin($userId);
@@ -1315,21 +1381,24 @@ class AuthManager
         }
 
         // S44 Finding 2 (HIGH) — the external-provider path (LDAP/OIDC) MUST be
-        // subject to the SAME per-IP brute-force throttle as the local password
+        // subject to the SAME brute-force throttle as the local password
         // login(). Without this an `ldap:`-prefixed login (routed here) bypasses
         // the rate limiter entirely, allowing unthrottled directory-credential
-        // guessing. Same store, same client-IP key and same limit as login(), so
-        // both surfaces share one budget. checkRateLimit() throws
-        // RateLimitException (→ central 429 mapping) when the IP is over budget.
+        // guessing. Same store, same client-IP key, same submitted-identifier
+        // account key (SH-017) and same limit as login(), so both surfaces
+        // share one budget per window. checkRateLimit() throws
+        // RateLimitException (→ central 429 mapping) when either window is
+        // over budget.
         // (Local var used so the method calls below don't re-widen the property.)
         $clientIp = $this->getClientIp();
-        $this->checkRateLimit($clientIp);
+        $accountKey = self::accountThrottleKey($username);
+        $this->checkRateLimit($clientIp, $accountKey);
 
         $result = $providerManager->authenticate($username, $credentials);
 
         if ($result->isFailure()) {
             // Count the failure against the brute-force budget, mirroring login().
-            $this->recordFailedAttempt($clientIp);
+            $this->recordFailedAttempt($clientIp, $accountKey);
             $this->auditLogger->logFailedAuth($result->error ?? 'provider_auth_failed', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -1337,9 +1406,9 @@ class AuthManager
             throw new \InvalidArgumentException($result->error ?? 'Authentication failed');
         }
 
-        // Successful provider auth — clear the IP's failed-attempt window, as
+        // Successful provider auth — clear both failed-attempt windows, as
         // login() does after a good password.
-        $this->clearRateLimit($clientIp);
+        $this->clearRateLimit($clientIp, $accountKey);
 
         $userId = $result->userId;
 
@@ -1906,12 +1975,13 @@ class AuthManager
      * Argon2id-cost guesses from one socket: a free password-crashing rig on
      * the same budget login() guards.
      *
-     * Failures are charged PER-IP against the same DbLoginRateLimitStore
-     * budget as login() (one shared ceiling per IP — a client brute-forcing
-     * OPDS is brute-forcing the account, no separate quota to earn); success
-     * clears the window so a legitimate e-reader that finally lands a correct
-     * password is not punished for earlier typos. Per-segment re-auth UX is
-     * unaffected: only WRONG passwords count.
+     * Failures are charged against the SAME DbLoginRateLimitStore budgets as
+     * login() — the per-IP window (one shared ceiling per IP: a client
+     * brute-forcing OPDS is brute-forcing the account, no separate quota to
+     * earn) and, since SH-017, the per-account window keyed on the identifier
+     * from the Basic header; success clears both, so a legitimate e-reader
+     * that finally lands a correct password is not punished for earlier
+     * typos. Per-segment re-auth UX is unaffected: only WRONG passwords count.
      *
      * @param string $usernameOrEmail Identifier from the Basic header.
      * @param string $password        Password from the Basic header.
@@ -1929,15 +1999,16 @@ class AuthManager
      */
     public function verifyCredentialsThrottled(string $usernameOrEmail, string $password, string $clientIp): ?string
     {
-        $this->checkRateLimit($clientIp);
+        $accountKey = self::accountThrottleKey($usernameOrEmail);
+        $this->checkRateLimit($clientIp, $accountKey);
 
         $userId = $this->verifyCredentials($usernameOrEmail, $password);
         if ($userId === null) {
-            $this->recordFailedAttempt($clientIp);
+            $this->recordFailedAttempt($clientIp, $accountKey);
             return null;
         }
 
-        $this->clearRateLimit($clientIp);
+        $this->clearRateLimit($clientIp, $accountKey);
         return $userId;
     }
 

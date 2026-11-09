@@ -82,3 +82,12 @@ PROGRESS.md
 
 # S445 write-through bridge socket (runtime artifact of the daemon; tests use temp paths)
 var/syncplay-bridge.sock
+
+# SH-019: private key material must never live in the git tree. The hub
+# identity keypair's DEFAULT is now var/hub-server-key.pem (see
+# src/Hub/Ed25519KeyManager::resolveKeyPath); the blanket *.pem rule is the
+# backstop for ANY secret PEM an operator (or a legacy pairing flow) lands
+# inside the working tree, and var/hub-server-key.pem is pinned explicitly in
+# case the default key is ever moved to a non-.pem extension.
+*.pem
+var/hub-server-key.pem

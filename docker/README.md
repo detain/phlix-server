@@ -55,6 +55,30 @@ is unset remains boot-anyway-with-banner. Dev opt-out: run with
 `-e PHLIX_MIGRATIONS_STRICT=0` (the repo-root development `docker-compose.yml`
 does exactly that). Compose examples and the Kubernetes charts keep strict on.
 
+### Logs, queues and the production tier: the SH-024 durability posture
+
+Since SH-024 all three runtime images ship two more defaults:
+
+- `ENV PHLIX_LOG_STDOUT=1` — the Monolog `stdout` sink is ON by default, so
+  app records reach `docker logs` / `kubectl logs`. Before this, the file
+  handlers in `config/logger.php` wrote `.logs/` **inside the image layer**
+  (repo-relative paths — ephemeral), and the `phlix_logs:/var/phlix/logs`
+  mount carried only supervisord's own captures (`phlix.log`,
+  `phlix-error.log`); an operator tailing `docker logs` saw no application
+  records at all. The file handlers still work; stdout ADDS a sink. Opt out
+  with `-e PHLIX_LOG_STDOUT=0`.
+- `ENV PHLIX_ENV=production` — arms the boot-time DB-credential law in
+  `config/database.php` (warning by default, hard refusal with
+  `PHLIX_REQUIRE_DB_CREDENTIALS=1`), matching the systemd unit's default
+  tier. The entrypoint maps `PHLIX_DATABASE_*` to `DB_*`, so the shipped
+  examples stay silent; only a truly unset password raises the warning.
+
+The compose examples additionally set `PHLIX_JOB_QUEUE_ROOT=/var/phlix/data/jobs`
+so transcode/metadata job queues land on the `phlix_data` volume instead of the
+ephemeral repo-relative `var/jobs`, and the server-only example's healthcheck
+carries `start_period: 90s` — a compose `healthcheck` block REPLACES the image
+`HEALTHCHECK` wholesale, silently dropping the Dockerfile's start period.
+
 ### Verifying an image actually runs
 
 `docker build` never executes `CMD`, `ENTRYPOINT` or `HEALTHCHECK`, so a green

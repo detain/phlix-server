@@ -13,6 +13,10 @@ data:
   # Environment= and the installer template). The former `PHLIX_APP_ENV` key
   # here had zero readers and silently did nothing.
   PHLIX_ENV: "production"
+  # SH-024: route app records to stdout (kubectl logs) in addition to the
+  # repo-relative .logs/ files, which are ephemeral inside the pod. Mirrors
+  # the runtime Dockerfiles' default since this wave.
+  PHLIX_LOG_STDOUT: "1"
   PHLIX_LOG_LEVEL: {{ .Values.config.log_level | quote }}
   {{- if .Values.config.hub_url }}
   PHLIX_HUB_URL: {{ .Values.config.hub_url | quote }}

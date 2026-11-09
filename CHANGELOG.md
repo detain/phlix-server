@@ -33,6 +33,14 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **Login throttling gained a second, per-account failure window.**
+  `migrations/126_login_rate_limit_account.sql` creates
+  `login_rate_limit_account` — the per-identifier sibling of
+  `login_rate_limit` (074): same shape (attempts / reset_at / bounded
+  sweep), keyed by the normalised submitted identifier instead of the
+  client IP. Read with the SH-017 Security entry below.
+  (server review SH-017, w17L3)
+
 - **Every transcode `start`/`status` variant now advertises its mini-master
   index URL, signed.** Each playable-variant entry gains `playlist_url` —
   the rung's `media_v{id}_master.m3u8` index (the file
@@ -58,6 +66,68 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **A password-guesser can no longer spread one account across many IPs to
+  stay under the throttle.** `AuthManager` login throttling was keyed purely
+  by client IP — `DbLoginRateLimitStore` counted failures per address, so
+  rotating source IPs (botnets, or the simple case of a shared NAT pool on
+  the attacker's side) reset the budget for a FIXED target account every
+  time. Every credential failure now also charges a per-account window keyed
+  by the normalised submitted identifier (trim + casefold — `ALICE`, ` alice`
+  and `alice` share one budget): an unknown identifier is charged exactly
+  like a wrong password (anti-enumeration symmetry — both paths keep
+  burning the real verify-time and return the byte-identical generic
+  envelope; no new wire codes, the 429 still maps centrally through
+  `RateLimitException`), provider login and the OPDS Basic path obey the
+  same law. The IP window is evaluated FIRST and unchanged — the existing
+  IP ladder (5/900s, `login_rate_limit` 074) keeps its exact semantics,
+  pinned by a preservation test; the account window is an additional trip
+  (same 5/900 shape, new table 126). Accepted tradeoff, stated on purpose:
+  an attacker who knows one username can lock that account for a ≤15-minute
+  window — the same self-DoS posture the IP law already took. The unmigrated
+  fallback in-memory store mirrors both windows under `acct:`-prefixed keys.
+  Conviction: 5 of the 7 new/rewritten throttle tests RED at parent (e.g.
+  five failures against five IPs then a fresh IP still locked the account
+  only post-cure); green with the cure. Tests:
+  `tests/Unit/Auth/AuthManagerAccountRateLimitTest.php` (6, fallback-store
+  venue incl the ladder-preservation law), rewritten
+  `AuthManagerOpdsThrottleTest` per-account + IP-hopping cases, 4 store
+  SQL-shape/precedence pins. (server review SH-017, w17L3)
+- **The DVB-T signal probe no longer builds a shell string around configured
+  paths, and its output file is no longer guessable.**
+  `DvbtSignalEngine` interpolated `$ffmpegPath`/`$zapPath` (and the
+  adapter/frontend numbers) straight into the `dvbv5-zap … 2>&1` command it
+  hands to `proc_open`, writing a PREDICTABLE
+  `/tmp/dvbt_stream_<adapter>_<frontend>.ts` — a local symlink-preemption
+  vector (another uid's file or a planted symlink under /tmp), plus the
+  quoting gap itself: the sibling builder escaped one path while this one
+  escaped none. The live path is now shell-free: `zapArgv()` returns an argv
+  LIST (configured binary first, verbatim — a `; touch /pwn` path stays one
+  opaque element, mutation-proven), `startStreaming()` `proc_open`s the list
+  form, and the capture file comes from `tempnam()` — unpredictable name,
+  0600, ownership-checked, released by `tune()`'s probe, `stopStreaming()`
+  and the failed-launch path alike. `tune()`'s display string survives for
+  the debug log, fully `escapeshellarg`-quoted. Tests: 4 new
+  (`DvbtSignalEngineTest`, 7 total) incl. a real-`proc_open` launch/teardown
+  case and a predictable-name extinction scan; parent mutation 1 error +
+  3 red. (server review SH-018, w17L3)
+- **A fresh hub enrollment keypair is now born OUTSIDE the git tree, and no
+  `.pem` may ever be tracked here again.** The default identity key path was
+  hardcoded to `config/hub-server-key.pem` — a directory this repo VERSIONS,
+  so any operator who paired in place and then ran `git status`/`git add -A`
+  risked committing the private Ed25519 enrollment identity (no key was ever
+  shipped; the defect was the birthplace). `Ed25519KeyManager::resolveKeyPath()`
+  is now the single resolver, in precedence order: explicit configured path >
+  `PHLIX_HUB_KEY_PATH` env > **legacy `config/hub-server-key.pem` if it
+  already exists** (existing installs keep their identity — zero breakage,
+  the compat probe) > `var/hub-server-key.pem` (git-ignored, alongside the
+  other runtime state). Wired through every consumer: `config/hub.php`,
+  `HubServicesProvider`, the JWKS branch in `Application`, the
+  `HealthController`/`AdminHubController` manual fallbacks,
+  `scripts/pair-with-hub.php`; `.gitignore` gained `*.pem` +
+  `var/hub-server-key.pem`, pinned estate-wide by a
+  `git ls-files '*.pem'` extinction test (repo-wide scan, 6 resolver cases).
+  Installer README step-4e prose and the root README JWKS paragraph carry
+  the truth. (server review SH-019, w17L3)
 - **The newsletter can no longer be made to forge email headers by a
   self-registered username.** `NewsletterSender::sendNewsletter()` interpolated
   `users.username` raw into the `To:` header — and registration bounds the
@@ -864,6 +934,66 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Readiness re-sync can no longer resurrect or overwrite terminal transcode
+  job states.** `getJobReadiness()` wrote `completed`/`failed` straight into
+  `transcode_jobs` keyed only by job id — an unguarded UPDATE racing the
+  reaper and the cancel path (lost update: a row the reaper had already
+  retired as `failed`, or a user-cancelled row, could be flipped back to
+  `completed` from a stale disk-marker read). Both statements now carry the
+  predecessor guard `AND status NOT IN ('completed','cancelled')` — chosen
+  over the reaper's `= 'running'` shape on purpose so the legitimate
+  failed→completed recovery persistence stays writable — and zero affected
+  rows is the guard WORKING (logged, cache still invalidated, never an
+  error). Four new pins in `TranscodeManagerTest` (two SQL-literal string
+  pins, one 0-rows-tolerated case with a recording fake, one cancelled-row
+  read-side pin); the two write-guard convictions red on the parent via a
+  stashed-src comparison. (server review SH-021, w17L3)
+- **The transcode/session schema docs and code comments stop citing things
+  that do not exist, and the dead parts are now tripwired.**
+  `TranscodeManager`'s epoch-guard docblock credited a `completeJob()`
+  method the class never had (the name lives only in the unrelated
+  `LibraryScanCommand`); it now names the two REAL writers — the
+  `getJobReadiness()` marker sync and `reapStaleRunningJobs()`. The
+  `STATUS_*` constants carry per-const truth: `cancelled` has NO writer
+  today (its carve-out and the SH-021 guards are pre-armed for a future
+  cancel path), `queued` is only ever the column DEFAULT, and
+  `pending` is not merely dead but UNREPRESENTABLE — the frozen 001 enum
+  has no such member (kept, not deleted: public constant). The `api_keys`
+  table (001, pre-auth-system era) has zero readers anywhere in `src/`;
+  `sessions.profile_id` (002) is never written by `SessionManager`. No
+  destructive schema surgery — dropping a table or enum member needs its
+  own explicit migration by the forward-only law; this entry plus
+  `docs/data-model.md`'s new "Dead schema facts" section record the truth,
+  and `tests/Unit/Media/Transcoding/TranscodeJobSchemaTruthTest.php` (6
+  pins, mutation-proven via a planted `api_keys` reader → exactly its own
+  test red) rotates ON PURPOSE the day any of it revives.
+  (server review SH-022, w17L3)
+- **Docker deploys stop losing application records, job queues and the
+  health start period — with two deliberate behavior deltas disclosed.**
+  (1) `docker logs` was SILENT: the Monolog file handlers write `.logs/`
+  with repo-relative paths INSIDE the image layer (ephemeral), the
+  `phlix_logs:/var/phlix/logs` mount carried only supervisord's captures,
+  and the stdout sink was env-gated OFF with nothing setting it — all
+  three runtime images now ship `ENV PHLIX_LOG_STDOUT=1` (opt out with
+  `-e PHLIX_LOG_STDOUT=0`; the sink ADDS, never replaces). (2) The DB
+  credential boot law in `config/database.php` armed only on the EXACT
+  `PHLIX_ENV=production` string, which no Dockerfile ever set — the images
+  now set it, matching the systemd unit's default tier; the entrypoint's
+  `PHLIX_DATABASE_*→DB_*` mapping keeps the shipped examples silent, and
+  without `PHLIX_REQUIRE_DB_CREDENTIALS=1` the worst case stays the
+  one-time warning. (The sibling posture disagreement —
+  `AuthServicesProvider` treats ANY non-dev env, including absent, as
+  production-shaped by default — is now documented in both files, not
+  unified: each fail-safe direction was chosen for its own blast radius.)
+  (3) The transcode/metadata job queues defaulted to the repo-relative
+  `var/jobs` inside the image — pending work died with the container;
+  all three compose examples set `PHLIX_JOB_QUEUE_ROOT=/var/phlix/data/jobs`
+  on the existing `phlix_data` mount (the helm chart's configmap gained the
+  stdout default; `envFrom` projects it automatically). (4) The
+  server-only example's healthcheck re-states `start_period: 90s` — a
+  compose `healthcheck` block REPLACES the image `HEALTHCHECK` wholesale,
+  silently dropping the Dockerfile's start period and flapping a >1-minute
+  first boot `unhealthy`. (server review SH-024, w17L3)
 - **The SyncPlay command path now bounds every string it copies.** The WS
   handlers passed chat bodies, group/member display names and per-item
   `media_id`/`media_info` queue payloads through verbatim — the only bound

@@ -244,6 +244,29 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+
+- **Forward-note (test figures): two w17L3 count claims were wrong; shipped
+  behavior is untouched and nothing is rewritten here.** [server review w17L3
+  round 2 / DD adversarial review 2026-11-09, minors] (a) The SH-017 Security
+  entry above says `tests/Unit/Auth/AuthManagerAccountRateLimitTest.php`
+  shipped "(6, fallback-store venue …)" tests, and the lane's decomposition
+  register inherited the +1 (32 new/rewritten methods). The file declares
+  exactly FIVE test methods (enumerated at the tip: unknown-identifier charged
+  across IPs, identifier normalization, known-user wrong password,
+  successful-login release, IP-ladder preservation) — the correct total is 31.
+  (b) The lane's body register twice labelled the SH-018 predictable-name
+  extinction scan as "deliberately green at parent — pure tripwire";
+  re-measured at the parent with tip tests
+  (`DvbtSignalEngineTest::testThePredictableStreamPathIsExtinctFromTheEngine`)
+  is one of the file's three FAILURES — parent src still contains the
+  `/tmp/dvbt_stream_` literal — a genuine FIFTH conviction, not a tripwire
+  (the shipped CHANGELOG's own "1 error + 3 red" figure was already true; the
+  mislabel lived in the register). Enforcement was stronger than recorded, a
+  good-direction error, but the numbers narrative is corrected per the
+  enumerate-exactly law. The review's enforcement Major from the same round
+  (SH-024 durability legs carried zero pins — revert-all measured zero
+  genuine convictions) is closed by `tests/Unit/Docker/
+  DockerDurabilityEnvPinsTest.php` landing this wave.
 - **The served web player carries the review-cure cycle: `@phlix/ui` v0.99.22 re-pinned to
   v0.99.24, and the served `/app` bundle regenerated.** [ui review-cure wave 2026-11-07]
   - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.22 → v0.99.24 (tag object

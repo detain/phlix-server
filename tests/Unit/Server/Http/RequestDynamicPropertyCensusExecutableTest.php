@@ -1143,7 +1143,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // precedence + *.pem extinction pin) and tests/Unit/Media/Transcoding/
     // TranscodeJobSchemaTruthTest.php (SH-022 dead-schema tripwires);
     // 2063 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2063;
+    // +1 2063→2064: w17L3-round2 adds tests/Unit/Docker/
+    // DockerDurabilityEnvPinsTest.php (SH-024 enforcement pins: the durability
+    // ENV/start_period legs must be asserted in the shipped Dockerfiles,
+    // compose examples and helm ConfigMap — the DD review measured the
+    // revert-all at zero genuine convictions before this file existed);
+    // 2064 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2064;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

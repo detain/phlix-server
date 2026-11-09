@@ -1049,6 +1049,7 @@ class SyncPlayManagerTest extends TestCase
             'member_name' => str_repeat('m', GroupState::MAX_NAME_BYTES + 1),
         ]);
         $frames = $host->getSentMessages();
+        $this->assertNotEmpty($frames, 'the second oversized-name send must also answer');
         $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.create_failed');
 
         // Exactly-at-cap is legal on both slots.
@@ -1109,6 +1110,7 @@ class SyncPlayManagerTest extends TestCase
                 'queue' => $poison,
             ]);
             $frames = $host->getSentMessages();
+            $this->assertNotEmpty($frames, 'each oversized item must be answered');
             $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.queue_limit_exceeded');
             $this->assertSame(
                 $before,
@@ -1130,7 +1132,10 @@ class SyncPlayManagerTest extends TestCase
             'queue' => [$atCapItem],
         ]);
         $after = $wire->getGroupState($groupId)['queue'];
-        $this->assertCount(1, $after, 'at-cap queue items must be accepted');
-        $this->assertSame(str_repeat('m', GroupState::MAX_MEDIA_ID_BYTES), $after[0]['media_id']);
+        $this->assertSame(
+            [str_repeat('m', GroupState::MAX_MEDIA_ID_BYTES)],
+            array_column($after, 'media_id'),
+            'at-cap queue items must be accepted (one item, id intact)'
+        );
     }
 }

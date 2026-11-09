@@ -1557,7 +1557,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Request sites — the deleted family held none either, which is why the
     // -16 file sweep moves only the file count). Measured from the phpunit
     // red (1182) at tip c904aa4d, not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1182;
+    // +1 1182→1183: SH-012 (tip a0d6c1c2) adds one sanctioned Request
+    // property-write seed — the direct legacyRedirect pin in
+    // tests/Unit/Server/Workerman/HttpHandlerLegacyRedirectTest.php assigns
+    // $request->query to drive the separator law without a full dispatch.
+    // Zero src/ writes: the cure edits header composition, adding no Request
+    // sites. Measured from the phpunit red (1183) at tip 96a2ee90 — this
+    // follow-through re-pin follows the d8cce76c precedent (caught by the
+    // lane-closing full-gate pass, not predicted).
+    private const EXPECTED_DECLARED_WRITES = 1183;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -57,6 +57,25 @@ House discipline this file maintains (established by review W-min90/91/92):
   [playback incident 2026-11-06 / URL-contract law]
 
 ### Security
+
+- **The newsletter can no longer be made to forge email headers by a
+  self-registered username.** `NewsletterSender::sendNewsletter()` interpolated
+  `users.username` raw into the `To:` header — and registration bounds the
+  name only by trim + length 3-50 (its own docblock states no charset
+  whitelist is applied), so a username containing CRLF imploded extra header
+  lines straight into the `mail()` header block: the classic Bcc-forgery /
+  spam-amplification surface, with no vendor stripping on this path (unlike
+  the HTTP Response encoder). Every header slot now composes in one place:
+  display names (recipient and config `from_name`) are control-byte-stripped,
+  `"`/`\`-escaped and wrapped as RFC 5322 quoted-strings — so commas,
+  semicolons and angles stay cosmetic instead of forging addressees — the
+  config address slot sheds control bytes and angle/backslash characters, the
+  subject is scrubbed of control bytes (PHP `mail()` puts it in the header
+  block itself), and the envelope recipient stays the DB email, never a
+  header value. Twelve wire-shape pins in
+  `tests/Unit/Admin/NewsletterEmailCompositionTest.php`, mutation-proven:
+  strip removed → 2 red; plain payload blanked → its decode pin red.
+  (server review SH-011)
 - **A regression pin now guards the retired `PHLIX_SECRET_KEY` env line in the
   full installer's generated env file.** When the systemd carrier retired that
   dead key (a docker-entrypoint input the installer wrote but nothing on the
@@ -844,6 +863,19 @@ House discipline this file maintains (established by review W-min90/91/92):
   first-party PHP files 2079→2067 (+4 new files in this batch, −16 deleted;
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
+
+- **The newsletter's plain-text copy finally reaches its readers.** The
+  generator has built a `plain_text` sibling for every send since it was
+  written, but the sender declared `Content-Type: text/html` and handed
+  `mail()` only the HTML body — text-only clients and screen-reader fallbacks
+  got raw markup while the second copy died unread in the content array.
+  The message is now a real `multipart/alternative` (RFC 2046 §5.1.4
+  ordering: base64 text/plain part first, base64 text/html second) with a
+  per-message random boundary pinned token-safe by
+  `tests/Unit/Admin/NewsletterEmailCompositionTest.php`; the composition and
+  the header guard from the SH-011 fix share one `composeEmail()` seam so
+  `sendNewsletter()` holds no inline MIME assembly left to drift.
+  (server review SH-015)
 - **The weekly newsletter can no longer wedge the background-timer worker — and a
   week missed while the server was down now actually arrives.** The newsletter
   timer was a `Timer::add(1, …)` gated on day-and-hour equality with the

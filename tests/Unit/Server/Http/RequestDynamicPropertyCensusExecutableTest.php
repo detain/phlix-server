@@ -1132,7 +1132,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // test files in the same commit (ProviderFailureLoggingTest survives,
     // its Fanart section removed with the class it pinned); 2059 measured
     // from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2059;
+    // +1 2059→2060: SH-011/SH-015 add tests/Unit/Admin/
+    // NewsletterEmailCompositionTest.php (the mail() wire-composition law:
+    // no untrusted string may break header framing, and the generator's
+    // plain-text copy now rides a real multipart/alternative to the
+    // recipient); 2060 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2060;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

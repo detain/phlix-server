@@ -360,21 +360,21 @@ class NewsletterSender
         $userName = isset($user['username']) && is_string($user['username']) ? $user['username'] : $userEmail;
         $fromName = is_string($this->config['from_name'] ?? null) ? $this->config['from_name'] : 'Phlix Media Server';
         $fromEmail = is_string($this->config['from_email'] ?? null) ? $this->config['from_email'] : 'phlix@example.com';
-        $toAddress = $userName;
 
-        $headers = [
-            'MIME-Version: 1.0',
-            'Content-Type: text/html; charset=UTF-8',
-            "From: {$fromName} <{$fromEmail}>",
-            "To: {$toAddress}",
-            'X-Mailer: Phlix-Media-Server',
-        ];
+        $wire = self::composeEmail(
+            $content,
+            $userEmail,
+            $userName,
+            $fromName,
+            $fromEmail,
+            self::generateMimeBoundary()
+        );
 
         $result = @mail(
-            $userEmail,
-            $content['subject'],
-            $content['html_body'],
-            implode("\r\n", $headers)
+            $wire['envelope_to'],
+            $wire['subject'],
+            $wire['body'],
+            $wire['headers']
         );
 
         if (!$result) {
@@ -382,6 +382,108 @@ class NewsletterSender
         }
 
         return true;
+    }
+
+    /**
+     * Generate the per-message MIME boundary (RFC 2046 requires it to appear
+     * nowhere else in the message; a fresh 128-bit random hex payload under a
+     * fixed prefix cannot collide with generated newsletter content).
+     */
+    private static function generateMimeBoundary(): string
+    {
+        return 'phlix-' . bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Neutralise one display-name slot for an RFC 5322 header.
+     *
+     * Every ASCII control byte (CR and LF first among them — the SH-011
+     * injection class: `users.username` is bounded only by trim + length
+     * 3-50 in AuthManager::register, so CRLF reaches here verbatim) is
+     * removed, then `"` and `\` are backslash-escaped and the result rides a
+     * quoted-string, so commas, semicolons and angle brackets stay cosmetic
+     * instead of forging separators or address boundaries.
+     */
+    private static function headerDisplayName(string $raw): string
+    {
+        $clean = (string) preg_replace('/[\x00-\x1F\x7F]/', '', $raw);
+
+        // Backslash must be doubled BEFORE the quote is escaped, or the
+        // first pass would re-escape the second pass's escapes.
+        $escaped = str_replace(['\\', '"'], ['\\\\', '\\"'], $clean);
+
+        return '"' . $escaped . '"';
+    }
+
+    /**
+     * Neutralise one addr-spec slot inside `<...>`. Control bytes, angle
+     * brackets and backslashes cannot appear in an address, so they are
+     * removed outright (config-fed today, but the config read is the class's
+     * own trust boundary and stays guarded like every other slot).
+     */
+    private static function headerAddress(string $raw): string
+    {
+        return (string) preg_replace('/[\x00-\x1F\x7F<>\\\\]/', '', $raw);
+    }
+
+    /**
+     * Compose the newsletter's exact mail() wire set — the single place
+     * header framing and MIME structure are decided (review SH-011/SH-015).
+     *
+     * The envelope recipient is the DB email, never a header value; the
+     * display slots go through the quoted-string guard above; and the body
+     * is a real `multipart/alternative` so the generator's `plain_text`
+     * copy reaches text-only readers instead of dying unread in $content
+     * (its previous wiring declared text/html and passed only the HTML
+     * body). Parts ride base64 (RFC 2046 §5.1.4 ordering: plain first).
+     *
+     * @param array<string, mixed> $content generateForUser() output
+     * @param string $userEmail  envelope recipient from the users row
+     * @param string $userName   display name for To: (user-controlled data)
+     * @param string $fromName   config display name
+     * @param string $fromEmail  config address
+     * @param string $boundary   MIME boundary from generateMimeBoundary()
+     *
+     * @return array{envelope_to: string, subject: string, body: string, headers: string}
+     */
+    private static function composeEmail(
+        array $content,
+        string $userEmail,
+        string $userName,
+        string $fromName,
+        string $fromEmail,
+        string $boundary
+    ): array {
+        $subject = is_string($content['subject'] ?? null) ? $content['subject'] : '';
+        $htmlBody = is_string($content['html_body'] ?? null) ? $content['html_body'] : '';
+        $plainText = is_string($content['plain_text'] ?? null) ? $content['plain_text'] : '';
+
+        $headers = [
+            'MIME-Version: 1.0',
+            'Content-Type: multipart/alternative; boundary="' . $boundary . '"',
+            'From: ' . self::headerDisplayName($fromName) . ' <' . self::headerAddress($fromEmail) . '>',
+            'To: ' . self::headerDisplayName($userName),
+            'X-Mailer: Phlix-Media-Server',
+        ];
+
+        $body = "--{$boundary}\r\n"
+            . "Content-Type: text/plain; charset=UTF-8\r\n"
+            . "Content-Transfer-Encoding: base64\r\n\r\n"
+            . chunk_split(base64_encode($plainText), 76, "\r\n")
+            . "--{$boundary}\r\n"
+            . "Content-Type: text/html; charset=UTF-8\r\n"
+            . "Content-Transfer-Encoding: base64\r\n\r\n"
+            . chunk_split(base64_encode($htmlBody), 76, "\r\n")
+            . "--{$boundary}--\r\n";
+
+        return [
+            'envelope_to' => $userEmail,
+            // PHP mail() puts the subject into the header block itself, so
+            // it obeys the same no-control-byte law as every other slot.
+            'subject' => (string) preg_replace('/[\x00-\x1F\x7F]/', '', $subject),
+            'body' => $body,
+            'headers' => implode("\r\n", $headers),
+        ];
     }
 
     /**

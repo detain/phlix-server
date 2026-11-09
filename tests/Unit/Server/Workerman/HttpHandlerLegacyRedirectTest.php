@@ -33,7 +33,8 @@ use Psr\Container\ContainerInterface;
  * page redirect carries the incoming query through (re-encoded via
  * `http_build_query()`, the pre-existing photo idiom), stays query-less when
  * none was sent, and switches to `&` only when the target already carries a
- * `?` (reachable through the urldecoded music-name segments).
+ * `?` (a defensive guard since SH-012 — no shipped caller embeds a '?' any
+ * more, but the M-SERVER-40 carry law pins it directly below).
  */
 final class HttpHandlerLegacyRedirectTest extends TestCase
 {
@@ -154,15 +155,49 @@ final class HttpHandlerLegacyRedirectTest extends TestCase
         );
     }
 
-    public function testSeparatorSwitchesToAmpersandWhenTargetAlreadyCarriesQuery(): void
+    public function testMusicNameSegmentStaysPercentEncodedOnTheWire(): void
     {
-        // /music/albums/{name} urldecodes the segment, so a %3F in the name
-        // can put a literal '?' into the target — the carry must not append a
-        // second '?' (which would truncate the real query at the first '?').
+        // SH-012 (review server__fedev #2): the wire path is ALREADY
+        // percent-encoded, so the old urldecode() here was a double-decode —
+        // a decoded CR/LF made Workerman's Response::encode silently drop the
+        // whole header (302 with no Location = dead redirect), and decoded
+        // '+', '&' or '?' corrupted or truncated the target. The segment now
+        // rides through verbatim; the SPA's route decoder performs the one
+        // legitimate decode.
         $this->assertRedirectTo(
-            '/app/music/album/weird?name&x=2',
+            '/app/music/album/weird%3Fname?x=2',
             '/music/albums/weird%3Fname',
             ['x' => '2']
         );
+        $this->assertRedirectTo(
+            '/app/music/album/A%0D%0ABcc:%20evil@x',
+            '/music/albums/A%0D%0ABcc:%20evil@x'
+        );
+        $this->assertRedirectTo(
+            '/app/music/artist/A%0D%0ABcc:%20evil@x',
+            '/music/artists/A%0D%0ABcc:%20evil@x'
+        );
+    }
+
+    public function testTheQueryCarrySeparatorLawStillSwitchesToAmpersand(): void
+    {
+        // The '&' switch survives as a guard on legacyRedirect itself: the
+        // music segments no longer reach it with an embedded '?' (SH-012),
+        // but the helper's contract (append with the right separator, never a
+        // second '?') is the M-SERVER-40 law and stays pinned directly.
+        $handler = $this->makeHandler();
+        $request = new Request();
+        $request->query = ['x' => '2'];
+
+        $m = new \ReflectionMethod(HttpHandler::class, 'legacyRedirect');
+        $m->setAccessible(true);
+
+        /** @var Response $withQuery */
+        $withQuery = $m->invoke($handler, $request, '/app/target?already=1');
+        self::assertSame('/app/target?already=1&x=2', $withQuery->headers['Location']);
+
+        /** @var Response $bare */
+        $bare = $m->invoke($handler, $request, '/app/target');
+        self::assertSame('/app/target?x=2', $bare->headers['Location']);
     }
 }

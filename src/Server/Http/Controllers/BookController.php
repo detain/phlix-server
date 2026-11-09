@@ -691,8 +691,36 @@ class BookController
 
         return (new Response())
             ->header('Content-Type', $mimeType)
-            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"')
+            ->header('Content-Disposition', self::attachmentDisposition($filename))
             ->header('Content-Length', (string)strlen($content))
             ->body($content);
+    }
+
+    /**
+     * RFC 6266/5987 attachment header for a (DB-sourced, untrusted) filename.
+     *
+     * SH-012: the old value was `'attachment; filename="' . $filename . '"'`
+     * — a `"` in a book name broke out of the quoted-string (malformed
+     * header) and non-ASCII names shipped as raw bytes, which browsers
+     * recover with divergent (or abortive) filenames. The pair below: the
+     * `filename` slot is a sanitized ASCII fallback for legacy readers;
+     * `filename*` is the authoritative UTF-8 form, percent-encoded via
+     * rawurlencode() so every byte lands in RFC 5987 attr-chars and no
+     * control character can split the header (same framing law the
+     * newsletter compose guard enforces).
+     */
+    private static function attachmentDisposition(string $filename): string
+    {
+        // Fallback slot: control bytes splice two words when merely removed,
+        // so they are substituted along with everything the legacy slot
+        // cannot carry: quote (0x22), slash (0x2F), backslash (0x5C), and all
+        // non-printable/non-ASCII bytes. The authoritative slot instead
+        // percent-encodes the ORIGINAL name — rawurlencode keeps every byte
+        // inside RFC 5987 attr-chars, so even CR/LF ride harmlessly as %0D%0A
+        // and a 6266-capable client recovers the true filename.
+        $clean = (string) preg_replace('/[\x00-\x1F\x7F]/', '_', $filename);
+        $ascii = (string) preg_replace('/[^\x20-\x21\x23-\x2E\x30-\x5B\x5D-\x7E]/', '_', $clean);
+
+        return 'attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($filename);
     }
 }

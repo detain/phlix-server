@@ -864,6 +864,29 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Redirect and download headers stop corrupting themselves.** Two encoding
+  defects shared one review family (server review SH-012): the legacy
+  `/music/albums/{name}` and `/music/artists/{name}` redirects `urldecode`d
+  the already wire-encoded path segment before interpolating it into the
+  `Location` header — a double-decode in which a name carrying an encoded
+  CR/LF put raw control bytes into the header (Workerman's Response::encode
+  silently *drops* any header whose value contains CRLF: a 302 with no
+  Location, a dead redirect), and decoded `+`, `&`, `?` corrupted or
+  truncated the target. The segments now ride through verbatim; the SPA
+  route performs the one legitimate decode (its `weird%3Fname` case arrives
+  intact as a single path param, the carry appended with `?`, never a forged
+  second one). And the book download answered with
+  `attachment; filename="<raw DB name>"` — a `"` in a book title broke out
+  of the quoted-string (malformed header), non-ASCII names shipped as raw
+  bytes browsers recover divergently, and a CRLF-bearing title could split
+  the header outright. Downloads now emit the RFC 6266 pair: a sanitized
+  ASCII fallback `filename` (control bytes, quote, slash and backslash
+  substituted) plus the authoritative `filename*=UTF-8''<percent-encoded>`
+  slot, where rawurlencode keeps every byte — including CR/LF as %0D%0A —
+  inside RFC 5987 attr-chars. Red-first at the pre-fix tip (3 convictions
+  across the two files); mutations: urldecode restored → the segment pin
+  reddens; ext slot fed the pre-stripped name → the framing pin reddens; old
+  inline header restored → both book pins redden.
 - **The newsletter's plain-text copy finally reaches its readers.** The
   generator has built a `plain_text` sibling for every send since it was
   written, but the sender declared `Content-Type: text/html` and handed

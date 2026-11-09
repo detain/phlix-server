@@ -1294,7 +1294,9 @@ final class HttpHandler
      * (review server__webux M1). The re-encode via `http_build_query()` matches
      * the pre-existing photo-redirect idiom and keeps the Location header
      * percent-clean; the separator is `&` only when the target already carries
-     * a `?` (an urldecoded path segment can).
+     * a `?` — reachable in this helper's contract, though since SH-012 (the
+     * music segments stopped urldecoding) no shipped caller produces such a
+     * target.
      */
     private function legacyRedirect(Request $request, string $target): Response
     {
@@ -1326,16 +1328,21 @@ final class HttpHandler
             return $this->legacyRedirect($request, '/app/music');
         }
         if (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
-            // Redirect to the Vue SPA album detail page
-            return $this->legacyRedirect($request, '/app/music/album/' . urldecode($m['name']));
+            // SH-012: forward the wire-encoded segment VERBATIM. The path is
+            // already percent-encoded, so the former urldecode() was a
+            // double-decode: a decoded CR/LF made Workerman's Response
+            // silently drop the whole Location header (dead redirect), and
+            // decoded '+', '&', '?' corrupted/truncated the target. The SPA
+            // route performs the one legitimate decode.
+            return $this->legacyRedirect($request, '/app/music/album/' . $m['name']);
         }
         if ($path === '/music/artists') {
             // Redirect to the Vue SPA artists listing
             return $this->legacyRedirect($request, '/app/music/artists');
         }
         if (preg_match('#^/music/artists/(?P<name>.+)$#', $path, $m) === 1) {
-            // Redirect to the Vue SPA artist detail page
-            return $this->legacyRedirect($request, '/app/music/artist/' . urldecode($m['name']));
+            // SH-012: verbatim-encoded segment (see the album leg above).
+            return $this->legacyRedirect($request, '/app/music/artist/' . $m['name']);
         }
         if ($path === '/music/tracks') {
             // Redirect to the Vue SPA tracks listing

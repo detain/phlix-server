@@ -412,4 +412,113 @@ class BookControllerTest extends TestCase
             );
         }
     }
+
+    /**
+     * SH-012 (review server__fedev #4): the download filename rode unescaped
+     * — a `"` in a book name broke out of the quoted-string (malformed
+     * header) and non-ASCII names shipped as raw UTF-8 bytes browsers recover
+     * with divergent (or abortive) filenames. The law now is RFC 6266/5987:
+     * an ASCII fallback `filename` plus `filename*=UTF-8''<percent-encoded>`
+     * as the authoritative slot.
+     *
+     * @test
+     */
+    public function testDownloadBookEmitsRfc6266QuotedFilenamePair(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        $bookPath = $tempDir . '/file-on-disk.epub';
+        file_put_contents($bookPath, 'minimal epub content');
+
+        $name = 'He said "Goodbye" \\ / — Époche';
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-6266',
+            'name' => $name,
+            'type' => 'book',
+            'path' => $bookPath,
+            'metadata' => [],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->downloadBook(new Request(), ['id' => 'book-6266']);
+            $disposition = $response->headers['Content-Disposition'] ?? '';
+
+            // The authoritative slot: UTF-8'' + RFC 5987 attr-chars only.
+            $this->assertStringContainsString(
+                "; filename*=UTF-8''" . rawurlencode($name . '.epub'),
+                $disposition
+            );
+
+            // The ASCII fallback: quoted-string body, no raw quote/backslash,
+            // no non-ASCII, no control bytes, no path separators.
+            self::assertSame(1, preg_match('/filename="([^"]*)"/', $disposition, $fallback));
+            $ascii = $fallback[1];
+            // printable ASCII minus " (0x22), / (0x2F) and \ (0x5C):
+            $this->assertMatchesRegularExpression('/^[\x20-\x21\x23-\x2E\x30-\x5B\x5D-\x7E]*$/', $ascii);
+            $this->assertStringEndsWith('.epub', $ascii);
+
+            // Header framing: no raw CR/LF anywhere in the value.
+            $this->assertStringNotContainsString("\r", $disposition);
+            $this->assertStringNotContainsString("\n", $disposition);
+        } finally {
+            unlink($bookPath);
+            rmdir($tempDir);
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * A CRLF-bearing book name must not be able to split the header — the
+     * fallback slot replaces the control bytes and the ext slot percent-
+     * encodes them. This is the same injection class the newsletter fix
+     * guards; both slots stay on one line.
+     *
+     * @test
+     */
+    public function testDownloadBookFilenameCannotBreakHeaderFraming(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        $bookPath = $tempDir . '/safe.epub';
+        file_put_contents($bookPath, 'x');
+
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-crlf',
+            'name' => "Good\r\nX-Evil: yes",
+            'type' => 'book',
+            'path' => $bookPath,
+            'metadata' => [],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->downloadBook(new Request(), ['id' => 'book-crlf']);
+            $disposition = $response->headers['Content-Disposition'] ?? '';
+
+            $this->assertStringNotContainsString("\r", $disposition);
+            $this->assertStringNotContainsString("\n", $disposition);
+            $this->assertStringContainsString("UTF-8''Good%0D%0AX-Evil%3A%20yes.epub", $disposition);
+        } finally {
+            unlink($bookPath);
+            rmdir($tempDir);
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
 }

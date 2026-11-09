@@ -1125,7 +1125,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // walker counts it, proven by this exact arithmetic — and the seven
     // family-only test files); 2067 measured from the phpunit red, not
     // predicted.
-    private const EXPECTED_PHP_FILES = 2067;
+    // -8 2067→2059: SH-008/SH-009 zero-production-reference hygiene sweep —
+    // four orphan classes (src/Auth/WebAuthnProvider.php, src/Common/Events/
+    // StructuredLoggerPsrAdapter.php, src/LiveTv/ComskipPostProcessor.php,
+    // src/Media/Metadata/FanartProvider.php) deleted with the four owning
+    // test files in the same commit (ProviderFailureLoggingTest survives,
+    // its Fanart section removed with the class it pinned); 2059 measured
+    // from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2059;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

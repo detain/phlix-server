@@ -804,6 +804,26 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Removed
 
+- **Four classes nothing in production ever constructed are gone, each with the
+  test file that kept it company.** `src/Auth/WebAuthnProvider.php` implemented
+  the auth `ProviderInterface` but no plugin entry point and no container
+  binding ever registered it — the live WebAuthn path is the ceremony API
+  (`WebAuthnController` + `WebAuthnManager`, gated by `AuthMethodPolicy`),
+  and the adapter survived only on its own unit test. The same sweep result
+  for three zero-reference classes: `src/Common/Events/StructuredLoggerPsrAdapter.php`
+  (PSR-3 bridge over `StructuredLogger`, no construction site anywhere in
+  src/config/start.php/bin/public/install/docker/scripts), `src/LiveTv/
+  ComskipPostProcessor.php` (the live comskip path is
+  `ComskipLifecycleManager` + `ComskipRunner`), and `src/Media/Metadata/
+  FanartProvider.php` — nothing ever called `registerProvider` with it, so the
+  `'fanart'` names riding the provider-priority chains and the admin source
+  list are string vocabulary that a future Fanart.tv wiring would register
+  into; the class itself was phantom wiring (its `MetadataManager` docblock
+  claims stay accurate as vocabulary). Gone with them: their four owning
+  test files, and `ProviderFailureLoggingTest`'s Fanart section (the TMDB/TVDB
+  observability legs that file actually exists for are untouched). Census
+  rotated from the measured red: first-party PHP files 2067→2059 (−8: 4
+  classes + 4 tests, all in this one commit). (server review SH-008/SH-009)
 - **The webhook notification plugin family is retired — no consumer, no path
   back without review.** Eight classes under `Phlix\Webhooks\Plugins` (an
   abstract base plus Apprise, Discord, MQTT, Ntfy, Pushover, Slack and

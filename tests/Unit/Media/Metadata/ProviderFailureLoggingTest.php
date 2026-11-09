@@ -6,7 +6,6 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
-use Phlix\Media\Metadata\FanartProvider;
 use Phlix\Media\Metadata\MetadataFailureKind;
 use Phlix\Media\Metadata\MetadataHttpClient;
 use Phlix\Media\Metadata\MetadataHttpResult;
@@ -275,42 +274,8 @@ class ProviderFailureLoggingTest extends TestCase
         $this->assertCount(1, $this->logsAtOrAbove('error'));
     }
 
-    // ---------------------------------------------------------------- Fanart
-
-    public function testFanartWithValidKeyAndNoArtworkStaysADebugMiss(): void
-    {
-        $http = $this->httpReturning(MetadataHttpResult::classify(404, []));
-
-        $images = (new FanartProvider('valid-key', $this->capturingLogger(), $http))->getTvShowImages('81189');
-
-        $this->assertSame([], $images);
-        $this->assertSame([], $this->logsAtOrAbove('warning', 'error'));
-        $this->assertSame('not_found', $this->logs[0]['context']['outcome']);
-    }
-
-    public function testFanartWithInvalidKeyLogsAnError(): void
-    {
-        $http = $this->httpReturning(MetadataHttpResult::classify(401, ['error message' => 'Invalid API key']));
-
-        $images = (new FanartProvider('bad-key', $this->capturingLogger(), $http))->getMovieImages('tt0133093');
-
-        $this->assertSame([], $images);
-        $escalated = $this->logsAtOrAbove('error');
-        $this->assertCount(1, $escalated);
-        $this->assertSame('auth', $escalated[0]['context']['outcome']);
-        $this->assertSame('FanartProvider', $escalated[0]['context']['provider']);
-    }
-
-    public function testFanartUnknownIdTypeIsReportedAsALocalFaultNotAnOutage(): void
-    {
-        $http = $this->httpReturning(MetadataHttpResult::classify(200, []));
-
-        $details = (new FanartProvider('valid-key', $this->capturingLogger(), $http))
-            ->getDetails('123', ['id_type' => 'bogus']);
-
-        $this->assertSame([], $details);
-        $warnings = $this->logsAtOrAbove('warning');
-        $this->assertCount(1, $warnings);
-        $this->assertSame('unsupported', $warnings[0]['context']['outcome']);
-    }
+    // The Fanart section that lived here retired with the zero-production-
+    // reference class it pinned (SH-009 hygiene sweep, 2026-11-09): nothing on
+    // any request path ever constructed FanartProvider — registerProvider is
+    // called by the auth plugins only, and no metadata wiring ever named it.
 }

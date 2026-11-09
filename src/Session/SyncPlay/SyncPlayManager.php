@@ -700,6 +700,21 @@ class SyncPlayManager
             );
         }
 
+        // SH-016 — display-name length cap at the domain choke point: both
+        // rails (WS handleGroupCreate and REST SyncPlayController::create)
+        // inherit it, and the refusal rides the existing syncplay.create_
+        // failed envelope — no new wire codes. The slots are named so the
+        // message tells the client which one was too long.
+        foreach (['Group name' => $name, 'Member name' => $memberName ?? ''] as $slot => $candidate) {
+            if (strlen((string) $candidate) > GroupState::MAX_NAME_BYTES) {
+                return [
+                    'success' => false,
+                    'error' => sprintf('%s exceeds the %d-byte cap', $slot, GroupState::MAX_NAME_BYTES),
+                    'error_code' => 'syncplay.create_failed',
+                ];
+            }
+        }
+
         if (count($this->groups) >= self::MAX_GROUPS) {
             return [
                 'success' => false,
@@ -791,6 +806,18 @@ class SyncPlayManager
             throw new \InvalidArgumentException(
                 'joinGroup(): passwordHash must be a canonical 64-char lowercase hex digest'
             );
+        }
+
+        // SH-016 — display-name cap before the lookup: the guard covers the
+        // S289 idempotent-rejoin branch too, where memberName REFRESHES the
+        // stored record (an uncapped rename path otherwise). The refusal
+        // rides the existing syncplay.join_failed envelope — no new codes.
+        if (strlen($memberName) > GroupState::MAX_NAME_BYTES) {
+            return [
+                'success' => false,
+                'error' => sprintf('Member name exceeds the %d-byte cap', GroupState::MAX_NAME_BYTES),
+                'error_code' => 'syncplay.join_failed',
+            ];
         }
 
         $group = $this->groups[$groupId] ?? null;
@@ -1252,6 +1279,7 @@ class SyncPlayManager
         // cleared first, then grew the queue without bound).
         /** @var list<array{media_id: string, media_info: array<string, mixed>}> $parsedQueue */
         $parsedQueue = [];
+        $fieldRefusal = null;
         if (is_array($queueRaw)) {
             foreach ($queueRaw as $item) {
                 if (!is_array($item)) {
@@ -1261,6 +1289,17 @@ class SyncPlayManager
                 if (!is_string($mediaId)) {
                     continue;
                 }
+                // SH-016 — per-field budgets for the value-for-value copies
+                // this parser performs (the count cap alone let one frame
+                // smuggle megabytes per item, re-UPSERTed by every later
+                // mutation). media_info is budgeted on its ENCODED size
+                // because the snapshot column is JSON: the probe doubles as
+                // the "json_encode can represent this opaque payload" gate
+                // (a 1e999-decoded INF would otherwise throw at publish).
+                if (strlen($mediaId) > GroupState::MAX_MEDIA_ID_BYTES) {
+                    $fieldRefusal = sprintf('media_id exceeds the %d-byte cap', GroupState::MAX_MEDIA_ID_BYTES);
+                    break;
+                }
                 $mediaInfoRaw = $item['media_info'] ?? [];
                 $mediaInfo = [];
                 if (is_array($mediaInfoRaw)) {
@@ -1269,6 +1308,14 @@ class SyncPlayManager
                             $mediaInfo[$infoKey] = $infoValue;
                         }
                     }
+                }
+                $encodedInfo = json_encode($mediaInfo);
+                if ($encodedInfo === false || strlen($encodedInfo) > GroupState::MAX_MEDIA_INFO_BYTES) {
+                    $fieldRefusal = sprintf(
+                        'media_info exceeds the %d-byte encoded cap',
+                        GroupState::MAX_MEDIA_INFO_BYTES
+                    );
+                    break;
                 }
                 $parsedQueue[] = ['media_id' => $mediaId, 'media_info' => $mediaInfo];
             }
@@ -1282,6 +1329,19 @@ class SyncPlayManager
                     'Playback queue exceeds the %d-item cap; queue unchanged',
                     GroupState::MAX_QUEUE_SIZE
                 )
+            );
+            return;
+        }
+
+        if ($fieldRefusal !== null) {
+            // SH-016 — same all-or-nothing law as the count arm, same
+            // registered code (queue-size refusals were minted as
+            // queue_limit_exceeded; the message names the exact cap) — no
+            // new wire codes, live queue untouched.
+            $this->sendError(
+                $connection,
+                'syncplay.queue_limit_exceeded',
+                $fieldRefusal . '; queue unchanged'
             );
             return;
         }
@@ -1331,7 +1391,10 @@ class SyncPlayManager
             return;
         }
 
-        $message = self::stringFromMixed($payload['message'] ?? '');
+        $message = self::truncateUtf8(
+            self::stringFromMixed($payload['message'] ?? ''),
+            GroupState::MAX_CHAT_MESSAGE_BYTES
+        );
         $memberRecord = $group->getMember($memberId);
         $memberName = $memberRecord['name'] ?? 'Unknown';
 
@@ -2193,6 +2256,22 @@ class SyncPlayManager
             return $value ? '1' : '';
         }
         return '';
+    }
+
+    /**
+     * SH-016 — cut a wire string to a BYTE budget on a UTF-8 codepoint
+     * boundary (mb_strcut, never substr: a split codepoint would ship
+     * invalid UTF-8 to every peer and into the JSON snapshot column).
+     *
+     * Post-json_decode input is valid UTF-8 by construction (the frame
+     * parser refuses broken sequences), so the budget arithmetic holds.
+     */
+    private static function truncateUtf8(string $value, int $maxBytes): string
+    {
+        if (strlen($value) <= $maxBytes) {
+            return $value;
+        }
+        return mb_strcut($value, 0, $maxBytes, 'UTF-8');
     }
 
     /**

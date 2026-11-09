@@ -635,4 +635,25 @@ class GroupStateTest extends TestCase
 
         $this->assertSame('u1', $group->getHostId(), 'members without a host elect the oldest on install');
     }
+
+    /**
+     * SH-016 belt — addChatMessage itself caps the stored body at the
+     * display budget, so no caller (present or future) can grow the rolling
+     * buffer with megabyte strings that every later snapshot mutation
+     * re-encodes. Stored bytes are exactly what the boundary would accept.
+     */
+    public function testAddChatMessageCapsTheStoredBodyAtTheBudget(): void
+    {
+        $group = new GroupState('g1', 'Belt Room');
+        $group->addChatMessage('m1', str_repeat('x', GroupState::MAX_CHAT_MESSAGE_BYTES + 4096));
+
+        $stored = $group->getChatMessages();
+        $this->assertCount(1, $stored);
+        $this->assertSame(GroupState::MAX_CHAT_MESSAGE_BYTES, strlen($stored[0]['message']));
+
+        $short = 'within budget';
+        $group->addChatMessage('m1', $short);
+        $stored = $group->getChatMessages();
+        $this->assertSame($short, $stored[1]['message'], 'in-budget text rides through untouched');
+    }
 }

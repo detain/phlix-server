@@ -864,6 +864,32 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **The SyncPlay command path now bounds every string it copies.** The WS
+  handlers passed chat bodies, group/member display names and per-item
+  `media_id`/`media_info` queue payloads through verbatim — the only bound
+  was the frame-size default — and the rolling 100-message chat buffer,
+  the 1000-item queue and the snapshot service (which re-encodes and
+  re-UPSERTs the whole state blob on EVERY mutation) made one fat frame a
+  recurring cost, not a one-off. The caps (canonical homes
+  `GroupState::MAX_*`): chat bodies truncate at a 2 KiB display budget, cut
+  with mb_strcut on a codepoint boundary and enforced twice — at the WS
+  boundary (the broadcast carries exactly the stored bytes) and inside
+  `GroupState::addChatMessage` as the belt; display names over 128 bytes
+  are REFUSED by `createGroup()`/`joinGroup()` at the domain choke point,
+  so the REST and WS rails both inherit the law (the join guard sits
+  before the S289 idempotent-rejoin branch, which refreshes the stored
+  name); queue items refuse wholesale under the existing LOW-2
+  all-or-nothing law above 64 bytes of `media_id` or 4 KiB of ENCODED
+  `media_info` — the encode-probe doubling as the budget check also
+  refuses opaque payloads `json_encode` cannot represent (a 1e999-decoded
+  INF would otherwise throw at snapshot publish). Refusals ride the
+  already-registered `syncplay.create_failed` / `syncplay.join_failed` /
+  `syncplay.queue_limit_exceeded` envelopes — no new wire codes. Six new
+  pins (five wire-level, one belt); red-first at the pre-fix tip was
+  exactly those 5 wire tests; mutations: boundary truncation removed →
+  the 2 chat tests; belt removed → only the belt test (independence
+  proven); each of the four manager guards neutralized → its own test.
+  (server review SH-016)
 - **Redirect and download headers stop corrupting themselves.** Two encoding
   defects shared one review family (server review SH-012): the legacy
   `/music/albums/{name}` and `/music/artists/{name}` redirects `urldecode`d

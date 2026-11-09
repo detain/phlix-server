@@ -50,6 +50,15 @@ class SyncPlaySnapshotService
      *
      * Called by the WS worker after each mutation. Upserts the snapshot row.
      *
+     * SH-016 context for the size question this file's history keeps
+     * circling: the re-encoded blob is the SUM of the per-field budgets the
+     * ingest boundaries enforce upstream (GroupState::MAX_* constants — chat
+     * bodies, display names, per-item media_id/media_info encoded budgets,
+     * on top of the pre-existing 50-member / 1000-item count caps). No
+     * single later mutation can be surprised by an uncapped field written
+     * before the caps existed on a fresh worker; pre-cap durable rows
+     * rehydrate from the snapshot itself and ride forward unchanged.
+     *
      * @param GroupState $group The group state to snapshot
      * @return void
      */

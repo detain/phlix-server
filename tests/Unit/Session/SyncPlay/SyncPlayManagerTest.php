@@ -966,4 +966,171 @@ class SyncPlayManagerTest extends TestCase
         $this->assertCount(GroupState::MAX_QUEUE_SIZE, $wire->getGroupState($groupId)['queue']);
         $this->assertSame([], $host->framesOfType(Messages::TYPE_ERROR), 'exactly-at-cap is legal, not an overflow');
     }
+
+    // =================================================================
+    // SH-016 — per-field length caps on the SyncPlay WS command path.
+    // The rolling 100-message chat buffer, the 1000-item queue and the
+    // snapshot re-encode meant ONE 10 MiB frame could embed megabytes of
+    // chat body / display names / opaque media_info, re-UPSERTed by every
+    // later mutation. The law now: chat truncates at the display budget
+    // (broadcast and stored bytes are the SAME value); names and queue
+    // items refuse through the existing registered codes with the live
+    // state untouched. No new wire codes.
+    // =================================================================
+
+    public function testOversizedChatTruncatesToBudgetAndThePeerSeesTheStoredBytes(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('sh16-host', 'sh16-host-user');
+        ConnectionPool::getInstance()->add($host);
+        $created = $wire->createGroup('Bounds Room', null, 'sh16-host-user', 'Host', 'sh16-host');
+        $groupId = $created['group']['group_id'];
+        $peer = $this->authedConnection('sh16-peer', 'sh16-peer-user');
+        ConnectionPool::getInstance()->add($peer);
+        $wire->joinGroup($groupId, 'sh16-peer-user', 'Peer', null, 'sh16-peer');
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_CHAT_MESSAGE,
+            'group_id' => $groupId,
+            'message' => str_repeat('x', GroupState::MAX_CHAT_MESSAGE_BYTES + 4096),
+        ]);
+
+        $frames = $peer->framesOfType(Messages::TYPE_CHAT_MESSAGE);
+        $this->assertCount(1, $frames, 'the peer must receive the message (truncated, not dropped)');
+        $this->assertSame(GroupState::MAX_CHAT_MESSAGE_BYTES, strlen($frames[0]['message']));
+    }
+
+    public function testChatTruncationLandsOnUtf8BoundaryNotMidCharacter(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('u8-host', 'u8-host-user');
+        ConnectionPool::getInstance()->add($host);
+        $created = $wire->createGroup('Utf8 Room', null, 'u8-host-user', 'Host', 'u8-host');
+        $groupId = $created['group']['group_id'];
+        $peer = $this->authedConnection('u8-peer', 'u8-peer-user');
+        ConnectionPool::getInstance()->add($peer);
+        $wire->joinGroup($groupId, 'u8-peer-user', 'Peer', null, 'u8-peer');
+
+        // 1000 x U+20AC = 3000 bytes; the 2048-byte budget lands inside the
+        // 683rd character, so a naive substr() would ship half a codepoint —
+        // invalid UTF-8 straight into every peer and the snapshot blob.
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_CHAT_MESSAGE,
+            'group_id' => $groupId,
+            'message' => str_repeat('€', 1000),
+        ]);
+
+        $frames = $peer->framesOfType(Messages::TYPE_CHAT_MESSAGE);
+        $this->assertCount(1, $frames);
+        $message = $frames[0]['message'];
+        $this->assertTrue(mb_check_encoding($message, 'UTF-8'), 'truncation must never split a codepoint');
+        $this->assertLessThanOrEqual(GroupState::MAX_CHAT_MESSAGE_BYTES, strlen($message));
+        $this->assertSame(str_repeat('€', 682), $message, 'exactly the whole codepoints that fit the budget');
+    }
+
+    public function testOversizedGroupAndMemberNamesRefuseThroughTheWireErrorEnvelope(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('nm-host', 'nm-host-user');
+        ConnectionPool::getInstance()->add($host);
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'group_name' => str_repeat('n', GroupState::MAX_NAME_BYTES + 1),
+            'member_name' => 'Fine',
+        ]);
+        $frames = $host->getSentMessages();
+        $this->assertNotEmpty($frames);
+        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.create_failed');
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'group_name' => 'Fine',
+            'member_name' => str_repeat('m', GroupState::MAX_NAME_BYTES + 1),
+        ]);
+        $frames = $host->getSentMessages();
+        $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.create_failed');
+
+        // Exactly-at-cap is legal on both slots.
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_GROUP_CREATE,
+            'group_name' => str_repeat('n', GroupState::MAX_NAME_BYTES),
+            'member_name' => str_repeat('m', GroupState::MAX_NAME_BYTES),
+        ]);
+        $this->assertNotEmpty($host->framesOfType(Messages::TYPE_GROUP_STATE), 'at-cap names create normally');
+    }
+
+    public function testOversizedMemberNameRefusesOnJoinWithoutTouchingTheGroup(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('j16-host', 'j16-host-user');
+        ConnectionPool::getInstance()->add($host);
+        $created = $wire->createGroup('Join Cap Room', null, 'j16-host-user', 'Host', 'j16-host');
+        $groupId = $created['group']['group_id'];
+
+        $result = $wire->joinGroup(
+            $groupId,
+            'j16-late-user',
+            str_repeat('p', GroupState::MAX_NAME_BYTES + 1),
+            null,
+            'j16-late'
+        );
+        $this->assertFalse($result['success']);
+        $this->assertSame('syncplay.join_failed', $result['error_code'] ?? null);
+        $this->assertCount(1, $wire->getGroupState($groupId)['members'], 'a refused join adds nobody');
+    }
+
+    public function testOversizedMediaIdOrInfoRefusesWholesaleAndKeepsQueueByteIdentical(): void
+    {
+        $wire = $this->wireManager();
+        $host = $this->authedConnection('mi-host', 'mi-host-user');
+        ConnectionPool::getInstance()->add($host);
+        $created = $wire->createGroup('Media Room', null, 'mi-host-user', 'Host', 'mi-host');
+        $groupId = $created['group']['group_id'];
+
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => [['media_id' => 'keep-1'], ['media_id' => 'keep-2']],
+        ]);
+        $before = $wire->getGroupState($groupId)['queue'];
+
+        $oversizedInfo = ['blob' => str_repeat('a', GroupState::MAX_MEDIA_INFO_BYTES)];
+        $poisons = [
+            'oversized media_id' => [['media_id' => str_repeat('m', GroupState::MAX_MEDIA_ID_BYTES + 1)]],
+            'oversized media_info' => [['media_id' => 'ok', 'media_info' => $oversizedInfo]],
+            'non-encodable media_info' => [['media_id' => 'ok', 'media_info' => ['inf' => INF]]],
+        ];
+
+        foreach ($poisons as $label => $poison) {
+            $wire->publicHandleMessage($host, [
+                'type' => Messages::TYPE_PLAYBACK_QUEUE,
+                'group_id' => $groupId,
+                'queue' => $poison,
+            ]);
+            $frames = $host->getSentMessages();
+            $this->assertErrorCode($frames[count($frames) - 1], 'syncplay.queue_limit_exceeded');
+            $this->assertSame(
+                $before,
+                $wire->getGroupState($groupId)['queue'],
+                "$label must leave the live queue untouched"
+            );
+        }
+
+        // At-cap values are legal: 64-byte id; info under the budget. (The
+        // three refusals above left their error frames on the socket, so the
+        // law is asserted on state, not on frame absence.)
+        $atCapItem = [
+            'media_id' => str_repeat('m', GroupState::MAX_MEDIA_ID_BYTES),
+            'media_info' => ['title' => 'ok'],
+        ];
+        $wire->publicHandleMessage($host, [
+            'type' => Messages::TYPE_PLAYBACK_QUEUE,
+            'group_id' => $groupId,
+            'queue' => [$atCapItem],
+        ]);
+        $after = $wire->getGroupState($groupId)['queue'];
+        $this->assertCount(1, $after, 'at-cap queue items must be accepted');
+        $this->assertSame(str_repeat('m', GroupState::MAX_MEDIA_ID_BYTES), $after[0]['media_id']);
+    }
 }

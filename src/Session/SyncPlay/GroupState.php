@@ -128,6 +128,35 @@ class GroupState
     public const MAX_QUEUE_SIZE = 1000;
 
     /**
+     * SH-016 — per-field length caps for the unbounded-copy vectors on the
+     * SyncPlay command path. Without them one 10 MiB frame could embed a
+     * megabyte-scale chat body in the rolling 100-message buffer, megabyte
+     * display names in every member record, or megabyte opaque media_info in
+     * each queue item — and every later mutation re-encodes and re-UPSERTs
+     * the WHOLE state blob carrying them (SyncPlaySnapshotService).
+     *
+     * These are the canonical homes; enforcement is split by the review's
+     * reject/truncate ruling with the semantic each vector deserves:
+     *  - chat body: TRUNCATED (mb_strcut on a codepoint boundary) at the
+     *    boundary AND here as the belt — a direct API caller cannot bypass
+     *    the cap, and the stored bytes are exactly the broadcast bytes;
+     *  - group/member names: REFUSED by SyncPlayManager::createGroup()/
+     *    joinGroup() through the existing syncplay.create_failed /
+     *    syncplay.join_failed envelopes (both the REST and WS rails inherit;
+     *    no new wire codes);
+     *  - queue media_id/media_info: REFUSED wholesale by the WS parser under
+     *    the LOW-2 all-or-nothing law via the existing
+     *    syncplay.queue_limit_exceeded envelope (the message disambiguates
+     *    the arm; media_info is budgeted on its ENCODED size because the
+     *    snapshot column is JSON — the same probe also refuses values
+     *    json_encode cannot represent, e.g. a 1e999-decoded INF).
+     */
+    public const MAX_NAME_BYTES = 128;
+    public const MAX_CHAT_MESSAGE_BYTES = 2048;
+    public const MAX_MEDIA_ID_BYTES = 64;
+    public const MAX_MEDIA_INFO_BYTES = 4096;
+
+    /**
      * Default playback position tolerance in milliseconds.
      *
      * Members whose position differs from host by more than this
@@ -995,6 +1024,16 @@ class GroupState
      */
     public function addChatMessage(string $memberId, string $message): void
     {
+        // SH-016 belt — the WS boundary already truncates to the budget;
+        // enforcing here too means no future direct caller can smuggle an
+        // oversized body into the rolling buffer (whose whole blob every
+        // later snapshot mutation re-encodes). mb_strcut keeps the cut on a
+        // codepoint boundary. Idempotent on already-bounded text, so the
+        // stored bytes and the broadcast bytes stay identical.
+        $message = strlen($message) > self::MAX_CHAT_MESSAGE_BYTES
+            ? mb_strcut($message, 0, self::MAX_CHAT_MESSAGE_BYTES, 'UTF-8')
+            : $message;
+
         $this->chatMessages[] = [
             'member_id' => $memberId,
             'message' => $message,

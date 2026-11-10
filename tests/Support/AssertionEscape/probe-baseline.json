@@ -49,6 +49,12 @@
             "method": "createHarness",
             "recorded": "2026-11-04",
             "reason": "The site is `$this->fail('unexpected SQL reached by the create path: ' . $sql)` — the last-arm guard of the createHarness() mock's willReturnCallback, added with the media-marker ownership cures (6ad21937). The closure IS invoked on every create-path test, but only its two handler arms run: the flow under test issues exactly the INSERT INTO media_markers and SELECT * FROM media_markers WHERE id shapes the arms above resolve. The guard line is unreachable on the passing path BY DESIGN — making it run would mean the controller issuing SQL it must not, i.e. breaking the behaviour under test (and a fail() arm that ever executes reddens the test itself). The sibling harness closure in the same file GATES, proving the probe executes this file's mock wiring. Mocked Connection, no database — deterministic on every box (measured NOT-REACHED locally and on CI 2026-11-04)."
+        },
+        {
+            "file": "tests/Unit/Media/Library/ItemRepositorySearchCountTest.php",
+            "method": "repository",
+            "recorded": "2026-11-10",
+            "reason": "The site is `self::fail('unexpected statement issued by searchCount(): ' . $sql)` — the last-arm guard of the repository() helper's willReturnCallback, added with the SH-023 search-count legs (2ded3496). The closure IS invoked on every query the method under test dispatches, but only its three leg arms (artists JOIN, albums JOIN, COUNT(*) primary) run: the guard line is reached only if searchCount() issues a fourth statement shape or a leg whose answer the test did not stub — unreachable on the passing path BY DESIGN, since making it run would mean the code under test issuing SQL it must not (and a fail() arm that ever executes reddens the test itself). The sibling legs of the same helper GATES, proving the probe executes this file's mock wiring. Mocked Workerman MySQL Connection, no database touched — deterministic on every box (measured NOT-REACHED locally and on CI run 42795623411, 2026-11-10)."
         }
     ]
 }

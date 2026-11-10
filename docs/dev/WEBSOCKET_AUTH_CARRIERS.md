@@ -55,8 +55,9 @@ Sec-WebSocket-Protocol: bearer
 
 ## Logging hygiene
 
-No `:8097` handshake log line may carry a credential. The only URI-bearing handshake log
-site (the carrier-mismatch rejection) passes the request URI through
+No `:8097` handshake log line may carry a credential. The URI-bearing handshake log
+sites (the carrier-mismatch rejection and the CP-007 query-carrier telemetry/rejection
+line) both pass the request URI through
 `SyncPlayAuthMiddleware::redactTokenQuery()` first, which masks every whole-name
 `token=` query value (`?token=[redacted]`) while leaving the path and other params
 intact. This closes the URL-in-logs exposure for **legacy query clients too** — the
@@ -79,6 +80,21 @@ The query carrier stays accepted until every shipping client version has the fli
 (clients are old by default — server-side removal must trail fleet update, owner
 timing call). When it is removed, this document and `resolveHandshakeToken()` shrink to
 the bearer law only.
+
+### Server-side retirement gate (CP-007, COOKIE-DESIGN.md §4.1)
+
+PHASE A (shipped): `PHLIX_WS_QUERY_TOKEN=allow|deny` (config `websocket.query_token`,
+default `allow`) plus one redacted `websocket` warn line per query-carrier handshake —
+that telemetry census is the evidence that times PHASE B. Under `deny`, a
+query-carrier handshake is refused pre-101 with the existing reject idiom (pool reap +
+TCP close — no envelope, zero new wire codes); bearer and admitted-cookie handshakes
+are byte-ident under every setting. The gate is opt-in tightening: unset/empty/
+unrecognized values all behave `allow`. PHASE B (after mobile lands the bearer flip —
+the last query producer) flips the default to `deny` (CP-024); PHASE C removes the
+branch. The stored-home settings key `auth.ws_query_token` (phlix-shared schema,
+restart:false live-read) joins this env lever when its read-through lands — the same
+staged env-first shape as `auth.cookie.insecure`; until then the env knob is the only
+live lever.
 
 ## Cross-references
 

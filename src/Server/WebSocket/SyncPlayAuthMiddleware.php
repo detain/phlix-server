@@ -21,7 +21,10 @@ use Phlix\Common\Logger\LogChannels;
  *
  * Validates the handshake JWT (bearer subprotocol preferred, legacy
  * `?token=` accepted — see docs/dev/WEBSOCKET_AUTH_CARRIERS.md) and enforces
- * authentication for SyncPlay rooms.
+ * authentication for SyncPlay rooms. The legacy query carrier additionally
+ * answers to the CP-007 retirement gate (`PHLIX_WS_QUERY_TOKEN`, default
+ * allow — {@see parseQueryTokenPolicy()}); bearer and admitted-cookie legs
+ * are never governed by it.
  *
  * ## Authentication Flow
  *
@@ -70,6 +73,19 @@ class SyncPlayAuthMiddleware
     public const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: bearer';
 
     /**
+     * Query-carrier gate dispositions (CP-007, COOKIE-DESIGN.md §4.1 PHASE A).
+     *
+     * The `:8097` legacy `?token=` carrier is observed under `allow` (every
+     * query handshake logs one redacted telemetry line) and additionally
+     * REFUSED pre-101 under `deny`. Shipped default is `allow`; PHASE B flips
+     * the default after the last query-producing client retires (§4.4), and
+     * PHASE C removes the branch. Env seam: `PHLIX_WS_QUERY_TOKEN` (config
+     * `websocket.query_token`).
+     */
+    public const QUERY_TOKEN_ALLOW = 'allow';
+    public const QUERY_TOKEN_DENY = 'deny';
+
+    /**
      * JWT handler for token validation.
      *
      * @var JwtHandler
@@ -112,6 +128,17 @@ class SyncPlayAuthMiddleware
     private $logger;
 
     /**
+     * Whether the legacy `?token=` query carrier may complete a handshake
+     * (CP-007 §4.1). Parsed once from the constructor policy — resident
+     * config, restart-class like `jwt_secret`. Bearer and admitted-cookie
+     * carriers are governed by {@see resolveHandshakeToken()} alone; this
+     * flag never touches them.
+     *
+     * @var bool
+     */
+    private bool $queryTokenAllowed;
+
+    /**
      * Create a new SyncPlayAuthMiddleware instance.
      *
      * @param string $jwtSecret The JWT secret key for validation
@@ -121,6 +148,11 @@ class SyncPlayAuthMiddleware
      *   the handshake enforces the same active/deleted/revocation law every
      *   HTTP request passes; without it only crypto + access-type are checked
      *   (tests/dev direct construction).
+     * @param string $queryTokenPolicy CP-007 query-carrier gate disposition —
+     *   the `websocket.query_token` config value (env seam
+     *   PHLIX_WS_QUERY_TOKEN). {@see parseQueryTokenPolicy()} for the fail-open
+     *   reading; the default keeps every pre-CP-007 construction site on
+     *   today's allow behavior.
      *
      * @example
      * ```php
@@ -131,12 +163,48 @@ class SyncPlayAuthMiddleware
      * $middleware = new SyncPlayAuthMiddleware('your-secret-key', false);
      * ```
      */
-    public function __construct(string $jwtSecret, bool $requireAuth = true, ?AuthManager $authManager = null)
-    {
+    public function __construct(
+        string $jwtSecret,
+        bool $requireAuth = true,
+        ?AuthManager $authManager = null,
+        string $queryTokenPolicy = self::QUERY_TOKEN_ALLOW
+    ) {
         $this->jwtHandler = new JwtHandler($jwtSecret);
         $this->requireAuth = $requireAuth;
         $this->authManager = $authManager;
+        $this->queryTokenAllowed = self::parseQueryTokenPolicy($queryTokenPolicy);
         $this->logger = LoggerFactory::get(LogChannels::WEBSOCKET);
+    }
+
+    /**
+     * Read the query-carrier gate policy — pure, fail-OPEN by design.
+     *
+     * Only an explicit `deny` (trim + case-insensitive) denies; every other
+     * value — `allow`, empty, garbage — allows. This mirrors the estate's
+     * opt-in-tightening family (SH-064 TLS gate): a typo in a production env
+     * file must never silently lock legacy clients out; tightening happens
+     * only when the operator says so unambiguously.
+     *
+     * @param string $rawPolicy Config/env value as supplied.
+     * @return bool True when the query carrier stays accepted.
+     */
+    public static function parseQueryTokenPolicy(string $rawPolicy): bool
+    {
+        return strtolower(trim($rawPolicy)) !== self::QUERY_TOKEN_DENY;
+    }
+
+    /**
+     * This middleware's parsed query-carrier gate disposition (CP-007).
+     *
+     * Consumed by {@see WebSocketServer::onWebSocketConnect()} at the query
+     * carrier leg ONLY — the telemetry/rejection log site and the pre-101
+     * reject both live there, keeping this class the credential-law home and
+     * the server the socket-lifecycle home, exactly like every other reject
+     * idiom on that hook.
+     */
+    public function queryTokenCarrierAllowed(): bool
+    {
+        return $this->queryTokenAllowed;
     }
 
     /**

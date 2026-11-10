@@ -1200,7 +1200,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Unit/Server/Http/Controllers/ControllerCopySweepTest.php (wire
     // byte-identity of every const, family-sentence sweeps, measured
     // allow-lists); 2080 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2084;
+    // +1 2084→2085: w30L1 CP-007 adds tests/Unit/Server/WebSocket/
+    // WsQueryTokenGateTest.php (the PHLIX_WS_QUERY_TOKEN gate harness: real
+    // parsed upgrade Requests over a temp stream-handler logger — query-carrier
+    // telemetry/rejection redaction legs, bearer/cookie byte-identity under
+    // both dispositions, fail-open parse table, config-surface env seam);
+    // 2085 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2085;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

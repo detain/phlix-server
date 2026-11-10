@@ -33,6 +33,21 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **Operators can opt the legacy `?token=` WebSocket carrier into retirement.**
+  `PHLIX_WS_QUERY_TOKEN=allow|deny` (config `websocket.query_token`, default
+  `allow`, read at boot) gates the `:8097` handshake's legacy query carrier:
+  `allow` keeps today's behavior and logs one redacted telemetry line per query
+  handshake (the census that times the default flip); `deny` additionally
+  refuses query-carrier handshakes pre-upgrade with the existing reject idiom
+  (pool reap + TCP close — no HTTP envelope exists before the 101, so no new
+  wire vocabulary). Bearer-subprotocol and admitted-cookie handshakes are
+  byte-ident under every setting. PHASE A of the COOKIE-DESIGN.md §4.1
+  retirement plan; the §2.3 carrier-precedence law (CP-006) is unchanged
+  (CP-007). The stored-home settings key `auth.ws_query_token` shipped in
+  phlix-shared for this program already; its live read-through joins this
+  env lever in a future server leg (same staged shape as
+  `auth.cookie.insecure`), and PHASE B (CP-024) flips this default to deny.
+
 - **The portal honours a configured WebSocket origin: `PHLIX_WS_URL` and
   `PHLIX_WS_PATH`.** A deployment that serves the SPA from one host but
   terminates the watch-party socket on another (split haproxy front, TLS-offload

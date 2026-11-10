@@ -168,7 +168,16 @@ class WebSocketServer
         // connections are allowed anonymously (dev).
         $jwtSecret = $this->config['jwt_secret'] ?? null;
         if (is_string($jwtSecret) && $jwtSecret !== '') {
-            $this->authMiddleware = new SyncPlayAuthMiddleware($jwtSecret, true, $authManager);
+            // CP-007: the query-carrier retirement policy rides the same config
+            // block as the secret (websocket.query_token / PHLIX_WS_QUERY_TOKEN).
+            // A non-string/absent value keeps the shipped allow default.
+            $queryTokenPolicy = $this->config['query_token'] ?? SyncPlayAuthMiddleware::QUERY_TOKEN_ALLOW;
+            $this->authMiddleware = new SyncPlayAuthMiddleware(
+                $jwtSecret,
+                true,
+                $authManager,
+                is_string($queryTokenPolicy) ? $queryTokenPolicy : SyncPlayAuthMiddleware::QUERY_TOKEN_ALLOW,
+            );
         }
 
         if ($worker !== null) {
@@ -737,6 +746,38 @@ class WebSocketServer
             unset($this->openedConnectionIds[$wsConnection->getId()]);
             $connection->close();
             return;
+        }
+
+        // CP-007 (COOKIE-DESIGN.md §4.1 PHASE A): the legacy `?token=` query
+        // carrier answers to its retirement gate — EVERY query-carrier
+        // handshake logs one redacted telemetry line (the census that times
+        // the PHASE B default flip), and under PHLIX_WS_QUERY_TOKEN=deny the
+        // same leg refuses the handshake pre-101 using the existing reject
+        // idiom (pool reap + TCP close; there is no 101 yet to carry an
+        // envelope, so zero new wire codes). The condition is the RESOLVED
+        // carrier, so the bearer and admitted-cookie legs never pass through
+        // here (CP-006 precedence law, §2.3 — UNMOVED), and a mismatched or
+        // credential-less handshake keeps its own established story above and
+        // below this block. The log context carries the URI only through
+        // redactTokenQuery — token bytes never reach a log line.
+        if ($resolved['carrier'] === 'query') {
+            $queryCarrierAllowed = $this->authMiddleware->queryTokenCarrierAllowed();
+            LoggerFactory::get(LogChannels::WEBSOCKET)->warning(
+                $queryCarrierAllowed
+                    ? 'WebSocket handshake used the legacy ?token= query carrier (PHLIX_WS_QUERY_TOKEN=allow)'
+                    : 'WebSocket handshake rejected: legacy ?token= query carrier refused (PHLIX_WS_QUERY_TOKEN=deny)',
+                [
+                    'client_ip' => $clientIp,
+                    'uri' => SyncPlayAuthMiddleware::redactTokenQuery($request->uri()),
+                ],
+            );
+            if (!$queryCarrierAllowed) {
+                $this->connections->remove($wsConnection->getId());
+                // As above: reap the opened-id tracking entry on the reject path.
+                unset($this->openedConnectionIds[$wsConnection->getId()]);
+                $connection->close();
+                return;
+            }
         }
 
         if (!$this->authMiddleware->authenticateConnection($wsConnection, $resolved['token'])) {

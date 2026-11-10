@@ -10,8 +10,10 @@ use Jose\Component\Signature\Algorithm\RS256;
 use Jose\Component\Signature\JWSBuilder;
 use Jose\Component\Signature\Serializer\CompactSerializer as JwsCompactSerializer;
 use PHPUnit\Framework\TestCase;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
@@ -648,6 +650,161 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertSame('Lax', $byName['phlix_refresh']['sameSite']);
         $this->assertSame(604800, $byName['phlix_refresh']['maxAge']);
         $this->assertTrue($byName['phlix_refresh']['secure']);
+    }
+
+    // -----------------------------------------------------------------------
+    // w28L1 round-2 (DD M2) — the CookiePolicy seam on the callback mint
+    // (mirrors the GitHub suite's legs; see that file's banner for the full
+    // law statement): auth.cookie.enabled=false must suppress the session
+    // cookies HERE TOO (§7 rollback is global), §2.1 custody vetoes apply, and
+    // the stored auth.cookie.insecure twin joins the env switch for the Secure
+    // bit. 302 envelope byte-ident in every leg; only the attach is governed.
+    // Red-first: all four construct with the new named `cookiePolicy:`
+    // parameter and are RED at parent (unknown named parameter).
+    // -----------------------------------------------------------------------
+
+    /** §7 rollback law on the OIDC callback surface. */
+    public function test_callback_master_switch_off_sets_no_session_cookies(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        [$controller, $request] = $this->oidcCookieHarness([
+            CookiePolicy::COOKIE_ENABLED_KEY => false,
+        ]);
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app/home', $response->headers['Location']);
+        $this->assertNoSessionCookies(
+            $response,
+            'auth.cookie.enabled=false must suppress the callback cookie mint (§7)'
+        );
+    }
+
+    /** §2.1 device-marker veto on the callback surface. */
+    public function test_callback_device_marked_receives_no_session_cookies(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        [$controller, $request] = $this->oidcCookieHarness(null);
+        $request->headers['X-Phlix-Device-Type'] = 'roku';
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app/home', $response->headers['Location']);
+        $this->assertNoSessionCookies(
+            $response,
+            'device-class callbacks stay bearer-only (§2.1)'
+        );
+    }
+
+    /** §2.1 foreign-origin veto on the callback surface. */
+    public function test_callback_foreign_origin_is_device_class_no_cookies(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        [$controller, $request] = $this->oidcCookieHarness(null);
+        $request->headers['Origin'] = 'http://evil.example';
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertNoSessionCookies(
+            $response,
+            'a foreign Origin must not purchase a cookie session (§2.1)'
+        );
+    }
+
+    /** CD-3a stored twin (no env var): Secure attribute drops, cookies still flow. */
+    public function test_callback_honors_stored_insecure_twin_without_env(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        [$controller, $request] = $this->oidcCookieHarness([
+            CookiePolicy::COOKIE_INSECURE_KEY => true,
+        ]);
+
+        $response = $controller->callback($request, []);
+
+        $byName = [];
+        foreach ($response->cookies as $cookie) {
+            $byName[$cookie['name']] = $cookie;
+        }
+        $this->assertSame('access-token-xyz', $byName['phlix_session']['value'] ?? null);
+        $this->assertFalse($byName['phlix_session']['secure']);
+        $this->assertFalse($byName['phlix_refresh']['secure']);
+    }
+
+    /**
+     * Harness for the DD M2 legs: a fully SUCCESSFUL OIDC callback exchange
+     * (real provider verifying an RS256 ID token, state seeded, mint stubbed)
+     * returned as [controller, browser callback request]. $settings null →
+     * shipped default posture (store-less CookiePolicy via ctor default); a
+     * map → store-backed policy.
+     *
+     * @param array<string, mixed>|null $settings
+     *
+     * @return array{0: OidcCallbackController, 1: Request}
+     */
+    private function oidcCookieHarness(?array $settings): array
+    {
+        $providerUrl = 'https://idp.policy.test';
+        $clientId = 'client-id';
+        $nonce = 'policy-nonce';
+
+        $registry = new AuthProviderRegistry();
+        $registry->registerProvider(
+            $this->realOidcProviderReturningSuccess($providerUrl, $clientId, $nonce)
+        );
+
+        $userRepository = $this->createMock(UserRepository::class);
+        $userRepository->method('findOrCreateByExternalId')
+            ->with('oidc', 'oidc.oidc-subject-123', 'oidc-user@example.com', 'OIDC User')
+            ->willReturn('user-777');
+
+        $jwtHandler = $this->createMock(JwtHandler::class);
+        $jwtHandler->method('createAccessToken')->with('user-777')->willReturn('access-token-xyz');
+        $jwtHandler->method('createRefreshToken')->with('user-777')->willReturn('refresh-token-xyz');
+        $jwtHandler->method('accessTtl')->willReturn(3600);
+        $jwtHandler->method('refreshTtl')->willReturn(604800);
+
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-policy', 'verifier-policy', $nonce, self::boundContext());
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $userRepository,
+            $jwtHandler,
+            $stateStore,
+            cookiePolicy: $settings === null ? null : new CookiePolicy($this->settingsStore($settings)),
+        );
+
+        $state = base64_encode((string) json_encode([
+            'sid' => 'sid-policy',
+            'redirect_uri' => '/app/home',
+        ], JSON_THROW_ON_ERROR));
+
+        $request = self::bindBrowser(new Request());
+        $request->headers['Host'] = self::HOST;
+        $request->query = ['code' => 'auth-code', 'state' => $state];
+
+        return [$controller, $request];
+    }
+
+    /**
+     * @param array<string, mixed> $values key => stored effective value
+     */
+    private function settingsStore(array $values): SettingsRepository
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')
+            ->willReturnCallback(
+                static fn (string $key): mixed => $values[$key] ?? null
+            );
+
+        return $settings;
     }
 
     /**

@@ -23,6 +23,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\UserIdentityRepository;
@@ -84,6 +85,16 @@ final class OidcCallbackController
      * direct-construction call sites keep working; production DI binds it.
      */
     private ?OidcPlugin $plugin;
+
+    /**
+     * The auth-cookie policy seam (w28L1 R2, DD M2): the SAME
+     * {@see CookiePolicy} the /auth arms consult governs this mint — the
+     * `auth.cookie.enabled` master switch (§7 rollback), the §2.1 custody
+     * classification, and the Secure-bit twin. Optional with a store-less
+     * default so hand-built test constructions keep working; production DI
+     * binds the container singleton.
+     */
+    private CookiePolicy $cookiePolicy;
 
     /** This server's OIDC callback path (the tail of the absolute redirect_uri). */
     private const string CALLBACK_PATH = '/auth/oidc/callback';
@@ -149,6 +160,7 @@ final class OidcCallbackController
         ?AuthProviderBootstrapper $bootstrapper = null,
         ?UserIdentityRepository $identities = null,
         ?OidcPlugin $plugin = null,
+        ?CookiePolicy $cookiePolicy = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
@@ -156,6 +168,7 @@ final class OidcCallbackController
         $this->bootstrapper = $bootstrapper;
         $this->identities = $identities;
         $this->plugin = $plugin;
+        $this->cookiePolicy = $cookiePolicy ?? new CookiePolicy();
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -570,7 +583,7 @@ final class OidcCallbackController
             $response = $this->clearCorrelation(
                 (new Response())->status(302)->header('Location', $redirectUri),
             );
-            $this->attachAuthCookies($response, $tokens);
+            $this->attachAuthCookies($response, $tokens, $request);
 
             return $response;
         } catch (\Throwable $e) {
@@ -899,18 +912,50 @@ final class OidcCallbackController
      * {@see \Phlix\Server\Http\Controllers\AuthController::attachAuthCookies()}
      * so the OIDC browser flow sets the SAME cookies the local login sets —
      * identical names ({@see AuthController::SESSION_COOKIE}/{@see
-     * AuthController::REFRESH_COOKIE}), HttpOnly so XSS cannot read them, Secure
-     * so they only ride HTTPS (opt-out via `PHLIX_COOKIE_INSECURE=1` for local
-     * HTTP dev), SameSite=Lax so the top-level IdP → callback navigation still
-     * carries them. Lifetimes come from the same {@see JwtHandler} that minted
-     * the tokens, never a literal, so a cookie's Max-Age can't drift from its
-     * JWT `exp`.
+     * AuthController::REFRESH_COOKIE}), HttpOnly so XSS cannot read them, and
+     * the Secure bit from {@see CookiePolicy::cookiesSecure()} — the env
+     * switch AND its stored `auth.cookie.insecure` twin opt out (w28L1 R2:
+     * this path used to read only `getenv('PHLIX_COOKIE_INSECURE')`, so the
+     * admin-facing lever was inert here), SameSite=Lax so the top-level IdP →
+     * callback navigation still carries them. Lifetimes come from the same
+     * {@see JwtHandler} that minted the tokens, never a literal, so a cookie's
+     * Max-Age can't drift from its JWT `exp`.
+     *
+     * w28L1 R2 (DD M2) routes the attach through the SAME
+     * {@see CookiePolicy} seam {@see AuthController::attachAuthCookies()}
+     * uses: the §7 `auth.cookie.enabled` master switch suppresses the pair on
+     * THIS path too (before this round the callback ignored the lever and
+     * persisted a session anyway — the rollback was a no-op here), and §2.1
+     * custody demotes device-marked / foreign-Origin exchanges to bearer
+     * (no Set-Cookie). formEra=true: a top-level IdP redirect back to
+     * /auth/oidc/callback is the form-era browser surface by construction, so
+     * browser class is the shipped posture and the two vetoes are the only
+     * demotion path. The §2.4 scheme gate is deliberately NOT applied here —
+     * gating this IdP-decided redirect leg on X-Forwarded-Proto would change
+     * shipped behavior beyond the DD's enumerated deltas (banked follow-up
+     * row in the round-2 register for a wave aligning scheme across surfaces).
      *
      * @param array<string, string> $tokens access_token + refresh_token pair.
      */
-    private function attachAuthCookies(Response $response, array $tokens): void
+    private function attachAuthCookies(Response $response, array $tokens, Request $request): void
     {
-        $secure = getenv('PHLIX_COOKIE_INSECURE') !== '1';
+        if (!$this->cookiePolicy->cookieModeEnabled()) {
+            return;
+        }
+
+        if (
+            $this->cookiePolicy->custodyMode(
+                true,
+                $request->getHeader('X-Phlix-Device-Type'),
+                $request->getHeader('Origin'),
+                $request->getHeader('Host'),
+                $request->getHeader('Sec-Fetch-Site'),
+            ) !== CookiePolicy::MODE_COOKIE
+        ) {
+            return;
+        }
+
+        $secure = $this->cookiePolicy->cookiesSecure();
 
         $response->cookie(
             AuthController::SESSION_COOKIE,

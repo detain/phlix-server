@@ -311,6 +311,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The OAuth sign-in callbacks now honor the cookie-policy levers (w28L1
+  round-2, DD M2).** With `auth.cookie.enabled=false` the GitHub and OIDC
+  browser callbacks no longer attach the `phlix_session`/`phlix_refresh`
+  pair: the §7 rollback lever is global now — previously the lever was live
+  on the `/auth` arms but the callback minters consulted nothing, so pulling
+  it still persisted a cookie session on those two paths (the law text
+  claimed otherwise; this entry supersedes that claim — verbatim history
+  stands). Device-marked and foreign-Origin callbacks classify bearer-side
+  per §2.1 and likewise receive no Set-Cookie, and the stored
+  `auth.cookie.insecure` twin now drops the Secure attribute on these paths
+  too (only the `PHLIX_COOKIE_INSECURE=1` env form worked there before). The
+  302 redirect envelopes — Location, correlation-cookie expiry, the
+  held-account and error refusals — stay byte-ident; zero wire codes changed.
+  Also superseding, as disclosed correction (older text stays verbatim): the
+  dual-emit Added entry's "(rotated on every POST /api/v1/auth/refresh)"
+  describes the browser-class refresh only — the device-class refresh leg
+  never attaches cookies — and its enforcement-coverage framing did not
+  reach the LDAP arms or these callbacks, which this round's suites convict
+  leg by leg (round-2 register, mutation tables).
+  [review w28L1, DD M1/M2]
+
 - **`worker.count => 'auto'` now honors a container CPU limit.** The auto
   arm always resolved to the shipped 14 HTTP workers — but a k8s `cpu:
   2000m` limit is a cgroup CFS quota, `nproc` lies about it, and 14 workers

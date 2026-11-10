@@ -1296,8 +1296,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * $request->headers to seed the device marker (read-modify-write; the
      * walker counts the read once). Zero src/ reads added. Measured from
      * the phpunit red (474), not predicted.
+     * +1 474→475 (w28L1 R2, DD M2): the OIDC cookie harness seeds Host via
+     * an offset-write on a recognized factory-assigned root ($request->
+     * headers['Host'] = …, read-classified per the walker docblock); the
+     * leg bodies' header seeds sit behind a list-destructured binding the
+     * root tracker does not classify (zero counted sites there). Zero src/
+     * reads added — attachAuthCookies() reaches headers only through
+     * getHeader(). Measured from the phpunit red (475), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 474;
+    private const EXPECTED_DECLARED_READS = 475;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1618,7 +1625,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +5 1198→1203 (w28L1 R2, DD M1): five $request->body fixture seeds in
     // the new CookieDualEmitTest LDAP legs (two per master-off leg). Zero
     // src/ writes added. Measured from the phpunit red (1203), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1203;
+    // +1 1203→1204 (w28L1 R2, DD M2): the OIDC cookie harness seeds
+    // $request->query (whole-property write on a recognized root). Zero src/
+    // writes added. Measured from the phpunit red (1204), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1204;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

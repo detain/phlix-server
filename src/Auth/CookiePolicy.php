@@ -26,7 +26,9 @@ use Phlix\Admin\SettingsRepository;
  *     device-class — exactly today's JSON bearer-only posture, byte-ident.
  *  2. MASTER SWITCH — `auth.cookie.enabled` (shared schema, landed @2683579):
  *     false means the server never sets auth cookies at all, on any path
- *     (form redirect included). Live read, fail-open to the shipped default.
+ *     (form redirect included; w28L1 R2 routed the OAuth callback minters
+ *     through this same seam, making the claim literally true as shipped).
+ *     Live read, fail-open to the shipped default.
  *  3. SCHEME LAW — cookies are issued only when the request arrived over
  *     https or addressed localhost, or the operator opted into insecure
  *     cookies (`PHLIX_COOKIE_INSECURE=1` env or its stored twin

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Plugins\Github;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
@@ -256,6 +258,170 @@ final class GithubCallbackControllerTest extends TestCase
         $this->assertSame('refresh-token', $cookieNames[AuthController::REFRESH_COOKIE] ?? null);
         // No token ever rides the URL.
         $this->assertStringNotContainsString('access-token', $response->headers['Location'] ?? '');
+    }
+
+    // -----------------------------------------------------------------------
+    // w28L1 round-2 (DD M2) — the CookiePolicy seam on the callback mint.
+    // Before this round the callback consulted ONLY getenv('PHLIX_COOKIE_INSECURE')
+    // for the Secure bit and NOTHING for issuance: with auth.cookie.enabled=false
+    // (the §7 rollback lever) the callback still persisted a full cookie session,
+    // so the global law "flag off ⇒ no Set-Cookie on any path" was falsified on
+    // this surface. The legs below route the mint through the same policy the
+    // /auth arms use: master switch gates issuance, §2.1 custody vetoes apply,
+    // the stored auth.cookie.insecure twin joins the env switch for the Secure
+    // bit. The 302 envelope (Location + correlation expiry) stays byte-ident in
+    // every leg — only the cookie attach is governed.
+    //
+    // Red-first note: each leg constructs with the new named `cookiePolicy:`
+    // parameter, so ALL FOUR are RED at parent (unknown named parameter). The
+    // master-off leg additionally pins the behavioral delta the DD names: green
+    // only once the lever actually works here.
+    // -----------------------------------------------------------------------
+
+    /**
+     * §7 rollback law on the callback surface: flag off ⇒ no Set-Cookie,
+     * even though the IdP exchange fully succeeded (tokens mint, 302 lands,
+     * the browser simply receives no session credential).
+     */
+    public function test_callback_master_switch_off_sets_no_session_cookies(): void
+    {
+        [$controller, $request] = $this->githubCookieHarness([
+            CookiePolicy::COOKIE_ENABLED_KEY => false,
+        ]);
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app', $response->headers['Location'] ?? '');
+        $this->assertNoSessionCookies(
+            $response,
+            'auth.cookie.enabled=false must suppress the callback cookie mint (§7)'
+        );
+    }
+
+    /**
+     * §2.1 custody law: a device-marked request classifies bearer, and the
+     * bearer class never receives Set-Cookie — on the callback included.
+     */
+    public function test_callback_device_marked_receives_no_session_cookies(): void
+    {
+        [$controller, $request] = $this->githubCookieHarness(null);
+        $request->headers['X-Phlix-Device-Type'] = 'roku';
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame('/app', $response->headers['Location'] ?? '');
+        $this->assertNoSessionCookies(
+            $response,
+            'device-class callbacks stay bearer-only (§2.1)'
+        );
+    }
+
+    /**
+     * §2.1 foreign-origin veto: an Origin that is not a same-site http(s)
+     * origin classifies device-side; the mint still completes (the IdP leg is
+     * unaffected) but no cookie rides the response.
+     */
+    public function test_callback_foreign_origin_is_device_class_no_cookies(): void
+    {
+        [$controller, $request] = $this->githubCookieHarness(null);
+        $request->headers['Origin'] = 'http://evil.example';
+
+        $response = $controller->callback($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertNoSessionCookies(
+            $response,
+            'a foreign Origin must not purchase a cookie session (§2.1)'
+        );
+    }
+
+    /**
+     * CD-3a stored twin: auth.cookie.insecure=true in the settings store drops
+     * the Secure attribute WITHOUT any env var — the callback previously read
+     * only getenv() here, so the admin-facing lever was a no-op on this path.
+     */
+    public function test_callback_honors_stored_insecure_twin_without_env(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        [$controller, $request] = $this->githubCookieHarness([
+            CookiePolicy::COOKIE_INSECURE_KEY => true,
+        ]);
+
+        $response = $controller->callback($request, []);
+
+        $byName = [];
+        foreach ($response->cookies as $cookie) {
+            $byName[$cookie['name']] = $cookie;
+        }
+        $this->assertSame('access-token', $byName[AuthController::SESSION_COOKIE]['value'] ?? null);
+        $this->assertFalse($byName[AuthController::SESSION_COOKIE]['secure']);
+        $this->assertFalse($byName[AuthController::REFRESH_COOKIE]['secure']);
+    }
+
+    /**
+     * Harness for the DD M2 legs: a fully SUCCESSFUL GitHub callback exchange
+     * (fake IdP queued, state seeded, mint stubbed) returned as
+     * [controller, browser callback request]. $settings null builds the
+     * shipped default posture (store-less CookiePolicy via the ctor default);
+     * a map builds a store-backed policy.
+     *
+     * @param array<string, mixed>|null $settings
+     *
+     * @return array{0: GithubCallbackController, 1: Request}
+     */
+    private function githubCookieHarness(?array $settings): array
+    {
+        $http = new FakeOAuth2HttpClient();
+        $http->queue('POST', GithubOAuthProvider::TOKEN_URL, 200, (string) json_encode([
+            'access_token' => 'gho_test',
+        ]));
+        $http->queue('GET', GithubOAuthProvider::USER_API_URL, 200, (string) json_encode([
+            'id' => 583231,
+            'login' => 'octocat',
+            'name' => 'The Octocat',
+            'email' => 'octocat@github.com',
+        ]));
+
+        $store = new InMemoryOAuth2StateStore();
+        $this->seedState($store, 'sid-policy');
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->method('findOrCreateByExternalId')
+            ->with('github', 'github.583231', 'octocat@github.com', 'The Octocat')
+            ->willReturn('user-1');
+
+        $jwt = $this->createMock(JwtHandler::class);
+        $jwt->method('createAccessToken')->with('user-1')->willReturn('access-token');
+        $jwt->method('createRefreshToken')->with('user-1')->willReturn('refresh-token');
+        $jwt->method('accessTtl')->willReturn(3600);
+        $jwt->method('refreshTtl')->willReturn(604800);
+
+        $controller = new GithubCallbackController(
+            $this->registryWithProvider($http),
+            $userRepo,
+            $jwt,
+            $store,
+            cookiePolicy: $settings === null ? null : new CookiePolicy($this->settingsStore($settings)),
+        );
+
+        return [$controller, $this->callbackRequest('sid-policy', '/app')];
+    }
+
+    /**
+     * @param array<string, mixed> $values key => stored effective value
+     */
+    private function settingsStore(array $values): SettingsRepository
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')
+            ->willReturnCallback(
+                static fn (string $key): mixed => $values[$key] ?? null
+            );
+
+        return $settings;
     }
 
     /**

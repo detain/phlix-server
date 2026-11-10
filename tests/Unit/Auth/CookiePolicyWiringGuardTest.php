@@ -15,6 +15,8 @@ use DI\ContainerBuilder;
 use Phlix\Auth\CookiePolicy;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Plugins\Github\Controller\GithubCallbackController;
+use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
 use Phlix\Server\Http\Controllers\AuthController;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -78,6 +80,55 @@ final class CookiePolicyWiringGuardTest extends TestCase
             . 'optional store, so live reads of auth.cookie.enabled/.insecure always answer '
             . 'with defaults and the §7 config-level rollback lever is theater.'
         );
+    }
+
+    /**
+     * w28L1 R2 (DD M2): the OAuth callback minters joined the same seam, so
+     * they carry the SAME guard. If `AuthServicesProvider` stopped naming the
+     * `cookiePolicy` constructor parameter on either callback, PHP-DI would
+     * skip it (optional param) and the controller would run the store-less
+     * default: the auth.cookie.enabled lever and the stored insecure twin go
+     * silently inert ON THAT SURFACE ONLY, while every hand-built callback
+     * suite leg stays GREEN because none of them resolve the container.
+     *
+     * @dataProvider callbackControllerClasses
+     *
+     * @param class-string<object> $controllerClass
+     */
+    public function testTheContainerComposedCallbackCarriesTheCookiePolicySingleton(string $controllerClass): void
+    {
+        $controller = $this->container()->get($controllerClass);
+
+        $this->assertInstanceOf($controllerClass, $controller);
+
+        $reflected = (new ReflectionClass($controllerClass))->getProperty('cookiePolicy');
+        $reflected->setAccessible(true);
+        $policy = $reflected->getValue($controller);
+
+        $this->assertInstanceOf(
+            CookiePolicy::class,
+            $policy,
+            $controllerClass . '::$cookiePolicy is not the container-composed policy — the '
+            . 'auth.cookie.* toggles are inert on this mint surface.'
+        );
+
+        $this->assertSame(
+            $this->container()->get(CookiePolicy::class),
+            $policy,
+            $controllerClass . ' holds a policy instance distinct from the container singleton '
+            . '— the constructorParameter binding regressed to an implicit new.'
+        );
+    }
+
+    /**
+     * @return array<string, array{0: class-string<object>}>
+     */
+    public static function callbackControllerClasses(): array
+    {
+        return [
+            'github callback' => [GithubCallbackController::class],
+            'oidc callback' => [OidcCallbackController::class],
+        ];
     }
 
     /**

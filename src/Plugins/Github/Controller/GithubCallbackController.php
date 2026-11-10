@@ -13,6 +13,7 @@ namespace Phlix\Plugins\Github\Controller;
 
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\PasswordChangeRequiredException;
 use Phlix\Auth\UserIdentityRepository;
@@ -49,7 +50,9 @@ use Workerman\MySQL\Connection;
  *    completed callback to a victim's browser and hand them a session for
  *    someone else's account ({@see StateCorrelation}, review r1 Finding 2);
  *  - a same-origin redirect ALLOWLIST on the return target ({@see isSafeRedirectTarget()});
- *  - session delivery as HttpOnly+Secure cookies, never tokens in the URL;
+ *  - session delivery as HttpOnly+Secure cookies, never tokens in the URL,
+ *    gated by the shared {@see CookiePolicy} seam (§7 master switch + §2.1
+ *    custody; w28L1 R2);
  *  - provider-scoped account resolution
  *    ({@see UserRepository::findOrCreateByExternalId()} with provider `github`);
  *  - request-path self-heal of the per-worker provider registry;
@@ -91,6 +94,16 @@ final class GithubCallbackController
      * (and unit tests) keep working; production DI binds it.
      */
     private ?GithubPlugin $plugin;
+
+    /**
+     * The auth-cookie policy seam (w28L1 R2, DD M2): the SAME
+     * {@see CookiePolicy} the /auth arms consult governs this mint — the
+     * `auth.cookie.enabled` master switch (§7 rollback), the §2.1 custody
+     * classification, and the Secure-bit twin. Optional with a store-less
+     * default so hand-built test constructions keep working; production DI
+     * binds the container singleton.
+     */
+    private CookiePolicy $cookiePolicy;
 
     /** Provider family + default single-instance sentinel for GitHub. */
     private const string GITHUB_PROVIDER = 'github';
@@ -139,6 +152,7 @@ final class GithubCallbackController
         ?AuthProviderBootstrapper $bootstrapper = null,
         ?UserIdentityRepository $identities = null,
         ?GithubPlugin $plugin = null,
+        ?CookiePolicy $cookiePolicy = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
@@ -146,6 +160,7 @@ final class GithubCallbackController
         $this->bootstrapper = $bootstrapper;
         $this->identities = $identities;
         $this->plugin = $plugin;
+        $this->cookiePolicy = $cookiePolicy ?? new CookiePolicy();
 
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -503,7 +518,7 @@ final class GithubCallbackController
             $response = $this->clearCorrelation(
                 (new Response())->status(302)->header('Location', $redirectUri),
             );
-            $this->attachAuthCookies($response, $tokens);
+            $this->attachAuthCookies($response, $tokens, $request);
 
             return $response;
         } catch (\Throwable $e) {
@@ -879,14 +894,50 @@ final class GithubCallbackController
     }
 
     /**
-     * Attach the minted session as HttpOnly cookies (never URL tokens), matching
-     * {@see AuthController::attachAuthCookies()} / the OIDC callback.
+     * Attach the minted session as HttpOnly cookies (never URL tokens) — through
+     * the SAME {@see CookiePolicy} seam {@see AuthController::attachAuthCookies()}
+     * uses (w28L1 R2, DD M2). Three laws govern the attach:
+     *
+     *  - §7 master switch: `auth.cookie.enabled=false` suppresses the pair on
+     *    THIS path too (before this round the callback ignored the lever and
+     *    persisted a session anyway — the rollback was a no-op here);
+     *  - §2.1 custody: a device marker or a non-same-site Origin classifies the
+     *    exchange bearer-side, and bearer-class responses never receive
+     *    Set-Cookie. formEra=true: a top-level IdP redirect back to
+     *    /auth/github/callback is the form-era browser surface by construction
+     *    (no fetch metadata accompanies it), so the browser-class limb is the
+     *    shipped posture and the two vetoes above remain the only demotion path;
+     *  - CD-3a Secure bit: {@see CookiePolicy::cookiesSecure()} — the env
+     *    switch now joins its stored `auth.cookie.insecure` twin (the previous
+     *    bare `getenv('PHLIX_COOKIE_INSECURE')` read honored only the env form).
+     *
+     * The §2.4 scheme gate is deliberately NOT applied on this surface: the
+     * callback's redirect target is decided by the IdP round trip, and gating
+     * issuance on X-Forwarded-Proto here would change the shipped LAN-https
+     * behavior beyond the DD's enumerated deltas (banked follow-up row in the
+     * round-2 register for a wave aligning scheme across surfaces).
      *
      * @param array<string, string> $tokens access_token + refresh_token pair.
      */
-    private function attachAuthCookies(Response $response, array $tokens): void
+    private function attachAuthCookies(Response $response, array $tokens, Request $request): void
     {
-        $secure = getenv('PHLIX_COOKIE_INSECURE') !== '1';
+        if (!$this->cookiePolicy->cookieModeEnabled()) {
+            return;
+        }
+
+        if (
+            $this->cookiePolicy->custodyMode(
+                true,
+                $request->getHeader('X-Phlix-Device-Type'),
+                $request->getHeader('Origin'),
+                $request->getHeader('Host'),
+                $request->getHeader('Sec-Fetch-Site'),
+            ) !== CookiePolicy::MODE_COOKIE
+        ) {
+            return;
+        }
+
+        $secure = $this->cookiePolicy->cookiesSecure();
 
         $response->cookie(
             AuthController::SESSION_COOKIE,

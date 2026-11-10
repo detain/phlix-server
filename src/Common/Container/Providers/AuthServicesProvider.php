@@ -508,7 +508,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
                 ->constructorParameter('bootstrapper', get(AuthProviderBootstrapper::class))
                 ->constructorParameter('identities', get(UserIdentityRepository::class))
-                ->constructorParameter('plugin', get(\Phlix\Plugins\Github\Plugin::class)),
+                ->constructorParameter('plugin', get(\Phlix\Plugins\Github\Plugin::class))
+                // w28L1 R2 (DD M2): the callback mint shares the /auth arms'
+                // policy seam. Optional ctor param PHP-DI would skip — without
+                // the binding the lever is inert on this surface (guarded by
+                // CookiePolicyWiringGuardTest).
+                ->constructorParameter('cookiePolicy', get(CookiePolicy::class)),
 
             // S48 review r1 Finding 3: `bootstrapper` lets a settings save rebuild
             // the live provider in this worker instead of leaving it authenticating
@@ -542,7 +547,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // operator-configured ABSOLUTE redirect_uri. A relative one can
                 // never match a registered IdP redirect URI, so without this the
                 // authorize page answers redirect_uri_mismatch.
-                ->constructorParameter('plugin', get(\Phlix\Plugins\Oidc\Plugin::class)),
+                ->constructorParameter('plugin', get(\Phlix\Plugins\Oidc\Plugin::class))
+                // w28L1 R2 (DD M2): the callback mint shares the /auth arms'
+                // policy seam. Optional ctor param PHP-DI would skip — without
+                // the binding the lever is inert on this surface (guarded by
+                // CookiePolicyWiringGuardTest).
+                ->constructorParameter('cookiePolicy', get(CookiePolicy::class)),
 
             // S45/S47: the authenticated account-linking endpoints (list, link
             // LDAP, and the S47 DELETE unlink). `bootstrapper` + `userRepository`

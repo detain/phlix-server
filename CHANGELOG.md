@@ -411,6 +411,30 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The local-address discovery probe now has one home.** `NatPmpClient`,
+  `StunClient`, `UpnpIgdClient` and `PortForwardService` each carried a
+  byte-identical copy of the `getLocalIpAddress()` / `getLocalIpViaUdpSocket()`
+  pair — the interface scan gated on
+  `FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE`, the S146/S197
+  coroutine probe, and the blocking `fsockopen('8.8.8.8', 53)` fallback — plus
+  an identical `inCoroutine()` predicate. The scan and probe bodies moved
+  verbatim into `src/Network/LocalAddressProbe.php` (178 lines, one home); each
+  class keeps its own scan-then-probe step and delegates the probe through a
+  closure that still calls its own `createCoroutineSocket()`, so the documented
+  override seam is untouched and behavior is identical. 300 lines of copies
+  came out of the four classes (measured diffstat); `NatPmpClient`'s
+  now-orphaned private `inCoroutine()` was deleted with its last call site.
+  The `CoroutineSocketFailureContainmentTest` family still drives all four
+  sites through their delegates (it now names the helper), the coroutine-fork
+  inventory map in `ForkInventoryGuardTest` rotated 30 files to 27 in the same
+  commit, and `LocalAddressProbeTest` pins the edge-shape decision table
+  (IPv6 zone ids, bracketed hosts, `0.0.0.0`, all loopback classes), the
+  measured allow-lists for the remaining `net_get_interfaces`/`8.8.8.8`
+  carriers, and the last-colon fallback parse. `PortForwardService`'s
+  `discoverGateway()` LAN-prefix read and `SsdpAdvertiser`'s distinct probe
+  deliberately stayed put — different contracts, not copies.
+  [SH-007 / server__srphp#3, w22L2 2026-11-10]
+
 - **The SyncPlay dialect catalog cites its SSOT.** The header docblocks of
   `src/Session/SyncPlay/Messages.php` and `SyncPlayManager.php` now name
   `Phlix\Shared\Relay\SyncPlayDialect` (landed in phlix-shared master) as the

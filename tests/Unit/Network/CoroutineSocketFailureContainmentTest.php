@@ -74,6 +74,18 @@ use RuntimeException;
  * `\Error` case is real, and `probeViaCoroutineSocket()` in the same file already
  * catches `\Throwable` for exactly these reasons — but nobody should read a green
  * suite here as "a swoole socket failure is now survivable".
+ *
+ * ## SH-007 (2026-11-10) — WHAT MOVED SINCE THIS WAS WRITTEN
+ *
+ * The four copy-pasted `getLocalIpViaUdpSocket()` bodies (sites 1-4) now live in
+ * one place: `src/Network/LocalAddressProbe.php`, whose `udpProbeAddress()` holds
+ * the single try-block and `localInterfaceAddress()` holds the scan
+ * that feeds it. The four classes (NatPmpClient, PortForwardService, StunClient,
+ * UpnpIgdClient) delegate to LocalAddressProbe through a closure that calls their
+ * own `createCoroutineSocket()`, so every seam below still fires exactly once and
+ * each site's assertions are unchanged in substance — they now convict the shared
+ * helper through the delegate instead of four byte-identical copies. Site 5
+ * (`PortForwardService::findGatewayForIp()`) keeps its own try-block by design.
  */
 class CoroutineSocketFailureContainmentTest extends TestCase
 {
@@ -153,11 +165,14 @@ class CoroutineSocketFailureContainmentTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
-    // Site 1..4 — getLocalIpViaUdpSocket(), copy-pasted into four classes.
+    // Site 1..4 — getLocalIpViaUdpSocket(), copy-pasted into four classes
+    // (SH-007: all four now delegate to LocalAddressProbe::udpProbeAddress()).
     // -----------------------------------------------------------------------
 
     /**
-     * The four classes that carry a copy of getLocalIpViaUdpSocket().
+     * The four classes that carry a copy of getLocalIpViaUdpSocket() — since
+     * SH-007 each copy is a delegate onto the shared LocalAddressProbe helper,
+     * so this provider drives the shared code through every historical site.
      *
      * @return array<string, array{0: class-string, 1: class-string<PlantsSocketFailures>}>
      */
@@ -298,6 +313,10 @@ class CoroutineSocketFailureContainmentTest extends TestCase
         $this->assertSame(1, $client->seamCalls());
         $this->assertSame(1, $socket->closeCalls, 'the socket must be closed exactly once, not twice');
         $this->assertNullOrString($captured['result']);
+        // SH-007: the empty host must fall through to the blocking probe (or null),
+        // never be returned as the local address — this is the mutation point for
+        // dropping the `$host !== ''` arm in the shared LocalAddressProbe helper.
+        $this->assertNotSame('', $captured['result'], 'a blank local address must never reach callers');
     }
 
     /**

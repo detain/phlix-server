@@ -60,6 +60,15 @@ use PHPUnit\Framework\TestCase;
  * arms for every input without inventing a new contract). The contract test
  * `CoroutineShellExecDivergenceContractTest` pins the three-arm shape and
  * fails on drift.
+ *
+ * SH-007 (2026-11-10) — the four `src/Network` discovery classes that carried
+ * copy-pasted forks (NatPmpClient, PortForwardService, StunClient, UpnpIgdClient)
+ * consolidated their probe arms into `src/Network/LocalAddressProbe.php`; the
+ * inventory moved 30 files -> 27 on this change (measured from the map at
+ * parent 657b83a0), and the single remaining Network fork site is
+ * the helper itself, covered by `CoroutineSocketFailureContainmentTest` driving
+ * the delegates. The historical per-file figures above are kept verbatim as
+ * recorded on 2026-08-25.
  */
 final class ForkInventoryGuardTest extends TestCase
 {
@@ -101,10 +110,10 @@ final class ForkInventoryGuardTest extends TestCase
         ],
         'src/Media/Transcoding/TranscodeManager.php' => ['tests/Unit/Media/Transcoding/TranscodeManagerTest.php'],
         'src/Network/CoroutineSocketGuard.php' => ['tests/Unit/Network/CoroutineSocketGuardTest.php'],
-        'src/Network/NatPmpClient.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
-        'src/Network/PortForwardService.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
-        'src/Network/StunClient.php' => ['tests/Unit/Network/StunClientTest.php'],
-        'src/Network/UpnpIgdClient.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
+        // SH-007: the four Network discovery classes delegated their coroutine
+        // probe arms to LocalAddressProbe; the fork site consolidated here and
+        // CoroutineSocketFailureContainmentTest drives it through the delegates.
+        'src/Network/LocalAddressProbe.php' => ['tests/Unit/Network/CoroutineSocketFailureContainmentTest.php'],
         'src/Plugins/Catalog/PluginCatalogService.php' => ['tests/Unit/Plugins/Catalog/PluginCatalogServiceTest.php'],
         'src/Plugins/OAuth2/OAuth2HttpClient.php' => [
             'tests/Unit/Plugins/OAuth2/OAuth2HttpClientCoroutineForkTest.php',

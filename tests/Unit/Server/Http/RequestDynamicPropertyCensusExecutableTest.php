@@ -1182,7 +1182,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // sentinel-driven legs for the unit-reachable admin 5xx arms, token-walked
     // structural leg over the nine cured classes, per-class generic-copy pins);
     // 2074 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2074;
+    // +2 2074→2076: w22L2 SH-007 adds src/Network/LocalAddressProbe.php (the
+    // consolidated interface-scan/coroutine-probe/blocking-fallback family,
+    // fork site of record in ForkInventoryGuardTest) and tests/Unit/Network/
+    // LocalAddressProbeTest.php (edge-shape table, delegate-parity and
+    // measured allow-list pins); 2076 measured from the phpunit red, not
+    // predicted.
+    private const EXPECTED_PHP_FILES = 2076;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

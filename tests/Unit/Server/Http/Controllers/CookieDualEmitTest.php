@@ -14,6 +14,10 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\CookiePolicy;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
@@ -41,6 +45,18 @@ use PHPUnit\Framework\TestCase;
  * between the browser arm and the device arm of the same AuthManager
  * payload — the central non-regression law: legacy bearer-only clients see
  * identical JSON no matter what the cookie ride adds.
+ *
+ * CP-008 (§7 "full dual-emit/dual-clear matrix") extends the class with the
+ * two axes the CP-003 era left as contains-string approximations: the
+ * Set-Cookie LINES themselves are pinned byte-exact on every emit and clear
+ * arm (attribute set AND order as the vendor serializer composes them —
+ * Max-Age, no Expires limb, Path, Secure-by-scheme-law, HttpOnly, SameSite,
+ * no Partitioned limb: the absence pins are measured facts about the shipped
+ * encoder, not omissions), and the CP-005 grace window is pinned THROUGH the
+ * controller — re-delivery inside the window re-emits the identical pair to
+ * the byte, the bearer path inside the window stays cookie-free (the memo
+ * itself never emits: emission remains classification-gated), and a
+ * watermark strike mid-window answers the 401 envelope with ZERO Set-Cookie.
  */
 class CookieDualEmitTest extends TestCase
 {
@@ -391,6 +407,313 @@ class CookieDualEmitTest extends TestCase
         $lines = $this->setCookieLines($response);
         $session = $this->findCookieLine($lines, AuthController::SESSION_COOKIE);
         $this->assertStringContainsString('Secure', $session);
+    }
+
+    // ── CP-008: byte-exact emit/clear lines (§7 dual-emit/dual-clear matrix) ──
+
+    public function testBrowserJsonLoginCookieLinesAreByteExactSecureArm(): void
+    {
+        $controller = new AuthController($this->loginManager());
+
+        $response = $controller->login($this->browserRequest(), []);
+
+        $this->assertSame(
+            $this->expectedPairLines('access-tok', 'refresh-tok', 3600, 604800, secure: true),
+            $this->setCookieLines($response),
+            'the FULL line (attribute set AND order) is the wire contract',
+        );
+    }
+
+    public function testInsecureOverrideLoginCookieLinesAreByteExactWithoutSecure(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE=1');
+        try {
+            $controller = new AuthController($this->loginManager());
+
+            $response = $controller->login($this->browserRequest(), []);
+
+            $this->assertSame(
+                $this->expectedPairLines('access-tok', 'refresh-tok', 3600, 604800, secure: false),
+                $this->setCookieLines($response),
+            );
+        } finally {
+            putenv('PHLIX_COOKIE_INSECURE');
+        }
+    }
+
+    public function testFormLoginRedirectCookieLinesAreByteExactAlongsideTheLocation(): void
+    {
+        $controller = new AuthController($this->loginManager());
+
+        $response = $controller->login($this->loginFormRequest(), []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame(
+            $this->expectedPairLines('access-tok', 'refresh-tok', 3600, 604800, secure: true),
+            $this->setCookieLines($response),
+        );
+    }
+
+    public function testRefreshRotationCookieLinesAreByteExact(): void
+    {
+        $controller = new AuthController($this->refreshManager());
+
+        $request = $this->browserRequest('/api/v1/auth/refresh');
+        $request->cookies = [AuthController::REFRESH_COOKIE => 'old-refresh'];
+
+        $response = $controller->refresh($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(
+            $this->expectedPairLines('access-tok', 'refresh-tok', 3600, 604800, secure: true),
+            $this->setCookieLines($response),
+            'rotation re-emits the pair on the same byte-exact law as first issue',
+        );
+    }
+
+    public function testJsonLogoutClearLinesAreByteExactForBothNamesAt204(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('logout')->willReturnCallback(static function (): void {
+        });
+        $controller = new AuthController($authManager);
+
+        $request = $this->browserRequest('/api/v1/auth/logout');
+        $request->userId = 'u-1';
+
+        $response = $controller->logoutJson($request, []);
+
+        $this->assertSame(204, $response->statusCode);
+        $this->assertSame(
+            [
+                // MEASURED shipped shape: the clear retains Path/HttpOnly/SameSite
+                // but NOT Secure (Response::clearCookie() passes the attribute
+                // defaults). RFC 6265 expiry matches on name/domain/path, so the
+                // Secure-flag gap cannot strand the authed cookie — the pin
+                // records the fact so any re-shape becomes a disclosed change.
+                'phlix_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax',
+                'phlix_refresh=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax',
+            ],
+            $this->setCookieLines($response),
+        );
+    }
+
+    public function testFormLogoutClearLinesAreByteExactAt302(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('logout')->willReturnCallback(static function (): void {
+        });
+        $controller = new AuthController($authManager);
+
+        $request = $this->loginFormRequest();
+        $request->userId = 'u-1';
+
+        $response = $controller->logout($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $this->assertSame(
+            [
+                'phlix_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax',
+                'phlix_refresh=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax',
+            ],
+            $this->setCookieLines($response),
+            'both logout rails ship the identical dual-clear bytes',
+        );
+    }
+
+    public function testEveryEmitAndClearArmCarriesNeitherExpiresNorPartitionedLimb(): void
+    {
+        // §7's attribute checklist names Expires and Partitioned: the shipped
+        // vendor serializer has NO limb for either (Max-Age carries the whole
+        // expiry law; Partitioned would need a vendor patch). Pinned as
+        // measured absence so "checked" is honest rather than silent.
+        $controller = new AuthController($this->loginManager());
+        $arms = [
+            'login' => $this->setCookieLines($controller->login($this->browserRequest(), [])),
+        ];
+
+        $refreshController = new AuthController($this->refreshManager());
+        $refreshRequest = $this->browserRequest('/api/v1/auth/refresh');
+        $refreshRequest->cookies = [AuthController::REFRESH_COOKIE => 'old-refresh'];
+        $arms['refresh'] = $this->setCookieLines($refreshController->refresh($refreshRequest, []));
+
+        $logoutManager = $this->createMock(AuthManager::class);
+        $logoutManager->method('logout')->willReturnCallback(static function (): void {
+        });
+        $arms['logout'] = $this->setCookieLines(
+            (new AuthController($logoutManager))->logoutJson($this->browserRequest('/api/v1/auth/logout'), [])
+        );
+
+        foreach ($arms as $site => $lines) {
+            $this->assertNotSame([], $lines, "premise: the {$site} arm emits lines at all");
+            foreach ($lines as $line) {
+                $this->assertStringNotContainsString('Expires', $line, "{$site} arm");
+                $this->assertStringNotContainsString('Partitioned', $line, "{$site} arm");
+            }
+        }
+    }
+
+    // ── CP-008: the CP-005 grace window THROUGH THE CONTROLLER (real AuthManager
+    // over a scripted repo — same harness as RefreshRotationGraceTest, whose
+    // manager-level pins stay authoritative for guard ORDER; these legs pin the
+    // HTTP consequence: which bytes ride the re-delivery) ──────────────────────
+
+    public function testGraceWindowReissueRedeliversTheIdenticalCookiePairToTheByte(): void
+    {
+        $jwt = $this->graceJwt();
+        $controller = new AuthController($this->graceManager($jwt, static fn (): array => ['status' => 'active', 'tokensNotValidAfter' => 0]));
+        $seedToken = $jwt->createRefreshToken('user-1');
+
+        $first = $controller->refresh($this->graceRefreshRequest($seedToken), []);
+        $second = $controller->refresh($this->graceRefreshRequest($seedToken), []);
+
+        $this->assertSame(200, $first->statusCode);
+        $this->assertSame(200, $second->statusCode);
+
+        $firstLines = $this->setCookieLines($first);
+        $secondLines = $this->setCookieLines($second);
+        $this->assertNotSame([], $firstLines, 'premise: the browser-class rotation emits');
+
+        $session = $this->findCookieLine($firstLines, AuthController::SESSION_COOKIE);
+        $this->assertStringNotContainsString(
+            $seedToken,
+            $session,
+            'premise: this really is a rotation — the jar carries the NEW refresh lineage'
+        );
+        $this->assertSame(
+            $firstLines,
+            $secondLines,
+            'inside the grace window the re-delivery is the IDENTICAL pair — a second mint '
+            . 'would move the refresh cookie value and redden this pin',
+        );
+    }
+
+    public function testGraceWindowRedeliveryOnTheBearerPathEmitsZeroCookieLines(): void
+    {
+        // "the grace memo never emits": memoized re-delivery answers the body
+        // token identically on the device-class path WITHOUT Set-Cookie — a
+        // memo shortcut that attached cookies from the cached pair (bypassing
+        // classification) reddens exactly this leg.
+        $jwt = $this->graceJwt();
+        $manager = $this->graceManager($jwt, static fn (): array => ['status' => 'active', 'tokensNotValidAfter' => 0]);
+        $seedToken = $jwt->createRefreshToken('user-1');
+
+        $browser = (new AuthController($manager))->refresh($this->graceRefreshRequest($seedToken), []);
+        $this->assertNotSame([], $this->setCookieLines($browser), 'premise: the pair is memoized by a browser-class rotation');
+
+        $deviceRequest = new Request();
+        $deviceRequest->path = '/api/v1/auth/refresh';
+        $deviceRequest->body = ['refresh_token' => $seedToken];
+
+        $device = (new AuthController($manager))->refresh($deviceRequest, []);
+
+        $this->assertSame(200, $device->statusCode);
+        $this->assertSame($browser->body, $device->body, 'the grace pair re-delivers body-identically');
+        $this->assertSame([], $this->setCookieLines($device), 'the bearer path stays cookie-free even inside the window');
+    }
+
+    public function testWatermarkStrikeInsideGraceWindowAnswers401WithZeroCookieLines(): void
+    {
+        // RefreshRotationGraceTest proves the guard-before-memo ORDER at the
+        // manager; this leg proves the HTTP consequence: the struck client
+        // gets the uniform 401 envelope and NO cookie bytes (not even the
+        // memoized pair it had a second ago).
+        $jwt = $this->graceJwt();
+        $watermark = 0;
+        $manager = $this->graceManager($jwt, static function () use (&$watermark): array {
+            return ['status' => 'active', 'tokensNotValidAfter' => $watermark];
+        });
+        $seedToken = $jwt->createRefreshToken('user-1');
+
+        $first = (new AuthController($manager))->refresh($this->graceRefreshRequest($seedToken), []);
+        $this->assertSame(200, $first->statusCode);
+
+        $watermark = time() + 10;
+        // Production's revoke path (AuthManager :2037) pairs the watermark
+        // write with this in-process cache bump; the 5s TTL would otherwise
+        // serve the pre-strike state (M-1 semantics, not a defect).
+        $manager->invalidateUserStatusCache('user-1');
+
+        $struck = (new AuthController($manager))->refresh($this->graceRefreshRequest($seedToken), []);
+
+        $this->assertSame(401, $struck->statusCode);
+        $this->assertSame(self::jsonBody(['error' => 'Token has been revoked']), $struck->body);
+        $this->assertSame([], $this->setCookieLines($struck));
+    }
+
+    /**
+     * @return array{0: string, 1: string} the byte-exact pair, in emit order
+     *         (session first — the order attachAuthCookies() attaches).
+     */
+    private function expectedPairLines(
+        string $access,
+        string $refresh,
+        int $accessMaxAge,
+        int $refreshMaxAge,
+        bool $secure
+    ): array {
+        // Shape MEASURED against the vendor serializer (workerman Response::cookie)
+        // at f82380d6: name=rawurlencode(value); Max-Age; Path; Secure; HttpOnly;
+        // SameSite — in that composition order, Expires/Partitioned never.
+        $tail = '; Max-Age=%d; Path=/' . ($secure ? '; Secure' : '') . '; HttpOnly; SameSite=Lax';
+
+        return [
+            AuthController::SESSION_COOKIE . '=' . rawurlencode($access) . sprintf($tail, $accessMaxAge),
+            AuthController::REFRESH_COOKIE . '=' . rawurlencode($refresh) . sprintf($tail, $refreshMaxAge),
+        ];
+    }
+
+    private function graceJwt(): JwtHandler
+    {
+        return new JwtHandler('cp008-grace-through-controller-12345', 'HS256', 3600, 604800);
+    }
+
+    /**
+     * @param \Closure(): array{status: ?string, tokensNotValidAfter: int} $authState
+     */
+    private function graceManager(JwtHandler $jwt, \Closure $authState): AuthManager
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->willReturnCallback($authState);
+        $repo->method('findById')->willReturn([
+            'id' => 'user-1',
+            'username' => 'grace',
+            'status' => 'active',
+        ]);
+        $repo->method('mustChangePassword')->willReturn(false);
+
+        return new AuthManager(
+            $repo,
+            $jwt,
+            $this->createMock(AuditLogger::class),
+            $this->graceLogger(),
+        );
+    }
+
+    private function graceLogger(): StructuredLogger
+    {
+        return new StructuredLogger('test', [
+            'handlers' => [
+                'stream' => [
+                    'type' => 'stream',
+                    'path' => sys_get_temp_dir() . '/phlix_cp008_grace_' . uniqid('', true) . '.log',
+                    'level' => 'debug',
+                ],
+            ],
+            'processors' => [
+                'context' => true,
+                'request_id' => false,
+                'user_id' => false,
+            ],
+        ]);
+    }
+
+    private function graceRefreshRequest(string $seedToken): Request
+    {
+        $request = $this->browserRequest('/api/v1/auth/refresh');
+        $request->body = ['refresh_token' => $seedToken];
+
+        return $request;
     }
 
     /** @param array<string, mixed> $payload */

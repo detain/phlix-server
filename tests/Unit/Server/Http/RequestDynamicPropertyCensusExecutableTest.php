@@ -1206,7 +1206,16 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // telemetry/rejection redaction legs, bearer/cookie byte-identity under
     // both dispositions, fail-open parse table, config-surface env seam);
     // 2085 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2085;
+    // +3 2085→2088: w31L1 CP-008 adds tests/Support/ws-cookie-handshake-server.php
+    // (the proc_open'd production WebSocketServer harness), tests/Integration/
+    // Server/WebSocket/CookieWsHandshakeRealSocketTest.php (the REAL two-socket
+    // carrier matrix: bearer > admitted-cookie > query over the wire, Origin-gate
+    // fail-closed, marker-echo-on-accepted-carrier-only, CP-007 gate postures,
+    // redacted-logging on real rejection paths) and tests/Unit/Server/Http/
+    // CsrfMatrixTest.php (the dispatch-layer verb×carrier×Origin belt matrix
+    // incl the Sec-Fetch belt and both parse-false convictions, byte-exact
+    // shared 403 envelope); 2088 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2088;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1677,7 +1686,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // $request->profileId in authedRequest() for the by-marker legs (three
     // whole-property writes on a recognized root). Zero src/ writes added.
     // Measured from the phpunit red (1212), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1223;
+    // +7 1223→1230 (CP-008, w31L1): seven whole-property Request-root seeds in
+    // the CookieDualEmitTest grace/watermark additions ($deviceRequest->path+
+    // body, $refreshRequest->cookies, $request->cookies/body and the two
+    // $request->userId seeds the bearer-path re-delivery leg needs). The three
+    // NEW files contribute ZERO (CsrfMatrixTest drives raw request lines; the
+    // real-socket harness speaks on wires, not on Request objects). The 1212→
+    // 1223 band carried no rungs when this lane measured (the documented
+    // missing-step pattern named at the file's 671-note); this rung states the
+    // full delta from the measured red, not a reconstruction of the band.
+    // Zero src/ writes added. Measured from the phpunit red (1230), not
+    // predicted.
+    private const EXPECTED_DECLARED_WRITES = 1230;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

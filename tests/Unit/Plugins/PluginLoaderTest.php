@@ -1275,6 +1275,66 @@ final class PluginLoaderTest extends TestCase
         self::assertNull($captured['optional_no_def']);
     }
 
+    public function test_install_materialises_typeless_declared_settings(): void
+    {
+        // w24L2-R2 unconvicted-leg pin (REVIEW-w24L2server.md Major):
+        // phlix-shared v0.54.0 narrowed the typed `$settings` view to
+        // descriptors carrying a string `type`, silently dropping typeless
+        // declarations from it. defaultSettings() must therefore read
+        // through SettingsMasker::declaredSettings() — the AGENTS.md
+        // key-set contract ("the materialised array's key-set is always
+        // identical to the manifest's declared key-set") holds for
+        // typeless declarations too, or their keys vanish from the
+        // install-time settings array. Mutation-verified: stripping the
+        // adapter call back to the raw typed view fails THIS test only
+        // (the typeless keys disappear from the materialised key-set).
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-typeless',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'notifier',
+            'entry' => FakeLifecyclePlugin::class,
+            'settings' => [
+                'retries' => ['type' => 'int', 'default' => 5],
+                'note'    => ['label' => 'Note'],   // no 'type' — typed view drops it
+                'apiKey'  => ['secret' => true],    // no 'type' — secret flag lives raw
+            ],
+        ]);
+
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+
+        $captured = null;
+        $this->expect($this->repository, 'insert')
+            ->once()
+            ->with(
+                Mockery::any(),
+                false,
+                Mockery::on(function ($defaults) use (&$captured): bool {
+                    $captured = $defaults;
+                    return is_array($defaults);
+                }),
+            );
+
+        $this->makeLoader()->installFromDirectory('/x');
+
+        // Declared key-set parity INCLUDES typeless keys, in manifest order.
+        self::assertSame(
+            ['retries', 'note', 'apiKey'],
+            array_keys((array) $captured),
+        );
+        self::assertSame(5, $captured['retries']);
+        self::assertArrayHasKey('note', (array) $captured);
+        self::assertNull($captured['note']);
+        // The typeless SECRET key gets its slot too: a plugin may hold a
+        // credential the operator has not filled in yet — hiding the key
+        // from the materialised set would also hide it from the settings UI.
+        self::assertArrayHasKey('apiKey', (array) $captured);
+        self::assertNull($captured['apiKey']);
+    }
+
     public function test_bootstrapEnabled_logs_errors_for_broken_plugins_and_continues(): void
     {
         $manifest = $this->manifest();

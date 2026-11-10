@@ -1115,4 +1115,91 @@ final class PluginAdminControllerTest extends TestCase
         self::assertStringContainsString('[E2W-PA-MARKER]', $log);
         self::assertStringNotContainsString($secret, $log, 'the submitted secret is scrubbed before logging');
     }
+
+    // ------------------------------------------------------------------
+    // w24L2-R2 (REVIEW-w24L2server.md Major): redactSubmittedSecrets() must
+    // read declared-ness through SettingsMasker::declaredSettings(), NOT
+    // shared v0.54.0's narrowed typed `$settings` view. A typeless
+    // `secret: true` descriptor is invisible to the typed view, and a short
+    // credential (below REDACT_MIN_LENGTH = 8) is invisible to the
+    // length floor — the declaredSecret branch is the ONLY thing standing
+    // between the just-submitted key and the server-side log. This is the
+    // credential-leak face the S51/E2 program exists to close; it was
+    // mutation-verified: stripping the adapter call back to the raw typed
+    // lookup fails THIS test only (the secret reappears in the log line).
+    // ------------------------------------------------------------------
+
+    public function test_test_credentials_scrubs_short_secret_on_typeless_descriptor(): void
+    {
+        LoggerFactory::reset();
+        $dir = sys_get_temp_dir() . '/phlix_e2k_pa_log_' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $this->e2wLoggerDirs[] = $dir;
+        $logPath = $dir . '/app.log';
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php\nreturn [\n"
+            . "    'default' => 'file',\n"
+            . "    'handlers' => [\n"
+            . "        'file' => [\n"
+            . "            'type' => 'stream',\n"
+            . "            'path' => " . var_export($logPath, true) . ",\n"
+            . "            'level' => 'debug',\n"
+            . "        ],\n"
+            . "    ],\n"
+            . "];\n"
+        );
+        LoggerFactory::init($dir . '/logger.php');
+
+        $secret = 'E2K7XQ'; // 6 chars: under REDACT_MIN_LENGTH — length floor can't catch it
+        $marker = 'auth failed for key [E2K-PA-MARKER]';
+
+        $entry = new class ($marker, $secret) {
+            public function __construct(private string $marker, private string $secret)
+            {
+            }
+
+            /** @param array<string, mixed> $settings */
+            public function testCredentials(array $settings): string
+            {
+                // Third-party plugin code embedding the submitted key in the
+                // exception text, exactly as OMDb-shaped URI-carrying clients
+                // do — but with the typeless-manifest shape v0.54.0 hides.
+                throw new \RuntimeException($this->marker . ' (sent key ' . $this->secret . ')');
+            }
+        };
+
+        $this->expectCall($this->loader, 'getInstalled')
+            ->with('phlix-plugin-demo')
+            ->andReturn($this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: true,
+                manifestSettings: ['token' => ['secret' => true]], // no 'type' key
+            ));
+        $this->expectCall($this->loader, 'getEntryInstance')
+            ->with('phlix-plugin-demo')
+            ->andReturn($entry);
+
+        $response = $this->controller->testCredentials(
+            $this->makeRequest('admin-1', ['settings' => ['token' => $secret]]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(
+            ['success' => false, 'message' => 'Credential test failed.'],
+            $this->decode((string) $response->body),
+        );
+        self::assertStringNotContainsString('E2K-PA-MARKER', (string) $response->body);
+        self::assertStringNotContainsString($secret, (string) $response->body);
+
+        $log = (string) file_get_contents($logPath);
+        self::assertStringContainsString('Plugin credential test failed: phlix-plugin-demo', $log);
+        self::assertStringContainsString('[E2K-PA-MARKER]', $log);
+        self::assertStringNotContainsString(
+            $secret,
+            $log,
+            'a typeless declared secret below the length floor is still scrubbed',
+        );
+    }
 }

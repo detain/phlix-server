@@ -22,7 +22,7 @@ use PHPUnit\Framework\TestCase;
  * `configuredSocketBaseUrl()` / `configuredSocketBasePath()`), with the
  * server's own env-var convention: `PHLIX_WS_URL` / `PHLIX_WS_PATH`.
  *
- * Pinned behaviours:
+ * Pinned behaviors:
  *  1. the grammar arms (accepted origins/paths verbatim; everything else
  *     fail-soft to null — unset, blank, whitespace, non-ws scheme, embedded
  *     path/query/userinfo, bare `//host`, out-of-range ports);

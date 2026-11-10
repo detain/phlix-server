@@ -46,7 +46,9 @@ fetched afterwards from TMDB/TVDB (and any provider plugins you enable);
 
 Fetching that art needs a (free) TMDB API key: pass `--tmdb-api-key` to the
 installer, or save it later in **Admin → Settings → Metadata** — without a
-key, only local NFO metadata and artwork work.
+key, only local NFO metadata and artwork work. A key saved through the admin
+UI is read when the workers start, so restart the server to apply it (the
+settings screen flags such keys as needing a restart).
 
 ## 4. Add the household
 
@@ -101,7 +103,7 @@ reverse-proxy question, covered by
 
 | Term | Meaning here |
 |------|--------------|
-| **watch party / room / group** | One noun, three vocabularies: user copy says *watch party*, the REST/WS payloads say *group* and *room id*, internals say group. Same thing: a synced-playback party you join by id. |
+| **watch party / room / group** | One noun, three vocabularies: user copy says *room* ('Create room' / 'Join room' / 'Room ID'), the REST/WS payloads say *group* and *room id*, internals say group. Same thing: a synced-playback party you join by id. |
 | **SyncPlay** | The watch-party feature's name in the wire protocol and in the portal UI. |
 | **hub / relay** | The optional companion service (above) and the outbound tunnel your server dials so remote viewers can reach it. |
 | **profile** | Two kinds meet here: a *household profile* is the per-person viewer profile with rating caps and history (step 4); a *quality profile* is a playback-device preset (stream-limits API). The endpoints say which one they mean. |

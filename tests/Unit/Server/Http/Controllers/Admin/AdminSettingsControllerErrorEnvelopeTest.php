@@ -177,7 +177,10 @@ final class AdminSettingsControllerErrorEnvelopeTest extends TestCase
         );
 
         $this->assertSame(500, $response->statusCode);
-        $this->assertWireEnvelopeIsSanitized($response->body, 'Auth-method policy check failed');
+        $this->assertWireEnvelopeIsSanitized(
+            $response->body,
+            'Sign-in-method safety check could not run — no change was saved. Restore the database connection and retry.',
+        );
         // The logged exception is the WRAPPER class; its message is the
         // original SQL-bearing text, preserved verbatim (AuthMethodPolicy:384).
         $this->assertLogged(

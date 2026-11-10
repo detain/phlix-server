@@ -188,6 +188,9 @@ final class AuthProviderControllerDisableGuardTest extends TestCase
 
         $this->assertSame(500, $response->statusCode);
         $body = json_decode($response->body, true);
-        $this->assertSame('Auth-method policy check failed', $body['error']);
+        $this->assertSame(
+            'Sign-in-method safety check could not run — no change was saved. Restore the database connection and retry.',
+            $body['error'],
+        );
     }
 }

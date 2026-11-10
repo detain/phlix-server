@@ -208,7 +208,9 @@ final class HealthController
                     'status' => 'offline',
                     'measuredAt' => $measuredAt,
                     'stale' => true,
-                    'error' => 'Hub heartbeat state is stale — the phlix-hub-heartbeat worker is not running',
+                    // SH-042: the operator needs the symptom, the age, and the
+                    // remedy — not the internal fork's process name.
+                    'error' => 'Hub heartbeat has not reported since ' . $measuredAt . ' — restart the server.',
                 ]);
             }
 

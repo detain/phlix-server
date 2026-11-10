@@ -142,6 +142,12 @@ final class AdminRestartControllerTest extends TestCase
         $body = $this->decode($response->body);
         self::assertFalse($body['success']);
         self::assertSame('PID file not found', $body['error']);
+        // SH-042 (CW10): the message names the actual config knob instead of a
+        // nominalised abstraction, and is now pinned (previously unpinned).
+        self::assertSame(
+            'The server may not be running, or the pid-file path is wrong (config/server.php: worker.pid_file).',
+            $body['message'],
+        );
     }
 
     public function testRestartFailsWhenPidFileIsEmpty(): void

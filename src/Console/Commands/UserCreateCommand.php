@@ -18,19 +18,26 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Input\StreamableInputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Throwable;
 
+use function file_get_contents;
 use function filter_var;
+use function is_file;
+use function is_resource;
+use function is_readable;
 use function is_string;
 use function preg_match;
+use function rtrim;
+use function stream_get_contents;
 use function strlen;
 use function trim;
 
 use const FILTER_VALIDATE_EMAIL;
 
 /**
- * `user:create {username} --email= --password= [--display-name=]` — add an account.
+ * `user:create {username} --email= (--password= | --password-file=) [--display-name=]` — add an account.
  *
  * Applies the same field rules the admin HTTP surface
  * ({@see \Phlix\Server\Http\Controllers\Admin\AdminUserController::create()})
@@ -38,6 +45,11 @@ use const FILTER_VALIDATE_EMAIL;
  * the supplied plain password. A username collision or a duplicate email is
  * refused as `Command::INVALID` rather than surfacing as a database UNIQUE
  * violation.
+ *
+ * SH-032 secret hygiene: `--password=` lands the plain secret in shell
+ * history and every local `ps`/`/proc/<pid>/cmdline` reader. `--password-file=`
+ * (or `--password-file=-` to read a pipe/stdin) keeps it off argv; the two
+ * forms are alternatives, with an explicit non-empty `--password` winning.
  *
  * With `--json` the freshly created (non-secret) account summary is emitted
  * under the shared success envelope. The backing {@see UserRepository} is
@@ -76,7 +88,15 @@ final class UserCreateCommand extends Command
                 'password',
                 null,
                 InputOption::VALUE_REQUIRED,
-                'The plain password to set (required; hashed at rest)',
+                'The plain password to set (hashed at rest). Visible to shell history and ps —'
+                . ' prefer --password-file= for anything but throwaway local accounts',
+            )
+            ->addOption(
+                'password-file',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Read the password from this file instead of argv ("-" = stdin). A trailing'
+                . ' newline is trimmed. An explicit non-empty --password wins',
             )
             ->addOption(
                 'display-name',
@@ -100,8 +120,24 @@ final class UserCreateCommand extends Command
         $username = trim(is_string($usernameArg) ? $usernameArg : '');
         $email = trim(self::stringOption($input, 'email'));
         $password = self::stringOption($input, 'password');
+        $passwordFile = self::stringOption($input, 'password-file');
         $displayNameOption = self::stringOption($input, 'display-name');
         $displayName = $displayNameOption !== '' ? $displayNameOption : null;
+
+        // SH-032: a non-empty explicit --password wins; otherwise the secret
+        // may arrive through the file/stdin seam so it never touches argv.
+        if ($password === '' && $passwordFile !== '') {
+            $fromFile = self::passwordFromFile($input, $passwordFile);
+            if ($fromFile === null) {
+                return $this->fail(
+                    $input,
+                    $output,
+                    'Cannot read --password-file: ' . $passwordFile,
+                    Command::INVALID,
+                );
+            }
+            $password = $fromFile;
+        }
 
         // Mirror the admin controller's field rules exactly, in the same order,
         // so `--json` consumers get identical validation semantics over CLI.
@@ -180,10 +216,44 @@ final class UserCreateCommand extends Command
             return $this->fail($input, $output, 'Invalid email format.', Command::INVALID);
         }
         if ($password === '') {
-            return $this->fail($input, $output, 'A --password is required.', Command::INVALID);
+            return $this->fail(
+                $input,
+                $output,
+                'A password is required (--password= or --password-file=).',
+                Command::INVALID,
+            );
         }
 
         return null;
+    }
+
+    /**
+     * Read the secret from a file (or stdin for "-"), trimming one trailing
+     * newline pair so a saved `echo >file` password is byte-correct. Null when
+     * the source is unreadable — the caller renders the operator-facing error.
+     */
+    private static function passwordFromFile(InputInterface $input, string $path): ?string
+    {
+        if ($path === '-') {
+            $stream = $input instanceof StreamableInputInterface ? $input->getStream() : null;
+            if (is_resource($stream)) {
+                $data = stream_get_contents($stream);
+
+                return $data === false ? null : rtrim($data, "\r\n");
+            }
+
+            $data = @file_get_contents('php://stdin');
+
+            return $data === false ? null : rtrim($data, "\r\n");
+        }
+
+        if (!is_file($path) || !is_readable($path)) {
+            return null;
+        }
+
+        $data = @file_get_contents($path);
+
+        return $data === false ? null : rtrim($data, "\r\n");
     }
 
     /**

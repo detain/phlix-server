@@ -240,7 +240,10 @@ final class AuthProviderController
                 // pre-write try, keeping the dispatcher 500 shape unchanged.
                 return (new Response())->status(500)->json([
                     'success' => false,
-                    'error' => 'Auth-method policy check failed',
+                    // SH-042: same operator-facing copy as the admin settings
+                    // surface (byte-identical across both controllers).
+                    'error' => 'Sign-in-method safety check could not run — no change was saved.'
+                        . ' Restore the database connection and retry.',
                     'message' => $e->getMessage(),
                 ]);
             }

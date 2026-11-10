@@ -119,7 +119,9 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'PID file not found',
-                    'message' => 'The server may not be running, or the PID file setting is misconfigured',
+                    // SH-042 (CW10): name the knob an operator can actually check.
+                    'message' => 'The server may not be running, or the pid-file path is wrong'
+                        . ' (config/server.php: worker.pid_file).',
                 ]);
             }
 

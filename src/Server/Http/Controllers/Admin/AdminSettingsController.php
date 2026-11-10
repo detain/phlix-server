@@ -853,7 +853,9 @@ final class AdminSettingsController
 
             return (new Response())->status(500)->json([
                 'success' => false,
-                'error'   => 'Auth-method policy check failed',
+                // SH-042: operator-facing copy — symptom, state assurance, remedy.
+                'error'   => 'Sign-in-method safety check could not run — no change was saved.'
+                    . ' Restore the database connection and retry.',
                 'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }

@@ -21,8 +21,10 @@ namespace Phlix\Auth;
  * proposed map. The transaction is already rolled back when this surfaces,
  * so nothing was persisted; the wrapper carries the ORIGINAL message verbatim
  * (and keeps the previous exception for logs) so both HTTP surfaces keep
- * answering their byte-identical fail-closed 500 envelope
- * (`error: 'Auth-method policy check failed'`).
+ * answering their fail-closed 500 envelope. Since SH-042 the wire `error`
+ * reads 'Sign-in-method safety check could not run — no change was saved.
+ * Restore the database connection and retry.' (the raw exception text stays
+ * in the server logs only on the admin-PUT surface).
  *
  * The distinction from a plain rethrow is load-bearing: BEGIN/lock/persist/
  * COMMIT failures propagate UNWRAPPED so the surfaces keep classifying them

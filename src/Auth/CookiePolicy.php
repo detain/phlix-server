@@ -33,7 +33,9 @@ use Phlix\Admin\SettingsRepository;
  *     https or addressed localhost, or the operator opted into insecure
  *     cookies (`PHLIX_COOKIE_INSECURE=1` env or its stored twin
  *     `auth.cookie.insecure`, which ALSO drops the Secure attribute — there is
- *     never a silent Secure downgrade onto plain HTTP).
+ *     never a silent Secure downgrade onto plain HTTP). While PHLIX_ENV is
+ *     `production` an active opt-in warns once per process (SH-033): the
+ *     posture is dev-only, and silence was how it leaked into deployments.
  *
  * Reads settings exactly like {@see TokenTtlPolicy}: live per-call
  * getEffective() (an admin toggle takes effect on the next request), clamped
@@ -92,10 +94,18 @@ final class CookiePolicy
      * (already shipped) or its stored twin. True = the scheme gate is bypassed
      * AND the Secure attribute is dropped. Never enabled by default, never
      * inferred from anything else (CD-3a: no silent Secure downgrade).
+     *
+     * SH-033: under PHLIX_ENV=production an active opt-in is almost certainly
+     * misconfiguration, so it now warns once per process (see
+     * {@see warnProductionInsecureOnce()}). The opt-out remains honored —
+     * this is the same loud-warning posture as the DB-credential guard in
+     * config/database.php, not a hard block.
      */
     public function insecureOverride(): bool
     {
         if (getenv('PHLIX_COOKIE_INSECURE') === '1') {
+            self::warnProductionInsecureOnce('PHLIX_COOKIE_INSECURE=1');
+
             return true;
         }
 
@@ -104,10 +114,46 @@ final class CookiePolicy
         }
 
         try {
-            return $this->settings->getEffective(self::COOKIE_INSECURE_KEY) === true;
+            $stored = $this->settings->getEffective(self::COOKIE_INSECURE_KEY) === true;
         } catch (\Throwable) {
             return false;
         }
+
+        if ($stored) {
+            self::warnProductionInsecureOnce('auth.cookie.insecure');
+        }
+
+        return $stored;
+    }
+
+    /**
+     * One loud E_USER_WARNING per process when the insecure-cookie opt-in is
+     * active while PHLIX_ENV=production (exact-'production' scope, the same
+     * arm as config/database.php's DB-credential guard — deliberate
+     * non-unification, see that file's SH-024 note). Names the risk and the
+     * remedy; the opt-out itself still works.
+     *
+     * The $GLOBALS latch is the documented test seam (mirroring the
+     * __phlix_db_credentials_guard idiom) so a suite can re-arm per case.
+     */
+    private static function warnProductionInsecureOnce(string $source): void
+    {
+        if (getenv('PHLIX_ENV') !== 'production') {
+            return;
+        }
+
+        if (isset($GLOBALS['__phlix_cookie_insecure_production_warn'])) {
+            return;
+        }
+
+        $GLOBALS['__phlix_cookie_insecure_production_warn'] = true;
+
+        trigger_error(
+            $source . ' is active while PHLIX_ENV=production — auth cookies are issued WITHOUT'
+            . ' the Secure attribute and are readable on plain HTTP. Terminate TLS in front of'
+            . ' the server (see reverse-proxy/) and turn the insecure-cookie opt-in off',
+            E_USER_WARNING,
+        );
     }
 
     /**

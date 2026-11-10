@@ -377,7 +377,11 @@ final class HealthControllerTest extends TestCase
         $body = $this->decode($this->controller()->networkHealth($this->request(), [])->body);
         self::assertSame('offline', $body['status'], 'a frozen snapshot must not read as healthy');
         self::assertTrue($body['stale']);
-        self::assertStringContainsString('stale', (string) $body['error']);
+        // SH-042: the operator copy states the symptom, WHEN it was last seen,
+        // and the remedy — not the internal fork's name.
+        self::assertStringContainsString('has not reported', (string) $body['error']);
+        self::assertStringContainsString('restart the server', (string) $body['error']);
+        self::assertStringContainsString((string) $body['measuredAt'], (string) $body['error']);
         // The measurement itself is still reported — it is a true historical
         // fact — it just no longer describes the present.
         self::assertSame(12, $body['latencyMs']);

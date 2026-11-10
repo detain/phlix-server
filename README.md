@@ -21,8 +21,11 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Real-time SyncPlay**: Watch content together with friends
 - **Live TV Support**: DVR and guide integration
 - **Cast to TV**: Chromecast, AirPlay, Roku and DLNA renderers — per-protocol device discovery plus
-  full transport control (play/pause/seek/stop), each gated by `CastingEnabledMiddleware` on its
-  `casting.<protocol>.enabled` switch; triage in [A cast device is not found](#a-cast-device-is-not-found)
+  full transport control (play/pause/seek/stop). Chromecast/AirPlay/Roku routes sit behind
+  `CastingEnabledMiddleware` on their `casting.<protocol>.enabled` switches; the DLNA renderer
+  routes are auth-gated only — DLNA is configured separately by `dlna.enabled` (SSDP
+  advertisement, applied at worker start) and `dlna.cds_enabled` (LAN content browsing, off by
+  default); triage in [A cast device is not found](#a-cast-device-is-not-found)
 - **Transcoding**: On-the-fly media conversion via FFmpeg with automatic quality selection
 - **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists, normalized
   for browser playback — encoder-level detail under [HLS & transcoding](#hls--transcoding)
@@ -400,10 +403,11 @@ slips into a fresh server just because it is reachable.
 - **Naming layers**: the same concept is named per layer — on the **wire** it is a
   *group* (`/api/v1/syncplay/groups`, the `syncplay_create_group` event); in the
   **server internals** older prose says *room* (the `SyncPlayManager`/`GroupState`
-  docblocks in `src/Session/SyncPlay/`); in **user-facing copy** it is a
-  *watch party* (the feature line above). A one-noun consolidation is an open
-  owner decision — until it lands, this map is the translation table between
-  the three vocabularies.
+  docblocks in `src/Session/SyncPlay/`); in **user-facing copy** it is a *room* as
+  well (the portal says 'Create room' / 'Join room' / 'Room ID'; a few client strings
+  drift to 'watch group'), while this README and the docs prose call the feature a
+  *watch party*. A one-noun consolidation is an open owner decision — until it
+  lands, this map is the translation table between the vocabularies.
 
 #### Starting a watch party (portal walkthrough)
 
@@ -1145,7 +1149,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_SECRET_KEY` | — | **yes** | n/a (shell) | **docker-entrypoint alias** → exported as `JWT_SECRET` before the daemon starts; the PHP runtime never reads this name |
 | `PHLIX_SIGNED_URL_SECRET` | derives from `JWT_SECRET` (domain-separated) | **yes** | live | `src/Auth/SignedUrl.php` |
 | `PHLIX_SIGNED_URL_TTL` | `21600` s (6 h) | no | live | `src/Auth/SignedUrl.php` |
-| `PHLIX_COOKIE_INSECURE` | off | no | live | `AuthController` + OIDC/GitHub callback controllers — drops `Secure` on session cookies for plain-HTTP dev (never in production) |
+| `PHLIX_COOKIE_INSECURE` | off | no | live | `src/Auth/CookiePolicy.php` — the SSOT behind `AuthController` and the OIDC/GitHub callback minters; the OAuth2 plugin's state-cookie helpers (`src/Plugins/OAuth2/StateCorrelation.php`, `src/Plugins/OAuth2/CallbackUrl.php`) read the env directly. Drops `Secure` on auth cookies for plain-HTTP dev (stored twin: `auth.cookie.insecure`). Dev-only — under `PHLIX_ENV=production` an active opt-in warns once per process (SH-033) |
 | `PHLIX_TLS_ENABLED` | off | no | yes | `config/hub.php` — https vs wss scheme composition |
 
 #### Docker-entrypoint shell seams
@@ -1244,7 +1248,7 @@ quietly-broken cache is invisible until playback gets slow.
 
 | Variable | Default | Secret? | Restart | Consumed by |
 |----------|---------|---------|---------|-------------|
-| `TMDB_API_KEY` | _unset_ | **yes** | live | `MediaServicesProvider`, `TmdbApiKeyResolver` (DB admin-setting wins) |
+| `TMDB_API_KEY` | _unset_ | **yes** | yes (worker start) | `MediaServicesProvider`, `TmdbApiKeyResolver` (DB admin-setting wins) — the key is resolved once at worker start, so a newly saved `tmdb.api_key` applies on the next worker cycle (the schema declares it `restart:true`) |
 | `IMDB_ENABLED` | off | no | yes | `config/imdb.php` (config load at boot) |
 | `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` | `` | **yes** (secret) | yes (master switch) | `config/scrobblers/trakt.php` — empty client id = Trakt subsystem off at boot |
 | `TRAKT_REDIRECT_URI` | derived from `PHLIX_DOMAIN` | no | yes | `config/scrobblers/trakt.php` |
@@ -1354,9 +1358,10 @@ by the mechanism that reads it early:
   container). `RateLimitProfiles` itself reads no proxy env, and no proxy
   setting is frozen here.
 
-Everything else (metadata keys like `metadata.*`, `PHLIX_SIGNED_URL_*`,
-`PHLIX_CORS_ALLOWED_ORIGINS`, and the plugin gates read at each
-composer/install invocation) is resolved at runtime and applies to the next
+Everything else (metadata keys like `metadata.*` — but **not** the TMDB key,
+which is resolved at worker start; see its `TMDB_API_KEY` row above —
+`PHLIX_SIGNED_URL_*`, `PHLIX_CORS_ALLOWED_ORIGINS`, and the plugin gates read
+at each composer/install invocation) is resolved at runtime and applies to the next
 request/job without a restart. `TRUSTED_PROXIES` is runtime as well, with one
 split: the REST path builds a fresh `TrustedProxyResolver` on every request
 (`Request::getTrustedClientIp()`), so there a change applies at the next
@@ -1833,7 +1838,7 @@ User commands accept a username or an email wherever `<user>` appears.
 | `library:scan` | `<libraryId>`; `--rescan`, `--force` | Scan (or, with `--rescan`, re-read every file of) a library; `--force` starts even when a scan job is already queued/running |
 | `media:dedupe-paths` | `--dry-run` (default), `--apply`, `--batch-size=N` | Find/merge duplicate media items sharing a filesystem path (default 500 per batch) |
 | `user:list` | `--status=pending\|active\|disabled`, `--json` | List accounts, optionally one status cohort |
-| `user:create` | `<username>`; `--email=`, `--password=` (required), `--display-name=`, `--json` | Create an account (username 3–50 chars; password Argon2ID-hashed at rest). There is no admin flag — promote afterwards |
+| `user:create` | `<username>`; `--email=`, a password via `--password=` or `--password-file=` (`-` = stdin; one is required), `--display-name=`, `--json` | Create an account (username 3–50 chars; password Argon2ID-hashed at rest). Prefer `--password-file=-` — an explicit `--password=` lands in shell history and `/proc/<pid>/cmdline`; a non-empty `--password=` wins over the file form. There is no admin flag — promote afterwards |
 | `user:promote` | `<user>`; `--revoke`, `--json` | Toggle the admin flag (`--revoke` demotes; the last admin cannot be demoted) |
 | `user:reset-password` | `<user>`; `--password=` | Reset an account's password; prints a strong generated one when `--password` is omitted. Writes the password **hash**, stamps `tokens_not_valid_after` (every live session's tokens are revoked with the write), and clears `must_change_password` — one run is the full escape hatch from the admin force-change (see *Locked by the admin `reset-password` endpoint* below) |
 | `user:approve` | `<user>`; `--json` | Move a pending account to `active` |
@@ -1862,6 +1867,10 @@ talks to the database directly, so it works when web login does not.
 php bin/phlix user:reset-password admin            # generates and prints a new password
 php bin/phlix user:reset-password admin --password='pick-one'
 ```
+
+Prefer the generated form. An explicit `--password='…'` lands in shell history and is
+readable by every local `/proc/<pid>/cmdline` reader until the process exits — the same
+reason `user:create` accepts `--password-file=-` (stdin) as of SH-032.
 
 The reset re-hashes through the same `UserRepository` write path the HTTP admin surface
 uses — and, like every password write on that path, it stamps `tokens_not_valid_after`, so the
@@ -1910,7 +1919,7 @@ disclosed M-5 throttle semantics). Full recovery is ONE CLI step:
 `tokens_not_valid_after` stamp):
 
 ```bash
-php bin/phlix user:reset-password alice --password='pick-one'   # new hash + latch cleared
+php bin/phlix user:reset-password alice            # new hash + latch cleared; strong password printed
 ```
 
 **Auth-method lock-out (`422`) — nothing to undo, and the true last resort.** A write the
@@ -1941,7 +1950,7 @@ the admin section; the guards will keep the corrected state safe from then on.
 promote:
 
 ```bash
-php bin/phlix user:create admin --email=admin@example.com --password='pick-one'
+php bin/phlix user:create admin --email=admin@example.com --password-file=-   # password read from stdin
 php bin/phlix user:promote admin
 ```
 
@@ -2081,9 +2090,13 @@ A scheduled-but-absent recording means the recorder job failed: check
 Device enumeration is per protocol: `GET /api/v1/cast/devices` (Chromecast),
 `/api/v1/airplay/devices`, `/api/v1/roku/devices`, `/api/v1/dlna/renderers`.
 Discovery (SSDP/mDNS) listeners are built at boot, so a network change after
-start needs a service restart; the SSDP advertisement binds `:1900`. Casting
-routes sit behind `CastingEnabledMiddleware` — confirm the subsystem is enabled
-(`casting.chromecast.enabled` and siblings) before suspecting discovery.
+start needs a service restart; the SSDP advertisement binds `:1900`. Chromecast,
+AirPlay and Roku routes sit behind `CastingEnabledMiddleware` — confirm the
+subsystem is enabled (`casting.chromecast.enabled` and siblings) before suspecting
+discovery. DLNA has no per-protocol middleware switch: its renderer routes need
+only authentication, while what DLNA advertises and serves is governed by
+`dlna.enabled` (the SSDP advertiser, applied at worker start) and
+`dlna.cds_enabled` (LAN content browsing — off by default).
 
 ### A webhook never fires
 

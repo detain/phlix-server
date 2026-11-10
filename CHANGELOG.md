@@ -33,6 +33,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **`user:create` can read the password from a file or a pipe
+  (`--password-file=`).** An explicit `--password=` on the command line lands
+  in shell history and is readable through any local `/proc/<pid>/cmdline`
+  reader until the process exits. `--password-file=PATH` — or
+  `--password-file=-` to read stdin, with the trailing newline trimmed —
+  keeps the secret off argv; a non-empty `--password=` still wins, and an
+  unreadable source refuses with `Command::INVALID` before any write. The
+  post-install banner and the README admin-creation recipes now teach the
+  safe form. [SH-032 / server__seceng-docs#6, w20L2 2026-11-10]
 - **Browser sign-ins now receive the HttpOnly session cookies on the JSON API
   too.** A same-origin browser SPA posting JSON to `POST /api/v1/auth/login`
   or `POST /api/v1/auth/register` gets the byte-identical JSON token envelope
@@ -59,6 +68,21 @@ House discipline this file maintains (established by review W-min90/91/92):
   [COOKIE-DESIGN §3 / CP-002, w28L1 2026-11-09]
 
 ### Security
+
+- **Insecure auth cookies under `PHLIX_ENV=production` now speak up.** The
+  plain-HTTP development opt-out (`PHLIX_COOKIE_INSECURE=1` or its stored
+  `auth.cookie.insecure` twin) drops the `Secure` attribute from auth
+  cookies — a dev-only posture that until now was steered by prose alone:
+  the README said "never in production" and nothing echoed it. An active
+  opt-out during a production-tier run now raises exactly one
+  `E_USER_WARNING` per process naming the sniffing risk and the remedy
+  (terminate TLS, turn the opt-in off) — the same warn-once latch idiom as
+  the boot-time DB-credential guard in `config/database.php`, including the
+  `$GLOBALS` latch as a documented test seam. It stays a warning, not a
+  lockout: the opt-out still works where it is deliberate. The env census
+  row records the actual consumers (`CookiePolicy` SSOT plus the OAuth2
+  plugin's direct env readers) and the warn behavior.
+  [SH-033 / server__seceng-docs#7, w20L2 2026-11-10]
 
 - **A hub TLS anchor can no longer be silently absent.** When the operator
   explicitly configures a CA anchor — `PHLIX_HUB_TLS_CAFILE` (or the
@@ -330,6 +354,34 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+
+- **Operator-facing 500 copy now states symptoms and remedies, not internal
+  names.** The shared fail-closed 500 `error` text
+  `'Auth-method policy check failed'` becomes 'Sign-in-method safety check
+  could not run — no change was saved. Restore the database connection and
+  retry.' on both auth surfaces (admin settings PUT and provider disable);
+  the hub-health stale arm becomes 'Hub heartbeat has not reported since
+  <measuredAt> — restart the server.' (embedding the timestamp it already
+  returns, dropping the internal `phlix-hub-heartbeat` fork name); the
+  restart PID-file miss names the actual config knob
+  (`config/server.php: worker.pid_file`) instead of a nominalised
+  "setting is misconfigured". HTTP statuses and envelope keys are
+  unchanged — text slots only.
+  [SH-042 / server__copywriter#7 + #10, w20L2 2026-11-10]
+- **Docs truth pass on restart, gating, naming and secret-recipe claims.**
+  The `TMDB_API_KEY` census row and the "everything else resolves at
+  runtime" prose now state that the key — env or saved `tmdb.api_key` twin —
+  is resolved at worker start, matching `TmdbApiKeyResolver` and the
+  schema's `restart:true` (a saved change applies on the next worker
+  cycle); the Cast-to-TV feature bullet and the cast troubleshooting
+  section distinguish the three `CastingEnabledMiddleware`-gated protocols
+  from the auth-only DLNA renderer routes (whose real switches are
+  `dlna.enabled` / `dlna.cds_enabled`); the naming-layer map states that
+  user-facing copy says *room* ('Create room' / 'Join room' / 'Room ID') —
+  not *watch party*, which is docs prose — and the quickstart glossary row
+  carries the same correction; the CLI examples prefer the
+  generated-password and stdin forms.
+  [SH-032 / SH-037 / SH-038 / SH-039, w20L2 2026-11-10]
 
 - **The served web player carries the next review-cure cycle: `@phlix/ui` v0.99.24 re-pinned to
   v0.99.25, and the served `/app` bundle regenerated.** [ui review-cure wave 2026-11-09]

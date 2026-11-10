@@ -2736,7 +2736,11 @@ info "Database pass : stored in ${ENV_FILE} (mode 640) — show with: sudo grep 
 echo
 info "Next:"
 info "  - Sign in at the URL. There is no setup wizard — create the first admin from the CLI:"
-info "      php $INSTALL_PATH/bin/phlix user:create <name> --email=<email> --password=<password>"
+info "      php $INSTALL_PATH/bin/phlix user:create <name> --email=<email> --password-file=-"
+# SH-032: --password-file=- reads the password from stdin, keeping the secret
+# out of shell history and every local /proc/<pid>/cmdline reader (an
+# explicit --password= on argv is visible to both until the process exits).
+info "        (the password is read from stdin — never pass it as --password= on the command line)"
 info "      php $INSTALL_PATH/bin/phlix user:promote <name>"
 info "  - Pair with a Phlix Hub via 'php $INSTALL_PATH/scripts/pair-with-hub.php' if needed."
 info "  - Drop a TMDB_API_KEY into $ENV_FILE for metadata enrichment."

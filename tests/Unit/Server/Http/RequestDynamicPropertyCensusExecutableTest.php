@@ -1166,7 +1166,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // the DD review EXECUTED reverting the detectCpuQuotaCores() argument at
     // zero battery convictions — this pin is the missing enforcement leg);
     // 2070 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2070;
+    // +1 2070→2071: w20L2 adds tests/Unit/Auth/
+    // CookiePolicyProductionInsecureWarnTest.php (SH-033: the warn-once
+    // production gate on the insecure-cookie opt-out, latch test seam
+    // included); 2071 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2071;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

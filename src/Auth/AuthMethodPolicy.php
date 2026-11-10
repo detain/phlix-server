@@ -313,8 +313,10 @@ final class AuthMethodPolicy
      * Failure classification is deliberate and byte-pinned by the surfaces'
      * envelopes: guard-window blow-ups arrive as
      * {@see AuthMethodGuardCheckFailedException} (original message preserved,
-     * previous chained) so both controllers keep answering their 500
-     * 'Auth-method policy check failed'; BEGIN/lock/persist/COMMIT failures
+     * previous chained) so both controllers keep answering their 500 with the
+     * shared operator-facing safety-check copy (see the
+     * AuthMethodGuardCheckFailedException docblock for the envelope site);
+     * BEGIN/lock/persist/COMMIT failures
      * re-propagate UNWRAPPED after ROLLBACK (the admin PUT's outer catch
      * keeps its 'Failed to update settings' path; the provider route's
      * dispatcher 500 for a bootstrapper failure stays a dispatcher 500).

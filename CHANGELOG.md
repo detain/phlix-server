@@ -411,6 +411,54 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The served web player carries the cookie-custody and single-flight refresh
+  cures: `@phlix/ui` v0.99.25 re-pinned to v0.99.26, and the served `/app`
+  bundle regenerated.** [ui pin wave 2026-11-10 — final consumer leg]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.25 → v0.99.26
+    (tag object `74c120bc`, peel `dc2e70fe`, ls-remote-verified against origin; ui
+    release CI 4/4 green at the peel per the TW-ui-26 register). The dependency
+    edges ride unchanged — contracts `#v0.5.7` / syncplay `#v0.1.7`, the blessed
+    pair — so the lock delta is surgical: `package-lock.json` 5+/5- (root echo +
+    the ui node triple: version/resolved/integrity, plus one disclosed upstream
+    declaration line, the pinia peer widening `^3.0.0` → `^3.0.0 || ^4.0.0`
+    carried by the ui package since its w21L4 commit `e2c45746`) and
+    `package.json` 1+/1-, produced by a real `npm install` under npm 11.19.0 on the
+    S253-pinned node 24.20.0 with `NPM_CONFIG_USERCONFIG=/dev/null`
+    ("changed 1 package"); a second install is a byte-no-op — lock idempotence
+    proven. The vendored `dist/` matches the ui register's consumer-target
+    identities byte-exactly and equals the codeload tarball of the tag by
+    recursive diff: `phlix-ui.js` `7cea63d4…`, `player.js` `a6428a08…`,
+    `phlix-ui.umd.cjs` `e35db384…`, `player.umd.cjs` `01bc6133…`. Payload
+    carried: the ui CP-014 cookie-custody wave (`5b8574ac`), the CP-016
+    401 single-flight refresh + logout leg (`8852c14a`), and the w21L4
+    pinia-peer/PageHint barrel item (`e2c45746`).
+  - *Bundle.* `/app` SPA regenerated (S253 byte-exactness law): `npm run build`
+    x2 under the pinned node, the two outputs byte-identical (`diff -r`),
+    aggregate md5 `237b2c0178e82c1e8cbd92480698cb64` (family recipe
+    `find | LC_ALL=C sort | xargs md5sum | md5sum`), corpus unchanged at 200
+    tracked files. The stamp chunk `index-CUn_z3ex.js` carries `0.99.26`; zero
+    `0.99.25` residue under `public/assets/app`. The ui PlayerPage carrier
+    rotation `Bp-fkb06` → `5onGq7ES` propagates as server chunk
+    `PlayerPage-5onGq7ES-CiP9VnWo.js`; 61 hashed chunk pairs (js + map) renamed
+    and `index.html` + `.vite/manifest.json` carry the new entry refs — churn
+    honestly attributed to the two payload cure waves riding the pin, not a
+    build anomaly (builds x2 agree).
+  - *Currency.* The ui `src/i18n` diff `6e1ce2d8..dc2e70fe` is EMPTY by
+    measurement, so no locale catalog rides this wave; the server's web-ui i18n
+    tests are dynamic assertions (no static key-count pins) and stayed green
+    unmodified. No PHP era-test holds a real-bundle literal at this tip
+    (grep-proven), so the rotation table is empty — by measurement, not
+    assumption.
+  - *Gates.* web-ui `node --test` 33/33 exact; bundle-aware PHP cohort
+    (WebUiBundleGate, PublicFrontControllerRemovalGuard, ViteAssetsMemo,
+    SharedUiControllerCspNonce, HttpHandlerServeStatic, BrowserE2EGate,
+    LicenseHeaderGuard, NginxAssetLocation) OK 68 tests / 503 assertions —
+    per-file identical to the v0.99.25-era baseline, zero reds, so no era pin
+    rotated; `composer validate --strict` OK. Zero PHP source files touched.
+    README UI-truth line and this entry carry the version flip;
+    `docs/dev/ui-bundle-vendor.md` is version-agnostic and holds.
+    [server pin-wave leg, 2026-11-10]
+
 - **Admin and portal error copy now speaks one house voice, and the shared
   sentences have one home** (review server__copywriter #3-#6, #11-#13,
   SH-041). Validation and outcome literals across

@@ -33,6 +33,34 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **The WS query-carrier gate gained its stored-home admin control:
+  `auth.ws_query_token` is now a live lever, not a promise.** For an admin
+  to retire (or temporarily restore) the legacy `?token=` handshake carrier
+  per install without touching host env and without a restart, set the
+  shared-schema key `auth.ws_query_token` to `allow` or `deny` in Settings.
+  The gate answer now resolves through one SSOT resolver
+  (`src/Server/WebSocket/QueryTokenGatePolicy.php`) with fixed precedence:
+  explicit `PHLIX_WS_QUERY_TOKEN` env (operator override in BOTH directions
+  — env `deny` outranks a row `allow`; the escape-hatch `allow` still
+  restores the PHASE A behavior byte-ident) above the admin row above the
+  shipped default, which stays the CP-024 PHASE B `deny`. The row is read
+  live per decision — a flip lands on the next handshake — and a broken or
+  unusable row (anything outside the `allow`/`deny` enum) or an unreachable
+  store normalizes to deny with one bounded redacted warning (type name
+  only, never the stored bytes), so a bad admin value can only restore the
+  shipped posture, never widen it; the env tier's set-but-garbage
+  fails-open vocabulary is UNMOVED. The three sites that each carried their
+  own `deny` fallback (config surface, server constructor, middleware
+  constructor parameter) now defer to the resolver, and an unset/empty env
+  passes through as silence (null) instead of synthesizing `'deny'` — every
+  row-absent handshake denies byte-ident to before, same pre-101 reject
+  path, zero new wire codes. Bearer and admitted-cookie handshakes never
+  consult the row and stay byte-ident under every setting (CP-006 precedence
+  law UNMOVED). The key lands in the admin API with the next phlix-shared
+  schema re-vendor; the resolver honors the row through the store whatever
+  the write path. Law table: `docs/dev/WEBSOCKET_AUTH_CARRIERS.md`
+  ([off-kit owner ruling 2026-11-10]).
+
 - **Operators can opt the legacy `?token=` WebSocket carrier into retirement.**
   `PHLIX_WS_QUERY_TOKEN=allow|deny` (config `websocket.query_token`, default
   `allow`, read at boot) gates the `:8097` handshake's legacy query carrier:

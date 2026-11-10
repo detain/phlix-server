@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebSocket;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Logger\LoggerFactory;
@@ -23,9 +24,11 @@ use Phlix\Common\Logger\LogChannels;
  * `?token=` accepted only while the retirement gate resolves to allow — see
  * docs/dev/WEBSOCKET_AUTH_CARRIERS.md) and enforces
  * authentication for SyncPlay rooms. The legacy query carrier additionally
- * answers to the CP-007 retirement gate (`PHLIX_WS_QUERY_TOKEN`, default
- * deny since the CP-024 PHASE B flip — {@see parseQueryTokenPolicy()});
- * bearer and admitted-cookie legs are never governed by it.
+ * answers to the CP-007 retirement gate, resolved live per decision by
+ * {@see QueryTokenGatePolicy} (precedence: explicit env `PHLIX_WS_QUERY_TOKEN`
+ * > admin row `auth.ws_query_token` > PHASE B default deny, flipped at
+ * CP-024, admin control wired 2026-11-10); bearer and admitted-cookie legs
+ * are never governed by it.
  *
  * ## Authentication Flow
  *
@@ -74,7 +77,8 @@ class SyncPlayAuthMiddleware
     public const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: bearer';
 
     /**
-     * Query-carrier gate dispositions (CP-007/CP-024, COOKIE-DESIGN.md §4.1).
+     * Query-carrier gate dispositions (CP-007/CP-024, COOKIE-DESIGN.md §4.1;
+     * the stored tier landed 2026-11-10 — {@see QueryTokenGatePolicy}).
      *
      * The `:8097` legacy `?token=` carrier is observed under `allow` (every
      * query handshake logs one redacted telemetry line) and REFUSED pre-101
@@ -82,8 +86,11 @@ class SyncPlayAuthMiddleware
      * shipped once the last query-producing client — mobile, §4.4 — flipped)
      * ships `deny`: the straggler escape hatch is an explicit
      * `PHLIX_WS_QUERY_TOKEN=allow`, which restores the PHASE A behavior
-     * byte-ident. PHASE C removes the branch. Env seam:
-     * `PHLIX_WS_QUERY_TOKEN` (config `websocket.query_token`).
+     * byte-ident. PHASE C removes the branch. Tiers: env seam
+     * `PHLIX_WS_QUERY_TOKEN` (config `websocket.query_token`) above the
+     * shared-schema admin row `auth.ws_query_token` (same `allow`/`deny`
+     * vocabulary) above the shipped deny — resolved in ONE place,
+     * {@see QueryTokenGatePolicy::allowsQueryCarrier()}.
      */
     public const QUERY_TOKEN_ALLOW = 'allow';
     public const QUERY_TOKEN_DENY = 'deny';
@@ -132,14 +139,19 @@ class SyncPlayAuthMiddleware
 
     /**
      * Whether the legacy `?token=` query carrier may complete a handshake
-     * (CP-007 §4.1). Parsed once from the constructor policy — resident
-     * config, restart-class like `jwt_secret`. Bearer and admitted-cookie
+     * (CP-007 §4.1 + the 2026-11-10 admin-control wiring). THE ONE LAW
+     * HOME for the gate's effective state is {@see QueryTokenGatePolicy}:
+     * env > admin row > PHASE B default deny, resolved LIVE per decision —
+     * this field holds the resolver, not a parsed snapshot, because a
+     * resident `:8097` worker must answer with the admin's CURRENT word
+     * (the de573d6e rework law: an instance-frozen answer is a process
+     * cache in a per-decision costume). Bearer and admitted-cookie
      * carriers are governed by {@see resolveHandshakeToken()} alone; this
-     * flag never touches them.
+     * gate never touches them.
      *
-     * @var bool
+     * @var QueryTokenGatePolicy
      */
-    private bool $queryTokenAllowed;
+    private QueryTokenGatePolicy $queryGate;
 
     /**
      * Create a new SyncPlayAuthMiddleware instance.
@@ -151,12 +163,18 @@ class SyncPlayAuthMiddleware
      *   the handshake enforces the same active/deleted/revocation law every
      *   HTTP request passes; without it only crypto + access-type are checked
      *   (tests/dev direct construction).
-     * @param string $queryTokenPolicy CP-007 query-carrier gate disposition —
+     * @param string|null $queryTokenPolicy CP-007 query-carrier gate ENV tier —
      *   the `websocket.query_token` config value (env seam
-     *   PHLIX_WS_QUERY_TOKEN). {@see parseQueryTokenPolicy()} for the
-     *   explicit-value reading; the parameter default carries the PHASE B
-     *   shipped posture (CP-024): `deny`, the same law the config surface
-     *   ships for an unset knob.
+     *   PHLIX_WS_QUERY_TOKEN) when set; null (the parameter default, and the
+     *   nullableText form of unset/empty) means the operator stayed silent and
+     *   the admin row / PHASE B default decide — {@see QueryTokenGatePolicy}
+     *   for the full precedence. Legacy 1-3-arg construction therefore resolves
+     *   to `deny` through the resolver's default tier, the same answer CP-024
+     *   shipped as the literal `deny` parameter default.
+     * @param SettingsRepository|null $queryTokenSettings Admin-row store for
+     *   tier 2 (`auth.ws_query_token`, read live per decision); null — every
+     *   pre-wiring construction shape — leaves the row tier unavailable and
+     *   the PHASE B default answers, movement-invisible.
      *
      * @example
      * ```php
@@ -171,29 +189,39 @@ class SyncPlayAuthMiddleware
         string $jwtSecret,
         bool $requireAuth = true,
         ?AuthManager $authManager = null,
-        string $queryTokenPolicy = self::QUERY_TOKEN_DENY
+        ?string $queryTokenPolicy = null,
+        ?SettingsRepository $queryTokenSettings = null
     ) {
         $this->jwtHandler = new JwtHandler($jwtSecret);
         $this->requireAuth = $requireAuth;
         $this->authManager = $authManager;
-        $this->queryTokenAllowed = self::parseQueryTokenPolicy($queryTokenPolicy);
         $this->logger = LoggerFactory::get(LogChannels::WEBSOCKET);
+        $this->queryGate = new QueryTokenGatePolicy($queryTokenPolicy, $queryTokenSettings, $this->logger);
     }
 
     /**
      * Read the query-carrier gate policy — pure, fail-OPEN by design.
      *
-     * Only an explicit `deny` (trim + case-insensitive) denies; every other
+     * This is the ENV tier's explicit-value vocabulary and it is UNMOVED:
+     * only an explicit `deny` (trim + case-insensitive) denies; every other
      * value — `allow`, empty, garbage — allows. This mirrors the estate's
      * opt-in-tightening family (SH-064 TLS gate): a typo in a production env
      * file must never silently lock legacy clients out; tightening happens
      * only when the operator says so unambiguously.
      *
+     * Scope note (2026-11-10 wiring): the resolver applies this reading to
+     * SET env values only ({@see QueryTokenGatePolicy::allowsQueryCarrier()}
+     * treats unset/empty as env silence and defers to the admin row / PHASE B
+     * default) — the admin row has its OWN stricter law (exact enum member or
+     * fail-closed deny), because a stored garbage row is an explicit-but-
+     * broken admin statement, not an operator typo mid-boot.
+     *
      * The CP-024 PHASE B flip changed WHAT FEEDS THIS READER by default —
-     * `config/server.php` now hands it the string 'deny' whenever the env
-     * knob is unset or empty, so the shipped posture denies — not what an
+     * `config/server.php` handed it the string 'deny' whenever the env knob
+     * was unset or empty, so the shipped posture denied — not what an
      * explicit knob value means: a set-but-unrecognized value still reads as
-     * allow under the rule above.
+     * allow under the rule above. The 11-10 wiring replaces that synthesized
+     * 'deny' with nullable pass-through so silence can reach tier 2.
      *
      * @param string $rawPolicy Config/env value as supplied.
      * @return bool True when the query carrier stays accepted.
@@ -204,9 +232,13 @@ class SyncPlayAuthMiddleware
     }
 
     /**
-     * This middleware's parsed query-carrier gate disposition (CP-007).
+     * This middleware's live query-carrier gate disposition (CP-007;
+     * admin-row tier wired 2026-11-10 — {@see QueryTokenGatePolicy}).
      *
-     * Consumed by {@see WebSocketServer::onWebSocketConnect()} at the query
+     * Resolved FRESH on every call — env tier (boot value), then the admin
+     * row `auth.ws_query_token` (live SELECT, honored on the very next
+     * handshake, no restart), then the PHASE B default deny. Consumed by
+     * {@see WebSocketServer::onWebSocketConnect()} at the query
      * carrier leg ONLY — the telemetry/rejection log site and the pre-101
      * reject both live there, keeping this class the credential-law home and
      * the server the socket-lifecycle home, exactly like every other reject
@@ -214,7 +246,7 @@ class SyncPlayAuthMiddleware
      */
     public function queryTokenCarrierAllowed(): bool
     {
-        return $this->queryTokenAllowed;
+        return $this->queryGate->allowsQueryCarrier();
     }
 
     /**

@@ -14,6 +14,7 @@ namespace Phlix\Server\WebSocket;
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\CookiePolicy;
 use Phlix\Common\Http\TrustedProxyResolver;
@@ -142,6 +143,14 @@ class WebSocketServer
      *        token is refused at the handshake — the same law every HTTP request
      *        passes. Null (direct construction, tests, dev) keeps the
      *        crypto + access-type law only.
+     * @param SettingsRepository|null $queryTokenSettings Admin-row store for
+     *        the query-carrier gate's tier-2 read (`auth.ws_query_token`, the
+     *        2026-11-10 wiring): the resident `start.php` path passes the
+     *        container's repository so an admin flip lands on the very next
+     *        query handshake without a restart. Null (standalone, tests, the
+     *        CP-008 real-socket harness) keeps the row tier unavailable — the
+     *        PHASE B shipped default (deny) answers, byte-ident to the
+     *        pre-wiring posture.
      *
      * @example
      * ```php
@@ -156,7 +165,8 @@ class WebSocketServer
         array $config,
         ?MessageHandler $handler = null,
         ?Worker $worker = null,
-        ?AuthManager $authManager = null
+        ?AuthManager $authManager = null,
+        ?SettingsRepository $queryTokenSettings = null
     ) {
         $this->config = $config;
         $this->connections = ConnectionPool::getInstance();
@@ -168,16 +178,22 @@ class WebSocketServer
         // connections are allowed anonymously (dev).
         $jwtSecret = $this->config['jwt_secret'] ?? null;
         if (is_string($jwtSecret) && $jwtSecret !== '') {
-            // CP-007/CP-024: the query-carrier retirement policy rides the
-            // same config block as the secret (websocket.query_token /
-            // PHLIX_WS_QUERY_TOKEN). A non-string/absent value keeps the
-            // shipped PHASE B default — deny (CP-024 flipped it from allow).
-            $queryTokenPolicy = $this->config['query_token'] ?? SyncPlayAuthMiddleware::QUERY_TOKEN_DENY;
+            // CP-007/CP-024 + the 2026-11-10 admin-control wiring: the config
+            // surface contributes ONLY the env tier (PHLIX_WS_QUERY_TOKEN via
+            // websocket.query_token). An absent, empty or non-string value is
+            // operator SILENCE — never a synthesized 'deny' string — so the
+            // middleware's resolver (env > admin row auth.ws_query_token >
+            // PHASE B default deny, {@see QueryTokenGatePolicy}) can hear the
+            // admin tier. The row store arrives via $queryTokenSettings;
+            // null (standalone/test boots) keeps the shipped PHASE B default
+            // the answer, byte-ident to the pre-wiring posture.
+            $queryTokenEnv = $this->config['query_token'] ?? null;
             $this->authMiddleware = new SyncPlayAuthMiddleware(
                 $jwtSecret,
                 true,
                 $authManager,
-                is_string($queryTokenPolicy) ? $queryTokenPolicy : SyncPlayAuthMiddleware::QUERY_TOKEN_DENY,
+                is_string($queryTokenEnv) && $queryTokenEnv !== '' ? $queryTokenEnv : null,
+                $queryTokenSettings,
             );
         }
 
@@ -749,21 +765,27 @@ class WebSocketServer
             return;
         }
 
-        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1, PHASE B shipped): the legacy
-        // `?token=` query carrier answers to its retirement gate and the
-        // gate's SHIPPED DEFAULT IS NOW DENY (CP-024 — the PHASE A telemetry
-        // census timed the flip and mobile, the last query producer, flipped
-        // at phlix-mobile-client bdbe1e1). Under an explicit
-        // PHLIX_WS_QUERY_TOKEN=allow every query-carrier handshake still logs
-        // one redacted telemetry line; under the shipped deny the same leg
-        // refuses the handshake pre-101 using the existing reject
-        // idiom (pool reap + TCP close; there is no 101 yet to carry an
+        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1, PHASE B shipped) + the
+        // 2026-11-10 admin-control wiring: the legacy `?token=` query carrier
+        // answers to its retirement gate and the gate's SHIPPED DEFAULT IS
+        // DENY (CP-024 — the PHASE A telemetry census timed the flip and
+        // mobile, the last query producer, flipped at phlix-mobile-client
+        // bdbe1e1). The answer resolves live per handshake via
+        // {@see QueryTokenGatePolicy}: explicit PHLIX_WS_QUERY_TOKEN first,
+        // then the admin row auth.ws_query_token, then the deny default —
+        // only the first consumes the env tier, and the row read NEVER runs
+        // on bearer or admitted-cookie legs. Under allow every query-carrier
+        // handshake still logs one redacted telemetry line; under the shipped
+        // deny the same leg refuses the handshake pre-101 using the existing
+        // reject idiom (pool reap + TCP close; there is no 101 yet to carry an
         // envelope, so zero new wire codes). The condition is the RESOLVED
         // carrier, so the bearer and admitted-cookie legs never pass through
         // here (CP-006 precedence law, §2.3 — UNMOVED), and a mismatched or
         // credential-less handshake keeps its own established story above and
         // below this block. The log context carries the URI only through
-        // redactTokenQuery — token bytes never reach a log line.
+        // redactTokenQuery — token bytes never reach a log line. The two
+        // literals below name the env seam for historical continuity; a
+        // disposition may now also come from the admin row or the default.
         if ($resolved['carrier'] === 'query') {
             $queryCarrierAllowed = $this->authMiddleware->queryTokenCarrierAllowed();
             LoggerFactory::get(LogChannels::WEBSOCKET)->warning(

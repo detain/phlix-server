@@ -20,6 +20,16 @@
  * setting including gate-absent (CP-006 precedence law, §2.3) and are
  * pinned against exactly that by the identity legs below.
  *
+ * 2026-11-10 admin-control wiring: the gate answer moved behind the live
+ * three-tier resolver (env > admin row auth.ws_query_token > deny —
+ * QueryTokenGatePolicy); every leg here constructs WITHOUT a settings
+ * store, so the row tier is unavailable and each disposition resolves to
+ * exactly the answer pinned here — the whole file is the movement-
+ * invisibility proof, green with zero leg edited except the config-surface
+ * arm (rotated: unset now passes through as null, the PHASE B deny default
+ * it still answers moved into the resolver). The admin-tier convictions
+ * live in WsQueryTokenAdminControlTest.php.
+ *
  * Harness idiom: CookieWsHandshakeTest (real parsed upgrade Requests over
  * mocked TcpConnections) + DlnaResUrlIsRoutableTest (temp stream-handler
  * logger.php bound via LoggerFactory so log lines are capturable bytes).
@@ -407,14 +417,31 @@ final class WsQueryTokenGateTest extends TestCase
         }
     }
 
-    public function test_configSurfaceShipsTheDenyDefaultAndHonorsTheEnvSeam(): void
+    public function test_configSurfacePassesTheEnvTierThroughAndDefersWhenSilent(): void
     {
-        // PHASE B conviction at the config layer (limb c): unset now ships
-        // 'deny' — that IS the flipped default — while the escape-hatch
-        // direction 'allow' and the explicit 'deny' both ride the seam
-        // unchanged. REDDENED at the parent (unset leg asserted 'allow').
+        // PHASE B (CP-024) shipped this surface as a synthesized 'deny'
+        // string for unset/empty. The 2026-11-10 admin-control wiring
+        // rotated this leg (measured red at the flip: the unset assert saw
+        // null where it demanded 'deny'): the config surface now passes the
+        // ENV tier through verbatim and speaks SILENCE as null — the
+        // nullableText unset/empty law, matching every other "not configured"
+        // knob — so the resolver can hear the admin row underneath. The
+        // shipped default-answer (deny) moved with it into
+        // QueryTokenGatePolicy, where the gate-absent legs above still pin it.
         $config = require dirname(__DIR__, 4) . '/config/server.php';
-        $this->assertSame('deny', $config['websocket']['query_token']);
+        $this->assertArrayHasKey('query_token', $config['websocket']);
+        $this->assertNull(
+            $config['websocket']['query_token'],
+            'unset env must pass through as silence (null), not a synthesized deny'
+        );
+
+        putenv('PHLIX_WS_QUERY_TOKEN=');
+        try {
+            $emptied = require dirname(__DIR__, 4) . '/config/server.php';
+            $this->assertNull($emptied['websocket']['query_token'], 'empty env is the same silence');
+        } finally {
+            putenv('PHLIX_WS_QUERY_TOKEN');
+        }
 
         putenv('PHLIX_WS_QUERY_TOKEN=allow');
         try {

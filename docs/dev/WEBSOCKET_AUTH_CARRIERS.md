@@ -10,7 +10,7 @@ estate policy — `WEBSOCKET_URL_QUERY_REFUSED` — has one wire vocabulary.
 | Priority | Carrier | Form | State |
 |---|---|---|---|
 | 1 | Bearer subprotocol | `Sec-WebSocket-Protocol: bearer, <jwt>` | **TARGET** — the carrier clients move to |
-| 2 | Legacy query | `GET /…?token=<jwt>` | **REFUSED BY DEFAULT** since CP-024 PHASE B — opt in per host via `PHLIX_WS_QUERY_TOKEN=allow` |
+| 2 | Legacy query | `GET /…?token=<jwt>` | **REFUSED BY DEFAULT** since CP-024 PHASE B — opt in per install via the admin setting `auth.ws_query_token=allow`, or per host via `PHLIX_WS_QUERY_TOKEN=allow` |
 
 Browsers cannot set an `Authorization` header on a `WebSocket` upgrade, which is why the
 estate carrier is the subprotocol two-entry form, not a header. Server semantics live in
@@ -100,9 +100,49 @@ the flip: `deny` is the only value that denies — unrecognized values still fai
 `allow` (opt-in-tightening law). Bearer and admitted-cookie handshakes are byte-ident
 under every setting — gate absent, `allow` or `deny` (precedence law CP-006 UNMOVED).
 PHASE C removes the branch; that remains an owner timing call trailing fleet update.
-The stored-home settings key `auth.ws_query_token` (phlix-shared schema, restart:false
-live-read) joins this env lever when its read-through lands — the same staged env-first
-shape as `auth.cookie.insecure`; until then the env knob is the only live lever.
+### The admin-row tier (wired 2026-11-10, off-kit owner ruling)
+
+The stored-home settings key `auth.ws_query_token` (phlix-shared
+server-settings schema, string enum `allow`/`deny`) landed its read-through —
+it is now the middle tier of a single SSOT resolver,
+`src/Server/WebSocket/QueryTokenGatePolicy.php`, consulted per query-carrier
+handshake (the same staged env-first shape as `auth.cookie.insecure`):
+
+```
+EXPLICIT ENV PHLIX_WS_QUERY_TOKEN  >  ADMIN ROW auth.ws_query_token  >  PHASE B DEFAULT DENY
+```
+
+- **Env wins both ways.** `PHLIX_WS_QUERY_TOKEN=deny` outranks an admin-row
+  `allow` (host lockdown); `=allow` outranks an admin-row `deny` — the
+  straggler escape hatch works without DB access. Env stays restart-class.
+  An unset/empty knob is SILENCE: it now falls THROUGH to the row tier
+  instead of synthesizing `'deny'` at the config surface — with no row the
+  answer is the same shipped deny, byte-ident to the CP-024 posture
+  (carrier precedence CP-006, the reject path, and the redacted warn-log
+  laws all UNMOVED; zero new wire codes).
+- **The row is live.** An admin flip lands on the very next handshake — no
+  restart, no worker recycle. Only the exact strings `allow` / `deny` speak;
+  any other stored value (near-miss case, surrounding whitespace, a
+  non-string from a raw-SQL or restored write) normalizes to DENY with one
+  bounded, redacted warning — the type name only, never the stored bytes.
+  The env tier's opt-in-tightening rule (garbage fails open to `allow`)
+  deliberately does NOT apply here: a garbage env is an operator typo
+  mid-boot, a garbage row is an explicit-but-broken admin statement, and at
+  a security gate whose shipped default is already deny, only the safe
+  direction may answer. An unreachable store likewise fails CLOSED to deny
+  with a bounded warning — never a throw (a throw out of
+  `onWebSocketConnect` takes the `:8097` worker down with it).
+- **Query-only, as ever.** Bearer and admitted-cookie legs never consult
+  the row: no SELECT, no log difference, byte-ident outcomes.
+- The two warn-line literals still name the env seam
+  (`PHLIX_WS_QUERY_TOKEN=allow|deny`) for continuity of the log
+  vocabulary; the disposition they describe may now also come from the
+  admin row or the default.
+- The key becomes PUT-able through the admin settings API when the server
+  re-vendors the phlix-shared schema that carries it (schema prose +
+  admission ride that sibling wave); the resolver reads the row through the
+  store whatever the write path — a row landed by SQL or a settings restore
+  is honored identically.
 
 ## Cross-references
 

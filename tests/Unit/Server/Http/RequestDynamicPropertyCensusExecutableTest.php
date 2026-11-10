@@ -1215,7 +1215,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // CsrfMatrixTest.php (the dispatch-layer verb×carrier×Origin belt matrix
     // incl the Sec-Fetch belt and both parse-false convictions, byte-exact
     // shared 403 envelope); 2088 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2088;
+    // +2 2088→2090: the 2026-11-10 off-kit owner ruling wires the shared-
+    // schema admin row auth.ws_query_token into the WS query-carrier gate as
+    // tier 2 of a single SSOT resolver (env > admin row > PHASE B deny) —
+    // src/Server/WebSocket/QueryTokenGatePolicy.php joins the tree with its
+    // conviction cohort tests/Unit/Server/WebSocket/
+    // WsQueryTokenAdminControlTest.php; 2090 measured from the phpunit red.
+    private const EXPECTED_PHP_FILES = 2090;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

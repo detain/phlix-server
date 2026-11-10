@@ -834,6 +834,19 @@ try {
         /** @var \Phlix\Auth\AuthManager $wsAuthManager */
         $wsAuthManager = $container->get(\Phlix\Auth\AuthManager::class);
 
+        // 2026-11-10 off-kit owner ruling: the query-carrier gate's admin-row
+        // tier (auth.ws_query_token) resolves live per handshake through the
+        // SAME container store the HTTP rails write, so an admin flip lands on
+        // the next query handshake without a restart. Resolved UNWRAPPED on
+        // purpose — the $wsAuthManager law above: a silently missing store
+        // would make the admin control quietly inert instead of failing the
+        // boot. This adds no new DB-read class to the rail: handshake-time
+        // store reads are already the shipped posture via AuthManager's
+        // 5s-cached liveness probe, and the extra single-row SELECT rides
+        // QUERY-carrier handshakes only (bearer/cookie legs never consult it).
+        /** @var \Phlix\Admin\SettingsRepository $wsQueryTokenSettings */
+        $wsQueryTokenSettings = $container->get(\Phlix\Admin\SettingsRepository::class);
+
         /** @var array<string, mixed> $wsConfig */
         // Inject THIS worker ($wsWorker) — the one that actually listens on :8097
         // — so WebSocketServer binds its connection-lifecycle callbacks
@@ -843,7 +856,13 @@ try {
         // so the pool would stay empty and pongs would never reach recordPong() —
         // breaking S-F28 half-open detection and SyncPlay routing in the resident
         // path.
-        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler, $w, $wsAuthManager);
+        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer(
+            $wsConfig,
+            $messageHandler,
+            $w,
+            $wsAuthManager,
+            $wsQueryTokenSettings,
+        );
         $wsServer->setSyncPlayManager($syncPlayManager);
 
         // SV-4.15(h): inject the per-IP WS-connect limiter so onWebSocketConnect

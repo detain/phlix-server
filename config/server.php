@@ -217,23 +217,30 @@ return [
         // production JWT_SECRET is always present (the boot guard refuses to
         // start otherwise), so WS auth is enforced there.
         'jwt_secret' => EnvConfig::text('JWT_SECRET', ''),
-        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1): the legacy `?token=` WS
-        // carrier is on a three-phase retirement — PHASE A shipped the
-        // behavior plus a redacted per-handshake telemetry line (that census
-        // timed PHASE B); PHASE B — this line — defaults to DENY now that the
-        // last query producer (mobile, §4.4) has flipped; PHASE C removes the
-        // branch one release later. Env knob PHLIX_WS_QUERY_TOKEN=allow|deny:
-        // unset/empty takes the shipped 'deny', and an explicit 'allow'
-        // restores the PHASE A behavior byte-ident — the straggler escape
-        // hatch. The explicit-value parse rule is UNMOVED from PHASE A (among
-        // SET values only an exact 'deny' denies; unrecognized values still
-        // behave 'allow', the SH-064 TLS-gate family's never-lock-out rule —
-        // what flipped is the shipped default, not the vocabulary). The gate
-        // governs the QUERY carrier only; bearer and admitted-cookie legs are
-        // unaffected under every setting (CP-006 precedence law, §2.3). Read
-        // once at boot and handed to SyncPlayAuthMiddleware (restart-class,
-        // like host/port).
-        'query_token' => EnvConfig::text('PHLIX_WS_QUERY_TOKEN', 'deny'),
+        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1) + the 2026-11-10
+        // admin-control wiring: the legacy `?token=` WS carrier is on a
+        // three-phase retirement — PHASE A shipped the behavior plus a
+        // redacted per-handshake telemetry line (that census timed PHASE B);
+        // PHASE B defaulted the shipped posture to DENY once the last query
+        // producer (mobile, §4.4) flipped; PHASE C removes the branch one
+        // release later. This line contributes ONLY the ENV tier of the gate:
+        // a set-and-non-empty PHLIX_WS_QUERY_TOKEN=allow|deny is the operator
+        // override in BOTH directions (an explicit 'allow' restores PHASE A
+        // byte-ident — the straggler escape hatch; an explicit 'deny'
+        // outranks an admin-row allow). Unset/empty passes through as null —
+        // operator SILENCE, not a synthesized deny — and the admin row
+        // auth.ws_query_token (shared schema, read live per handshake) then
+        // decides; with no row the gate denies, the same shipped default CP-024
+        // lands today, resolved in ONE place: \Phlix\Server\WebSocket\
+        // QueryTokenGatePolicy. The explicit-value parse rule is UNMOVED from
+        // PHASE A (among SET env values only an exact 'deny' denies;
+        // unrecognized values still behave 'allow', the SH-064 TLS-gate
+        // family's never-lock-out rule — what CP-024 flipped is the shipped
+        // default, not the vocabulary). Env is restart-class like host/port;
+        // the admin row is live without restart. The gate governs the QUERY
+        // carrier only; bearer and admitted-cookie legs are unaffected under
+        // every setting (CP-006 precedence law, §2.3).
+        'query_token' => EnvConfig::nullableText('PHLIX_WS_QUERY_TOKEN'),
     ],
 
     // S445 write-through publish bridge: private unix socket the 14 HTTP

@@ -794,12 +794,16 @@ runs `composer install --no-dev --optimize-autoloader`, clears `templates_c/`, r
 deliberately leaves the env file, MySQL grants, HAProxy config, and Let's Encrypt cert alone.
 
 Before upgrading across several versions, skim [`CHANGELOG.md`](CHANGELOG.md) for every release
-you cross: the deploy-critical notes ride inline today — grep the file for the bold
-`MIGRATION ANSWER` markers, which record the operator actions a deploy must take beyond
-migrations (`None.` where a release is drop-in; 3 markers exist at this tip). The CHANGELOG's
-house preamble commits every NEW dated release section to opening with an explicit
-**Upgrade notes** block going forward, so both shapes live in the file and the
-`MIGRATION ANSWER` grep is the reliable one today. Anything that needs doing beyond the automatic
+you cross: the deploy-critical notes ride inline today as bold callout lines — grep with
+`grep -n '\*\*MIGRATION ANSWER' CHANGELOG.md` (the asterisks are the callout shape; the name in
+backticks elsewhere is prose ABOUT callouts, so a bare-name grep over-counts — and this page
+pins no marker count on purpose: the ledger is append-only, and any number quoted here is stale
+the moment it lands). The callouts record the operator actions a deploy must take beyond
+migrations (`None.` where a release is drop-in). The CHANGELOG's house preamble commits every
+NEW dated release section to opening with an explicit **Upgrade notes** block going forward;
+none has been cut as of 2026-11-10 (`grep -c '^### Upgrade notes' CHANGELOG.md` = 0 — a dated
+snapshot the first release cut rotates, not a permanent law), so the inline-callout grep is the
+reliable one today. Anything that needs doing beyond the automatic
 `scripts/run-migrations.php` step above (a rescan, a new required env var) is named there.
 
 ### Updating a clone of the old repo

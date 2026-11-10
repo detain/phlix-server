@@ -1377,6 +1377,28 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Doc truth: the CHANGELOG marker-count citation is now self-stable (w21L5
+  round-2).** The SH-043 entry above stated the reading guide leads "with the
+  greppable bold `MIGRATION ANSWER` callouts (3 exist at this tip — measured)".
+  That count was false the moment the sentence itself landed: the entry names
+  the marker in backticks, and a bare-name grep counts prose mentions too —
+  `grep -c 'MIGRATION ANSWER' CHANGELOG.md` measured 4 at the very tip the
+  claim named, and every future mention moves it again (the callout-shape
+  grep measured 1 there; the true callout is S331's). The README "Updating an
+  existing install" paragraph now quotes no marker count at all: it names the
+  callout grep SHAPE (`grep -n '\*\*MIGRATION ANSWER' CHANGELOG.md` —
+  asterisk-joined callouts match, backticked prose mentions cannot), and the
+  `### Upgrade notes` negative pin survives as a DATED snapshot (as of
+  2026-11-10 `grep -c '^### Upgrade notes' CHANGELOG.md` = 0) rather than a
+  live count — pin shapes and dated measurements, never live counts against an
+  append-only ledger, per the rotate-with-the-rows tripwire law this batch had
+  itself armed. The misquoted historical entry stays verbatim per the house
+  verbatim-history law; this entry is the forward correction. Also: the
+  failure-modes table header in `docs/dev/SYNCPLAY_MEMBER_SYNC_NUDGE.md` now
+  reads "Behavior", joining the US spellings the same batch swept at its
+  neighbours there (round-1's "sweep-verified clean" missed it). Docs-only:
+  zero PHP/test delta; no census movement by design.
+
 - **The quickstart journey tells the truth end to end.** The blanket "There is
   no `.env` or `.env.example` in this repo, by design" was false —
   `docker/examples/.env.example` exists and is consumed by docker compose

@@ -156,7 +156,7 @@ Rules:
 
 ## Failure modes
 
-| Situation | Behaviour |
+| Situation | Behavior |
 |---|---|
 | `position` missing / negative / bool / non-numeric | `reportedPositionMs()` ⇒ null: nothing stored, nothing judged, pure pre-S446 echo — legacy clients unaffected |
 | Reporter left between resolve and store | `recordMemberPosition()` returns false (race), report dropped; no fabricated live state |

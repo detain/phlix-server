@@ -33,6 +33,11 @@ final class RelayConfig
 
     /**
      * Default CA bundle used to verify the hub's relay TLS certificate.
+     * An anchor carries CA/root certificates — NEVER the hub's leaf/fullchain
+     * (a leaf rotates every ~60 days and a pinned leaf then silently expires
+     * the trust — audit §5.2). An explicitly configured but unreadable anchor
+     * refuses the dial loudly at RelayConsumer::buildSslContext() (audit §3.2);
+     * this shipped default staying absent keeps the system-store behavior.
      */
     public const DEFAULT_TLS_CAFILE = '/etc/ssl/certs/ca-certificates.crt';
 
@@ -77,6 +82,11 @@ final class RelayConfig
      *                                      matching the hub's permissive relay listener.
      * @param string $relayTlsCafile       CA bundle used to verify the hub's relay TLS
      *                                      certificate (default = system bundle).
+     *                                      Anchor law (§5.2): CA/root certificates
+     *                                      only, never the hub's rotating leaf/fullchain;
+     *                                      an explicitly-set unreadable path refuses
+     *                                      the dial LOUD (§3.2), an absent shipped
+     *                                      default keeps system-store verification.
      * @param bool   $allowPlaintextTunnel Explicit operator acknowledgement that the
      *                                      relay tunnel may run plaintext ws://. The
      *                                      tunnel trust model honors X-Phlix-Relay-User

@@ -17,6 +17,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthMethodPolicy;
 use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProviderManager;
@@ -622,7 +623,20 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // `ldap:` login path doesn't 503 on workers that booted before LDAP
                 // was enabled. PHP-DI skips optional ctor params during autowiring,
                 // so bind it explicitly.
-                ->constructorParameter('providerBootstrapper', get(AuthProviderBootstrapper::class)),
+                ->constructorParameter('providerBootstrapper', get(AuthProviderBootstrapper::class))
+                // CP-003: browser/device custody classification for the
+                // dual-emit (COOKIE-DESIGN §2.2). Unbound it would keep the
+                // store-less shipped-default policy (safe posture, inert
+                // toggles), so bind the settings-backed instance explicitly.
+                ->constructorParameter('cookiePolicy', get(CookiePolicy::class)),
+
+            // CP-003 (COOKIE-DESIGN §2.1/§2.4): the settings-backed
+            // auth-cookie policy. PHP-DI skips optional ctor params, so the
+            // store must be named or the admin-facing auth.cookie.* toggles
+            // would silently stay unread (store-less defaults would still be
+            // safe — enabled, env-only insecure — but not admin-controllable).
+            CookiePolicy::class => autowire()
+                ->constructorParameter('settings', get(SettingsRepository::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

@@ -1155,7 +1155,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // binary in the runner — plus the dirty-list parity leg against the
     // server chart and the README argv/truth pins);
     // 2065 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2065;
+    // +4 2065→2069: w28L1 (CP-002/CP-003 cookie dual-emit) adds
+    // src/Auth/CookiePolicy.php (custody/scheme/master-switch policy),
+    // tests/Unit/Auth/CookiePolicyTest.php, tests/Unit/Auth/
+    // CookiePolicyWiringGuardTest.php and tests/Unit/Server/Http/Controllers/
+    // CookieDualEmitTest.php (the §7 browser/device/scheme matrix);
+    // 2069 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2069;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1275,8 +1281,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * M-SERVER-48 law; zero src/ reads added (probe-proven: the src-only
      * worktree at this change measures 460 green). Measured from the
      * phpunit red (461), not predicted.
+     * +12 461→473 by the CP-003 cookie suite (w28L1): all twelve reads are
+     * fixture sites in the new tests/Unit/Server/Http/Controllers/
+     * CookieDualEmitTest.php (per-file token walk: base 344→work 356, that
+     * file alone +12); zero src/ reads added — classifyRequest() reaches
+     * headers only through getHeader(). Measured from the phpunit red
+     * (473), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 461;
+    private const EXPECTED_DECLARED_READS = 473;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1583,7 +1595,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // sites. Measured from the phpunit red (1183) at tip 96a2ee90 — this
     // follow-through re-pin follows the d8cce76c precedent (caught by the
     // lane-closing full-gate pass, not predicted).
-    private const EXPECTED_DECLARED_WRITES = 1183;
+    // +14 1183→1197 (CP-003, w28L1): +12 fixture property
+    // writes in the new CookieDualEmitTest.php and +2 in AuthControllerTest
+    // (the two browser-class fixture headers the intended-scheme-gate
+    // adaptation seeds) — per-file token walk base-vs-worktree attributes
+    // every delta to test files, zero src/ writes added. Measured from the
+    // phpunit red (1197) at 4edc8dc4+this commit, not predicted.
+    // +1 1197→1198 (CP-003, w28L1 follow-through): the TokenTtlEnforcementTest
+    // refreshCookies() fixture gains one sanctioned $request->headers
+    // property-write seed (the browser-class Origin/Host pair the refresh
+    // cookie-rotation law now requires). Zero src/ writes. Measured from the
+    // phpunit red (1198), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1198;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

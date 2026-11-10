@@ -32,6 +32,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 ## [Unreleased]
 
 ### Added
+
+- **Browser sign-ins now receive the HttpOnly session cookies on the JSON API
+  too.** A same-origin browser SPA posting JSON to `POST /api/v1/auth/login`
+  or `POST /api/v1/auth/register` gets the byte-identical JSON token envelope
+  AND the `phlix_session`/`phlix_refresh` cookie pair (rotated on every
+  `POST /api/v1/auth/refresh`), so the hosted web UI can keep its session in
+  an HttpOnly cookie instead of JavaScript-readable storage. Device-class
+  clients (any `X-Phlix-Device-Type` header, app://-style webview origins,
+  foreign origins, or no browser signal at all — curl and every legacy
+  native client) never receive a `Set-Cookie` header, and their JSON bodies
+  are byte-for-byte unchanged. Cookie issuance follows the scheme law:
+  https or localhost only; an http-LAN deployment keeps today's body-token
+  posture unless the operator opts in (`PHLIX_COOKIE_INSECURE=1` or the
+  stored `auth.cookie.insecure` twin), and `auth.cookie.enabled=false`
+  suppresses every auth-cookie path server-wide as the config-level rollback
+  lever. [COOKIE-DESIGN §2.1/§2.2/§2.4, owner ruling CD-3a / CP-003, w28L1
+  2026-11-09]
+- **The OpenAPI spec advertises the session cookie as an authentication
+  carrier.** A `sessionCookie` securityScheme (`apiKey` in cookie, name
+  `phlix_session`) is now listed as an alternative to `bearerAuth` on all
+  316 bearer-authenticated operations; the credential-establishing public
+  operations (`login`/`register`/`refresh`/...) keep `security: []`. Purely
+  additive spec documentation — no wire behavior, no body envelope, and no
+  request that used to be accepted or rejected differently changes.
+  [COOKIE-DESIGN §3 / CP-002, w28L1 2026-11-09]
+
 ### Security
 
 - **The vendored `phlix-hub` helm chart can no longer deploy with its
@@ -1029,6 +1055,17 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Token refresh no longer hands cookies to clients that cannot use them.**
+  The rotation ride on `POST /api/v1/auth/refresh` was unconditional since
+  its introduction (66ae647c): a device-class client
+  refreshing with a body token — a CLI, native app, or server-to-server
+  caller with no cookie jar — also received a `Set-Cookie` pair it could
+  never store, contradicting the §2.1 law that device-class requests never
+  see `Set-Cookie`. The rotation now goes through the same per-request
+  custody classification as the new login/register arms (browser-class AND
+  scheme-eligible); browser cookie refreshes rotate exactly as before and
+  the JSON body stays byte-identical for everyone. [BANK.md cookie-program
+  scaffolding cure 66ae647c / CP-003, w28L1 2026-11-09]
 - **The hub's pairing reply is parsed by the shared DTO, not by hand.**
   `HubClient::initiatePairing()` read the claim fields with
   `is_string(...) ?: ''` / `is_int(...) ?: 600` fallbacks, so a malformed

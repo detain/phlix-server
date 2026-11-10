@@ -304,6 +304,13 @@ class AuthControllerTest extends TestCase
      * Cookie rotation: a successful refresh re-issues BOTH auth cookies so the
      * browser's httpOnly refresh credential is replaced (rotated) with the new
      * value, using the same HttpOnly/Secure/SameSite attributes as login.
+     *
+     * CP-003 intended change: the rotation now requires browser-class +
+     * §2.4-eligible scheme (same-origin localhost headers here). Before the
+     * classification policy this fixture proved nothing about custody — the
+     * device-class counterpart (no markers ⇒ no cookies on refresh) is the
+     * BANK.md scaffolding-bug cure, pinned by
+     * CookieDualEmitTest::testDeviceBodyTokenRefreshReceivesNoCookies.
      */
     public function testRefreshRotatesAuthCookiesOnSuccess(): void
     {
@@ -320,6 +327,10 @@ class AuthControllerTest extends TestCase
 
         $request = new Request();
         $request->cookies = [AuthController::REFRESH_COOKIE => 'old-refresh'];
+        $request->headers = [
+            'Origin' => 'http://localhost:8096',
+            'Host' => 'localhost:8096',
+        ];
 
         $response = $controller->refresh($request, []);
 
@@ -416,8 +427,12 @@ class AuthControllerTest extends TestCase
         $controller = new AuthController($authManager);
 
         // The `/auth/` path marks this as a browser request → redirect + cookies.
+        // CP-003 intended change: the §2.4 scheme law needs an eligible scheme
+        // too — a localhost Host is the canonical browser-form context (an
+        // http-LAN form login no longer receives unusable Secure cookies).
         $request = new Request();
         $request->path = '/auth/login';
+        $request->headers = ['Host' => 'localhost:8096'];
         $request->body = ['username' => 'alice', 'password' => 'hunter2hunter2'];
 
         $response = $controller->login($request, []);

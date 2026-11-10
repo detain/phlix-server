@@ -230,6 +230,14 @@ final class TokenTtlEnforcementTest extends TestCase
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/auth/refresh';
+        // Browser-class markers (COOKIE-DESIGN.md §2.1): since CP-003/w28L1 the refresh
+        // endpoint attaches cookie custody only for browser-class requests — a device
+        // request carries the rotated tokens in the JSON body alone. Origin/Host on the
+        // loopback host also satisfies the §2.4 scheme-gate (localhost is cookie-eligible).
+        $request->headers = [
+            'Origin' => 'http://localhost:8096',
+            'Host' => 'localhost:8096',
+        ];
         $request->body = ['refresh_token' => $jwt->createRefreshToken(self::USER_ID)];
 
         $response = $controller->refresh($request, []);

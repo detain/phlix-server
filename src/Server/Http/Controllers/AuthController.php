@@ -15,6 +15,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthProviderBootstrapper;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\RateLimitException;
 use Phlix\Auth\SignupDisabledException;
 use Phlix\Auth\AccountInactiveException;
@@ -85,6 +86,17 @@ class AuthController
     private ?AuthProviderBootstrapper $providerBootstrapper;
 
     /**
+     * The auth-cookie issuance policy (COOKIE-DESIGN §2.1/§2.4): custody
+     * classification, the master switch, the scheme law, and the Secure-
+     * attribute decision all read through this one collaborator. Defaults to a
+     * store-less policy whose answers reproduce the shipped posture (enabled,
+     * env-only insecure, live settings unread), so the degraded no-container
+     * fallback and every direct-construction call site behave exactly as
+     * before this seam existed.
+     */
+    private CookiePolicy $cookiePolicy;
+
+    /**
      * Creates a new AuthController instance.
      *
      * The rate limiters are optional so existing direct-construction call sites
@@ -92,23 +104,31 @@ class AuthController
      * DI factory binds each one explicitly to its {@see RateLimitProfiles}
      * container id (PHP-DI skips optional ctor params during autowiring, so an
      * unbound limiter would silently stay null and leave the surface open).
+     * The same named-binding law applies to `cookiePolicy`: the container
+     * wires the settings-backed policy; leaving it unbound keeps the shipped
+     * defaults (safe, but the admin-facing auth.cookie.* toggles would be
+     * inert — so it IS bound, see AuthServicesProvider).
      *
      * @param AuthManager             $authManager    The authentication manager
      * @param RateLimiterInterface|null $registerLimiter Limiter guarding register()
      * @param RateLimiterInterface|null $refreshLimiter  Limiter guarding refresh()
      * @param AuthProviderBootstrapper|null $providerBootstrapper Request-path
      *        self-heal for the per-worker provider registry (LDAP login path).
+     * @param CookiePolicy|null $cookiePolicy Auth-cookie policy (null = the
+     *        shipped-default store-less policy).
      */
     public function __construct(
         AuthManager $authManager,
         ?RateLimiterInterface $registerLimiter = null,
         ?RateLimiterInterface $refreshLimiter = null,
         ?AuthProviderBootstrapper $providerBootstrapper = null,
+        ?CookiePolicy $cookiePolicy = null,
     ) {
         $this->authManager = $authManager;
         $this->registerLimiter = $registerLimiter;
         $this->refreshLimiter = $refreshLimiter;
         $this->providerBootstrapper = $providerBootstrapper;
+        $this->cookiePolicy = $cookiePolicy ?? new CookiePolicy();
     }
 
     /**
@@ -156,6 +176,7 @@ class AuthController
         $password = $data['password'] ?? null;
 
         $isBrowser = $this->isBrowserRequest($request);
+        $cookieMode = $this->classifyRequest($request);
 
         if (
             !is_string($username) || $username === ''
@@ -184,9 +205,16 @@ class AuthController
             }
 
             if ($isBrowser) {
-                return $this->browserAuthResponse($result, '/');
+                return $this->browserAuthResponse($result, '/', $cookieMode === CookiePolicy::MODE_COOKIE);
             }
-            return (new Response())->status(201)->json($result);
+            // CP-003 dual-emit (COOKIE-DESIGN §2.2): the JSON 201 envelope stays
+            // byte-ident for every legacy bearer client; browser-class clients
+            // on a §2.4-eligible scheme additionally receive the HttpOnly pair.
+            $response = (new Response())->status(201)->json($result);
+            if ($cookieMode === CookiePolicy::MODE_COOKIE) {
+                $this->attachAuthCookies($response, $result);
+            }
+            return $response;
         } catch (SignupDisabledException $e) {
             if ($isBrowser) {
                 return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
@@ -229,6 +257,7 @@ class AuthController
         $password = $data['password'] ?? null;
 
         $isBrowser = $this->isBrowserRequest($request);
+        $cookieMode = $this->classifyRequest($request);
 
         if (!is_string($username) || $username === '' || !is_string($password) || $password === '') {
             $msg = 'Missing required fields: username, password';
@@ -246,15 +275,22 @@ class AuthController
         // loginWithProvider() throws and we answer 503 rather than a misleading
         // "invalid credentials".
         if (str_starts_with($username, 'ldap:')) {
-            return $this->ldapLogin($username, $password, $deviceId, $isBrowser);
+            return $this->ldapLogin($username, $password, $deviceId, $isBrowser, $cookieMode);
         }
 
         try {
             $result = $this->authManager->login($username, $password, $deviceId);
             if ($isBrowser) {
-                return $this->browserAuthResponse($result, '/');
+                return $this->browserAuthResponse($result, '/', $cookieMode === CookiePolicy::MODE_COOKIE);
             }
-            return (new Response())->json($result);
+            // CP-003 dual-emit (COOKIE-DESIGN §2.2): the JSON 200 envelope stays
+            // byte-ident for every legacy bearer client; browser-class clients
+            // on a §2.4-eligible scheme additionally receive the HttpOnly pair.
+            $response = (new Response())->json($result);
+            if ($cookieMode === CookiePolicy::MODE_COOKIE) {
+                $this->attachAuthCookies($response, $result);
+            }
+            return $response;
         } catch (AccountInactiveException $e) {
             // Correct credentials but the account is pending/disabled — 403 with
             // a distinct code so clients can show the right message.
@@ -301,9 +337,16 @@ class AuthController
      * @param string $deviceId   Device identifier for token binding.
      * @param bool   $isBrowser  Whether to reply with a cookie redirect (browser)
      *                           or a JSON token blob (API client).
+     * @param string $cookieMode The classifyRequest() custody decision
+     *                           (CookiePolicy::MODE_*), same as the local arm.
      */
-    private function ldapLogin(string $identifier, string $password, string $deviceId, bool $isBrowser): Response
-    {
+    private function ldapLogin(
+        string $identifier,
+        string $password,
+        string $deviceId,
+        bool $isBrowser,
+        string $cookieMode,
+    ): Response {
         $localUsername = substr($identifier, strlen('ldap:'));
 
         // S44 Finding 3 — reconcile THIS worker's provider registry with the
@@ -322,9 +365,15 @@ class AuthController
             );
 
             if ($isBrowser) {
-                return $this->browserAuthResponse($result, '/');
+                return $this->browserAuthResponse($result, '/', $cookieMode === CookiePolicy::MODE_COOKIE);
             }
-            return (new Response())->json($result);
+            // CP-003: same dual-emit law as the local-password arm — the LDAP
+            // provider minting the session changes nothing about custody.
+            $response = (new Response())->json($result);
+            if ($cookieMode === CookiePolicy::MODE_COOKIE) {
+                $this->attachAuthCookies($response, $result);
+            }
+            return $response;
         } catch (RateLimitException $e) {
             // S44 Finding 2 — the brute-force throttle tripped inside
             // loginWithProvider(). RateLimitException extends RuntimeException, so
@@ -398,10 +447,13 @@ class AuthController
      *      in-memory-access-token web/native flow uses, where JS never sees the
      *      refresh credential and so cannot put it in the body.
      *
-     * On success the response carries a fresh access + refresh token pair AND
-     * re-issues both auth cookies, rotating the refresh cookie so the new
-     * credential replaces the old one (the previous cookie value is overwritten
-     * with the same HttpOnly/Secure/SameSite attributes login uses).
+     * On success the response carries a fresh access + refresh token pair.
+     * The auth cookies are re-issued (rotated) only when the request is
+     * browser-class on a §2.4-eligible scheme — under the same classifyRequest
+     * policy as the JSON login/register arms. Before CP-003 this rotation was
+     * UNCONDITIONAL, so a device-class body-token refresh also received
+     * cookies it can never use (the cookie program's own scaffolding bug,
+     * BANK.md); the classification now suppresses that header ride.
      *
      * The raw refresh token is never logged.
      *
@@ -442,8 +494,12 @@ class AuthController
             $result = $this->authManager->refreshToken($refreshToken);
             $response = (new Response())->json($result);
             // Rotate the auth cookies so the browser/native httpOnly flow keeps
-            // a valid refresh credential without JS ever touching it.
-            $this->attachAuthCookies($response, $result);
+            // a valid refresh credential without JS ever touching it — but
+            // only for cookie-class requests (CP-003 cure: device-class
+            // body-token refreshes must never see Set-Cookie, §2.1 law).
+            if ($this->classifyRequest($request) === CookiePolicy::MODE_COOKIE) {
+                $this->attachAuthCookies($response, $result);
+            }
             return $response;
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
@@ -519,6 +575,9 @@ class AuthController
      * canonical browser entry; `Content-Type: application/x-www-form-urlencoded`
      * is the secondary signal for clients that POST to the API path
      * with a form body.
+     *
+     * This decides the RESPONSE SHAPE (redirect vs JSON) exactly as before.
+     * The separate cookie-CUSTODY decision is {@see self::classifyRequest()}.
      */
     private function isBrowserRequest(Request $request): bool
     {
@@ -528,6 +587,56 @@ class AuthController
         $contentType = $request->getHeader('Content-Type') ?? '';
         return str_contains($contentType, 'application/x-www-form-urlencoded')
             || str_contains($contentType, 'multipart/form-data');
+    }
+
+    /**
+     * CP-003 (COOKIE-DESIGN §2.1/§2.2/§2.4): the per-request custody
+     * classification that decides whether Set-Cookie may ride this response
+     * at all. Returns CookiePolicy::MODE_COOKIE only when ALL of:
+     *
+     *  - device marker absent AND the request is browser-class per §2.1 —
+     *    a form-era signal (path under `/auth/` or a form Content-Type, the
+     *    values isBrowserRequest() reads), or a same-site http(s) Origin
+     *    (the hosted SPA's fetch), or `Sec-Fetch-Site: same-origin`. An
+     *    Origin that is present but NOT same-site http(s) — foreign web
+     *    host, capacitor://, app:// webview vaults — is device-class:
+     *    bearer-only, NO Set-Cookie ever. No browser signal at all (curl,
+     *    legacy native clients) stays bearer-only = today's JSON posture.
+     *  - the `auth.cookie.enabled` master switch is not false;
+     *  - the §2.4 scheme law holds: https per the first hop of
+     *    X-Forwarded-Proto, or a localhost Host, or the explicit insecure
+     *    override (env or stored twin — which also drops the Secure
+     *    attribute in attachAuthCookies, so there is never a cookie flagged
+     *    `Secure` that a plain-HTTP browser would silently discard).
+     *
+     * The classify is side-effect-free and per-request: resident workers
+     * must never carry a custody decision from one client to the next.
+     *
+     * @see CookiePolicy for the primitive decisions (pure over header values).
+     */
+    private function classifyRequest(Request $request): string
+    {
+        $mode = $this->cookiePolicy->custodyMode(
+            $this->isBrowserRequest($request),
+            $request->getHeader('X-Phlix-Device-Type'),
+            $request->getHeader('Origin'),
+            $request->getHeader('Host'),
+            $request->getHeader('Sec-Fetch-Site'),
+        );
+
+        if ($mode !== CookiePolicy::MODE_COOKIE) {
+            return CookiePolicy::MODE_BEARER;
+        }
+
+        if (!$this->cookiePolicy->cookieModeEnabled()) {
+            return CookiePolicy::MODE_BEARER;
+        }
+
+        if (!$this->cookiePolicy->schemeEligible($request->getHeader('X-Forwarded-Proto'), $request->getHeader('Host'))) {
+            return CookiePolicy::MODE_BEARER;
+        }
+
+        return CookiePolicy::MODE_COOKIE;
     }
 
     /**
@@ -544,11 +653,18 @@ class AuthController
      * @param array<string, mixed> $authResponse The shape returned by
      *        AuthManager (access_token, refresh_token, expires_in, user).
      * @param string $redirectTo Where to send the browser next.
+     * @param bool $emitCookies The classifyRequest() decision — redirect arms
+     *        whose request is bearer-class (device marker, http-LAN without
+     *        the insecure override, master switch off) still redirect, they
+     *        simply carry no Set-Cookie (§2.1: device-class never receives
+     *        cookies; §2.4: no silent issuance onto plain HTTP).
      */
-    private function browserAuthResponse(array $authResponse, string $redirectTo): Response
+    private function browserAuthResponse(array $authResponse, string $redirectTo, bool $emitCookies): Response
     {
         $response = (new Response())->redirect($redirectTo);
-        $this->attachAuthCookies($response, $authResponse);
+        if ($emitCookies) {
+            $this->attachAuthCookies($response, $authResponse);
+        }
         return $response;
     }
 
@@ -564,11 +680,20 @@ class AuthController
      * handler that minted the refresh token, so the two cannot drift when
      * `auth.refresh_ttl` changes. Empty token values are skipped.
      *
+     * The `auth.cookie.enabled` master switch is honoured at this single
+     * choke point: false ⇒ the server sets no auth cookie on ANY path, form
+     * redirect included (§7 rollback law). Classification (who may reach this
+     * method at all) lives in {@see self::classifyRequest()}.
+     *
      * @param array<string, mixed> $authResponse The shape returned by
      *        AuthManager (access_token, refresh_token, expires_in, user).
      */
     private function attachAuthCookies(Response $response, array $authResponse): void
     {
+        if (!$this->cookiePolicy->cookieModeEnabled()) {
+            return;
+        }
+
         $access = is_string($authResponse['access_token'] ?? null) ? $authResponse['access_token'] : '';
         $refresh = is_string($authResponse['refresh_token'] ?? null) ? $authResponse['refresh_token'] : '';
         // Both lifetimes come from the AuthManager -> JwtHandler that minted
@@ -579,7 +704,7 @@ class AuthController
             ? $authResponse['expires_in']
             : $this->authManager->accessTtl();
 
-        $secure = self::cookiesSecure();
+        $secure = $this->cookiePolicy->cookiesSecure();
 
         if ($access !== '') {
             $response->cookie(
@@ -601,21 +726,5 @@ class AuthController
                 sameSite: 'Lax',
             );
         }
-    }
-
-    /**
-     * Whether auth cookies should carry the `Secure` attribute.
-     *
-     * Defaults to true so the session/refresh credentials are never
-     * transmitted over plain HTTP. Only a deliberate local-development
-     * opt-out (`PHLIX_COOKIE_INSECURE=1`) disables it, so an HTTP dev
-     * server can still set cookies. Any other value — including unset —
-     * keeps `Secure` on.
-     */
-    private static function cookiesSecure(): bool
-    {
-        $optOut = getenv('PHLIX_COOKIE_INSECURE');
-
-        return $optOut !== '1';
     }
 }

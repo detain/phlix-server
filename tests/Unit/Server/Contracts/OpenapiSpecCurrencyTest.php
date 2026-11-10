@@ -823,7 +823,7 @@ final class OpenapiSpecCurrencyTest extends TestCase
         /** @var mixed $scheme */
         $scheme = is_array($schemes) ? ($schemes['sessionCookie'] ?? null) : null;
         if (!is_array($scheme)) {
-            $problems[] = 'components.securitySchemes.sessionCookie is missing (CP-002: apiKey, cookie, phlix_session).';
+            $problems[] = 'components.securitySchemes.sessionCookie is missing (CP-002 declares it).';
         } else {
             if (($scheme['type'] ?? null) !== 'apiKey') {
                 $problems[] = 'sessionCookie scheme must be type apiKey.';
@@ -886,7 +886,7 @@ final class OpenapiSpecCurrencyTest extends TestCase
 
         if ($bearerOps !== 316) {
             $problems[] = sprintf(
-                'expected exactly 316 bearer-authenticated operations, saw %d — re-measure on a red and rotate (CP-002).',
+                'expected 316 bearer-authenticated operations, saw %d — re-measure on a red and rotate (CP-002).',
                 $bearerOps
             );
         }

@@ -632,7 +632,8 @@ class AuthController
             return CookiePolicy::MODE_BEARER;
         }
 
-        if (!$this->cookiePolicy->schemeEligible($request->getHeader('X-Forwarded-Proto'), $request->getHeader('Host'))) {
+        $forwardedProto = $request->getHeader('X-Forwarded-Proto');
+        if (!$this->cookiePolicy->schemeEligible($forwardedProto, $request->getHeader('Host'))) {
             return CookiePolicy::MODE_BEARER;
         }
 

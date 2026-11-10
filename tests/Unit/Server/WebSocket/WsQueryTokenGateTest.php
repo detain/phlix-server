@@ -1,17 +1,24 @@
 <?php
 
 /**
- * CP-007 (COOKIE-DESIGN.md §4.1): the PHLIX_WS_QUERY_TOKEN opt-in gate
- * (default allow) + redacted query-carrier warn-log on `:8097`.
+ * CP-007 + CP-024 PHASE B (COOKIE-DESIGN.md §4.1): the PHLIX_WS_QUERY_TOKEN
+ * gate on `:8097` + the redacted query-carrier warn-log.
  *
- * PHASE A posture: every legacy `?token=` carrier handshake records ONE
- * redacted telemetry line (that census times the PHASE B default flip);
- * the env knob additionally REJECTS the query carrier pre-101 only when
- * explicitly set to deny. Opt-in tightening — absent/empty/unrecognized
- * values behave exactly like today's allow (the SH-064 TLS-gate family's
- * posture). The gate governs the QUERY carrier ONLY: bearer and admitted
- * cookie legs are byte-ident under every setting (CP-006 precedence law,
- * §2.3) and are pinned against exactly that by the identity legs below.
+ * PHASE B posture (this file's law since the CP-024 flip): the SHIPPED
+ * DEFAULT IS DENY. An unset/empty knob (gate key absent from the config,
+ * or every pre-CP-007 config shape) refuses the legacy `?token=` carrier
+ * pre-101 — the estate producer census proved zero live query producers
+ * before the flip (mobile, the last one, moved to bearer-subprotocol at
+ * phlix-mobile-client bdbe1e1). The env knob remains the escape hatch:
+ * explicit allow restores the PHASE A behavior byte-ident (accept +
+ * one redacted telemetry line); explicit deny is the same rejection path
+ * the new default takes. The parser vocabulary is UNCHANGED from PHASE A:
+ * only the exact word deny (case/trim tolerant) denies, so unrecognized
+ * garbage still fails open to allow — a typo cannot silently tighten the
+ * surface beyond the shipped posture. The gate governs the QUERY carrier
+ * ONLY: bearer and admitted cookie legs are byte-ident under EVERY
+ * setting including gate-absent (CP-006 precedence law, §2.3) and are
+ * pinned against exactly that by the identity legs below.
  *
  * Harness idiom: CookieWsHandshakeTest (real parsed upgrade Requests over
  * mocked TcpConnections) + DlnaResUrlIsRoutableTest (temp stream-handler
@@ -198,28 +205,36 @@ final class WsQueryTokenGateTest extends TestCase
 
     // --- wired handshake arms ------------------------------------------------
 
-    public function test_gateAbsentValidQueryHandshakeKeepsTodaysAcceptShape(): void
+    public function test_gateAbsentQueryHandshakeIsRefusedByThePhaseBDenyDefault(): void
     {
-        // Arm (c): the shipped default is behavior-neutral. No query_token key
-        // (every pre-CP-007 config shape, tests included) must authenticate a
-        // valid query handshake exactly as it does today: pooled, authed,
-        // open, no subprotocol echo for a client that offered nothing.
-        // By-design GREEN at the parent — disclosed belt leg, not a conviction.
-        $result = $this->runHandshake($this->authConfig(), $this->jwtHandler->createAccessToken('user-shape'));
+        // PHASE B conviction (limb a): with NO query_token key — the shipped
+        // default surface and every pre-CP-007 config shape — a VALID query
+        // credential is now refused pre-101 exactly like the explicit-deny
+        // arm: socket closed, pool wrapper reaped, never authenticated, no
+        // echo. REDDENED at the parent (measured: this leg asserted today's
+        // accept shape and the flip turned it red before rotation).
+        $rawToken = $this->jwtHandler->createAccessToken('user-shape');
+        $result = $this->runHandshake($this->authConfig(), $rawToken);
 
-        $connections = ConnectionPool::getInstance()->all();
-        $this->assertCount(1, $connections);
-        $this->assertTrue($connections[0]->isAuthenticated());
-        $this->assertSame('user-shape', $connections[0]->getUserId());
-        $this->assertArrayNotHasKey('close', $result['tracker']);
+        $this->assertTrue($result['tracker']['close'] ?? false, 'The deny default must close the socket pre-101.');
+        $this->assertCount(0, ConnectionPool::getInstance()->all(), 'The pool wrapper must be reaped.');
         $this->assertSame([], $result['headers']);
+
+        // Limb (d): the SAME rejection path also carries the SAME redacted
+        // warn-log — no new log shape may appear on the new default path.
+        foreach (self::DENY_LITERALS as $literal) {
+            $this->assertStringContainsString($literal, $result['log']);
+        }
+        $this->assertStringContainsString(self::REDACTED_FORM, $result['log']);
+        $this->assertStringNotContainsString($rawToken, $result['log']);
     }
 
     public function test_allowPolicyAcceptsQueryCarrierAndLogsRedactedTelemetry(): void
     {
-        // §4.1 PHASE A: default allow keeps the handshake live AND every query
-        // handshake leaves exactly one telemetry line — path kept, credential
-        // masked. Strip the log site -> red; deny the accept -> red.
+        // PHASE B escape hatch: explicit allow restores the PHASE A
+        // byte-ident behavior — handshake live AND exactly one telemetry
+        // line, path kept, credential masked. Strip the log site -> red;
+        // flip the escape hatch off -> red.
         $rawToken = $this->jwtHandler->createAccessToken('user-allow');
         $result = $this->runHandshake($this->authConfig('allow'), $rawToken);
 
@@ -275,56 +290,77 @@ final class WsQueryTokenGateTest extends TestCase
         $this->assertStringContainsString(self::REDACTED_FORM, $result['log']);
     }
 
-    public function test_bearerLegIsByteIdentUnderAllowAndDeny(): void
+    public function test_bearerLegIsByteIdentUnderEveryGateSetting(): void
     {
         // Precedence law (§2.3, CP-006 UNMOVED): the gate governs the query
         // carrier ONLY. A bearer handshake must produce identical outcome,
-        // identical 101 echo, and an identical log excerpt under allow and
-        // under deny. Widen the gate condition past carrier==='query' -> red.
+        // identical 101 echo, and an identical log excerpt under gate-absent
+        // (the new deny default), under allow and under deny. Widen the gate
+        // condition past carrier==='query' -> red. Limb (b) of the flip.
         $bearer = $this->jwtHandler->createAccessToken('user-bearer-x');
+
+        $absentRun = $this->runHandshake($this->authConfig(), null, 'bearer, ' . $bearer);
+        $absentConnections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $absentConnections);
+        $this->assertTrue($absentConnections[0]->isAuthenticated());
+        $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $absentRun['headers']);
+        $absentLog = $this->normalizeLog($absentRun['log']);
+        ConnectionPool::getInstance()->clear();
 
         $allowRun = $this->runHandshake($this->authConfig('allow'), null, 'bearer, ' . $bearer);
         $allowConnections = ConnectionPool::getInstance()->all();
         $this->assertCount(1, $allowConnections);
         $this->assertTrue($allowConnections[0]->isAuthenticated());
-        $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $allowRun['headers']);
-        $allowLog = $this->normalizeLog($allowRun['log']);
+        $this->assertSame($absentRun['headers'], $allowRun['headers']);
+        $this->assertSame($absentLog, $this->normalizeLog($allowRun['log']));
         ConnectionPool::getInstance()->clear();
 
         $denyRun = $this->runHandshake($this->authConfig('deny'), null, 'bearer, ' . $bearer);
         $denyConnections = ConnectionPool::getInstance()->all();
         $this->assertCount(1, $denyConnections);
         $this->assertTrue($denyConnections[0]->isAuthenticated());
-        $this->assertSame($allowRun['headers'], $denyRun['headers']);
-        $this->assertSame($allowLog, $this->normalizeLog($denyRun['log']));
+        $this->assertSame($absentRun['headers'], $denyRun['headers']);
+        $this->assertSame($absentLog, $this->normalizeLog($denyRun['log']));
 
-        $this->assertStringNotContainsString('query carrier', $allowLog);
+        $this->assertStringNotContainsString('query carrier', $absentLog);
+        $this->assertStringNotContainsString('query carrier', $allowRun['log']);
         $this->assertStringNotContainsString('query carrier', $denyRun['log']);
     }
 
-    public function test_admittedCookieLegIsByteIdentUnderAllowAndDeny(): void
+    public function test_admittedCookieLegIsByteIdentUnderEveryGateSetting(): void
     {
         // Same identity law for the ambient carrier CP-006 admitted: jar +
-        // same-site Origin authenticates identically under both policies,
-        // still answers no bearer marker, and logs nothing about the gate.
+        // same-site Origin authenticates identically under EVERY setting —
+        // gate-absent (the new deny default) included — still answers no
+        // bearer marker, and logs nothing about the gate. Limb (b).
         $jar = $this->jwtHandler->createAccessToken('user-jar-x');
+
+        $absentRun = $this->runHandshake($this->authConfig(), null, null, $jar, ['Origin' => 'http://localhost']);
+        $absentConnections = ConnectionPool::getInstance()->all();
+        $this->assertCount(1, $absentConnections);
+        $this->assertTrue($absentConnections[0]->isAuthenticated());
+        $this->assertSame([], $absentRun['headers']);
+        $absentLog = $this->normalizeLog($absentRun['log']);
+        ConnectionPool::getInstance()->clear();
 
         $allowRun = $this->runHandshake($this->authConfig('allow'), null, null, $jar, ['Origin' => 'http://localhost']);
         $allowConnections = ConnectionPool::getInstance()->all();
         $this->assertCount(1, $allowConnections);
         $this->assertTrue($allowConnections[0]->isAuthenticated());
-        $this->assertSame([], $allowRun['headers']);
-        $allowLog = $this->normalizeLog($allowRun['log']);
+        $this->assertSame($absentRun['headers'], $allowRun['headers']);
+        $this->assertSame($absentLog, $this->normalizeLog($allowRun['log']));
         ConnectionPool::getInstance()->clear();
 
         $denyRun = $this->runHandshake($this->authConfig('deny'), null, null, $jar, ['Origin' => 'http://localhost']);
         $denyConnections = ConnectionPool::getInstance()->all();
         $this->assertCount(1, $denyConnections);
         $this->assertTrue($denyConnections[0]->isAuthenticated());
-        $this->assertSame($allowRun['headers'], $denyRun['headers']);
-        $this->assertSame($allowLog, $this->normalizeLog($denyRun['log']));
+        $this->assertSame($absentRun['headers'], $denyRun['headers']);
+        $this->assertSame($absentLog, $this->normalizeLog($denyRun['log']));
 
-        $this->assertStringNotContainsString('query carrier', $allowLog);
+        $this->assertStringNotContainsString('query carrier', $absentLog);
+        $this->assertStringNotContainsString('query carrier', $allowRun['log']);
+        $this->assertStringNotContainsString('query carrier', $denyRun['log']);
     }
 
     public function test_denyDoesNotHijackTheMismatchOrMissingCredentialLaws(): void
@@ -371,13 +407,22 @@ final class WsQueryTokenGateTest extends TestCase
         }
     }
 
-    public function test_configSurfaceShipsTheAllowDefaultAndHonorsTheEnvSeam(): void
+    public function test_configSurfaceShipsTheDenyDefaultAndHonorsTheEnvSeam(): void
     {
-        // The config layer is the env read: unset ships 'allow' (today), and
-        // PHLIX_WS_QUERY_TOKEN is the only knob — mirror of the sibling
-        // websocket-block env seams. Drop the config key -> red on both legs.
+        // PHASE B conviction at the config layer (limb c): unset now ships
+        // 'deny' — that IS the flipped default — while the escape-hatch
+        // direction 'allow' and the explicit 'deny' both ride the seam
+        // unchanged. REDDENED at the parent (unset leg asserted 'allow').
         $config = require dirname(__DIR__, 4) . '/config/server.php';
-        $this->assertSame('allow', $config['websocket']['query_token']);
+        $this->assertSame('deny', $config['websocket']['query_token']);
+
+        putenv('PHLIX_WS_QUERY_TOKEN=allow');
+        try {
+            $escaped = require dirname(__DIR__, 4) . '/config/server.php';
+            $this->assertSame('allow', $escaped['websocket']['query_token']);
+        } finally {
+            putenv('PHLIX_WS_QUERY_TOKEN');
+        }
 
         putenv('PHLIX_WS_QUERY_TOKEN=deny');
         try {
@@ -388,14 +433,39 @@ final class WsQueryTokenGateTest extends TestCase
         }
     }
 
-    public function test_middlewareConstructionDefaultsTheGateToAllow(): void
+    public function test_middlewareConstructionDefaultsTheGateToDeny(): void
     {
-        // CP-006-era 3-arg construction sites keep allow semantics unchanged
-        // (the default lives on the constructor parameter, not on the caller).
+        // PHASE B conviction at the constructor seam (limb a): CP-006-era
+        // argument shapes that never name a policy now resolve to deny —
+        // the default lives on the constructor parameter. Explicit allow
+        // still resolves to allow (escape hatch), explicit deny to deny.
+        // REDDENED at the parent (legacyShape asserted allowed() true).
         $legacyShape = new SyncPlayAuthMiddleware($this->jwtSecret);
-        $this->assertTrue($legacyShape->queryTokenCarrierAllowed());
+        $this->assertFalse($legacyShape->queryTokenCarrierAllowed());
+
+        $escapeHatch = new SyncPlayAuthMiddleware($this->jwtSecret, true, null, 'allow');
+        $this->assertTrue($escapeHatch->queryTokenCarrierAllowed());
 
         $explicitDeny = new SyncPlayAuthMiddleware($this->jwtSecret, true, null, 'deny');
         $this->assertFalse($explicitDeny->queryTokenCarrierAllowed());
+    }
+
+    public function test_gateAbsentRejectionIsByteIdentToExplicitDenyRejection(): void
+    {
+        // "Same rejection path, same shape" pin: the new default must not
+        // invent a third disposition — headers, close behavior and the
+        // normalized warn-log of a gate-absent query handshake equal the
+        // explicit-deny arm's byte-for-byte. Mint a bespoke absent-mode log
+        // line -> red. Belt leg by design (green both sides); disclosed.
+        $token = $this->jwtHandler->createAccessToken('user-samepath');
+
+        $absentRun = $this->runHandshake($this->authConfig(), $token);
+        $absentLog = $this->normalizeLog($absentRun['log']);
+        ConnectionPool::getInstance()->clear();
+
+        $denyRun = $this->runHandshake($this->authConfig('deny'), $token);
+        $this->assertSame($absentRun['tracker'], $denyRun['tracker']);
+        $this->assertSame($absentRun['headers'], $denyRun['headers']);
+        $this->assertSame($absentLog, $this->normalizeLog($denyRun['log']));
     }
 }

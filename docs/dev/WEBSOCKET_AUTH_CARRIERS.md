@@ -10,7 +10,7 @@ estate policy — `WEBSOCKET_URL_QUERY_REFUSED` — has one wire vocabulary.
 | Priority | Carrier | Form | State |
 |---|---|---|---|
 | 1 | Bearer subprotocol | `Sec-WebSocket-Protocol: bearer, <jwt>` | **TARGET** — the carrier clients move to |
-| 2 | Legacy query | `GET /…?token=<jwt>` | **RETIRING** — accepted only while clients upgrade |
+| 2 | Legacy query | `GET /…?token=<jwt>` | **REFUSED BY DEFAULT** since CP-024 PHASE B — opt in per host via `PHLIX_WS_QUERY_TOKEN=allow` |
 
 Browsers cannot set an `Authorization` header on a `WebSocket` upgrade, which is why the
 estate carrier is the subprotocol two-entry form, not a header. Server semantics live in
@@ -22,7 +22,8 @@ one place that reads carriers).
 1. A `bearer` entry in the offer list marks the carrier; the **first other non-empty,
    trimmed entry** is the credential (per-entry RFC 7230 token comparison —
    `bearer-chat` is a different protocol-id and does not count as an offer).
-2. No bearer credential → the legacy `?token=` query value is used.
+2. No bearer credential → the legacy `?token=` query value is used — subject to the
+   retirement gate below, which since PHASE B refuses the query carrier by default.
 3. Both carriers carry credentials and they **differ** → the handshake is rejected
    pre-101 (pool removal + TCP close). A half-migrated client must fail loudly instead
    of authenticating on a credential other than the one it presents.
@@ -44,7 +45,8 @@ Sec-WebSocket-Protocol: bearer
   keep off logs (RFC 6455 §4.2.2 permits answering only with a supported protocol-id).
 - The echo is **gated on the offer**: a legacy query-only client that negotiates nothing
   gets no echo (selecting a protocol the client never offered is itself the §4.1
-  violation), and query-only browser clients keep working unchanged.
+  violation), and — while the gate resolves to `allow` — query-only browser clients
+  keep working unchanged.
 - Mechanism: Workerman composes the 101 **after** `onWebSocketConnect` returns and
   appends every `$connection->headers` entry verbatim
   (`vendor/workerman/workerman/src/Protocols/Websocket.php:449-455`) — the only echo
@@ -76,25 +78,31 @@ Each client flips its `:8097` connect to the two-entry subprotocol form
 | mobile | `wsEndpoint.ts` direct lane | same |
 | roku / console | native `Sec-WebSocket-Protocol` request header | same (non-browser clients may also adopt an `Authorization: Bearer` lane later; not accepted by `:8097` today) |
 
-The query carrier stays accepted until every shipping client version has the flip
-(clients are old by default — server-side removal must trail fleet update, owner
-timing call). When it is removed, this document and `resolveHandshakeToken()` shrink to
-the bearer law only.
+The fleet upgrade is complete: the estate producer census run for CP-024 found no live
+`?token=` WS producer outside the server (phlix-ui, hub, tizen, windows, console and roku
+dial bearer/cookie carriers; mobile — the last query producer — flipped at
+phlix-mobile-client `bdbe1e1`). PHASE B therefore **flips the gate default to `deny`**;
+a host running straggler clients restores the byte-identical Phase-A acceptance with an
+explicit `PHLIX_WS_QUERY_TOKEN=allow`. Removal itself (PHASE C) still trails fleet
+update — clients are old by default, owner timing call — and when the branch goes, this
+document and `resolveHandshakeToken()` shrink to the bearer law only.
 
-### Server-side retirement gate (CP-007, COOKIE-DESIGN.md §4.1)
+### Server-side retirement gate (CP-007 + CP-024, COOKIE-DESIGN.md §4.1)
 
-PHASE A (shipped): `PHLIX_WS_QUERY_TOKEN=allow|deny` (config `websocket.query_token`,
-default `allow`) plus one redacted `websocket` warn line per query-carrier handshake —
-that telemetry census is the evidence that times PHASE B. Under `deny`, a
-query-carrier handshake is refused pre-101 with the existing reject idiom (pool reap +
-TCP close — no envelope, zero new wire codes); bearer and admitted-cookie handshakes
-are byte-ident under every setting. The gate is opt-in tightening: unset/empty/
-unrecognized values all behave `allow`. PHASE B (after mobile lands the bearer flip —
-the last query producer) flips the default to `deny` (CP-024); PHASE C removes the
-branch. The stored-home settings key `auth.ws_query_token` (phlix-shared schema,
-restart:false live-read) joins this env lever when its read-through lands — the same
-staged env-first shape as `auth.cookie.insecure`; until then the env knob is the only
-live lever.
+`PHLIX_WS_QUERY_TOKEN=allow|deny` (config `websocket.query_token`) gates the legacy query
+carrier, and one redacted `websocket` warn line rides every query-carrier handshake
+under either disposition. PHASE A shipped the gate with default `allow`; **PHASE B
+(CP-024) flipped the default to `deny`** — unset or empty now refuses a query-carrier
+handshake pre-101 with the existing reject idiom (pool reap + TCP close — no envelope,
+zero new wire codes). An explicit `allow` is the straggler-host escape hatch and
+restores the byte-identical Phase-A acceptance. The parser vocabulary is unchanged by
+the flip: `deny` is the only value that denies — unrecognized values still fail open to
+`allow` (opt-in-tightening law). Bearer and admitted-cookie handshakes are byte-ident
+under every setting — gate absent, `allow` or `deny` (precedence law CP-006 UNMOVED).
+PHASE C removes the branch; that remains an owner timing call trailing fleet update.
+The stored-home settings key `auth.ws_query_token` (phlix-shared schema, restart:false
+live-read) joins this env lever when its read-through lands — the same staged env-first
+shape as `auth.cookie.insecure`; until then the env knob is the only live lever.
 
 ## Cross-references
 

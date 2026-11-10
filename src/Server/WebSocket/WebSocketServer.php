@@ -168,15 +168,16 @@ class WebSocketServer
         // connections are allowed anonymously (dev).
         $jwtSecret = $this->config['jwt_secret'] ?? null;
         if (is_string($jwtSecret) && $jwtSecret !== '') {
-            // CP-007: the query-carrier retirement policy rides the same config
-            // block as the secret (websocket.query_token / PHLIX_WS_QUERY_TOKEN).
-            // A non-string/absent value keeps the shipped allow default.
-            $queryTokenPolicy = $this->config['query_token'] ?? SyncPlayAuthMiddleware::QUERY_TOKEN_ALLOW;
+            // CP-007/CP-024: the query-carrier retirement policy rides the
+            // same config block as the secret (websocket.query_token /
+            // PHLIX_WS_QUERY_TOKEN). A non-string/absent value keeps the
+            // shipped PHASE B default — deny (CP-024 flipped it from allow).
+            $queryTokenPolicy = $this->config['query_token'] ?? SyncPlayAuthMiddleware::QUERY_TOKEN_DENY;
             $this->authMiddleware = new SyncPlayAuthMiddleware(
                 $jwtSecret,
                 true,
                 $authManager,
-                is_string($queryTokenPolicy) ? $queryTokenPolicy : SyncPlayAuthMiddleware::QUERY_TOKEN_ALLOW,
+                is_string($queryTokenPolicy) ? $queryTokenPolicy : SyncPlayAuthMiddleware::QUERY_TOKEN_DENY,
             );
         }
 
@@ -748,11 +749,14 @@ class WebSocketServer
             return;
         }
 
-        // CP-007 (COOKIE-DESIGN.md §4.1 PHASE A): the legacy `?token=` query
-        // carrier answers to its retirement gate — EVERY query-carrier
-        // handshake logs one redacted telemetry line (the census that times
-        // the PHASE B default flip), and under PHLIX_WS_QUERY_TOKEN=deny the
-        // same leg refuses the handshake pre-101 using the existing reject
+        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1, PHASE B shipped): the legacy
+        // `?token=` query carrier answers to its retirement gate and the
+        // gate's SHIPPED DEFAULT IS NOW DENY (CP-024 — the PHASE A telemetry
+        // census timed the flip and mobile, the last query producer, flipped
+        // at phlix-mobile-client bdbe1e1). Under an explicit
+        // PHLIX_WS_QUERY_TOKEN=allow every query-carrier handshake still logs
+        // one redacted telemetry line; under the shipped deny the same leg
+        // refuses the handshake pre-101 using the existing reject
         // idiom (pool reap + TCP close; there is no 101 yet to carry an
         // envelope, so zero new wire codes). The condition is the RESOLVED
         // carrier, so the bearer and admitted-cookie legs never pass through

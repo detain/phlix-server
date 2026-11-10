@@ -217,18 +217,23 @@ return [
         // production JWT_SECRET is always present (the boot guard refuses to
         // start otherwise), so WS auth is enforced there.
         'jwt_secret' => EnvConfig::text('JWT_SECRET', ''),
-        // CP-007 (COOKIE-DESIGN.md §4.1): the legacy `?token=` WS carrier is on
-        // a three-phase retirement — PHASE A ships today's behavior plus a
-        // redacted per-handshake telemetry line (that census times PHASE B);
-        // PHASE B flips this default to deny once the last query producer
-        // (mobile, §4.4) lands; PHASE C removes the branch. Env knob
-        // PHLIX_WS_QUERY_TOKEN=allow|deny, default 'allow': opt-in tightening
-        // exactly like the SH-064 TLS-gate family — unset/empty/unrecognized
-        // values all behave 'allow', never closed. The gate governs the QUERY
-        // carrier only; bearer and admitted-cookie legs are unaffected under
-        // every setting (CP-006 precedence law, §2.3). Read once at boot and
-        // handed to SyncPlayAuthMiddleware (restart-class, like host/port).
-        'query_token' => EnvConfig::text('PHLIX_WS_QUERY_TOKEN', 'allow'),
+        // CP-007/CP-024 (COOKIE-DESIGN.md §4.1): the legacy `?token=` WS
+        // carrier is on a three-phase retirement — PHASE A shipped the
+        // behavior plus a redacted per-handshake telemetry line (that census
+        // timed PHASE B); PHASE B — this line — defaults to DENY now that the
+        // last query producer (mobile, §4.4) has flipped; PHASE C removes the
+        // branch one release later. Env knob PHLIX_WS_QUERY_TOKEN=allow|deny:
+        // unset/empty takes the shipped 'deny', and an explicit 'allow'
+        // restores the PHASE A behavior byte-ident — the straggler escape
+        // hatch. The explicit-value parse rule is UNMOVED from PHASE A (among
+        // SET values only an exact 'deny' denies; unrecognized values still
+        // behave 'allow', the SH-064 TLS-gate family's never-lock-out rule —
+        // what flipped is the shipped default, not the vocabulary). The gate
+        // governs the QUERY carrier only; bearer and admitted-cookie legs are
+        // unaffected under every setting (CP-006 precedence law, §2.3). Read
+        // once at boot and handed to SyncPlayAuthMiddleware (restart-class,
+        // like host/port).
+        'query_token' => EnvConfig::text('PHLIX_WS_QUERY_TOKEN', 'deny'),
     ],
 
     // S445 write-through publish bridge: private unix socket the 14 HTTP

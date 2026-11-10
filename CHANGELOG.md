@@ -550,6 +550,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The `:8097` legacy `?token=` WebSocket query carrier is refused by
+  default.** The CP-007 gate shipped as "`PHLIX_WS_QUERY_TOKEN=allow|deny`
+  (config `websocket.query_token`, default `allow`, read at boot)"; CP-024
+  PHASE B flips the shipped default to `deny`, exactly as that entry forecast
+  the §4.1 plan would. Unset or empty env now refuses query-carrier
+  handshakes pre-upgrade with the existing reject idiom (pool reap + TCP
+  close — no envelope exists before the 101, zero new wire codes; the frozen
+  error-code registry is untouched). Hosts running straggler clients restore
+  the previous behavior with an explicit `PHLIX_WS_QUERY_TOKEN=allow`, byte-
+  identical to Phase-A acceptance including its redacted telemetry line. The
+  parser vocabulary is unchanged by the flip: `deny` remains the only denying
+  value and unrecognized values still fail open to `allow` (opt-in-tightening
+  law). Bearer-subprotocol and admitted-cookie handshakes stay byte-ident
+  under every gate setting — absent, `allow` or `deny` — the CP-006 precedence
+  law is UNMOVED. The flip is gated on an estate producer census (2026-11-10)
+  that found zero live `?token=` WS-handshake producers: phlix-ui, hub,
+  tizen, windows, console and roku dial bearer/cookie carriers, and mobile —
+  the last query producer — flipped its direct lane to the bearer
+  subprotocol at phlix-mobile-client `bdbe1e1`. Measured golden rotation:
+  eight unit expectations and one real-socket integration expectation that
+  pinned the gate-absent leg to the Phase-A accept shape reddened on the flip
+  and were rotated to the new default law; two query-vehicle auth/rate-limit
+  law legs gained explicit `allow` pins so the laws they exercise stay
+  exercised. PHASE C (branch deletion) stays a later owner-timed move trailing
+  fleet update.
+
 - **Composer dependency refresh: `detain/phlix-shared` `^0.53.0` → `^0.54.0`
   and the test-only `detain/phlix-tokens` archive pin `v0.2.2` → `v0.2.3`.**
   The shared v0.54.0 manifest parser narrowed the typed settings view; the

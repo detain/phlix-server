@@ -91,10 +91,14 @@ class WsAuthenticationTest extends TestCase
      */
     public function testValidTokenAuthenticatesConnection(): void
     {
+        // CP-024 PHASE B: the query carrier is pinned through the escape
+        // hatch so this SV-4.7 law stays about token VALIDITY at handshake
+        // stage; the deny default itself is convicted in WsQueryTokenGateTest.
         $config = [
             'host' => '0.0.0.0',
             'port' => 8097,
             'jwt_secret' => $this->jwtSecret,
+            'query_token' => 'allow',
         ];
 
         $server = new WebSocketServer($config);
@@ -122,10 +126,15 @@ class WsAuthenticationTest extends TestCase
 
     public function testInvalidTokenClosesConnection(): void
     {
+        // CP-024 PHASE B: exercise the invalid-credential law through the
+        // escape hatch — under the shipped deny default this handshake would
+        // close for the WRONG reason (gate refusal masking the validity law),
+        // which would make the leg vacuous. allow keeps it about the token.
         $config = [
             'host' => '0.0.0.0',
             'port' => 8097,
             'jwt_secret' => $this->jwtSecret,
+            'query_token' => 'allow',
         ];
 
         $server = new WebSocketServer($config);
@@ -204,10 +213,13 @@ class WsAuthenticationTest extends TestCase
 
     public function testExpiredTokenRejectsConnection(): void
     {
+        // CP-024 PHASE B: escape-hatch pin (same vacuity prevention as
+        // testInvalidTokenClosesConnection — this leg is about expiry).
         $config = [
             'host' => '0.0.0.0',
             'port' => 8097,
             'jwt_secret' => $this->jwtSecret,
+            'query_token' => 'allow',
         ];
 
         // Create an expired JWT handler
@@ -663,11 +675,15 @@ class WsAuthenticationTest extends TestCase
     }
 
     /**
-     * @return array{host: string, port: int, jwt_secret: string}
+     * @return array<string, mixed>
      */
-    private function authConfig(): array
+    private function authConfig(?string $queryTokenPolicy = null): array
     {
-        return ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+        if ($queryTokenPolicy !== null) {
+            $config['query_token'] = $queryTokenPolicy;
+        }
+        return $config;
     }
 
     /**
@@ -703,13 +719,16 @@ class WsAuthenticationTest extends TestCase
     }
 
     /**
-     * Legacy ?token=-only carrier still authenticates (compat) and, negotiating
-     * no subprotocol, must get NO echo (RFC 6455 §4.1: answering an offer the
-     * client never made is itself the violation).
+     * Legacy ?token=-only carrier authenticates through the CP-024 PHASE B
+     * escape hatch (explicit allow restores PHASE A byte-ident) and,
+     * negotiating no subprotocol, must get NO echo (RFC 6455 §4.1: answering
+     * an offer the client never made is itself the violation). The deny
+     * DEFAULT for this carrier is convicted by WsQueryTokenGateTest; this
+     * leg exercises the carrier law itself, which the flip must not change.
      */
     public function testQueryOnlyCarrierStillAuthenticatesWithoutEcho(): void
     {
-        $server = new WebSocketServer($this->authConfig());
+        $server = new WebSocketServer($this->authConfig('allow'));
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
         $token = $this->jwtHandler->createAccessToken('user-query');
@@ -794,10 +813,13 @@ class WsAuthenticationTest extends TestCase
      * `bearer` offered WITHOUT a token entry falls back to the legacy query
      * carrier (transitional clients mid-retirement) and still gets the echo,
      * because negotiation is offer-driven, not carrier-driven — the hub law.
+     * Exercised under the CP-024 escape hatch; the fall-back resolves to
+     * carrier 'query', so the shipped deny default must refuse it too —
+     * pinned by the second leg below (no gate bypass via marker smuggling).
      */
     public function testBearerMarkerWithoutTokenEntryFallsBackToQueryAndEchoes(): void
     {
-        $server = new WebSocketServer($this->authConfig());
+        $server = new WebSocketServer($this->authConfig('allow'));
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
         $token = $this->jwtHandler->createAccessToken('user-fallback');
@@ -809,6 +831,28 @@ class WsAuthenticationTest extends TestCase
         $this->assertCount(1, $connections);
         $this->assertSame('user-fallback', $connections[0]->getUserId());
         $this->assertSame(['Sec-WebSocket-Protocol: bearer'], $mockConnection->headers);
+    }
+
+    /**
+     * CP-024 PHASE B conviction: the same marker-without-entry handshake under
+     * the SHIPPED default is refused — the fall-back lands on carrier 'query',
+     * which the deny gate governs, so a bare 'bearer' offer cannot smuggle a
+     * query credential past the retirement gate. REDDENED at the parent (the
+     * PHASE A allow default authenticated and echoed this handshake).
+     */
+    public function testBearerMarkerFallbackIsRefusedByTheDenyDefault(): void
+    {
+        $server = new WebSocketServer($this->authConfig());
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+        $token = $this->jwtHandler->createAccessToken('user-smuggle');
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeHandshakeRequest($token, 'bearer'));
+
+        $this->assertTrue($callTracker['close'], 'The deny default must refuse the fallback carrier.');
+        $this->assertCount(0, ConnectionPool::getInstance()->all());
+        $this->assertSame([], $mockConnection->headers, 'A refused handshake answers no negotiation.');
     }
 
     /**

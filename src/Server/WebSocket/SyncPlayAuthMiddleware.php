@@ -20,11 +20,12 @@ use Phlix\Common\Logger\LogChannels;
  * SyncPlay Authentication Middleware for WebSocket connections.
  *
  * Validates the handshake JWT (bearer subprotocol preferred, legacy
- * `?token=` accepted — see docs/dev/WEBSOCKET_AUTH_CARRIERS.md) and enforces
+ * `?token=` accepted only while the retirement gate resolves to allow — see
+ * docs/dev/WEBSOCKET_AUTH_CARRIERS.md) and enforces
  * authentication for SyncPlay rooms. The legacy query carrier additionally
  * answers to the CP-007 retirement gate (`PHLIX_WS_QUERY_TOKEN`, default
- * allow — {@see parseQueryTokenPolicy()}); bearer and admitted-cookie legs
- * are never governed by it.
+ * deny since the CP-024 PHASE B flip — {@see parseQueryTokenPolicy()});
+ * bearer and admitted-cookie legs are never governed by it.
  *
  * ## Authentication Flow
  *
@@ -73,14 +74,16 @@ class SyncPlayAuthMiddleware
     public const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: bearer';
 
     /**
-     * Query-carrier gate dispositions (CP-007, COOKIE-DESIGN.md §4.1 PHASE A).
+     * Query-carrier gate dispositions (CP-007/CP-024, COOKIE-DESIGN.md §4.1).
      *
      * The `:8097` legacy `?token=` carrier is observed under `allow` (every
-     * query handshake logs one redacted telemetry line) and additionally
-     * REFUSED pre-101 under `deny`. Shipped default is `allow`; PHASE B flips
-     * the default after the last query-producing client retires (§4.4), and
-     * PHASE C removes the branch. Env seam: `PHLIX_WS_QUERY_TOKEN` (config
-     * `websocket.query_token`).
+     * query handshake logs one redacted telemetry line) and REFUSED pre-101
+     * under `deny`. PHASE A shipped `allow` as the default; PHASE B (CP-024,
+     * shipped once the last query-producing client — mobile, §4.4 — flipped)
+     * ships `deny`: the straggler escape hatch is an explicit
+     * `PHLIX_WS_QUERY_TOKEN=allow`, which restores the PHASE A behavior
+     * byte-ident. PHASE C removes the branch. Env seam:
+     * `PHLIX_WS_QUERY_TOKEN` (config `websocket.query_token`).
      */
     public const QUERY_TOKEN_ALLOW = 'allow';
     public const QUERY_TOKEN_DENY = 'deny';
@@ -150,9 +153,10 @@ class SyncPlayAuthMiddleware
      *   (tests/dev direct construction).
      * @param string $queryTokenPolicy CP-007 query-carrier gate disposition —
      *   the `websocket.query_token` config value (env seam
-     *   PHLIX_WS_QUERY_TOKEN). {@see parseQueryTokenPolicy()} for the fail-open
-     *   reading; the default keeps every pre-CP-007 construction site on
-     *   today's allow behavior.
+     *   PHLIX_WS_QUERY_TOKEN). {@see parseQueryTokenPolicy()} for the
+     *   explicit-value reading; the parameter default carries the PHASE B
+     *   shipped posture (CP-024): `deny`, the same law the config surface
+     *   ships for an unset knob.
      *
      * @example
      * ```php
@@ -167,7 +171,7 @@ class SyncPlayAuthMiddleware
         string $jwtSecret,
         bool $requireAuth = true,
         ?AuthManager $authManager = null,
-        string $queryTokenPolicy = self::QUERY_TOKEN_ALLOW
+        string $queryTokenPolicy = self::QUERY_TOKEN_DENY
     ) {
         $this->jwtHandler = new JwtHandler($jwtSecret);
         $this->requireAuth = $requireAuth;
@@ -184,6 +188,12 @@ class SyncPlayAuthMiddleware
      * opt-in-tightening family (SH-064 TLS gate): a typo in a production env
      * file must never silently lock legacy clients out; tightening happens
      * only when the operator says so unambiguously.
+     *
+     * The CP-024 PHASE B flip changed WHAT FEEDS THIS READER by default —
+     * `config/server.php` now hands it the string 'deny' whenever the env
+     * knob is unset or empty, so the shipped posture denies — not what an
+     * explicit knob value means: a set-but-unrecognized value still reads as
+     * allow under the rule above.
      *
      * @param string $rawPolicy Config/env value as supplied.
      * @return bool True when the query carrier stays accepted.

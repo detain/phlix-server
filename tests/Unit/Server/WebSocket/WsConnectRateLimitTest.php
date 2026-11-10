@@ -156,7 +156,9 @@ final class WsConnectRateLimitTest extends TestCase
      */
     public function testUnderLimitConnectProceedsToAuth(): void
     {
-        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+        // CP-024 PHASE B: the query carrier reaches auth through the escape
+        // hatch — this leg is about the limiter's ordering, not the gate.
+        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret, 'query_token' => 'allow'];
         $server = new WebSocketServer($config);
 
         $limiter = $this->makeLimiter(false);
@@ -213,7 +215,9 @@ final class WsConnectRateLimitTest extends TestCase
      */
     public function testNoLimiterLeavesConnectUnthrottled(): void
     {
-        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret];
+        // CP-024 PHASE B: escape-hatch pin — the query carrier here is the
+        // vehicle for reaching auth, the subject is the no-limiter posture.
+        $config = ['host' => '0.0.0.0', 'port' => 8097, 'jwt_secret' => $this->jwtSecret, 'query_token' => 'allow'];
         $server = new WebSocketServer($config);
 
         $callTracker = [];

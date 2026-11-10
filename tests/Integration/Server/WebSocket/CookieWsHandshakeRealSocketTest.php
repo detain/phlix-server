@@ -258,20 +258,22 @@ final class CookieWsHandshakeRealSocketTest extends TestCase
 
     // ── query carrier + CP-007 gate legs (real wire + real log file) ─────────
 
-    public function testQueryCarrierGateAbsentCompletesAndLogsRedactedTelemetryOnRealSocket(): void
+    public function testQueryCarrierGateAbsentRefusesPreUpgradeOnRealSocket(): void
     {
+        // CP-024 PHASE B on the real wire: gate-absent IS the shipped
+        // posture, and the shipped posture is now deny — the query handshake
+        // receives ZERO response bytes and the deny telemetry lands in the
+        // log file the child process writes itself. REDDENED at the parent
+        // (this leg pinned the PHASE A default-allow upgrade + telemetry).
         $server = $this->startServer('absent');
         $token = $this->accessToken();
 
         $wire = $this->handshake($server, '/syncplay?token=' . urlencode($token), []);
 
-        // Query-only client offered no 'bearer' subprotocol -> offered-gate
-        // echo stays off even though the carrier authenticated.
-        $this->assertUpgrade($wire, 'query carrier (default allow posture)');
-        $this->assertStringNotContainsString(self::MARKER_LINE, $wire);
+        $this->assertSame('', $wire, 'the deny default must kill the query handshake before the 101');
 
         $log = $this->serverLog($server);
-        $this->assertStringContainsString('used the legacy ?token= query carrier (PHLIX_WS_QUERY_TOKEN=allow)', $log);
+        $this->assertStringContainsString('legacy ?token= query carrier refused (PHLIX_WS_QUERY_TOKEN=deny)', $log);
         $this->assertStringContainsString('token=[redacted]', $log);
         $this->assertStringNotContainsString(
             $token,

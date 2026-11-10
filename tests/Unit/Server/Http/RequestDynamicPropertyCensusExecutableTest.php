@@ -1149,7 +1149,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // compose examples and helm ConfigMap — the DD review measured the
     // revert-all at zero genuine convictions before this file existed);
     // 2064 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2064;
+    // +1 2064→2065: w18L1 adds tests/Unit/Deploy/
+    // HubChartPlaceholderSecretGuardTest.php (SH-027: the phlix-hub chart's
+    // placeholder-secret refusal pinned at source-text level — no helm
+    // binary in the runner — plus the dirty-list parity leg against the
+    // server chart and the README argv/truth pins);
+    // 2065 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2065;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

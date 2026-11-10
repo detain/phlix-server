@@ -14,6 +14,7 @@ namespace Phlix\Hub;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Network\PortForwardService;
 use Phlix\Shared\Hub\ClaimRequest;
+use Phlix\Shared\Hub\ClaimResponse;
 use Phlix\Shared\Hub\HeartbeatDto;
 use Phlix\Shared\Hub\LibraryRef;
 use Throwable;
@@ -54,6 +55,16 @@ class HubClient
      * the claim-poll path.
      */
     private const CLAIM_ID_PATTERN = '/^[A-Za-z0-9_-]+$/';
+
+    /**
+     * Claim-code validity window (seconds) the pairing flow assumes when the
+     * hub reply omits it. The hub's own ClaimResponse mints 600 (master plan
+     * §6); this is the server-side tolerance for the absent field, applied
+     * BEFORE the shared parse so the one deliberate leniency stays visible.
+     *
+     * @see self::initiatePairing()
+     */
+    private const DEFAULT_CLAIM_EXPIRES_IN = 600;
 
     /** @var int Enrollment JWT lifetime in seconds (7 days). */
     private const ENROLLMENT_TTL = 604800;
@@ -225,19 +236,34 @@ class HubClient
 
         $body = $response->body;
 
-        // The hub replies with the shared ClaimResponse wire format
-        // (camelCase: claimCode/expiresIn/claimId/hubBaseUrl); read those
-        // keys, not snake_case, or the claim code comes back empty.
-        $claimCode = is_string($body['claimCode'] ?? null) ? $body['claimCode'] : '';
-        $expiresIn = is_int($body['expiresIn'] ?? null) ? $body['expiresIn'] : 600;
-        $claimId = is_string($body['claimId'] ?? null) ? $body['claimId'] : '';
-        $hubBaseUrl = is_string($body['hubBaseUrl'] ?? null) ? $body['hubBaseUrl'] : $hubUrl;
+        // LW-078: consume the shared ClaimResponse DTO instead of hand-parsing.
+        // fromPayload() IS the wire contract — camelCase claimCode/claimId/
+        // hubBaseUrl strings plus an int expiresIn, all required. The two
+        // leniencies the pairing UX has always carried are expressed AROUND
+        // the parse as pre-fill defaults (isset covers absent AND null, the
+        // exact old behavior): a missing expiresIn assumes the 600s claim
+        // window, a missing hubBaseUrl falls back to the URL we dialed. Every
+        // other shape violation — absent or wrong-typed required field — now
+        // throws instead of silently yielding '' claim codes; the old '' path
+        // only deferred the failure into pollClaimStatus's INVALID_CLAIM_ID
+        // gate (and the UI's unclaimable-code dead end). Callers already wrap
+        // this in catch(Throwable) (AdminHubController pairing action,
+        // scripts/pair-with-hub.php), so the failure lands in their error
+        // envelope — no new wire codes.
+        if (!isset($body['expiresIn'])) {
+            $body['expiresIn'] = self::DEFAULT_CLAIM_EXPIRES_IN;
+        }
+        if (!isset($body['hubBaseUrl'])) {
+            $body['hubBaseUrl'] = $hubUrl;
+        }
+
+        $claim = ClaimResponse::fromPayload($body);
 
         return new ClaimInitiateResult(
-            claimCode: $claimCode,
-            expiresIn: $expiresIn,
-            claimId: $claimId,
-            hubBaseUrl: $hubBaseUrl,
+            claimCode: $claim->claimCode,
+            expiresIn: $claim->expiresIn,
+            claimId: $claim->claimId,
+            hubBaseUrl: $claim->hubBaseUrl,
         );
     }
 
@@ -711,7 +737,15 @@ class HubClient
         // Build from the shared HeartbeatDto so the wire payload uses the
         // camelCase keys the hub parses with HeartbeatDto::fromPayload();
         // a snake_case array here is rejected with 400 "Bad Request"
-        // ("serverId is required").
+        // ("serverId is required"). Since LW-067 the hub parses with
+        // strictLibraries=true (phlix-hub ServerController: `fromPayload(
+        // $request->body, true)`), which throws on any library entry lacking
+        // a non-empty library_id/library_name. This producer satisfies that
+        // contract by construction: collectLibraries() maps every entry
+        // through LibraryRef::fromPayload() — the identical shape gate — and
+        // degrades the WHOLE list to [] on any throw, so the hub never sees a
+        // half-built entry. The pinned round-trip lives in HubClientTest::
+        // test_sendHeartbeat_payload_round_trips_through_the_strict_hub_parser.
         $payload = (new HeartbeatDto(
             serverId: $enrollment->serverId,
             version: $this->serverVersion,

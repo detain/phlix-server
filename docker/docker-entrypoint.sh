@@ -264,6 +264,71 @@ fi
 
 export JWT_SECRET
 
+# ---------------------------------------------------------------------------
+# SH-031: never boot a debug-armed container on a PUBLIC trigger value.
+#
+# docker/php.ini shipped `xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"`.
+# "devdebug" is committed to this repository — anyone who reads it can start
+# debug sessions against a container that left the default live: trace/PHPDBG
+# traffic into /tmp/xdebug (a disk-fill vector) and disclosure of exactly
+# which requests get traced. The examples file even claimed "leaving it unset
+# changes nothing" — that claim WAS the exposure. The obvious fix is ruled
+# out by Xdebug semantics: with start_with_request=trigger, an EMPTY/absent
+# trigger_value means ANY value triggers — strictly worse. The doctrine is
+# therefore the host-install one (scripts/install.sh randomizes per install;
+# systemd/README.md names devdebug a do-not-keep value): mint a per-deploy
+# value — here per-boot. When debugging is ARMED and the operator set
+# nothing, generate 64 hex chars and print the value once (a trigger is not
+# a signing-key class secret: the operator must be able to read it from
+# `docker logs` to start a session, and it rotates on restart). An
+# explicitly set public literal is REFUSED while armed, same fail-closed
+# shape as PHLIX-PLACEHOLDER-SECRET above. Mode off (the shipped default)
+# stays fully inert: no generation, no export, no refusal.
+# ---------------------------------------------------------------------------
+xdebug_armed() {
+	case "$(printf '%s' "${XDEBUG_MODE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	'' | off | no | none | 0) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+if xdebug_armed; then
+	case "$(printf '%s' "${XDEBUG_TRIGGER:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	devdebug)
+		echo "==========================================================" >&2
+		echo "PHLIX-XDEBUG-PUBLIC-TRIGGER: XDEBUG_TRIGGER is set to the" >&2
+		echo "documented default \"devdebug\"." >&2
+		echo "" >&2
+		echo "That string is committed to this repository, so it is public:" >&2
+		echo "anyone could start debug sessions and trace files on this" >&2
+		echo "container. Refusing to start with debugging armed." >&2
+		echo "" >&2
+		echo "Set XDEBUG_TRIGGER to a private value (e.g. the output of" >&2
+		echo "  openssl rand -hex 12 )" >&2
+		echo "or UNSET it and let this entrypoint generate a fresh one per" >&2
+		echo "boot; or disable debugging entirely with XDEBUG_MODE=off." >&2
+		echo "==========================================================" >&2
+		exit 1
+		;;
+	esac
+	if [ -z "${XDEBUG_TRIGGER:-}" ]; then
+		XDEBUG_TRIGGER="$(phlix_generate_secret 2>/dev/null || true)"
+		if [ -z "$XDEBUG_TRIGGER" ]; then
+			echo "==========================================================" >&2
+			echo "PHLIX-XDEBUG-TRIGGER-UNAVAILABLE: debugging is armed but" >&2
+			echo "no trigger value could be generated (no usable od(1)/openssl)" >&2
+			echo "and XDEBUG_TRIGGER is unset. Set a private XDEBUG_TRIGGER" >&2
+			echo "explicitly, or disable debugging with XDEBUG_MODE=off." >&2
+			echo "==========================================================" >&2
+			exit 1
+		fi
+		echo "PHLIX-XDEBUG-TRIGGER: generated one-time debug-session trigger ${XDEBUG_TRIGGER}"
+		echo "Start a session by sending XDEBUG_TRIGGER=${XDEBUG_TRIGGER}"
+		echo "(cookie, GET or HEAD param — it rotates on every restart)."
+	fi
+	export XDEBUG_TRIGGER
+fi
+
 # `1`/`true`/`yes`/`on`, case-insensitive, whitespace-insensitive. The trim
 # matters: a docker `env_file` preserves a trailing space, and
 # `PHLIX_MIGRATIONS_STRICT="1 "` silently falling through to boot-anyway is

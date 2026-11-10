@@ -17,6 +17,7 @@ use Phlix\Hub\HttpResponse;
 use Phlix\Hub\HubClientException;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Hub\StoredEnrollment;
+use Phlix\Shared\Hub\HeartbeatDto;
 use Phlix\Common\Logger\StructuredLogger;
 
 class HubClientTest extends TestCase
@@ -122,6 +123,144 @@ class HubClientTest extends TestCase
 
         (new HubClient($keyManager, $httpClient, $logger, $this->tmpDir))
             ->initiatePairing('https://hub.example.com/', 'Test Server');
+    }
+
+    public function test_initiatePairing_defaults_an_absent_expires_in_to_the_pairing_window(): void
+    {
+        // LW-078 preservation pin: the pairing UX has always tolerated a hub
+        // reply without expiresIn by falling back to the 600s claim window.
+        // The leniency now lives AROUND the shared ClaimResponse parse, so it
+        // must behave exactly as before for the absent field — AND for the
+        // present-but-null field the old `is_int(...) ?: 600` also tolerated
+        // (that's why the pre-fill is isset, not array_key_exists).
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 'ABCD-1234',
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+        $result = $client->initiatePairing('https://hub.example.com', 'Test Server');
+
+        $this->assertSame(600, $result->expiresIn);
+
+        $httpClientNull = $this->createMock(HttpClientInterface::class);
+        $httpClientNull->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 'ABCD-1234',
+            'expiresIn' => null,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        $clientNull = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClientNull,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+        $resultNull = $clientNull->initiatePairing('https://hub.example.com', 'Test Server');
+
+        $this->assertSame(600, $resultNull->expiresIn);
+    }
+
+    public function test_initiatePairing_falls_back_to_the_dialed_url_for_a_null_hub_base_url(): void
+    {
+        // LW-078 preservation pin: a null (or absent) hubBaseUrl falls back to
+        // the URL we dialed — isset covers both shapes, matching the old
+        // `is_string(...) ?: $hubUrl` behavior for absent AND null.
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 'ABCD-1234',
+            'expiresIn' => 600,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => null,
+        ]));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+        $result = $client->initiatePairing('https://hub.example.com', 'Test Server');
+
+        $this->assertSame('https://hub.example.com', $result->hubBaseUrl);
+    }
+
+    public function test_initiatePairing_rejects_a_wrong_typed_claim_code(): void
+    {
+        // LW-078 fail-loud pin: the shared ClaimResponse parser rejects a
+        // non-string claimCode. The old hand-parse silently produced '' and
+        // the pairing flow limped on with an unclaimable code — the exact
+        // theater this item removes.
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 12345,
+            'expiresIn' => 600,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $client->initiatePairing('https://hub.example.com', 'Test Server');
+    }
+
+    public function test_initiatePairing_rejects_a_missing_claim_code(): void
+    {
+        // LW-078 fail-loud pin (see wrong-typed sibling): absent claimCode used
+        // to yield the same '' fail-late path; it must throw at the boundary.
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'expiresIn' => 600,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $client->initiatePairing('https://hub.example.com', 'Test Server');
+    }
+
+    public function test_initiatePairing_rejects_a_missing_claim_id(): void
+    {
+        // LW-078 fail-loud pin: claimId is what every later poll/redeem call
+        // needs; '' only deferred the failure into pollClaimStatus's
+        // INVALID_CLAIM_ID shape gate. Fail at the parse instead.
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 'ABCD-1234',
+            'expiresIn' => 600,
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $client->initiatePairing('https://hub.example.com', 'Test Server');
     }
 
     public function test_pollClaimStatus_gets_the_absolute_hub_url(): void
@@ -525,6 +664,57 @@ class HubClientTest extends TestCase
             ],
             $capturedPayload['libraries'] ?? null,
         );
+    }
+
+    public function test_sendHeartbeat_payload_round_trips_through_the_strict_hub_parser(): void
+    {
+        // LW-064-a pin: the hub has parsed heartbeats with strictLibraries=true
+        // since LW-067 (phlix-hub ServerController::fromPayload($request->body,
+        // true)) — every library entry must carry a non-empty library_id AND
+        // library_name or the parse throws. This producer satisfies that
+        // contract by construction (collectLibraries maps each entry through
+        // LibraryRef::fromPayload, which throws on the same shape, and the
+        // whole list degrades to [] on any error), so the strict re-parse of
+        // the captured wire payload must round-trip with libraries intact.
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $capturedPayload = null;
+        $httpClient->method('post')->willReturnCallback(
+            function (string $url, array $payload) use (&$capturedPayload): HttpResponse {
+                $capturedPayload = $payload;
+                return new HttpResponse(200, [], []);
+            }
+        );
+
+        $client = new HubClient(
+            new Ed25519KeyManager($this->keyPath),
+            $httpClient,
+            new StructuredLogger('hub', []),
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            static fn (): array => [
+                ['library_id' => 'lib-1', 'library_name' => 'Movies'],
+                ['library_id' => 'lib-2', 'library_name' => 'TV'],
+            ],
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $result = $client->sendHeartbeat();
+        $this->assertTrue($result->ok);
+        $this->assertIsArray($capturedPayload);
+
+        $dto = HeartbeatDto::fromPayload($capturedPayload, true);
+        $this->assertCount(2, $dto->libraries);
+        $this->assertSame('lib-1', $dto->libraries[0]->libraryId);
+        $this->assertSame('Movies', $dto->libraries[0]->libraryName);
+        $this->assertSame('lib-2', $dto->libraries[1]->libraryId);
+        $this->assertSame('TV', $dto->libraries[1]->libraryName);
     }
 
     public function test_sendHeartbeat_survives_a_failing_libraries_provider(): void

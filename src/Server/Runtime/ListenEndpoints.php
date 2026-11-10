@@ -42,8 +42,10 @@ use RuntimeException;
  * non-positive/non-numeric worker count throws a {@see RuntimeException}
  * whose message names the offending key — failing the boot loudly beats
  * serving the media library on a port the operator did not choose. Only
- * `worker.count => 'auto'` is a legal special value: it means "keep the
- * shipped pool size" (14), documented at the config site.
+ * `worker.count => 'auto'` is a legal special value: it resolves to the
+ * shipped pool size (14), shrunk to the container's CPU quota when one is
+ * visible (SH-025 — see {@see detectCpuQuotaCores()}), documented at the
+ * config site.
  *
  * The env seams are `PHLIX_HTTP_HOST`, `PHLIX_HTTP_PORT`,
  * `PHLIX_HTTP_WORKER_COUNT`, `PHLIX_WS_HOST` and `PHLIX_WS_PORT`; empty
@@ -83,12 +85,27 @@ final class ListenEndpoints
     public const DEFAULT_HTTP_PORT = 8096;
 
     /**
-     * Shipped HTTP worker pool size — identical to the pre-R14-06 hardcode,
-     * and the value `worker.count => 'auto'` resolves to.
+     * Shipped HTTP worker pool size — identical to the pre-R14-06 hardcode.
+     * It is what `worker.count => 'auto'` resolves to when no CPU quota is
+     * visible, and the ceiling `auto` never exceeds even when the machine
+     * offers more (SH-025).
      *
      * @since 1.4.0
      */
     public const DEFAULT_HTTP_WORKER_COUNT = 14;
+
+    /**
+     * cgroup v2 CPU-limit file: one line `"<quota> <period>"` in µs, or
+     * `"max <period>"` when unlimited (SH-025).
+     */
+    private const CGROUP_V2_CPU_MAX_PATH = '/sys/fs/cgroup/cpu.max';
+
+    /**
+     * cgroup v1 CPU-limit pair: `cpu.cfs_quota_us` (-1 when unlimited) over
+     * `cpu.cfs_period_us` (SH-025).
+     */
+    private const CGROUP_V1_QUOTA_PATH = '/sys/fs/cgroup/cpu/cpu.cfs_quota_us';
+    private const CGROUP_V1_PERIOD_PATH = '/sys/fs/cgroup/cpu/cpu.cfs_period_us';
 
     /** Shipped WebSocket bind host. @since 1.4.0 */
     public const DEFAULT_WS_HOST = '0.0.0.0';
@@ -106,10 +123,14 @@ final class ListenEndpoints
     /**
      * Resolve the HTTP listening endpoint.
      *
-     * @param array<string, mixed> $config   The `config/server.php` array.
-     * @param string|null          $envHost  Raw `PHLIX_HTTP_HOST` value (null/false/'' = unset).
-     * @param string|null          $envPort  Raw `PHLIX_HTTP_PORT` value.
-     * @param string|null          $envCount Raw `PHLIX_HTTP_WORKER_COUNT` value.
+     * @param array<string, mixed> $config        The `config/server.php` array.
+     * @param string|null          $envHost       Raw `PHLIX_HTTP_HOST` value (null/false/'' = unset).
+     * @param string|null          $envPort       Raw `PHLIX_HTTP_PORT` value.
+     * @param string|null          $envCount      Raw `PHLIX_HTTP_WORKER_COUNT` value.
+     * @param float|null           $cpuQuotaCores Detected cgroup CPU quota in cores
+     *                                            ({@see detectCpuQuotaCores()}) or null when
+     *                                            no limit is visible. Only the auto arm consults
+     *                                            it (SH-025); null keeps the historical answer.
      *
      * @return array{host: string, port: int, workerCount: int, socketName: string}
      *
@@ -121,14 +142,15 @@ final class ListenEndpoints
         array $config,
         ?string $envHost = null,
         ?string $envPort = null,
-        ?string $envCount = null
+        ?string $envCount = null,
+        ?float $cpuQuotaCores = null
     ): array {
         $server = is_array($config['server'] ?? null) ? $config['server'] : [];
         $worker = is_array($config['worker'] ?? null) ? $config['worker'] : [];
 
         $host = self::resolveHost($envHost, $server['host'] ?? null, self::DEFAULT_HTTP_HOST, self::ENV_HTTP_HOST);
         $port = self::resolvePort($envPort, $server['port'] ?? null, self::DEFAULT_HTTP_PORT, self::ENV_HTTP_PORT);
-        $count = self::resolveWorkerCount($envCount, $worker['count'] ?? null);
+        $count = self::resolveWorkerCount($envCount, $worker['count'] ?? null, $cpuQuotaCores);
 
         return [
             'host' => $host,
@@ -321,15 +343,17 @@ final class ListenEndpoints
 
     /**
      * Env-wins HTTP worker pool size. `worker.count => 'auto'` (the shipped
-     * value) resolves to {@see self::DEFAULT_HTTP_WORKER_COUNT} — Workerman
-     * has no auto-scaling pool; 'auto' has always meant "the shipped 14".
+     * value) and an omitted key resolve via {@see autoWorkerCount()} — the
+     * shipped 14, shrunk to a visible CPU quota (SH-025). Workerman has no
+     * auto-scaling pool; the pool size is fixed at boot.
      *
-     * @param string|null $envValue     Nullable raw env string.
-     * @param mixed       $configValue  Raw config value.
+     * @param string|null $envValue       Nullable raw env string.
+     * @param mixed       $configValue    Raw config value.
+     * @param float|null  $cpuQuotaCores  Detected cgroup CPU quota in cores, or null.
      *
      * @throws RuntimeException On zero, negative, or otherwise unparseable counts.
      */
-    private static function resolveWorkerCount(?string $envValue, mixed $configValue): int
+    private static function resolveWorkerCount(?string $envValue, mixed $configValue, ?float $cpuQuotaCores = null): int
     {
         if ($envValue !== null) {
             if (!preg_match('/^\d+$/', $envValue)) {
@@ -355,16 +379,129 @@ final class ListenEndpoints
             return $configValue;
         }
         if (is_string($configValue) && strtolower(trim($configValue)) === 'auto') {
-            return self::DEFAULT_HTTP_WORKER_COUNT;
+            return self::autoWorkerCount($cpuQuotaCores);
         }
         if ($configValue === null) {
-            return self::DEFAULT_HTTP_WORKER_COUNT;
+            return self::autoWorkerCount($cpuQuotaCores);
         }
 
         throw new RuntimeException(sprintf(
             'ListenEndpoints: worker.count must be a positive int or "auto", got %s.',
             get_debug_type($configValue)
         ));
+    }
+
+    /**
+     * The answer `worker.count => 'auto'` gives: the shipped pool when no CPU
+     * quota is visible (bare hosts, unrestricted containers — the historical
+     * behavior byte-for-byte), otherwise ceil(cores) clamped into 1..14.
+     * The clamp-at-shipped ceiling keeps `auto` a safety valve rather than a
+     * growth mandate: a bigger quota never forks more workers than the pool
+     * every default install has always run.
+     */
+    private static function autoWorkerCount(?float $cpuQuotaCores): int
+    {
+        if ($cpuQuotaCores === null || $cpuQuotaCores <= 0.0) {
+            return self::DEFAULT_HTTP_WORKER_COUNT;
+        }
+
+        return (int) min(
+            self::DEFAULT_HTTP_WORKER_COUNT,
+            max(1, (int) ceil($cpuQuotaCores)),
+        );
+    }
+
+    /**
+     * Detect this process's container CPU limit in cores from the cgroup
+     * files (SH-025). Kubernetes expresses `cpu` limits as a CFS quota, and
+     * `nproc`/CPU- affinity reporting does NOT see it — a 2000m pod still
+     * reports the node's full core count — which is why the fixed 14-worker
+     * default silently overshot pod limits. Order of preference: cgroup v2
+     * `cpu.max`, then the cgroup v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`
+     * pair. Anything that is not a usable positive ratio — the v2 `max`
+     * keyword, the v1 `-1` sentinel, missing files, malformed contents —
+     * returns null, and the caller keeps the historical default. Detection
+     * must never guess an artificial limit.
+     *
+     * The path parameters exist for the test harness; production callers
+     * pass nothing.
+     *
+     * @param string|null $cpuMaxPath  cgroup v2 cpu.max path (default real).
+     * @param string|null $quotaPath   cgroup v1 cpu.cfs_quota_us path (default real).
+     * @param string|null $periodPath  cgroup v1 cpu.cfs_period_us path (default real).
+     *
+     * @return float|null Quota in cores (quota µs / period µs), null when no
+     *                    limit is detectable or the limit is "unlimited".
+     */
+    public static function detectCpuQuotaCores(
+        ?string $cpuMaxPath = null,
+        ?string $quotaPath = null,
+        ?string $periodPath = null
+    ): ?float {
+        $cpuMaxPath ??= self::CGROUP_V2_CPU_MAX_PATH;
+        $quotaPath ??= self::CGROUP_V1_QUOTA_PATH;
+        $periodPath ??= self::CGROUP_V1_PERIOD_PATH;
+
+        if (is_file($cpuMaxPath) && is_readable($cpuMaxPath)) {
+            // cgroup v2 unified hierarchy answers alone — probing the v1
+            // paths beside it would mix unrelated numbers.
+            return self::parseCpuMax((string) @file_get_contents($cpuMaxPath));
+        }
+
+        return self::parseCfsPair($quotaPath, $periodPath);
+    }
+
+    /**
+     * `"<quota> <period>"` in µs → cores; `"max …"` (unlimited) or garbage → null.
+     */
+    private static function parseCpuMax(string $contents): ?float
+    {
+        $parts = preg_split('/\s+/', trim($contents));
+        if (!is_array($parts) || count($parts) !== 2) {
+            return null;
+        }
+        [$quota, $period] = $parts;
+        if ($quota === 'max') {
+            return null;
+        }
+        if (preg_match('/^\d+$/', $quota) !== 1 || preg_match('/^\d+$/', $period) !== 1) {
+            return null;
+        }
+        $quotaUs = (int) $quota;
+        $periodUs = (int) $period;
+        if ($quotaUs < 1 || $periodUs < 1) {
+            return null;
+        }
+
+        return $quotaUs / $periodUs;
+    }
+
+    /**
+     * The cgroup v1 pair: `cpu.cfs_quota_us` (negative = unlimited) over
+     * `cpu.cfs_period_us`. Either file missing/unreadable/malformed → null.
+     */
+    private static function parseCfsPair(string $quotaPath, string $periodPath): ?float
+    {
+        if (!is_file($quotaPath) || !is_file($periodPath) || !is_readable($quotaPath) || !is_readable($periodPath)) {
+            return null;
+        }
+        $quotaRaw = @file_get_contents($quotaPath);
+        $periodRaw = @file_get_contents($periodPath);
+        if (!is_string($quotaRaw) || !is_string($periodRaw)) {
+            return null;
+        }
+        if (preg_match('/^-?\d+$/', trim($quotaRaw)) !== 1 || preg_match('/^\d+$/', trim($periodRaw)) !== 1) {
+            return null;
+        }
+        $quotaUs = (int) trim($quotaRaw);
+        $periodUs = (int) trim($periodRaw);
+        if ($quotaUs < 1 || $periodUs < 1) {
+            // v1's unlimited sentinel is -1; zero/negative anything else is
+            // not a usable limit either.
+            return null;
+        }
+
+        return $quotaUs / $periodUs;
     }
 
     /**

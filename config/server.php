@@ -24,10 +24,13 @@ return [
     ],
     'worker' => [
         // HTTP worker pool size (start.php §3). 'auto' resolves to the
-        // shipped pool of 14 — Workerman has no auto-scaling pool, and 14
-        // was the number every real deploy has run since before this key
-        // existed. A positive int sets it explicitly; the env seam
-        // PHLIX_HTTP_WORKER_COUNT wins over this key. The WebSocket
+        // shipped pool of 14, shrunk to the container's cgroup CPU quota
+        // when one is visible — a k8s `cpu: 2000m` limit yields 2 workers,
+        // not 14 (SH-025; Workerman has no auto-scaling pool, the size is
+        // fixed at boot, and 14 was the number every real deploy ran with
+        // before this key existed). With no detectable limit 'auto' still
+        // means exactly 14. A positive int sets it explicitly; the env
+        // seam PHLIX_HTTP_WORKER_COUNT wins over this key. The WebSocket
         // worker's count is NOT configurable (count=1 law: one
         // authoritative SyncPlayManager).
         'count' => 'auto',

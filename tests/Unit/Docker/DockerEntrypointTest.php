@@ -2354,4 +2354,150 @@ class DockerEntrypointTest extends TestCase
             'publish with an unspecified host port and read it back with `docker port`'
         );
     }
+
+    /**
+     * SH-031: a stub supervisord that records the XDEBUG_TRIGGER value it was
+     * started with — proof the entrypoint's decision actually EXPORTS into
+     * the child processes (php.ini interpolates `${XDEBUG_TRIGGER:-…}` when
+     * the workers parse it, so only an exported value is honored).
+     */
+    private function stubSupervisordRecordingXdebugTrigger(): void
+    {
+        $script = "#!/bin/sh\n"
+            . 'printf \'%s \' "$@" > "' . $this->tmpDir . "/supervisord-ran\"\n"
+            . 'echo "XDEBUG_TRIGGER=${XDEBUG_TRIGGER-<unset>}" > "' . $this->tmpDir . "/xdebug-trigger-env\"\n"
+            . 'echo "stub supervisord: started"' . "\n";
+        file_put_contents($this->tmpDir . '/bin/supervisord', $script);
+        chmod($this->tmpDir . '/bin/supervisord', 0755);
+    }
+
+    private function recordedXdebugTriggerEnv(): string
+    {
+        return (string) file_get_contents($this->tmpDir . '/xdebug-trigger-env');
+    }
+
+    public function testADebugArmedBootGeneratesAndAnnouncesAPerBootTrigger(): void
+    {
+        // SH-031: with debugging armed and no operator trigger set, the
+        // entrypoint must mint a non-guessable value (64 hex, like the JWT
+        // generator), export it, and print it once so the operator can copy
+        // it out of `docker logs`. The historical committed default was the
+        // public literal `devdebug`.
+        $this->stubPhp(0);
+        $this->stubSupervisordRecordingXdebugTrigger();
+
+        $run = $this->runEntrypoint(['XDEBUG_MODE' => 'debug']);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertMatchesRegularExpression(
+            '/PHLIX-XDEBUG-TRIGGER: generated .*([0-9a-f]{64})/',
+            $run['stdout'],
+            'the generated trigger must be announced with its value'
+        );
+        $env = $this->recordedXdebugTriggerEnv();
+        self::assertMatchesRegularExpression('/XDEBUG_TRIGGER=[0-9a-f]{64}\n/', $env);
+        self::assertStringNotContainsString('devdebug', $env);
+    }
+
+    public function testThePublicDefaultTriggerIsRefusedWhenDebugIsArmed(): void
+    {
+        // An operator explicitly setting the public literal would silently
+        // re-expose exactly what the generator exists to prevent — same
+        // fail-closed doctrine as PHLIX-PLACEHOLDER-SECRET above.
+        $this->stubPhp(0);
+        $this->stubSupervisordRecordingXdebugTrigger();
+
+        $run = $this->runEntrypoint(['XDEBUG_MODE' => 'debug', 'XDEBUG_TRIGGER' => 'devdebug']);
+
+        self::assertSame(1, $run['code']);
+        self::assertStringContainsString('PHLIX-XDEBUG-PUBLIC-TRIGGER', $run['stderr']);
+        self::assertFalse($this->supervisordStarted(), 'refusal must happen before the container starts');
+    }
+
+    public function testAnOperatorChosenTriggerSurvivesWhenDebugIsArmed(): void
+    {
+        // The generator serves the UNSET case only; an explicit,
+        // non-public value is honored verbatim.
+        $this->stubPhp(0);
+        $this->stubSupervisordRecordingXdebugTrigger();
+
+        $run = $this->runEntrypoint(['XDEBUG_MODE' => 'develop,debug', 'XDEBUG_TRIGGER' => 'a-real-random-one']);
+
+        self::assertSame(0, $run['code']);
+        self::assertStringNotContainsString('PHLIX-XDEBUG-TRIGGER', $run['stdout']);
+        self::assertSame("XDEBUG_TRIGGER=a-real-random-one\n", $this->recordedXdebugTriggerEnv());
+    }
+
+    public function testAnUnsetDebugModeLeavesTheTriggerAlone(): void
+    {
+        // Off is off: with mode unset (the shipped default) nothing is
+        // generated, announced, or exported — a production boot must not
+        // grow xdebug surface it never asked for.
+        $this->stubPhp(0);
+        $this->stubSupervisordRecordingXdebugTrigger();
+
+        $run = $this->runEntrypoint([]);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+        self::assertStringNotContainsString('PHLIX-XDEBUG-TRIGGER', $run['stdout']);
+        self::assertSame("XDEBUG_TRIGGER=<unset>\n", $this->recordedXdebugTriggerEnv());
+    }
+
+    public function testThePublicDefaultTriggerIsToleratedWhileDebuggingIsOff(): void
+    {
+        // The refusal is about an ARMED debugger answering a public trigger.
+        // A stale XDEBUG_TRIGGER=devdebug left in an .env while the mode is
+        // off is inert and must not brick the boot.
+        $this->stubPhp(0);
+        $this->stubSupervisordRecordingXdebugTrigger();
+
+        $run = $this->runEntrypoint(['XDEBUG_MODE' => 'off', 'XDEBUG_TRIGGER' => 'devdebug']);
+
+        self::assertSame(0, $run['code']);
+        self::assertTrue($this->supervisordStarted());
+    }
+
+    public function testThePhpIniCarriesNoPublicTriggerDefault(): void
+    {
+        // SH-031 text pin: the ini fallback is reached only outside the
+        // entrypoint path (mode armed via env without the entrypoint — the
+        // sentinel names that accident instead of being a shared public
+        // value); the historical literal `devdebug` survives only in the
+        // cautionary comment, never as the assignment's default.
+        $ini = (string) file_get_contents(dirname(__DIR__, 3) . '/docker/php.ini');
+
+        $assignments = array_values(array_filter(
+            preg_split('/\R/', $ini) ?: [],
+            static fn (string $line): bool => str_starts_with(trim($line), 'xdebug.trigger_value')
+        ));
+        self::assertCount(1, $assignments, 'exactly one trigger_value assignment');
+        self::assertStringNotContainsString('devdebug', $assignments[0]);
+        self::assertMatchesRegularExpression('/=\s*"\$\{XDEBUG_TRIGGER:-[^}"]+\}"/', $assignments[0]);
+    }
+
+    public function testTheEnvExampleTellsTheTruthAboutTheTriggerDefault(): void
+    {
+        // SH-031 text pin: the example used to claim the built-in default
+        // made the variable moot — "leaving it unset changes nothing" —
+        // precisely because that default was public. No uncommented trigger
+        // assignment may ship, and the prose must describe the real behavior.
+        $example = (string) file_get_contents(
+            dirname(__DIR__, 3) . '/docker/examples/.env.example'
+        );
+
+        self::assertStringNotContainsString('leaving it unset changes nothing', $example);
+        foreach (preg_split('/\R/', $example) ?: [] as $line) {
+            if (str_starts_with(ltrim($line), '#')) {
+                continue;
+            }
+            self::assertDoesNotMatchRegularExpression(
+                '/^\s*XDEBUG_TRIGGER=\S/',
+                $line,
+                'the example must not assign a trigger value; the entrypoint mints one'
+            );
+        }
+        self::assertStringContainsString('devdebug', $example);
+    }
 }

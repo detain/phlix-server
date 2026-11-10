@@ -32,6 +32,46 @@ House discipline this file maintains (established by review W-min90/91/92):
 ## [Unreleased]
 
 ### Added
+### Security
+
+- **The vendored `phlix-hub` helm chart can no longer deploy with its
+  placeholder secrets.** `values.example.yaml` ships `database_password:
+  "CHANGE_ME"` and `secret_key: "openssl rand -hex 64"` — the COMMAND as the
+  VALUE — and `templates/secret.yaml` wrapped both in bare `required()`,
+  which only proves non-emptiness: `helm install -f values.example.yaml`
+  therefore succeeded verbatim, booting a hub with a JWT signing key and DB
+  password that are public to anyone who can read this repository. The
+  server chart learned exactly this as M29; the hub chart now carries the
+  same render-time refusal (`phlix-hub.rejectKnownPlaceholder`, its dirty
+  list pinned byte-identical to the server helper's by
+  `HubChartPlaceholderSecretGuardTest`) on both keys, and the example keeps
+  the bait strings ON PURPOSE so a copy-paste install fails loudly.
+  `k8s/README.md` is corrected in the same pass: the install examples no
+  longer pass credentials through `--set` argv (shell history / `ps` leak)
+  and no longer advertise the hub's "own required … values" as the
+  safeguard; a new Secret hygiene section documents the refusal and the
+  `--values` file (mode 0600) idiom. [server review SH-027 / seceng major 1,
+  w18L1 2026-11-09]
+- **A debug-armed container can no longer answer the public Xdebug trigger
+  default.** `docker/php.ini` shipped `xdebug.trigger_value =
+  "${XDEBUG_TRIGGER:-devdebug}"` and `docker/examples/.env.example` claimed
+  "leaving it unset changes nothing" — the claim WAS the exposure: `devdebug`
+  is committed here, so anyone who reads it can start debug sessions on any
+  container that arms `XDEBUG_MODE` without overriding the trigger (trace
+  files piling into `/tmp/xdebug`, plus disclosure of which requests are
+  traced). Deleting the default is ruled out by Xdebug semantics: with
+  `start_with_request = trigger`, an EMPTY trigger value means ANY value
+  triggers. `docker-entrypoint.sh` now owns the per-deploy randomization the
+  host installer (`scripts/install.sh`) already does, per boot: when
+  debugging is armed it mints a 64-hex trigger and prints it once with the
+  `PHLIX-XDEBUG-TRIGGER` marker (operators read it from `docker logs`; it
+  rotates on restart), refuses to start at all if the operator explicitly
+  sets the public literal (`PHLIX-XDEBUG-PUBLIC-TRIGGER` banner), and honors
+  any private value verbatim. Mode off — the shipped default — boots
+  byte-identically to before, with no trigger handling. The ini fallback is
+  now a self-describing sentinel instead of a shared public word.
+  [server review SH-031 / seceng minor 5, w18L1 2026-11-09]
+
 
 - **Login throttling gained a second, per-account failure window.**
   `migrations/126_login_rate_limit_account.sql` creates
@@ -244,6 +284,38 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+
+- **`worker.count => 'auto'` now honors a container CPU limit.** The auto
+  arm always resolved to the shipped 14 HTTP workers — but a k8s `cpu:
+  2000m` limit is a cgroup CFS quota, `nproc` lies about it, and 14 workers
+  plus ~11 sibling processes inside the pod's limits oversubscribed ~2× and
+  put the whole container into an OOMKill lottery (the MySQL connection
+  floor scales with the pool too). `ListenEndpoints::detectCpuQuotaCores()`
+  reads cgroup v2 `cpu.max`, then the v1
+  `cpu.cfs_quota_us`/`cpu.cfs_period_us` pair, and `start.php` hands the
+  result to `http()`: with a visible quota, `auto` resolves to ceil(cores)
+  clamped to 1..14 — capped at the shipped pool, never a mandate to grow —
+  and with NO usable quota (`max`, the `-1` sentinel, garbage, bare hosts,
+  unrestricted containers, PHPUnit) it resolves to exactly 14, the
+  historical answer byte-for-byte. An explicit `PHLIX_HTTP_WORKER_COUNT` or
+  config int still wins over the quota (precedence law unchanged).
+  `k8s/helm/phlix/values.yaml` documents the worker↔quota↔memory math and
+  the env escape hatch for pinning a count. [server review SH-025 / devops
+  minor 4, w18L1 2026-11-09]
+- **The heartbeat library contract is pinned against the hub's strict
+  parser.** The hub has parsed heartbeats with `strictLibraries = true`
+  since LW-067 (its `ServerController` passes `true` to
+  `HeartbeatDto::fromPayload`); the server is producer-only, and its
+  `collectLibraries()` was already strict BY CONSTRUCTION — every entry
+  maps through `LibraryRef::fromPayload` (throws on a missing/empty
+  `library_id`/`library_name`) and any throw degrades the whole list to
+  empty, so the hub never sees a half-built entry. LW-064-a makes that
+  law visible instead of tribal: the `HubClient` payload comment states
+  the strict contract, and `HubClientTest::
+  test_sendHeartbeat_payload_round_trips_through_the_strict_hub_parser`
+  re-parses the captured wire payload with `strictLibraries = true`, so
+  future producer drift reddens here before it becomes 400s at hub
+  audit time. [shared review LW-064-a / srphp info, w18L1 2026-11-09]
 
 - **Forward-note (test figures): two w17L3 count claims were wrong; shipped
   behavior is untouched and nothing is rewritten here.** [server review w17L3
@@ -956,6 +1028,25 @@ House discipline this file maintains (established by review W-min90/91/92):
   first-party PHP files 2079→2067 (+4 new files in this batch, −16 deleted;
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
+
+- **The hub's pairing reply is parsed by the shared DTO, not by hand.**
+  `HubClient::initiatePairing()` read the claim fields with
+  `is_string(...) ?: ''` / `is_int(...) ?: 600` fallbacks, so a malformed
+  hub response became a "success" carrying an EMPTY claim code that only
+  died later — as `INVALID_CLAIM_ID` at the poll gate, and as an
+  unclaimable dead end in the UI. The tail is now
+  `ClaimResponse::fromPayload()` from `@phlix/shared` — the four camelCase
+  keys ARE the contract, and an absent or wrong-typed field throws at the
+  boundary. The two leniencies pairing has always deliberately tolerated
+  stay: a missing or null `expiresIn` assumes the 600-second claim window,
+  and a missing or null `hubBaseUrl` falls back to the URL actually
+  dialed — both expressed AROUND the parse as explicit `isset` pre-fills
+  (isset covers absent AND null, exactly the old shape) with tests pinning
+  the preserved leniencies AND the new fail-loud forms. Callers already
+  wrap this call in `catch (Throwable)` (the admin pairing action,
+  `scripts/pair-with-hub.php`), so the failure lands in their existing
+  error envelope — no new wire codes. [server review LW-078 / HH, w18L1
+  2026-11-09]
 
 - **Readiness re-sync can no longer resurrect or overwrite terminal transcode
   job states.** `getJobReadiness()` wrote `completed`/`failed` straight into

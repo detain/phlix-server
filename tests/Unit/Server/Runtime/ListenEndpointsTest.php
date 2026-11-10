@@ -84,6 +84,134 @@ final class ListenEndpointsTest extends TestCase
         self::assertSame(2, ListenEndpoints::http(['worker' => ['count' => 4]], null, null, '2')['workerCount']);
     }
 
+    public function test_auto_shrinks_the_pool_to_a_visible_cpu_quota(): void
+    {
+        // SH-025: a k8s CPU limit is a cgroup CFS quota that `nproc` lies
+        // about, so 'auto' must consult the quota when one is detectable:
+        // ceil(cores) workers, never more than the shipped 14, never fewer
+        // than 1. A pod capped at 2 cores forks 2 HTTP workers, not 14 —
+        // 14 workers + ~11 sibling processes inside a 2000m/2Gi limit is an
+        // OOMKill lottery for the whole pod.
+        self::assertSame(
+            2,
+            ListenEndpoints::http(['worker' => ['count' => 'auto']], null, null, null, 2.0)['workerCount'],
+        );
+        self::assertSame(
+            2,
+            ListenEndpoints::http([], null, null, null, 2.0)['workerCount'],
+        );
+        // Fractional quotas round up but clamp at the floor of one worker.
+        self::assertSame(
+            1,
+            ListenEndpoints::http(['worker' => ['count' => 'auto']], null, null, null, 0.5)['workerCount'],
+        );
+    }
+
+    public function test_auto_never_exceeds_the_shipped_pool_from_a_quota(): void
+    {
+        // The quota is a ceiling input, not a mandate to grow: on a 30-core
+        // box 'auto' still resolves to the shipped 14, and with no quota
+        // visible (bare host, unlimited docker, PHPUnit) it stays 14 exactly
+        // as it has always been — default-preserving.
+        self::assertSame(
+            14,
+            ListenEndpoints::http(['worker' => ['count' => 'auto']], null, null, null, 30.0)['workerCount'],
+        );
+        self::assertSame(
+            14,
+            ListenEndpoints::http(['worker' => ['count' => 'auto']], null, null, null, null)['workerCount'],
+        );
+    }
+
+    public function test_an_explicit_worker_count_beats_the_cpu_quota(): void
+    {
+        // Precedence law unchanged: env > config > auto-resolution. The quota
+        // only feeds the auto arm; operators who pin a count keep it even
+        // when it overshoots the limit (that becomes their informed choice).
+        self::assertSame(
+            5,
+            ListenEndpoints::http(['worker' => ['count' => 'auto']], null, null, '5', 2.0)['workerCount'],
+        );
+        self::assertSame(
+            6,
+            ListenEndpoints::http(['worker' => ['count' => 6]], null, null, null, 2.0)['workerCount'],
+        );
+    }
+
+    public function test_detect_cpu_quota_cores_reads_the_cgroup_v2_cpu_max(): void
+    {
+        // SH-025 detection: cgroup v2 renders the limit as "<quota> <period>"
+        // in one file (µs/µs). 200000/100000 = 2.0 cores.
+        $dir = sys_get_temp_dir() . '/phlix-cgv2-' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        file_put_contents($dir . '/cpu.max', "200000 100000\n");
+        try {
+            self::assertSame(
+                2.0,
+                ListenEndpoints::detectCpuQuotaCores($dir . '/cpu.max', $dir . '/absent', $dir . '/absent'),
+            );
+        } finally {
+            @unlink($dir . '/cpu.max');
+            @rmdir($dir);
+        }
+    }
+
+    public function test_detect_cpu_quota_cores_reads_the_cgroup_v1_pair(): void
+    {
+        // cgroup v1 splits the same limit into cpu.cfs_quota_us +
+        // cpu.cfs_period_us, reached only when no v2 cpu.max exists.
+        $dir = sys_get_temp_dir() . '/phlix-cgv1-' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        file_put_contents($dir . '/quota', "150000\n");
+        file_put_contents($dir . '/period', "100000\n");
+        try {
+            self::assertSame(
+                1.5,
+                ListenEndpoints::detectCpuQuotaCores($dir . '/absent', $dir . '/quota', $dir . '/period'),
+            );
+        } finally {
+            @unlink($dir . '/quota');
+            @unlink($dir . '/period');
+            @rmdir($dir);
+        }
+    }
+
+    public function test_detect_cpu_quota_cores_is_null_for_unlimited_absent_or_malformed(): void
+    {
+        // Every "no usable quota" shape — v2 'max', v1 -1 sentinel, missing
+        // files, non-numeric garbage, zero period, wrong token count — must
+        // yield null so 'auto' falls back to the shipped 14 instead of
+        // guessing. A detection that mis-answers "no limit" as "1 core"
+        // would throttle every container host.
+        $dir = sys_get_temp_dir() . '/phlix-cgnu-' . uniqid('', true);
+        mkdir($dir, 0700, true);
+        $missing = $dir . '/absent';
+        try {
+            file_put_contents($dir . '/max', "max 100000\n");
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($dir . '/max', $missing, $missing));
+
+            file_put_contents($dir . '/quota', "-1\n");
+            file_put_contents($dir . '/period', "100000\n");
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($missing, $dir . '/quota', $dir . '/period'));
+
+            file_put_contents($dir . '/garbage', "banana apple\n");
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($dir . '/garbage', $missing, $missing));
+
+            file_put_contents($dir . '/onerow', "200000\n");
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($dir . '/onerow', $missing, $missing));
+
+            file_put_contents($dir . '/zero', "200000 0\n");
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($dir . '/zero', $missing, $missing));
+
+            self::assertNull(ListenEndpoints::detectCpuQuotaCores($missing, $missing, $missing));
+        } finally {
+            foreach (glob($dir . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($dir);
+        }
+    }
+
     public function test_hostile_values_fail_loud_naming_the_key(): void
     {
         $this->expectException(RuntimeException::class);

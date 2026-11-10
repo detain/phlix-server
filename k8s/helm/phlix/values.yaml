@@ -70,6 +70,24 @@ ingress:
         - phlix.local
 
 # Container resource requests/limits
+#
+# SH-025 sizing law: the HTTP worker pool now honors these limits. The
+# shipped `worker.count => 'auto'` forks ceil(CPU limit) workers (capped at
+# the historical 14) instead of a fixed 14, because a `cpu:` limit is a
+# cgroup CFS quota that nproc does not report — 14 workers inside
+# cpu: 2000m oversubscribed the pod ~2x and the whole pod (workers +
+# transcodes + ~11 sibling processes + each worker's MySQL pool lease)
+# entered an OOMKill lottery on memory pressure. Plan memory as
+# workers x per-worker working set, plus transcode headroom; note the DB
+# connection floor scales with the pool (each HTTP worker may hold pool
+# leases — see config/database.php), so a low `limits.cpu` also lowers the
+# server_connections_needed_for_pool floor the boot asserts. To pin a
+# count deliberately (bigger node, smaller quota, or the reverse), set
+# PHLIX_HTTP_WORKER_COUNT via the extra-env block below — env beats the
+# quota arm. Example:
+#   env:
+#     - name: PHLIX_HTTP_WORKER_COUNT
+#       value: "6"
 resources:
   limits:
     cpu: 2000m

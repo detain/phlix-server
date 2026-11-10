@@ -281,11 +281,16 @@ $publicRoot = realpath(__DIR__ . '/public') ?: __DIR__ . '/public';
 // every later reader (the DLNA advertised port at §dlna, the relay's
 // local-address derivation, container healthchecks' expectations) sees the
 // socket that actually accepts. {@see \Phlix\Server\Runtime\ListenEndpoints}
+// SH-025: the auto arm additionally consults the cgroup CPU quota, because
+// a k8s `cpu` limit (CFS quota) is invisible to nproc — 14 workers inside a
+// 2-core pod oversubscribed the limit and put the whole pod into an OOMKill
+// lottery. null (no visible limit) keeps the shipped 14 exactly as before.
 $httpListen = ListenEndpoints::http(
     $config,
     ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_HOST),
     ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_PORT),
-    ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_WORKER_COUNT)
+    ListenEndpoints::envValue(ListenEndpoints::ENV_HTTP_WORKER_COUNT),
+    ListenEndpoints::detectCpuQuotaCores()
 );
 $config['server'] = is_array($config['server'] ?? null) ? $config['server'] : [];
 $config['server']['host'] = $httpListen['host'];

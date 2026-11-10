@@ -20,17 +20,24 @@ see `RELEASE_PROCESS.md` — nothing pushes a chart to any chart repository).
 Install from a checkout of this repo, or after downloading the release `.tgz`:
 
 ```bash
-# From a repo checkout (chart sources in ./k8s/helm/phlix):
+# From a repo checkout (chart sources in ./k8s/helm/phlix). Credentials go in
+# a PRIVATE values file, never in `--set`: argv is shell history and `ps`
+# fodder, and both charts refuse known placeholder values at render time
+# (templates/_helpers.tpl `rejectKnownPlaceholder` — see "Secret hygiene").
 helm install phlix ./k8s/helm/phlix \
+  --values ~/phlix-secrets.yaml \
   --set image.tag=<full-sha>-latest \
-  --set config.database_host=your-mysql.example.internal \
-  --set config.database_password=your_password \
-  --set config.secret_key=your_secret \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=phlix.example.com
 
+# ~/phlix-secrets.yaml — chmod 0600, keep it out of git:
+#   config:
+#     database_host: your-mysql.example.internal
+#     database_password: <real credential>
+#     secret_key: <output of: openssl rand -hex 64>
+
 # Or from a release asset:
-helm install phlix ./phlix-<version>.tgz --set image.tag=... (flags as above)
+helm install phlix ./phlix-<version>.tgz --values ~/phlix-secrets.yaml --set image.tag=... (flags as above)
 ```
 
 `image.tag` is REQUIRED and must be an immutable tag; a mutable `latest`
@@ -156,17 +163,36 @@ helm template hub k8s/helm/phlix-hub --set image.tag=test | grep -B1 -A2 contain
 ## Hub chart
 
 The `phlix-hub` chart (in this repo under `k8s/helm/phlix-hub`) deploys the
-central hub. Same pattern as above, with the port map rows for `phlix-hub`
-and its own required `config.database_password` / `config.secret_key` values.
+central hub. Same pattern as above, with the port map rows for `phlix-hub`,
+and the same credential discipline: its `config.database_password` /
+`config.secret_key` ride the chart's `rejectKnownPlaceholder` guard, so copy-
+pasted example values fail at render (SH-027).
 
 ```bash
 helm install hub k8s/helm/phlix-hub \
+  --values ~/phlix-hub-secrets.yaml \
   --set image.tag=<sha12> \
-  --set config.database_password=your_password \
-  --set config.secret_key=your_secret \
-  --set config.database_host=your-mysql \
   -n phlix-hub --create-namespace
+
+# ~/phlix-hub-secrets.yaml — chmod 0600, keep it out of git:
+#   config:
+#     database_host: your-mysql
+#     database_password: <real credential>
+#     secret_key: <output of: openssl rand -hex 64>
 ```
+
+## Secret hygiene
+
+Both charts refuse to render when a secret-position value matches a known
+placeholder shape (`change_me`, `CHANGE_ME`, `replace_me`, `secret`,
+`password`, `test`, `demo`, `dev`, the literal command string
+`openssl rand -hex 64`, …) — the guard is
+`templates/_helpers.tpl::rejectKnownPlaceholder`, applied in each chart's
+`secret.yaml`. `values.example.yaml` deliberately keeps those bait strings so
+a copy-paste install hits a loud render failure instead of booting with a
+publicly-known JWT signing key. `required()` alone is NOT the safeguard: it
+only proves non-emptiness. Pass real credentials through a `--values` file
+with mode 0600, never through `--set` on the command line.
 
 ## Database migration
 

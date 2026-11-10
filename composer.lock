@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "97e5c2e64e46d38ad776eb75d5fbb9e1",
+    "content-hash": "2184761b33c3c208cc0b64c9645f954f",
     "packages": [
         {
             "name": "brick/math",
@@ -418,16 +418,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.53.0",
+            "version": "v0.54.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "9e784c60ce3db5b000630a855460bb6f73fea544"
+                "reference": "55f3e680b100a9cb40a40e9a270c3675ddd3cbe1"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/9e784c60ce3db5b000630a855460bb6f73fea544",
-                "reference": "9e784c60ce3db5b000630a855460bb6f73fea544",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/55f3e680b100a9cb40a40e9a270c3675ddd3cbe1",
+                "reference": "55f3e680b100a9cb40a40e9a270c3675ddd3cbe1",
                 "shasum": ""
             },
             "require": {
@@ -461,9 +461,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — bundled I/O is confined to the Arr/ namespace: the blocking CurlArrTransport default (CLI/test posture) and TrashGuidesProvider's own blocking stream fetches (no transport seam there); event-loop consumers should inject an async ArrTransportInterface unless their runtime hooks curl (phlix-hub's S425 position).",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.53.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.54.0"
             },
-            "time": "2026-11-02T14:37:18+00:00"
+            "time": "2026-11-07T01:09:50+00:00"
         },
         {
             "name": "directorytree/ldaprecord",
@@ -7491,10 +7491,10 @@
         },
         {
             "name": "detain/phlix-tokens",
-            "version": "v0.2.2",
+            "version": "v0.2.3",
             "dist": {
                 "type": "tar",
-                "url": "https://github.com/detain/phlix-tokens/archive/refs/tags/v0.2.2.tar.gz"
+                "url": "https://github.com/detain/phlix-tokens/archive/refs/tags/v0.2.3.tar.gz"
             },
             "type": "library",
             "description": "Phlix design tokens (@phlix/tokens) — vendored ONLY so tests can diff BuiltInThemes against the real colors.css (S228)."

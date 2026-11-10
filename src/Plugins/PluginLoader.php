@@ -1308,7 +1308,7 @@ class PluginLoader
     private static function defaultSettings(Manifest $manifest): array
     {
         $defaults = [];
-        foreach ($manifest->settings as $key => $schema) {
+        foreach (SettingsMasker::declaredSettings($manifest) as $key => $schema) {
             $defaults[$key] = $schema['default'] ?? null;
         }
         return $defaults;

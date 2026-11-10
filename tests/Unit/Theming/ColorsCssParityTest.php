@@ -30,11 +30,12 @@ use PHPUnit\Framework\TestCase;
  * `detain/phlix-tokens` (see the `repositories` block in composer.json), and
  * every check here parses THAT FILE. The chain of custody is
  *
- *   colors.css @ 1a1ee0a8 (tag v0.2.2, phlix-tokens)
- *     -> tag-archive tarball (archive/refs/tags/v0.2.2.tar.gz since the v0.2.1
+ *   colors.css @ cfae43fd (tag v0.2.3, phlix-tokens)
+ *     -> tag-archive tarball (archive/refs/tags/v0.2.3.tar.gz since the v0.2.1
  *        pin idiom), fetched by `composer install` and recorded in composer.lock
- *        (the stylesheet bytes are identical v0.2.0 == v0.2.1 == v0.2.2 — the
- *        sha below has held across both bumps)
+ *        (the stylesheet bytes are identical v0.2.0 == v0.2.1 == v0.2.2 ==
+ *        v0.2.3 — the sha below has held across all three bumps; the v0.2.3
+ *        train moved dist/ and the TS roster, never src/css/colors.css)
  *     -> vendor/detain/phlix-tokens/src/css/colors.css
  *     -> sha256 asserted equal to {@see self::COLORS_CSS_SHA256} right here
  *     -> parsed and diffed, name-for-name and value-for-value, against the
@@ -50,10 +51,10 @@ use PHPUnit\Framework\TestCase;
 final class ColorsCssParityTest extends TestCase
 {
     /** Commit the pinned tag peels to; the tarball's bytes are that commit's tree. */
-    private const TOKENS_COMMIT = '1a1ee0a8741ed61e84347a76479f135e5ae460cd';
+    private const TOKENS_COMMIT = 'cfae43fd1a666f648efd8b1593ddedbcbb9b37d3';
 
     /** The tag composer.json/composer.lock pin; recorded for the human reader. */
-    private const TOKENS_TAG = 'v0.2.2';
+    private const TOKENS_TAG = 'v0.2.3';
 
     /**
      * sha256 of src/css/colors.css AT {@see TOKENS_COMMIT}.

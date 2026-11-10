@@ -411,6 +411,45 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Composer dependency refresh: `detain/phlix-shared` `^0.53.0` → `^0.54.0`
+  and the test-only `detain/phlix-tokens` archive pin `v0.2.2` → `v0.2.3`.**
+  The shared v0.54.0 manifest parser narrowed the typed settings view; the
+  server now reads every declared plugin setting through one canonical
+  accessor (see the *Settings view* bullet), so the re-vendor lands with a
+  small consumer adaptation instead of blind pass-through.
+  - *Shared.* The `^0.54.0` constraint resolves through Packagist to the v0.54.0
+    tag peel `55f3e680` (annotated tag object `dcba451a`, ls-remote-verified;
+    the release commit syncs `src/Version.php` to `0.54.0` and carries the
+    `## [0.54.0]` CHANGELOG section). The lock rotation came from a real
+    `composer update` scoped to the two packages with `--with-dependencies`;
+    the diff stays inside the two package entries plus the content-hash, and a
+    second scoped resolve is a no-op — lock idempotence proven.
+  - *Tokens.* The v0.2.3 tag (object `358ca289`, peel `cfae43fd`, the then tip
+    of phlix-tokens master) carries the accent-roster/contrast-guard/
+    reduced-motion train and its `dist/` rebuilds — none of which touch
+    `src/css/colors.css`: the S228 guard's pinned bytes are byte-identical at
+    the new peel (measured three ways — git-at-peel, raw-at-peel, delivered
+    tarball), so `ColorsCssParityTest`'s sha256 golden rides UNMOVED (zero
+    moved goldens this wave, measured not assumed) and only the guard's
+    provenance constants and doc chain rotate to the new pin.
+  - *Settings view.* Since v0.54.0, `Manifest::fromArray()` drops descriptors
+    without a string `type` from the typed `Manifest::$settings` view, keeping
+    them only in the untouched raw payload. The full parallel battery convicted
+    exactly the server consumers that relied on the complete declared set — the
+    masker's schema projection and `mixed`-fallback row, and the admin
+    settings-update path (three tests). The server gained
+    `SettingsMasker::declaredSettings()`: the canonical declared-settings map
+    (raw-payload entries in manifest order, overlaid by the typed view), read
+    by all six typed-view sites. That also closes two latent leaks the
+    narrowing introduced — a typeless `secret: true` descriptor once again
+    redacts its value in both the API mask and the admin-log redaction — a law
+    now pinned by two new tests in `SettingsMaskerTest`.
+  - *Dialect note.* The v0.54.0 cut predates `Phlix\Shared\Relay\SyncPlayDialect`
+    (shared master `b67d920`, `@since 0.55.0`), so the server's dialect aliases
+    keep riding a later shared release; the SSOT docblock in `Messages` drops
+    its stale `0.53.0` era literal for a version-stable form. (LW-084 —
+    [server w24 L2 2026-11-10])
+
 - **The served web player carries the cookie-custody and single-flight refresh
   cures: `@phlix/ui` v0.99.25 re-pinned to v0.99.26, and the served `/app`
   bundle regenerated.** [ui pin wave 2026-11-10 — final consumer leg]

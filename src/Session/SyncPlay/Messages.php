@@ -55,8 +55,8 @@ namespace Phlix\Session\SyncPlay;
  * The canonical `syncplay_*` message-type catalog now lives in ONE place
  * estate-wide: `Phlix\Shared\Relay\SyncPlayDialect` in the `phlix-shared`
  * package (master). This class remains the server's runtime definition —
- * constant ALIASES onto the shared module ride the next shared re-vendor
- * (the vendored 0.53.0 does not ship it yet; the module carries an
+ * constant ALIASES onto the shared module ride the shared release that
+ * ships it (the module carries an
  * anticipatory `@since 0.55.0` stamp), so until then the 19 `TYPE_*` names
  * below and the shared consts are kept in lockstep by hand and pinned by
  * the wiring guard tests. Sibling consumer legs: hub relay side (LW-082-b),

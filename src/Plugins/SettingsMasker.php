@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins;
 
+use Phlix\Shared\Plugin\Manifest as SharedManifest;
+
 /**
  * Shared helper that hides values for manifest-declared secret settings
  * before they are returned to the admin UI (JSON or SSR).
@@ -49,6 +51,50 @@ final class SettingsMasker
      * Default tier for a field whose manifest omits `tier` (most of them).
      */
     public const DEFAULT_TIER = 'standard';
+
+    /**
+     * The complete set of settings a manifest DECLARES.
+     *
+     * Since phlix-shared v0.54.0, `Manifest::fromArray()` drops entries
+     * without a string `type` from the typed {@see SharedManifest::$settings}
+     * view, retaining them only in the untouched
+     * {@see SharedManifest::getRawData()} payload. A typeless descriptor is
+     * still a setting the plugin declared: the masker must still honour its
+     * `secret` flag, the schema projection must still render it (its `mixed`
+     * fallback is the whole point), and the admin update path must still
+     * accept its value. Every server consumer of "declared settings"
+     * therefore reads through here instead of the typed view: raw-declared
+     * entries in manifest order, overlaid by the typed view wherever both
+     * exist (they carry identical arrays; the overlay is the belt for
+     * manifests built without a raw payload).
+     *
+     * @param SharedManifest $manifest Manifest whose declared settings to read.
+     *
+     * @return array<string, array<array-key, mixed>> Keyed by setting name.
+     *
+     * @since 1.3.0
+     */
+    public static function declaredSettings(SharedManifest $manifest): array
+    {
+        $declared = [];
+
+        $raw = $manifest->getRawData()['settings'] ?? null;
+        if (is_array($raw)) {
+            foreach ($raw as $key => $descriptor) {
+                if (is_string($key) && is_array($descriptor)) {
+                    $declared[$key] = $descriptor;
+                }
+            }
+        }
+
+        foreach ($manifest->settings as $key => $descriptor) {
+            if (is_string($key) && is_array($descriptor)) {
+                $declared[$key] = $descriptor;
+            }
+        }
+
+        return $declared;
+    }
 
     /**
      * Resolve a manifest's declared `tier` to one we will actually render.
@@ -98,7 +144,7 @@ final class SettingsMasker
     public static function mask(InstalledPlugin $plugin): array
     {
         $masked = $plugin->settings;
-        foreach ($plugin->manifest->settings as $key => $schema) {
+        foreach (self::declaredSettings($plugin->manifest) as $key => $schema) {
             if (
                 array_key_exists($key, $masked)
                 && isset($schema['secret']) && $schema['secret'] === true
@@ -144,7 +190,7 @@ final class SettingsMasker
          *     default?:mixed, label?:string, description?:string, tier?:string,
          *     link?:string, link_text?:string}> $settings
          */
-        $settings = $plugin->manifest->settings;
+        $settings = self::declaredSettings($plugin->manifest);
         foreach ($settings as $key => $schema) {
             $required = isset($schema['required']) && $schema['required'] === true;
             $entry = [
@@ -189,7 +235,7 @@ final class SettingsMasker
     public static function secretStatus(InstalledPlugin $plugin): array
     {
         $out = [];
-        foreach ($plugin->manifest->settings as $key => $schema) {
+        foreach (self::declaredSettings($plugin->manifest) as $key => $schema) {
             if (!(isset($schema['secret']) && $schema['secret'] === true)) {
                 continue;
             }
@@ -217,7 +263,7 @@ final class SettingsMasker
     public static function view(InstalledPlugin $plugin): array
     {
         $rows = [];
-        foreach ($plugin->manifest->settings as $key => $schema) {
+        foreach (self::declaredSettings($plugin->manifest) as $key => $schema) {
             $isSecret = isset($schema['secret']) && $schema['secret'] === true;
             $value = $plugin->settings[$key] ?? null;
             if ($isSecret && $value !== null) {

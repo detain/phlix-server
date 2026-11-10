@@ -58,6 +58,36 @@ final class SettingsMaskerTest extends TestCase
         $this->assertArrayNotHasKey('api_key', $masked);
     }
 
+    public function test_mask_redacts_secret_value_on_typeless_descriptor(): void
+    {
+        // phlix-shared v0.54.0 narrowed the typed `$settings` view to
+        // descriptors carrying a string `type`; a typeless `secret: true`
+        // descriptor must STILL be redacted — being dropped from the typed
+        // view must never make a secret leak through the API mask.
+        $plugin = $this->plugin(
+            ['token' => 'topsecret'],
+            ['token' => ['secret' => true]], // no 'type' key
+        );
+
+        $masked = SettingsMasker::mask($plugin);
+
+        $this->assertSame(SettingsMasker::MASK, $masked['token']);
+    }
+
+    public function test_secret_status_counts_secret_on_typeless_descriptor(): void
+    {
+        $plugin = $this->plugin(
+            ['token' => 'abc123'],
+            ['token' => ['secret' => true]], // no 'type' key
+        );
+
+        $status = SettingsMasker::secretStatus($plugin);
+
+        $this->assertArrayHasKey('token', $status);
+        $this->assertTrue($status['token']['set']);
+        $this->assertSame(6, $status['token']['length']);
+    }
+
     public function test_view_returns_rows_for_every_manifest_setting(): void
     {
         $plugin = $this->plugin(

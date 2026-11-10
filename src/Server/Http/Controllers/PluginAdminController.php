@@ -648,6 +648,8 @@ final class PluginAdminController
             return $message;
         }
 
+        $declared = SettingsMasker::declaredSettings($plugin->manifest);
+
         foreach ($submitted as $key => $value) {
             if (!is_scalar($value)) {
                 continue;
@@ -659,7 +661,7 @@ final class PluginAdminController
 
             $declaredSecret = false;
             if (is_string($key)) {
-                $schema = $plugin->manifest->settings[$key] ?? null;
+                $schema = $declared[$key] ?? null;
                 $declaredSecret = is_array($schema)
                     && isset($schema['secret'])
                     && $schema['secret'] === true;

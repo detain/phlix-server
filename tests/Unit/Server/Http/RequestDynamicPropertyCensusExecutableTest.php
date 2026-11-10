@@ -1292,8 +1292,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * file alone +12); zero src/ reads added — classifyRequest() reaches
      * headers only through getHeader(). Measured from the phpunit red
      * (473), not predicted.
+     * +1 473→474 (w28L1 R2, DD M1): the new device-marked LDAP leg reads
+     * $request->headers to seed the device marker (read-modify-write; the
+     * walker counts the read once). Zero src/ reads added. Measured from
+     * the phpunit red (474), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 473;
+    private const EXPECTED_DECLARED_READS = 474;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1611,7 +1615,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // property-write seed (the browser-class Origin/Host pair the refresh
     // cookie-rotation law now requires). Zero src/ writes. Measured from the
     // phpunit red (1198), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1198;
+    // +5 1198→1203 (w28L1 R2, DD M1): five $request->body fixture seeds in
+    // the new CookieDualEmitTest LDAP legs (two per master-off leg). Zero
+    // src/ writes added. Measured from the phpunit red (1203), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1203;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

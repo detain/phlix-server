@@ -25,6 +25,13 @@ use PHPUnit\Framework\TestCase;
  * with NO Set-Cookie ever, and every browser-class emission is gated by the
  * §2.4 scheme law (https-or-localhost, or the explicit insecure override).
  *
+ * w28L1 round-2 (DD M1): the LDAP arm of login() carries the SAME dual-emit
+ * law (the `ldap:` prefix changes the token MINTER, never the custody class),
+ * and this suite now enforces it on every LDAP arm — the JSON dual-emit, the
+ * device-class bearer veto, the form-era redirect ride and the §7 master
+ * switch. Before this round the ldapLogin() emit had zero test visibility
+ * (strip-the-leg mutation stayed green); these legs are the enforcement.
+ *
  * Also carries the refresh-cure leg: /auth/refresh used to attach cookies
  * UNCONDITIONALLY (cookie-program scaffolding bug, BANK.md) — device-class
  * body-token refreshes must not receive cookies under the same
@@ -274,6 +281,84 @@ class CookieDualEmitTest extends TestCase
         $this->assertSame([], $this->setCookieLines($redirect));
     }
 
+    public function testBrowserJsonLdapLoginDualEmitsBodyAndCookiePair(): void
+    {
+        $controller = new AuthController($this->ldapManager());
+
+        $request = $this->browserRequest();
+        $request->body = ['username' => 'ldap:alice', 'password' => 'hunter2hunter2'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(self::jsonBody(self::TOKENS), $response->body);
+
+        $lines = $this->setCookieLines($response);
+        $session = $this->findCookieLine($lines, AuthController::SESSION_COOKIE);
+        $refresh = $this->findCookieLine($lines, AuthController::REFRESH_COOKIE);
+
+        $this->assertStringContainsString('access-tok', $session);
+        $this->assertStringContainsString('refresh-tok', $refresh);
+        $this->assertStringContainsString('Max-Age=3600', $session);
+        $this->assertStringContainsString('Max-Age=604800', $refresh);
+        foreach ([$session, $refresh] as $line) {
+            $this->assertStringContainsString('Secure', $line);
+            $this->assertStringContainsString('HttpOnly', $line);
+            $this->assertStringContainsString('SameSite=Lax', $line);
+        }
+    }
+
+    public function testDeviceMarkedLdapLoginStaysBearerOnlyWithByteIdenticalBody(): void
+    {
+        $controller = new AuthController($this->ldapManager());
+
+        $request = $this->browserRequest();
+        $request->headers['X-Phlix-Device-Type'] = 'roku';
+        $request->body = ['username' => 'ldap:alice', 'password' => 'hunter2hunter2'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(self::jsonBody(self::TOKENS), $response->body);
+        $this->assertSame([], $this->setCookieLines($response));
+    }
+
+    public function testLdapFormLoginRedirectCarriesCookiePair(): void
+    {
+        $controller = new AuthController($this->ldapManager());
+
+        $request = $this->loginFormRequest();
+        $request->body = ['username' => 'ldap:alice', 'password' => 'hunter2hunter2'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+        $lines = $this->setCookieLines($response);
+        $this->assertStringContainsString('access-tok', $this->findCookieLine($lines, AuthController::SESSION_COOKIE));
+        $this->assertStringContainsString('refresh-tok', $this->findCookieLine($lines, AuthController::REFRESH_COOKIE));
+    }
+
+    public function testMasterSwitchOffSuppressesCookiesOnLdapJsonAndFormArms(): void
+    {
+        $policy = new CookiePolicy($this->settingsStore([
+            CookiePolicy::COOKIE_ENABLED_KEY => false,
+        ]));
+        $controller = new AuthController($this->ldapManager(), cookiePolicy: $policy);
+
+        $jsonRequest = $this->browserRequest();
+        $jsonRequest->body = ['username' => 'ldap:alice', 'password' => 'hunter2hunter2'];
+        $json = $controller->login($jsonRequest, []);
+        $this->assertSame(200, $json->statusCode);
+        $this->assertSame(self::jsonBody(self::TOKENS), $json->body);
+        $this->assertSame([], $this->setCookieLines($json));
+
+        $formRequest = $this->loginFormRequest();
+        $formRequest->body = ['username' => 'ldap:alice', 'password' => 'hunter2hunter2'];
+        $redirect = $controller->login($formRequest, []);
+        $this->assertSame(302, $redirect->statusCode);
+        $this->assertSame([], $this->setCookieLines($redirect));
+    }
+
     public function testStoredInsecureSettingOptsIntoUnsecureCookies(): void
     {
         $policy = new CookiePolicy($this->settingsStore([
@@ -319,6 +404,22 @@ class CookieDualEmitTest extends TestCase
         $authManager = $this->createMock(AuthManager::class);
         $authManager->method('login')->willReturn(self::TOKENS);
         $authManager->method('register')->willReturn(self::TOKENS);
+        $authManager->method('accessTtl')->willReturn(3600);
+        $authManager->method('refreshTtl')->willReturn(604800);
+
+        return $authManager;
+    }
+
+    /**
+     * The LDAP route mints through loginWithProvider() (ProviderManager prefix
+     * dispatch) instead of login() — the custody law is identical, only the
+     * token source differs (design §2.2 "who minted" is irrelevant to "who
+     * carries").
+     */
+    private function ldapManager(): AuthManager
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('loginWithProvider')->willReturn(self::TOKENS);
         $authManager->method('accessTtl')->willReturn(3600);
         $authManager->method('refreshTtl')->willReturn(604800);
 

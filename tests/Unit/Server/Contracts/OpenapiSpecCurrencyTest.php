@@ -751,6 +751,193 @@ final class OpenapiSpecCurrencyTest extends TestCase
     }
 
     /**
+     * CP-002 (cookie program, w28L1 — COOKIE-DESIGN.md §3): the spec advertises
+     * the cookie carrier next to the bearer. `sessionCookie` (type apiKey,
+     * in cookie, name phlix_session) must be declared under securitySchemes, and
+     * EVERY operation secured by bearerAuth must list sessionCookie as an
+     * ALTERNATIVE security — {@see \Phlix\Server\Http\RequestAuthenticator}
+     * accepts either credential on every authenticated route (bearer header
+     * first, then the HttpOnly session cookie), and the spec saying so is the
+     * machine-readable statement of cookie mode consumers key their onboarding
+     * docs against. The public auth-establishment operations (login/register/
+     * refresh) deliberately keep `security: []`: the cookie is EMITTED by the
+     * response, never REQUIRED by the request. The leg is spec-additive — no
+     * body envelope, middleware chain, or status code anywhere changes.
+     */
+    public function testSessionCookieCarrierIsAdvertisedAlongsideBearerAuth(): void
+    {
+        /** @var array<string, mixed> $committed */
+        $committed = Yaml::parseFile(self::SPEC);
+
+        $this->assertSame([], $this->cookieCarrierReport($committed));
+    }
+
+    /**
+     * Anti-vacuity leg (same discipline as {@see self::testAPlantedSuccessCodeReversionTurnsTheLegRed()}):
+     * deleting the scheme or stripping the alternatives out of the parsed
+     * document must be caught and NAMED by the same report helper — and the
+     * strip must demonstrably touch 316 operations, so the carrier law can never
+     * be green-by-emptiness.
+     */
+    public function testPlantedCarrierReversionTurnsTheLegRed(): void
+    {
+        /** @var array<string, mixed> $committed */
+        $committed = Yaml::parseFile(self::SPEC);
+        $this->assertSame([], $this->cookieCarrierReport($committed), 'control: the committed spec is clean');
+
+        $withoutScheme = $committed;
+        unset($withoutScheme['components']['securitySchemes']['sessionCookie']);
+        $this->assertTrue(
+            $this->reportMentions(
+                $this->cookieCarrierReport($withoutScheme),
+                'components.securitySchemes.sessionCookie is missing'
+            ),
+            'deleting the scheme declaration must be caught and named'
+        );
+
+        [$stripped, $strippedCount] = $this->stripCookieAlternatives($committed);
+        $report = $this->cookieCarrierReport($stripped);
+        $this->assertSame(
+            316,
+            $strippedCount,
+            'the mutation must find exactly the bearer operation set (316) — other numbers mean vacuity'
+        );
+        $named = array_values(array_filter(
+            $report,
+            static fn (string $line): bool => str_contains($line, 'lacks the sessionCookie alternative')
+        ));
+        $this->assertCount(316, $named, 'every bearer-only operation must be named by the report');
+    }
+
+    /**
+     * @param array<string, mixed> $doc
+     *
+     * @return list<string>
+     */
+    private function cookieCarrierReport(array $doc): array
+    {
+        $problems = [];
+
+        /** @var mixed $schemes */
+        $schemes = $doc['components']['securitySchemes'] ?? null;
+        /** @var mixed $scheme */
+        $scheme = is_array($schemes) ? ($schemes['sessionCookie'] ?? null) : null;
+        if (!is_array($scheme)) {
+            $problems[] = 'components.securitySchemes.sessionCookie is missing (CP-002: apiKey, cookie, phlix_session).';
+        } else {
+            if (($scheme['type'] ?? null) !== 'apiKey') {
+                $problems[] = 'sessionCookie scheme must be type apiKey.';
+            }
+            if (($scheme['in'] ?? null) !== 'cookie') {
+                $problems[] = 'sessionCookie scheme must be in: cookie.';
+            }
+            if (($scheme['name'] ?? null) !== 'phlix_session') {
+                $problems[] = 'sessionCookie scheme must carry name phlix_session (AuthController::SESSION_COOKIE).';
+            }
+        }
+
+        /** @var array<string, mixed> $paths */
+        $paths = is_array($doc['paths'] ?? null) ? $doc['paths'] : [];
+        $bearerOps = 0;
+
+        foreach ($paths as $path => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            foreach ($item as $verb => $op) {
+                if (!in_array($verb, self::HTTP_VERBS, true) || !is_array($op)) {
+                    continue;
+                }
+
+                /** @var mixed $security */
+                $security = $op['security'] ?? null;
+                if (!is_array($security)) {
+                    continue;
+                }
+
+                $usesBearer = false;
+                $usesCookie = false;
+                foreach ($security as $requirement) {
+                    if (is_array($requirement) && array_key_exists('bearerAuth', $requirement)) {
+                        $usesBearer = true;
+                    }
+                    if (is_array($requirement) && array_key_exists('sessionCookie', $requirement)) {
+                        $usesCookie = true;
+                    }
+                }
+                if (!$usesBearer) {
+                    continue;
+                }
+                $bearerOps++;
+
+                $key = strtoupper($verb) . ' ' . $path;
+                if (!$usesCookie) {
+                    $problems[] = sprintf('%s uses bearerAuth but lacks the sessionCookie alternative.', $key);
+                    continue;
+                }
+
+                // Canonical shape: two ALTERNATIVE requirements (OR), bearer first —
+                // not one AND-combined requirement carrying both keys.
+                if ($security !== [['bearerAuth' => []], ['sessionCookie' => []]]) {
+                    $problems[] = sprintf('%s declares a non-canonical bearer/cookie alternative shape.', $key);
+                }
+            }
+        }
+
+        if ($bearerOps !== 316) {
+            $problems[] = sprintf(
+                'expected exactly 316 bearer-authenticated operations, saw %d — re-measure on a red and rotate (CP-002).',
+                $bearerOps
+            );
+        }
+
+        foreach (['/api/v1/auth/login', '/api/v1/auth/register', '/api/v1/auth/refresh'] as $publicPath) {
+            $op = is_array($paths[$publicPath] ?? null) ? ($paths[$publicPath]['post'] ?? null) : null;
+            if (is_array($op) && $op['security'] !== []) {
+                $problems[] = sprintf('POST %s is auth-establishment and must keep security: [].', $publicPath);
+            }
+        }
+
+        return $problems;
+    }
+
+    /**
+     * Mutation helper: remove every `sessionCookie` alternative from the parsed
+     * document, returning the mutated doc and how many operations it touched.
+     *
+     * @param array<string, mixed> $doc
+     *
+     * @return array{0: array<string, mixed>, 1: int}
+     */
+    private function stripCookieAlternatives(array $doc): array
+    {
+        $count = 0;
+        foreach ($doc['paths'] ?? [] as $path => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            foreach ($item as $verb => $op) {
+                if (!in_array($verb, self::HTTP_VERBS, true) || !is_array($op) || !is_array($op['security'] ?? null)) {
+                    continue;
+                }
+                $touched = false;
+                foreach ($op['security'] as $index => $requirement) {
+                    if (is_array($requirement) && array_key_exists('sessionCookie', $requirement)) {
+                        unset($op['security'][$index]);
+                        $touched = true;
+                    }
+                }
+                if ($touched) {
+                    $count++;
+                    $doc['paths'][$path][$verb]['security'] = array_values($op['security']);
+                }
+            }
+        }
+
+        return [$doc, $count];
+    }
+
+    /**
      * @param array<string, mixed> $doc
      *
      * @return list<string>

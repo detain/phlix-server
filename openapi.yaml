@@ -126,6 +126,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -167,6 +168,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -190,6 +192,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -212,6 +215,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -237,6 +241,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -260,6 +265,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -282,6 +288,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -307,6 +314,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -330,6 +338,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -355,6 +364,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -377,6 +387,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -402,6 +413,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -432,6 +444,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -464,6 +477,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -498,6 +512,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -525,6 +540,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -550,6 +566,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -573,6 +590,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -595,6 +613,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -627,6 +646,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -661,6 +681,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -695,6 +716,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -722,6 +744,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -745,6 +768,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -768,6 +792,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -791,6 +816,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -814,6 +840,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -837,6 +864,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -862,6 +890,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -885,6 +914,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -910,6 +940,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -940,6 +971,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -965,6 +997,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -995,6 +1028,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1026,6 +1060,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1060,6 +1095,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -1083,6 +1119,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1113,6 +1150,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1138,6 +1176,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1163,6 +1202,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1185,6 +1225,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1217,6 +1258,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1242,6 +1284,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1272,6 +1315,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1303,6 +1347,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1330,6 +1375,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1352,6 +1398,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1384,6 +1431,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1415,6 +1463,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1448,6 +1497,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1475,6 +1525,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1498,6 +1549,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1528,6 +1580,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1559,6 +1612,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1592,6 +1646,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1619,6 +1674,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1642,6 +1698,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1665,6 +1722,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1688,6 +1746,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1713,6 +1772,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1738,6 +1798,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1768,6 +1829,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1793,6 +1855,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1818,6 +1881,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1843,6 +1907,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1868,6 +1933,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1891,6 +1957,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1916,6 +1983,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1939,6 +2007,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1962,6 +2031,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -1985,6 +2055,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2008,6 +2079,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2031,6 +2103,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2054,6 +2127,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2076,6 +2150,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2101,6 +2176,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2124,6 +2200,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2146,6 +2223,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2171,6 +2249,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2195,6 +2274,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2220,6 +2300,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -2245,6 +2326,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2268,6 +2350,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2300,6 +2383,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2331,6 +2415,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2365,6 +2450,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2399,6 +2485,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2433,6 +2520,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2467,6 +2555,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2501,6 +2590,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2535,6 +2625,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2566,6 +2657,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2599,6 +2691,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2633,6 +2726,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2666,6 +2760,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2700,6 +2795,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2732,6 +2828,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2763,6 +2860,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -2803,6 +2901,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2840,6 +2939,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2879,6 +2979,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2913,6 +3014,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2944,6 +3046,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -2978,6 +3081,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3009,6 +3113,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -3049,6 +3154,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3076,6 +3182,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3101,6 +3208,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3126,6 +3234,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3151,6 +3260,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3176,6 +3286,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3199,6 +3310,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3224,6 +3336,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3247,6 +3360,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3272,6 +3386,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3297,6 +3412,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3320,6 +3436,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3345,6 +3462,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3370,6 +3488,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3395,6 +3514,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3418,6 +3538,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3443,6 +3564,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3468,6 +3590,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3491,6 +3614,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3516,6 +3640,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3541,6 +3666,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3564,6 +3690,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3589,6 +3716,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3612,6 +3740,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3634,6 +3763,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3659,6 +3789,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3682,6 +3813,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3705,6 +3837,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3728,6 +3861,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3809,6 +3943,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3832,6 +3967,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3855,6 +3991,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3877,6 +4014,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3902,6 +4040,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "202":
           description: "Accepted - asynchronous job queued (body: job_id, status)."
@@ -3927,6 +4066,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3952,6 +4092,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3975,6 +4116,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -3997,6 +4139,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -4029,6 +4172,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4060,6 +4204,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4093,6 +4238,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4127,6 +4273,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4161,6 +4308,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4195,6 +4343,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4229,6 +4378,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4263,6 +4413,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4297,6 +4448,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4328,6 +4480,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -4355,6 +4508,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4415,6 +4569,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4438,6 +4593,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4460,6 +4616,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -4492,6 +4649,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "204":
           description: "No Content - resource deleted; response body is empty."
@@ -4595,6 +4753,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware, CastingEnabledMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4625,6 +4784,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4659,6 +4819,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4693,6 +4854,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4725,6 +4887,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4759,6 +4922,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -4784,6 +4948,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4814,6 +4979,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4846,6 +5012,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4878,6 +5045,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -4909,6 +5077,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5081,6 +5250,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5318,6 +5488,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5348,6 +5519,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5434,6 +5606,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5465,6 +5638,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5517,6 +5691,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware, CastingEnabledMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5547,6 +5722,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5581,6 +5757,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5615,6 +5792,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5649,6 +5827,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5683,6 +5862,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5715,6 +5895,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5742,6 +5923,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5764,6 +5946,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -5796,6 +5979,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5827,6 +6011,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5860,6 +6045,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5894,6 +6080,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5934,6 +6121,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -5973,6 +6161,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6007,6 +6196,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6041,6 +6231,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6071,6 +6262,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6105,6 +6297,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6139,6 +6332,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6173,6 +6367,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6205,6 +6400,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6232,6 +6428,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6255,6 +6452,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6492,6 +6690,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6836,6 +7035,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6879,6 +7079,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6901,6 +7102,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6926,6 +7128,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6949,6 +7152,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -6979,6 +7183,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7071,6 +7276,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7094,6 +7300,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7117,6 +7324,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7140,6 +7348,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7163,6 +7372,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7186,6 +7396,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7209,6 +7420,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7239,6 +7451,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7270,6 +7483,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7304,6 +7518,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7367,6 +7582,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7399,6 +7615,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -7429,6 +7646,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7461,6 +7679,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7493,6 +7712,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7526,6 +7746,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7560,6 +7781,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7594,6 +7816,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7625,6 +7848,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7659,6 +7883,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7691,6 +7916,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7723,6 +7949,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7761,6 +7988,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7851,6 +8079,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7885,6 +8114,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7917,6 +8147,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -7949,6 +8180,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8035,6 +8267,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8068,6 +8301,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8128,6 +8362,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8162,6 +8397,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8194,6 +8430,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8226,6 +8463,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -8293,6 +8531,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8360,6 +8599,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8392,6 +8632,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8453,6 +8694,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8487,6 +8729,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8527,6 +8770,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8552,6 +8796,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8582,6 +8827,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8614,6 +8860,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8639,6 +8886,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8669,6 +8917,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8694,6 +8943,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8717,6 +8967,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8742,6 +8993,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8772,6 +9024,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8797,6 +9050,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "302":
           description: "Found - browser redirect to the provider authorization URL. No JSON body."
@@ -8820,6 +9074,7 @@ paths:
       x-phlix-middleware: [AdminMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "302":
           description: "Found - browser redirect to the application continuation route. No JSON body."
@@ -8879,6 +9134,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8909,6 +9165,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8934,6 +9191,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -8964,6 +9222,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9080,6 +9339,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9103,6 +9363,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -9128,6 +9389,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9150,6 +9412,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -9182,6 +9445,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9213,6 +9477,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9246,6 +9511,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9280,6 +9546,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9312,6 +9579,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -9344,6 +9612,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9377,6 +9646,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9411,6 +9681,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9445,6 +9716,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9476,6 +9748,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -9516,6 +9789,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9553,6 +9827,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9592,6 +9867,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9626,6 +9902,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9657,6 +9934,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9691,6 +9969,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9725,6 +10004,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9756,6 +10036,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "201":
           description: "Created."
@@ -9796,6 +10077,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9823,6 +10105,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware, CastingEnabledMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9859,6 +10142,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9899,6 +10183,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9933,6 +10218,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9967,6 +10253,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -9992,6 +10279,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10022,6 +10310,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10187,6 +10476,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10212,6 +10502,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10237,6 +10528,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10259,6 +10551,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10291,6 +10584,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10323,6 +10617,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10357,6 +10652,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10384,6 +10680,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10414,6 +10711,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10466,6 +10764,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10491,6 +10790,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -10513,6 +10813,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success. Streams the media/binary resource."
@@ -10536,6 +10837,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10559,6 +10861,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10582,6 +10885,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10604,6 +10908,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10636,6 +10941,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10663,6 +10969,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10686,6 +10993,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10709,6 +11017,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10731,6 +11040,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10792,6 +11102,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10815,6 +11126,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10838,6 +11150,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10869,6 +11182,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10894,6 +11208,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -10924,6 +11239,7 @@ paths:
             type: string
       security:
         - bearerAuth: []
+        - sessionCookie: []
       responses:
         "200":
           description: "Success."
@@ -11584,6 +11900,17 @@ components:
       description: |-
         HS256 access JWT minted by `AuthController::login`/`refresh` (iss=phlix, 1h).
         Enforced by `AuthMiddleware`; `AdminMiddleware` additionally requires an admin account.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: phlix_session
+      description: |-
+        HttpOnly `phlix_session` access-JWT cookie (COOKIE-DESIGN.md carrier pair with
+        `phlix_refresh`), set by `AuthController` on browser-class login/register/refresh
+        and accepted wherever `bearerAuth` is — `RequestAuthenticator` checks the bearer
+        header first, then this cookie. Device-class clients (`X-Phlix-Device-Type`
+        header or a non-browser Origin) never receive or send it; the scheme-gate
+        (https-or-localhost, §2.4) governs issuance.
   responses:
     Unauthorized:
       description: "No credentials, or credentials the middleware rejected."

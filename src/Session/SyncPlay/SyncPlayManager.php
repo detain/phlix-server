@@ -53,6 +53,17 @@ use Phlix\Server\WebSocket\SyncPlay\JoinPasswordThrottle;
  * REST rails, which hydrate via adoptGroupFromSerialized() before mutating.
  * Model, ordering and loss posture: docs/dev/SYNCPLAY_WRITE_THROUGH_BRIDGE.md.
  *
+ * ## Dialect SSOT (LW-082-c cite)
+ *
+ * The message vocabulary handled here (`syncplay_*` types) is defined by
+ * {@see Messages} on this host; the canonical estate-wide catalog is
+ * `Phlix\Shared\Relay\SyncPlayDialect` in the `phlix-shared` package master
+ * — the single source the hub relay (`:8804`) and the `@phlix/syncplay`
+ * client package are being aligned onto (rows LW-082-b/-d). Server-side
+ * constant aliases onto it ride the next shared re-vendor; until then this
+ * copy is authoritative at runtime and kept in lockstep by the wiring
+ * guard tests, so treat any new type as a SHARED-MODULE + Messages edit.
+ *
  * @author Phlix Development Team
  *
  * @see GroupState For individual group state management

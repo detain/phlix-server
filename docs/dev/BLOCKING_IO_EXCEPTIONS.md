@@ -50,7 +50,7 @@ Measured against a TCP-accepting, never-answering listener on 127.0.0.1, in a
 real Workerman worker under the Swoole event loop, with a sibling coroutine
 appending a timestamp every 100 ms:
 
-```
+```text
 # BEFORE (LDAP_OPT_NETWORK_TIMEOUT only)
 tick t=102ms  ... tick t=919ms          <- 9 baseline ticks, scheduler healthy
 LDAP-START t=1001ms withOpt=no
@@ -111,9 +111,12 @@ the only reason exception 2 is currently cheap.
 `Workerman\Events\Swoole::__construct()`
 (`vendor/workerman/workerman/src/Events/Swoole.php:59`) runs
 `Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])` and clobbers it. `start.php`
-already anticipates this — `$applyCuratedCoroutineHooks()` (`:148-152`) re-asserts
-the curated mask at the top of every `onWorkerStart` (`:172`, `:549`, `:714`,
-`:778`, `:816`, `:1014`).
+already anticipates this — `$applyCuratedCoroutineHooks()` re-asserts
+the curated mask at the top of every `onWorkerStart`. (Coords rotated
+2026-11-10 against this tip: closure `start.php:244-252`, seven arms at `:304`,
+`:727`, `:962`, `:1027`, `:1094`, `:1297`, `:1614`; the pre-rotation citation
+pointed at the closure at `:148-152` with six arms `:172`, `:549`, `:714`,
+`:778`, `:816`, `:1014`.)
 
 **The re-assert does not take effect.** Workerman runs `onWorkerStart` inside a
 Swoole coroutine, and from there `Coroutine::set(['hook_flags' => …])` updates the
@@ -121,7 +124,7 @@ reported option but cannot un-swap handlers that are already installed. Isolated
 A/B, 2 repeats, alternating order, both starting from hooks physically installed
 as `SWOOLE_HOOK_ALL`:
 
-```
+```text
 re-assert OUTSIDE any coroutine   REPORTED=0x42fe  curl=3003.7ms TICKS= 0  -> cURL unhooked (intended)
 re-assert INSIDE a coroutine      REPORTED=0x42fe  curl=3006.2ms TICKS=29  -> cURL still HOOKED
 ```
@@ -139,7 +142,7 @@ needs its own step.
 Confirmed in a production-shaped harness that reproduces `start.php`'s master
 setup *and* the per-worker re-assert verbatim, 3 repeats each, alternating:
 
-```
+```text
 MODE=prod     hook_flags BEFORE re-assert=0x7fbff7ff AFTER=0x42fe  (reported)
 MODE=prod     onWorkerStart-coroutine  https  elapsed=10006.1ms SIBLING-TICKS=99
 MODE=prod     child-coroutine          https  elapsed=10005.7ms SIBLING-TICKS=99
@@ -165,6 +168,33 @@ predicate) and `tests/Unit/Plugins/OAuth2/OAuth2HttpClientTimeoutTest.php`
 (the cURL bound actually firing). The latter signals a lost bound by hanging,
 not by failing.
 
+### Correction (2026-11-10) — "that needs its own step" has since shipped
+
+The sections above narrate the pre-fix world and stay verbatim as the record.
+What changed:
+
+- **The curated mask now reaches every worker.** `start.php` replaced the
+  in-coroutine `Coroutine::set()` re-assert with `HookDelivery::enforceAndVerify()`
+  (`src/Server/Runtime/HookDelivery.php`), called by `$applyCuratedCoroutineHooks()`
+  at the top of every `onWorkerStart` (closure at `start.php:244-252`, seven arms
+  at `:304`, `:727`, `:962`, `:1027`, `:1094`, `:1297`, `:1614`). The delivery does
+  **not** trust the option read that this section proved lies: it installs via
+  `Swoole\Runtime::enableCoroutine($flags)` (the full-mask *replacement* API, callable
+  from inside a coroutine) and then runs a **behavioral probe** — a sibling
+  coroutine ticking ~every 2 ms around a deliberately-stalling cURL call; a hooked
+  cURL yields (dozens of ticks), an unhooked one does not. Failure throws
+  `HookDeliveryException`, and every worker's start guard re-raises it loudly so
+  the child dies at boot instead of running the crash-prone full mask — the
+  background-timers fork's comment states the doctrine: "an undelivered hook
+  allowlist is NOT best-effort" (`start.php:1038-1043`).
+- **Consequence for this entry:** the yield the "Why the cost is stated as a
+  stall when it currently is not one" section measured away is gone. The
+  prediction made there materialized — this fetch **is** now the ≤10 s
+  single-worker stall the Cost row states, and the `CURLOPT_TIMEOUT` bound is the
+  live mitigation, not a paper one. Nothing else in this entry needs a rewrite:
+  the bound, the guards, and the "which cURL option is the bound" note all
+  describe the shipped shape.
+
 ---
 
 ## Exception 3 — SyncPlay write-through bridge publish (unix socket, S445)
@@ -189,7 +219,7 @@ this register forbids. Capping the frame below the measured single-write
 absorption floor and writing it exactly once converts "retry until done" into
 "done or refused, instantly": oversize is rejected before any syscall.
 
-```
+```text
 normal frame → wedged listener : result=true  elapsed=0.1ms
 219264B chunk 1 (of 400KB)     : absorbed whole, then chunk 2 blocked forever  ← why no chunking
 oversized frame (200KB name)    : result=false elapsed=0.1ms  (refused, never sent)
@@ -234,8 +264,39 @@ Regression guard: `tests/Unit/Discovery/Ssdp/SsdpDiscoverySsrfTest.php`.
 | Site | `src/Network/UpnpIgdClient.php` — `discoverGateway()` (UDP M-SEARCH + `socket_select` loop), `asyncHttpGet()` (Swoole client or blocking `fsockopen`), `soapRequest()` (`stream_socket_client`, plain or TLS); plus the `NatPmpClient` / `StunClient` legs the same call chain drives |
 | Reached from | `POST /api/v1/admin/remote/portforward/{enable,disable}` and `GET …/status` (`AdminHubController::portForward*()`), synchronously via `PortForwardService::autoConfigure()` / `disable()` → `discoverGateway()` → `getExternalIp()` / `addPortMapping()` / `removePortMapping()`, on an HTTP worker |
 | Why it is sync | One-shot, admin-triggered control-plane operation against the LAN router; converting the whole `Phlix\Network` socket family to promises would touch every leg (SSDP, SOAP, NAT-PMP, STUN) to accelerate a call no viewer request ever makes. |
-| Bound | `discoverGateway()` is hard-bounded to `$timeout` (default 3000 ms) measured in **one** monotonic unit (`hrtime(true)` ms, H3 — the pre-fix code double-scaled elapsed-ms and fed `socket_select()` a negative timeout, busy-spinning one worker at 100% CPU for the whole window) with `socket_select` slices ≤ 500 ms, matching `NatPmpClient`; `SO_RCVTIMEO`/`SO_SNDTIMEO` 3 s; every HTTP/SOAP socket 5 s connect. H1(d): the SSDP `LOCATION` must be an http(s) **literal IP equal to the datagram source** and every downstream fetch/SOAP target must be LAN-routable, enforced **before any socket** via `LanEndpointGuard`; `<controlURL>`s are same-host-pinned (`resolveUrl()` returns null for foreign absolutes); M4: the https SOAP branch verifies peer cert, name and SNI (self-signed IGD TLS is refused — the service falls back to NAT-PMP). L4: NAT-PMP/STUN replies from a source other than the configured gateway/STUN host are discarded. Reply reads in `asyncHttpGet()` (both arms) and `soapRequest()` go through `readResponseBounded()`: the same 1 MiB ceiling as the fetch paths (`LanEndpointGuard::MAX_RESPONSE_BYTES`) and a 5 s ceiling on the gap between chunks (`RESPONSE_IDLE_TIMEOUT_SECONDS`, mirroring `FETCH_TIMEOUT_SECONDS`); oversize or stalled reads fail loud (null). As in Exception 4, the caps bound bytes and per-gap silence, not wall clock — a drip attacker that keeps a chunk arriving inside every 5 s gap under the 1 MiB ceiling is the pathological bound, never an unbounded read. |
+| Bound | Bounded on every leg — the long pre-fix paragraph form of this cell outgrew the table; the same content, unedited, now reads itemized under **"The bound, itemized"** below the table (prose-currency pass 2026-11-10). |
 | Cost | Zero against refused or spoofed targets (refused pre-socket); against a silent LAN router worst case ≈ the discovery budget (3 s) plus a bounded 5 s per follow-up — one of the 14 HTTP workers, only while an operator clicks port-forward. |
+
+### The bound, itemized
+
+(The table cell this list replaces was the same prose at the same tip, unwrapped
+by the 2026-11-10 prose-currency pass; content unchanged.)
+
+- **Discovery loop.** `discoverGateway()` is hard-bounded to `$timeout`
+  (default 3000 ms) measured in **one** monotonic unit (`hrtime(true)` ms, H3 —
+  the pre-fix code double-scaled elapsed-ms and fed `socket_select()` a negative
+  timeout, busy-spinning one worker at 100% CPU for the whole window) with
+  `socket_select` slices ≤ 500 ms, matching `NatPmpClient`.
+- **Socket options.** `SO_RCVTIMEO`/`SO_SNDTIMEO` 3 s; every HTTP/SOAP socket
+  5 s connect.
+- **Pre-socket target gate (H1(d)).** The SSDP `LOCATION` must be an http(s)
+  **literal IP equal to the datagram source** and every downstream fetch/SOAP
+  target must be LAN-routable, enforced **before any socket** via
+  `LanEndpointGuard`; `<controlURL>`s are same-host-pinned (`resolveUrl()`
+  returns null for foreign absolutes).
+- **TLS posture (M4).** The https SOAP branch verifies peer cert, name and SNI
+  (self-signed IGD TLS is refused — the service falls back to NAT-PMP).
+- **Reply source-pinning (L4).** NAT-PMP/STUN replies from a source other than
+  the configured gateway/STUN host are discarded.
+- **Bounded reads.** Reply reads in `asyncHttpGet()` (both arms) and
+  `soapRequest()` go through `readResponseBounded()`: the same 1 MiB ceiling as
+  the fetch paths (`LanEndpointGuard::MAX_RESPONSE_BYTES`) and a 5 s ceiling on
+  the gap between chunks (`RESPONSE_IDLE_TIMEOUT_SECONDS`, mirroring
+  `FETCH_TIMEOUT_SECONDS`); oversize or stalled reads fail loud (null).
+- **Drip-attacker honesty.** As in Exception 4, the caps bound bytes and
+  per-gap silence, not wall clock — a drip attacker that keeps a chunk arriving
+  inside every 5 s gap under the 1 MiB ceiling is the pathological bound, never
+  an unbounded read.
 
 Regression guards: `tests/Unit/Network/UpnpIgdClientTest.php` (LOCATION source-pin
 and cross-host `controlURL` refusals via reflection; bounded-read oversize abort,
@@ -308,6 +369,18 @@ state files, source filter, commit-first dedup, bind-failure degrade),
 `tests/Unit/Network/NatPmpAnnouncementWireTest.php` (loopback wire test incl. a
 real `224.0.0.1` multicast join → production listener receive, gated on a
 pre-built raw-socket round-trip probe).
+
+---
+
+## Exception 9 — the background-timers fork (registered 2026-11-10, prose-currency pass)
+
+| | |
+|---|---|
+| Site | `start.php:1013-1052` — the `count = 1` worker named `phlix-background-timers`; its body is `Application::startBackgroundTimers()` (`src/Server/Core/Application.php:3070`), which arms, in order: the newsletter sweep (`registerNewsletterTimer` `:2953` — a 60 s due-gated, per-sweep-capped campaign sweep whose send legs do SMTP/file IO; the older unbounded `while (getPendingCount() > 0)` drain that first motivated this entry was itself fixed before this line was written, so the current shape is what is registered here), scheduled backups (`startBackupTimerIfEnabled` `:3277` — archive work inline in the callback), the storage-snapshot timer (`startStorageSnapshotTimer` `:3403`, which "shells out to `du -sb` per vault bucket" per `:3168`), the transcode stale-job reaper (`:3439`, default check every 45 s), the core update check (`:3231`, which arms the `CoreUpdateCheckWorker` fetch legs), the maintenance-queue drain (`startMaintenanceQueueTimer` `:3183` → `src/Admin/Maintenance/MaintenanceQueueWorker.php`: `POLL_SECONDS = 5` (`:52`), `Timer::add` (`:93`), `drain()` (`:107`) — and the queue's own docblock (`:33`) names the blocking profile: `du -sb` children and whole-`media_items` scans, which is exactly why the HTTP side only ENQUEUES (`Application.php:3097`)), and the hourly stats-retention sweep (`:3134`, batched DELETEs, `STATS_RETENTION_SWEEP_INTERVAL = 3600`). |
+| Reached from | No request path. Timers fire on the fork's own schedule; the fork is spawned unconditionally next to the HTTP/WS workers (`start.php:1013`). |
+| Why it is sync | These tasks are subprocess-bound (`du -sb`, archive writers) or whole-table by nature (`media_items` walks). The design answer is not an async rewrite — it is **containment**: they already run on a dedicated `count = 1` process whose only job is this subsystem. |
+| Bound | Subprocess legs are bounded by their own work and the single-runner property (`count = 1` makes "one maintenance job at a time" true); the queue drain is poll-bounded (5 s cadence, one drain per tick) and boot-reaps exhausted-attempt rows so a wedged job cannot spin the queue; the newsletter leg is due-gated with a per-sweep send cap and a 60 s sweep period; the reaper/sweep legs are short batched DB work whose MySQL legs ride the hooked TCP path. The residual unbounded shape is honestly stated where it exists: a maintenance job that runs long (a whole-vault `du -sb` on a big library) delays every other timer on this fork for its duration — including the next `du -sb`. |
+| Cost | **Bounded blast radius by construction: the fork is not on any latency-critical path.** Nothing shares it — no HTTP worker, no WS/SyncPlay worker, no heartbeat or relay tunnel process. A stall here costs freshness of backups / storage stats / queue latency / newsletter sends, never playback or API availability. That containment is the exception's whole justification, and it is why the fork's start body re-raises `HookDeliveryException` loudly (`start.php:1038-1043`) while treating *everything else* as best-effort: the timers degrade silently by design, but running them under the crash-prone full hook mask is not a degradation the fork may accept. |
 
 ---
 

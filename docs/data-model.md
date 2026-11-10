@@ -13,8 +13,9 @@ a fresh database. The operator-facing migration workflow lives in
 - `Phlix\Common\Database\MigrationRunner` (and `scripts/run-migrations.php`,
   which delegates to it) discovers files with `glob()` + `sort()` — plain
   **lexicographic** order. At the fixed three-digit width lexicographic order
-  equals numeric order; a four-digit prefix would still sort after `999`, but
-  the house convention is three digits and the runner does not re-pad.
+  equals numeric order; a four-digit ordinal would sort *before* the 2xx–9xx
+  files lexicographically (`1000_…` lands ahead of `999_…`) — exactly why the
+  three-digit law matters. The runner does not re-pad.
 - **Gaps are legal and historical.** Applied files are recorded by name in
   `schema_migrations`; the runner skips what it has seen with a matching
   checksum, and replays are tolerated (`IF NOT EXISTS`, duplicate-error
@@ -141,17 +142,17 @@ Two unrelated families share a noun:
 | `schema_migrations` | 076 | The migration ledger (file name + checksum). |
 | `livetv_timeshift_sessions` | 078 | Timeshift DVR sessions. |
 | `imdb_title_akas` | 082 | Local copy of the useful subset of IMDb alternate/localized titles (akas). |
-| `rate_limit_buckets` | 085 | Shared, DB-backed per-surface rate-limit buckets (SV-4.15). |
+| `rate_limit_buckets` | 085 | Shared, DB-backed per-surface rate-limit buckets. |
 | `subtitle_provider_quota` | 088 | External subtitle-provider daily quota accounting (external-tracks era). |
 | `user_identities` | 092 | Linked external identities per user (oidc/github/ldap/hub). |
 | `plugin_settings` | 093 | DB-backed per-plugin settings documents (provider configs live here). |
-| `maintenance_jobs` | 098 | One-off admin maintenance task queue (S77: storage snapshots, path dedup) — sibling of `library_scan_jobs`, drained by `MaintenanceQueueWorker` on a timer in the background-timers worker. |
-| `client_heartbeats` | 106 | Consent-gated client telemetry heartbeats (AD-27/S518), one UPSERTed row per client. |
-| `first_admin_election` | 108 | Single-row sentinel serialising first-admin bootstrap (L-3). |
-| `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers (Device-M1). |
-| `login_rate_limit_account` | 126 | Per-account login failure window (SH-017) — sibling of `login_rate_limit` (074), keyed by the normalised submitted identifier instead of the client IP. |
+| `maintenance_jobs` | 098 | One-off admin maintenance task queue (storage snapshots, path dedup) — sibling of `library_scan_jobs`, drained by `MaintenanceQueueWorker` on a timer in the background-timers worker. |
+| `client_heartbeats` | 106 | Consent-gated client telemetry heartbeats, one UPSERTed row per client. |
+| `first_admin_election` | 108 | Single-row sentinel serializing first-admin bootstrap. |
+| `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers. |
+| `login_rate_limit_account` | 126 | Per-account login failure window — sibling of `login_rate_limit` (074), keyed by the normalized submitted identifier instead of the client IP. |
 
-## Dead schema facts (SH-022, measured at the 126-era tip)
+## Dead schema facts (measured at the 126-era tip)
 
 Three pieces of shipped schema carry no live code. They are documented here —
 NOT deleted: the forward-only law above forbids editing applied files, and
@@ -166,14 +167,14 @@ feature revives one, rotate the pin in the same commit.
   the on-demand job INSERT (seeds `completed` directly) and
   `reapStaleRunningJobs()` (`failed`, guarded `AND status = 'running'`).
   Consequences: `cancelled` has **no writer at all** (no cancel endpoint or
-  flow exists — the read-side carve-out and the SH-021 predecessor guards are
+  flow exists — the read-side carve-out and the predecessor guards are
   pre-armed for a hypothetical future one); `running` rows can only be legacy
   corpses from before the on-demand cutover (what the reaper exists to retire);
   `queued` is the enum DEFAULT but is never explicitly written. The
   `TranscodeManager::STATUS_PENDING` constant is dead **and unrepresentable**
   ('pending' is not an enum member); it survives only as external API surface.
   There is likewise no `TranscodeManager::completeJob()` method — the docblock
-  that once implied one now names the two real writers (SH-022).
+  that once implied one now names the two real writers.
 - **`api_keys` (001).** Zero readers, zero writers anywhere in `src/`. The
   former catalog prose called it "Static API keys with scopes" — doubly wrong:
   the feature never landed, and the table has no scopes column (id, user_id,

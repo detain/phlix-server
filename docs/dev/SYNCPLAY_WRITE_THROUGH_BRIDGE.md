@@ -76,7 +76,7 @@ the WS worker, fed by published deltas.
 
 ## Data flow (per REST mutation rail)
 
-```
+```text
 HTTP worker                                   WS worker (count=1)
 ─────────────────────────────────────────     ─────────────────────────────────
 1. hydrate:  loadSerialized(groupId)          (join/leave rails — adopt the

@@ -6,12 +6,15 @@
 Read this before telling a user — in docs, in a CHANGELOG entry, in a docblock, or in the admin UI —
 that restarting the server makes a specific setting take effect.
 
-Of the sixteen rows in the table below, fifteen `restart: true` keys now genuinely apply on
-restart — five of those apply a *disable* but not an enable-from-off, the documented
+All sixteen live keys in the per-key table below now genuinely apply on restart — five of
+those apply a *disable* but not an enable-from-off, the documented
 `process.<worker>.enabled` asymmetry, now disclosed in the keys' own admin-facing `helpText`
-and not merely here. The sixteenth row, `hwaccel.probe_timeout`, was **deleted** from
-`server-settings.schema.json` in `phlix-shared` **v0.26.0** rather than wired — it had no
-consumer and could not be given one cheaply or safely (reasoning below).'
+and not merely here. The seventeenth row, `hwaccel.probe_timeout`, is not a live key: it was
+**deleted** from `server-settings.schema.json` in `phlix-shared` **v0.26.0** rather than
+wired — it had no consumer and could not be given one cheaply or safely (reasoning below).
+The counts above are read from the table; rotate them with the rows
+(the "sixteen rows / fifteen keys" phrasing this intro carried predates `tmdb.api_key`
+joining the table).
 
 
 > **Scope note.** This table tracks the keys covered by the `EffectiveConfig` work plus
@@ -33,7 +36,7 @@ That promise was false. The effective value of a setting is `override ?? default
 `Phlix\Admin\SettingsRepository::getEffective()` — and **almost nothing read it**. Every other
 consumer read the boot `$config` array or `include`d a `config/*.php` file directly, and nothing
 merged the `server_settings` table into either. Neither a graceful reload nor a full
-`systemctl restart` changed behaviour.
+`systemctl restart` changed behavior.
 
 ## What the fix is
 
@@ -47,8 +50,8 @@ It is reached two ways:
 - **`bootstrapAndOverlay($config)`** — called at the top of every `onWorkerStart` in `start.php`
   (HTTP, WebSocket, hub-heartbeat, relay-tunnel, and each managed worker),
   **before `ContainerFactory::create($config)`**. Every DI provider that reads boot config therefore
-  sees the effective value with no per-provider wiring. It runs on the sole entry point since S171
-  deleted the unserved `public/index.php` that used to require mirroring.
+  sees the effective value with no per-provider wiring. It runs on the sole entry point since the
+  unserved `public/index.php` that used to require mirroring was deleted.
 - **`EffectiveConfig::file('<name>')`** — for consumers that `include` a config file directly and so
   bypass `$config` entirely. Rewired: `HwAccelConfig::get()`,
   `FfmpegRunner::getTranscodeTimeout()`, `Recorder::getTranscodeTimeout()`, and `start.php`'s
@@ -230,15 +233,16 @@ This is the trap that made two of these look fine. The call site is per-request,
 - `EffectiveConfig::$overrides` is a **static** array, populated once by `bootstrap()`.
 - `bootstrap()` runs inside `onWorkerStart` (six call sites in `start.php`), i.e. **once per
   worker**, not per request.
-- `file()` is then **memoised per bootstrap generation**.
+- `file()` is then **memoized per bootstrap generation**.
 
 So an override saved while a worker is running is invisible to that worker no matter how often
 `file()` is called. Contrast `SettingsRepository::getEffective()`, which performs an **uncached
 `SELECT` on every call** and *is* genuinely live — that difference is the whole line between
 the 23 `restart: false` keys and the rest.
 
-(`public/index.php` used to bootstrap per request too — S171 deleted that unserved
-front controller, so the per-worker Workerman semantics are now the only ones.)
+(`public/index.php` used to bootstrap per request too — that unserved
+front controller has since been deleted, so the per-worker Workerman semantics
+are now the only ones.)
 
 #### On "restart" vs "reload"
 
@@ -294,7 +298,7 @@ must be deleted). Wiring it is neither cheap nor safe:
   `$this->initialized`. Wiring it would have left the UI text false regardless.
 
 **Guards against reintroduction:** `ServerSettingsSchemaTest::test_consumerless_probe_timeout_key_is_not_reintroduced()`
-in `phlix-shared`, and the hand-written allow-list + `assertCount(42, …)` in
+in `phlix-shared`, and the hand-written allowlist + `assertCount(42, …)` in
 `tests/Unit/Server/Http/Controllers/Admin/AdminSettingsControllerTest.php`. `config/hwaccel_base.php`
 and `config/transcoding.php` keep their `probe_timeout` literals so the merged array shape is
 unchanged; they are simply not an admin setting.
@@ -333,7 +337,7 @@ three statements in and forbids the old wording's return.
 ## What the restart endpoint does
 
 `POST /api/v1/admin/restart` sends a genuine graceful reload (SIGUSR2) to the master. Workers cycle,
-re-run `onWorkerStart`, re-bootstrap the overlay and rebuild their DI containers — so the fifteen
+re-run `onWorkerStart`, re-bootstrap the overlay and rebuild their DI containers — so the sixteen
 ✅/⚠️ keys above are re-read. See `AdminRestartController`'s docblock.
 
 ## Tests
@@ -357,8 +361,8 @@ generation guard turns 6 red; removing the boot fail-safe turns the unreachable-
 - The SyncPlay WebSocket worker and the DLNA SSDP worker are `reloadable` (Workerman's default), so a
   reload drops live WS/SyncPlay sessions and in-flight HLS segment requests. There is no confirm
   dialog warning about that.
-- **RESOLVED by R14-06** (this bullet previously read "are read by nothing —
-  `start.php` hardcodes `$httpWorker->count = 14`", the pre-R14-06 state):
+- **Resolved by the listen-endpoints rework** (this bullet previously read "are read by nothing —
+  `start.php` hardcodes `$httpWorker->count = 14`", describing the pre-rework state):
   `src/Server/Runtime/ListenEndpoints.php` now reads both — the HTTP pool
   size resolves env `PHLIX_HTTP_WORKER_COUNT` > `worker.count` > default 14
   (`'auto'` = 14), and `process.reloadable` is applied via

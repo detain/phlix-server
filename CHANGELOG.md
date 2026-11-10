@@ -33,6 +33,39 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **The portal honours a configured WebSocket origin: `PHLIX_WS_URL` and
+  `PHLIX_WS_PATH`.** A deployment that serves the SPA from one host but
+  terminates the watch-party socket on another (split haproxy front, TLS-offload
+  box) had no way to say so — the embedded `__PHLIX__` payload carried no socket
+  coordinates, so the bundled client could only derive them from `window.origin`.
+  `SharedUiController` now injects both keys with the hub's
+  `HUB_WS_URL`/`HUB_WS_PATH` semantics mirrored exactly (same host grammar,
+  same path grammar, same port-range rule, fail-soft to null on junk — not a
+  500); the CSP `connect-src` gains the configured origin as a validated extra
+  source only when it names a different host than the request's, so a
+  same-host config adds no duplicate. The vendored `@phlix/ui` bundle already
+  consumes these keys from `__PHLIX__` — no `web-ui/` source change and no
+  `/app` rebuild was needed (the repo's zero hand-rolled socket dials are a
+  measured fact, recorded in the seam's docblock). 36 new tests
+  (`SharedUiSocketSeamTest`) including a shell-level injection check.
+  (LW-077-a server half; the phlix-ui `socketHint.ts` producer list flips with
+  the next pin-wave.)
+- **`JwtHandler::validateClaims()` returns the shared `Phlix\Shared\Auth\JwtClaims`
+  DTO.** The shared class's docblock promises that "the server's JWT validation
+  path deserializes into `JwtClaims`"; this is that half, shipped as a typed
+  **view beside** `validateToken()` rather than a flip of its `?array` contract.
+  Two measured reasons the in-place flip cannot ship today: the `profile_id`
+  custom claim rides the array return into `AuthManager::refresh()` (the DTO
+  drops unknown claims, so flipping would silently sever profile scoping), and
+  the array path pins a digit-string-`exp` tolerance the DTO's `requireInt`
+  would newly reject — an acceptance-set change disguised as a type change.
+  The view is verification-first: `validateToken()` runs (signature, `iss`,
+  lifetime) before `JwtClaims::fromPayload()`, a payload the verifier rejected
+  yields null, and a token signed with a rogue secret can never produce claims.
+  The default-`aud` shim inside `fromPayload` and the mint-side `aud` stamping
+  that retires it are documented as the migration track (8 new tests,
+  `JwtClaimsServerHalfTest`). (LW-079-a server half)
+
 - **`user:create` can read the password from a file or a pipe
   (`--password-file=`).** An explicit `--password=` on the command line lands
   in shell history and is readable through any local `/proc/<pid>/cmdline`
@@ -354,6 +387,77 @@ House discipline this file maintains (established by review W-min90/91/92):
   [review server__secaudit, INFO-SERVER-51]
 
 ### Changed
+
+- **The SyncPlay dialect catalog cites its SSOT.** The header docblocks of
+  `src/Session/SyncPlay/Messages.php` and `SyncPlayManager.php` now name
+  `Phlix\Shared\Relay\SyncPlayDialect` (landed in phlix-shared master) as the
+  canonical 19-type catalog and state plainly that the server-side aliases ride
+  the next shared re-vendor — the vendored `0.53.0` does not ship the module
+  yet. Comment-only; zero behavior change. (LW-082-c)
+- **Operator docs coordinate, inventory and claim currency (w21 L5).** README:
+  the collections cross-references re-anchored to the shipped
+  `CollectionController.php` (the `create()` span, `actorSees()`,
+  `actorManages()`, the PUT ownership-immutability note, `collectionNotFound()`
+  and the class-law bullets — the era's line numbers had all drifted), and the
+  openapi pointer now names the path string to search instead of a rot-prone
+  line number; the cast bullet no longer promises play/pause/seek/stop for
+  **Roku** (its routes are status/send/launch/key — transport is key-press
+  simulation on-device; Chromecast/AirPlay/DLNA keep the full transport claim);
+  the settings deep link corrected to `/app/settings` (no
+  `/app/settings/security` route exists); the manual-install apt mirror gained
+  `ffmpeg` (the installer ships it; without it a manual deploy fails its first
+  transcode) with honest new sentences for `pdo` (built into the Debian php8.3
+  binaries) and `php-bcmath` (convenience, not a contract member); the env
+  census preamble names the one `scripts/` knob it deliberately omits
+  (`MIN_COVERAGE`, CI-only); `Dockerfile.nvidia` joins the two images already
+  setting `PHLIX_MIGRATIONS_STRICT=1`; the CHANGELOG reading guide now leads
+  with the greppable bold `MIGRATION ANSWER` callouts (3 exist at this tip —
+  measured) and states the forward-only `### Upgrade notes` convention for new
+  dated sections; the library-DELETE row records migration
+  `122_collections_foreign_keys.sql`'s FK cascade; review-ledger handles
+  (SRV-M17/18/19/20, M-5, M27) stripped from operator prose to a single
+  trailing reference, and the touched passages normalized to US spellings
+  (behaviour/judgement/serialising/normalised/memoised → US, allow-list →
+  allowlist). data-model.md: the migration-ordinal claim corrected — a
+  four-digit ordinal sorts **before** the 2xx–9xx files lexicographically
+  (`1000_…` ahead of `999_…`), which is the three-digit law's real
+  justification; table-row review-ID parentheticals stripped.
+  settings-restart-gap.md: the per-key counts re-measured from the table
+  (sixteen live keys — twelve full-apply, five disable-only asymmetric — plus
+  the deleted `hwaccel.probe_timeout` row; the stale "sixteen rows / fifteen
+  keys" intro predates `tmdb.api_key` joining the table) with a
+  rotate-with-the-rows tripwire note, the dangling closing apostrophe deleted,
+  and stale round-labels (S171, R14-06) neutralized. skipped-test-names.md:
+  the deictic "this box reports ~259" generalized to "a typical dev host",
+  S345/S352 round-labels to descriptive provenance. WEBSOCKET_AUTH_CARRIERS.md:
+  round-labels stripped and the open SPEC-flip TODO carries a dated pointer
+  naming its real owner (the phlix-syncplay spec tracker).
+  AUTH_METHOD_LOCKOUT.md / SYNCPLAY_MEMBER_SYNC_NUDGE.md: round-label and
+  orthography passes; untagged ASCII fences tagged `text` (README arch tree,
+  nudge/bridge data-flow blocks). The arch-tree tag rippled into its own
+  guard: `ArchitectureTreeCoversSrcSubsystemsTest`'s fence scan now accepts an
+  optional language tag (the law is the tree's ENTRIES — still fully pinned,
+  guard re-run green), and the S431 census rotated `EXPECTED_PHP_FILES`
+  2071→2073 measured from red in this commit (the two new seam/DTO test
+  files).
+- **The blocking-I/O register is current with the shipped runtime
+  (`BLOCKING_IO_EXCEPTIONS.md`).** Exception 2 gained a dated correction: the
+  curated hook mask now reaches every worker — `start.php`'s re-assert became
+  `HookDelivery::enforceAndVerify()` (full-mask `Swoole\Runtime::enableCoroutine`
+  replacement plus a behavioural sibling-tick probe; every worker's start guard
+  re-raises delivery failure loudly, per the "an undelivered hook allowlist is
+  NOT best-effort" doctrine at `start.php:1038-1043`) — so the ≤10 s cURL stall
+  the entry predicted is the live cost, not the pre-fix yield the history
+  measured. The history prose stays verbatim; the stale `start.php` line
+  coordinates carry a dated rotation note (closure `:244-252`, seven arms
+  `:304/:727/:962/:1027/:1094/:1297/:1614` at this tip). Exception 5's 150-word
+  `Bound` table cell was unwrapped into an itemized subsection below the table
+  (content unchanged). A new **Exception 9** registers the
+  `phlix-background-timers` fork — `du -sb` children, whole-`media_items`
+  scans, the due-gated 60 s newsletter sweep (its unbounded pre-fix drain long
+  since rewritten), archive legs and batched retention DELETEs all stall one
+  dedicated `count = 1` process that shares nothing with any latency-critical
+  worker; that containment is the entry's stated justification. (SH-045)
 
 - **Operator-facing 500 copy now states symptoms and remedies, not internal
   names.** The shared fail-closed 500 `error` text
@@ -1177,6 +1281,23 @@ House discipline this file maintains (established by review W-min90/91/92):
   first-party PHP files 2079→2067 (+4 new files in this batch, −16 deleted;
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
+
+- **The quickstart journey tells the truth end to end.** The blanket "There is
+  no `.env` or `.env.example` in this repo, by design" was false —
+  `docker/examples/.env.example` exists and is consumed by docker compose
+  interpolation; the sentence now distinguishes the PHP runtime (which has no
+  dotenv loader, still true) from the compose examples. The journey never said
+  how to **play** anything: a new step 4 ("Play your first title") lands
+  between the scan and the household, including the honest expectation that an
+  exotic-codec first play waits on on-demand segment encoding while later plays
+  are instant. No self-service password reset existed anywhere in the user
+  docs; the household step now states the real path — an admin forced-change
+  from **Admin → Users** completed by `php bin/phlix user:reset-password <name>`
+  on the server, the same CLI line the README's Bad-days section carries. The
+  glossary's room/group map contradicted the README's naming-layers table
+  ("internals say *group*" — older server-internal prose actually says *room*);
+  it now mirrors the README's translation table and names it as the authority.
+  Step renumbering carried through the internal cross-references. (SH-044)
 
 - **Managed-HAProxy certificates no longer strand on a copied PEM, and
   renewing them no longer tears the proxy.** The installer's TLS section

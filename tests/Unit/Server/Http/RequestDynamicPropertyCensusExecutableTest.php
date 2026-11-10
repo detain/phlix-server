@@ -1170,7 +1170,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // CookiePolicyProductionInsecureWarnTest.php (SH-033: the warn-once
     // production gate on the insecure-cookie opt-out, latch test seam
     // included); 2071 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2071;
+    // +2 2071→2073: w21L5 adds tests/Unit/Server/WebPortal/
+    // SharedUiSocketSeamTest.php (LW-077-a PHLIX_WS_URL/PHLIX_WS_PATH seam:
+    // hub-mirrored grammars, fail-soft arms, shell-level injection and the
+    // CSP extra-source same-host rule) and tests/Unit/Auth/
+    // JwtClaimsServerHalfTest.php (LW-079-a validateClaims DTO view: both
+    // token types, verification-first unforged arms, the aud-unchanged-at-
+    // mint pin); 2073 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2073;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

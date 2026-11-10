@@ -2,7 +2,7 @@
 
 **Status: TRANSITIONAL DUAL-CARRIER.** The SyncPlay WebSocket on `:8097` accepts the
 handshake JWT through two carriers, in a fixed priority order. This mirrors the carrier
-law phlix-hub `:8804` ships (S237/S355, `src/SyncPlay/SyncPlayRelayWorker.php`) so one
+law phlix-hub `:8804` ships (`src/SyncPlay/SyncPlayRelayWorker.php`) so one
 estate policy — `WEBSOCKET_URL_QUERY_REFUSED` — has one wire vocabulary.
 
 ## The carriers
@@ -83,11 +83,12 @@ the bearer law only.
 ## Cross-references
 
 - Hub implementation of the same law: phlix-hub
-  `src/SyncPlay/SyncPlayRelayWorker.php` (S237 extraction, S355 echo) and
+  `src/SyncPlay/SyncPlayRelayWorker.php` (bearer extraction and echo legs) and
   `src/Relay/ClientRelayWorker.php::extractClientToken()` (query carrier already removed
   at `:8803`).
 - Hub carrier documentation: phlix-hub `docs/websockets.md`.
 - Wire spec: phlix-syncplay `SPEC.md` §8.4 — server `:8097` was documented
   CURRENT=`?token` query / TARGET=bearer subprotocol; **this change implements the
   TARGET alongside CURRENT (transitional)**. The SPEC's status line needs a doc-lane
-  flip to record that `:8097` now accepts the bearer carrier.
+  flip to record that `:8097` now accepts the bearer carrier. (Still open 2026-11-10 —
+  owned by the phlix-syncplay spec tracker, not an action in this repo.)

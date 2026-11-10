@@ -103,6 +103,15 @@ final class SharedUiController
             'menu' => [],
             'extraRoutes' => [],
             'features' => (object) [],
+            // LW-077-a: operator-pinned WebSocket endpoint hints for the SPA,
+            // mirroring the hub's shipped seam (`HUB_WS_URL`/`HUB_WS_PATH` ->
+            // `wsUrl`/`wsPath`). Both default to null = "not configured", so
+            // the ui lane's socketHint consumer falls back to its legacy
+            // same-origin socket derivation (current shipped behavior). The
+            // vendored @phlix/ui bundle already READS these keys; this row is
+            // what makes the read actually resolve on server-hosted shells.
+            'wsUrl' => self::configuredSocketBaseUrl(),
+            'wsPath' => self::configuredSocketBasePath(),
         ];
 
         // The bootstrap config is emitted as an inline <script>, which the
@@ -139,6 +148,90 @@ final class SharedUiController
 
         return (new Response())
             ->html($html)
-            ->header('Content-Security-Policy', SecurityHeaders::contentSecurityPolicy($nonce, $wsHost));
+            ->header('Content-Security-Policy', SecurityHeaders::contentSecurityPolicy(
+                $nonce,
+                $wsHost,
+                // A pinned cross-host origin must be dial-able: 'self' plus the
+                // portless same-host allowance would otherwise CSP-block it.
+                // Same-host pins are deduped inside the CSP builder.
+                $config['wsUrl'],
+            ));
+    }
+
+    /**
+     * Optional explicit WebSocket base origin for the SPA (`PHLIX_WS_URL`).
+     *
+     * When set to a valid `ws://`/`wss://` origin (optional `:port`, NO path —
+     * the path belongs to {@see self::configuredSocketBasePath()}), it is
+     * emitted as `window.__PHLIX__.wsUrl` so the ui lane can dial an
+     * operator-pinned socket endpoint instead of deriving same-origin.
+     * Absent, blank, or malformed yields `null` = the client's legacy
+     * same-origin derivation (unchanged behavior). Fail-soft by design: the
+     * bootstrap hint must never break the shell, mirroring the
+     * `HUB_COOKIE_INSECURE` precedent — and mirroring, key-for-key, the hub's
+     * shipped {@see configuredSocketBaseUrl()} twin (env name follows this
+     * repo's `PHLIX_*` convention; grammar and semantics are the hub's).
+     *
+     * Accepted: `ws://127.0.0.1:8804`, `wss://hub.example.com`, `wss://hub.example.com:8804`.
+     * Rejected (→ null): any non-ws(s) scheme, embedded path/query/userinfo,
+     * a bare `//host`, or an out-of-range port.
+     *
+     * @return string|null The validated origin, or null when unset/invalid.
+     *
+     * @since 1.4.0 (LW-077-a server half)
+     */
+    public static function configuredSocketBaseUrl(): ?string
+    {
+        $raw = getenv('PHLIX_WS_URL');
+        if ($raw === false) {
+            return null;
+        }
+        $candidate = trim($raw);
+        if ($candidate === '') {
+            return null;
+        }
+        // The grammar admits `[0-9]{1,5}` ports; parse, then range-check —
+        // the "out-of-range ports are rejected" promise must be real, not
+        // aspirational (still fail-soft: rejection yields null, the shell
+        // renders, the client falls back to same-origin derivation).
+        if (preg_match('#^(wss?)://([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$#', $candidate, $parts) === 1) {
+            $port = $parts[3] ?? '';
+            if ($port === '') {
+                return $candidate;
+            }
+            if ((int) $port >= 1 && (int) $port <= 65535) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Optional socket base path (`PHLIX_WS_PATH`), e.g. `/syncplay`.
+     *
+     * Emitted as `window.__PHLIX__.wsPath`. Must be a single absolute path
+     * segment set (leading `/`, path-safe characters only, no query/fragment).
+     * Absent, blank, or malformed yields `null` = legacy client behavior.
+     *
+     * @return string|null The validated path, or null when unset/invalid.
+     *
+     * @since 1.4.0 (LW-077-a server half)
+     */
+    public static function configuredSocketBasePath(): ?string
+    {
+        $raw = getenv('PHLIX_WS_PATH');
+        if ($raw === false) {
+            return null;
+        }
+        $candidate = trim($raw);
+        if ($candidate === '') {
+            return null;
+        }
+        if (preg_match('#^/[A-Za-z0-9._~/-]*$#', $candidate) === 1) {
+            return $candidate;
+        }
+
+        return null;
     }
 }

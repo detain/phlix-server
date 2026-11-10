@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Shared\Auth\JwtClaims;
+
 /**
  * JWT token handler for creating and validating JSON Web Tokens.
  *
@@ -267,6 +269,10 @@ class JwtHandler
     /**
      * Validate a JWT token and return its payload.
      *
+     * The return stays the decoded ARRAY (custom-claim transport — see
+     * {@see self::validateClaims()} for why the shared-DTO flip is additive
+     * here rather than in place, and for the typed entry point).
+     *
      * Performs full validation including signature verification, expiration
      * check, and issuer validation. Returns the decoded payload if valid,
      * or null if the token is invalid, expired, or malformed.
@@ -314,6 +320,63 @@ class JwtHandler
 
             return $payload;
         } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Validate a token and return it as the shared {@see JwtClaims} DTO.
+     *
+     * This is the server half of the Phase C.5 promise in the shared class
+     * docblock (`phlix-shared` `Auth/JwtClaims.php`: "`JwtHandler::validateToken()`
+     * [is to be] wired to deserialize the decoded payload into this DTO so
+     * server and hub share one definition of what's in a Phlix JWT"). The hub
+     * shipped the promise literally — its `validateToken()` returns
+     * `?JwtClaims` outright. The server cannot flip its `validateToken()`
+     * return in place for two measured reasons:
+     *
+     *  1. **Custom-claim transport.** Server tokens carry the S80
+     *     {@see self::CLAIM_PROFILE_ID} custom claim; the DTO models only the
+     *     standard Phlix shape and `toPayload()` deliberately omits anything
+     *     else. `AuthManager::refresh()` reads the profile back out of the
+     *     ARRAY payload — converting the return type would silently drop
+     *     profile scoping on every refresh (the exact bug S80 fixed).
+     *  2. **Acceptance-set delta.** `validateToken()` documents a numeric-string
+     *     `exp` leniency (L-2 — pinned by `JwtHandlerTest::testDigitStringExpStillValidates`);
+     *     the DTO's required-field checks demand real ints. Flipping the
+     *     return in place would narrow a shipped acceptance set silently.
+     *
+     * So this method is the typed entry point, and it is VERIFICATION-FIRST:
+     * a payload only reaches `JwtClaims::fromPayload()` after it has passed
+     * the full signature / expiry / issuer gauntlet of
+     * {@see self::validateToken()} — the DTO performs no verification of its
+     * own (its class docblock says so in CAPITALS). Tokens the DTO cannot
+     * model (missing/mistyped `iat`/`exp`, …) legitimately yield null from
+     * this view while the legacy array view keeps its documented tolerance.
+     *
+     * Migration track (tracked estate follow-up, NOT this row): once the mint
+     * stamps `aud`, consumers move from `validateToken()` arrays to
+     * `fromPayloadStrict()`-backed claims and the legacy default-`AUD_SERVER`
+     * shim retires.
+     *
+     * @param string $token JWT token string to validate
+     *
+     * @return JwtClaims|null Hydrated claims when the token verifies AND the
+     *                        payload fits the shared DTO shape; null otherwise.
+     *
+     * @see https://github.com/detain/phlix-shared Auth/JwtClaims.php (the DTO)
+     * @since 1.4.0 (LW-079-a server half)
+     */
+    public function validateClaims(string $token): ?JwtClaims
+    {
+        $payload = $this->validateToken($token);
+        if ($payload === null) {
+            return null;
+        }
+
+        try {
+            return JwtClaims::fromPayload($payload);
+        } catch (\InvalidArgumentException) {
             return null;
         }
     }

@@ -171,16 +171,22 @@ final class ArchitectureTreeCoversSrcSubsystemsTest extends TestCase
             return '';
         }
 
-        $open = strpos($readme, "```\n", $headingAt);
-        if ($open === false) {
+        // The opening fence may carry a language tag (`text`) — the
+        // 2026-11-10 prose-currency pass tagged the tree block, and the law
+        // this test enforces is about the tree's ENTRIES, not its fence
+        // marker. Anything else (no block, no close) still returns '' and
+        // reddens exactly as before.
+        $fence = [];
+        if (preg_match('/^```[a-zA-Z]*\n/m', substr($readme, $headingAt), $fence, PREG_OFFSET_CAPTURE) !== 1) {
             return '';
         }
+        $bodyStart = $headingAt + $fence[0][1] + strlen($fence[0][0]);
 
-        $close = strpos($readme, "\n```", $open + 4);
+        $close = strpos($readme, "\n```", $bodyStart);
         if ($close === false) {
             return '';
         }
 
-        return substr($readme, $open + 4, $close - $open - 4);
+        return substr($readme, $bodyStart, $close - $bodyStart);
     }
 }

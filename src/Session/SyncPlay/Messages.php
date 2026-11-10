@@ -50,6 +50,19 @@ namespace Phlix\Session\SyncPlay;
  * The current protocol version is 1. All messages include a protocol_version
  * field for future compatibility and version negotiation.
  *
+ * ## Dialect SSOT (LW-082-c cite)
+ *
+ * The canonical `syncplay_*` message-type catalog now lives in ONE place
+ * estate-wide: `Phlix\Shared\Relay\SyncPlayDialect` in the `phlix-shared`
+ * package (master). This class remains the server's runtime definition —
+ * constant ALIASES onto the shared module ride the next shared re-vendor
+ * (the vendored 0.53.0 does not ship it yet; the module carries an
+ * anticipatory `@since 0.55.0` stamp), so until then the 19 `TYPE_*` names
+ * below and the shared consts are kept in lockstep by hand and pinned by
+ * the wiring guard tests. Sibling consumer legs: hub relay side (LW-082-b),
+ * the `@phlix/syncplay` package (LW-082-d). Any new message type must land
+ * in the shared module AND here in the same estate wave.
+ *
  * @author Phlix Development Team
  *
  * @see SyncPlayManager For message handling

@@ -41,7 +41,7 @@ written down. This change supplies both in one commit:
 
 ## Data flow
 
-```
+```text
 member ──playback_sync {position:ms,...}──▶ handlePlaybackSync
                                              │ reportedPositionMs()  (parse; null ⇒ fully inert)
                                              │ recordMemberPosition() (live-only store)
@@ -58,7 +58,7 @@ member ──playback_sync {position:ms,...}──▶ handlePlaybackSync
                     ONE nudge frame → drifting member's connection ONLY
 ```
 
-The group echo broadcast is byte-for-byte the pre-S446 behaviour; the nudge is
+The group echo broadcast is byte-for-byte the pre-S446 behavior; the nudge is
 an *additional* frame aimed only at the reporter, sent after the echo. A client
 that understands nothing new still receives the authoritative state it always
 did.
@@ -110,7 +110,7 @@ Additive keys only, on the existing `playback_sync` family, through the S417
   Since the INCIDENT playjump cure, `group.position` here is the
   anchor-ADVANCED reading (`GroupState::getAdvancedPlaybackPosition()`) taken
   on the SAME ingest tick that produced the echoed `position` and the
-  in-sync judgement — one reference instant per `playback_sync` handling, so
+  in-sync judgment — one reference instant per `playback_sync` handling, so
   a frame can never carry a position and a drift that disagree.
 - `direction` is the human-readable sign of the drift; `suggested_rate` is
   `1 ± NUDGE_RATE_STEP` (1.1 speed-up when behind, 0.9 slow-down when ahead).

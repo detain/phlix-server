@@ -1,7 +1,7 @@
 # Phlix quickstart — from empty server to first watch party
 
-One page, in order: install → admin account → first library → the household →
-first watch party. Reference detail lives in the
+One page, in order: install → admin account → first library → first play →
+the household → first watch party. Reference detail lives in the
 [README](../../README.md); this page is the journey.
 
 ## 1. Install
@@ -20,8 +20,11 @@ Pick ONE path; each ends with a running server whose portal listens on
   its Prerequisites block first; it names the apt packages the other two paths
   do for you.
 
-There is no `.env` or `.env.example` in this repo, by design: Phlix has no
-dotenv loader. Environment variables reach the server through the systemd
+There is no `.env` in the PHP-runtime sense: Phlix has no dotenv loader, and no
+code reads a `.env` file. (The one example file that exists,
+`docker/examples/.env.example`, is consumed by docker compose's own variable
+interpolation in the `docker/` examples — never by the server process.)
+Environment variables reach the server through the systemd
 unit's `EnvironmentFile=/etc/phlix/env` (or your shell when you run
 `start.php` by hand); manually-run scripts pull the same file in via
 `scripts/bootstrap_env.php`, which never overrides a variable already set.
@@ -32,7 +35,7 @@ Open the portal, choose **Create an account** (the sign-in page's link; the form
 itself is headed **Create your account**), and fill it in. The **first**
 account on an empty server always becomes the active admin (and is admitted
 regardless of the signup gate). Every later self-service registration goes to
-the approval queue (see step 4) — the shipped default is `signup_mode: approval`,
+the approval queue (see step 5) — the shipped default is `signup_mode: approval`,
 so strangers cannot slip in just because the port is reachable.
 
 ## 3. Add your first library
@@ -50,7 +53,18 @@ key, only local NFO metadata and artwork work. A key saved through the admin
 UI is read when the workers start, so restart the server to apply it (the
 settings screen flags such keys as needing a restart).
 
-## 4. Add the household
+## 4. Play your first title
+
+Once the scan finishes, open any title from **Browse** and press **Play** — no
+transcode pass or pre-generation step is required first. The first play of an
+exotic-codec file can take noticeably longer than the rest: segments are encoded
+on demand, so the player is waiting on the encoder for its first moments while
+cached later segments stream instantly. (If something does not play, the
+README's [Troubleshooting](../../README.md#troubleshooting) "first steps" list —
+another browser, sign-out/sign-in, same-network check — is what resolves most
+household playback complaints.)
+
+## 5. Add the household
 
 Each person signs up at `/app` (the **Create an account** link under the sign-in
 form) and lands in the **pending** queue;
@@ -68,7 +82,16 @@ What a child profile actually sees: titles above its rating cap and blocked
 genres are filtered out of every rail and search result — the cap is enforced
 server-side at the library and stream gates, not by hiding UI.
 
-## 5. Start your first watch party
+**Forgot a password?** There is no self-service reset and no email flow. An
+admin can start the process from **Admin → Users** (the forced-change button),
+but the recovery completes with one CLI line on the server:
+`php bin/phlix user:reset-password <name>` — it prints a strong new password
+(or accepts `--password=`), revokes that account's live sessions, and clears
+the hold. Hand the member the printed password; they should then pick their own
+under Settings. The same command is the escape hatch if the forced-change hold
+is ever left mid-flight (README → *Bad days: recovery from the CLI*).
+
+## 6. Start your first watch party
 
 The walkthrough that names the buttons: README →
 [Starting a watch party (portal walkthrough)](../../README.md#starting-a-watch-party-portal-walkthrough).
@@ -103,10 +126,10 @@ reverse-proxy question, covered by
 
 | Term | Meaning here |
 |------|--------------|
-| **watch party / room / group** | One noun, three vocabularies: user copy says *room* ('Create room' / 'Join room' / 'Room ID'), the REST/WS payloads say *group* and *room id*, internals say group. Same thing: a synced-playback party you join by id. |
+| **watch party / room / group** | One noun, three vocabularies: user copy says *room* ('Create room' / 'Join room' / 'Room ID'), the REST/WS payloads say *group* and *room id*, and older server-internal prose says *room* — the README's Naming Layers passage is the authoritative translation table. Same thing: a synced-playback party you join by id. |
 | **SyncPlay** | The watch-party feature's name in the wire protocol and in the portal UI. |
 | **hub / relay** | The optional companion service (above) and the outbound tunnel your server dials so remote viewers can reach it. |
-| **profile** | Two kinds meet here: a *household profile* is the per-person viewer profile with rating caps and history (step 4); a *quality profile* is a playback-device preset (stream-limits API). The endpoints say which one they mean. |
+| **profile** | Two kinds meet here: a *household profile* is the per-person viewer profile with rating caps and history (step 5); a *quality profile* is a playback-device preset (stream-limits API). The endpoints say which one they mean. |
 | **JWT** | The signed bearer token the API hands you at login (`Authorization: Bearer …`) and the WebSocket carries. |
 | **signed URL** | A media/thumbnail URL carrying an expiring signature, so short-lived requests (segments, subtitles) can be fetched by dumb `<img>`/`<video>` machinery without a header. |
 | **HLS** | HTTP Live Streaming: the server chops media into segments + a playlist so browsers and TVs can stream it adaptively. |

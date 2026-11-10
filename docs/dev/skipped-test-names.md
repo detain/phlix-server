@@ -23,7 +23,7 @@ Against a CI run (the script strips `gh`'s `job<TAB>step<TAB>timestamp ` prefix 
 gh run view <run-id> --log | scripts/skipped-test-names.sh > /tmp/ci.txt
 ```
 
-That is also how the mechanism is checked after a merge: master's own pre-S345 log exits
+That is also how the mechanism is checked after a merge: master's own pre-repair log exits
 **4** on this command (measured on run `32027697809`), so an exit of **0** with a non-empty
 file is the before/after demonstration. The exit code is the whole contract — an empty set
 is never handed over silently:
@@ -61,8 +61,8 @@ limitation, not a config mistake.** The mechanics:
   in the pinned PHPUnit 10.5.64, which is the citation the script's own error message
   prints). A `--testdox` run therefore adds to `Skipped: N` and can never name those
   skips, with or without `--display-skipped`.
-- No workflow passes `--testdox` any more (`syncplay-e2e.yml` dropped it in S345 for
-  exactly this reason). If you add it back, or use it locally, the script exits **5**
+- No workflow passes `--testdox` any more (`syncplay-e2e.yml` dropped it in the same
+  review round for exactly this reason). If you add it back, or use it locally, the script exits **5**
   and says so — do not "fix" `phpunit.xml` in response; re-run without `--testdox`.
 - Exit 5 is decided inside the run whose own glyphs prove it is a testdox run:
   any ` ↩ ` glyph that does not exceed the run's shortfall marks the run, and because
@@ -102,7 +102,7 @@ header, and a run in which every suite skipped prints `No tests executed!` with 
 `SUITE:<name>`.
 
 **Why names and not `Skipped: N`.** The number drifts between runs on its own — this
-repo has legitimate environment-dependent skips, and this box reports ~259 where CI
+repo has legitimate environment-dependent skips, and a typical dev host reports ~259 where CI
 reports 3 — and a moved count cannot distinguish *"a test started skipping"* from
 *"a conditionally-skipped test turned into a failure"* from *"a test disappeared"*.
 All three move it identically, and two of the three can leave it **unmoved**. `comm`
@@ -112,7 +112,7 @@ denominators on stderr, and **fails loudly** rather than printing an empty set �
 one of the exit codes in the table above. Each code names the cause its own
 arithmetic supports, and never attributes more to a cause than that cause can carry — a
 wrong diagnosis would send the next reader to fix the wrong thing, and rounds 2 and 3 of
-the S345 review plus its test engineer each caught one doing exactly that before it
+that review plus its test engineer each caught one doing exactly that before it
 shipped (the last was a clamp that trimmed a surplus of testdox glyphs down to the
 shortfall; it is removed rather than re-tuned, because a surplus cannot come from a real
 testdox run at all).
@@ -153,7 +153,7 @@ listed first:
   blaming `phpunit.xml` rather than as exit 3 blaming the parser — the right refusal
   with the wrong cause.
 
-The script's header carries all six limits (three closed by S352, three still open,
+The script's header carries all six limits (three closed in a later review pass, three still open,
 plus the refusal side-effect of limit 2 — the genuinely-empty run shape, listed
 first above), numbered, each with the input that reaches it, and enumerates every
 exit path with its input class; that header is the canonical statement of this

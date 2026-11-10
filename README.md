@@ -21,7 +21,9 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **Real-time SyncPlay**: Watch content together with friends
 - **Live TV Support**: DVR and guide integration
 - **Cast to TV**: Chromecast, AirPlay, Roku and DLNA renderers — per-protocol device discovery plus
-  full transport control (play/pause/seek/stop). Chromecast/AirPlay/Roku routes sit behind
+  transport control (play/pause/seek/stop) on Chromecast, AirPlay and DLNA; Roku's server-side
+  surface is send-to-device, app launch and key-press routes (transport there is simulated on the
+  TV, not commanded by the server). Chromecast/AirPlay/Roku routes sit behind
   `CastingEnabledMiddleware` on their `casting.<protocol>.enabled` switches; the DLNA renderer
   routes are auth-gated only — DLNA is configured separately by `dlna.enabled` (SSDP
   advertisement, applied at worker start) and `dlna.cds_enabled` (LAN content browsing, off by
@@ -51,8 +53,8 @@ Phlix Media Server provides a complete media management and streaming solution:
   (`src/Webhooks/Plugins/` — Slack, Discord, ntfy, Apprise, Telegram, Pushover, MQTT): every
   configured egress URL is re-validated against `SsrfGuard` at send time, so a config edited
   or shipped to point at loopback, link-local metadata, or a private range is refused with a
-  logged warning and zero bytes out — the create+moment-of-use law the webhook surfaces proved
-  (SRV-M20). Redirects are never followed: every guarded egress context pins
+  logged warning and zero bytes out — the create+moment-of-use law the webhook surfaces proved.
+  Redirects are never followed: every guarded egress context pins
   `follow_location=0`/`max_redirects=0`, so a public endpoint answering `302 →` a denied
   range is refused at hop one (logged, zero bytes to the target). The guard's verdict is
   check-time, before the socket connects; the sub-second resolver window is disclosed as a
@@ -63,12 +65,12 @@ Phlix Media Server provides a complete media management and streaming solution:
 
 Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
-library → first watch party, one page, in order. The rest of this README is the
-reference; the quickstart is the journey.
+library → first play → household → watch party, one page, in order. The rest of this
+README is the reference; the quickstart is the journey.
 
 ## Architecture
 
-```
+```text
 src/
 ├── Access/           # Per-profile access schedules and content access policy
 ├── Admin/            # Admin services: backup manager, dashboard aggregation
@@ -211,7 +213,7 @@ Every environment variable the server process reads is inventoried in the defini
   nav are registered in `web-ui/src/main.ts`, covering **Browse/Library**, **Player**, **Music** sub-pages
   (`/app/music/*`), **Books** (`/app/books/*`), **Audiobooks** (`/app/audiobooks/*`), **Photos**
   (`/app/photo/*`), **Search** (`/app/search`), **Settings** (incl. the **Security**/passkey tab at
-  `/app/settings/security`), and the admin section (`/app/admin/*`).
+  `/app/settings`), and the admin section (`/app/admin/*`).
 - **Legacy Smarty page rendering removed**: The old server-rendered (Smarty) portal pages —
   `PageRenderer`, the page controllers, and all `public/templates/**/*.tpl` page templates — have been
   **deleted**. Their old paths now **302-redirect** to the `/app` equivalent (e.g. `/login` →
@@ -381,7 +383,7 @@ slips into a fresh server just because it is reachable.
   the account to `active` so the member can sign in; disabling or rejecting revokes any
   issued tokens as the row is updated or removed.
 - **Changing the mode** — `auth.signup_mode` is a server setting like the rest
-  (`PUT /api/v1/admin/settings`, allow-list-backed) and is re-read per registration, so
+  (`PUT /api/v1/admin/settings`, allowlist-backed) and is re-read per registration, so
   `open` / `approval` / `disabled` takes effect live, no restart. `open` creates the
   account active and hands back tokens immediately (`201`); `disabled` refuses every
   non-first registration with `403` `auth.signups_disabled` and creates nothing.
@@ -491,7 +493,7 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
 
 - **CRUD loop**: `POST /api/v1/collections` creates a collection — body `{name, library_id}` are both required
   non-empty strings (`400` otherwise), with optional `smart_playlist_id`/`parent_id`/`sort_order` —
-  and returns `201 {collection}` (`create()`, `CollectionController.php:116-163`). **`POST /api/v1/playlists`
+  and returns `201 {collection}` (`create()`, `CollectionController.php:116-177`). **`POST /api/v1/playlists`
   is an alias of that same registration** (`Application::loadCollectionRoutes()`) — there is no separate playlist table.
   Reads: `GET /api/v1/collections` (visible-to-actor list), `GET /api/v1/collections/{id}`
   (`{collection, items, total}`), `GET /api/v1/libraries/{libraryId}/collections` (list scoped to one
@@ -504,13 +506,13 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   admin, earliest user of any status) — so nothing was orphaned; with no users at all rows stay `NULL`.
   Members **see** their own rows plus legacy `created_by = NULL` rows; **active** admins
   (`is_admin = 1 AND status = 'active'` — never the soft flag alone, and an unwired repository fails
-  closed to non-admin) see everything (`actorSees()`, `CollectionController.php:558`). **Writes are
+  closed to non-admin) see everything (`actorSees()`, `CollectionController.php:597`). **Writes are
   stricter**: only the row's owner may update/delete/add-items/refresh; foreign and legacy-NULL rows
-  are admin-only (`actorManages()`, `:573`). `PUT` never reads `created_by` from the body — ownership
-  is immutable, a rename never re-stamps the anchor (`:264-266`).
+  are admin-only (`actorManages()`, `:612`). `PUT` never reads `created_by` from the body — ownership
+  is immutable, a rename never re-stamps the anchor (`:289`).
 - **404-not-403 rationale**: every ownership miss answers the byte-identical
   `404 {error: "Collection not found"}` that a genuinely absent id produces (`collectionNotFound()`,
-  `:585`; class law `:52-54`). A distinct `403` would make the endpoint an existence oracle — probes
+  `:624`; class law `:55-56`). A distinct `403` would make the endpoint an existence oracle — probes
   could enumerate which collection ids exist by the 403-vs-404 delta — so refusal is made
   indistinguishable from absence, mirroring the syncplay room-visibility precedent the docblock cites.
 - **Smart collections**: a collection carrying a `smart_playlist_id` is *smart* — its membership is
@@ -520,7 +522,7 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   via `POST /api/v1/collections/{id}/refresh` (`400` "Collection is not
   a smart collection" on a plain row, `409` when the collection's `smart_playlist_id` edge dangles —
   its playlist row is gone — and `200 {message, items_added, items_removed}` when the refresh
-  actually ran; SRV-M19 made both the write-time existence check on `smart_playlist_id`
+  actually ran; a review repair made both the write-time existence check on `smart_playlist_id`
   (`400` naming the field) and the honest refresh diff live). Honest gap: **the backing
   rule-sets have no live HTTP CRUD** — the `/api/v1/smart-playlists` registration helper sits
   uncalled in `Router.php` (never invoked; pinned by `SmartPlaylistRegistrationGuardTest`), so a
@@ -529,7 +531,7 @@ exact line is cited in the [HTTP endpoints](#http-endpoints) table rows below.
   `web-ui/package.json:15`) exposes both the **admin** Collections page (`/app/admin/collections`)
   and the member-facing `/app/playlists` pages (the v0.99.12 re-pin landed them; playlist
   manageability gating per `@phlix/ui` v0.99.11/v0.99.12). Either way clients code against the REST contract above —
-  `openapi.yaml` carries all paths (`/api/v1/collections*` from `:5728`) and
+  `openapi.yaml` carries all paths (search `"/api/v1/collections"` for the block) and
   `OpenapiSpecCurrencyTest` machine-checks the route↔spec bijection.
 
 ### Live TV & DVR (admin-managed)
@@ -683,7 +685,7 @@ the disabled theme's id 400s in the meantime.
 ## Installation
 
 > **Prefer containers?** The published Docker images are CI-built and fully supported —
-> see [docker/README.md](docker/README.md) for compose files, entrypoint behaviour and image
+> see [docker/README.md](docker/README.md) for compose files, entrypoint behavior and image
 > tagging. Everything below covers the bare-metal Ubuntu/Debian installer and source installs.
 
 ### One-line install (Ubuntu/Debian)
@@ -792,10 +794,12 @@ runs `composer install --no-dev --optimize-autoloader`, clears `templates_c/`, r
 deliberately leaves the env file, MySQL grants, HAProxy config, and Let's Encrypt cert alone.
 
 Before upgrading across several versions, skim [`CHANGELOG.md`](CHANGELOG.md) for every release
-you cross: each release section opens with **Upgrade notes** — breaking changes and the
-operator actions the deploy must take, or `None.` when the release is drop-in — and
-pre-convention releases carry their deploy-critical warnings inline instead
-(the bold `MIGRATION ANSWER` line shows that older shape). Anything that needs doing beyond the automatic
+you cross: the deploy-critical notes ride inline today — grep the file for the bold
+`MIGRATION ANSWER` markers, which record the operator actions a deploy must take beyond
+migrations (`None.` where a release is drop-in; 3 markers exist at this tip). The CHANGELOG's
+house preamble commits every NEW dated release section to opening with an explicit
+**Upgrade notes** block going forward, so both shapes live in the file and the
+`MIGRATION ANSWER` grep is the reliable one today. Anything that needs doing beyond the automatic
 `scripts/run-migrations.php` step above (a rescan, a new required env var) is named there.
 
 ### Updating a clone of the old repo
@@ -951,7 +955,7 @@ the sequence below does **not**. On a fresh Ubuntu/Debian host, start with:
 sudo apt-get update -y
 sudo apt-get install -y ca-certificates curl git unzip openssl \
     php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip php-ldap \
-    mysql-server
+    mysql-server ffmpeg
 ```
 
 That package set is the manual mirror of `scripts/install.sh`'s own apt line and
@@ -960,7 +964,14 @@ its built-in-vs-packaged mapping comment: `ctype`, `exif`, `fileinfo`, `iconv`,
 `libxml` and `simplexml` come with `php-xml`; `hash`, `json`, `filter`,
 `openssl`, `pcntl`, `random`, `sodium` and `zlib` are built into the
 `php8.3-cli` binary; `pdo_mysql` rides `php-mysql`, `mbstring`/`curl`/`gd`/`zip`
-/`ldap` are their own packages. `composer.json`'s 24 `ext-*` requirements are
+/`ldap` are their own packages; and `pdo` — the contract base `pdo_mysql`
+extends — is built into the same Debian `php8.3` binaries, so no package is
+named for it. Two honest leftovers: `php-bcmath` is not a member of the derived
+contract (`bcmath` appears only in vendor *suggest* lists) — the installer ships
+it as optional convenience; and `ffmpeg` is not a PHP extension at all, but the
+transcode, trickplay and subtitle-burn features listed above need it on PATH at
+runtime, so the manual path must install it too or first play of an exotic-codec
+title fails. `composer.json`'s 24 `ext-*` requirements are
 the derived contract (`scripts/required-php-extensions.php`) — a missing member
 makes the very first `composer install` below refuse. Then install Composer
 itself (<https://getcomposer.org/download/>), verified against its published
@@ -1020,7 +1031,7 @@ reach the process environment the same way the managed path does it:
 `/etc/phlix/env`, which the systemd unit loads as `EnvironmentFile=`. The PHP
 runtime never reads that file by itself — `scripts/bootstrap_env.php` loads it for
 the maintenance scripts under `scripts/` and for the hand-run `bin/phlix` CLI,
-never overriding already-set variables (M27 — so both documented migration
+never overriding already-set variables (so both documented migration
 paths see `/etc/phlix/env` alike) —
 so a hand-run `php start.php start` outside a login shell that exports the variables
 connects with no password and refuses to boot.
@@ -1081,8 +1092,11 @@ every `getenv()`, `$_ENV[]` and constant-mediated read in `src/`, `config/`,
 `start.php`, `bin/` and `scripts/` — if a knob is not here, no in-repo PHP code reads
 it. (Externally vendored plugins may resolve additional knobs inside this process —
 the anidb plugin's `PHLIX_ANIDB_CACHE_DIR` is one such example: plugin code reads it,
-no in-repo PHP code does (the installer's shell paths seed and honour it — census rows
-enumerate PHP reads), so it deliberately has no row in this census.) Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
+no in-repo PHP code does (the installer's shell paths seed and honor it — census rows
+enumerate PHP reads), so it deliberately has no row in this census.) The CI-only
+`MIN_COVERAGE` (`scripts/coverage-threshold-check.php:231`) is a further exception of
+the same kind: it lives in `scripts/` but is read only by the phpunit workflow's coverage
+gate, never by the server process, so it has no row here either. Most operators only set `DB_PASSWORD` and `JWT_SECRET`;
 everything else has a safe default. "Secret?" marks values that must never be
 logged or committed. The "Restart" column uses four values: **yes** =
 read once at boot (bind, container/config construction) — a new value applies
@@ -1149,7 +1163,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_SECRET_KEY` | — | **yes** | n/a (shell) | **docker-entrypoint alias** → exported as `JWT_SECRET` before the daemon starts; the PHP runtime never reads this name |
 | `PHLIX_SIGNED_URL_SECRET` | derives from `JWT_SECRET` (domain-separated) | **yes** | live | `src/Auth/SignedUrl.php` |
 | `PHLIX_SIGNED_URL_TTL` | `21600` s (6 h) | no | live | `src/Auth/SignedUrl.php` |
-| `PHLIX_COOKIE_INSECURE` | off | no | live | `src/Auth/CookiePolicy.php` — the SSOT behind `AuthController` and the OIDC/GitHub callback minters; the OAuth2 plugin's state-cookie helpers (`src/Plugins/OAuth2/StateCorrelation.php`, `src/Plugins/OAuth2/CallbackUrl.php`) read the env directly. Drops `Secure` on auth cookies for plain-HTTP dev (stored twin: `auth.cookie.insecure`). Dev-only — under `PHLIX_ENV=production` an active opt-in warns once per process (SH-033) |
+| `PHLIX_COOKIE_INSECURE` | off | no | live | `src/Auth/CookiePolicy.php` — the SSOT behind `AuthController` and the OIDC/GitHub callback minters; the OAuth2 plugin's state-cookie helpers (`src/Plugins/OAuth2/StateCorrelation.php`, `src/Plugins/OAuth2/CallbackUrl.php`) read the env directly. Drops `Secure` on auth cookies for plain-HTTP dev (stored twin: `auth.cookie.insecure`). Dev-only — under `PHLIX_ENV=production` an active opt-in warns once per process |
 | `PHLIX_TLS_ENABLED` | off | no | yes | `config/hub.php` — https vs wss scheme composition |
 
 #### Docker-entrypoint shell seams
@@ -1187,7 +1201,7 @@ while these were invisible:
 | `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` — CAFILE holds CA/**root** certificates only, never a hub/server leaf/fullchain (LEAF material rotates every ~60 days; pinning it is the silent-expiry class — audit §5.2); an explicitly-set (env or `$tlsCafile` ctor arg) but unreadable path now throws on every hub REST call naming the source (§3.2), while the unset default keeps trusting the system store |
-| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognised value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; previously an explicit `0` was silently treated as unset) |
+| `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognized value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; previously an explicit `0` was silently treated as unset) |
 
 #### SyncPlay write-through bridge
 
@@ -1486,7 +1500,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | POST | `/api/v1/collections/{id}/bulk-add` | Add many items — body `{media_item_ids: string[] (required, non-empty)}` → `{message, added_count}`; `400` missing/empty; owner-or-admin gate (`:2270`) |
 | POST | `/api/v1/collections/{id}/refresh` | Re-evaluate a **smart** collection (one carrying `smart_playlist_id`) against its playlist rules → `200 {message:"Smart collection refreshed"}`; `400` "Collection is not a smart collection" on a plain row; owner-or-admin (`:2271`) |
 | POST | `/api/v1/libraries` | Create a library — body `{name: string (required), type: movie\|series\|music\|audiobook\|photo\|book\|video (required), paths: string[] (required, non-empty), options?, series_per_directory?, metadata_priority?}`; each path is stat-checked before anything reaches the DB; `400` on missing/invalid fields (`valid_types` echoed for a bad type) — admin (enforced in-handler, not route-level middleware) |
-| GET/PUT/DELETE | `/api/v1/libraries/{id}` | Read / partial-update / remove one library (update re-validates submitted `paths` through the same gate as create) — admin (in-handler) |
+| GET/PUT/DELETE | `/api/v1/libraries/{id}` | Read / partial-update / remove one library (update re-validates submitted `paths` through the same gate as create; DELETE also cascades away the library's collections and their item rows via the foreign keys in migration `122_collections_foreign_keys.sql`) — admin (in-handler) |
 | POST | `/api/v1/libraries/{id}/scan` · `/rescan` · `/refresh-metadata` · `/match-metadata` | Queue the add-library initial scan / a full rescan / a metadata re-fetch / a metadata re-match — admin (in-handler); progress via `GET /api/v1/libraries/{id}/scan-history` · `/scan-status` |
 | POST | `/api/v1/libraries/{id}/clear-artwork` · `/clear-metadata` · `/prune` · `/regenerate-assets` · `/delete-all` | Library maintenance operations (drop cached artwork / drop metadata / prune vanished files / rebuild derived assets / remove all items) — admin (in-handler) |
 | GET | `/api/v1/airplay/devices` · `/api/v1/cast/devices` · `/api/v1/roku/devices` · `/api/v1/dlna/renderers` | Enumerate reachable cast targets per protocol — auth required (`AuthMiddleware`; airplay/cast/roku additionally `CastingEnabledMiddleware`) |
@@ -1510,7 +1524,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
 | DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
 | POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
-| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, and while the flag is set the account is **held** — no route mints a new session: password sign-in and refresh are refused, and provider sign-in plus the passkey (WebAuthn), quick-connect and profile-switch mints all refuse at `AuthManager`'s token seam; the SRV-M18 rework closed the legs that mint outside `AuthManager` too — the OIDC and GitHub browser callbacks (answered a `?error=password_change_required` redirect with no cookies) and the hub-token exchange refuse through the same shared guard, and OPDS HTTP-Basic streaming is refused for a held account ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
+| POST | `/api/v1/admin/users/{id}/reset-password` | Issue a **forced password change**: stores a hashed reset token server-side, sets `must_change_password`, and revokes the account's sessions — the response carries only `{message}`; **no new password is returned**. No shipped surface delivers or consumes the token, and while the flag is set the account is **held** — no route mints a new session: password sign-in and refresh are refused, and provider sign-in plus the passkey (WebAuthn), quick-connect and profile-switch mints all refuse at `AuthManager`'s token seam; a follow-up rework closed the legs that mint outside `AuthManager` too — the OIDC and GitHub browser callbacks (answered a `?error=password_change_required` redirect with no cookies) and the hub-token exchange refuse through the same shared guard, and OPDS HTTP-Basic streaming is refused for a held account ([Bad days: recovery from the CLI](#bad-days-recovery-from-the-cli)) — admin-only |
 | POST | `/api/v1/admin/users/{id}/approve` | Approve a pending signup (`status` → `active`); `200 {message}`, `404` unknown id — admin-only |
 | POST | `/api/v1/admin/users/{id}/disable` | Disable an account — revokes its tokens; `400` when it is your own account or the last admin — admin-only |
 | POST | `/api/v1/admin/users/{id}/reject` | Reject a still-pending signup (hard delete); `400` if the account is not pending — admin-only |
@@ -1528,7 +1542,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | GET/POST | `/api/v1/admin/auth-providers/github/config` | Read / save GitHub config (`client_id`, `client_secret` write-only, `scopes`, `redirect_uri`); `configured` means id **and** secret are present. An absent optional key is **preserved** — admin-only |
 | GET | `/api/v1/admin/auth-providers/{oidc,ldap,github}/schema` | JSON schema for the provider's config form — admin-only |
 | GET/POST/PUT/DELETE | `/api/v1/admin/webhooks` · `/webhooks/{id}` · `POST /webhooks/{id}/test` | Signed webhook hook registry: per-hook secret, SSRF-guarded target URL, HMAC `X-Phlix-Signature` (+ additive timestamped V2) delivery headers — admin-only (see [A webhook never fires](#a-webhook-never-fires)) |
-| GET/POST/DELETE | `/api/v1/admin/webhooks/subscriptions` · `/{id}`, `GET /api/v1/admin/webhooks/deliveries` | Domain-event subscriptions (body `{url, events[]}`; `user.login`, `playback.*`, `library.*`, …). **Unsigned** — the subscriptions store has no secret column; deliveries carry only `X-Phlix-Event`/`X-Phlix-Delivery`, so the URL is the sole (weak) capability: anyone who learns it can forge events to the receiver. Targets are SSRF-guarded at create *and* re-validated against the stored row on every delivery attempt (SRV-M20). Use the signed registry above for any trust-bearing flow — admin-only |
+| GET/POST/DELETE | `/api/v1/admin/webhooks/subscriptions` · `/{id}`, `GET /api/v1/admin/webhooks/deliveries` | Domain-event subscriptions (body `{url, events[]}`; `user.login`, `playback.*`, `library.*`, …). **Unsigned** — the subscriptions store has no secret column; deliveries carry only `X-Phlix-Event`/`X-Phlix-Delivery`, so the URL is the sole (weak) capability: anyone who learns it can forge events to the receiver. Targets are SSRF-guarded at create *and* re-validated against the stored row on every delivery attempt. Use the signed registry above for any trust-bearing flow — admin-only |
 | GET/POST/PUT/DELETE | `/api/v1/profiles/{profileId}/schedules` · `/{scheduleId}` | Per-profile access schedules (allowed-time windows), enforced request-edge by `AccessScheduleMiddleware`. Authorization is per-handler (`ProfileAccessPolicy::canManageProfile` — own profile or server admin), auth required |
 | POST | `/api/v1/admin/backup/create` | Create a backup archive now — optional body `{label: string}` (non-string `label` → `400`); `data` carries `backup_id`, `file_path`, `size_bytes`; failure → `500` — admin-only |
 | GET | `/api/v1/admin/backup/list` | All backups newest-first — rows carry `id`, `label`, `file_path`, `size_bytes`, `checksum_sha256`, `is_s3`, `created_at`, `expires_at` (the latter is never written; always `null`) — admin-only |
@@ -1564,7 +1578,7 @@ response-body field the guard has always shipped. Semantics, envelopes and recov
 
 **JWKS key format.** `GET /.well-known/jwks.json` serves this server's Ed25519
 public key from the resolved hub identity keypair — `var/hub-server-key.pem`
-by default (SH-019: private key material no longer defaults into the git
+by default (private key material no longer defaults into the git
 tree), with a compatibility probe for a pre-existing
 `config/hub-server-key.pem` and an override via config `key_path` / env
 `PHLIX_HUB_KEY_PATH`. The reader accepts **both** the
@@ -1770,7 +1784,7 @@ php bin/phlix backup:create --label=pre-upgrade   # create a backup archive now 
 php bin/phlix backup:list                          # table of stored backups, newest first
 ```
 
-`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service, and both bootstrap the managed env file the same way — each requires `scripts/bootstrap_env.php` right after the Composer autoloader (default `/etc/phlix/env`, override with `PHLIX_ENV_FILE`; already-set variables are never clobbered), so on an install.sh-managed box neither command needs `DB_PASSWORD` exported by hand (M27). Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php`. Both delegate to the same `Phlix\Common\Database\MigrationRunner` service, and both bootstrap the managed env file the same way — each requires `scripts/bootstrap_env.php` right after the Composer autoloader (default `/etc/phlix/env`, override with `PHLIX_ENV_FILE`; already-set variables are never clobbered), so on an install.sh-managed box neither command needs `DB_PASSWORD` exported by hand. Re-running is safe. Applied files are recorded in a `schema_migrations` ledger and skipped while their checksum matches. When a file does re-run, its statements tolerate the replay: they use `IF NOT EXISTS` where MySQL supports it, and duplicate-column/duplicate-key errors are downgraded to notes. The downgrade is necessary because MySQL 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`. The complete set of commands the tool actually ships is tabulated at the end of this section.
 
 **Numbering law.** Migration files are `NNN_snake_case_description.sql` with a
 zero-padded three-digit prefix; the runner discovers them with `glob() + sort()`
@@ -1786,8 +1800,8 @@ catalogued in [docs/data-model.md](docs/data-model.md).
 **Exit codes.** Both commands exit `0` when every statement applied, or failed only with an idempotent "already applied" error. They exit `1` when at least one genuine, non-idempotent statement error was recorded. A failing run does **not** stop at the first error — later files are still attempted. But the failing file is deliberately left out of the ledger, so the next run retries it. Consequences worth knowing:
 
 - `scripts/install.sh` runs under `set -euo pipefail`, so a failed migration **aborts** the install/update before the service is restarted.
-- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead — note the **shipped images already set this to 1** (`docker/Dockerfile`, `Dockerfile.intel`), so a deploy from the published images refuses to boot on a failed migration unless you explicitly override it; see [docker/README.md](docker/README.md). It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
-- `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honoured by **both** commands.
+- `docker/docker-entrypoint.sh` prints a loud `PHLIX-MIGRATION-FAILURE` banner to stderr and, by default, **still starts the container** (a crash-looping media server is worse than a degraded one). Set `PHLIX_MIGRATIONS_STRICT=1` to make the container refuse to start instead — note the **shipped images already set this to 1** (`docker/Dockerfile`, `Dockerfile.intel`, `Dockerfile.nvidia`), so a deploy from the published images refuses to boot on a failed migration unless you explicitly override it; see [docker/README.md](docker/README.md). It also refuses to start when migrations could not run at all (no database host configured, or `scripts/run-migrations.php` missing).
+- `PHLIX_MIGRATIONS_DIR` overrides the directory that is scanned for `*.sql` (default `migrations/`). Honored by **both** commands.
 
 ⚠ **"Idempotent" is a closed list, not "anything a replay raises".** The squelch is decided on the MySQL **error number**, never on the exception text. The driver prefixes the whole failing statement to its message, so matching a phrase like `already exists` would grep the migration's own SQL — an earlier version did, and it reclassified hard failures as successes. The idempotent set is exactly four errors:
 
@@ -1870,7 +1884,7 @@ php bin/phlix user:reset-password admin --password='pick-one'
 
 Prefer the generated form. An explicit `--password='…'` lands in shell history and is
 readable by every local `/proc/<pid>/cmdline` reader until the process exits — the same
-reason `user:create` accepts `--password-file=-` (stdin) as of SH-032.
+reason `user:create` accepts `--password-file=-` (stdin).
 
 The reset re-hashes through the same `UserRepository` write path the HTTP admin surface
 uses — and, like every password write on that path, it stamps `tokens_not_valid_after`, so the
@@ -1886,34 +1900,35 @@ is a force-change-and-revoke button, not a reset the affected user can complete:
 hashed reset token, sets `must_change_password`, and kills the account's sessions — and **no
 shipped endpoint delivers or consumes that token**. While the flag is set the account is held —
 no route mints a new session — and the legs answer differently: a **password login** is refused
-by `PasswordChangeRequiredException`, and SRV-M17 shipped the HTTP mapping the exception was
-written for: the served path answers the distinct `403` + `{error, code}` envelope
+by `PasswordChangeRequiredException`, and the served path answers the HTTP mapping the exception
+was written for: the distinct `403` + `{error, code}` envelope
 (`auth.password_change_required`) with no session minted. A token
 **refresh** is refused by a plain `InvalidArgumentException`, which `AuthController::refresh`
 catches and answers `401` + `{error}` (no code field). Provider sign-in through
 `AuthManager::loginWithProvider` is refused with `PasswordChangeRequiredException` **before any
-success bookkeeping** (SRV-M18, review server__pm); SRV-M17 moved that typed refusal ahead of
+success bookkeeping**; an earlier fix moved that typed refusal ahead of
 the controller arm's generic `RuntimeException` catch, so the hold answers the same distinct
 `403` envelope instead of the mislabeled `provider_unavailable` (genuine provider failures
 still fail closed with a `503`, no token). The passkey entry point `WebAuthnController::finishAuthentication`
 no longer walks around the hold: like quick-connect approval and the profile switch, it mints
 through `AuthManager::buildAuthResponse()`, which consults `must_change_password` at the seam
 itself and mints nothing for a held account (WebAuthn ships **enabled** by default in
-`config/auth.php`, so this gate is load-bearing). **SRV-M18 rework (review server__pm)** closed
+`config/auth.php`, so this gate is load-bearing). **A follow-up rework** closed
 the legs that used to mint outside `AuthManager` entirely: the OIDC and GitHub browser callbacks
 now call the same shared guard — `PasswordChangeRequiredException::refuseIfHeld()` — before their
 mint and answer a held account with the refusal shape these surfaces already ship, a `302` back to
 the allowlisted return target carrying `?error=password_change_required` with no session cookies;
 and the hub-token exchange (`POST /api/v1/auth/hub-token`) refuses through the guard before
-issuing `server_session_token`; SRV-M17's 403 mapping did not take this leg into its scope, so
+issuing `server_session_token`; the `403` mapping never took this leg into its scope, so
 the typed refusal still answers the router's central `500` here (interim — unlike the passkey
-leg, which SRV-M17 mapped). The wall is now universal on the mint
+leg, which is mapped). The wall is now universal on the mint
 side: `MintSeamLawTripwireTest` enumerates every access-token and refresh-token call site in
 `src/` and turns red until any new one is gated behind the guard. The hold also covers the OPDS
 HTTP-Basic streaming surface: `AuthManager::verifyCredentials()` answers a held account with its
 contract's silent refusal, so the compromised password can neither mint nor keep streaming, and
 the refusal charges the per-IP brute-force budget exactly like any other failed check does (the
-disclosed M-5 throttle semantics). Full recovery is ONE CLI step:
+throttling semantics disclosed above apply in full here too). These refusal legs landed across the
+review rounds the CHANGELOG tracks as SRV-M17 and SRV-M18. Full recovery is ONE CLI step:
 `user:reset-password` sets a new password AND clears
 `must_change_password` itself (live-session revocation rides the same
 `tokens_not_valid_after` stamp):

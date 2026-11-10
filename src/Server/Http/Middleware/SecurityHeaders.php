@@ -244,11 +244,22 @@ final class SecurityHeaders
      *                                  fed from {@see self::webSocketHostFromHeader()}
      *                                  so it is pre-validated. NULL (or empty)
      *                                  emits the historical bare `connect-src 'self'`.
+     * @param string|null $extraWebSocketOrigin Optional operator-pinned socket
+     *                                  origin (LW-077-a `PHLIX_WS_URL`). Re-validated
+     *                                  against the closed `ws(s)://host[:port]`
+     *                                  grammar here; added to `connect-src` only
+     *                                  when valid AND its host is not already
+     *                                  covered by the portless `$webSocketHost`
+     *                                  source. Invalid or redundant input emits
+     *                                  the historical source list unchanged.
      *
      * @return string The full CSP header value.
      */
-    public static function contentSecurityPolicy(?string $scriptNonce = null, ?string $webSocketHost = null): string
-    {
+    public static function contentSecurityPolicy(
+        ?string $scriptNonce = null,
+        ?string $webSocketHost = null,
+        ?string $extraWebSocketOrigin = null
+    ): string {
         $scriptSrc = "'self'";
         if ($scriptNonce !== null && $scriptNonce !== '') {
             $scriptSrc .= " 'nonce-" . $scriptNonce . "'";
@@ -257,6 +268,23 @@ final class SecurityHeaders
         $connectSrc = "connect-src 'self'";
         if ($webSocketHost !== null && $webSocketHost !== '') {
             $connectSrc .= ' ws://' . $webSocketHost . ' wss://' . $webSocketHost;
+        }
+        // LW-077-a: an operator-pinned socket origin (PHLIX_WS_URL, validated by
+        // SharedUiController::configuredSocketBaseUrl() before it reaches here)
+        // must be dial-able from the shell, but the server's CSP deliberately
+        // allowlists only the request's own portless host — so the pinned
+        // origin is added as an explicit source. It is RE-validated here
+        // against the same closed grammar (defense-in-depth: this method is
+        // shared, and a failed parse must emit the historical source list,
+        // never an attacker-influenced one), and skipped when its host equals
+        // $webSocketHost — the portless source already covers every port on
+        // that host, so a same-host pin would only duplicate the allowance.
+        $pinned = self::validatedSocketOriginSource($extraWebSocketOrigin);
+        if (
+            $pinned !== null
+            && ($webSocketHost === null || $webSocketHost === '' || $pinned['host'] !== $webSocketHost)
+        ) {
+            $connectSrc .= ' ' . $pinned['source'];
         }
         $connectSrc .= '; ';
 
@@ -325,5 +353,44 @@ final class SecurityHeaders
         }
 
         return $host;
+    }
+
+    /**
+     * Validate an operator-pinned socket origin into a CSP `connect-src`
+     * source pair (host + verbatim-cased source string), or null.
+     *
+     * Grammar is the SAME closed set `SharedUiController::configuredSocketBaseUrl()`
+     * accepts (`ws://`/`wss://` host with optional in-range port, no path,
+     * query or userinfo) — re-checked here because `contentSecurityPolicy()`
+     * is a shared primitive and must never splice an unvalidated string into
+     * a header. Hosts are lower-cased: CSP source matching is
+     * case-insensitive and the portless same-host allowance it may collide
+     * with is built from a lower-cased Host header.
+     *
+     * @return array{source: string, host: string}|null
+     */
+    private static function validatedSocketOriginSource(?string $origin): ?array
+    {
+        if ($origin === null) {
+            return null;
+        }
+
+        $candidate = trim($origin);
+        if (
+            $candidate === ''
+            || preg_match('#^(wss?)://([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$#', $candidate, $parts) !== 1
+        ) {
+            return null;
+        }
+
+        $port = $parts[3] ?? '';
+        if ($port !== '' && ((int) $port < 1 || (int) $port > 65535)) {
+            return null;
+        }
+
+        return [
+            'source' => $parts[1] . '://' . strtolower($parts[2]) . ($port === '' ? '' : ':' . $port),
+            'host' => strtolower($parts[2]),
+        ];
     }
 }

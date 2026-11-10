@@ -826,8 +826,14 @@ What it removes when present:
    backend stay. If phlix-server was the last Phlix project, the pre-Phlix snapshot at
    `/etc/haproxy/haproxy.cfg.pre-phlix.bak` is restored (or `haproxy.cfg` is removed and
    haproxy is stopped + disabled if no snapshot exists).
-3. The combined PEM at `/etc/haproxy/certs/<domain>.pem`.
-4. `/etc/cron.d/phlix-server-certbot` and the certbot deploy hook.
+3. The legacy merge-copy PEM at `/etc/haproxy/certs/<domain>.pem`, if this host ran the
+   pre-2.9 `MERGED` shape. On HAProxy >= 2.9 the frontend binds certbot's `live/` paths
+   directly, so no merge copy is ever created and there is nothing here to strand
+   (§3.1).
+4. `/etc/cron.d/phlix-server-certbot` and the certbot deploy hook. Removing the **last**
+   Phlix renewal owner on the host (this project or phlix-hub) also unmasks + `preset`s
+   the distro `certbot.timer` back to its package default — the installer had masked it
+   so only one scheduler owned renewal (§3.5).
 5. The Let's Encrypt cert via `certbot delete` — only with `--purge` or interactive confirm.
 6. The MySQL database + user — only with `--purge` or interactive confirm.
 7. The install dir (`/var/www/phlix` by default; system paths refused).
@@ -863,7 +869,10 @@ After both finish, `/etc/haproxy/haproxy.cfg` looks like:
 # phlix-managed: rebuilt by phlix install scripts — do not edit
 ...
 frontend fe_https
-    bind :443 ssl crt /etc/haproxy/certs/
+    # capability-measured shape (audit §3.1): on HAProxy >= 2.9 each annotated
+    # TLS domain binds its certbot live/ paths directly — no stale merge copy:
+    bind :443 ssl crt "/etc/letsencrypt/live/hub.example.com/fullchain.pem" key-file "/etc/letsencrypt/live/hub.example.com/privkey.pem"
+    bind :443 ssl crt "/etc/letsencrypt/live/phlix.example.com/fullchain.pem" key-file "/etc/letsencrypt/live/phlix.example.com/privkey.pem"
     http-request set-header X-Forwarded-Proto https
 
     # --- phlix-hub ---
@@ -879,9 +888,19 @@ frontend fe_https
 
 **How the merge works.** Each install drops a fragment at
 `/etc/haproxy/phlix-managed/<project>.cfg.fragment` with `fe_http`, `fe_https`, and `backends`
-sections. A rebuilder function then assembles the final `haproxy.cfg` from every fragment it
-finds. HAProxy's `crt /etc/haproxy/certs/` directive auto-loads every `.pem` in that directory
-and picks the right one per SNI hostname.
+sections. A shared rebuilder then assembles the final `haproxy.cfg` from every fragment it
+finds. The `frontend fe_https` bind shape is capability-measured at rebuild time
+(audit §3.1 cure): on HAProxy >= 2.9 — every host on the supported matrix (Ubuntu 24.04+,
+where the distro ships 2.9.x) — each annotated TLS fragment binds its certbot `live/` paths
+directly (`crt /etc/letsencrypt/live/<domain>/fullchain.pem key-file .../privkey.pem`), so a
+reload always picks up the current bytes at stable symlink paths and a rotation done outside
+this host's certbot can never strand a stale copy. Only certs the rebuild cannot reference
+live (operator extras, or domains without material) keep the legacy `crt /etc/haproxy/certs/`
+directory bind. On pre-2.9 HAProxy (off-matrix) the builder falls back to that merged-copy
+directory — a `cat fullchain + privkey` PEM per domain — refreshed by the deploy hook. `ACME`
+HTTP-01 challenges are answered straight from `/var/www/phlix-acme` by the shared frontend,
+so renewals never stop the proxy (the server daemon itself serves plain HTTP/WS on
+`127.0.0.1:8096`; TLS termination is entirely the proxy's job).
 
 The first install snapshots any pre-Phlix `haproxy.cfg` to
 `/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
@@ -890,6 +909,21 @@ The first install snapshots any pre-Phlix `haproxy.cfg` to
 other Phlix projects remain, their frontend stays untouched. When the **last** Phlix project
 is uninstalled, the rebuilder restores the pre-Phlix snapshot (or removes `haproxy.cfg`
 outright if there was no pre-Phlix config) and stops/disables `haproxy`.
+
+> **Cert rotation contract (audit §3.1/§3.4/§5.2).** Every Phlix-managed cert renews through
+> this host's certbot: the monthly cron line at `/etc/cron.d/phlix-server-certbot` renews
+> against the running proxy's ACME webroot leg (no connection tear), and deploy hooks in
+> `/etc/letsencrypt/renewal-hooks/deploy/` are auto-discovered on every renewal — Phlix's hook
+> removes any stale merge copy and runs `systemctl reload haproxy`, which is what adopts the
+> rotated bytes at the stable live/ paths. A rotation done OUTSIDE this pipeline (e.g. your own
+> wildcard via DNS-01) must respect two contracts: (1) the material lands at exactly
+> `/etc/letsencrypt/live/<domain>/fullchain.pem` + `privkey.pem` — the paths the fragments bind
+> (or, on the pre-2.9 fallback shape, at the merged copy `/etc/haproxy/certs/<domain>.pem`);
+> (2) you run `systemctl reload haproxy` so the frontend re-reads it — otherwise HAProxy keeps
+> serving the previous bytes until the next reload. And never point `PHLIX_HUB_TLS_CAFILE` /
+> `PHLIX_RELAY_TLS_CAFILE` at these files: they are trust ANCHORS for the server's outbound
+> HTTPS calls — CA/root bundles, not leaf material; a hub leaf pinned there silently expires in
+> ~60 days (§5.2, and the refusal texts now say so out loud — §3.2).
 
 The **hub server-tunnel port** (`:8802`) is a separate listener — servers connect to that port
 directly. Open it on the firewall but don't put it behind the HAProxy 80/443 frontend.
@@ -1142,13 +1176,13 @@ while these were invisible:
 | `PHLIX_RELAY_REQUIRE_TLS` | off (`false`) | no | yes | `RelayConfig.php` — when on, refuses non-`wss://` relay dials outright (fail-closed); off (the default) is warn-only — a plaintext tunnel still dials, with a connect-time impersonation warning — so production installs should set `1` |
 | `PHLIX_RELAY_ALLOW_PLAINTEXT` | off (`false`) | no | yes | `RelayConfig.php` — opt-in ACK (M5) that silences the connect-time plaintext-tunnel impersonation warning; it changes no behavior, and `PHLIX_RELAY_REQUIRE_TLS` still refuses non-`wss://` dials regardless |
 | `PHLIX_RELAY_TLS` | off | no | yes | `RelayConfig.php` |
-| `PHLIX_RELAY_TLS_CAFILE` / `PHLIX_RELAY_TLS_VERIFY` | system CA / on (verify) | CA path | yes | `RelayConfig.php`, `src/Hub/HttpClient.php` |
+| `PHLIX_RELAY_TLS_CAFILE` / `PHLIX_RELAY_TLS_VERIFY` | system CA / on (verify) | CA path | yes | `RelayConfig.php`, `src/Hub/HttpClient.php` — CAFILE must hold CA/**root** certificates, never the hub's leaf/fullchain (a leaf rotates every ~60 days and silently breaks the pin — audit §5.2); an explicitly-set (env or config) but unreadable path now REFUSES the dial LOUD (ERROR log + reconnect, never a silent fallback to the system store), while the shipped default staying absent keeps system-store behavior (§3.2) |
 | `PHLIX_RELAY_TUNNEL_HOSTNAME` | _unset_ | no | yes | `RelayConfig.php` |
 | `PHLIX_HUB_URL` | _unset_ | no | yes | `config/hub.php` |
 | `PHLIX_HUB_JWKS_URL` | derived from `PHLIX_HUB_URL` | no | yes | `config/hub.php` |
 | `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
-| `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` |
+| `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` — CAFILE holds CA/**root** certificates only, never a hub/server leaf/fullchain (LEAF material rotates every ~60 days; pinning it is the silent-expiry class — audit §5.2); an explicitly-set (env or `$tlsCafile` ctor arg) but unreadable path now throws on every hub REST call naming the source (§3.2), while the unset default keeps trusting the system store |
 | `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognised value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; previously an explicit `0` was silently treated as unset) |
 
 #### SyncPlay write-through bridge

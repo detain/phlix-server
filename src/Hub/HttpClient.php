@@ -34,7 +34,15 @@ class HttpClient implements HttpClientInterface
      */
     public const ENV_TLS_VERIFY = 'PHLIX_HUB_TLS_VERIFY';
 
-    /** Env var pointing at the CA bundle used to verify the hub certificate. */
+    /**
+     * Env var pointing at the CA bundle used to verify the hub certificate.
+     *
+     * Audit §5.2 anchor law: this file must hold CA/ROOT certificates — never
+     * the hub's leaf/fullchain (leaves rotate every ~60 days and a
+     * leaf-anchored bundle then breaks every request). Set-but-unreadable
+     * refuses the request LOUD (audit §3.2 — never a silent system-store
+     * re-anchor); unset keeps the tolerant default (system store).
+     */
     public const ENV_TLS_CAFILE = 'PHLIX_HUB_TLS_CAFILE';
 
     /** System CA bundle default (same path the relay tunnel verifies against). */
@@ -54,6 +62,18 @@ class HttpClient implements HttpClientInterface
 
     /** @var string CA bundle used when {@see $tlsVerify} is true. */
     private string $tlsCafile;
+
+    /**
+     * @var bool Whether {@see $tlsCafile} came from an explicit operator choice
+     *           (constructor argument or env) rather than the shipped default.
+     *           Explicit-but-unreadable refuses the request (audit §3.2); the
+     *           default path keeps the historical silent system-store tolerance
+     *           (its absence is a distro fact, not an operator mis-set).
+     */
+    private bool $cafileExplicit;
+
+    /** @var string Where the explicit choice came from, named in the refusal text. */
+    private string $cafileSource = '';
 
     /** @var string Optional explicit Host header value for co-located hub routing. */
     private string $hostOverride = '';
@@ -80,9 +100,14 @@ class HttpClient implements HttpClientInterface
      * @param bool|null   $tlsVerify    Explicit TLS verification choice; null
      *                                  resolves from {@see ENV_TLS_VERIFY}
      *                                  (default true).
-     * @param string|null $tlsCafile    Explicit CA bundle path; null resolves
+     * @param string|null $tlsCafile    Explicit CA bundle path (empty string =
+     *                                  no opinion, same as null); null resolves
      *                                  from {@see ENV_TLS_CAFILE}, then
-     *                                  {@see DEFAULT_TLS_CAFILE}.
+     *                                  {@see DEFAULT_TLS_CAFILE}. An explicit
+     *                                  choice that is not a readable file
+     *                                  refuses requests loudly (audit §3.2);
+     *                                  the shipped default keeps the silent
+     *                                  system-store tolerance.
      */
     public function __construct(
         string $baseUrl,
@@ -95,7 +120,12 @@ class HttpClient implements HttpClientInterface
         $this->bearerToken = $bearerToken;
         $this->timeout = $timeout;
         $this->tlsVerify = $tlsVerify ?? self::envTlsVerifyDefault();
-        $cafile = $tlsCafile ?? (getenv(self::ENV_TLS_CAFILE) ?: '');
+        $envCafile = getenv(self::ENV_TLS_CAFILE) ?: '';
+        $cafile = $tlsCafile !== null && $tlsCafile !== '' ? $tlsCafile : $envCafile;
+        $this->cafileExplicit = $cafile !== '';
+        $this->cafileSource = $tlsCafile !== null && $tlsCafile !== ''
+            ? 'the $tlsCafile constructor argument'
+            : self::ENV_TLS_CAFILE;
         $this->tlsCafile = $cafile !== '' ? $cafile : self::DEFAULT_TLS_CAFILE;
     }
 
@@ -129,6 +159,10 @@ class HttpClient implements HttpClientInterface
      *         verified posture by default (verify_peer + verify_peer_name +
      *         CA bundle), or the explicit opt-out (verify_peer=false +
      *         allow_self_signed) when verification was disabled by config/env.
+     *
+     * @throws RuntimeException When verification is on and the OPERATOR-SET
+     *         CA bundle is not a readable file (audit §3.2 refusal — never a
+     *         silent drop to the system store).
      */
     public function tlsContext(): array
     {
@@ -140,6 +174,22 @@ class HttpClient implements HttpClientInterface
             ]];
         }
 
+        if ($this->cafileExplicit && !is_readable($this->tlsCafile)) {
+            // Audit §3.2 (wildcard-rotation cure): the historical shape here
+            // was `is_file(...) ? set cafile : silently drop`. An operator
+            // who set PHLIX_HUB_TLS_CAFILE (or passed $tlsCafile) and later
+            // moved/deleted the bundle got their trust anchor discarded with
+            // zero log lines — requests then silently re-anchored to the
+            // system store, validating only publicly-signed hub certs. A
+            // configured-but-unreadable anchor must never be dropped quiet:
+            // refuse LOUD, name the knob, name both exits (fix the path — CA
+            // roots only, never the hub's rotating leaf — or unset to mean
+            // "system store"). The DEFAULT path keeps the silent tolerance:
+            // its absence is a distro fact, and OpenSSL still verifies via
+            // the system store (audit §5.1).
+            throw new RuntimeException($this->cafileRefusalMessage());
+        }
+
         $ssl = [
             'verify_peer' => true,
             'verify_peer_name' => true,
@@ -149,6 +199,24 @@ class HttpClient implements HttpClientInterface
         }
 
         return ['ssl' => $ssl];
+    }
+
+    /**
+     * The refusal text for an explicit CA bundle that is not a readable file.
+     *
+     * Single-sourced so tests pin the exact operator-facing wording (names
+     * the path, the source of the choice, both exits out, and the §5.2
+     * root-not-leaf anchor law).
+     */
+    private function cafileRefusalMessage(): string
+    {
+        return 'TLS verification is on for hub requests but the explicitly configured CA bundle ('
+            . $this->tlsCafile . ', set via ' . $this->cafileSource . ') is not a readable file.'
+            . ' The request is refused instead of silently re-anchoring to the system trust store.'
+            . ' Point ' . self::ENV_TLS_CAFILE . ' at an existing CA bundle — CA/root certificates'
+            . ' only, never the hub\'s leaf/fullchain: leaves rotate every ~60 days and a'
+            . ' leaf-anchored bundle breaks every request at rotation — or unset it to use the'
+            . ' system trust store.';
     }
 
     /**

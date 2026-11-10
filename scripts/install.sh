@@ -92,6 +92,7 @@ INTERACTIVE="auto" # auto|yes|no
 ASSUME_YES="no"
 ACTION="install" # install|update|uninstall
 PURGE="no"       # uninstall: also drop the DB and delete the Let's Encrypt cert
+SELF_TEST="no"   # --self-test: exercise the pure TLS-bind helpers and exit
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -115,6 +116,157 @@ warn() { printf '%s[warn]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 die() {
 	printf '%s[error]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2
 	exit 1
+}
+
+# ---------------------------------------------------------------------------
+# HAProxy TLS-bind shape helpers (audit AUDIT-wildcard-cert-rotation.md §3.1)
+#
+# Defined at the top of the file — and dependency-free — so `--self-test` can
+# exercise them on any machine (no root, no haproxy, no network): they are the
+# pure decision core of the cert-rotation cure, and this repo has no CI shell
+# harness, so the flag below is the testable leg. phlix_haproxy_rebuild in the
+# shared-haproxy region consumes them.
+#
+# LAW being enforced: a fe_https bind must never read a CAT-MERGED COPY of a
+# certificate. Merged copies go stale the moment any cert rotates outside this
+# host's certbot pipeline, and the next reload then serves expired bytes — the
+# §3.1 outage class. HAProxy >= 2.9 references the certbot live/ symlinks
+# directly with the split form
+#     crt <live/fullchain.pem> key-file <live/privkey.pem>
+# and re-reads material at those content-stable paths on every reload. The
+# Phlix support matrix (Ubuntu 24.04+ — see README) ships haproxy 2.9.x or
+# newer, but the installer apt-installs an unpinned haproxy, so the capability
+# is MEASURED here, never assumed. Pre-2.9 hosts keep the historical merged-copy
+# shape (best-effort: the deploy hook re-merges on every renewal THIS host's
+# certbot performs, but off-pipeline rotations still strand the copy — the warn
+# lines say so).
+# ---------------------------------------------------------------------------
+
+# Is a version string >= 2.9? '2.9.5'/'2.9'/'2.10.4'/'3.0.3' yes; '2.8.14'/
+# '1.8.30'/empty/garbage no. Numeric compare — no lexicographic trap for 2.10.
+phlix_haproxy_version_ge_29() {
+	local ver="$1" major minor
+	case "$ver" in [0-9]*) ;; *) return 1 ;; esac
+	major="${ver%%.*}"
+	if [ "$ver" = "$major" ]; then
+		minor=0
+	else
+		minor="${ver#*.}"
+		minor="${minor%%.*}"
+	fi
+	case "$major" in '' | *[!0-9]*) return 1 ;; esac
+	case "$minor" in '' | *[!0-9]*) return 1 ;; esac
+	[ "$major" -gt 2 ] && return 0
+	[ "$major" -eq 2 ] && [ "$minor" -ge 9 ] && return 0
+	return 1
+}
+
+# Print the installed haproxy version number ('2.9.5'), or nothing when the
+# binary is absent. Never fails the caller's set -e.
+phlix_haproxy_installed_version() {
+	command -v haproxy >/dev/null 2>&1 || return 0
+	haproxy -v 2>/dev/null |
+		sed -n 's/^HAProxy version \([0-9][0-9.]*\).*/\1/p' |
+		head -n1
+	return 0
+}
+
+# Does the haproxy on this box support `crt <pem> key-file <pem>` binds?
+phlix_haproxy_supports_tls_key_file() {
+	local ver
+	ver="$(phlix_haproxy_installed_version)"
+	[ -n "$ver" ] || return 1
+	phlix_haproxy_version_ge_29 "$ver"
+}
+
+# Certbot's live/ root. Overridable so the --self-test + rebuild conviction
+# harnesses exercise the decision paths against scratch material; on real
+# hosts (where nobody exports it) it is exactly /etc/letsencrypt/live.
+PHLIX_LE_LIVE_DIR="${PHLIX_LE_LIVE_DIR:-/etc/letsencrypt/live}"
+
+# Pure renderer: print the fe_https `bind :443 ...` lines (4-space indented).
+#   $1 shape      live | merged
+#   $2 certs_dir  directory holding legacy merge copies
+#   $3 extras     yes|no — certs_dir still holds a .pem the dir-bind must serve
+#   $4.. domains  annotated tls domains whose live/ material is present
+phlix_haproxy_render_https_binds() {
+	local shape="$1" certs_dir="$2" extras="$3" dom
+	shift 3
+	if [ "$shape" = "live" ]; then
+		for dom in "$@"; do
+			printf '    bind :443 ssl crt "%s/%s/fullchain.pem" key-file "%s/%s/privkey.pem"\n' "$PHLIX_LE_LIVE_DIR" "$dom" "$PHLIX_LE_LIVE_DIR" "$dom"
+		done
+	fi
+	if [ "$shape" = "merged" ] || [ "$extras" = "yes" ]; then
+		printf '    bind :443 ssl crt %s/\n' "$certs_dir"
+	fi
+}
+
+# --self-test plumbing: equality assertions on plain stdout; nonzero exit if
+# any FAIL line was emitted.
+phlix_selftest_assert() {
+	local label="$1" expected="$2" actual="$3"
+	if [ "$expected" = "$actual" ]; then
+		printf '    ok   %s\n' "$label"
+		return 0
+	fi
+	printf '    FAIL %s\n         expected: %s\n         actual:   %s\n' "$label" "$expected" "$actual" >&2
+	return 1
+}
+
+phlix_selftest_ge29() {
+	local v="$1" want="$2" got="no"
+	phlix_haproxy_version_ge_29 "$v" && got="yes"
+	phlix_selftest_assert "version_ge_29 '$v' => $want" "$want" "$got"
+}
+
+phlix_run_self_tests() {
+	local rc=0 out want
+	PHLIX_LE_LIVE_DIR="${PHLIX_LE_LIVE_DIR:-/etc/letsencrypt/live}"
+	log "Installer self-test (pure TLS-bind helpers — audit §3.1 decision core)"
+	phlix_selftest_ge29 2.9.5 yes || rc=1
+	phlix_selftest_ge29 2.9 yes || rc=1
+	phlix_selftest_ge29 2.10.4 yes || rc=1
+	phlix_selftest_ge29 3.0.3 yes || rc=1
+	phlix_selftest_ge29 2.8.14 no || rc=1
+	phlix_selftest_ge29 2.2 no || rc=1
+	phlix_selftest_ge29 1.8.30 no || rc=1
+	phlix_selftest_ge29 2 no || rc=1
+	phlix_selftest_ge29 '' no || rc=1
+	phlix_selftest_ge29 dev no || rc=1
+	phlix_selftest_ge29 300x no || rc=1
+
+	out="$(phlix_haproxy_render_https_binds live /etc/haproxy/certs no phlix.example.com)"
+	want='    bind :443 ssl crt "/etc/letsencrypt/live/phlix.example.com/fullchain.pem" key-file "/etc/letsencrypt/live/phlix.example.com/privkey.pem"'
+	phlix_selftest_assert 'render live/1 domain/no extras' "$want" "$out" || rc=1
+
+	out="$(phlix_haproxy_render_https_binds live /etc/haproxy/certs yes a.example.com b.example.com)"
+	want="$(printf '    bind :443 ssl crt "/etc/letsencrypt/live/a.example.com/fullchain.pem" key-file "/etc/letsencrypt/live/a.example.com/privkey.pem"\n    bind :443 ssl crt "/etc/letsencrypt/live/b.example.com/fullchain.pem" key-file "/etc/letsencrypt/live/b.example.com/privkey.pem"\n    bind :443 ssl crt /etc/haproxy/certs/')"
+	phlix_selftest_assert 'render live/2 domains/extras' "$want" "$out" || rc=1
+
+	out="$(phlix_haproxy_render_https_binds merged /etc/haproxy/certs no a.example.com)"
+	want='    bind :443 ssl crt /etc/haproxy/certs/'
+	phlix_selftest_assert 'render merged ignores domains, dir-bind only' "$want" "$out" || rc=1
+
+	out="$(phlix_haproxy_render_https_binds live /etc/haproxy/certs yes)"
+	want='    bind :443 ssl crt /etc/haproxy/certs/'
+	phlix_selftest_assert 'render live/no domains/extras => dir-bind only' "$want" "$out" || rc=1
+
+	out="$(phlix_haproxy_render_https_binds live /etc/haproxy/certs no)"
+	want=''
+	phlix_selftest_assert 'render live/no domains/no extras => empty' "$want" "$out" || rc=1
+
+	if command -v haproxy >/dev/null 2>&1; then
+		info "(haproxy found: '$(phlix_haproxy_installed_version)'; supports key-file bind: $(phlix_haproxy_supports_tls_key_file && echo yes || echo no))"
+	else
+		info "(haproxy not installed here — capability probe exercised against fixture strings only)"
+	fi
+
+	if [ "$rc" -ne 0 ]; then
+		die "Installer self-test FAILED."
+	fi
+	log "Installer self-test passed."
+	return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -160,6 +312,8 @@ Options:
                           (prompts before each destructive step)
   --purge                 With --uninstall, also DROP the database and DELETE
                           the Let's Encrypt certificate (data loss)
+  --self-test             Run the installer's pure TLS-bind decision helpers
+                          (no root, no network, no side effects) and exit
   -y, --non-interactive   Never prompt; use defaults/flags (auto when no TTY)
   --interactive           Force prompts even when piped
   -h, --help              Show this help and exit
@@ -279,6 +433,10 @@ while [ $# -gt 0 ]; do
 		ACTION="uninstall"
 		shift
 		;;
+	--self-test)
+		SELF_TEST="yes"
+		shift
+		;;
 	-y | --non-interactive | --yes)
 		INTERACTIVE="no"
 		ASSUME_YES="yes"
@@ -295,6 +453,15 @@ while [ $# -gt 0 ]; do
 	*) die "Unknown option: $1 (try --help)" ;;
 	esac
 done
+
+# --self-test short-circuits before every environment requirement: the pure
+# helpers defined near the top of this file are its entire surface. This is the
+# conviction seam for the §3.1 bind-shape decision logic (audit §3.1 cure —
+# the repo has no CI shell harness, so the flag IS the shell-script test leg).
+if [ "$SELF_TEST" = "yes" ]; then
+	phlix_run_self_tests
+	exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Environment checks
@@ -883,10 +1050,57 @@ phlix_haproxy_rebuild() {
 		cp "$PHLIX_HAPROXY_CFG" "$PHLIX_HAPROXY_BAK"
 	fi
 
-	local emit_https="no"
+	# --- fe_https bind selection (audit AUDIT-wildcard-cert-rotation.md §3.1) --
+	# Collect annotated tls domains from EVERY project's fragment: the hub and
+	# server installers share the `# Mode    : tls` + `# Domain  : <dom>` header
+	# law, so one rebuild cures every annotated domain on the host.
+	local tls_domains=() live_domains=() f dom mode
+	for f in "${fragments[@]}"; do
+		mode="$(sed -n 's/^# Mode[[:space:]]*: *//p' "$f" | head -n1)"
+		[ "$mode" = "tls" ] || continue
+		dom="$(sed -n 's/^# Domain[[:space:]]*: *//p' "$f" | head -n1)"
+		case "$dom" in '' | '<none>') continue ;; esac
+		tls_domains+=("$dom")
+	done
+
+	# MEASURE (never assume) whether this box's haproxy can bind the split
+	# crt/key-file form against the certbot live/ symlinks.
+	local shape="merged"
+	if [ ${#tls_domains[@]} -gt 0 ] && phlix_haproxy_supports_tls_key_file; then
+		shape="live"
+	fi
+
+	if [ "$shape" = "live" ]; then
+		for dom in "${tls_domains[@]}"; do
+			if [ -f "${PHLIX_LE_LIVE_DIR}/${dom}/fullchain.pem" ] &&
+				[ -f "${PHLIX_LE_LIVE_DIR}/${dom}/privkey.pem" ]; then
+				live_domains+=("$dom")
+				# A live-bound domain's merge copy must not linger: it is exactly the
+				# §3.1 stale-bytes artifact and would silently resurrect a dir bind on
+				# the next pre-2.9-style rebuild.
+				if [ -f "$PHLIX_HAPROXY_CERTS_DIR/${dom}.pem" ]; then
+					rm -f "$PHLIX_HAPROXY_CERTS_DIR/${dom}.pem"
+					info "Removed stale merge copy ${PHLIX_HAPROXY_CERTS_DIR}/${dom}.pem (live/ paths are bound directly)."
+				fi
+			elif [ -f "$PHLIX_HAPROXY_CERTS_DIR/${dom}.pem" ]; then
+				warn "TLS fragment for ${dom} has no ${PHLIX_LE_LIVE_DIR}/${dom} material; the merged copy in ${PHLIX_HAPROXY_CERTS_DIR} stays as best-effort fallback — it goes stale if that cert rotates outside certbot on THIS host (§3.1 class)."
+			fi
+		done
+	fi
+
+	local dir_pems="no"
 	if [ -d "$PHLIX_HAPROXY_CERTS_DIR" ] &&
 		[ -n "$(find "$PHLIX_HAPROXY_CERTS_DIR" -maxdepth 1 -name '*.pem' -print -quit 2>/dev/null)" ]; then
+		dir_pems="yes"
+	fi
+
+	# fe_https exists when there is something to bind: live material, or certs
+	# in the legacy dir (stray copies, pre-2.9 merges, operator PEMs).
+	local emit_https="no" https_binds=""
+	if { [ "$shape" = "live" ] && [ ${#live_domains[@]} -gt 0 ]; } ||
+		[ "$dir_pems" = "yes" ]; then
 		emit_https="yes"
+		https_binds="$(phlix_haproxy_render_https_binds "$shape" "$PHLIX_HAPROXY_CERTS_DIR" "$dir_pems" ${live_domains[@]+"${live_domains[@]}"})"
 	fi
 
 	{
@@ -913,6 +1127,19 @@ defaults
 
 frontend fe_http
     bind :80
+    # ACME HTTP-01 challenges for Phlix-managed certs (audit §3.4): renewals
+    # authenticate against the RUNNING proxy from /var/www/phlix-acme (see
+    # /etc/cron.d/phlix-server-certbot), so a renewal is a content swap + reload,
+    # never a connection tear. `http-request return file` needs HAProxy >= 2.2;
+    # the Phlix support matrix ships >= 2.9 (off-matrix ancient hosts fail the
+    # haproxy -c validation at reload — loudly, at install time).
+    # The token regex is an anchored SINGLE segment over [A-Za-z0-9._~-]: no
+    # slash, no percent — traversal out of the webroot is structurally
+    # impossible; anything else under the ACME path gets a plain 404.
+    acl is_acme path_beg /.well-known/acme-challenge/
+    acl acme_safe path_reg ^/\.well-known/acme-challenge/[A-Za-z0-9._~-]+$
+    http-request return file "/var/www/phlix-acme%[path]" status 200 content-type "text/plain" if is_acme acme_safe
+    http-request return status 404 content-type "text/plain" string "not an ACME token\n" if is_acme
 BASE
 
 		local f section
@@ -926,12 +1153,9 @@ BASE
 		printf '\n    default_backend be_phlix_default\n'
 
 		if [ "$emit_https" = "yes" ]; then
-			cat <<'HTTPS_TOP'
-
-frontend fe_https
-    bind :443 ssl crt /etc/haproxy/certs/
-    http-request set-header X-Forwarded-Proto https
-HTTPS_TOP
+			# Bind lines come from phlix_haproxy_render_https_binds (shape-selected
+			# live/ split binds, legacy dir bind, or both — see §3.1 block above).
+			printf '\nfrontend fe_https\n%s\n    http-request set-header X-Forwarded-Proto https\n' "$https_binds"
 			for f in "${fragments[@]}"; do
 				section="$(phlix_haproxy_extract_section "$f" fe_https)"
 				if [ -n "$section" ]; then
@@ -1304,6 +1528,18 @@ do_uninstall() {
 		log "Removing certbot deploy hook"
 		rm -f "$hook"
 	}
+	if [ -n "$cron" ] || [ -n "$hook" ]; then
+		# §3.5 symmetry: the install masked the distro certbot.timer because Phlix
+		# owned renewal. Once the LAST Phlix renewal owner on this box is gone,
+		# hand the timer back to its distro default state. (phlix-hub writes its
+		# own differently-named cron + hook; their presence keeps the timer retired
+		# for the surviving owner's benefit.)
+		if [ ! -f /etc/cron.d/phlix-hub-certbot ] && [ ! -f /etc/cron.d/phlix-server-certbot ]; then
+			systemctl unmask certbot.timer >/dev/null 2>&1 || true
+			systemctl preset certbot.timer >/dev/null 2>&1 || true
+			info "Restored the distro certbot.timer to its package default (no Phlix renewal owner remains)."
+		fi
+	fi
 	if [ "$revoke_cert" = "yes" ] && command -v certbot >/dev/null 2>&1; then
 		log "Deleting Let's Encrypt certificate for ${U_DOMAIN}"
 		certbot delete --non-interactive --cert-name "${U_DOMAIN}" >/dev/null 2>&1 ||
@@ -2323,31 +2559,123 @@ else
 
 	if [ "$TLS_ENABLED" = "yes" ]; then
 		log "Obtaining TLS certificate for $DOMAIN via certbot"
-		systemctl stop haproxy >/dev/null 2>&1 || true
-		if certbot certonly --standalone --non-interactive --agree-tos \
-			-m "$ADMIN_EMAIL" -d "$DOMAIN" --keep-until-expiring; then
-			cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
-				"/etc/letsencrypt/live/${DOMAIN}/privkey.pem" >"/etc/haproxy/certs/${DOMAIN}.pem"
-			chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
+		# ACME webroot dir for the tear-free renewal path (audit §3.4): the
+		# managed fe_http's BASE leg answers /.well-known/acme-challenge/ from
+		# here while haproxy keeps serving, so renewals never stop the proxy.
+		mkdir -p /var/www/phlix-acme/.well-known/acme-challenge
+		chmod 755 /var/www/phlix-acme /var/www/phlix-acme/.well-known /var/www/phlix-acme/.well-known/acme-challenge
+		# standalone binds :80, which a RUNNING managed proxy owns; a cached
+		# valid cert (`--keep-until-expiring`) never binds at all. Stop haproxy
+		# ONLY when the first attempt fails (audit §3.4: an update run must not
+		# tear every connection just to ask certbot a question whose answer is
+		# "unchanged"). The stop path self-heals: the rebuild+reload sequence at
+		# the end of this section brings the proxy back up on every success, and
+		# the failure branch below starts it again before bailing out.
+		phlix_certbot_standalone() {
+			certbot certonly --standalone --non-interactive --agree-tos \
+				-m "$ADMIN_EMAIL" -d "$DOMAIN" --keep-until-expiring
+		}
+		CERTBOT_OK="no"
+		if phlix_certbot_standalone; then
+			CERTBOT_OK="yes"
+		else
+			info "(certbot could not bind :80 — managed HAProxy owns it; stopping it for one retry)"
+			systemctl stop haproxy >/dev/null 2>&1 || true
+			if phlix_certbot_standalone; then CERTBOT_OK="yes"; fi
+		fi
+		if [ "$CERTBOT_OK" = "yes" ]; then
+			# §3.1 shape decision, MEASURED here and baked into this run's
+			# deploy-hook text; phlix_haproxy_rebuild re-measures independently
+			# at every rebuild.
+			if phlix_haproxy_supports_tls_key_file; then
+				PHLIX_HAPROXY_TLS_SHAPE="live"
+				info "HAProxy $(phlix_haproxy_installed_version) supports 'crt ... key-file ...': fe_https will read /etc/letsencrypt/live/${DOMAIN} directly (rotated bytes are adopted by the deploy-hook reload; no merge copy exists to go stale)."
+				rm -f "/etc/haproxy/certs/${DOMAIN}.pem" 2>/dev/null || true
+			else
+				PHLIX_HAPROXY_TLS_SHAPE="merged"
+				warn "HAProxy $(phlix_haproxy_installed_version) predates 2.9 — keeping the merged-copy shape. Rotations of ${DOMAIN} outside certbot on THIS host strand /etc/haproxy/certs/${DOMAIN}.pem with stale bytes (§3.1 class); renewals by this host's certbot stay covered by the deploy hook below."
+				cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
+					"/etc/letsencrypt/live/${DOMAIN}/privkey.pem" >"/etc/haproxy/certs/${DOMAIN}.pem"
+				chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
+			fi
 
+			# Deploy hook: adopt rotated material after each renewal — shape-split
+			# (audit §3.1). certbot scans this directory automatically on every
+			# renewal, so the cron line below carries no --deploy-hook arg: one
+			# mechanism, not two. NOTE (honest server/hub divergence): no
+			# private-key perms leg here — unlike the hub, the phlix-server daemon
+			# holds NO inbound TLS listener (plain :8096/:8097; TLS termination is
+			# the proxy's job — see README), so nothing this project runs ever
+			# reads the key material. And nothing here points the outbound CA
+			# anchors at these files: they are LEAF material, never trust anchors
+			# (§5.2 — leaves rotate every ~60 days; pinning one reintroduces the
+			# silent-expiry class the anchors' refusal texts guard).
 			mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-			cat >/etc/letsencrypt/renewal-hooks/deploy/phlix-server-haproxy.sh <<HOOK
+			{
+				if [ "$PHLIX_HAPROXY_TLS_SHAPE" = "live" ]; then
+					cat <<'HOOK_HEAD'
 #!/bin/sh
-cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \\
+# Managed by the Phlix Media Server installer; rewritten on every install/update.
+# Shape: LIVE (audit AUDIT-wildcard-cert-rotation.md §3.1, haproxy >= 2.9).
+HOOK_HEAD
+					cat <<HOOK_LIVE_TAIL
+# fe_https binds read ${DOMAIN}'s live/ symlinks directly — there is nothing
+# to re-merge. Remove any stale merge copy so a fallback rebuild can never
+# serve it, then RELOAD (audit §3.4: reload is what adopts the rotated bytes
+# at the stable path; the old stop/start machinery is gone).
+rm -f "/etc/haproxy/certs/${DOMAIN}.pem" 2>/dev/null || true
+systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
+HOOK_LIVE_TAIL
+				else
+					cat <<'HOOK_HEAD_M'
+#!/bin/sh
+# Managed by the Phlix Media Server installer; rewritten on every install/update.
+# Shape: MERGED (legacy pre-2.9 haproxy — audit §3.1 best-effort path).
+HOOK_HEAD_M
+					cat <<HOOK_MERGED_TAIL
+# fe_https reads the CAT-MERGED copy below, so every renewal on THIS host
+# MUST re-merge it — a rotation outside this pipeline leaves the copy serving
+# stale bytes (that is the §3.1 outage class; upgrade HAProxy into the
+# support matrix, which ships >= 2.9, to retire this path).
+cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
     "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
 chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
 systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
-HOOK
+HOOK_MERGED_TAIL
+				fi
+			} >/etc/letsencrypt/renewal-hooks/deploy/phlix-server-haproxy.sh
 			chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-server-haproxy.sh
 
+			# Monthly auto-renewal (1st of the month, 03:00) — audit §3.4 cure:
+			# the managed fe_http answers ACME challenges from the webroot while
+			# HAProxy keeps running, so NO --pre-hook stop / --post-hook start
+			# anymore: a renewal is a content swap + deploy-hook reload, never a
+			# connection tear. The deploy hook is discovered via certbot's
+			# automatic scan of /etc/letsencrypt/renewal-hooks/deploy/, so this
+			# line carries no --deploy-hook arg. NOTE: `--webroot -w ...` on the
+			# CLI overrides the recorded authenticator for EVERY certificate this
+			# command renews on the host — by design, because the distro timer is
+			# retired below and this cron line is the single scheduled renewal
+			# path Phlix depends on.
 			cat >/etc/cron.d/phlix-server-certbot <<CRON
-# Phlix Media Server: monthly Let's Encrypt renewal
-0 3 1 * * root certbot renew --quiet --pre-hook "systemctl stop haproxy" --post-hook "systemctl start haproxy" --deploy-hook /etc/letsencrypt/renewal-hooks/deploy/phlix-server-haproxy.sh
+# Phlix Media Server: monthly Let's Encrypt renewal (webroot + reload, no tear — §3.4)
+0 3 1 * * root certbot renew --quiet --webroot -w /var/www/phlix-acme
 CRON
+
+			# Audit §3.5: the installer owns renewal on this host, so retire the
+			# distro certbot.timer — two schedulers racing (with different hook
+			# sets) was the silent-expiry trap. Idempotent; `|| true` keeps
+			# minimal images without the unit happy.
+			systemctl disable --now certbot.timer >/dev/null 2>&1 || true
+			systemctl mask certbot.timer >/dev/null 2>&1 || true
+			info "Disabled + masked the distro certbot.timer: the Phlix cron line and the global deploy hook are the single renewal mechanism."
 
 			log "Writing phlix-server HAProxy fragment (TLS)"
 			phlix_haproxy_write_fragment_server tls "$DOMAIN"
 		else
+			# Self-heal the §3.4 stop-retry path before the loud bail: a down
+			# proxy must not be the residue of a failed cert run.
+			systemctl start haproxy >/dev/null 2>&1 || true
 			# R7-08: an operator who asked for TLS must not silently land on plain
 			# HTTP. Fail loudly with the exact retry; re-running this installer is
 			# safe, and the plaintext postures stay available deliberately (no --tls

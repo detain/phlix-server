@@ -60,6 +60,26 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **A hub TLS anchor can no longer be silently absent.** When the operator
+  explicitly configures a CA anchor — `PHLIX_HUB_TLS_CAFILE` (or the
+  `tlsCafile` constructor argument) for hub REST calls,
+  `PHLIX_RELAY_TLS_CAFILE` (or `config/relay.php` `relay_tls_cafile`) for
+  the hub relay dial — an anchor that is not a readable file now REFUSES
+  loudly instead of being quietly dropped: `HttpClient::tlsContext()`
+  throws a `RuntimeException` naming the path, which source set it, and
+  the exits (the refusal is deterministic whether the file is missing or
+  present-but-unreadable), and `RelayConsumer::buildSslContext()` throws
+  at dial time — surfacing as the connect path's existing ERROR log plus
+  a scheduled reconnect rather than a crash. Before this cure the
+  explicit-but-unreadable anchor fell back to the system trust store
+  with no word at all: pinning silently became "whatever the box
+  trusts". Unset anchors keep the prior system-store behavior verbatim
+  (§5.1 tolerance), and `PHLIX_*_TLS_VERIFY=0` still opts out entirely
+  without consulting the cafile. The refusal texts and the README env
+  rows now also carry the anchor law: an anchor wants CA/root
+  certificates, NEVER the hub's leaf/fullchain — leaves rotate roughly
+  every 60 days and a pinned leaf expires the trust in silence.
+  [wildcard-cert rotation audit §3.2/§5.2 server twin, 2026-11-10]
 - **The vendored `phlix-hub` helm chart can no longer deploy with its
   placeholder secrets.** `values.example.yaml` ships `database_password:
   "CHANGE_ME"` and `secret_key: "openssl rand -hex 64"` — the COMMAND as the
@@ -1106,6 +1126,39 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Managed-HAProxy certificates no longer strand on a copied PEM, and
+  renewing them no longer tears the proxy.** The installer's TLS section
+  used to stop HAProxy for a `certbot --standalone` bootstrap, cat a
+  merged copy of key+chain into `/etc/haproxy/certs/<domain>.pem`, bind
+  `crt <dir>` against that copy, and renew via a monthly cron with
+  `--pre-hook stop --post-hook start`: every renewal window left the
+  whole proxy down across the renewal plus a reload, and the copied PEM
+  went stale whenever anything outside the cron rotated the
+  certificate. Capability-measured now: HAProxy 2.9+ (measured via
+  `haproxy -v`'s own version output, never assumed) binds the stable
+  Let's Encrypt live paths directly —
+  `crt "<live>/<domain>/fullchain.pem" key-file "<live>/<domain>/privkey.pem"`
+  — so a renewal refreshes the files in place and a reload picks them
+  up; pre-2.9 boxes keep the merged shape, but the deploy hook re-cats
+  it at every renewal instead of letting it rot. Renewal itself moved to
+  webroot: the rebuilt `fe_http` serves `/.well-known/acme-challenge/`
+  from `/var/www/phlix-acme` (token paths validated, everything else
+  under the prefix returns a plain 404), the monthly cron is
+  `certbot renew --quiet --webroot -w /var/www/phlix-acme` with no
+  pre/post hooks, and the deploy hook (`renewal-hooks/deploy/`, auto-
+  discovered) RELOADS and only falls back to a restart when reload is
+  unavailable. `--standalone` survives solely as the bootstrap, retried
+  with a stop ONLY when binding :80 fails because the managed proxy owns
+  it — and the certbot-failure exit now starts HAProxy again before
+  dying instead of leaving the box down. One renewal mechanism per
+  host: the install disables AND masks `certbot.timer` (the distro unit
+  that would race the cron), and uninstall returns the timer to its
+  package default only when NEITHER Phlix renewal cron owner — server
+  or hub — remains. `scripts/install.sh --self-test` adds a non-root,
+  non-mutating conviction leg (version-compare matrix plus bind-render
+  shape cases) so the capability logic itself is gated, and the
+  uninstall doc block states the legacy-copy stranding honestly.
+  [wildcard-cert rotation audit §3.1/§3.4/§3.5 server twin, 2026-11-10]
 - **Token refresh no longer hands cookies to clients that cannot use them.**
   The rotation ride on `POST /api/v1/auth/refresh` was unconditional since
   its introduction (66ae647c): a device-class client

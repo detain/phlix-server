@@ -16,6 +16,7 @@ use Phlix\Hub\StoredEnrollment;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpResponseChunk;
+use RuntimeException;
 use Workerman\Connection\AsyncTcpConnection;
 
 /**
@@ -2357,12 +2358,62 @@ class RelayConsumerTest extends TestCase
 
     public function test_transport_tls_uses_configured_cafile(): void
     {
-        $config = new RelayConfig(relayTlsCafile: '/etc/custom/bundle.pem');
+        // Audit §3.2 era rotation: the pin used to hand a GHOST path
+        // (/etc/custom/bundle.pem) to a builder that never touched the
+        // filesystem. The builder now refuses unreadable anchors (loud dial
+        // refusal — the cure), so the passthrough law is proven with a REAL
+        // readable scratch bundle (content irrelevant pre-handshake; only
+        // readability is the law under test).
+        $ca = tempnam(sys_get_temp_dir(), 'phlix-relay-ca-');
+        $this->assertIsString($ca);
+
+        try {
+            $config = new RelayConfig(relayTlsCafile: $ca);
+            $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
+
+            /** @var array<string, mixed> $ssl */
+            $ssl = $t['context']['ssl'];
+            $this->assertSame($ca, $ssl['cafile']);
+        } finally {
+            @unlink($ca);
+        }
+    }
+
+    /**
+     * §3.2 dial-side mirror of the hub federation law: a CA bundle that is not
+     * a readable file refuses the dial LOUD, naming the knob, the path, the
+     * root-not-leaf anchor law (§5.2), and the exits. Call-site pin: deleting
+     * the is_readable guard in buildSslContext reddens this directly (the
+     * context would carry the ghost path again).
+     */
+    public function test_transport_tls_refuses_unreadable_cafile_loud(): void
+    {
+        $ghost = sys_get_temp_dir() . '/phlix-relay-ca-ghost-' . bin2hex(random_bytes(6)) . '.pem';
+        $config = new RelayConfig(relayTlsCafile: $ghost);
+
+        try {
+            $this->resolveTransport($config, 'wss://hub.example.com:8802');
+            $this->fail('an unreadable CA anchor must refuse the dial, not hand OpenSSL a dead path');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString($ghost, $e->getMessage());
+            $this->assertStringContainsString('PHLIX_RELAY_TLS_CAFILE', $e->getMessage());
+            $this->assertStringContainsString('not a readable file', $e->getMessage());
+            $this->assertStringContainsString('CA/root', $e->getMessage());
+            $this->assertStringContainsString('leaf/fullchain', $e->getMessage());
+        }
+    }
+
+    public function test_transport_tls_permissive_optout_never_consults_the_cafile(): void
+    {
+        // The verify opt-out arm must not trip the anchor refusal: PHLIX_-
+        // RELAY_TLS_VERIFY=0 means "I know, let it dial" (self-signed hub).
+        $config = new RelayConfig(relayTlsVerify: false, relayTlsCafile: '/nonexistent/phlix-ghost-ca.pem');
         $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
 
         /** @var array<string, mixed> $ssl */
         $ssl = $t['context']['ssl'];
-        $this->assertSame('/etc/custom/bundle.pem', $ssl['cafile']);
+        $this->assertFalse($ssl['verify_peer']);
+        $this->assertArrayNotHasKey('cafile', $ssl);
     }
 
     // ---------------------------------------------------------------------

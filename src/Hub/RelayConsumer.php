@@ -23,6 +23,7 @@ use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpRequestHead;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
+use RuntimeException;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
 use Workerman\Connection\ConnectionInterface;
@@ -30,6 +31,7 @@ use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
 
 use function is_array;
+use function is_readable;
 use function is_string;
 use function json_decode;
 use function parse_str;
@@ -1119,6 +1121,12 @@ final class RelayConsumer
      *
      * @return array<string, mixed> A Workerman `['ssl' => [...]]` context.
      *
+     * @throws RuntimeException On the verified arm when the configured CA
+     *         bundle is not a readable file (audit §3.2 refusal — named in
+     *         the relay ERROR log by the {@see self::connect()} catch, then
+     *         the standard reconnect backoff; the dial is never attempted
+     *         against material OpenSSL would choke on).
+     *
      * @since 0.20.0
      */
     private function buildSslContext(): array
@@ -1133,6 +1141,25 @@ final class RelayConsumer
                     'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
                 ],
             ];
+        }
+
+        if (!is_readable($this->config->relayTlsCafile)) {
+            // Audit §3.2 (wildcard-rotation cure), dial-side mirror of the
+            // hub federation law (unreadable anchor = refused LOUD, never a
+            // silent fallback): without this, every wss:// dial fails inside
+            // OpenSSL with a raw stream warning and the reconnect loop never
+            // names the knob at fault. The bundle rotating out from under
+            // the tunnel (dated copy removed, file moved) is exactly this
+            // case.
+            throw new RuntimeException(
+                'Relay TLS verification is on but the CA bundle (' . $this->config->relayTlsCafile
+                . ', PHLIX_RELAY_TLS_CAFILE / config/relay.php relay_tls_cafile'
+                . ($this->config->relayTlsCafile === RelayConfig::DEFAULT_TLS_CAFILE ? ', the shipped default' : '')
+                . ') is not a readable file. The dial is refused until it is — put CA/root'
+                . ' certificates there (never the hub\'s leaf/fullchain: leaves rotate every'
+                . ' ~60 days), install the distro ca-certificates bundle, or point the env at'
+                . ' an existing readable bundle.'
+            );
         }
 
         return [

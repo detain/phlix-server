@@ -102,6 +102,37 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Forward correction to the belt entry below: "belt position-purity" sold a
+  non-property — and the correction wave brought the rotation-grace memo's
+  CAP limb its first true conviction.** The shipped belt text listed,
+  verbatim: "13 new legs: belt position-purity, inert-when-absent, per-token
+  provider (no broadened match), both-absent non-rescue, and two dispatch-gate
+  pins — cookie POST refused / bearer POST immunised — under the belt." An
+  independent adversarial execution (re-verified by re-execution here) proved
+  the position-purity leg unconvicting as described: the state-changing
+  origin ladder's arms all refuse on their own triggers and never rescue, so
+  relocating the Sec-Fetch-Site belt anywhere still ahead of the accept tail —
+  AFTER the Referer arm included — is an equivalent mutant that turned ZERO
+  legs red, while the "5 red" conviction list recorded for that row reproduces
+  exactly under the belt-STRIP placement (the same named 5). The belt's
+  behaviorally observable law is REACHABILITY, not position; belt-first stays
+  the CODE-ORDER law — the verbatim hub mirror, unchanged, no src edit. The
+  companion false claim lived in the round's mutation matrix, not in src: the
+  memo-cap leg shipped as cap-minus-one (63 seeds plus one store land on 64
+  capped or not), so a full strip of the FIFO prune measured GREEN across the
+  touched-suite set. The behavior was always correct — the tests could not
+  see this limb. Three new drift-guard legs join the panel (tests-only; zero
+  src change, zero wire change): at-the-cap FIFO eviction (strip,
+  PHP_INT_MAX-bound, over-evict and LIFO plants each redden exactly that leg
+  by name), the grace window's ten-second MAGNITUDE (re-tuning the constant to
+  a day measured GREEN everywhere until this pin existed), and the server's
+  own empty-Host discrimination leg (making an empty server host
+  wildcard-match measured GREEN server-side — the hub program's convicted
+  empty-Host shape finally mirrored on this side). The belt leg's docblock
+  was forward-corrected in place to state the true convicting shape.
+  [CP-009/CP-005 corrections + w29L1-R2 pins;
+  COOKIE-DESIGN §2.5/§5, FIX-server-w29L1-round2 register 2026-11-10]
+
 - **The browser WebSocket handshake can now ride the session cookie, and a
   racing refresh rotation converges instead of diverging.**
   - *WS cookie carrier.* The `:8097` handshake gains a third credential

@@ -392,8 +392,19 @@ final class RequestAuthenticatorTest extends TestCase
     public function testBeltRejectsAheadOfTheRefererArm(): void
     {
         // Referer-only request (no Origin) with an exact same-site Referer:
-        // if the belt were ordered AFTER the Referer check this leg would
-        // accept. Position is the law — belt first, exactly like the hub.
+        // every other arm is legal here, so ONLY the belt refuses. What this
+        // leg convicts is belt REACHABILITY, not belt ordering — corrected
+        // wording (w29L1-R2, review REVIEW-w29L1server.md; the earlier text
+        // claimed that ordering the belt after the Referer check would make
+        // this leg accept, and an executed plant refuted it): the ladder's
+        // arms all refuse on their own triggers and never rescue, so
+        // relocating the belt anywhere still ahead of the accept tail —
+        // after the Referer arm included — is an equivalent mutant that
+        // turned ZERO legs red. Only a belt that can never run (stripped, or
+        // relocated past the accept tail) accepts here. Belt-first remains
+        // the law as CODE ORDER — it is the verbatim hub mirror, reviewable
+        // in the text — but its behavioral teeth are exactly the belt-strip
+        // teeth, the same named 5-red set.
         $request = $this->request('POST', [
             'Host' => 'example.com',
             'Referer' => 'https://example.com/page',
@@ -458,6 +469,25 @@ final class RequestAuthenticatorTest extends TestCase
         ]);
 
         self::assertTrue($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    public function testEmptyServerHostRefusesAnOtherwiseMatchingOrigin(): void
+    {
+        // Drift-guard twin of the hub's convicted empty-Host discrimination
+        // (w29L1-R2, review REVIEW-w29L1server.md minor: the server side had
+        // NO leg of its own — an executed plant making an empty server host
+        // wildcard-match measured GREEN across every existing leg). Belt
+        // absent, Referer absent, Origin well-formed and naming
+        // 'example.com': the only limb left to decide is the host
+        // comparison, and with no Host header the server parts fall back to
+        // the raw empty string — "matches nothing a browser can send:
+        // fail-CLOSED". Under that wildcard mutant this leg would ACCEPT;
+        // at the tip it refuses.
+        $request = $this->request('POST', [
+            'Origin' => 'https://example.com',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
     }
 
     // --- Case 10: safe methods are never CSRF-checked -----------------------

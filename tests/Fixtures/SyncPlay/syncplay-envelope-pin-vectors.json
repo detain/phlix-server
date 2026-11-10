@@ -194,7 +194,7 @@
                 "error"
             ],
             "body": {
-                "error": "Group not found"
+                "error": "Group not found."
             }
         }
     },

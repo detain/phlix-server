@@ -231,7 +231,7 @@ class MediaPosterController
         $posterUrl = is_scalar($posterUrlRaw) ? trim((string) $posterUrlRaw) : '';
         if ($posterUrl === '') {
             return (new Response())->status(400)->json([
-                'error' => 'poster_url is required',
+                'error' => 'Poster URL is required',
                 'code' => 'poster.missing_url',
             ]);
         }
@@ -239,7 +239,7 @@ class MediaPosterController
         // Anti-SSRF: validate the URL is among the item's known candidates.
         if (!$this->isKnownPosterUrl($item, $posterUrl)) {
             return (new Response())->status(400)->json([
-                'error' => 'poster_url is not among the item\'s known poster candidates',
+                'error' => 'Poster URL is not among the item\'s known poster candidates',
                 'code' => 'poster.poster_not_candidate',
             ]);
         }

@@ -179,7 +179,7 @@ class WebhookAdminController
         $eventsRaw = $data['events'] ?? [];
         if (!is_array($eventsRaw)) {
             return (new Response())->status(400)->json([
-                'error' => 'events must be an array',
+                'error' => 'Events must be an array',
             ]);
         }
         $events = [];

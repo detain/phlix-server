@@ -125,7 +125,7 @@ class RokuController
         $thumbnail = is_string($body['thumbnail'] ?? null) ? $body['thumbnail'] : '';
 
         if ($mediaUrl === '') {
-            return (new Response())->status(400)->json(['error' => 'media_url is required']);
+            return (new Response())->status(400)->json(['error' => 'Media URL is required']);
         }
 
         $session = $this->rokuManager->startSession(

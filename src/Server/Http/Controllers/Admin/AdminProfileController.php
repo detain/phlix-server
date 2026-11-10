@@ -293,7 +293,7 @@ final class AdminProfileController
         }
 
         if (!is_string($pin)) {
-            return (new Response())->status(400)->json(['error' => 'PIN must be a string']);
+            return (new Response())->status(400)->json(['error' => 'The PIN must be text']);
         }
 
         if (

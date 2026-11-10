@@ -85,7 +85,7 @@ class RemoteSubtitleController
         $language = $this->stringInput($request, 'language');
         if ($provider === '' || $downloadId === '' || $language === '') {
             return (new Response())->status(400)->json([
-                'error' => 'provider, downloadId and language are required',
+                'error' => 'Provider, downloadId and language are required',
             ]);
         }
 

@@ -108,7 +108,7 @@ final class HubTokenController
             return (new Response())->error(
                 503,
                 'hub.not_enrolled',
-                "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it."
+                ControllerCopy::HUB_NOT_ENROLLED
             );
         }
 

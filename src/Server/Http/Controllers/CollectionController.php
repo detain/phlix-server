@@ -124,7 +124,7 @@ final class CollectionController
 
         $name = $body['name'] ?? null;
         if (!is_string($name) || trim($name) === '') {
-            return (new Response())->status(400)->json(['error' => 'name is required']);
+            return (new Response())->status(400)->json(['error' => 'Name is required']);
         }
 
         $libraryId = $body['library_id'] ?? null;
@@ -144,7 +144,7 @@ final class CollectionController
         // and its refresh answering 200 while doing nothing.
         if ($smartPlaylistId !== null && !$this->manager->smartPlaylistExists($smartPlaylistId)) {
             return (new Response())->status(400)->json([
-                'error' => 'smart_playlist_id does not reference an existing smart playlist',
+                'error' => 'Smart playlist ID (smart_playlist_id) does not reference an existing smart playlist',
             ]);
         }
 
@@ -194,7 +194,7 @@ final class CollectionController
 
         $id = $params['id'] ?? null;
         if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'id is required']);
+            return (new Response())->status(400)->json(['error' => 'ID is required']);
         }
 
         $collectionWithItems = $this->manager->getCollectionWithItems($id);
@@ -227,7 +227,7 @@ final class CollectionController
 
         $id = $params['id'] ?? null;
         if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'id is required']);
+            return (new Response())->status(400)->json(['error' => 'ID is required']);
         }
 
         $existing = $this->manager->findById($id);
@@ -262,7 +262,7 @@ final class CollectionController
             // that edge instead).
             if ($smartPlaylistId !== null && !$this->manager->smartPlaylistExists($smartPlaylistId)) {
                 return (new Response())->status(400)->json([
-                    'error' => 'smart_playlist_id does not reference an existing smart playlist',
+                    'error' => 'Smart playlist ID (smart_playlist_id) does not reference an existing smart playlist',
                 ]);
             }
         }
@@ -313,7 +313,7 @@ final class CollectionController
 
         $id = $params['id'] ?? null;
         if ($id === null) {
-            return (new Response())->status(400)->json(['error' => 'id is required']);
+            return (new Response())->status(400)->json(['error' => 'ID is required']);
         }
 
         $existing = $this->manager->findById($id);
@@ -353,7 +353,7 @@ final class CollectionController
             return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
         if ($mediaItemId === null) {
-            return (new Response())->status(400)->json(['error' => 'media item id is required']);
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
         }
 
         $collection = $this->manager->findById($collectionId);
@@ -393,7 +393,7 @@ final class CollectionController
             return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
         }
         if ($mediaItemId === null) {
-            return (new Response())->status(400)->json(['error' => 'media item id is required']);
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
         }
 
         $collection = $this->manager->findById($collectionId);
@@ -444,7 +444,7 @@ final class CollectionController
         $mediaItemIds = $body['media_item_ids'] ?? null;
 
         if (!is_array($mediaItemIds) || empty($mediaItemIds)) {
-            return (new Response())->status(400)->json(['error' => 'media_item_ids array is required']);
+            return (new Response())->status(400)->json(['error' => 'Media item IDs array is required']);
         }
 
         $validIds = [];
@@ -456,7 +456,7 @@ final class CollectionController
 
         if (empty($validIds)) {
             return (new Response())->status(400)->json([
-                'error' => 'media_item_ids must contain at least one valid id',
+                'error' => 'Media item IDs must contain at least one valid ID',
             ]);
         }
 

@@ -289,7 +289,7 @@ class LibraryUpdatePathValidationTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode((string) $response->body, true);
-        $this->assertSame('Library updated successfully', $body['message'] ?? null);
+        $this->assertSame('Library updated successfully.', $body['message'] ?? null);
     }
 
     public function testUpdateWithoutPathsKeyIsUntouchedByTheGate(): void
@@ -319,6 +319,6 @@ class LibraryUpdatePathValidationTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode((string) $response->body, true);
-        $this->assertSame('Library updated successfully', $body['message'] ?? null);
+        $this->assertSame('Library updated successfully.', $body['message'] ?? null);
     }
 }

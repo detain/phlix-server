@@ -222,7 +222,7 @@ class SyncPlayController
         $group = $this->snapshotService->getGroupState($groupId);
 
         if ($group === null) {
-            return (new Response())->status(404)->json(['error' => 'Group not found']);
+            return (new Response())->status(404)->json(['error' => 'Group not found.']);
         }
 
         $userId = $request->userId ?? '';
@@ -230,7 +230,7 @@ class SyncPlayController
         if (!$isMember && !$this->isAdminUser($userId)) {
             // Existence-agnostic refusal — same envelope, same status as the
             // missing-room arm above (MED-2: no id oracle, no roster exfil).
-            return (new Response())->status(404)->json(['error' => 'Group not found']);
+            return (new Response())->status(404)->json(['error' => 'Group not found.']);
         }
 
         return (new Response())->json(['group' => $group]);

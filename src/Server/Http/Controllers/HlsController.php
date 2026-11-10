@@ -98,7 +98,7 @@ class HlsController
         if (!$this->isSafeJobId($jobId)) {
             // Pointer echo only — but a garbage id here becomes a request the
             // serveFile rail must then refuse; answer at the boundary instead.
-            return (new Response())->status(400)->json(['error' => 'invalid request']);
+            return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
         return (new Response())->json([
@@ -154,7 +154,7 @@ class HlsController
         // traversal shape through, and the id is interpolated into the served
         // path. The 400 envelope stays byte-identical to the file-arm's.
         if (!$this->isSafeJobId($jobId) || !$this->isSafeFilename($file)) {
-            return (new Response())->status(400)->json(['error' => 'invalid request']);
+            return (new Response())->status(400)->json(['error' => 'Invalid request']);
         }
 
         // Serve-time parental re-check (Finding 1b): deny a capped profile any
@@ -193,7 +193,7 @@ class HlsController
                 return (new Response())
                     ->status(503)
                     ->header('Retry-After', '1')
-                    ->json(['error' => 'segment busy']);
+                    ->json(['error' => ControllerCopy::SEGMENT_BUSY]);
             } catch (SegmentCacheFullException $e) {
                 // SV-1.9: ENOSPC guard — the segment cache filesystem is low on space.
                 // Trigger an opportunistic sweep to reclaim what we can, then tell
@@ -203,7 +203,7 @@ class HlsController
                 return (new Response())
                     ->status(503)
                     ->header('Retry-After', '3')
-                    ->json(['error' => 'segment cache full']);
+                    ->json(['error' => ControllerCopy::SEGMENT_CACHE_FULL]);
             } catch (\InvalidArgumentException $e) {
                 // INV-A P3 (playback-lag cure): the argv-boundary gate in
                 // FfmpegRunner::argvParam() throws synchronously inside the
@@ -223,10 +223,10 @@ class HlsController
                 return (new Response())
                     ->status(503)
                     ->header('Retry-After', '2')
-                    ->json(['error' => 'segment build refused']);
+                    ->json(['error' => ControllerCopy::SEGMENT_BUILD_REFUSED]);
             }
             if ($ready === null) {
-                return (new Response())->status(404)->json(['error' => 'segment unavailable']);
+                return (new Response())->status(404)->json(['error' => ControllerCopy::SEGMENT_UNAVAILABLE]);
             }
         }
 

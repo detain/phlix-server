@@ -76,7 +76,7 @@ final class SyncPlayTwinFlipErrorFrameTest extends TestCase
             'The leave fallback must now speak the dotted registry twin'
         );
         $this->assertSame(
-            'Not in any group',
+            'Not in any group.',
             $frame['message'] ?? null,
             'Message prose is byte-identical across the flip — only the code changed'
         );
@@ -107,7 +107,7 @@ final class SyncPlayTwinFlipErrorFrameTest extends TestCase
             $frames[0]['error_code'] ?? null,
             'A specific registered code must still win over the coarse join fallback'
         );
-        $this->assertSame('Group not found', $frames[0]['message'] ?? null);
+        $this->assertSame('Group not found.', $frames[0]['message'] ?? null);
     }
 
     /**

@@ -131,14 +131,14 @@ final class AdminMergeController
         $duplicateIds = $this->normalizeDuplicateIds($request->input('duplicate_ids'));
         if ($duplicateIds === null) {
             return (new Response())->status(400)->json([
-                'error' => 'duplicate_ids must be a non-empty array of item ids',
+                'error' => 'Duplicate IDs must be a non-empty array of item IDs',
             ]);
         }
 
         // Reject a self-merge: the primary can never be one of its own duplicates.
         if (in_array($primaryId, $duplicateIds, true)) {
             return (new Response())->status(400)->json([
-                'error' => 'primary_id must not appear in duplicate_ids (self-merge)',
+                'error' => 'Primary ID must not appear in the duplicate IDs (self-merge)',
             ]);
         }
 

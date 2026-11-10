@@ -138,7 +138,7 @@ final class SyncPlaySnapshotMembershipsRealDbTest extends TestCase
             ['id' => $groupId]
         );
         $this->assertSame(404, $hidden->statusCode);
-        $this->assertSame(['error' => 'Group not found'], $this->decode($hidden));
+        $this->assertSame(['error' => 'Group not found.'], $this->decode($hidden));
         $this->assertStringNotContainsString(self::MEMBER_USER_ID, $hidden->body);
 
         $open = $controller->getGroup(

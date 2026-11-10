@@ -152,7 +152,7 @@ final class SyncPlayVisibilityRestTest extends TestCase
             $this->decode($hidden),
             'the refusal must be byte-identical to the missing-room arm — never an id oracle'
         );
-        $this->assertSame(['error' => 'Group not found'], $this->decode($hidden));
+        $this->assertSame(['error' => 'Group not found.'], $this->decode($hidden));
         $this->assertStringNotContainsString(self::MEMBER_USER_ID, $hidden->body);
         $this->assertStringNotContainsString('hunter2', $hidden->body);
     }

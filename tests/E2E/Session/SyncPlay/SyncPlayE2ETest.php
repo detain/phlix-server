@@ -174,7 +174,7 @@ class SyncPlayE2ETest extends TestCase
             'conn-member2'
         );
         $this->assertFalse($failResult['success']);
-        $this->assertEquals('Invalid password', $failResult['error']);
+        $this->assertEquals('Invalid password.', $failResult['error']);
     }
 
     /**
@@ -496,7 +496,7 @@ class SyncPlayE2ETest extends TestCase
             'conn-extra'
         );
         $this->assertFalse($extraResult['success']);
-        $this->assertEquals('Group is full', $extraResult['error']);
+        $this->assertEquals('Group is full.', $extraResult['error']);
     }
 
     /**

@@ -211,7 +211,7 @@ class PhotoController
 
         if ($photoId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'photo id is required',
+                'error' => 'Photo ID is required',
             ]);
         }
 
@@ -266,7 +266,7 @@ class PhotoController
 
         if ($photoId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'photo id is required',
+                'error' => 'Photo ID is required',
             ]);
         }
 
@@ -344,7 +344,7 @@ class PhotoController
 
         if ($photoId === null) {
             return (new Response())->status(400)->json([
-                'error' => 'photo id is required',
+                'error' => 'Photo ID is required',
             ]);
         }
 

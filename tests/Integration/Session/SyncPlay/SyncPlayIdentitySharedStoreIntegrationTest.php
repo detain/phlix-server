@@ -123,7 +123,7 @@ final class SyncPlayIdentitySharedStoreIntegrationTest extends TestCase
             'the phantom-write boundary: a worker that never held the group in memory '
             . 'cannot mutate it — the snapshot is not re-hydrated into any live table (SP6).'
         );
-        $this->assertSame('Group not found', $join['error'] ?? null);
+        $this->assertSame('Group not found.', $join['error'] ?? null);
     }
 
     /**

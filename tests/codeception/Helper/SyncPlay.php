@@ -191,7 +191,7 @@ class SyncPlay extends Module
         $memberId = $this->connectionToMember[$connectionId] ?? null;
 
         if ($memberId === null) {
-            return ['success' => false, 'error' => 'Not in any group'];
+            return ['success' => false, 'error' => 'Not in any group.'];
         }
 
         $result = $this->manager->leaveGroup($memberId);

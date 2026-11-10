@@ -147,7 +147,7 @@ final class ProfilesController
 
         return (new Response())->status(201)->json([
             'profile_id' => $profileId,
-            'message' => 'Profile created',
+            'message' => 'Profile created successfully',
         ]);
     }
 
@@ -224,7 +224,7 @@ final class ProfilesController
         }
         if (array_key_exists('content_rating', $data)) {
             if (!is_string($data['content_rating'])) {
-                return (new Response())->status(400)->json(['error' => 'content_rating must be a string']);
+                return (new Response())->status(400)->json(['error' => 'The content rating must be text']);
             }
             $payload['content_rating'] = $data['content_rating'];
         }
@@ -238,7 +238,7 @@ final class ProfilesController
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
 
-        return (new Response())->json(['message' => 'Profile updated']);
+        return (new Response())->json(['message' => 'Profile updated successfully']);
     }
 
     /**
@@ -318,7 +318,7 @@ final class ProfilesController
         }
 
         if (!is_string($pin)) {
-            return (new Response())->status(400)->json(['error' => 'PIN must be a string']);
+            return (new Response())->status(400)->json(['error' => 'The PIN must be text']);
         }
 
         if (

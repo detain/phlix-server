@@ -163,7 +163,7 @@ class SyncPlayCest
         $joinFailResult = $I->joinGroup($member2Conn, $groupId, 'wrongpassword');
         $I->assertFalse($joinFailResult['success']);
         /** @var array{success: false, error: string} $joinFailResult */
-        $I->assertEquals('Invalid password', $joinFailResult['error']);
+        $I->assertEquals('Invalid password.', $joinFailResult['error']);
     }
 
     /**
@@ -498,6 +498,6 @@ class SyncPlayCest
         $extraResult = $I->joinGroup($extraConn, $groupId, null, 'Extra');
         $I->assertFalse($extraResult['success']);
         /** @var array{success: false, error: string} $extraResult */
-        $I->assertEquals('Group is full', $extraResult['error']);
+        $I->assertEquals('Group is full.', $extraResult['error']);
     }
 }

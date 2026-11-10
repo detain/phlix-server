@@ -195,7 +195,7 @@ class MediaMatchController
         $tmdbId = is_scalar($tmdbRaw) ? trim((string) $tmdbRaw) : '';
         if ($tmdbId === '') {
             return (new Response())->status(400)->json([
-                'error' => 'tmdb_id is required',
+                'error' => 'TMDB ID is required',
                 'code' => 'metadata.bad_tmdb_id',
             ]);
         }
@@ -221,7 +221,7 @@ class MediaMatchController
 
         if ($applied['matched'] !== true) {
             return (new Response())->status(422)->json([
-                'error' => 'TMDB returned no usable details for that id',
+                'error' => 'TMDB returned no usable details for that ID',
                 'code' => 'metadata.no_match',
             ]);
         }

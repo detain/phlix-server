@@ -486,7 +486,7 @@ class AuthController
 
         if (!is_string($refreshToken) || $refreshToken === '') {
             return (new Response())->status(400)->json([
-                'error' => 'refresh_token is required',
+                'error' => 'Refresh token is required',
             ]);
         }
 

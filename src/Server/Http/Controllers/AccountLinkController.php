@@ -209,7 +209,7 @@ final class AccountLinkController
         if ($identityId === '') {
             return (new Response())->status(400)->json([
                 'error' => 'missing_identity_id',
-                'message' => 'An identity id is required',
+                'message' => 'An identity ID is required',
             ]);
         }
 
@@ -413,7 +413,7 @@ final class AccountLinkController
             return (new Response())->error(
                 503,
                 'hub.not_enrolled',
-                "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it."
+                ControllerCopy::HUB_NOT_ENROLLED
             );
         }
 

@@ -106,7 +106,7 @@ class ChromecastController
         $duration = is_numeric($durationRaw) ? (int) $durationRaw : 0;
 
         if ($mediaUrl === '') {
-            return (new Response())->status(400)->json(['error' => 'media_url is required']);
+            return (new Response())->status(400)->json(['error' => 'Media URL is required']);
         }
 
         $session = $this->castManager->startSession(

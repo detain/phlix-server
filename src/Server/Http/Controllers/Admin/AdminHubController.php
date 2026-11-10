@@ -154,7 +154,7 @@ final class AdminHubController
             if ($hubUrl === '') {
                 return (new Response())->status(400)->json([
                     'success' => false,
-                    'message' => 'hubUrl is required.',
+                    'message' => 'Hub URL is required.',
                 ]);
             }
 
@@ -194,7 +194,7 @@ final class AdminHubController
             if ($claimId === '') {
                 return (new Response())->status(400)->json([
                     'success' => false,
-                    'message' => 'claimId is required.',
+                    'message' => 'Claim ID is required.',
                 ]);
             }
 
@@ -209,7 +209,7 @@ final class AdminHubController
             if ($hubUrl === '') {
                 return (new Response())->status(400)->json([
                     'success' => false,
-                    'message' => 'hubUrl is required.',
+                    'message' => 'Hub URL is required.',
                 ]);
             }
 
@@ -286,7 +286,7 @@ final class AdminHubController
             if ($enrollmentJwt === '' || $hubJwksUrl === '' || $serverId === '' || $hubUrl === '') {
                 return (new Response())->status(400)->json([
                     'success' => false,
-                    'message' => 'enrollmentJwt, hubJwksUrl, serverId, and hubUrl are required.',
+                    'message' => 'Enrollment JWT, hub JWKS URL, server ID, and hub URL are required.',
                 ]);
             }
 

@@ -557,7 +557,7 @@ final class SyncPlayEnvelopePinTest extends TestCase
             array_keys($getBody),
             'handler 404 is {error} alone — the router 404 carries {error, message}'
         );
-        $this->assertSame('Group not found', $getBody['error']);
+        $this->assertSame('Group not found.', $getBody['error']);
     }
 
     // -----------------------------------------------------------------

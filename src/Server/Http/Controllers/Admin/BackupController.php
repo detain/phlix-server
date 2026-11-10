@@ -344,7 +344,7 @@ class BackupController
                     return (new Response())->status(400)->json([
                         'success' => false,
                         'error' => 'Invalid interval',
-                        'message' => 'auto_backup_interval_days must be non-negative',
+                        'message' => 'Auto-backup interval must be a non-negative number of days.',
                     ]);
                 }
             }
@@ -355,7 +355,7 @@ class BackupController
                     return (new Response())->status(400)->json([
                         'success' => false,
                         'error' => 'Invalid retention count',
-                        'message' => 'retention_count must be at least 1',
+                        'message' => 'Backup retention count must be at least 1.',
                     ]);
                 }
             }

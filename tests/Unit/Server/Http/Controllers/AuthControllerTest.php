@@ -237,7 +237,7 @@ class AuthControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('refresh_token is required', $body['error']);
+        $this->assertSame('Refresh token is required', $body['error']);
     }
 
     /**

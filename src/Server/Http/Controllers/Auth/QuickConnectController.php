@@ -257,7 +257,10 @@ final class QuickConnectController
         $body = $request->body;
         $secret = $body['secret'] ?? null;
         if ($code === null || !is_string($secret) || $secret === '') {
-            return (new Response())->status(400)->json(['error' => 'secret is required', 'code' => 'invalid_request']);
+            return (new Response())->status(400)->json([
+                'error' => 'Pairing secret is required',
+                'code' => 'invalid_request',
+            ]);
         }
 
         $result = $this->pairs->approve($code, $secret, $userId);
@@ -300,7 +303,10 @@ final class QuickConnectController
         $body = $request->body;
         $secret = $body['secret'] ?? null;
         if ($code === null || !is_string($secret) || $secret === '') {
-            return (new Response())->status(400)->json(['error' => 'secret is required', 'code' => 'invalid_request']);
+            return (new Response())->status(400)->json([
+                'error' => 'Pairing secret is required',
+                'code' => 'invalid_request',
+            ]);
         }
 
         if ($this->pairs === null) {
@@ -392,7 +398,7 @@ final class QuickConnectController
         $instanceId = $body['instance_id'] ?? null;
         if (!is_string($instanceId) || preg_match(self::INSTANCE_ID_PATTERN, $instanceId) !== 1) {
             return (new Response())->status(400)->json([
-                'error' => 'instance_id must be an opaque id of 8-64 [A-Za-z0-9._-] characters',
+                'error' => 'Instance ID must be an opaque ID of 8-64 [A-Za-z0-9._-] characters',
                 'code' => 'invalid_payload',
             ]);
         }
@@ -400,7 +406,7 @@ final class QuickConnectController
         $version = $body['version'] ?? null;
         if (!is_string($version) || $version === '' || strlen($version) > self::MAX_VERSION_LENGTH) {
             return (new Response())->status(400)->json([
-                'error' => 'version is required (max ' . self::MAX_VERSION_LENGTH . ' chars)',
+                'error' => 'Version is required (max ' . self::MAX_VERSION_LENGTH . ' characters)',
                 'code' => 'invalid_payload',
             ]);
         }
@@ -408,7 +414,7 @@ final class QuickConnectController
         $clientType = $body['client_type'] ?? null;
         if (!is_string($clientType) || $clientType === '' || strlen($clientType) > self::MAX_CLIENT_TYPE_LENGTH) {
             return (new Response())->status(400)->json([
-                'error' => 'client_type is required (max ' . self::MAX_CLIENT_TYPE_LENGTH . ' chars)',
+                'error' => 'Client type is required (max ' . self::MAX_CLIENT_TYPE_LENGTH . ' characters)',
                 'code' => 'invalid_payload',
             ]);
         }
@@ -418,7 +424,7 @@ final class QuickConnectController
         $buildToken = $body['build_token'] ?? '';
         if (!is_string($buildToken) || strlen($buildToken) > self::MAX_BUILD_TOKEN_LENGTH) {
             return (new Response())->status(400)->json([
-                'error' => 'build_token must be a string of at most ' . self::MAX_BUILD_TOKEN_LENGTH . ' chars',
+                'error' => 'Build token must be text of at most ' . self::MAX_BUILD_TOKEN_LENGTH . ' characters',
                 'code' => 'invalid_payload',
             ]);
         }

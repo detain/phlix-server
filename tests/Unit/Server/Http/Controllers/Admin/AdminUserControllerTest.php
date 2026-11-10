@@ -258,7 +258,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Invalid password', $body['error']);
+        $this->assertSame('Invalid password.', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
         $this->assertArrayHasKey('password', $body['field_errors']);
     }

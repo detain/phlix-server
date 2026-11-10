@@ -1051,7 +1051,7 @@ class MediaItemController
 
         $body = $request->body;
         if (!is_array($body)) {
-            return (new Response())->status(400)->json(['error' => 'Request body must be a JSON object.']);
+            return (new Response())->status(400)->json(['error' => 'Request body must be a JSON object']);
         }
 
         $updateData = [];
@@ -1146,13 +1146,14 @@ class MediaItemController
 
         if (!is_array($submitted)) {
             $errorResponse = (new Response())->status(400)
-                ->json(['error' => 'metadata_json must be a JSON object']);
+                ->json(['error' => 'Metadata JSON (metadata_json) must be a JSON object']);
             return null;
         }
 
         if (strlen((string) json_encode($submitted)) > self::METADATA_PATCH_MAX_BYTES) {
             $errorResponse = (new Response())->status(400)->json([
-                'error' => 'metadata_json exceeds the ' . self::METADATA_PATCH_MAX_BYTES . '-byte limit',
+                'error' => 'Metadata JSON (metadata_json) exceeds the '
+                    . self::METADATA_PATCH_MAX_BYTES . '-byte limit',
             ]);
             return null;
         }
@@ -1161,7 +1162,7 @@ class MediaItemController
         if ($unknownKeys !== []) {
             $names = array_map(static fn (int|string $key): string => (string) $key, $unknownKeys);
             $errorResponse = (new Response())->status(400)->json([
-                'error' => 'metadata_json contains unsupported keys: ' . implode(', ', $names),
+                'error' => 'Metadata JSON (metadata_json) contains unsupported keys: ' . implode(', ', $names),
             ]);
             return null;
         }

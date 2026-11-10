@@ -1091,7 +1091,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(400, $res->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($res->body, true);
-        $this->assertSame(['error' => 'invalid request'], $body);
+        $this->assertSame(['error' => 'Invalid request'], $body);
     }
 
     /**
@@ -1104,7 +1104,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(400, $res->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($res->body, true);
-        $this->assertSame(['error' => 'invalid request'], $body);
+        $this->assertSame(['error' => 'Invalid request'], $body);
     }
 
     /**
@@ -1143,7 +1143,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame(['error' => 'invalid request'], $body);
+        $this->assertSame(['error' => 'Invalid request'], $body);
     }
 
     /**

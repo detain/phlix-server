@@ -174,7 +174,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('name is required', $body['error']);
+        $this->assertSame('Name is required', $body['error']);
     }
 
     public function testCreateReturns400WhenLibraryIdMissing(): void
@@ -562,7 +562,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('media_item_ids array is required', $body['error']);
+        $this->assertSame('Media item IDs array is required', $body['error']);
     }
 
     public function testBulkAddReturns400WhenMediaItemIdsEmpty(): void
@@ -583,7 +583,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('media_item_ids array is required', $body['error']);
+        $this->assertSame('Media item IDs array is required', $body['error']);
     }
 
     public function testBulkAddReturns400WhenAllMediaItemIdsInvalid(): void
@@ -604,7 +604,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('media_item_ids must contain at least one valid id', $body['error']);
+        $this->assertSame('Media item IDs must contain at least one valid ID', $body['error']);
     }
 
     // ─── refresh ────────────────────────────────────────────────────────────────

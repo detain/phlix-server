@@ -411,6 +411,33 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Admin and portal error copy now speaks one house voice, and the shared
+  sentences have one home** (review server__copywriter #3-#6, #11-#13,
+  SH-041). Validation and outcome literals across
+  `src/Server/Http/Controllers/**` and `Session/SyncPlay/SyncPlayManager`
+  were normalized: human prose leads capitalized and ends its sentences —
+  the refusal family no longer answers bare "Group not found" on its REST
+  mirrors while the WS frames answer "Group not found." — same-file
+  label/message pairs collapsed to their dominant form ("Invalid email
+  format"; the stale "must be a string" pointer family now reads "must be
+  text"), `id` became `ID` and `chars` became `characters` in operator-
+  facing prose, and field-name collisions keep the wire key visible in a
+  parenthesis where integrators match on it ("Metadata JSON
+  (metadata_json) exceeds the ...-byte limit", "Metadata priority
+  (metadata_priority) ..."). The four streaming segment status values and
+  the hub-enrolment sentence (three verbatim copies) moved into the new
+  `Server\Http\Controllers\ControllerCopy` constants class; those values
+  are byte-identical to the prose they replace, pinned by a sweep test's
+  wire byte-identity leg.
+  HTTP statuses, envelope key sets and the wire error-code set did not
+  move; only human-readable `error`/`message` prose values changed, and
+  every consumer-visible pin (unit tests, the pinned SyncPlay envelope
+  vectors fixture, codeception and E2E legs) rotated in this same commit.
+  Machine-readable `error` tokens (`missing_identity_id` and friends)
+  remain tokenized by doctrine (#14): the code is contract, the copy is
+  ours.
+  [SH-041 / server__copywriter#3-#6,#11-#13, w22L2 2026-11-10]
+
 - **`GET /api/v1/media/search` reports the library-wide match count.** The
   endpoint's `total` used to be the length of the page it returned, so a
   library holding 400 matches for `dune` answered `total: 50` (the default

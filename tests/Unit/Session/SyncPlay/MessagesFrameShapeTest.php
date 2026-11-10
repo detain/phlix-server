@@ -47,7 +47,7 @@ class MessagesFrameShapeTest extends TestCase
 
     public function testErrorFactoryUsesErrorCodeNotCode(): void
     {
-        $message = Messages::error('NOT_IN_GROUP', 'You are not in a group');
+        $message = Messages::error('NOT_IN_GROUP', 'You are not in a group.');
 
         // Must use 'error_code' field
         $this->assertArrayHasKey('error_code', $message);
@@ -55,7 +55,7 @@ class MessagesFrameShapeTest extends TestCase
 
         // Verify values
         $this->assertEquals('NOT_IN_GROUP', $message['error_code']);
-        $this->assertEquals('You are not in a group', $message['message']);
+        $this->assertEquals('You are not in a group.', $message['message']);
         $this->assertEquals(Messages::TYPE_ERROR, $message['type']);
         $this->assertEquals(Messages::PROTOCOL_VERSION, $message['protocol_version']);
     }

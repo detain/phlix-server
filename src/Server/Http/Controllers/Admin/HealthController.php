@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayStateStore;
+use Phlix\Server\Http\Controllers\ControllerCopy;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Psr\Container\ContainerInterface;
@@ -185,7 +186,7 @@ final class HealthController
                     'latencyMs' => null,
                     'status' => 'offline',
                     'measuredAt' => date('c'),
-                    'error' => 'This server isn\'t enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it.',
+                    'error' => ControllerCopy::HUB_NOT_ENROLLED,
                 ]);
             }
 

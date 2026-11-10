@@ -94,7 +94,7 @@ class SyncPlayManagerTest extends TestCase
         $joinResult = $this->manager->joinGroup($groupId, 'member_2', 'User 2', 'wrong');
 
         $this->assertFalse($joinResult['success']);
-        $this->assertEquals('Invalid password', $joinResult['error']);
+        $this->assertEquals('Invalid password.', $joinResult['error']);
     }
 
     public function testJoinNonexistentGroupFails(): void
@@ -102,7 +102,7 @@ class SyncPlayManagerTest extends TestCase
         $result = $this->manager->joinGroup('nonexistent', 'member_1', 'User 1');
 
         $this->assertFalse($result['success']);
-        $this->assertEquals('Group not found', $result['error']);
+        $this->assertEquals('Group not found.', $result['error']);
     }
 
     public function testLeaveGroupSuccess(): void
@@ -123,7 +123,7 @@ class SyncPlayManagerTest extends TestCase
         $result = $this->manager->leaveGroup('nonexistent');
 
         $this->assertFalse($result['success']);
-        $this->assertEquals('Not in any group', $result['error']);
+        $this->assertEquals('Not in any group.', $result['error']);
     }
 
     public function testLeaveGroupRemovesMemberFromGroup(): void

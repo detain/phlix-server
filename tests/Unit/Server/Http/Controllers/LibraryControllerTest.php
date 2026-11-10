@@ -980,7 +980,7 @@ class LibraryControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Library updated successfully', $body['message']);
+        $this->assertSame('Library updated successfully.', $body['message']);
     }
 
     /**
@@ -1083,7 +1083,7 @@ class LibraryControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Library deleted successfully', $body['message']);
+        $this->assertSame('Library deleted successfully.', $body['message']);
     }
 
     /**
@@ -1142,7 +1142,7 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertSame('job-1', $body['job_id']);
         $this->assertSame('queued', $body['status']);
-        $this->assertSame('Library scan queued', $body['message']);
+        $this->assertSame('Library scan queued.', $body['message']);
     }
 
     /**
@@ -1309,7 +1309,7 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertSame('job-md', $body['job_id']);
         $this->assertSame('queued', $body['status']);
-        $this->assertSame('Metadata match queued', $body['message']);
+        $this->assertSame('Metadata match queued.', $body['message']);
     }
 
     /**
@@ -1389,7 +1389,7 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertSame('job-mr', $body['job_id']);
         $this->assertSame('queued', $body['status']);
-        $this->assertSame('Metadata refresh queued', $body['message']);
+        $this->assertSame('Metadata refresh queued.', $body['message']);
     }
 
     /**
@@ -1473,7 +1473,7 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertSame('job-p', $body['job_id']);
         $this->assertSame('queued', $body['status']);
-        $this->assertSame('Library prune queued', $body['message']);
+        $this->assertSame('Library prune queued.', $body['message']);
     }
 
     public function testPruneReturns404WhenLibraryNotFound(): void
@@ -1533,7 +1533,7 @@ class LibraryControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('job-cm', $body['job_id']);
-        $this->assertSame('Metadata clear queued', $body['message']);
+        $this->assertSame('Metadata clear queued.', $body['message']);
     }
 
     public function testClearMetadataReturns404WhenLibraryNotFound(): void
@@ -1593,7 +1593,7 @@ class LibraryControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('job-ca', $body['job_id']);
-        $this->assertSame('Artwork clear queued', $body['message']);
+        $this->assertSame('Artwork clear queued.', $body['message']);
     }
 
     public function testClearArtworkReturns404WhenLibraryNotFound(): void

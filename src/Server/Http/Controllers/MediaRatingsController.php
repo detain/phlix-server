@@ -89,12 +89,12 @@ class MediaRatingsController
 
         $raw = $request->input('score');
         if ($raw === null || !is_numeric($raw)) {
-            return (new Response())->status(400)->json(['error' => 'score is required and must be numeric']);
+            return (new Response())->status(400)->json(['error' => 'Score is required and must be numeric']);
         }
 
         $score = (float) $raw;
         if ($score < 0.0 || $score > 10.0) {
-            return (new Response())->status(400)->json(['error' => 'score must be between 0.0 and 10.0']);
+            return (new Response())->status(400)->json(['error' => 'Score must be between 0.0 and 10.0']);
         }
 
         $this->ratingService->upsert(

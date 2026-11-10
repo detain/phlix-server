@@ -1194,7 +1194,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Server/WebPortal/WebPortalRouterSearchTotalTest.php (library total
     // flows through the handler, key-set law, by-marker clamp-on-read era);
     // 2078 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2078;
+    // +2 2078→2080: w22L2 SH-041 adds src/Server/Http/Controllers/
+    // ControllerCopy.php (the in-scope copy SSOT: segment-status vocabulary +
+    // the hub-enrolment sentence lifted from its three verbatim copies) and
+    // tests/Unit/Server/Http/Controllers/ControllerCopySweepTest.php (wire
+    // byte-identity of every const, family-sentence sweeps, measured
+    // allow-lists); 2080 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2080;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

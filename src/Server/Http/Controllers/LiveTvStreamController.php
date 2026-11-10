@@ -116,7 +116,7 @@ class LiveTvStreamController
         $recordingId = $params['id'] ?? '';
 
         if ($recordingId === '') {
-            return (new Response())->status(400)->json(['error' => 'Recording ID required']);
+            return (new Response())->status(400)->json(['error' => 'Recording ID is required']);
         }
 
         $recording = $this->recorder->getRecording($recordingId);
@@ -241,7 +241,7 @@ class LiveTvStreamController
         $sessionId = $params['sessionId'] ?? '';
 
         if ($sessionId === '') {
-            return (new Response())->status(400)->json(['error' => 'Session ID required']);
+            return (new Response())->status(400)->json(['error' => 'Session ID is required']);
         }
 
         $bufferDir = $this->resolveTimeShiftBufferDir($sessionId);
@@ -293,7 +293,7 @@ class LiveTvStreamController
         $segment = $params['segment'] ?? '';
 
         if ($sessionId === '') {
-            return (new Response())->status(400)->json(['error' => 'Session ID required']);
+            return (new Response())->status(400)->json(['error' => 'Session ID is required']);
         }
 
         // SECURITY: path-jail the segment name. The router already constrains

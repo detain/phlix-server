@@ -166,7 +166,8 @@ class LibraryController
     private function metadataPriorityError(): Response
     {
         return (new Response())->status(400)->json([
-            'error' => 'metadata_priority must be a map of media type to an ordered list of source names',
+            'error' => 'Metadata priority (metadata_priority) must be a map of media type '
+                . 'to an ordered list of source names',
         ]);
     }
 
@@ -199,7 +200,8 @@ class LibraryController
 
         if (!is_array($raw)) {
             return (new Response())->status(400)->json([
-                'error' => 'image_types must be a map of type to boolean, or a list of enabled type names',
+                'error' => 'Image types (image_types) must be a map of type to boolean, '
+                    . 'or a list of enabled type names',
             ]);
         }
 
@@ -264,7 +266,7 @@ class LibraryController
     private function autoCollectionsError(): Response
     {
         return (new Response())->status(400)->json([
-            'error' => 'Set autoCollections to true/false, or {"enabled": true/false}.',
+            'error' => 'Set autoCollections to true/false, or {"enabled": true/false}',
         ]);
     }
 
@@ -819,7 +821,7 @@ class LibraryController
 
         $this->libraryManager->updateLibrary($params['id'], $data);
 
-        return (new Response())->json(['message' => 'Library updated successfully']);
+        return (new Response())->json(['message' => 'Library updated successfully.']);
     }
 
     /**
@@ -839,7 +841,7 @@ class LibraryController
 
         $this->libraryManager->deleteLibrary($params['id']);
 
-        return (new Response())->json(['message' => 'Library deleted successfully']);
+        return (new Response())->json(['message' => 'Library deleted successfully.']);
     }
 
     /**
@@ -872,7 +874,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Library scan queued',
+            'message' => 'Library scan queued.',
         ]);
     }
 
@@ -956,7 +958,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Metadata match queued',
+            'message' => 'Metadata match queued.',
         ]);
     }
 
@@ -992,7 +994,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Metadata refresh queued',
+            'message' => 'Metadata refresh queued.',
         ]);
     }
 
@@ -1027,7 +1029,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Library prune queued',
+            'message' => 'Library prune queued.',
         ]);
     }
 
@@ -1063,7 +1065,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Metadata clear queued',
+            'message' => 'Metadata clear queued.',
         ]);
     }
 
@@ -1096,7 +1098,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Artwork clear queued',
+            'message' => 'Artwork clear queued.',
         ]);
     }
 
@@ -1145,7 +1147,7 @@ class LibraryController
         return (new Response())->status(202)->json([
             'job_id' => $jobId,
             'status' => 'queued',
-            'message' => 'Delete-all items queued (destructive)',
+            'message' => 'Delete-all items queued (destructive).',
         ]);
     }
 

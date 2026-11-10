@@ -834,7 +834,7 @@ class SyncPlayManager
         $group = $this->groups[$groupId] ?? null;
 
         if ($group === null) {
-            return ['success' => false, 'error' => 'Group not found', 'error_code' => 'syncplay.group_not_found'];
+            return ['success' => false, 'error' => 'Group not found.', 'error_code' => 'syncplay.group_not_found'];
         }
 
         if ($group->hasMember($memberId)) {
@@ -882,12 +882,16 @@ class SyncPlayManager
                 ? $group->verifyPasswordHash($passwordHash)
                 : $group->verifyPassword($password ?? '');
             if (!$gatePasses) {
-                return ['success' => false, 'error' => 'Invalid password', 'error_code' => 'syncplay.invalid_password'];
+                return [
+                    'success' => false,
+                    'error' => 'Invalid password.',
+                    'error_code' => 'syncplay.invalid_password',
+                ];
             }
         }
 
         if ($group->getMemberCount() >= GroupState::MAX_MEMBERS) {
-            return ['success' => false, 'error' => 'Group is full', 'error_code' => 'syncplay.group_full'];
+            return ['success' => false, 'error' => 'Group is full.', 'error_code' => 'syncplay.group_full'];
         }
 
         // MED-3 — JOIN IMPLIES LEAVE. An identity re-homing to a second room must
@@ -908,7 +912,7 @@ class SyncPlayManager
         ];
 
         if (!$group->addMember($memberId, $memberData)) {
-            return ['success' => false, 'error' => 'Failed to join group'];
+            return ['success' => false, 'error' => 'Failed to join group.'];
         }
 
         $this->memberToGroup[$memberId] = $groupId;
@@ -972,7 +976,7 @@ class SyncPlayManager
         $groupId = $this->memberToGroup[$memberId] ?? null;
 
         if ($groupId === null) {
-            return ['success' => false, 'error' => 'Not in any group'];
+            return ['success' => false, 'error' => 'Not in any group.'];
         }
 
         $group = $this->groups[$groupId] ?? null;
@@ -1125,7 +1129,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1177,7 +1181,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1223,7 +1227,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1273,7 +1277,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1398,7 +1402,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1503,7 +1507,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1593,7 +1597,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -1771,7 +1775,7 @@ class SyncPlayManager
         $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
         if ($group === null || $groupId === null) {
-            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group.');
             return;
         }
 
@@ -2179,7 +2183,7 @@ class SyncPlayManager
             if ($now - $group->getLastActivityAt() > $timeout) {
                 // Notify members
                 $this->broadcastToGroup($id, Messages::TYPE_INFO, [
-                    'message' => 'Group timed out due to inactivity',
+                    'message' => 'Group timed out due to inactivity.',
                 ]);
 
                 // SRV-M9: the removal must tear down the reverse indexes and

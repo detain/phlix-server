@@ -296,7 +296,7 @@ final class AdminUserController
         // Validate email format
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return (new Response())->status(400)->json([
-                'error' => 'Invalid email',
+                'error' => 'Invalid email format',
                 'field_errors' => ['email' => 'Invalid email format'],
             ]);
         }
@@ -307,7 +307,7 @@ final class AdminUserController
         $passwordError = $this->passwordPolicy()->validate($password);
         if ($passwordError !== null) {
             return (new Response())->status(400)->json([
-                'error' => 'Invalid password',
+                'error' => 'Invalid password.',
                 'field_errors' => ['password' => $passwordError],
             ]);
         }
@@ -379,7 +379,7 @@ final class AdminUserController
             $email = is_string($email) ? trim($email) : '';
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 return (new Response())->status(400)->json([
-                    'error' => 'Invalid email',
+                    'error' => 'Invalid email format',
                     'field_errors' => ['email' => 'Invalid email format'],
                 ]);
             }
@@ -398,7 +398,7 @@ final class AdminUserController
             $passwordError = $this->passwordPolicy()->validate($password);
             if ($passwordError !== null) {
                 return (new Response())->status(400)->json([
-                    'error' => 'Invalid password',
+                    'error' => 'Invalid password.',
                     'field_errors' => ['password' => $passwordError],
                 ]);
             }

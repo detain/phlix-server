@@ -141,7 +141,7 @@ class MediaUserDataController
             // or null. Bools are numeric-adjacent in PHP but never a valid rating.
             if (is_bool($raw) || !is_numeric($raw) || (float) $raw !== floor((float) $raw)) {
                 return (new Response())->status(400)->json(
-                    ['error' => 'rating must be an integer between 1 and 10, or null']
+                    ['error' => 'Rating must be an integer between 1 and 10, or null']
                 );
             }
             $rating = (int) $raw;
@@ -190,7 +190,7 @@ class MediaUserDataController
             || (float) $raw !== floor((float) $raw)
         ) {
             return (new Response())->status(400)->json(
-                ['error' => 'level must be an integer between -2 and 2']
+                ['error' => 'Level must be an integer between -2 and 2']
             );
         }
         $level = (int) $raw;

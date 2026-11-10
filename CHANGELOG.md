@@ -311,6 +311,36 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The served web player carries the next review-cure cycle: `@phlix/ui` v0.99.24 re-pinned to
+  v0.99.25, and the served `/app` bundle regenerated.** [ui review-cure wave 2026-11-09]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.24 → v0.99.25 (tag object
+    `52ea3cb7`, peel `6e1ce2d8`, ls-remote-verified; ui-ci 42702476767 success, headSha-bound).
+    The dependency edges ride unchanged — contracts `#v0.5.7` / syncplay `#v0.1.7`, the blessed
+    pair; the syncplay `#v0.1.8` re-baseline stays its own wave — so the lock delta is surgical:
+    `package-lock.json` 4+/4- (root echo + the ui node triple: version/resolved/integrity) and
+    `package.json` 1+/1-, produced by a real `npm install` under npm 11.19.0 on the S253-pinned
+    node 24.20.0 with `NPM_CONFIG_USERCONFIG=/dev/null` ("changed 1 package"); a second install
+    is a byte-no-op — lock idempotence proven. The vendored `dist/` matches the ui register's
+    consumer-target identities exactly: `phlix-ui.js` `0083016a…`, `player.js` `0dad2a06…`,
+    `phlix-ui.umd.cjs` `cd7be5ef…`, `player.umd.cjs` `50f11c11…`. Payload carried: the ui
+    w15 L2 + w16 L1 review-cure waves (login guidance, anchor music nav, catalog-rails i18n
+    533→542, SyncPlay contracts-SSOT truth, color-mix fallbacks; stacked-overlay focus routing,
+    SyncPlay reconnect park ladder, socketHint producer truth, three dead wire DTOs deleted) —
+    client-side fixes only, zero server wire change.
+  - *Bundle regen.* `/app` (`public/assets/app`) rebuilt on node 24.20.0, deterministic ×2
+    (`diff -r` clean between builds), aggregate md5sum-recipe (sorted per-file md5 digest)
+    `6a340d5057990b6faeb38e3027c6b9bc`, 198 files in `assets/`; the stamp reads `0.99.25`
+    (`index-BxGXn4WR.js`, zero `0.99.24` residue tree-wide). The two payload waves churned the
+    module graph: 129 hashed chunks renamed (delete+emit pairs), `index.html` and
+    `.vite/manifest.json` carry the new entry refs, and the ui carrier `PlayerPage-Bp-fkb06`
+    propagates as server chunk `PlayerPage-Bp-fkb06-Cxtb6Pu_.js`. Bundle-aware PHP cohort
+    (WebUiBundleGate 10/56, ViteAssetsMemo 4/7, SharedUiControllerCspNonce 5/35,
+    HttpHandlerServeStatic 10/50, PublicFrontControllerRemovalGuard 9/168, NginxAssetLocation
+    4/49, LicenseHeaderGuard 5/11, BrowserE2EGate 21/127 — 68 tests / 503 assertions, exact),
+    web-ui `node --test` 33/33, `composer validate --strict` OK — all green, zero era pins moved
+    (the cohort fixture-loads the bundle structurally and holds no version literals). README
+    UI-truth line flips. Zero PHP files touched.
+
 - **The OAuth sign-in callbacks now honor the cookie-policy levers (w28L1
   round-2, DD M2).** With `auth.cookie.enabled=false` the GitHub and OIDC
   browser callbacks no longer attach the `phlix_session`/`phlix_refresh`

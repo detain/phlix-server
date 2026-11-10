@@ -1161,7 +1161,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // CookiePolicyWiringGuardTest.php and tests/Unit/Server/Http/Controllers/
     // CookieDualEmitTest.php (the §7 browser/device/scheme matrix);
     // 2069 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2069;
+    // +1 2069→2070: w18L1-round2 adds tests/Unit/Server/Runtime/
+    // HttpWorkerQuotaWiringTest.php (SH-025 start.php wiring enforcement:
+    // the DD review EXECUTED reverting the detectCpuQuotaCores() argument at
+    // zero battery convictions — this pin is the missing enforcement leg);
+    // 2070 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2070;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

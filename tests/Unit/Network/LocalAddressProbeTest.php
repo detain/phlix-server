@@ -37,10 +37,19 @@ use ReflectionMethod;
  * over every candidate on 2026-11-10 and pinning what came out — including the
  * non-obvious rows: PHP's reserved ranges do NOT cover the TEST-NET
  * documentation blocks (203.0.113.9/198.51.100.7/192.0.2.1 all ACCEPT), CGNAT
- * 100.64.0.0/10 ACCEPTS, while the IPv6 documentation space 2001:db8::/32
- * REJECTS. An IPv6 zone id (`fe80::1%lo`) and a bracketed host (`[2001:db8::1]`)
- * are not valid address literals and reject; `0.0.0.0` and both loopback
- * classes reject. Re-measure, never re-reason, if this table ever goes red.
+ * 100.64.0.0/10 ACCEPTS. An IPv6 zone id (`fe80::1%lo`) and a bracketed host
+ * (`[2001:db8::1]`) are not valid address literals and reject; `0.0.0.0` and
+ * both loopback classes reject. Re-measure, never re-reason, if this table
+ * ever goes red.
+ *
+ * One row is deliberately NOT in the fixed table: the IPv6 documentation
+ * space 2001:db8::/32. PHP 8.3.6 (measured here) REJECTS it under
+ * FILTER_FLAG_NO_RES_RANGE while the CI runner's PHP line ACCEPTS it — the
+ * reserved-range list differs across patch levels, so pinning either verdict
+ * would be an environment flake (CI run 42795623411, 2026-11-10, is the
+ * measurement). The dedicated test below pins the scan to relay whatever the
+ * runtime's own filter decides for that literal, which still convicts a scan
+ * that swallows or swaps the flags.
  */
 class LocalAddressProbeTest extends TestCase
 {
@@ -71,7 +80,6 @@ class LocalAddressProbeTest extends TestCase
             'link-local-v6' => ['fe80::1', false],
             'v6-zone-id' => ['fe80::1%lo', false],
             'bracketed-host' => ['[2001:db8::1]', false],
-            'v6-doc-space' => ['2001:db8::1', false],
             'not-an-ip' => ['not-an-ip', false],
             'empty-string' => ['', false],
         ];
@@ -94,6 +102,29 @@ class LocalAddressProbeTest extends TestCase
         }
 
         $this->assertNull($result, $address . ' must not be treated as a usable local address');
+    }
+
+    /**
+     * The 2001:db8::/32 documentation space: accepted or rejected depending
+     * on the runtime's PHP patch level (see the class header). What is fixed
+     * is that the scan RELAYS the filter's own verdict — dropping or swapping
+     * either FILTER_FLAG_* arm makes this disagree on at least one line, and
+     * the version-stable rejections above carry the flag-strip convictions.
+     */
+    public function test_the_v6_documentation_space_relays_the_runtime_filter_verdict(): void
+    {
+        $address = '2001:db8::1';
+        $flags = FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        $usable = filter_var($address, FILTER_VALIDATE_IP, $flags) !== false;
+
+        $result = LocalAddressProbe::localInterfaceAddress([['unicast' => [['address' => $address]]]]);
+
+        if ($usable) {
+            $this->assertSame($address, $result, $address . ' is usable on this PHP line; the scan must relay that');
+            return;
+        }
+
+        $this->assertNull($result, $address . ' is filtered out on this PHP line; the scan must relay that');
     }
 
     public function test_the_scan_returns_the_first_acceptable_address_in_table_order(): void

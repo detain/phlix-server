@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Throwable;
@@ -80,6 +82,19 @@ use Workerman\Timer;
 class AdminRestartController
 {
     /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by the
+     * defensive 500 envelope of {@see restart()}. The curated arms ("PID file
+     * not found", "Signal send failed") keep their operator-actionable copy;
+     * an UNEXPECTED throw out of the signalling path is system copy, so it is
+     * logged server-side ({@see logFailure()}) and the wire carries this
+     * constant. Envelope SHAPE unchanged, no wire error codes added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while requesting the '
+        . 'server restart. The details were logged server-side.';
+
+    /**
      * Seconds to wait after responding before signalling the master.
      *
      * Long enough for the ack to be flushed to the client socket, short enough
@@ -98,6 +113,23 @@ class AdminRestartController
     public function __construct(string $pidFile)
     {
         $this->pidFile = $pidFile;
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
+        ]);
     }
 
     /**
@@ -170,10 +202,11 @@ class AdminRestartController
                 'message' => 'Restart signal sent',
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Restart failed', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Restart failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }

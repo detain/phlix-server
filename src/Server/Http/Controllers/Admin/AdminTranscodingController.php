@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\HardwareAccelerator;
 use Phlix\Server\Http\Request;
@@ -35,6 +37,19 @@ use Throwable;
  */
 final class AdminTranscodingController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by the
+     * 500 envelope {@see accelerators()} emits on probe failure. FfmpegRunner
+     * failures are system copy (process errors, absolute binary paths), so the
+     * class, message and origin are logged server-side ({@see logFailure()})
+     * and the wire carries this constant. Envelope SHAPE unchanged, no wire
+     * error codes added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while detecting '
+        . 'hardware accelerators. The details were logged server-side.';
+
     /** @var array<string, mixed> */
     private array $config;
 
@@ -80,9 +95,10 @@ final class AdminTranscodingController
                 'preferred_accelerator' => $preferred,
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to detect hardware accelerators', $e);
             return (new Response())->status(500)->json([
                 'error' => 'Failed to detect hardware accelerators',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -144,6 +160,23 @@ final class AdminTranscodingController
         return (new Response())->json([
             'tone_mapping_mode' => $mode,
             'prefer_hdr_output' => $preferHdr,
+        ]);
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
         ]);
     }
 }

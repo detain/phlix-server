@@ -362,12 +362,18 @@ final class AdminUpdatesControllerTest extends TestCase
         self::assertSame(503, $response->statusCode);
         $payload = $this->decode((string) $response->body);
         self::assertFalse($payload['success']);
+        self::assertStringNotContainsString('transport exploded', (string) $response->body);
         self::assertSame(
             AdminUpdatesController::SURVIVAL_TOKEN . ' core update check could not be dispatched',
             $payload['error'],
             'The dispatch-failure message must carry the token const — the literal lives once, in src.',
         );
         self::assertSame('update_check_dispatch_failed', $payload['code']);
+        self::assertSame(
+            'An internal error occurred while dispatching the core update check. The details were logged server-side.',
+            $payload['message'],
+            'SH-003 (M-SERVER-05 idiom): the throwing transport\'s text is logged, never echoed.',
+        );
         self::assertNull($this->db->storedValue(CoreUpdateCheckService::STATE_LATEST_VERSION));
     }
 

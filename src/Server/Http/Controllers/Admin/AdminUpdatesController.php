@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -63,6 +65,19 @@ final class AdminUpdatesController
      * not a comment.
      */
     public const SURVIVAL_TOKEN = 'S273CHECKX6P5';
+
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by the
+     * 503 dispatch-failure envelope of {@see check()}. The thrown transport
+     * text is system copy; it is logged server-side ({@see logFailure()}) and
+     * the wire carries this constant. The `error` field keeps the S273
+     * survival token (pinned by the era test) and the envelope SHAPE is
+     * unchanged; no wire error codes are added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while dispatching '
+        . 'the core update check. The details were logged server-side.';
 
     /**
      * Both parameters are REQUIRED and neither carries a default.
@@ -208,11 +223,13 @@ final class AdminUpdatesController
             // construction, which is the same guarantee the AC demands of a
             // transport FAILURE; a dispatch that never happened cannot blank
             // what a later transport error might.
+            self::logFailure('Core update check dispatch failed', $e);
+
             return (new Response())->status(503)->json([
                 'success' => false,
                 'error'   => self::SURVIVAL_TOKEN . ' core update check could not be dispatched',
                 'code'    => 'update_check_dispatch_failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
 
@@ -220,6 +237,23 @@ final class AdminUpdatesController
             'success' => true,
             'message' => 'Update check dispatched.',
             'data'    => $this->updates->status()->toArray(),
+        ]);
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
         ]);
     }
 

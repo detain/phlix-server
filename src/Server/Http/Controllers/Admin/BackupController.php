@@ -13,6 +13,8 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Admin\BackupManager;
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Throwable;
@@ -29,6 +31,22 @@ use Throwable;
  */
 class BackupController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by every
+     * 500 envelope this class emits. `BackupManager` failures are system copy —
+     * `mysqldump`/`tar` process errors, re-thrown `PDOException` text ("mysql
+     * import failed with code: N"), and absolute filesystem paths — so the wire
+     * carries this constant instead of {@see \Throwable::getMessage()}. The
+     * exception's class, message and origin are logged server-side
+     * ({@see logFailure()}). The envelope SHAPE is unchanged
+     * (`{success:false, error:<per-arm label>, message:<this constant>}`) and no
+     * wire error codes are added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while handling the backup request. '
+        . 'The details were logged server-side.';
+
     private BackupManager $backupManager;
 
     /**
@@ -70,10 +88,11 @@ class BackupController
                 'data' => $result,
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Backup creation failed', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Backup creation failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -98,10 +117,11 @@ class BackupController
                 'count' => count($backups),
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to list backups', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Failed to list backups',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -141,10 +161,11 @@ class BackupController
                 'message' => 'Backup deleted successfully',
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to delete backup', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Failed to delete backup',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -185,10 +206,11 @@ class BackupController
                 'message' => $result->message,
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Restore failed', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Restore failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -229,10 +251,11 @@ class BackupController
                 'message' => 'Backup uploaded to S3 successfully',
             ]);
         } catch (Throwable $e) {
+            self::logFailure('S3 upload failed', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'S3 upload failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -269,10 +292,11 @@ class BackupController
                 ],
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to get schedule', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Failed to get schedule',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -364,10 +388,11 @@ class BackupController
                 ],
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to update schedule', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error' => 'Failed to update schedule',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -393,5 +418,21 @@ class BackupController
         $backupManager = new BackupManager($db);
 
         return new self($backupManager);
+    }
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
+        ]);
     }
 }

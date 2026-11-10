@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Ldap\Controller;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\Ldap\Plugin;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -59,6 +61,17 @@ use Phlix\Server\Http\Response;
  */
 final class LdapAdminController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by the
+     * connection-test 500-envelope arm. LDAP library exceptions embed server
+     * URIs and bind DNs; the class, message and origin are logged server-side
+     * ({@see logFailure()}) and the wire carries this constant. Envelope SHAPE
+     * unchanged, no wire error codes added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'The LDAP connection test failed to complete. '
+        . 'The details were logged server-side.';
     /** Port used when none is stored and none is supplied. */
     public const int DEFAULT_PORT = 389;
 
@@ -368,10 +381,11 @@ final class LdapAdminController
 
             return (new Response())->json($result);
         } catch (\Exception $e) {
+            self::logFailure('LDAP admin connection test failed', $e);
             return (new Response())->json([
                 'success' => false,
                 'error' => 'connection_failed',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -393,5 +407,22 @@ final class LdapAdminController
         ];
 
         return (new Response())->json(['schema' => $schema]);
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string     $event Log event label (the per-arm copy).
+     * @param \Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, \Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
+        ]);
     }
 }

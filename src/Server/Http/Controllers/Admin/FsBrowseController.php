@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Throwable;
@@ -54,6 +56,17 @@ use Throwable;
  */
 final class FsBrowseController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by the
+     * 500 envelope {@see browse()} emits on an unexpected failure. Filesystem
+     * errors carry absolute paths; the class, message and origin are logged
+     * server-side ({@see logFailure()}) and the wire carries this constant.
+     * Envelope SHAPE unchanged, no wire error codes added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while browsing the '
+        . 'filesystem. The details were logged server-side.';
     /**
      * Canonicalised allowed roots (no trailing slash). Each entry is the
      * {@see realpath()} of a configured `browse_roots` path; roots that do not
@@ -161,10 +174,11 @@ final class FsBrowseController
                 ],
             ]);
         } catch (Throwable $e) {
+            self::logFailure('Failed to browse filesystem', $e);
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'Failed to browse filesystem',
-                'message' => $e->getMessage(),
+                'message' => self::GENERIC_FAILURE_MESSAGE,
             ]);
         }
     }
@@ -222,6 +236,23 @@ final class FsBrowseController
         usort($entries, static fn (array $a, array $b): int => strcmp($a['name'], $b['name']));
 
         return $entries;
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
+        ]);
     }
 
     /**

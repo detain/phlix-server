@@ -102,6 +102,29 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Nine admin controllers no longer echo raw exception text onto the wire —
+  for the backup family that text was process output, re-thrown `PDOException`
+  statements, and absolute filesystem paths (review server__copywriter #1,
+  SH-003, M-SERVER-05 idiom).** `BackupController` (all seven 500 arms),
+  `MaintenanceController` (the shared `failure()` helper behind four arms),
+  `AdminWebhooksController` (the shared `errorResponse()` helper),
+  `AdminTranscodingController` (the accelerator-probe arm),
+  `AdminUpdatesController` (the 503 dispatch-failure arm), `FsBrowseController`,
+  `AdminRestartController` (the defensive `restart()` arm), `LdapAdminController`
+  (the connection-test arm) and `PluginAdminController` (the install arm) now
+  carry a fixed operator-facing message per controller and log the exception
+  class, message and origin to the HTTP log channel instead. Envelope shapes,
+  per-arm `error` labels, statuses and the wire code set are byte-identical —
+  the S273 survival token still rides `AdminUpdatesController`'s `error` field,
+  and `plugin.install.failed` keeps its `code` and structured `fields`. The
+  `MaintenanceController` helper's pre-SH-003 docblock that deliberately
+  surfaced curated task copy is rewritten to the new law (its one pin,
+  `MaintenanceControllerTest`, flipped in the same commit); the two
+  `LdapConnection::testConnection()` catch arms stay as designed — they echo
+  only admin-submitted connection parameters. A new law test covers both the
+  behaviourally reachable arms and, structurally, every cured class.
+  [SH-003 / server__copywriter#1, w22L2 2026-11-10]
+
 - **Insecure auth cookies under `PHLIX_ENV=production` now speak up.** The
   plain-HTTP development opt-out (`PHLIX_COOKIE_INSECURE=1` or its stored
   `auth.cookie.insecure` twin) drops the `Secure` attribute from auth

@@ -328,8 +328,20 @@ final class PluginAdminController
         try {
             $manifest = $this->loader->install($url, $sha, $ref);
         } catch (PluginInstallException $e) {
+            // SH-003 (M-SERVER-05 idiom): PluginInstallException text is system
+            // copy — HttpInstaller throws embed absolute staging paths and
+            // upstream source URLs. The class, message and origin go to the
+            // HTTP log; the wire keeps the byte-identical envelope shape with
+            // fixed copy (`code` and structured `fields` are unchanged — no
+            // wire error codes added, contract law).
+            LoggerFactory::get(LogChannels::HTTP)->error('Plugin installation failed', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
             $body = [
-                'error' => $e->getMessage(),
+                'error' => 'Plugin installation failed.',
                 'code'  => 'plugin.install.failed',
             ];
             $validation = $e->validationErrors();

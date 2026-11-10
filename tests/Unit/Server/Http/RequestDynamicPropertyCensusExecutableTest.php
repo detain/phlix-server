@@ -1177,7 +1177,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // JwtClaimsServerHalfTest.php (LW-079-a validateClaims DTO view: both
     // token types, verification-first unforged arms, the aud-unchanged-at-
     // mint pin); 2073 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2073;
+    // +1 2073→2074: w22L2 SH-003 adds tests/Unit/Server/Http/Controllers/
+    // Admin/ExceptionMessageContainmentTest.php (raw-exception-copy containment:
+    // sentinel-driven legs for the unit-reachable admin 5xx arms, token-walked
+    // structural leg over the nine cured classes, per-class generic-copy pins);
+    // 2074 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2074;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1639,7 +1644,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +1 1203→1204 (w28L1 R2, DD M2): the OIDC cookie harness seeds
     // $request->query (whole-property write on a recognized root). Zero src/
     // writes added. Measured from the phpunit red (1204), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1204;
+    // +5 1204→1209 (w22L2 SH-003): the ExceptionMessageContainmentTest request()
+    // harness seeds $request->method/path/userId/body/query (five whole-property
+    // writes on a recognized root, one helper serving every sentinel leg). Zero
+    // src/ writes added. Measured from the phpunit red (1209), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1209;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

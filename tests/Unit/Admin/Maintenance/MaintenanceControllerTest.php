@@ -208,9 +208,13 @@ final class MaintenanceControllerTest extends TestCase
     }
 
     /**
-     * A throwing synchronous task answers 500 with the MESSAGE, not a generic
-     * string: on an admin-only endpoint "`media_items` reports zero rows" is
-     * exactly what the operator needs in order to act.
+     * A throwing synchronous task answers 500 with a FIXED operational message
+     * — never the exception text. SH-003 (M-SERVER-05 idiom): the task arms
+     * also forward raw DB failures from inside task code, so the wire carries
+     * the constant while the class, message and origin go to the HTTP log.
+     * The per-arm `error` label is unchanged; no wire error codes are added.
+     * (The pre-SH-003 law surfaced "`media_items` reports zero rows" style
+     * curated copy here; that detail moved to the log channel.)
      */
     public function test_a_failing_synchronous_task_answers_500_with_the_reason(): void
     {
@@ -221,7 +225,11 @@ final class MaintenanceControllerTest extends TestCase
 
         self::assertSame(500, $response->statusCode);
         self::assertFalse($this->body($response)['success']);
-        self::assertSame('`users` reports zero rows', $this->body($response)['message']);
+        self::assertSame(
+            'An internal error occurred while handling the maintenance request. The details were logged server-side.',
+            $this->body($response)['message'],
+        );
+        self::assertStringNotContainsString('zero rows', $response->body);
     }
 
     // -----------------------------------------------------------------

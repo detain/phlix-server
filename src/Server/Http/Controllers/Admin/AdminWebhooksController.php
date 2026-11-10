@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -44,6 +46,19 @@ use Throwable;
  */
 final class AdminWebhooksController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by every
+     * 500 envelope this class emits ({@see errorResponse()}). Service failures
+     * reach the wire through that helper as raw exception text — including
+     * re-thrown `PDOException` statements — so they are logged server-side
+     * ({@see logFailure()}) and the wire carries this constant. Envelope SHAPE
+     * unchanged, no wire error codes added — contract law.
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while handling the '
+        . 'webhook request. The details were logged server-side.';
+
     /**
      * @param WebhookService $webhookService Webhook service for operations
      */
@@ -324,19 +339,39 @@ final class AdminWebhooksController
     }
 
     /**
-     * Create an error response with exception details.
+     * Create the 500 error response. SH-003: the raw message is logged, the
+     * wire carries {@see GENERIC_FAILURE_MESSAGE}.
      *
-     * @param string   $context Context description
-     * @param Throwable $e       Exception
+     * @param string    $context Per-arm error label (unchanged wire copy).
+     * @param Throwable $e       The caught failure.
      *
      * @return Response 500 error response
      */
     private function errorResponse(string $context, Throwable $e): Response
     {
+        self::logFailure($context, $e);
+
         return (new Response())->status(500)->json([
             'success' => false,
             'error' => $context,
-            'message' => $e->getMessage(),
+            'message' => self::GENERIC_FAILURE_MESSAGE,
+        ]);
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
         ]);
     }
 }

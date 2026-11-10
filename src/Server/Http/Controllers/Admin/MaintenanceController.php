@@ -14,6 +14,8 @@ namespace Phlix\Server\Http\Controllers\Admin;
 use Phlix\Admin\Maintenance\MaintenanceJobRepository;
 use Phlix\Admin\Maintenance\MaintenanceTask;
 use Phlix\Admin\Maintenance\MaintenanceTaskRunner;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -64,6 +66,15 @@ use Throwable;
  */
 class MaintenanceController
 {
+    /**
+     * SH-003 (M-SERVER-05 idiom): the operator-facing `message` carried by every
+     * 500 envelope this class emits ({@see failure()}).
+     */
+    // Concatenated to keep the PSR-12 warning-strict src gate happy; the
+    // runtime value is one flat string (pinned verbatim by the law test).
+    private const GENERIC_FAILURE_MESSAGE = 'An internal error occurred while handling the '
+        . 'maintenance request. The details were logged server-side.';
+
     /**
      * @param MaintenanceJobRepository $jobs       Queue store for the async tasks.
      * @param MaintenanceTaskRunner    $runner     Executes a synchronous task inline.
@@ -353,18 +364,44 @@ class MaintenanceController
     }
 
     /**
-     * The 500 shape. The exception MESSAGE is surfaced deliberately: these are
-     * admin-only endpoints whose failures ("`media_items` reports zero rows",
-     * "TranscodeManager is unavailable") are exactly what the operator needs in
-     * order to act, and hiding them behind a generic string is what made the
-     * DLNA and plugin failures in this repo so hard to diagnose.
+     * The 500 shape. SH-003 (M-SERVER-05 idiom): the exception MESSAGE is no
+     * longer surfaced. Every arm routes its Throwable through this helper —
+     * the repository arms carry re-thrown `PDOException` text (which begins
+     * `'SQL:' . <the full statement>`), and the synchronous-task arm, while it
+     * mostly carries curated operator copy from {@see MaintenanceTaskRunner}
+     * ("`media_items` reports zero rows"), also forwards any failure the task
+     * code itself raises (a DB error mid-task lands here raw). A single fixed
+     * message per helper, with the class, message and origin logged
+     * server-side ({@see logFailure()}), replaces both; the earlier
+     * operator-visibility ruling is honored through the HTTP log channel.
+     * The envelope SHAPE is unchanged (`{success:false, error:<per-arm label>,
+     * message:<this constant>}`) and no wire error codes are added — contract law.
      */
     private function failure(string $error, Throwable $e): Response
     {
+        self::logFailure($error, $e);
+
         return (new Response())->status(500)->json([
             'success' => false,
             'error' => $error,
-            'message' => $e->getMessage(),
+            'message' => self::GENERIC_FAILURE_MESSAGE,
+        ]);
+    }
+
+    /**
+     * SH-003: full exception detail goes to the HTTP log channel, never to the
+     * wire. Mirrors AdminSettingsController::logFailure() (M-SERVER-05).
+     *
+     * @param string    $event Log event label (the per-arm copy).
+     * @param Throwable $e     The caught failure.
+     */
+    private static function logFailure(string $event, Throwable $e): void
+    {
+        LoggerFactory::get(LogChannels::HTTP)->error($event, [
+            'exception' => $e::class,
+            'message'   => $e->getMessage(),
+            'file'      => $e->getFile(),
+            'line'      => $e->getLine(),
         ]);
     }
 }

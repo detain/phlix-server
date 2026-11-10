@@ -570,6 +570,64 @@ class AuthController
     }
 
     /**
+     * JSON logout (CP-004, cookie design §2.2) — the server twin of the hub's
+     * shipped `logoutJson` (506110fa), matched on SEMANTICS, not literals.
+     *
+     * The design law verbatim: "today only the form-path logout clears
+     * cookies; the JSON route must clearCookie both + keep the existing
+     * watermark bump." The hosted SPA has POSTed `/api/v1/auth/logout`
+     * since @phlix/ui v0.99.26 (its CP-016 best-effort leg) while the route
+     * did not exist — every cookie logout 404'd and the browser jar stayed
+     * populated, which is exactly the defect this row cures.
+     *
+     * Every accepted arm of the answer:
+     *  - 204 No Content, ZERO body bytes (the ui never parses the reply; the
+     *    302 the form route answers would have been a redirect the JSON
+     *    fetch follows into an HTML page — the hub's 204 shape is kept,
+     *    the clear rides as additive Set-Cookie headers only);
+     *  - when an identity is attached, the M-1 server-side teardown runs
+     *    FIRST: per-user JWT revocation watermark bump + all device-session
+     *    rows ended ({@see AuthManager::logout()}). The hub additionally
+     *    revokes the presented refresh jti through its key store; the server
+     *    has no key store — the watermark IS the server's ratified
+     *    revocation, and that is the semantics-not-literals half of the
+     *    twin law (the design's "keep the existing watermark bump");
+     *  - BOTH cookie names clear on every accepted logout, unconditionally —
+     *    deliberately NOT gated by the `auth.cookie.enabled` master switch
+     *    (§4.2 re-introduction law: revocation hygiene, not issuance; the
+     *    form route has always behaved this way);
+     *  - an anonymous request clears the jar and bumps nothing (there is no
+     *    attached identity to revoke — the never() arm is pinned in tests).
+     *
+     * CSRF is structural, not local: a cookie-carrying POST reaching this
+     * handler already survived the HttpHandler dispatch gate
+     * (isCookieAuthenticated → validateCsrfOrigin, belt included since
+     * CP-009), while a bearer or body-token logout carries no ambient
+     * credential to forge. A cookie logout from a foreign origin therefore
+     * dies as the ratified 403 `csrf.invalid_origin` frame BEFORE this
+     * method runs — no revoke strike, no Set-Cookie, not a logout.
+     *
+     * @param Request               $request The HTTP request.
+     * @param array<string, string> $params  Path parameters (unused).
+     *
+     * @return Response 204 with the additive expiring-cookie pair.
+     *
+     * @since 1.3.0
+     */
+    public function logoutJson(Request $request, array $params): Response
+    {
+        $userId = $request->userId;
+        if (is_string($userId) && $userId !== '') {
+            $this->authManager->logout($userId, '', UserLoggedOut::REASON_EXPLICIT);
+        }
+
+        return (new Response())
+            ->noContent()
+            ->clearCookie(self::SESSION_COOKIE)
+            ->clearCookie(self::REFRESH_COOKIE);
+    }
+
+    /**
      * Detect whether a request came from a browser form submit (vs.
      * a JSON API client). The route alias under `/auth/*` is the
      * canonical browser entry; `Content-Type: application/x-www-form-urlencoded`

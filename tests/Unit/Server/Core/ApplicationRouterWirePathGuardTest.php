@@ -510,6 +510,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'POST /api/v1/auth/quick-connect/initiate -> QuickConnectController::initiate []',
         'POST /api/v1/auth/quick-connect/{code}/approve -> QuickConnectController::approve [AuthMiddleware]',
         'POST /api/v1/auth/quick-connect/{code}/token -> QuickConnectController::token []',
+        'POST /api/v1/auth/logout -> AuthController::logoutJson []',
         'POST /api/v1/auth/refresh -> AuthController::refresh []',
         'POST /api/v1/auth/register -> AuthController::register []',
         'POST /api/v1/auth/webauthn/login/options -> WebAuthnController::startAuthentication []',

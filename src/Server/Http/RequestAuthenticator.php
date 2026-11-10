@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Server\Http\Controllers\AuthController;
 
 /**
@@ -170,10 +171,13 @@ final class RequestAuthenticator
     }
 
     /**
-     * The same-site header law WITHOUT the method gate: Origin/Referer (when
-     * present) must name this server's host, a request presenting neither is
-     * refused fail-closed, and the literal `null` Origin is rejected outright
-     * (M-SERVER-76). {@see validateCsrfOrigin()} is this method behind the
+     * The same-site header law WITHOUT the method gate: the full arm order
+     * (Sec-Fetch-Site belt, both-absent refusal, literal-`null` Origin
+     * refusal, Referer/Origin exact-host checks) lives in the SSOT
+     * {@see CookiePolicy::stateChangingRequestOriginAllowed()} — CP-009
+     * relocated it there as the server twin of the hub's ratified law, so
+     * the HTTP gate and the WS cookie carrier (CP-006) read ONE
+     * implementation. {@see validateCsrfOrigin()} is this method behind the
      * state-changing-methods guard.
      *
      * review minor 21: `GET /auth/logout` is state-changing IN EFFECT — a
@@ -190,119 +194,11 @@ final class RequestAuthenticator
      */
     public function validateSameSiteOrigin(Request $request): bool
     {
-        $origin = $request->getHeader('Origin');
-        $referer = $request->getHeader('Referer');
-
-        // If neither header is present, reject — legitimate browsers always
-        // send at least one for state-changing requests.
-        if ($origin === null && $referer === null) {
-            return false;
-        }
-
-        // minors M-SERVER-76 (W-min109): a literal 'null' Origin is the
-        // opaque-origin marker (sandboxed iframes and a few privacy contexts)
-        // — a state-changing cookie-authenticated request that cannot name
-        // its origin is refused outright. The old law SKIPPED the Origin leg
-        // for 'null', which meant 'Origin: null' arriving WITHOUT a Referer
-        // reached the accept tail unopposed; same-site protection then rested
-        // entirely on a header the client never sent. Refusing here is the
-        // fail-closed tightening the review asked for; the consequence (such
-        // iframe-nested writes stop working) is disclosed in the changelog.
-        if ($origin === 'null') {
-            return false;
-        }
-
-        // Parse the server's host header into host and port components.
-        $serverHost = $request->getHeader('Host') ?? '';
-        $serverHostParts = self::parseHostHeader($serverHost);
-
-        // Validate the Referer header if present.
-        if ($referer !== null) {
-            $refererParts = parse_url($referer);
-            if (!is_array($refererParts)) {
-                return false;
-            }
-            $refererHost = $refererParts['host'] ?? '';
-            $refererPort = isset($refererParts['port']) ? (int) $refererParts['port'] : null;
-
-            // Exact host match required (prevents evil-example.com matching example.com).
-            if (!$this->hostsMatch($refererHost, $refererPort, $serverHostParts)) {
-                return false;
-            }
-        }
-
-        // Validate the Origin header if present. ('null' was already refused
-        // above; the empty string keeps its skip — M-SERVER-76 names only the
-        // literal 'null'.)
-        if ($origin !== null && $origin !== '') {
-            $originParts = parse_url($origin);
-            if (!is_array($originParts)) {
-                return false;
-            }
-            $originHost = $originParts['host'] ?? '';
-            $originPort = isset($originParts['port']) ? (int) $originParts['port'] : null;
-
-            // Exact host match required (prevents evil-example.com matching example.com).
-            if (!$this->hostsMatch($originHost, $originPort, $serverHostParts)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Parse a Host header value into its host and port components.
-     *
-     * @param string $hostHeader The Host header value (e.g., "example.com" or "example.com:8080").
-     *
-     * @return array{host: string, port: int|null} The parsed host and port.
-     */
-    private static function parseHostHeader(string $hostHeader): array
-    {
-        $parts = parse_url('http://' . $hostHeader);
-        if (!is_array($parts)) {
-            return ['host' => $hostHeader, 'port' => null];
-        }
-        return [
-            'host' => $parts['host'] ?? $hostHeader,
-            'port' => isset($parts['port']) ? (int) $parts['port'] : null,
-        ];
-    }
-
-    /**
-     * Check if an origin host matches the server host exactly.
-     *
-     * The host comparison is exact — "example.com.evil.com" does NOT match
-     * "example.com" — preventing suffix-bypass attacks. Port handling allows
-     * either both to have no port, or both to have the same port.
-     *
-     * @param string $originHost The origin/referer host.
-     * @param int|null $originPort The origin/referer port, or null if not specified.
-     * @param array{host: string, port: int|null} $serverHostParts Parsed server host parts.
-     *
-     * @return bool True if hosts match exactly.
-     */
-    private function hostsMatch(string $originHost, ?int $originPort, array $serverHostParts): bool
-    {
-        // Exact host comparison — no suffix matching.
-        if ($originHost !== $serverHostParts['host']) {
-            return false;
-        }
-
-        // Port must either both be specified and match, or both be absent.
-        $originHasPort = $originPort !== null;
-        $serverHasPort = $serverHostParts['port'] !== null;
-
-        if ($originHasPort !== $serverHasPort) {
-            // One has a port, the other doesn't — reject.
-            return false;
-        }
-
-        if ($originHasPort && $originPort !== $serverHostParts['port']) {
-            return false;
-        }
-
-        return true;
+        return CookiePolicy::stateChangingRequestOriginAllowed(
+            $request->getHeader('Origin'),
+            $request->getHeader('Referer'),
+            $request->getHeader('Host'),
+            $request->getHeader('Sec-Fetch-Site')
+        );
     }
 }

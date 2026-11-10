@@ -535,8 +535,10 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // (alias /api/v1/me/history — one new template; the canonical
         // /api/v1/users/me/history GET joins an existing one) — re-measured here; 351
         // after xrepo__server-ui M3 registered GET /api/v1/servers/{id} (the admin
-        // MetricsPage detail card) — re-measured from this phpunit red.
-        $this->assertCount(351, $doc['paths'], 'the served surface is 351 distinct path templates');
+        // MetricsPage detail card) — re-measured from this phpunit red; 352 after
+        // CP-004 registered POST /api/v1/auth/logout (the JSON companion the shipped
+        // ui has been posting into a 404) — re-measured from this phpunit red.
+        $this->assertCount(352, $doc['paths'], 'the served surface is 352 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`

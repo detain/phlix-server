@@ -5332,6 +5332,28 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/logout":
+    post:
+      operationId: "post_api_v1_auth_logout"
+      tags: ["Authentication"]
+      summary: "Logout"
+      description: >-
+        Logout (post /api/v1/auth/logout). JSON companion of the form-path
+        /auth/logout, answered 204 with no body. Every accepted call clears
+        the phlix_session and phlix_refresh cookies via expiry Set-Cookie
+        headers, gated by nothing else; a call attached to a user additionally
+        bumps the server-side token watermark, invalidating every issued
+        token. A cookie-bearing call whose Origin/Referer fails the
+        same-site law (including the Sec-Fetch-Site cross-site belt) is
+        refused by the CSRF gate with 403 and no side effects; bearer calls
+        never ride that gate.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "204":
+          description: "Logged out; the cookie jar is cleared; no body."
+        "403":
+          $ref: "#/components/responses/Forbidden"
   "/api/v1/auth/refresh":
     post:
       operationId: "post_api_v1_auth_refresh"

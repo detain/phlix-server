@@ -102,6 +102,59 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **A logged-out hosted session's cookie jar now dies with the logout, and the
+  CSRF origin law gained its Sec-Fetch-Site belt — closing the cross-host
+  drift row.**
+  - *JSON logout.* `POST /api/v1/auth/logout` — the route every browser
+    logout of the hosted SPA has been posting since the shipped `@phlix/ui`
+    cookie-custody leg — now EXISTS (it 404'd: only the form route
+    `/auth/logout` was registered), so the `phlix_session`/`phlix_refresh`
+    jar no longer survives a browser logout until the JWT TTL. `logoutJson`
+    answers 204 with ZERO body bytes on every accepted arm (the jar clear
+    rides additive `Set-Cookie`; the shipped ui parses nothing back), clears
+    BOTH names unconditionally — issuance-switch-independent, per the
+    re-introduction law that clearing is hygiene, not issuance — and keeps
+    the server's real teardown on the attached arm (the M-1
+    `tokens_not_valid_after` watermark bump + `endAllUserSessions`); the
+    anonymous arm never touches the watermark. Both halves pinned, plus the
+    form-path 302 non-regression leg. Semantics twin of the hub's ratified
+    JSON logout (watermark revocation stands in for the hub's jti store —
+    semantics, not literals). CSRF on this arm is structural: cookie-carried
+    POSTs pass the Origin law (now belt-inclusive) BEFORE the handler runs —
+    a foreign-origin cookie logout 403s with no revocation strike and no
+    `Set-Cookie`; bearer-lineage logouts are never gated. Router, wire-
+    manifest guard, and the openapi operation all rotated in the same commit
+    (spec prose from real behavior only; the spec-currency count re-measured
+    from its own red). New suite `CookieLogoutJsonTest` (5 legs — four red-
+    first against the parent where the method did not exist).
+    (CP-004; COOKIE-DESIGN §2.2)
+  - *Sec-Fetch-Site belt.* The server twin of the hub's shipped belt — the
+    hub commit that added it literally recorded that the server had not grown
+    one (one-directionally stricter drift). The state-changing request-origin
+    law moved to `CookiePolicy::stateChangingRequestOriginAllowed` (SSOT,
+    mirroring the hub's placement): the belt acts FIRST — `cross-site`
+    (trimmed, case-folded) is refused even when Origin and Referer fully
+    match — while every other token (`same-origin`, `none`, `cross-origin`,
+    junk, empty) leaves the verdict to the existing arms and header ABSENCE
+    stays inert for native clients. The mirrored arms are preserved
+    verbatim: both-absent and literal-`'null'` refusals, fail-closed
+    Host/parse arms, raw host equality with both-or-neither ports, and the
+    hub's psalm-cured port reading (no redundant int casts).
+    `RequestAuthenticator::validateSameSiteOrigin` now delegates, and the WS
+    cookie carrier of the same wave reads through the same single source.
+    13 new legs: belt position-purity, inert-when-absent, per-token provider
+    (no broadened match), both-absent non-rescue, and two dispatch-gate pins
+    — cookie POST refused / bearer POST immunised — under the belt.
+    (CP-009; COOKIE-DESIGN §2.5)
+  - *Same-commit guard rotations.* A registered route is a line-number and
+    inventory event: the README route table's ten cited registration lines,
+    the composed-route inventory artifact (route, total, and POST histogram),
+    the wire-guard manifest tuple, the OpenAPI currency count pin, and the
+    declared-property census denominators (file count and the Request-rooted
+    read/write sites the new suites and handler touch) were ALL re-anchored
+    from this commit's own measured reds — no pin moved on trust, each
+    rotation rode a named assertion failure.
+
 - **Nine admin controllers no longer echo raw exception text onto the wire —
   for the backup family that text was process output, re-thrown `PDOException`
   statements, and absolute filesystem paths (review server__copywriter #1,

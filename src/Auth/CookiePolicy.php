@@ -313,4 +313,147 @@ final class CookiePolicy
             ? substr($host, 1, -1)
             : $host;
     }
+
+    /**
+     * The strict same-site law for STATE-CHANGING requests (CP-009, cookie
+     * design §2.5) — the server twin of the hub's ratified
+     * `stateChangingRequestOriginAllowed()` (hub 6a3d4b76 grew the belt
+     * first; this closes the owner-reel's one-directional-drift row).
+     *
+     * Placement note the design made explicit: the issuance-side
+     * {@see self::originIsSameSite()} above is deliberately LENIENT
+     * (lowercased hosts, default-port normalization, http(s)-scheme
+     * whitelisting) because it only LABELS a cookie; this law guards what a
+     * carried cookie can DO and is deliberately STRICT — raw byte-exact host
+     * comparison, both-or-neither ports with no default normalization, and a
+     * request presenting neither Origin nor Referer is refused fail-closed.
+     * Do not merge the two.
+     *
+     * The `Sec-Fetch-Site: cross-site` belt is arm (1), ahead of every header
+     * arm: Origin/Referer can be omitted or negotiated by an attacker, but a
+     * browser on a cross-site page reports `cross-site` truthfully and cannot
+     * be spoofed from page script. Any OTHER value (same-origin, same-site,
+     * none, junk) leaves the verdict to the arms — the belt rejects only the
+     * exact promise "cross-site", never its neighborhood.
+     *
+     * @param string|null $origin       Raw Origin header.
+     * @param string|null $referer      Raw Referer header.
+     * @param string|null $host         Raw Host header.
+     * @param string|null $secFetchSite Raw Sec-Fetch-Site header.
+     *
+     * @return bool True when a cookie-carrying state-changing request may proceed.
+     *
+     * @since 1.3.0
+     */
+    public static function stateChangingRequestOriginAllowed(
+        ?string $origin,
+        ?string $referer,
+        ?string $host,
+        ?string $secFetchSite
+    ): bool {
+        // (1) CP-009 belt (hub arm order mirrored exactly: belt first).
+        if ($secFetchSite !== null && strtolower(trim($secFetchSite)) === 'cross-site') {
+            return false;
+        }
+
+        // (2) Neither header present — refuse, fail-closed (ratified server
+        // law; native clients ride the bearer carrier, never this one).
+        if ($origin === null && $referer === null) {
+            return false;
+        }
+
+        // (3) M-SERVER-76 (W-min109): a literal 'null' Origin is the
+        // opaque-origin marker (sandboxed iframes and a few privacy contexts)
+        // — a state-changing cookie-authenticated request that cannot name
+        // its origin is refused outright. The old law SKIPPED the Origin leg
+        // for 'null', which meant 'Origin: null' arriving WITHOUT a Referer
+        // reached the accept tail unopposed; same-site protection then rested
+        // entirely on a header the client never sent. Refusing here is the
+        // fail-closed tightening the review asked for; the consequence (such
+        // iframe-nested writes stop working) is disclosed in the changelog.
+        if ($origin === 'null') {
+            return false;
+        }
+
+        // (4) Server host parts (unparseable Host falls back to the raw value
+        // as the host — matches nothing a browser can send: fail-CLOSED).
+        $serverHostParts = self::stateChangingHostParts($host ?? '');
+
+        // (5) Referer arm: an unparseable Referer is refused outright, then
+        // the exact-host + both-or-neither-port law applies.
+        if ($referer !== null) {
+            $refererParts = parse_url($referer);
+            if (!is_array($refererParts)) {
+                return false;
+            }
+            $refererHost = $refererParts['host'] ?? '';
+            $refererPort = $refererParts['port'] ?? null;
+
+            if (!self::stateChangingHostsMatch($refererHost, $refererPort, $serverHostParts)) {
+                return false;
+            }
+        }
+
+        // (6) Origin arm ('null' refused above; the empty string keeps its
+        // skip — M-SERVER-76 names only the literal 'null').
+        if ($origin !== null && $origin !== '') {
+            $originParts = parse_url($origin);
+            if (!is_array($originParts)) {
+                return false;
+            }
+            $originHost = $originParts['host'] ?? '';
+            $originPort = $originParts['port'] ?? null;
+
+            if (!self::stateChangingHostsMatch($originHost, $originPort, $serverHostParts)) {
+                return false;
+            }
+        }
+
+        // (7) Every present arm agreed.
+        return true;
+    }
+
+    /**
+     * Parse a Host header into host/port for the state-changing law.
+     *
+     * @return array{host: string, port: int|null}
+     */
+    private static function stateChangingHostParts(string $hostHeader): array
+    {
+        $parts = parse_url('http://' . $hostHeader);
+        if (!is_array($parts)) {
+            return ['host' => $hostHeader, 'port' => null];
+        }
+
+        return [
+            'host' => $parts['host'] ?? $hostHeader,
+            'port' => $parts['port'] ?? null,
+        ];
+    }
+
+    /**
+     * Byte-exact host equality plus the both-or-neither port rule — no
+     * suffix matching ("evil-example.com" never matches "example.com") and no
+     * default-port normalization ("host:80" never impersonates bare "host").
+     *
+     * @param array{host: string, port: int|null} $serverHostParts
+     */
+    private static function stateChangingHostsMatch(
+        string $originHost,
+        ?int $originPort,
+        array $serverHostParts
+    ): bool {
+        if ($originHost !== $serverHostParts['host']) {
+            return false;
+        }
+
+        $originHasPort = $originPort !== null;
+        $serverHasPort = $serverHostParts['port'] !== null;
+
+        if ($originHasPort !== $serverHasPort) {
+            return false;
+        }
+
+        return !$originHasPort || $originPort === $serverHostParts['port'];
+    }
 }

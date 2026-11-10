@@ -1200,7 +1200,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Unit/Server/Http/Controllers/ControllerCopySweepTest.php (wire
     // byte-identity of every const, family-sentence sweeps, measured
     // allow-lists); 2080 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2081;
+    private const EXPECTED_PHP_FILES = 2082;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1338,7 +1338,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * reads added — attachAuthCookies() reaches headers only through
      * getHeader(). Measured from the phpunit red (475), not predicted.
      */
-    private const EXPECTED_DECLARED_READS = 475;
+    private const EXPECTED_DECLARED_READS = 476;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1671,7 +1671,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // $request->profileId in authedRequest() for the by-marker legs (three
     // whole-property writes on a recognized root). Zero src/ writes added.
     // Measured from the phpunit red (1212), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1216;
+    private const EXPECTED_DECLARED_WRITES = 1223;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

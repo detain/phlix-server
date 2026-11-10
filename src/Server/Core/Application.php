@@ -445,6 +445,10 @@ class Application
         $this->router->post('/api/v1/auth/register', [$authController, 'register']);
         $this->router->post('/api/v1/auth/login', [$authController, 'login']);
         $this->router->post('/api/v1/auth/refresh', [$authController, 'refresh']);
+        // CP-004 (cookie design §2.2): the JSON twin of the form logout the
+        // hosted SPA has been POSTing since @phlix/ui v0.99.26 — 204, jar
+        // cleared on every accepted arm, watermark bump when attached.
+        $this->router->post('/api/v1/auth/logout', [$authController, 'logoutJson']);
         $this->router->get('/api/v1/auth/me', [$authController, 'me']);
 
         // Browser-form aliases for the login / register / refresh

@@ -340,14 +340,124 @@ final class RequestAuthenticatorTest extends TestCase
     public function testMalformedServerHostFailsSafe(): void
     {
         // A Host header with a non-numeric port makes parse_url() return false;
-        // parseHostHeader() then falls back to treating the whole string as the
-        // host, which cannot match a clean Origin host → rejected (fail-safe).
+        // the state-changing law's host parser (CookiePolicy::
+        // stateChangingHostParts()) then falls back to treating the whole
+        // string as the host, which cannot match a clean Origin host →
+        // rejected (fail-safe).
         $request = $this->request('POST', [
             'Host' => 'example.com:port',
             'Origin' => 'https://example.com',
         ]);
 
         self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    // --- CP-009: the Sec-Fetch-Site belt (cookie design §2.5) ---------------
+    //
+    // The belt is arm (1) of CookiePolicy::stateChangingRequestOriginAllowed,
+    // the server twin of the hub's ratified 6a3d4b76 guard. Every limb needs
+    // its OWN conviction (the estate was burned twice by guards whose arm
+    // order or null-handling no test could distinguish) — each leg below is
+    // arm-pure: the OTHER arms are legal, so only this limb decides.
+
+    public function testBeltRejectsCrossSiteDespiteFullyMatchingOrigin(): void
+    {
+        // Origin AND Referer both name the server exactly — every classic arm
+        // would pass. Only the belt can refuse this request; strip the belt
+        // arm and this leg goes red.
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Origin' => 'https://example.com',
+            'Referer' => 'https://example.com/page',
+            'Sec-Fetch-Site' => 'cross-site',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    public function testBeltTrimsAndLowercasesTheToken(): void
+    {
+        // Header tokens are case-insensitive and may carry padding — a belt
+        // doing bare `=== 'cross-site'` (no strtolower/trim) would wave
+        // ' CROSS-SITE ' through to the accept tail.
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Origin' => 'https://example.com',
+            'Sec-Fetch-Site' => ' CROSS-SITE ',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    public function testBeltRejectsAheadOfTheRefererArm(): void
+    {
+        // Referer-only request (no Origin) with an exact same-site Referer:
+        // if the belt were ordered AFTER the Referer check this leg would
+        // accept. Position is the law — belt first, exactly like the hub.
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Referer' => 'https://example.com/page',
+            'Sec-Fetch-Site' => 'cross-site',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    /**
+     * @dataProvider nonBeltSecFetchProvider
+     */
+    public function testNonBeltSecFetchValuesLeaveTheVerdictToTheArms(string $declared): void
+    {
+        // The belt rejects ONLY the exact promise 'cross-site'. A broadened
+        // belt (e.g. str_contains 'cross', or "any value other than
+        // same-origin/same-site") reddens here — notably on 'cross-origin',
+        // a real Chrome value for cross-origin POSTs that the arms must
+        // still judge on their own (and here they accept).
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Origin' => 'https://example.com',
+            'Sec-Fetch-Site' => $declared,
+        ]);
+
+        self::assertTrue($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function nonBeltSecFetchProvider(): array
+    {
+        return [
+            'same-origin' => ['same-origin'],
+            'same-site' => ['same-site'],
+            'none (explicit)' => ['none'],
+            'cross-origin (NOT the belt value)' => ['cross-origin'],
+            'junk' => ['undefined-token'],
+            'empty header' => [''],
+        ];
+    }
+
+    public function testBeltDoesNotRescueTheBothAbsentRefusal(): void
+    {
+        // A trustworthy Sec-Fetch-Site never turns the both-absent refusal
+        // into an accept — if the belt short-circuited to TRUE this leg reddens.
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Sec-Fetch-Site' => 'same-origin',
+        ]);
+
+        self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
+    }
+
+    public function testBeltIsInertWhenTheHeaderIsAbsent(): void
+    {
+        // The null arm: no Sec-Fetch-Site at all (native/old clients) must
+        // reach the classic verdict untouched — a belt that forgets the
+        // null guard fatals here (TypeError on trim(null)) or refuses.
+        $request = $this->request('POST', [
+            'Host' => 'example.com',
+            'Origin' => 'https://example.com',
+        ]);
+
+        self::assertTrue($this->authenticator()->validateCsrfOrigin($request));
     }
 
     // --- Case 10: safe methods are never CSRF-checked -----------------------
@@ -500,6 +610,72 @@ final class RequestAuthenticatorTest extends TestCase
         );
 
         // Reached dispatch (200), NOT the 403 CSRF gate.
+        self::assertSame(200, $response->getStatusCode());
+        self::assertStringNotContainsString('csrf.invalid_origin', $response->rawBody());
+    }
+
+    public function testGateRejectsCookieAuthPostWithCrossSiteBelt(): void
+    {
+        // CP-009 end-to-end: a FULLY matching Origin now rides past the
+        // classic arms — only the belt can produce this 403. The rejected
+        // frame is the ratified byte-ident csrf.invalid_origin envelope.
+        $wr = new WorkermanRequest(
+            "POST /api/v1/media/abc/favorite HTTP/1.1\r\n"
+            . "Host: localhost\r\n"
+            . "Cookie: phlix_session=valid-session-token\r\n"
+            . "Origin: http://localhost\r\n"
+            . "Sec-Fetch-Site: cross-site\r\n"
+            . "\r\n"
+        );
+
+        $response = $this->invokeHandler(
+            $wr,
+            $this->createMock(Application::class),
+            static function (ContainerInterface $container): void {
+                // 403 path resolves nothing from the container.
+                assert($container instanceof \PHPUnit\Framework\MockObject\MockObject);
+                $container->method('get')->willReturn(null);
+            },
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+        self::assertStringContainsString('csrf.invalid_origin', $response->rawBody());
+    }
+
+    public function testGateBypassedForBearerAuthPostWithCrossSiteBelt(): void
+    {
+        // Critical-class pin, new limb edition: the belt is a COOKIE-CARRIER
+        // concern. The same cross-site promise arriving on a BEARER request
+        // must never trip the gate — browsers do not auto-attach
+        // Authorization, so there is nothing to forge.
+        $application = $this->createMock(Application::class);
+        $application->method('dispatch')->willReturn(
+            (new Response())->status(200)->json(['ok' => true])
+        );
+
+        $registry = new SegmentProcessRegistry();
+
+        $wr = new WorkermanRequest(
+            "POST /api/v1/media/abc/favorite HTTP/1.1\r\n"
+            . "Host: localhost\r\n"
+            . "Authorization: Bearer some-bearer-token\r\n"
+            . "Origin: http://localhost\r\n"
+            . "Sec-Fetch-Site: cross-site\r\n"
+            . "\r\n"
+        );
+
+        $response = $this->invokeHandler(
+            $wr,
+            $application,
+            static function (ContainerInterface $container) use ($registry): void {
+                assert($container instanceof \PHPUnit\Framework\MockObject\MockObject);
+                $container->method('get')->willReturnCallback(
+                    static fn (string $id): mixed =>
+                        $id === SegmentProcessRegistry::class ? $registry : null
+                );
+            },
+        );
+
         self::assertSame(200, $response->getStatusCode());
         self::assertStringNotContainsString('csrf.invalid_origin', $response->rawBody());
     }

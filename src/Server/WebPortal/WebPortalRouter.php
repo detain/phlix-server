@@ -1685,7 +1685,8 @@ class WebPortalRouter
      *   - type: Marker type (intro|outro|credits|ad)
      *   - around: Search window in seconds (default: 30)
      *   - position: Current playhead position in milliseconds (default: 0)
-     *   - limit: Maximum results (default: 20)
+     *   - limit: Maximum results (default: 20, clamped to the shared
+     *     PageLimit policy — clamp-on-read, as every other paged endpoint)
      * @param array<string, string> $params Route parameters (unused)
      *
      * @return Response JSON response with items array:
@@ -1720,14 +1721,16 @@ class WebPortalRouter
 
         $position = $request->queryInt('position', 0);
         $around = $request->queryInt('around', 30);
-        $limit = $request->queryInt('limit', 20);
+        // SH-023 (minor): clamp-on-read through the shared PageLimit policy,
+        // exactly like searchMedia() and every other paged endpoint — an
+        // out-of-range `limit` clamps to PageLimit::MAX instead of 400-ing,
+        // and PageLimit::MAX equals the bound this arm used to reject, so no
+        // legitimate request loses rows. The `around` window below keeps its
+        // 400: an out-of-range window is semantically invalid, not a page.
+        $limit = $request->queryPageSize('limit', 20);
 
         if ($around < 1 || $around > 300) {
             return (new Response())->status(400)->json(['error' => 'The around value must be between 1 and 300']);
-        }
-
-        if ($limit < 1 || $limit > 100) {
-            return (new Response())->status(400)->json(['error' => 'The limit value must be between 1 and 100']);
         }
 
         // Resolve profile ID from user for watch-history exclusion
@@ -1772,7 +1775,8 @@ class WebPortalRouter
      * @param array<string, string> $params Route parameters (unused)
      *
      * @return Response JSON response with items array:
-     *   {items: [...], query: string, total: int}
+     *   {items: [...], query: string, total: int} where total is the
+     *   library-wide match count (SH-023) — deliberately not page length.
      *
      * @api_endpoint GET /api/v1/media/search
      *
@@ -1811,7 +1815,12 @@ class WebPortalRouter
         return (new Response())->json([
             'items' => $shapedItems,
             'query' => $query,
-            'total' => count($shapedItems),
+            // SH-023: the library-wide match count, not the page length.
+            // The page used to echo count($shapedItems), so every popular
+            // query reported at most `limit` and the client's "showing X of
+            // Y" cap notice could never fire. Key set is unchanged; only the
+            // VALUE semantics of `total` move here.
+            'total' => $this->itemRepository->searchCount($query),
         ]);
     }
 

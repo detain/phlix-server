@@ -411,6 +411,27 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **`GET /api/v1/media/search` reports the library-wide match count.** The
+  endpoint's `total` used to be the length of the page it returned, so a
+  library holding 400 matches for `dune` answered `total: 50` (the default
+  limit) — and the SPA's "showing X of Y" cap notice, which compares page
+  length against this field, could by construction never fire. `ItemRepository`
+  gains `searchCount()`, a dedicated COUNT leg mirroring the page path
+  statement-for-statement: same mode decision (boolean-mode FULLTEXT, the
+  sanitized-empty LIKE direct route, or the LIKE fallback after a fulltext
+  error), same three-leg artist/album container structure with the primary
+  leg's id-set subtracted the way `mergeSearchResults()` dedupes, and the same
+  failure ladder (container errors contribute 0, a direct-fuzzy primary error
+  propagates). No count statement carries a LIMIT — the number is deliberately
+  about the set beyond the page. Response key set `items/query/total` and every
+  status are byte-identical; only the VALUE semantics of `total` move. The
+  sibling `media/search/by-marker` endpoint now clamps an out-of-range `limit`
+  through the shared `PageLimit` policy like every other paged surface
+  (`PageLimit::MAX` equals the bound it used to reject at 400), while its
+  `around`-window and marker-type 400 arms stay: an invalid window is
+  semantically broken, not oversized. (review server__webux #1-#2, SH-023)
+  [SH-023 / server__webux#1-#2, w22L2 2026-11-10]
+
 - **The local-address discovery probe now has one home.** `NatPmpClient`,
   `StunClient`, `UpnpIgdClient` and `PortForwardService` each carried a
   byte-identical copy of the `getLocalIpAddress()` / `getLocalIpViaUdpSocket()`

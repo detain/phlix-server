@@ -1288,6 +1288,132 @@ class ItemRepository
     }
 
     /**
+     * Counts the FULL library match set for a search query (SH-023).
+     *
+     * `media/search` used to answer `total` with the page length, which made
+     * the endpoint lie about every popular query (a library of 400 'dune'
+     * hits reported 50) and left the SPA's "showing X of Y" cap notice dead
+     * code by construction. This is the count leg that replaces the lie.
+     *
+     * It mirrors {@see search()} statement-for-statement ON PURPOSE — the
+     * same three indexed legs, the same mode decision, the same failure
+     * ladder — so the union it counts is exactly the union the page merges:
+     *
+     *  1. the primary leg (FULLTEXT over non-music rows, or the LIKE variant
+     *     wherever search()/searchFuzzy() use it);
+     *  2. the artist-container leg, minus every row the primary predicate
+     *     already matches — `mergeSearchResults()` dedupes by id, and a
+     *     `NOT(<primary predicate>)` subtracts the same set;
+     *  3. the album-container leg, minus primary AND minus artist hits (the
+     *     inner `mergeSearchResults(artists, albums)` dedup).
+     *
+     * Failure behavior is leg-for-leg parity too: fulltext throwing downgrades
+     * ALL legs to their LIKE shapes (that is what the page's fallback does);
+     * a container statement throwing contributes 0 (the page swallows that
+     * failure to `[]`); the direct-fuzzy primary throwing PROPAGATES, because
+     * searchFuzzy() does not wrap it either. No count statement carries a
+     * LIMIT — the number is deliberately about the set beyond the page, and
+     * COUNT(*) over an indexed predicate never hydrates rows, so the S99
+     * row-ceiling that protects the page legs has no work to do here.
+     *
+     * @param string $query Raw user search input (sanitized/escaped exactly as on the page path).
+     *
+     * @return int Total number of library items matching the query.
+     */
+    public function searchCount(string $query): int
+    {
+        $sanitized = $this->sanitizeFulltextQuery($query);
+
+        if ($sanitized !== '') {
+            try {
+                return $this->countPrimaryFulltext($sanitized) + $this->countMusicContainers($query, true);
+            } catch (\Throwable) {
+                // Container legs swallow internally, so only a primary-leg
+                // throw can land here — exactly the page's fallback trigger.
+            }
+        }
+
+        return $this->countPrimaryLike($query) + $this->countMusicContainers($query, false);
+    }
+
+    /**
+     * Count of non-music rows matching the boolean-mode FULLTEXT predicate.
+     */
+    private function countPrimaryFulltext(string $sanitized): int
+    {
+        return $this->extractCount($this->db->query(
+            "SELECT COUNT(*) AS count FROM media_items
+              WHERE type NOT IN ('artist', 'album')
+                AND MATCH(name) AGAINST(? IN BOOLEAN MODE)",
+            [$sanitized]
+        ));
+    }
+
+    /**
+     * Count of non-music rows matching the LIKE predicate — the primary leg
+     * searchFuzzy() runs, minus its LIMIT.
+     */
+    private function countPrimaryLike(string $query): int
+    {
+        $escapedQuery = '%' . addcslashes($query, '%_') . '%';
+
+        return $this->extractCount($this->db->query(
+            "SELECT COUNT(*) AS count FROM media_items
+              WHERE type NOT IN ('artist', 'album') AND name LIKE ?",
+            [$escapedQuery]
+        ));
+    }
+
+    /**
+     * Count of artist + album container rows the page's second half would
+     * contribute, with the primary leg's id-set subtracted so the sum equals
+     * the merged union size instead of double-counting mirror matches.
+     *
+     * `$fulltextPrimary` selects the exclusion SHAPE: after the page falls
+     * back to fuzzy, the primary rows that got merged were LIKE-matched, and
+     * excluding a FULLTEXT set that never ran would undercount.
+     */
+    private function countMusicContainers(string $query, bool $fulltextPrimary): int
+    {
+        $escapedQuery = '%' . addcslashes($query, '%_') . '%';
+
+        if ($fulltextPrimary) {
+            $sanitized = $this->sanitizeFulltextQuery($query);
+            $exclusion = "NOT (mi.type NOT IN ('artist', 'album') AND MATCH(mi.name) AGAINST(? IN BOOLEAN MODE))";
+            $exclusionArgs = [$sanitized];
+        } else {
+            $exclusion = "NOT (mi.type NOT IN ('artist', 'album') AND mi.name LIKE ?)";
+            $exclusionArgs = [$escapedQuery];
+        }
+
+        try {
+            $artists = $this->extractCount($this->db->query(
+                "SELECT COUNT(*) AS count FROM media_items mi
+                   JOIN music_artists ar ON ar.media_item_id = mi.id
+                  WHERE ar.name LIKE ?
+                    AND {$exclusion}",
+                array_merge([$escapedQuery], $exclusionArgs)
+            ));
+
+            $albums = $this->extractCount($this->db->query(
+                "SELECT COUNT(*) AS count FROM media_items mi
+                   JOIN music_albums al ON al.media_item_id = mi.id
+                  WHERE al.title LIKE ?
+                    AND {$exclusion}
+                    AND NOT EXISTS (
+                        SELECT 1 FROM music_artists ar2
+                         WHERE ar2.media_item_id = mi.id AND ar2.name LIKE ?
+                    )",
+                array_merge([$escapedQuery], $exclusionArgs, [$escapedQuery])
+            ));
+
+            return $artists + $albums;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
      * Merges two result sets, dropping repeats by `id` and applying the caller's
      * limit to the combined list — while RESERVING a share of the page for the
      * second half.

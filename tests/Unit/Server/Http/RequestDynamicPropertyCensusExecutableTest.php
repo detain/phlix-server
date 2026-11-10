@@ -1188,7 +1188,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // LocalAddressProbeTest.php (edge-shape table, delegate-parity and
     // measured allow-list pins); 2076 measured from the phpunit red, not
     // predicted.
-    private const EXPECTED_PHP_FILES = 2076;
+    // +2 2076→2078: w22L2 SH-023 adds tests/Unit/Media/Library/
+    // ItemRepositorySearchCountTest.php (three-leg union-count parity: mode
+    // decision, failure ladder, no-LIMIT structural pin) and tests/Unit/
+    // Server/WebPortal/WebPortalRouterSearchTotalTest.php (library total
+    // flows through the handler, key-set law, by-marker clamp-on-read era);
+    // 2078 measured from the phpunit red, not predicted.
+    private const EXPECTED_PHP_FILES = 2078;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1654,7 +1660,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // harness seeds $request->method/path/userId/body/query (five whole-property
     // writes on a recognized root, one helper serving every sentinel leg). Zero
     // src/ writes added. Measured from the phpunit red (1209), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1209;
+    // +3 1209→1212 (w22L2 SH-023): the WebPortalRouterSearchTotalTest fixtures
+    // seed $request->query (request()), plus $request->userId and
+    // $request->profileId in authedRequest() for the by-marker legs (three
+    // whole-property writes on a recognized root). Zero src/ writes added.
+    // Measured from the phpunit red (1212), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1212;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

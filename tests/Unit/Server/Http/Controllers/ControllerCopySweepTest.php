@@ -221,7 +221,8 @@ final class ControllerCopySweepTest extends TestCase
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(self::CONTROLLER_DIR));
         foreach ($iterator as $file) {
             if ($file->isFile() && $file->getExtension() === 'php') {
-                $sources[str_replace(dirname(self::CONTROLLER_DIR) . '/', '', $file->getPathname())] = self::source($file->getPathname());
+                $label = (string) str_replace(dirname(self::CONTROLLER_DIR) . '/', '', $file->getPathname());
+                $sources[$label] = self::source($file->getPathname());
             }
         }
         return $sources;
@@ -238,7 +239,7 @@ final class ControllerCopySweepTest extends TestCase
                 continue;
             }
             if (strpos((string) file_get_contents($file->getPathname()), $needle) !== false) {
-                $hits[] = str_replace($srcDir, 'src/', $file->getPathname());
+                $hits[] = (string) str_replace($srcDir, 'src/', $file->getPathname());
             }
         }
         sort($hits);

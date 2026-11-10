@@ -117,6 +117,32 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Forward correction to the CP-008 test-suites' mutation claims: the CSRF
+  belt's parse-false arms now convict by execution (tests-only).** The w31 L1
+  commit body stated, verbatim: "11 plant/strip mutation arms each uniquely
+  convicted", and the same body credited the new dispatch matrix with "both
+  parse-false convictions". An independent adversarial execution (re-verified
+  by re-execution at this tip) proved the fixture premise behind those legs
+  false to the runtime: `parse_url('http://[')` returns an array on PHP 8.3.6
+  (scheme + host `[`), so the unparseable-Origin/Referer matrix rows refused
+  through the host-mismatch leg instead and force-allow plants on either
+  parse-false arm left all three CP-008 suites green — an unconvicted claim
+  riding the register and commit prose. The roster count rode the same
+  correction: twelve plant/strip arms shipped (M1, M1b, M2–M11), not eleven.
+  Cure, tests-only, zero src change, zero wire change: both fixture values
+  are inputs MEASURED parse-false on this runtime (invalid non-numeric port;
+  ambiguous multi-colon authority), and a new premise-falsification pin
+  asserts `parse_url() === false` for the shipped fixtures on every run —
+  the estate law this verdict instantiated: a fixture that claims to be
+  unparseable must prove it by execution, or the suite reddens at the pin,
+  never silently in some later mutation transcript. With the cure applied,
+  each original force-allow plant reddens exactly two named legs (its swapped
+  matrix row plus the shared-envelope byte-equality law) while the other two
+  CP-008 suites stay green.
+  [CP-008 test-law correction, w31L1-R2; COOKIE-DESIGN §7,
+  REVIEW-w31L1server.md Major + Minor; FIX-server-w31L1-round2 register
+  2026-11-10]
+
 - **Forward correction to the belt entry below: "belt position-purity" sold a
   non-property — and the correction wave brought the rotation-grace memo's
   CAP limb its first true conviction.** The shipped belt text listed,

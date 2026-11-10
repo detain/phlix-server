@@ -38,10 +38,15 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  *    the gate never sees these)};
  *  - origin shapes: same-site, foreign, belt (Sec-Fetch-Site: cross-site
  *    ALONGSIDE a same-site Origin — belt heads), absent-with-Host
- *    (fail-closed), literal 'null', unparseable ('http://[' — the hub
- *    belt's parse-false MAJOR class: these legs are paired with a
- *    same-shape-minus-the-defect control each, so an arm that would pass
- *    on both the refusal and the acceptance cannot exist here),
+ *    (fail-closed), literal 'null', unparseable — inputs that MEASURE
+ *    parse_url() === false in this runtime (w31L1-R2 cure: round-1 shipped
+ *    'http://[' on a false premise — PHP 8.3.6 parses it to scheme + host
+ *    '[' — so the belt's parse-false MAJOR class now rides the two constants
+ *    below, premise pinned by execution every run by
+ *    testTheUnparseableFixtureValuesTrulyFailParseUrlInThisRuntime):
+ *    these legs are paired with a same-shape-minus-the-defect control each,
+ *    so an arm that would pass on both the refusal and the acceptance cannot
+ *    exist here),
  *    port-discriminator (strict law: Origin without an explicit port
  *    against a Host that carries one REFUSES — no default-port
  *    normalization on this rail), referer-only same-site;
@@ -70,6 +75,19 @@ final class CsrfMatrixTest extends TestCase
 
     /** The one envelope every refused arm ships (HttpHandler inline body). */
     private const REFUSAL_BODY = '{"error":"CSRF validation failed","code":"csrf.invalid_origin"}';
+
+    /**
+     * Origin fixture that MEASURES parse_url() === false on this runtime
+     * (invalid non-numeric port). Replaces round-1's 'http://[' (parseable:
+     * scheme + host '['). Premise pinned by execution below.
+     */
+    private const UNPARSEABLE_ORIGIN = 'http://example.com:port';
+
+    /**
+     * Referer fixture that MEASURES parse_url() === false on this runtime
+     * (ambiguous multi-colon authority). Premise pinned by execution below.
+     */
+    private const UNPARSEABLE_REFERER = 'http://a:b:c:d';
 
     private string $publicRoot = '';
 
@@ -115,10 +133,15 @@ final class CsrfMatrixTest extends TestCase
             'post cookie absent origin fails closed' => ['POST', '/api/v1/users/me/settings', [$host, $jar], true],
             // Sandbox/opaque-origin postings literalize 'null' — M-SERVER-76.
             'post cookie literal null origin' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Origin: null'], true],
-            // HUB BELT PARSE-FALSE CLASS: parse_url('http://[') === false.
-            // An unparseable Origin must REFUSE (fail-closed), never skip.
-            'post cookie unparseable origin refuses' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Origin: http://['], true],
-            'post cookie unparseable referer refuses' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Referer: http://['], true],
+            // PARSE-FALSE CLASS (cured w31L1-R2 from measured red): round 1
+            // claimed parse_url('http://[') === false; PHP 8.3.6 returns an
+            // array for it (host '['), so those rows convicted the
+            // host-mismatch leg and the parse-false arms were mutation-blind.
+            // These constants genuinely fail parse_url() in this runtime —
+            // premise pinned by testTheUnparseableFixtureValuesTrulyFailParseUrlInThisRuntime.
+            // An unparseable Origin/Referer must REFUSE (fail-closed), never skip.
+            'post cookie unparseable origin refuses' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Origin: ' . self::UNPARSEABLE_ORIGIN], true],
+            'post cookie unparseable referer refuses' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Referer: ' . self::UNPARSEABLE_REFERER], true],
             // Strict host law: byte-exact host AND both-or-neither port.
             'post cookie origin portless against ported host' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Origin: http://localhost'], true],
             'post cookie port parity control' => ['POST', '/api/v1/users/me/settings', [$host, $jar, 'Origin: http://localhost:8096'], false],
@@ -223,6 +246,40 @@ final class CsrfMatrixTest extends TestCase
             );
         }
         $this->assertRefusalWire($canonical, 'shared envelope');
+    }
+
+    /**
+     * PREMISE-FALSIFICATION PIN (estate law instantiated by the w31L1-R2 DD
+     * verdict): a fixture that CLAIMS to be unparseable must PROVE it by
+     * execution, in this runtime, every run. Round 1 shipped 'http://[' on
+     * the belief parse_url() returned false; PHP 8.3.6 parses it to
+     * scheme + host '[' instead, so the two unparseable matrix rows refused
+     * via the host-mismatch leg and force-allow plants on either parse-false
+     * arm stayed green (DD d4/d4b, reproduced at base f31178da). With the
+     * premise pinned here, a future swap of a parseable value back into
+     * these fixtures reddens THIS leg by name — never silently in some
+     * later mutation transcript.
+     */
+    public function testTheUnparseableFixtureValuesTrulyFailParseUrlInThisRuntime(): void
+    {
+        $this->assertSame(
+            false,
+            parse_url(self::UNPARSEABLE_ORIGIN),
+            'the Origin fixture must be parse-false in this runtime'
+        );
+        $this->assertSame(
+            false,
+            parse_url(self::UNPARSEABLE_REFERER),
+            'the Referer fixture must be parse-false in this runtime'
+        );
+
+        // The retired round-1 value stays pinned in the OPPOSITE direction:
+        // parse_url('http://[') is an ARRAY on this runtime (scheme http,
+        // host '[') — precisely why it can never return as this fixture.
+        $retired = parse_url('http://[');
+        $this->assertIsArray($retired, "round-1's 'http://[' must stay documented as parseable");
+
+        $this->assertSame('[', $retired['host'] ?? '');
     }
 
     /**

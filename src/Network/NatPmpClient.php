@@ -600,10 +600,12 @@ class NatPmpClient
      * Returns the local IP address of this machine.
      *
      * SH-007: the decision table lives in {@see LocalAddressProbe} — the four
-     * byte-identical copies consolidated into one home. The two-step order is
-     * unchanged from every original: scan the interfaces, fall back to this
-     * class's own probe. This method remains as the surface the S197 containment
-     * family reflects into.
+     * byte-identical copies consolidated into one home. The two-step order
+     * (scan, then this class's own probe) is kept, with one disclosed
+     * error-path divergence (SH-007 R2): where an original returned null
+     * without probing when the interface scan itself failed, this delegate
+     * probes on — see the {@see LocalAddressProbe} class header for why. This
+     * method remains as the surface the S197 containment family reflects into.
      */
     private function getLocalIpAddress(): ?string
     {

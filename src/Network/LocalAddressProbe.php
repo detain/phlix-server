@@ -51,6 +51,24 @@ namespace Phlix\Network;
  * `no-local-ip` marker in network-isolated containers), and a synthetic seam
  * there would pin a shape production never exercises.
  *
+ * ## ONE DISCLOSED DIVERGENCE (SH-007 R2)
+ *
+ * The adversarial review of the extraction
+ * (`.reviews/2026-11-10/REVIEW-w22L2server.md`, m1) measured one behavioral
+ * difference against the four originals on the error path: when
+ * `net_get_interfaces()` itself answers non-array, each original's
+ * `getLocalIpAddress()` short-circuited to null WITHOUT running the UDP
+ * probe, while the thin delegates call `localInterfaceAddress()` (which
+ * still answers null there) and then fall through to their probe. The
+ * divergence is deliberate, strictly error-path-only and more-lenient: a
+ * failed interface scan is exactly when the fallback answer is most
+ * valuable, and a failing probe still terminates in the parent's null — the
+ * reachable outcomes are the originals' set plus one improvement (a correct
+ * address where an original had none). No unit venue can script
+ * `net_get_interfaces()` to fail (it is not a seam), so the behavior is
+ * disclosed here rather than pinned by a test, and the four delegate
+ * docblocks point at this paragraph instead of claiming blanket parity.
+ *
  * @package Phlix\Network
  * @since   1.2.3
  */

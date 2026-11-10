@@ -884,7 +884,14 @@ class SyncPlayManager
             if (!$gatePasses) {
                 return [
                     'success' => false,
-                    'error' => 'Invalid password.',
+                    // SH-041 R2: the un-dotted shape is a WIRE CONTRACT, not free
+                    // copy — the vendored @phlix/ui consumer strict-equality
+                    // matches this exact prose (src/api/syncplay.ts
+                    // isSyncPlayInvalidPassword: body.error === 'Invalid
+                    // password') to arm its re-prompt branch, on BOTH the REST
+                    // passthrough and the WS frame message. Pinned by
+                    // SyncPlayJoinRejectionWireContractTest. Do not punctuate.
+                    'error' => 'Invalid password',
                     'error_code' => 'syncplay.invalid_password',
                 ];
             }

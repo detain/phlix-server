@@ -94,7 +94,9 @@ class SyncPlayManagerTest extends TestCase
         $joinResult = $this->manager->joinGroup($groupId, 'member_2', 'User 2', 'wrong');
 
         $this->assertFalse($joinResult['success']);
-        $this->assertEquals('Invalid password.', $joinResult['error']);
+        // SH-041 R2: un-dotted prose is the ui consumer wire contract
+        // (SyncPlayJoinRejectionWireContractTest owns the byte-pin).
+        $this->assertEquals('Invalid password', $joinResult['error']);
     }
 
     public function testJoinNonexistentGroupFails(): void

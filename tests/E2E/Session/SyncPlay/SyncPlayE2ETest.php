@@ -174,7 +174,7 @@ class SyncPlayE2ETest extends TestCase
             'conn-member2'
         );
         $this->assertFalse($failResult['success']);
-        $this->assertEquals('Invalid password.', $failResult['error']);
+        $this->assertEquals('Invalid password', $failResult['error']); // SH-041 R2 wire contract — un-dotted (SyncPlayJoinRejectionWireContractTest)
     }
 
     /**

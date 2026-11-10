@@ -163,7 +163,7 @@ class SyncPlayCest
         $joinFailResult = $I->joinGroup($member2Conn, $groupId, 'wrongpassword');
         $I->assertFalse($joinFailResult['success']);
         /** @var array{success: false, error: string} $joinFailResult */
-        $I->assertEquals('Invalid password.', $joinFailResult['error']);
+        $I->assertEquals('Invalid password', $joinFailResult['error']); // SH-041 R2 wire contract — un-dotted, see SyncPlayJoinRejectionWireContractTest
     }
 
     /**

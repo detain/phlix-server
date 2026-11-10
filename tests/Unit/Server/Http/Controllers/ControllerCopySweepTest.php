@@ -113,6 +113,13 @@ final class ControllerCopySweepTest extends TestCase
         // The REST mirrors in SyncPlayController/AdminUserController carry the
         // same refusals as the WS manager — the whole in-scope family must
         // speak in sentences, not just the file the review sampled (SH-041 #4).
+        // 'Invalid password' is EXCLUDED (SH-041 R2): on the join rail this
+        // prose is a consumer wire contract — the vendored @phlix/ui
+        // strict-equality-matches the un-dotted form — so the byte-pin lives
+        // in SyncPlayJoinRejectionWireContractTest, not in this punctuation
+        // sweep. The admin rail's dotted 'Invalid password.' arms
+        // (AdminUserController) have no consumer matcher and stay in the
+        // sentence family pinned by AdminUserControllerTest.
         $family = [
             'You are not in a group',
             'Group not found',
@@ -120,7 +127,6 @@ final class ControllerCopySweepTest extends TestCase
             'Failed to join group',
             'Not in any group',
             'Group timed out due to inactivity',
-            'Invalid password',
         ];
         $manager = self::source(self::SYNCPLAY_MANAGER);
         foreach ($family as $sentence) {

@@ -1377,6 +1377,37 @@ House discipline this file maintains (established by review W-min90/91/92):
   the file walker counts `config/`, which the arithmetic proves).
 ### Fixed
 
+- **Watch-party join refusals answer with the exact bytes the client listens
+  for (SH-041 round-2).** The SyncPlay join rejection now says
+  `Invalid password` — no trailing period — on both the REST 400 body and the
+  WebSocket frame. The SH-041 punctuation sweep (entry below, era `b1d67a25`)
+  had added a sentence period to this arm; the vendored `@phlix/ui` consumer
+  matches this body by STRICT equality (`isSyncPlayInvalidPassword()` in
+  `src/api/syncplay.ts`) to arm its password re-prompt/focus branch, so every
+  wrong-password join on deployed servers silently lost that branch. The
+  sweep entry claimed "every consumer-visible pin ... rotated in this same
+  commit" — its estate audit covered `web-ui` and `hub` only, and the matcher
+  lives in `phlix-ui/src`, outside that scope; this entry is the forward
+  correction, the older text stands as verbatim history. The round-2 audit
+  re-grepped every string the sweep changed across every consumer repo
+  (ui, hub, mobile, roku, tizen, windows, console — runtime matchers,
+  fixtures and localized catalogs): this join arm is the ONLY broken runtime
+  matcher in the estate; every other client keys on `error_code` or renders
+  the prose as a fallback. The admin rail's dotted `Invalid password.` arms
+  keep the swept sentence form (measured zero consumer matchers). The prose
+  is now byte-pinned as a wire contract by the new
+  `SyncPlayJoinRejectionWireContractTest`, and the punctuation-sweep family
+  list carries a pointer comment instead of this arm — a future copy sweep
+  cannot re-dot it silently. `error_code` values, HTTP statuses and envelope
+  key sets did not move: zero wire-code change. Same round: the SH-007
+  extraction gains a disclosure-only cure — the `LocalAddressProbe` class
+  header now documents the single measured behavioral divergence from the
+  four originals (when `net_get_interfaces()` itself fails, delegates fall
+  through to the UDP probe where an original short-circuited to null —
+  error-path-only, strictly more lenient), and the delegate docblocks no
+  longer claim blanket parity with every original.
+  [w22L2 R2; server__copywriter SH-041 #4, REVIEW-w22L2server Critical + m1]
+
 - **Doc truth: the CHANGELOG marker-count citation is now self-stable (w21L5
   round-2).** The SH-043 entry above stated the reading guide leads "with the
   greppable bold `MIGRATION ANSWER` callouts (3 exist at this tip — measured)".

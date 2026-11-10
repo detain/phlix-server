@@ -1200,7 +1200,7 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Unit/Server/Http/Controllers/ControllerCopySweepTest.php (wire
     // byte-identity of every const, family-sentence sweeps, measured
     // allow-lists); 2080 measured from the phpunit red, not predicted.
-    private const EXPECTED_PHP_FILES = 2082;
+    private const EXPECTED_PHP_FILES = 2084;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on

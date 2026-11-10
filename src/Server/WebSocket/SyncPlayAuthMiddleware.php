@@ -423,29 +423,57 @@ class SyncPlayAuthMiddleware
     }
 
     /**
-     * Resolve the handshake credential from the two transitional carriers.
+     * Resolve the handshake credential from the three carriers.
      *
      * The priority law (estate policy WEBSOCKET_URL_QUERY_REFUSED; phlix-syncplay
-     * SPEC.md §8.4 — `:8097` CURRENT=query, TARGET=bearer subprotocol):
+     * SPEC.md §8.4 — `:8097` CURRENT=query, TARGET=bearer subprotocol; cookie
+     * carrier per COOKIE-DESIGN.md §2.3, CP-006):
      *
      * 1. The `bearer` subprotocol carrier wins when it carries a token.
-     * 2. `?token=<jwt>` is the legacy fallback while clients retire it.
-     * 3. Both carriers present with DIFFERENT tokens → reject (`mismatch`): a
-     *    half-migrated client must fail loudly at the handshake instead of
+     * 2. The `phlix_session` cookie rides THIRD: same-origin browser sockets
+     *    send the jar automatically, so a hosted-SPA handshake needs no
+     *    explicit credential — but the cookie is accepted ONLY when
+     *    `$sessionCookieAllowed` says so, and the caller computes that from
+     *    the SAME state-changing request-origin law the HTTP rails enforce
+     *    (absent-or-same-site; both-origin-headers absent FAILS CLOSED: an
+     *    ambient credential presented with no origin context is exactly the
+     *    smuggling shape the mirror-of-{@see \Phlix\Server\Http\RequestAuthenticator::validateCsrfOrigin()}
+     *    reading of §2.3 refuses. Native clients are untouched — they carry
+     *    no jar, so the gate never runs for them).
+     * 3. `?token=<jwt>` is the legacy fallback while clients retire it.
+     * 4. Bearer and query present with DIFFERENT tokens → reject (`mismatch`):
+     *    a half-migrated client must fail loudly at the handshake instead of
      *    silently authenticating with one credential while presenting another.
-     * 4. An empty `?token=` value carries no credential and counts as absent.
+     *    The law stays EXACTLY between the two EXPLICIT carriers: a jar is
+     *    ambient and may be stale, so an explicit credential silently
+     *    outranks it (priority is the disclosure), and a REFUSED cookie never
+     *    blocks the query carrier — a rejected ambient value is not a
+     *    credential the client is entitled to be authenticated as.
+     * 5. An empty `?token=` value or empty cookie carries no credential and
+     *    counts as absent.
      *
-     * @param string|null $offeredProtocols Raw `Sec-WebSocket-Protocol` header value.
-     * @param string|null $queryToken       Raw `token` query param value.
-     * @return array{token: ?string, carrier: 'bearer'|'query'|'none', mismatch: bool}
+     * @param string|null $offeredProtocols    Raw `Sec-WebSocket-Protocol` header value.
+     * @param string|null $queryToken          Raw `token` query param value.
+     * @param string|null $sessionCookie       Raw `phlix_session` cookie value, if any.
+     * @param bool        $sessionCookieAllowed Whether the request-origin law admits
+     *                                         the cookie carrier for THIS handshake.
+     * @return array{token: ?string, carrier: 'bearer'|'cookie'|'query'|'none', mismatch: bool}
      *         `token` is the credential to validate (null when absent or
      *         mismatched); `carrier` names the winning carrier for diagnostics
-     *         and never carries credential material itself.
+     *         (and drives the 101 marker-echo law) and never carries
+     *         credential material itself.
+     *
+     * @since 1.3.0 (cookie carrier; carriers resolver since 1.0.0)
      */
-    public static function resolveHandshakeToken(?string $offeredProtocols, ?string $queryToken): array
-    {
+    public static function resolveHandshakeToken(
+        ?string $offeredProtocols,
+        ?string $queryToken,
+        ?string $sessionCookie = null,
+        bool $sessionCookieAllowed = false
+    ): array {
         $bearerToken = self::bearerSubprotocolToken($offeredProtocols);
         $legacyToken = ($queryToken === null || $queryToken === '') ? null : $queryToken;
+        $cookieToken = ($sessionCookie === null || $sessionCookie === '') ? null : $sessionCookie;
 
         if ($bearerToken !== null && $legacyToken !== null && $bearerToken !== $legacyToken) {
             return ['token' => null, 'carrier' => 'none', 'mismatch' => true];
@@ -453,6 +481,10 @@ class SyncPlayAuthMiddleware
 
         if ($bearerToken !== null) {
             return ['token' => $bearerToken, 'carrier' => 'bearer', 'mismatch' => false];
+        }
+
+        if ($cookieToken !== null && $sessionCookieAllowed) {
+            return ['token' => $cookieToken, 'carrier' => 'cookie', 'mismatch' => false];
         }
 
         if ($legacyToken !== null) {

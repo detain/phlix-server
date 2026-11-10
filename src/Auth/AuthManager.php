@@ -237,6 +237,57 @@ class AuthManager
     private const USER_STATUS_CACHE_MAX = 5000;
 
     /**
+     * CP-005 (COOKIE-DESIGN.md §5): the rotation-grace window — seconds during
+     * which a repeat refresh presentation of an ALREADY-ROTATED token re-delivers
+     * that rotation's pair verbatim. Two tabs racing on one old refresh token
+     * (double-wake, retry-after-timeout) converge on a single pair instead of
+     * each keeping a different mint.
+     */
+    private const ROTATION_GRACE_SECONDS = 10;
+
+    /**
+     * Hard bound on {@see $rotationGrace}. Eviction degrades benignly: an
+     * evicted presentation simply mints a fresh pair — the pre-CP-005 behavior —
+     * and rotation never revokes, so every surviving pair stays valid.
+     */
+    private const ROTATION_GRACE_MAX_ENTRIES = 64;
+
+    /**
+     * Process-local rotation memo keyed by the presenting token's `jti` (the
+     * 32-hex claim the JwtHandler already stamps — never the raw token, the
+     * hub's persisted-key hygiene precedent). Per-Workerman-worker by
+     * construction: a cross-worker double rotation stays benign because
+     * rotation never revokes — both pairs carry the same identity claims —
+     * the memo converges the RESPONSE, not the authorization.
+     *
+     * @var array<string, array{response: array<string, mixed>, expiresAt: int}>
+     */
+    private array $rotationGrace = [];
+
+    /**
+     * Drop expired rotation-grace entries, then bound the memo FIFO-style
+     * (insertion order). Called from the write side only — the read side is a
+     * single key test, and the window is ten seconds, so the sweep is at most
+     * 64 comparisons per mint.
+     */
+    private function pruneRotationGrace(): void
+    {
+        $now = time();
+        foreach ($this->rotationGrace as $jti => $entry) {
+            if (($entry['expiresAt'] ?? 0) < $now) {
+                unset($this->rotationGrace[$jti]);
+            }
+        }
+        while (count($this->rotationGrace) >= self::ROTATION_GRACE_MAX_ENTRIES) {
+            $oldest = array_key_first($this->rotationGrace);
+            if ($oldest === null) {
+                break;
+            }
+            unset($this->rotationGrace[$oldest]);
+        }
+    }
+
+    /**
      * Create a new AuthManager instance.
      *
      * @param UserRepository $userRepository User data access repository
@@ -1557,7 +1608,32 @@ class AuthManager
         // S80: carry the session's profile across the re-mint. Without this a
         // device that switched to a child profile would silently revert to the
         // account default the first time its access token expired.
-        return $this->createAuthResponse($userId, JwtHandler::profileIdClaim($payload));
+        // CP-005 (§5): idempotent re-delivery inside the grace window. The
+        // lookup runs AFTER every guard above — grace memoizes the MINT, never
+        // an authorization decision, so a watermark bump mid-window still
+        // refuses this same presentation. Accepted state, disclosed by design:
+        // with no revocation-on-rotation (§5(c) unimplemented estate-wide), a
+        // stolen pre-rotation token is indistinguishable from a racing benign
+        // client, and theft stays undetectable until the watermark bump.
+        $jti = is_string($payload['jti'] ?? null) ? (string) $payload['jti'] : '';
+        if ($jti !== '') {
+            $graced = $this->rotationGrace[$jti] ?? null;
+            if (is_array($graced) && ($graced['expiresAt'] ?? 0) >= time()) {
+                return $graced['response'];
+            }
+        }
+
+        $response = $this->createAuthResponse($userId, JwtHandler::profileIdClaim($payload));
+
+        if ($jti !== '') {
+            $this->pruneRotationGrace();
+            $this->rotationGrace[$jti] = [
+                'response'  => $response,
+                'expiresAt' => time() + self::ROTATION_GRACE_SECONDS,
+            ];
+        }
+
+        return $response;
     }
 
     /**

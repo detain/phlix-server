@@ -15,10 +15,12 @@ use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\CookiePolicy;
 use Phlix\Common\Http\TrustedProxyResolver;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\RateLimit\RateLimiterInterface;
+use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Stats\Metrics\MetricsCollector;
 
@@ -563,24 +565,28 @@ class WebSocketServer
      * - Secret configured → resolve the handshake credential from the
      *   transitional carriers ({@see SyncPlayAuthMiddleware::resolveHandshakeToken()}:
      *   `Sec-WebSocket-Protocol: bearer, <jwt>` preferred, legacy `?token=<jwt>`
-     *   fallback, disagreement between the two rejected), then delegate to
+     *   fallback, disagreement between the two rejected) and the third
+     *   carrier, the Origin-gated `phlix_session` cookie (COOKIE-DESIGN.md
+     *   §2.3), then delegate to
      *   {@see SyncPlayAuthMiddleware::authenticateConnection()} (auth REQUIRED):
      *   a valid token marks the connection authenticated with
      *   its derived user id; a missing/invalid/expired token causes the handshake
      *   to be REJECTED — the connection is removed from the pool and closed.
-     * - A client that offered the `bearer` subprotocol and passes the gate gets
-     *   it echoed on the 101 ({@see echoBearerSubprotocol()}).
+     * - A client that offered the `bearer` subprotocol and passes the gate on an
+     *   EXPLICIT carrier gets it echoed on the 101 ({@see echoBearerSubprotocol()});
+     *   a COOKIE-authenticated handshake answers no bearer marker (§2.3).
      *
-     * Origin posture (INFO-SERVER-31): the `Origin` header is deliberately NOT
-     * checked at handshake. The estate's WS clients are native apps (Roku,
-     * Tizen, console, mobile) and the browser SPA — and WS auth never rides a
-     * cookie: the only credential carriers are the explicit `bearer` WebSocket
-     * subprotocol and the legacy `?token=` query above, both consumed verbatim
-     * from the upgrade request. A cross-site page therefore has no ambient
-     * credential to smuggle; presenting or guessing a valid token is the whole
-     * gate, which an origin allow-list cannot strengthen. Adding one would
-     * only break the native clients (they send no `Origin` at all), so the
-     * handshake stays origin-agnostic by decision, not by omission.
+     * Origin posture (INFO-SERVER-31, superseded by CP-006 §2.3): the EXPLICIT
+     * carriers (`bearer` subprotocol, legacy `?token=`) remain deliberately
+     * origin-agnostic — the estate's native clients (Roku, Tizen, console,
+     * mobile) send no `Origin` at all, presenting a valid explicit credential
+     * is the whole gate, and an origin allow-list could not strengthen it.
+     * What changed is the THIRD carrier: the `phlix_session` cookie is an
+     * AMBIENT credential, so it is accepted only when the upgrade request
+     * passes the same state-changing request-origin law the HTTP rails enforce
+     * (same-site Origin/Referer, Sec-Fetch-Site belt; absent-origin fails
+     * closed). The relay :8804 surface stays bearer-subprotocol-only — no jar
+     * rides it (COOKIE-DESIGN.md §2.3).
      *
      * @param TcpConnection $connection The Workerman TCP connection.
      * @param Request       $request    The parsed WebSocket upgrade request.
@@ -683,10 +689,37 @@ class WebSocketServer
         // DIFFERENT tokens rejects pre-101 so a half-migrated client fails
         // loudly instead of authenticating on a credential other than the one
         // it presents. See SyncPlayAuthMiddleware::resolveHandshakeToken().
+        //
+        // CP-006 (COOKIE-DESIGN.md §2.3) adds the THIRD carrier for same-origin
+        // browser sockets: the ambient `phlix_session` jar, admitted only under
+        // the state-changing request-origin law the HTTP rails enforce (SSOT
+        // CookiePolicy::stateChangingRequestOriginAllowed — same-site
+        // Origin/Referer with the Sec-Fetch-Site belt). Browsers send the jar
+        // and the origin headers on the upgrade automatically; native clients
+        // carry no jar, so the gate never runs for them. A cookie PRESENTED
+        // without origin headers fails CLOSED: the §2.3 'absent-or-same-site
+        // (mirror of validateCsrfOrigin)' reading is the mirror exactly, and
+        // that law refuses both-absent — an ambient credential smuggled with
+        // no origin context is the shape it exists to reject.
         $tokenRaw = $request->get('token');
+        $sessionRaw = $request->cookie(AuthController::SESSION_COOKIE);
+        $sessionCookie = is_string($sessionRaw) ? $sessionRaw : null;
+
+        $sessionCookieAllowed = false;
+        if ($sessionCookie !== null && $sessionCookie !== '') {
+            $sessionCookieAllowed = CookiePolicy::stateChangingRequestOriginAllowed(
+                self::upgradeHeader($request, 'origin'),
+                self::upgradeHeader($request, 'referer'),
+                self::upgradeHeader($request, 'host'),
+                self::upgradeHeader($request, 'sec-fetch-site'),
+            );
+        }
+
         $resolved = SyncPlayAuthMiddleware::resolveHandshakeToken(
             self::upgradeHeader($request, 'sec-websocket-protocol'),
             is_string($tokenRaw) ? $tokenRaw : null,
+            $sessionCookie,
+            $sessionCookieAllowed,
         );
 
         if ($resolved['mismatch']) {
@@ -715,7 +748,7 @@ class WebSocketServer
             return;
         }
 
-        $this->echoBearerSubprotocol($connection, $request);
+        $this->echoBearerSubprotocol($connection, $request, $resolved['carrier']);
     }
 
     /**
@@ -735,9 +768,21 @@ class WebSocketServer
      * the MARKER only — never the token (a credential is not a protocol-id;
      * echoing it would re-publish on the response wire the secret the carrier
      * law exists to keep off URLs). Same law phlix-hub S355 ships.
+     *
+     * CP-006 (COOKIE-DESIGN.md §2.3) adds the carrier condition: the marker
+     * law stays with the carrier the handshake ACTUALLY accepted, so a
+     * COOKIE-authenticated handshake answers no bearer marker — an echo would
+     * tell the client its (unavailable) subprotocol credential was honoured
+     * when it was the ambient jar that authenticated. `$carrier` is passed
+     * from the resolver verdict; the dev anonymous path (no resolver ran)
+     * keeps the offered-gate echo unchanged.
      */
-    private function echoBearerSubprotocol(TcpConnection $connection, Request $request): void
+    private function echoBearerSubprotocol(TcpConnection $connection, Request $request, ?string $carrier = null): void
     {
+        if ($carrier === 'cookie') {
+            return;
+        }
+
         if (!SyncPlayAuthMiddleware::offersBearerSubprotocol(self::upgradeHeader($request, 'sec-websocket-protocol'))) {
             return;
         }

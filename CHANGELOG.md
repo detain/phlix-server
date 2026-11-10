@@ -102,6 +102,46 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **The browser WebSocket handshake can now ride the session cookie, and a
+  racing refresh rotation converges instead of diverging.**
+  - *WS cookie carrier.* The `:8097` handshake gains a third credential
+    carrier with fixed precedence — bearer subprotocol first, then the
+    `phlix_session` cookie, then the legacy query token. The cookie carrier
+    is admitted only when the state-changing request-origin law (the same
+    `CookiePolicy` single source as the HTTP belt, Sec-Fetch-Site included)
+    allows it, and a browser-shaped upgrade presenting a jar with NO Origin
+    or Referer fails CLOSED: ambient-credential smuggling is exactly what the
+    design's "mirror of validateCsrfOrigin" reading forbids. A refused cookie
+    is not a credential: it never blocks an explicitly supplied query token
+    and never participates in the bearer-vs-query mismatch law (a stale jar
+    is not a contradiction, it is noise). The `Sec-WebSocket-Protocol: bearer`
+    echo stays the law of the carrier actually accepted — a
+    cookie-authenticated handshake answers no bearer marker — and relay `:8804`
+    remains bearer-subprotocol-only. No shipped estate client's behavior
+    moves: the ui's handshake helper offers no subprotocol at all when it has
+    no bearer token, which is precisely the jar mode this carrier serves.
+    13 new legs (7 pure-resolver, 6 wired-hook through the real upgrade
+    request path); 4 convicted red-first at the parent, the 9 refusal-legs
+    green there by design — non-vacuity disclosed, not assumed.
+    (COOKIE-DESIGN §2.3; CP-006)
+  - *Refresh rotation grace.* `AuthManager::refreshToken()` now remembers the
+    pair it just minted for ten seconds, keyed by the refresh token's `jti`
+    (never the token string). Two tabs racing one refresh token converge on
+    the identical response — same access token, same rotated refresh token,
+    same cookie re-attachment — instead of each minting a pair whose loser is
+    silently orphaned. The memo is consulted only AFTER every authorization
+    gate, so a watermark bump inside the window still refuses (pinned); the
+    store is capped and expired entries are swept on write, and eviction
+    degrades benignly to a fresh mint. Rotation never revoked anything before
+    and does not now, so a cross-worker double rotation leaves both pairs
+    valid — the per-worker memo converges responses, not authority. Accepted
+    state, stated plainly: with no revocation store, a stolen pre-rotation
+    refresh token is indistinguishable from a racing tab until the watermark
+    bump; grace-window idempotence is the mitigation the design chose, not
+    theft detection. 5 new legs; two errors + two failures convicted
+    red-first at the parent, the distinct-presentation identity pin green
+    there by construction. (COOKIE-DESIGN §5; CP-005)
+
 - **A logged-out hosted session's cookie jar now dies with the logout, and the
   CSRF origin law gained its Sec-Fetch-Site belt — closing the cross-host
   drift row.**

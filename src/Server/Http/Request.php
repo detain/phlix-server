@@ -122,6 +122,26 @@ class Request
     public ?string $profileId = null;
 
     /**
+     * The login-family id of the token that authenticated this request
+     * (CP-029 / D-1a), read from the signed `sid` claim.
+     *
+     * Set by {@see RequestAuthenticator::authenticate()} from the SAME
+     * validation result that fills {@see $userId} — the value is the family
+     * row in `auth_token_sessions` this request's token lineage belongs to.
+     * Null means "no family": an unauthenticated request, a pre-D-1a token
+     * (minted before migration 127, carrying no claim), or a legacy-adapter
+     * auth path that mints outside the JWT family store.
+     *
+     * ⚠ **Never assign this from request input**, exactly the {@see $profileId}
+     * law: naming someone else's family here would hand the per-device revoke
+     * endpoint a caller-chosen victim. Only the authenticator, reading a token
+     * this server signed, may set it.
+     *
+     * @var string|null
+     */
+    public ?string $tokenSessionId = null;
+
+    /**
      * @var \Phlix\Hub\HubUserClaims|null Hub user claims slot for hub-authenticated
      *      requests. RESERVED: declared part of the Request shape (pinned by the
      *      dynamic-property census), currently unwritten — the dead-wired
@@ -175,7 +195,8 @@ class Request
             "Dynamic read of undefined property Phlix\\Server\\Http\\Request::\${$name} — Request declares no magic"
             . ' properties (S427 reachability guard, closing the S271 silent-null bug class).'
             . ' Declared members: method, path, queryString, headers, query, body, rawBody, files,'
-            . ' remoteIp, remotePort, protocol, bearerToken, cookies, userId, profileId, hubUser, pathParams.'
+            . ' remoteIp, remotePort, protocol, bearerToken, cookies, userId, profileId, tokenSessionId,'
+            . ' hubUser, pathParams.'
             . ' Use ->body for the decoded request body, input()/has() for body+query lookups, and'
             . ' getHeader()/getCookie() for headers and cookies. [' . self::REACHABILITY_GUARD_PROVENANCE . ']'
         );

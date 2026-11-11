@@ -150,11 +150,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     /** The class whose roots the census walks. */
     private const TARGET_CLASS = 'Phlix\\Server\\Http\\Request';
 
-    /** The 17 declared public members of Request (mirrors RequestDynamicPropertyGuardTest). */
+    /** The 18 declared public members of Request (mirrors RequestDynamicPropertyGuardTest). */
     private const DECLARED_MEMBERS = [
         'method', 'path', 'queryString', 'headers', 'query', 'body', 'rawBody',
         'files', 'remoteIp', 'remotePort', 'protocol', 'bearerToken', 'cookies',
-        'userId', 'profileId', 'hubUser', 'pathParams',
+        'userId', 'profileId', 'tokenSessionId', 'hubUser', 'pathParams',
     ];
 
     /**
@@ -1221,7 +1221,18 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // src/Server/WebSocket/QueryTokenGatePolicy.php joins the tree with its
     // conviction cohort tests/Unit/Server/WebSocket/
     // WsQueryTokenAdminControlTest.php; 2090 measured from the phpunit red.
-    private const EXPECTED_PHP_FILES = 2090;
+    // +1 2090→2091: CP-029 (D-1a session-family revocation) joins the tree with
+    // src/Auth/TokenSessionRepository.php — migration 127's repository; the one
+    // first-party file the wave adds, every other touched surface is an edit;
+    // 2091 measured from the phpunit red.
+    // +3 2091→2094: the CP-029 conviction cohort lands — tests/Unit/Auth/
+    // TokenSessionFamilyTest.php (adjudication table, both faces), tests/Unit/
+    // Auth/AuthTokenSessionWiringGuardTest.php (the PHP-DI optional-param law,
+    // real container) and tests/Integration/Auth/TokenSessionFamilyMigration
+    // 127RealDbTest.php (real-MySQL replay + grace-clock proof); the reads/
+    // writes denominators re-run untouched (none of the three speaks on a
+    // Request root); 2094 measured from the phpunit red.
+    private const EXPECTED_PHP_FILES = 2094;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1358,8 +1369,15 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * root tracker does not classify (zero counted sites there). Zero src/
      * reads added — attachAuthCookies() reaches headers only through
      * getHeader(). Measured from the phpunit red (475), not predicted.
+     * +5 476→481 (CP-029 / D-1a): the session-family surface reads its OWN
+     * token lineage off the request five times — three `tokenSessionId` reads
+     * (logout + logoutJson thread the family into the audit/dispatch event,
+     * listTokenSessions computes the `current` flag) and two `userId` reads
+     * (the two new guarded endpoints key their queries on the authenticated
+     * subject). All on declared members, post-rotation; the undeclared-read
+     * leg re-convicts any name not in DECLARED_MEMBERS, measured 481.
      */
-    private const EXPECTED_DECLARED_READS = 476;
+    private const EXPECTED_DECLARED_READS = 481;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1703,7 +1721,12 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // full delta from the measured red, not a reconstruction of the band.
     // Zero src/ writes added. Measured from the phpunit red (1230), not
     // predicted.
-    private const EXPECTED_DECLARED_WRITES = 1230;
+    // +1 1230→1231 (CP-029 / D-1a): RequestAuthenticator's family fill — the
+    // single `$request->tokenSessionId = …` assignment that publishes the
+    // validated `sid` claim onto the request (src/Server/Http/
+    // RequestAuthenticator.php); the controller legs only READ it. Measured
+    // from the phpunit red (1231), not predicted.
+    private const EXPECTED_DECLARED_WRITES = 1231;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

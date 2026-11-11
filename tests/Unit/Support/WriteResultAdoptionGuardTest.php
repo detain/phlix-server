@@ -190,8 +190,15 @@ final class WriteResultAdoptionGuardTest extends TestCase
      * consumed through `WriteResult::wroteNothing()` (an unwritable row fails
      * the manager's start closed — same phantom-write contract as S518).
      * Measured 101 from the phpunit red.
+     * Re-pinned 101→103 by CP-029 (D-1a session-family revocation, 2026-11-10):
+     * +2 literal INSERT ->query() sites in src/Auth/TokenSessionRepository.php
+     * (createSession's family row + recordGrant's lineage row), BOTH plain
+     * discards — legal non-consumers under this guard's own law (nothing reads
+     * their outcome; a failed mint surfaces as the missing-row fail-closed on
+     * the next read, never as a phantom-stored success). Consumed denominator
+     * unchanged. Measured 103 from the phpunit red.
      */
-    private const EXPECTED_TOTAL_INSERT_CALLS = 101;
+    private const EXPECTED_TOTAL_INSERT_CALLS = 103;
 
     /**
      * The denominator, part 2: how many of those 99 consume their result.

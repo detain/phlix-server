@@ -126,7 +126,7 @@ final class RequestDynamicPropertyGuardTest extends TestCase
      * removed from Request, the typed-uninitialized read would throw
      * Error("must not be accessed before initialization") — NOT our
      * LogicException — and this test still passes; the point is that none
-     * of these 17 names may ever answer the guard.
+     * of these 18 names may ever answer the guard.
      */
     public function testDeclaredReadsNeverHitTheGuard(): void
     {
@@ -135,7 +135,7 @@ final class RequestDynamicPropertyGuardTest extends TestCase
         $declared = [
             'method', 'path', 'queryString', 'headers', 'query', 'body', 'rawBody',
             'files', 'remoteIp', 'remotePort', 'protocol', 'bearerToken', 'cookies',
-            'userId', 'profileId', 'hubUser', 'pathParams',
+            'userId', 'profileId', 'tokenSessionId', 'hubUser', 'pathParams',
         ];
 
         foreach ($declared as $name) {

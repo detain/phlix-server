@@ -206,6 +206,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'DELETE /api/v1/admin/webhooks/subscriptions/{id}'
             . ' -> AdminWebhooksController::deleteSubscription [AdminMiddleware]',
         'DELETE /api/v1/admin/webhooks/{id} -> WebhookAdminController::delete []',
+        'DELETE /api/v1/auth/sessions/{id} -> AuthController::revokeTokenSession [AuthMiddleware]',
         'DELETE /api/v1/collections/{id} -> CollectionController::delete [AuthMiddleware]',
         'DELETE /api/v1/collections/{id}/items/{mediaItemId} -> CollectionController::removeItem [AuthMiddleware]',
         'DELETE /api/v1/libraries/{id} -> LibraryController::delete []',
@@ -321,6 +322,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         'GET /api/v1/audiobooks/{id}/stream -> AudiobookController::streamAudiobook [SignedUrlMiddleware]',
         'GET /api/v1/auth/me -> AuthController::me []',
         'GET /api/v1/auth/quick-connect/{code}/status -> QuickConnectController::status []',
+        'GET /api/v1/auth/sessions -> AuthController::listTokenSessions [AuthMiddleware]',
         'GET /api/v1/books -> BookController::listBooks [AuthMiddleware]',
         'GET /api/v1/books/{id} -> BookController::getBook [AuthMiddleware]',
         'GET /api/v1/books/{id}/cover -> BookController::getCover [SignedUrlMiddleware]',

@@ -537,8 +537,11 @@ final class OpenapiSpecCurrencyTest extends TestCase
         // after xrepo__server-ui M3 registered GET /api/v1/servers/{id} (the admin
         // MetricsPage detail card) — re-measured from this phpunit red; 352 after
         // CP-004 registered POST /api/v1/auth/logout (the JSON companion the shipped
-        // ui has been posting into a 404) — re-measured from this phpunit red.
-        $this->assertCount(352, $doc['paths'], 'the served surface is 352 distinct path templates');
+        // ui has been posting into a 404) — re-measured from this phpunit red; 354
+        // after CP-029 (D-1a) registered the session-family pair — GET
+        // /api/v1/auth/sessions + DELETE /api/v1/auth/sessions/{id} (two new
+        // templates) — re-measured from this phpunit red.
+        $this->assertCount(354, $doc['paths'], 'the served surface is 354 distinct path templates');
 
         // The contract version is pinned to the app release version on purpose: the
         // whole thesis of this file is that drift must fail LOUD, so `info.version`
@@ -778,7 +781,7 @@ final class OpenapiSpecCurrencyTest extends TestCase
      * Anti-vacuity leg (same discipline as {@see self::testAPlantedSuccessCodeReversionTurnsTheLegRed()}):
      * deleting the scheme or stripping the alternatives out of the parsed
      * document must be caught and NAMED by the same report helper — and the
-     * strip must demonstrably touch 316 operations, so the carrier law can never
+     * strip must demonstrably touch 318 operations, so the carrier law can never
      * be green-by-emptiness.
      */
     public function testPlantedCarrierReversionTurnsTheLegRed(): void
@@ -800,15 +803,15 @@ final class OpenapiSpecCurrencyTest extends TestCase
         [$stripped, $strippedCount] = $this->stripCookieAlternatives($committed);
         $report = $this->cookieCarrierReport($stripped);
         $this->assertSame(
-            316,
+            318,
             $strippedCount,
-            'the mutation must find exactly the bearer operation set (316) — other numbers mean vacuity'
+            'the mutation must find exactly the bearer operation set (318) — other numbers mean vacuity'
         );
         $named = array_values(array_filter(
             $report,
             static fn (string $line): bool => str_contains($line, 'lacks the sessionCookie alternative')
         ));
-        $this->assertCount(316, $named, 'every bearer-only operation must be named by the report');
+        $this->assertCount(318, $named, 'every bearer-only operation must be named by the report');
     }
 
     /**
@@ -886,9 +889,9 @@ final class OpenapiSpecCurrencyTest extends TestCase
             }
         }
 
-        if ($bearerOps !== 316) {
+        if ($bearerOps !== 318) {
             $problems[] = sprintf(
-                'expected 316 bearer-authenticated operations, saw %d — re-measure on a red and rotate (CP-002).',
+                'expected 318 bearer-authenticated operations, saw %d — re-measure on a red and rotate (CP-002).',
                 $bearerOps
             );
         }

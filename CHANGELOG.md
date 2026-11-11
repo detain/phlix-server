@@ -145,6 +145,31 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Signing out of one device now signs out exactly that device — and a stolen
+  refresh token revokes its family, not the account.** Every login ceremony on
+  this server now mints its token pair inside a session family: a per-login
+  family id travels in the JWT `sid` claim and lives in `auth_token_sessions`
+  alongside its rotated-refresh lineage in `auth_refresh_grants` (migration
+  `127_auth_token_sessions.sql`). Two endpoints expose the capability:
+  `GET /api/v1/auth/sessions` lists the account's live families with the
+  caller's own flagged current, and `DELETE /api/v1/auth/sessions/{id}` ends
+  one — ownership is enforced by the store's WHERE, foreign and unknown ids
+  answer the same 404 (no probe oracle), and every other device keeps its
+  session. The access path reads family liveness live on every request, so a
+  revoked device dies immediately rather than at its token's TTL. On the
+  refresh path the presented grant is consumed at rotation; replaying an
+  already-rotated refresh token outside the grace window is the theft signal:
+  that family is revoked and the event audited as `refresh_token_reuse`, while
+  a replay inside the window — the benign multi-tab race CP-005 exists for —
+  rotates on inside the family unchanged. The account-wide semantics are kept
+  exactly as shipped: logout, password change and admin revocation still bump
+  the `tokens_not_valid_after` watermark — now mirrored by revoking every
+  family at the same choke point — rejection envelopes stay byte-identical
+  with zero new wire codes, and tokens minted before migration 127 (no claim
+  to consult) are judged by the watermark path alone, unchanged. (CP-029 /
+  D-1a; the capability COOKIE-DESIGN §5 deferred to this phase, owner-ratified
+  2026-11-10.)
+
 - **Forward correction to the CP-008 test-suites' mutation claims: the CSRF
   belt's parse-false arms now convict by execution (tests-only).** The w31 L1
   commit body stated, verbatim: "11 plant/strip mutation arms each uniquely

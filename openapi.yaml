@@ -5354,6 +5354,61 @@ paths:
           description: "Logged out; the cookie jar is cleared; no body."
         "403":
           $ref: "#/components/responses/Forbidden"
+  "/api/v1/auth/sessions":
+    get:
+      operationId: "get_api_v1_auth_sessions"
+      tags: ["Authentication"]
+      summary: "List login families"
+      description: >-
+        List this account's live login families (get /api/v1/auth/sessions).
+        CP-029 / D-1a: one row per login ceremony whose token lineage is still
+        alive, each carrying id, created_at, last_used_at, device_type,
+        device_name (NULL where the minting surface knew no device) and a
+        server-computed current flag for the family the caller authenticated
+        with. Not the legacy playback-device /api/v1/me/sessions registry.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  "/api/v1/auth/sessions/{id}":
+    delete:
+      operationId: "delete_api_v1_auth_sessions_id"
+      tags: ["Authentication"]
+      summary: "End one login family"
+      description: >-
+        End exactly one login family (delete /api/v1/auth/sessions/{id}).
+        Per-device sign-out: every other device keeps its session and the
+        account-wide watermark is NOT bumped. Unknown and foreign-owned ids
+        answer the identical 404 (no probe oracle); revoking one's own
+        already-revoked family is idempotent and answers 204.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Family id (the sid claim)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+      responses:
+        "204":
+          description: "Family ended (or was already ended); no body."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
   "/api/v1/auth/refresh":
     post:
       operationId: "post_api_v1_auth_refresh"

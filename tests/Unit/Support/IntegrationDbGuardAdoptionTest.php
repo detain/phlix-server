@@ -534,7 +534,14 @@ final class IntegrationDbGuardAdoptionTest extends TestCase
     // exactly once at rest and the same credentials then log in, over
     // throwaway phlix_admpw_* databases).
     // Measured from the phpunit red (81), not predicted.
-    private const EXPECTED_ADOPTERS = 81;
+    // 81→82 by CP-029 (D-1a session-family revocation, 2026-11-10, this
+    // commit): +tests/Integration/Auth/TokenSessionFamilyMigration127RealDbTest
+    // .php (real-MySQL proof of the migration-127 pair — apply/replay
+    // idempotence, the database-clock grace window read THROUGH the shipped
+    // repository, the reuse ceremony, family isolation, and both FK cascades —
+    // over throwaway phlix_s127_* databases).
+    // Measured from the phpunit red (82), not predicted.
+    private const EXPECTED_ADOPTERS = 82;
 
     /**
      * Bare function calls that are a MySQL reachability probe under any

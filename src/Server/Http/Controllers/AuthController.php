@@ -560,7 +560,11 @@ class AuthController
         // or a stray cookie) keeps the old pure-clear behaviour.
         $userId = $request->userId;
         if (is_string($userId) && $userId !== '') {
-            $this->authManager->logout($userId, '', UserLoggedOut::REASON_EXPLICIT);
+            $this->authManager->logout(
+                $userId,
+                (string) ($request->tokenSessionId ?? ''),
+                UserLoggedOut::REASON_EXPLICIT
+            );
         }
 
         return (new Response())
@@ -618,13 +622,98 @@ class AuthController
     {
         $userId = $request->userId;
         if (is_string($userId) && $userId !== '') {
-            $this->authManager->logout($userId, '', UserLoggedOut::REASON_EXPLICIT);
+            $this->authManager->logout(
+                $userId,
+                (string) ($request->tokenSessionId ?? ''),
+                UserLoggedOut::REASON_EXPLICIT
+            );
         }
 
         return (new Response())
             ->noContent()
             ->clearCookie(self::SESSION_COOKIE)
             ->clearCookie(self::REFRESH_COOKIE);
+    }
+
+    /**
+     * List this account's live login families (CP-029 / D-1a).
+     *
+     * GET /api/v1/auth/sessions — the D-1a capability surface, deliberately
+     * NOT the legacy `/api/v1/me/sessions` playback-device list:
+     * these rows are the token lineages the auth path adjudicates, one per
+     * login ceremony. The row answering `current: true` is the family the
+     * CALLER authenticated with (compared against the server-side read of
+     * its own `sid` claim — a client never has to decode its token, and
+     * cannot lie about which family it is).
+     *
+     * Unwired store (legacy composition edge) answers `{"sessions":[]}`:
+     * truthful — no families are tracked there, and every pre-D-1a token
+     * remains governed by the watermark exactly as before.
+     *
+     * @param Request               $request Authenticated via AuthMiddleware.
+     * @param array<string, string> $params  Unused.
+     *
+     * @return Response 200 {'sessions': list<array{id: string, current: bool,
+     *     created_at: string, last_used_at: string, device_type: string|null,
+     *     device_name: string|null}>}.
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public function listTokenSessions(Request $request, array $params): Response
+    {
+        $userId = (string) ($request->userId ?? '');
+        $current = $request->tokenSessionId;
+
+        $sessions = [];
+        foreach ($this->authManager->listTokenSessions($userId) as $row) {
+            $row['current'] = $current !== null && $row['id'] === $current;
+            $sessions[] = $row;
+        }
+
+        return (new Response())->json(['sessions' => $sessions]);
+    }
+
+    /**
+     * End exactly ONE login family for this account (CP-029 / D-1a).
+     *
+     * DELETE /api/v1/auth/sessions/{id} — the per-device sign-out the
+     * watermark-only world could not offer: every OTHER device of this
+     * account keeps its session, and `users.tokens_not_valid_after` is NOT
+     * bumped (that is {@see self::logoutJson()}'s account-wide semantic and
+     * stays untouched). The revoked family's bearer dies on its next request
+     * (live family read on the access path) and its refresh chain at the next
+     * presentation.
+     *
+     * Unknown id and foreign-owned id answer the SAME 404 — no probe oracle
+     * for other accounts' family ids. Idempotent: revoking an already-revoked
+     * family of one's own still answers 204 (the client asked for this state;
+     * it has it). Cookie hygiene note: this endpoint is about ANOTHER device
+     * or a past session, so it clears no cookies of the caller's jar.
+     *
+     * CSRF: structural, same as the logout legs — a cookie-carrying state-
+     * changing request has already passed the dispatch gate before this
+     * handler runs.
+     *
+     * @param Request               $request Authenticated via AuthMiddleware.
+     * @param array<string, string> $params  Path parameters with 'id'.
+     *
+     * @return Response 204 on revocation (including already-revoked own
+     *                  family), 404 {'error':'Session not found'} otherwise —
+     *                  the envelope mirrors the shipped legacy-sessions 404
+     *                  text; no new wire codes.
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public function revokeTokenSession(Request $request, array $params): Response
+    {
+        $userId = (string) ($request->userId ?? '');
+        $sessionId = (string) ($params['id'] ?? '');
+
+        if ($sessionId === '' || !$this->authManager->revokeTokenSession($userId, $sessionId)) {
+            return (new Response())->status(404)->json(['error' => 'Session not found']);
+        }
+
+        return (new Response())->noContent();
     }
 
     /**

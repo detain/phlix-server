@@ -100,6 +100,14 @@ final class RequestAuthenticator
         $profileId = $auth['profile_id'] ?? null;
         $request->profileId = is_string($profileId) && $profileId !== '' ? $profileId : null;
 
+        // CP-029 / D-1a: the family id of THIS request's token, taken from the
+        // same already-validated payload (validateAccessToken returns the claim
+        // it read, null when the token predates the store). The per-device
+        // revoke surface and the `current` flag on the session list key off
+        // exactly this value — it is never sourced from the client.
+        $familyId = $auth['session_id'] ?? null;
+        $request->tokenSessionId = is_string($familyId) && $familyId !== '' ? $familyId : null;
+
         if ($request->profileId !== null) {
             RequestContext::setProfileId($request->profileId);
         }

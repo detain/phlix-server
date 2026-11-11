@@ -19,6 +19,7 @@ use Phlix\Auth\AuthProviderBootstrapper;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\CookiePolicy;
 use Phlix\Auth\DbLoginRateLimitStore;
+use Phlix\Auth\TokenSessionRepository;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProviderManager;
 use Phlix\Auth\TokenTtlPolicy;
@@ -617,7 +618,26 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // tests/Unit/Auth/AuthManagerSessionTeardownWiringGuardTest to pin.
                 ->constructorParameter('sessionManager', get(SessionManager::class))
                 // F7 (auth.method_disabled gate): the password-toggle policy.
-                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class)),
+                ->constructorParameter('authPolicy', get(AuthMethodPolicy::class))
+                // CP-029 / D-1a: the session-family store behind the `sid`
+                // claim. The same PHP-DI optional-param law as every line above
+                // applies with extra force HERE: left unnamed,
+                // AuthManager::$tokenSessions stays null, minted tokens carry
+                // NO family claim, per-device revocation and reuse detection are
+                // silently inert, and a sid-carrying token (once minted by any
+                // wired path) would fail closed against the unwired read —
+                // i.e. the composition cannot be fixed after the fact without
+                // logging everyone out. Named so
+                // tests/Unit/Auth/AuthTokenSessionWiringGuardTest can pin the
+                // wired form out of the REAL container.
+                ->constructorParameter('tokenSessions', get(TokenSessionRepository::class)),
+
+            // CP-029 / D-1a: repository over the migration-127 tables
+            // (auth_token_sessions + auth_refresh_grants). Its `db` is the same
+            // pool-backed Connection::class binding DbLoginRateLimitStore uses
+            // (CoreServicesProvider), so the auth hot path shares the pool.
+            TokenSessionRepository::class => autowire()
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class)),
 
             // SV-4.15(f): register/refresh get their OWN per-surface DB-backed
             // rate limiters. AuthController is otherwise autowired; the limiter

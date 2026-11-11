@@ -68,6 +68,37 @@ class JwtHandler
      */
     public const CLAIM_PROFILE_ID = 'profile_id';
 
+    /**
+     * Claim carrying the login-family id behind a token (CP-029 / D-1a).
+     *
+     * ## What it is
+     *
+     * The primary key of one `auth_token_sessions` row — one LOGIN ceremony.
+     * Every access/refresh pair minted from that ceremony (and every refresh
+     * rotation of the same chain) carries it, which is what makes per-device
+     * revocation and refresh-token REUSE detection expressible at all: without
+     * a lineage handle, the only revocation this server could speak of was the
+     * account-wide watermark.
+     *
+     * ## What it is NOT
+     *
+     *  - Not a credential. Possession of a valid signature already proves the
+     *    claim was minted here; the claim's only job is to NAME which family to
+     *    look up in the store.
+     *  - Not always present. Tokens minted BEFORE migration 127 carry no `sid`
+     *    (there was nothing to name), and every read path treats "absent" as
+     *    "pre-D-1a token": the watermark path decides those, unchanged. The
+     *    claim's presence is the version marker, not a schema flag.
+     *  - Not the legacy `sessions.id` device registry (migration 001). Same
+     *    UUID shape, entirely different table and lifecycle — see
+     *    {@see \Phlix\Auth\TokenSessionRepository} for why they stay separate.
+     *
+     * @var string
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public const CLAIM_SESSION_ID = 'sid';
+
     /** @var string Secret key for HMAC signature */
     private string $secretKey;
 
@@ -257,6 +288,44 @@ class JwtHandler
         }
 
         $value = $payload[self::CLAIM_PROFILE_ID] ?? null;
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
+    }
+
+    /**
+     * Read the {@see self::CLAIM_SESSION_ID} family claim out of a decoded payload.
+     *
+     * The reader is null-tolerant by law: payloads from BEFORE migration 127
+     * (and payloads from any token this server minted while no
+     * {@see \Phlix\Auth\TokenSessionRepository} was wired) carry no `sid`, and
+     * "no claim" must route to the legacy watermark decision path — never to a
+     * fail-closed rejection of a perfectly good old token. Presence means the
+     * OPPOSITE: a `sid` here was signed by this server, so a store miss on it
+     * is a genuine anomaly the caller must fail closed on.
+     *
+     * ⚠ Signed does not mean ALIVE. The family can be revoked at any moment;
+     * it is the caller's duty to consult the store per decision (live-read
+     * law, CP-024 lineage) — never to cache this value's liveness.
+     *
+     * @param array<string, mixed>|null $payload Decoded JWT payload (null pass-through).
+     *
+     * @return string|null The family UUID, or null when the claim is absent,
+     *                     non-string, or blank.
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public static function sessionIdClaim(?array $payload): ?string
+    {
+        if ($payload === null) {
+            return null;
+        }
+
+        $value = $payload[self::CLAIM_SESSION_ID] ?? null;
         if (!is_string($value)) {
             return null;
         }

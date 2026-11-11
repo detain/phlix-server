@@ -466,6 +466,20 @@ class Application
         $this->router->get('/auth/logout', [$authController, 'logout']);
         $this->router->post('/auth/logout', [$authController, 'logout']);
 
+        // CP-029 / D-1a: the session-family surface. Guarded (AuthMiddleware)
+        // where login/register/refresh cannot be — these act on the CURRENT
+        // identity, which only an authenticated bearer or cookie carries. The
+        // rows are the auth path's own login families (migration 127), NOT the
+        // legacy `/api/v1/me/sessions` playback-device registry.
+        $this->router->group(
+            '',
+            function (Router $r) use ($authController): void {
+                $r->get('/api/v1/auth/sessions', [$authController, 'listTokenSessions']);
+                $r->delete('/api/v1/auth/sessions/{id}', [$authController, 'revokeTokenSession']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
+
         // S44/S45/S47: every external-auth-provider route is wired in ONE place —
         // {@see \Phlix\Server\Http\AuthProviderRouteRegistrar} — so a provider can
         // never ship with its routes silently unregistered (the S44 dead-OIDC

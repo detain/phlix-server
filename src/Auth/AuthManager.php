@@ -128,6 +128,29 @@ class AuthManager
     private ?AuthMethodPolicy $authPolicy;
 
     /**
+     * CP-029 / D-1a: the session-family store behind the `sid` JWT claim.
+     *
+     * When wired, every token minted from {@see self::buildAuthResponse()}
+     * belongs to a named family this store can end — per-device sign-out,
+     * reuse-triggered family revocation, and (from the watermark choke point
+     * {@see self::revokeUserTokens()}) the account-wide kill, which keeps its
+     * EXACT current semantics and envelope; the store only makes the same
+     * decision immediate on the family path rather than iat-derived.
+     *
+     * When null (hand-built unit managers, the legacy composition edge) token
+     * minting carries no `sid` claim and the read paths stay on the pure
+     * watermark behavior they shipped with since 2026-09-29 — the backward-
+     * compatibility arm the TokenSessionFamilyTest class pins. The container,
+     * however, ALWAYS ships the wired form: `AuthServicesProvider` names this
+     * parameter, and AuthTokenSessionWiringGuardTest proves it, because a
+     * silently-unwired store is exactly the PHP-DI optional-param trap every
+     * ctor param above this one already documents.
+     *
+     * @var TokenSessionRepository|null
+     */
+    private ?TokenSessionRepository $tokenSessions;
+
+    /**
      * In-memory fallback rate limit store used when no DbLoginRateLimitStore
      * is injected (tests / legacy callers).
      *
@@ -319,6 +342,13 @@ class AuthManager
      *                                       when supplied, logout() also ends the
      *                                       user's device sessions server-side (M-1)
      *                                       instead of only revoking JWTs.
+     * @param TokenSessionRepository|null $tokenSessions Optional D-1a session-family
+     *                                       store (CP-029); when supplied, minted
+     *                                       token pairs carry a `sid` family claim
+     *                                       and the refresh path gains per-family
+     *                                       revocation + reuse detection. Null =
+     *                                       legacy watermark-only behavior, pinned
+     *                                       as the backward-compat arm.
      *
      * @example
      * ```php
@@ -342,7 +372,8 @@ class AuthManager
         ?DbLoginRateLimitStore $loginRateLimitStore = null,
         ?UserProfileManager $profileManager = null,
         ?SessionManager $sessionManager = null,
-        ?AuthMethodPolicy $authPolicy = null
+        ?AuthMethodPolicy $authPolicy = null,
+        ?TokenSessionRepository $tokenSessions = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -357,6 +388,7 @@ class AuthManager
         $this->profileManager = $profileManager;
         $this->sessionManager = $sessionManager;
         $this->authPolicy = $authPolicy;
+        $this->tokenSessions = $tokenSessions;
         // Built from the already-explicitly-wired settings store rather than
         // taken as its own optional ctor param: PHP-DI skips optional params
         // during autowiring, so an unnamed PasswordPolicy param would silently
@@ -1605,17 +1637,35 @@ class AuthManager
             throw new \InvalidArgumentException('Password change required');
         }
 
+        $jti = is_string($payload['jti'] ?? null) ? (string) $payload['jti'] : '';
+
+        // CP-029 / D-1a: family + grant adjudication for every token the store
+        // KNOWS (one carrying a `sid` claim). These are AUTHORIZATION
+        // decisions, so they run here — BEFORE the grace memo below, exactly
+        // the guards-first discipline CP-005 pinned for the memo itself: a
+        // family revoked between two presentations must not re-deliver from
+        // memory. A refresh token with NO `sid` predates the store (or was
+        // minted by an unwired manager) and is adjudicated by the watermark
+        // alone, unchanged — the zero-breakage arm.
+        $sessionId = JwtHandler::sessionIdClaim($payload);
+        if ($sessionId !== null) {
+            $this->adjudicateRefreshFamily($userId, $sessionId, $jti);
+        }
+
         // S80: carry the session's profile across the re-mint. Without this a
         // device that switched to a child profile would silently revert to the
         // account default the first time its access token expired.
         // CP-005 (§5): idempotent re-delivery inside the grace window. The
         // lookup runs AFTER every guard above — grace memoizes the MINT, never
         // an authorization decision, so a watermark bump mid-window still
-        // refuses this same presentation. Accepted state, disclosed by design:
-        // with no revocation-on-rotation (§5(c) unimplemented estate-wide), a
-        // stolen pre-rotation token is indistinguishable from a racing benign
-        // client, and theft stays undetectable until the watermark bump.
-        $jti = is_string($payload['jti'] ?? null) ? (string) $payload['jti'] : '';
+        // refuses this same presentation. Since CP-029 the STORE verdict
+        // covers what this process-local memo cannot: a replay on a COLD
+        // worker finds no memo entry, reads as consumed-within-grace in
+        // `auth_refresh_grants`, and rotates on inside the family instead of
+        // being misread as theft. (The pre-D-1a note that "theft stays
+        // undetectable" held only while §5(c) was unimplemented; with the
+        // store wired, a replay OUTSIDE the window revokes the family and is
+        // audited as 'refresh_token_reuse'.)
         if ($jti !== '') {
             $graced = $this->rotationGrace[$jti] ?? null;
             if (is_array($graced) && ($graced['expiresAt'] ?? 0) >= time()) {
@@ -1623,7 +1673,11 @@ class AuthManager
             }
         }
 
-        $response = $this->createAuthResponse($userId, JwtHandler::profileIdClaim($payload));
+        $response = $this->buildAuthResponse(
+            $userId,
+            JwtHandler::profileIdClaim($payload),
+            $sessionId
+        );
 
         if ($jti !== '') {
             $this->pruneRotationGrace();
@@ -1634,6 +1688,130 @@ class AuthManager
         }
 
         return $response;
+    }
+
+    /**
+     * CP-029 / D-1a: adjudicate ONE presentation of a lineage-carrying refresh
+     * token against the session-family store. Throws to refuse; returns to
+     * let the caller proceed (grace memo, then re-mint inside the family).
+     *
+     * ## The decision table (mirrors TokenSessionRepository::findGrant())
+     *
+     *  - store unwired but the token claims a `sid` → impossible composition
+     *    (this server signed a family token while its store went missing);
+     *    FAIL CLOSED — the claim cannot be honored by guesswork.
+     *  - `jti` missing on a sid-carrying token → same class: every D-1a mint
+     *    stamps jti (reserved claim in createRefreshToken); fail closed.
+     *  - unknown jti → the signed token's lineage is not in the store (never
+     *    minted here, pruned, or the DB moved under the token); fail closed.
+     *  - session not 'active' → the family was revoked (per-device sign-out
+     *    or a previous reuse verdict) — refuse, do NOT re-revoke.
+     *  - grant.sessionId ≠ claim.sid → mint-time invariants (buildAuthResponse
+     *    writes both from one value) say this cannot happen; if it ever does,
+     *    the presentation is incoherent and dies.
+     *  - consumed AND outside the grace window → REUSE DETECTED: a rotated
+     *    token came back. That is the theft signal §5(c) was built for — the
+     *    FAMILY (this session id only, never the account) is revoked, the
+     *    event is audited, the presentation is refused.
+     *  - consumed AND inside the window → benign multi-tab race (the CP-005
+     *    grace rule at store scope): fall through so the caller rotates a
+     *    fresh pair INSIDE the family; nothing is revoked, nothing consumed.
+     *  - live → mark consumed; the caller's re-mint registers the successor
+     *    grant. Consumption BEFORE mint is deliberate: a mint that dies
+     *    mid-way leaves the client's retry inside the grace window, where it
+     *    rotates on — a post-mint consume would instead make the retry look
+     *    like reuse.
+     *
+     * Every refusal throws the EXISTING 'Token has been revoked' message the
+     * boundary already maps to 401 {'error': message} — zero new wire codes
+     * (§3 law); the distinguishing detail lives in the audit reason names.
+     *
+     * @param string $userId    Token subject.
+     * @param string $sessionId The family id from the `sid` claim.
+     * @param string $jti       The presented refresh token's jti ('' = absent).
+     *
+     * @return void
+     *
+     * @throws \InvalidArgumentException With the shipped generic revoked text
+     *                                   on every refusing arm.
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    private function adjudicateRefreshFamily(string $userId, string $sessionId, string $jti): void
+    {
+        if ($this->tokenSessions === null) {
+            $this->auditLogger->logFailedAuth('token_store_unwired', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        if ($jti === '') {
+            $this->auditLogger->logFailedAuth('refresh_grant_jti_missing', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        $grant = $this->tokenSessions->findGrant($jti, self::ROTATION_GRACE_SECONDS);
+
+        if ($grant === null) {
+            $this->auditLogger->logFailedAuth('refresh_grant_unknown', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+                'jti' => $jti,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        if (($grant['sessionStatus'] ?? '') !== 'active') {
+            $this->auditLogger->logFailedAuth('token_session_revoked', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+                'jti' => $jti,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        if (($grant['sessionId'] ?? '') !== $sessionId) {
+            $this->auditLogger->logFailedAuth('refresh_grant_session_mismatch', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+                'jti' => $jti,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        $consumed = ($grant['consumed'] ?? false) === true;
+
+        if ($consumed && ($grant['withinGrace'] ?? false) !== true) {
+            // REUSE. The family that owns the stolen-in-transit chain dies —
+            // and ONLY that family: every other device's `sid` keeps its
+            // living grants. This is the capability the stateless design
+            // could not have.
+            $this->tokenSessions->revokeSession($sessionId, 'refresh_token_reuse');
+            $this->auditLogger->logFailedAuth('refresh_token_reuse', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+                'jti' => $jti,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        if ($consumed) {
+            // Benign race inside the grace window: rotate on, revoke nothing.
+            return;
+        }
+
+        $this->tokenSessions->markGrantConsumed($jti);
     }
 
     /**
@@ -1689,6 +1867,24 @@ class AuthManager
             return null;
         }
 
+        // CP-029 / D-1a: the family layer. A token carrying a `sid` claim can
+        // authenticate only while its family row says 'active' — per-device
+        // sign-out and reuse revocation land HERE on the access path (the
+        // 15-minute access-token TTL was always the worst-case window on the
+        // pre-D-1a path; it is now the exception rather than the rule).
+        // Deliberately a LIVE read, every request, no memo (de573d6e law): a
+        // resident worker that cached liveness would reinvent the exact stale-
+        // window this capability exists to close. Absent claim = pre-D-1a
+        // token = watermark-only decision, unchanged. Present claim against an
+        // UNWIRED store fails closed — this server signed the claim, so its
+        // adjudicator missing is an anomaly, not a legacy shape.
+        $sessionId = JwtHandler::sessionIdClaim($payload);
+        if ($sessionId !== null) {
+            if ($this->tokenSessions === null || !$this->tokenSessions->isSessionActive($sessionId)) {
+                return null;
+            }
+        }
+
         // S80: the profile the token was minted for, resolved through the owner
         // check on every request. Returning the RAW claim here would hand the rest
         // of the stack a profile the account may no longer own — a token stays
@@ -1700,6 +1896,7 @@ class AuthManager
         return [
             'user_id' => $payload['sub'],
             'expires_at' => $payload['exp'],
+            'session_id' => $sessionId,
             'profile_id' => $this->resolveProfileForUser(
                 $userId,
                 JwtHandler::profileIdClaim($payload)
@@ -1862,6 +2059,17 @@ class AuthManager
      *                               profile through so it survives the re-mint.
      *                               The value is VERIFIED against `$userId` before
      *                               it is stamped — see {@see self::resolveProfileForUser()}.
+     * @param string|null $familyHint CP-029 (D-1a): the EXISTING family id a
+     *                               REFRESH rotation stays inside, so one device's
+     *                               whole token lineage remains one revocable unit.
+     *                               Null on a fresh-login mint — the store mints a
+     *                               new family row and the returned pair carries its
+     *                               `sid`. Ignored entirely (no store read, no
+     *                               claim) when no TokenSessionRepository is wired.
+     * @param string|null $deviceType Display metadata for a NEW family (login legs
+     *                               that know the client type); null when unknown.
+     * @param string|null $deviceName Display metadata for a NEW family; untrusted
+     *                               client text, column-length-capped, never parsed.
      *
      * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
      *     user: array<string, mixed>|null, profile_id: string|null}
@@ -1877,8 +2085,13 @@ class AuthManager
      *     all of them whatever verified the credential (SRV-M18, review
      *     server__pm).
      */
-    public function buildAuthResponse(string $userId, ?string $profileId = null): array
-    {
+    public function buildAuthResponse(
+        string $userId,
+        ?string $profileId = null,
+        ?string $familyHint = null,
+        ?string $deviceType = null,
+        ?string $deviceName = null
+    ): array {
         // SRV-M18 (review server__pm): the flag is an ACCOUNT HOLD, not a
         // password-leg quirk — the admin reset flow stamps it precisely
         // because the credentials are trusted-but-compromised. Guarding only
@@ -1907,9 +2120,41 @@ class AuthManager
             ? []
             : [JwtHandler::CLAIM_PROFILE_ID => $resolvedProfileId];
 
+        // CP-029 / D-1a: name the family BEFORE signing. Every pair minted
+        // from this seam belongs to one login family this server can end
+        // per-device; a rotation passes its lineage in as $familyHint so the
+        // WHOLE chain of one device shares one revocable row. When no store
+        // is wired (legacy hand-built managers) the mint stays byte-identical
+        // to the pre-D-1a shape — the backward-compat arm pinned by tests.
+        $sessionId = null;
+        if ($this->tokenSessions !== null) {
+            $sessionId = $familyHint ?? $this->tokenSessions->createSession($userId, $deviceType, $deviceName);
+            $claims[JwtHandler::CLAIM_SESSION_ID] = $sessionId;
+        }
+
         $accessToken = $this->jwtHandler->createAccessToken($userId, $claims);
         $refreshToken = $this->jwtHandler->createRefreshToken($userId, $claims);
         $user = $this->getUser($userId);
+
+        // The grant row registers the NEW refresh token's jti at mint time —
+        // a signed-and-delivered token with no grant row would read as
+        // "unknown jti" (fail-closed) on its very first presentation. The
+        // jti is re-read from the freshly signed token rather than threaded
+        // through the handler: reserved claims are minted inside create-
+        // RefreshToken, and duplicating that generator here would fork the
+        // identity that reuse detection is built on.
+        if ($this->tokenSessions !== null && $sessionId !== null) {
+            $minted = $this->jwtHandler->validateToken($refreshToken);
+            $mintedJti = is_array($minted) && is_string($minted['jti'] ?? null) ? $minted['jti'] : '';
+            if ($mintedJti !== '') {
+                $this->tokenSessions->recordGrant($mintedJti, $sessionId);
+            }
+            if ($familyHint !== null) {
+                // Rotation is the family's "still in use" signal (display
+                // metadata only — the access hot path stays a pure read).
+                $this->tokenSessions->touchSession($sessionId);
+            }
+        }
 
         return [
             'access_token' => $accessToken,
@@ -2034,11 +2279,104 @@ class AuthManager
     public function revokeUserTokens(string $userId, string $reason): void
     {
         $this->userRepository->revokeTokensBeforeNow($userId);
+        // CP-029 / D-1a: the store-side mirror of the bump. Same choke point,
+        // same blast radius — every family of this account dies, so the
+        // "last-man-standing" nuclear semantics are NOT weakened or widened,
+        // just made immediate on the family path as well as the iat-derived
+        // watermark path. Legacy (no-sid) tokens keep being judged by the
+        // watermark alone; this call cannot reach them either way.
+        $this->tokenSessions?->revokeAllForUser($userId, $reason);
         $this->invalidateUserStatusCache($userId);
         $this->logger->info('User tokens revoked', [
             'user_id' => $userId,
             'reason' => $reason,
         ]);
+    }
+
+    /**
+     * End EXACTLY ONE login family for one user (per-device sign-out).
+     *
+     * The capability D-1a exists for. Ownership is enforced here, not at the
+     * route: a family id belonging to someone else reports as not-found (the
+     * controller answers its 404), never as forbidden — there is no oracle
+     * for another account's session ids.
+     *
+     * ## What this does NOT touch (and why that is the whole point)
+     *
+     *  - the user's watermark (users.tokens_not_valid_after) — bumping it here
+     *    would silently convert a per-device sign-out into an account-wide
+     *    logout, deleting the distinction this feature ships to create;
+     *  - the legacy `sessions` device registry — separate concern, separate
+     *    table, see TokenSessionRepository's header;
+     *  - any OTHER family's grants — reuse revocation and per-device revoke
+     *    both bind to one session id, by construction of the UPDATE's WHERE.
+     *
+     * The revoked family's outstanding access token dies on its NEXT request
+     * (the live family read in {@see self::validateAccessToken()}) and its
+     * refresh chain dies at the next presentation — refused by the not-'active'
+     * arm in {@see self::adjudicateRefreshFamily()}.
+     *
+     * @param string $userId    The authenticated requester.
+     * @param string $sessionId The family id (path parameter) to end.
+     *
+     * @return bool True when a previously-active family of THIS user was
+     *              revoked; false when the id is unknown, foreign-owned, or
+     *              already revoked (idempotent no-op — the endpoint still
+     *              answers 204, so a double-tapped "sign this device out"
+     *              does not surface a spurious error).
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public function revokeTokenSession(string $userId, string $sessionId): bool
+    {
+        if ($this->tokenSessions === null || $sessionId === '' || $userId === '') {
+            return false;
+        }
+
+        if (!$this->tokenSessions->sessionBelongsToUser($sessionId, $userId)) {
+            return false;
+        }
+
+        $this->tokenSessions->revokeSession($sessionId, 'logout');
+        // Audit trail without inventing an event taxonomy: logLogout is the
+        // shipped name for "this session ended by user intent", the app-log
+        // line carries the D-1a-specific reason for operators.
+        $this->auditLogger->logLogout($userId, $sessionId);
+        $this->logger->info('Token session revoked', [
+            'user_id' => $userId,
+            'session_id' => $sessionId,
+            'reason' => 'logout',
+        ]);
+
+        return true;
+    }
+
+    /**
+     * The user's still-alive login families, for GET /api/v1/auth/sessions.
+     *
+     * Shape note: rows come straight from the store (id / created_at /
+     * last_used_at / device_type / device_name — the last two honestly NULL
+     * for mints whose surface had no device concept). The CURRENT family is
+     * flagged client-side by the controller comparing against the request's
+     * own `sid`; no extra query, and no need to make a client decode its own
+     * JWT to find out which row it is.
+     *
+     * @param string $userId Authenticated owner.
+     *
+     * @return list<array{id: string, created_at: string, last_used_at: string,
+     *     device_type: string|null, device_name: string|null}> Empty when the
+     *     store is unwired (the endpoint answers `{"sessions": []}` — truthful:
+     *     a deployment without the store has no tracked families).
+     *
+     * @since CP-029 (D-1a session-family revocation)
+     */
+    public function listTokenSessions(string $userId): array
+    {
+        if ($this->tokenSessions === null || $userId === '') {
+            return [];
+        }
+
+        return $this->tokenSessions->listActiveSessions($userId);
     }
 
     /**

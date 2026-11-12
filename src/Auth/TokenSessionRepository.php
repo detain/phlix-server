@@ -56,6 +56,32 @@ use Workerman\MySQL\Connection;
  */
 class TokenSessionRepository
 {
+    /**
+     * How long a grant row may outlive its token's expiry before the sweep
+     * removes it (D1a parity cure 2026-11-11, mirrors hub semantics). The theft
+     * sensor only ever needs the row while the token itself still verifies —
+     * `refreshToken()` refuses an expired token on crypto grounds before the
+     * grant is consulted — so the grace window is forensic headroom, not a
+     * correctness requirement.
+     */
+    private const PRUNE_GRACE_SECONDS = 86400;
+
+    /** Rows removed per sweep arm, per write — bounds each DELETE (the estate's single-phase prune idiom). */
+    private const PRUNE_BATCH_SIZE = 1000;
+
+    /**
+     * Retention for grant rows that predate lifetime stamping (expires_at
+     * NULL): a full year after created_at, far past any real token TTL.
+     */
+    private const UNSTAMPED_RETENTION_SECONDS = 31536000;
+
+    /**
+     * Ceiling for {@see listActiveSessions()}. Capability-neutral: revoking a
+     * family never requires seeing it in the list, so the honest bound trades
+     * an unbounded per-request read for a capped page the UI cannot outgrow.
+     */
+    public const MAX_LISTED_SESSIONS = 200;
+
     /** @var Connection Database connection (Workerman MySQL, same handle family as UserRepository) */
     private Connection $db;
 
@@ -189,17 +215,66 @@ class TokenSessionRepository
      * and never registered would be indistinguishable from an unknown forged
      * jti on presentation, so the row must exist the moment the bytes exist.
      *
-     * @param string $jti       The new refresh token's `jti`.
-     * @param string $sessionId Family that owns it.
+     * The insert first runs {@see pruneExpired()} — the write-time sweep that
+     * keeps the ledger bounded without a cron (D1a parity cure 2026-11-11,
+     * hub-consistent semantics on the server's own bounded-DELETE idiom).
+     *
+     * @param string   $jti       The new refresh token's `jti`.
+     * @param string   $sessionId Family that owns it.
+     * @param int|null $expiresAt The token's OWN baked `exp` (unix seconds),
+     *                            stamped so the row can never disagree with
+     *                            the token it indexes; NULL for pre-cure
+     *                            callers and grandfathered rows.
      *
      * @return void
      */
-    public function recordGrant(string $jti, string $sessionId): void
+    public function recordGrant(string $jti, string $sessionId, ?int $expiresAt = null): void
     {
+        $this->pruneExpired();
         $this->db->query(
-            'INSERT INTO auth_refresh_grants (jti, session_id) VALUES (?, ?)',
-            [$jti, $sessionId]
+            'INSERT INTO auth_refresh_grants (jti, session_id, expires_at) VALUES (?, ?, FROM_UNIXTIME(?))',
+            [$jti, $sessionId, $expiresAt]
         );
+    }
+
+    /**
+     * Sweep retired grants out of the ledger (bounded, two arms).
+     *
+     * Arm 1 — stamped rows whose token expired and has been dead past the
+     * grace window. A PRESENTATION of such a token is refused by
+     * {@see \Phlix\Auth\AuthManager::refreshToken()} on crypto grounds
+     * (validateToken's own exp check) BEFORE any grant lookup, so deleting the
+     * row cannot mask a theft signal.
+     * Arm 2 — unstamped rows (pre-cure era) aged a full year past created_at.
+     *
+     * A CONSUMED-but-unexpired grant is kept by both arms — that row is the
+     * theft sensor itself (replay adjudication needs it). Best-effort in the
+     * estate's janitor posture (QuickConnectStateStore::purgeExpired): the
+     * sweep runs on the write path and is never load-bearing for the auth
+     * decision.
+     *
+     * @return void
+     */
+    public function pruneExpired(): void
+    {
+        try {
+            $this->db->query(
+                'DELETE FROM auth_refresh_grants WHERE expires_at < NOW() - INTERVAL '
+                . self::PRUNE_GRACE_SECONDS . ' SECOND LIMIT ?',
+                [self::PRUNE_BATCH_SIZE]
+            );
+            $this->db->query(
+                'DELETE FROM auth_refresh_grants WHERE expires_at IS NULL'
+                . ' AND created_at < NOW() - INTERVAL '
+                . self::UNSTAMPED_RETENTION_SECONDS . ' SECOND LIMIT ?',
+                [self::PRUNE_BATCH_SIZE]
+            );
+        } catch (\Throwable) {
+            // The sweep is janitorial, never load-bearing. The INSERT that
+            // follows on the write path is validated by its own caller
+            // (a throw there is the real failure), so swallowing only here
+            // cannot leave an unregistered grant silently.
+        }
     }
 
     /**
@@ -303,6 +378,11 @@ class TokenSessionRepository
      * client saw the 204); resurrecting it in the list would invite "revive"
      * questions this schema has no answer for.
      *
+     * Bounded at MAX_LISTED_SESSIONS (D1a parity cure): the newest activity
+     * wins the page. Capability-neutral — DELETE /auth/sessions/{id} takes an
+     * id directly and never consults this list, so an off-page family is still
+     * revocable (its id lives in the client's own state and the JWT `sid`).
+     *
      * @param string $userId Owner.
      *
      * @return list<array{id: string, created_at: string, last_used_at: string,
@@ -313,7 +393,8 @@ class TokenSessionRepository
         $rows = RowMap::listFromMixed($this->db->query(
             'SELECT id, created_at, last_used_at, device_type, device_name'
             . " FROM auth_token_sessions WHERE user_id = ? AND status = 'active'"
-            . ' ORDER BY last_used_at DESC',
+            . ' ORDER BY last_used_at DESC'
+            . ' LIMIT ' . self::MAX_LISTED_SESSIONS,
             [$userId]
         ));
 

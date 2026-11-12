@@ -143,6 +143,26 @@ House discipline this file maintains (established by review W-min90/91/92):
   request that used to be accepted or rejected differently changes.
   [COOKIE-DESIGN §3 / CP-002, w28L1 2026-11-09]
 
+### Fixed
+
+- **Refresh-token grants now carry their own lifetime, a retention sweep runs,
+  and GET /api/v1/auth/sessions is bounded.** Since the D-1a core shipped, every
+  rotation left one grant row behind forever: the table had no lifetime column,
+  no sweep, and the sessions list had no ceiling — a long-lived account paid a
+  SELECT growing with its whole history for a screenful of rows. Migration 128
+  adds `auth_refresh_grants.expires_at` plus the sweep index, both guarded in
+  the 107-probe idiom and replay-idempotent; `recordGrant` now stamps the mint's
+  OWN baked `exp` and runs a bounded, best-effort sweep first; the list returns
+  at most 200 families, newest activity first. The reuse detector's
+  consumed-but-unexpired rows and grandfathered pre-cure rows are never swept —
+  each arm, and both safety premises, are pinned by execution against real
+  MySQL. docs/session-family-revocation.md documents the machinery as shipped
+  (core and cure together). Retraction disclosed: an earlier review register
+  claimed this cure had landed as commit 47374495 with green CI; that landing
+  was a phantom — the commit exists nowhere in this repository and origin never
+  moved. This entry is the real landing.
+  [CP-029 / D-1a parity cure, server w38-fold, 2026-11-11]
+
 ### Security
 
 - **Signing out of one device now signs out exactly that device — and a stolen

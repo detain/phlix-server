@@ -23,6 +23,16 @@
  * → ownership) so the SQL strings themselves — not just their mocked echo —
  * execute at least once here.
  *
+ * The D1a parity cure legs (migration 128) pin the retention half the core
+ * shipped without: the grants table carries each mint's OWN baked expiry,
+ * the write-time sweep retires exactly the arms TokenSessionRepository
+ * documents (never the consumed-but-unexpired theft sensor, never a live
+ * grant inside its grace), the expiry column and its sweep index ship in
+ * the DDL fingerprint, replay of 128 is an idempotent no-op, and the
+ * sessions list is bounded to MAX_LISTED_SESSIONS rows — newest activity
+ * first, the overflow row excluded by execution (201 rows seeded, exactly
+ * 200 returned), not by prose.
+ *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MPL-2.0
  */
@@ -47,6 +57,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     use RequiresRealDatabase;
 
     private const MIGRATION = '127_auth_token_sessions.sql';
+    private const MIGRATION_128 = '128_auth_refresh_grants_expiry.sql';
 
     private ?Connection $db = null;
     private ?string $scratchDb = null;
@@ -139,6 +150,28 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     }
 
     /**
+     * Apply the REAL migration-128 file (same isolated-fixDir idiom) and
+     * return the runner report.
+     *
+     * @return array{applied: list<string>, notes: list<string>, errors: list<string>, skipped_count: int}
+     */
+    private function apply128(): array
+    {
+        $fixDir = sys_get_temp_dir() . '/phlix-s128-fix-' . bin2hex(random_bytes(3));
+        mkdir($fixDir, 0777, true);
+        $this->fixDirs[] = $fixDir;
+        copy(dirname(__DIR__, 3) . '/migrations/' . self::MIGRATION_128, $fixDir . '/' . self::MIGRATION_128);
+
+        $db = $this->db;
+        if (!$db instanceof Connection) {
+            $this->fail('setUp must leave a live scratch connection before applying migrations.');
+        }
+        $runner = new MigrationRunner(static fn (): Connection => $db, $fixDir);
+
+        return $runner->run();
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     private function rows(string $sql, array $binds = []): array
@@ -151,6 +184,21 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     private function seedUser(string $id): void
     {
         $this->db->query('INSERT INTO users (id, username) VALUES (?, ?)', [$id, 'u-' . substr($id, 0, 8)]);
+    }
+
+    /**
+     * Seed one sweep-arm grant row with every clock value written as a raw
+     * DATABASE-CLOCK expression (the caller's strings) — never PHP-formatted
+     * dates, so the sweep is tested against the same clock its comparisons
+     * read (the two-clocks flaw the grace-window leg already forbids).
+     */
+    private function seedGrantArm(string $jti, string $sid, string $born, string $dies, string $consumed = 'NULL'): void
+    {
+        $this->db->query(
+            'INSERT INTO auth_refresh_grants (jti, session_id, consumed_at, created_at, expires_at)'
+            . " VALUES (?, ?, $consumed, $born, $dies)",
+            [$jti, $sid]
+        );
     }
 
     public function testTheMigrationAppliesCleanAndIsLedgered(): void
@@ -167,6 +215,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     public function testTheDdlShipsThePinnedShape(): void
     {
         $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors']);
 
         $cols = [];
         $colRows = $this->rows(
@@ -192,6 +241,13 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
         $this->assertSame('char(36)', $cols['auth_refresh_grants.session_id']['COLUMN_TYPE'] ?? null);
         $this->assertSame('YES', $cols['auth_refresh_grants.consumed_at']['IS_NULLABLE']);
 
+        // D1a parity cure (128): the grants table gains its OWN lifetime
+        // claim. Timestamp-nullable — a row that predates the cure (or a
+        // mint whose token carried no exp claim) keeps NULL and rides the
+        // created_at grandfather arm instead of sweeping instantly.
+        $this->assertSame('timestamp', $cols['auth_refresh_grants.expires_at']['COLUMN_TYPE'] ?? null);
+        $this->assertSame('YES', $cols['auth_refresh_grants.expires_at']['IS_NULLABLE'] ?? null);
+
         $indexes = [];
         $indexRows = $this->rows(
             'SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS'
@@ -201,7 +257,14 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
         foreach ($indexRows as $i) {
             $indexes[$i['INDEX_NAME']] = true;
         }
-        foreach (['idx_ats_user', 'idx_ats_user_status', 'idx_arg_session', 'idx_arg_consumed'] as $want) {
+        $wantIndexes = [
+            'idx_ats_user',
+            'idx_ats_user_status',
+            'idx_arg_session',
+            'idx_arg_consumed',
+            'idx_arg_expires_at',
+        ];
+        foreach ($wantIndexes as $want) {
             $this->assertArrayHasKey($want, $indexes, "index {$want} must ship — read paths depend on it");
         }
 
@@ -246,6 +309,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     public function testTheGraceWindowIsADatabaseClockFact(): void
     {
         $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors'], 'the current schema carries expires_at');
 
         $user = 'user-' . bin2hex(random_bytes(6));
         $this->seedUser($user);
@@ -300,6 +364,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     public function testTheFullCeremonyRunsOnRealRows(): void
     {
         $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors'], 'the current schema carries expires_at');
 
         $user = 'user-' . bin2hex(random_bytes(6));
         $this->seedUser($user);
@@ -417,6 +482,7 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
     public function testCascadeDeletesMirrorOwnershipCleanup(): void
     {
         $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors'], 'the current schema carries expires_at');
 
         $u = 'user-' . bin2hex(random_bytes(6));
         $this->seedUser($u);
@@ -438,5 +504,136 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
         $grants2 = $this->rows('SELECT COUNT(*) AS n FROM auth_refresh_grants');
         $this->assertSame(0, (int) ($sessions[0]['n'] ?? 0));
         $this->assertSame(0, (int) ($grants2[0]['n'] ?? 0));
+    }
+
+    public function testTheExpiryMigrationAppliesReplaySafeAndIsLedgered(): void
+    {
+        $this->assertSame([], $this->apply127()['errors']);
+
+        $report = $this->apply128();
+        $this->assertSame([], $report['errors'], 'migration 128 must apply without errors');
+        $this->assertNotEmpty($report['applied'], '128 must report as applied');
+
+        $ledger = $this->rows("SELECT name FROM schema_migrations WHERE name LIKE '128_%'");
+        $this->assertCount(1, $ledger, 'exactly one ledger row for 128');
+
+        // Replay with the ledger row REMOVED: both guarded blocks (column
+        // probe, index probe) must degrade to SELECT 1 — zero errors and, in
+        // the decisive case, zero duplicates. A second expires_at column is
+        // impossible by MySQL's own rules; a second identical index name is
+        // entirely possible if a probe lies, so the STATISTICS count is taken
+        // over ROWS, not distinct names.
+        $this->db->query("DELETE FROM schema_migrations WHERE name LIKE '128_%'");
+        $second = $this->apply128();
+        $this->assertSame([], $second['errors'], 'replay of 128 must be an error-free no-op');
+
+        $columns = $this->rows(
+            'SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS'
+            . " WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'auth_refresh_grants' AND COLUMN_NAME = 'expires_at'",
+            [$this->scratchDb]
+        );
+        $this->assertSame(1, (int) ($columns[0]['n'] ?? 0), 'exactly one expires_at column after replay');
+
+        $indexRows = $this->rows(
+            'SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.STATISTICS'
+            . " WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'auth_refresh_grants' AND INDEX_NAME = 'idx_arg_expires_at'",
+            [$this->scratchDb]
+        );
+        $this->assertSame(1, (int) ($indexRows[0]['n'] ?? 0), 'replay must not duplicate the sweep index');
+    }
+
+    public function testTheSessionsListIsBoundedToTheCeiling(): void
+    {
+        $this->assertSame([], $this->apply127()['errors']);
+
+        $u = 'user-' . bin2hex(random_bytes(6));
+        $this->seedUser($u);
+        $repo = new TokenSessionRepository($this->db);
+
+        /** @var list<string> $ids */
+        $ids = [];
+        for ($i = 0; $i <= TokenSessionRepository::MAX_LISTED_SESSIONS; $i++) {
+            $ids[] = $repo->createSession($u);
+        }
+        $this->assertCount(201, $ids, 'the seed must overshoot the ceiling by exactly one row');
+
+        // Make the cut DECISIVE instead of a tie among same-second rows: one
+        // session is aged on the database clock, so any correct newest-first
+        // page must exclude it, and only it.
+        $oldest = $ids[0];
+        $this->db->query(
+            'UPDATE auth_token_sessions SET last_used_at = DATE_SUB(NOW(), INTERVAL 3 DAY) WHERE id = ?',
+            [$oldest]
+        );
+
+        $list = $repo->listActiveSessions($u);
+        $this->assertCount(
+            TokenSessionRepository::MAX_LISTED_SESSIONS,
+            $list,
+            'the store must never hand the endpoint an unbounded page'
+        );
+
+        $returned = array_column($list, 'id');
+        $this->assertNotContains($oldest, $returned, 'the aged row is the overflow: it must be the one excluded');
+        $this->assertContains($ids[200], $returned, 'newest activity wins the page');
+    }
+
+    public function testTheWriteTimeSweepRetiresOnlyRetiredGrants(): void
+    {
+        $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors']);
+
+        $u = 'user-' . bin2hex(random_bytes(6));
+        $this->seedUser($u);
+        $repo = new TokenSessionRepository($this->db);
+        $sid = $repo->createSession($u);
+
+        // Arm table — every row a premise of pruneExpired()'s contract, seeded
+        // entirely on the DATABASE clock so the sweep is tested against the
+        // same clock its comparisons read (PHP-side seeding would make the
+        // window two clocks wide, exactly the flaw the grace-window leg
+        // already forbids for findGrant).
+        $goneExpired = str_pad('1', 32, '0', STR_PAD_LEFT);
+        $keptInGrace = str_pad('2', 32, '0', STR_PAD_LEFT);
+        $keptSensor = str_pad('3', 32, '0', STR_PAD_LEFT);
+        $goneUnstamped = str_pad('4', 32, '0', STR_PAD_LEFT);
+        $keptFreshUnstamped = str_pad('5', 32, '0', STR_PAD_LEFT);
+        $keptStampedLive = str_pad('6', 32, '0', STR_PAD_LEFT);
+
+        $this->seedGrantArm($goneExpired, $sid, 'NOW()', 'DATE_SUB(NOW(), INTERVAL 3 DAY)');
+        $this->seedGrantArm($keptInGrace, $sid, 'NOW()', 'DATE_SUB(NOW(), INTERVAL 600 SECOND)');
+        $this->seedGrantArm($keptSensor, $sid, 'NOW()', 'DATE_ADD(NOW(), INTERVAL 3600 SECOND)', 'NOW()');
+        $this->seedGrantArm($goneUnstamped, $sid, 'DATE_SUB(NOW(), INTERVAL 400 DAY)', 'NULL');
+        $this->seedGrantArm($keptFreshUnstamped, $sid, 'NOW()', 'NULL');
+        $this->seedGrantArm(
+            $keptStampedLive,
+            $sid,
+            'DATE_SUB(NOW(), INTERVAL 400 DAY)',
+            'DATE_ADD(NOW(), INTERVAL 86400 SECOND)'
+        );
+
+        $triggerJti = str_pad('ff', 32, '0', STR_PAD_LEFT);
+        $bakedExp = time() + 3600;
+        $repo->recordGrant($triggerJti, $sid, $bakedExp);
+
+        $present = [];
+        foreach ($this->rows('SELECT jti, UNIX_TIMESTAMP(expires_at) AS exp FROM auth_refresh_grants') as $r) {
+            $present[(string) $r['jti']] = $r['exp'];
+        }
+
+        $this->assertArrayNotHasKey($goneExpired, $present, 'expired beyond the grace: retired at the next write');
+        $this->assertArrayHasKey($keptInGrace, $present, 'expiry inside the grace survives — the sweep is a janitor');
+        $this->assertArrayHasKey($keptSensor, $present, 'consumed-but-UNexpired IS the reuse detector — never swept');
+        $this->assertArrayNotHasKey($goneUnstamped, $present, 'NULL-expiry rows retire on the year horizon');
+        $this->assertArrayHasKey($keptFreshUnstamped, $present, 'young pre-cure rows must survive grandfathering');
+        $this->assertArrayHasKey($keptStampedLive, $present, 'a live expiry outranks an ancient created_at');
+
+        $this->assertArrayHasKey($triggerJti, $present, 'recordGrant must still register the mint it was called for');
+        $this->assertEqualsWithDelta(
+            $bakedExp,
+            (float) $present[$triggerJti],
+            2.0,
+            'the stamped expires_at must be the mint\'s OWN baked claim (FROM_UNIXTIME round-trip)'
+        );
     }
 }

@@ -2147,7 +2147,12 @@ class AuthManager
             $minted = $this->jwtHandler->validateToken($refreshToken);
             $mintedJti = is_array($minted) && is_string($minted['jti'] ?? null) ? $minted['jti'] : '';
             if ($mintedJti !== '') {
-                $this->tokenSessions->recordGrant($mintedJti, $sessionId);
+                // D1a parity cure: the grant stores the token's OWN baked exp
+                // (validateToken has already proven it an integer), so the row
+                // can never disagree with the token it indexes and the sweep's
+                // stamped arm has real data to retire.
+                $mintedExp = is_array($minted) && is_int($minted['exp'] ?? null) ? $minted['exp'] : null;
+                $this->tokenSessions->recordGrant($mintedJti, $sessionId, $mintedExp);
             }
             if ($familyHint !== null) {
                 // Rotation is the family's "still in use" signal (display

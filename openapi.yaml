@@ -5366,6 +5366,9 @@ paths:
         device_name (NULL where the minting surface knew no device) and a
         server-computed current flag for the family the caller authenticated
         with. Not the legacy playback-device /api/v1/me/sessions registry.
+        The list is bounded to the 200 most recently active families (D1a parity
+        cure, 2026-11-11); DELETE by id remains capability-neutral for any
+        family the caller holds a token for.
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []

@@ -147,8 +147,8 @@ final class TokenSessionFamilyTest extends TestCase
         $store->expects($this->once())
             ->method('recordGrant')
             ->willReturnCallback(
-                function (string $jti, string $sid) use (&$recorded): void {
-                    $recorded = ['jti' => $jti, 'sid' => $sid];
+                function (string $jti, string $sid, mixed $expiresAt = null) use (&$recorded): void {
+                    $recorded = ['jti' => $jti, 'sid' => $sid, 'exp' => $expiresAt];
                 }
             );
         $store->expects($this->never())->method('touchSession');
@@ -164,10 +164,56 @@ final class TokenSessionFamilyTest extends TestCase
         $this->assertSame($family, $accessPayload['sid'] ?? null, 'access token must carry the family');
         $this->assertSame($family, $refreshPayload['sid'] ?? null, 'refresh token must carry the family');
         $this->assertSame(
-            [(string) $refreshPayload['jti'], $family],
+            [(string) $refreshPayload['jti'], $family, (int) $refreshPayload['exp']],
             array_values((array) $recorded),
-            'the grant row must be registered under the EXACT jti the client received'
+            'the grant row must be registered under the EXACT jti the client received, '
+            . 'carrying the EXACT exp that token bakes (D1a parity cure: the stamped sweep '
+            . 'arm is only honest if the row stores the lifetime claim of its own mint)'
         );
+    }
+
+    /**
+     * D1a parity cure, dedicated conviction: the mint hands recordGrant the
+     * successor token's OWN baked `exp` as a third argument — an integer, and
+     * exactly the value the presented-to-client token carries. Raw variadic
+     * capture so the arity itself is evidence (the parent's 2-arg call cannot
+     * fill slot three); the legacy first-contact path must additionally keep
+     * consulting findGrant zero times (this cure changes no ceremony order).
+     */
+    public function testTheSuccessorGrantCarriesTheMintsOwnBakedExpiry(): void
+    {
+        $this->harness();
+        $family = 'f' . str_repeat('c', 35);
+
+        $captured = [];
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->expects($this->once())
+            ->method('createSession')
+            ->with($this->identicalTo(self::USER_ID), $this->isNull(), $this->isNull())
+            ->willReturn($family);
+        $store->expects($this->never())->method('findGrant');
+        $store->expects($this->once())
+            ->method('recordGrant')
+            ->willReturnCallback(
+                function (...$args) use (&$captured): void {
+                    $captured = $args;
+                }
+            );
+
+        $response = $this->manager($store)->refreshToken($this->jwt->createRefreshToken(self::USER_ID));
+
+        $payload = $this->jwt->validateToken((string) $response['refresh_token']);
+        $this->assertIsArray($payload);
+
+        $this->assertCount(
+            3,
+            $captured,
+            'recordGrant must be handed a lifetime alongside jti and session'
+        );
+        $this->assertSame((string) $payload['jti'], $captured[0] ?? null);
+        $this->assertSame($family, $captured[1] ?? null);
+        $this->assertIsInt($captured[2] ?? null, 'the expiry is the typed token claim, not a config guess');
+        $this->assertSame((int) $payload['exp'], $captured[2], 'the row stores the EXACT exp the token bakes');
     }
 
     /**

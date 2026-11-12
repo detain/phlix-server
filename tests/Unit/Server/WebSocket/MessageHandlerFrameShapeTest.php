@@ -220,4 +220,38 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertGreaterThanOrEqual(1_000_000_000_000, $errorMsg['timestamp'] ?? 0, 'timestamp must be milliseconds');
         $this->assertArrayNotHasKey('data', $errorMsg);
     }
+
+    /**
+     * SRV-46: the protocol floor — zero and negative versions are rejected
+     * the same way as future ones (floor is >= 1, inert for real clients).
+     *
+     * @dataProvider belowFloorVersions
+     */
+    public function testProtocolVersionBelowFloorIsRejected(int $version): void
+    {
+        $handler = $this->createMessageHandler();
+        $connection = $this->createConnection();
+
+        $called = false;
+        $handler->on('syncplay_group_create', function () use (&$called): void {
+            $called = true;
+        });
+
+        $handler->handle($connection, json_encode([
+            'type' => 'syncplay_group_create',
+            'protocol_version' => $version,
+            'member_id' => 'member_1',
+            'timestamp' => 1234567890,
+        ], JSON_THROW_ON_ERROR));
+
+        $this->assertFalse($called);
+        $this->assertCount(1, $this->sentMessages);
+        $this->assertSame('PROTOCOL_VERSION_MISMATCH', $this->sentMessages[0]['error_code'] ?? null);
+    }
+
+    /** @return array<string, array{int}> */
+    public static function belowFloorVersions(): array
+    {
+        return ['zero' => [0], 'negative' => [-1]];
+    }
 }

@@ -297,6 +297,12 @@ class HubClient
             );
         }
 
+        if (HubUrlPolicy::isCleartextNonLoopback($hubUrl)) {
+            $this->logger->warning('Hub claim-status poll over cleartext http:// to a non-loopback host', [
+                'hub_url' => $hubUrl,
+            ]);
+        }
+
         // Absolute URL — the injected client has an empty placeholder base.
         $response = $this->httpClient->get(
             rtrim($hubUrl, '/') . "/api/v1/server-claims/{$claimId}",

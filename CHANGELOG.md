@@ -206,6 +206,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **The WebSocket protocol-version check now has a floor: `protocol_version`
+  below 1 is rejected as `PROTOCOL_VERSION_MISMATCH`, like a future version.**
+  Real clients send 1, so nothing changes for them (SRV-46). The relay
+  require-TLS default flip (`PHLIX_RELAY_REQUIRE_TLS`, SRV-45) is NOT part of
+  this entry: it stays warn-only by default pending the owner's rollout decision.
+  Also: `pollClaimStatus` now logs the same cleartext-http warning as pairing.
+
 - **Hub pairing and JWKS URLs are now restricted to http(s).** Non-http(s) hub
   URLs are rejected at store time (admin 400, existing envelope), cURL is pinned
   to http/https with an https-only redirect mask so an https hub cannot be

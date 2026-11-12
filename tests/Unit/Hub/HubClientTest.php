@@ -278,6 +278,22 @@ class HubClientTest extends TestCase
             ->pollClaimStatus('claim-7', 'https://hub.example.com/');
     }
 
+    public function test_pollClaimStatus_warns_on_cleartext_non_loopback_hub(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with($this->stringContains('cleartext'));
+
+        $httpClient->method('get')
+            ->willReturn(new HttpResponse(200, [], ['status' => 'pending']));
+
+        (new HubClient($keyManager, $httpClient, $logger, $this->tmpDir))
+            ->pollClaimStatus('claim-7', 'http://hub.example.com');
+    }
+
     public function test_pollClaimStatus_pending_when_not_yet_claimed(): void
     {
         $keyManager = new Ed25519KeyManager($this->keyPath);

@@ -187,7 +187,12 @@ class MessageHandler
         // Validate protocol_version for flat canonical messages
         if (!$hasDataKey && isset($message['protocol_version'])) {
             $protocolVersion = $message['protocol_version'];
-            if (!is_int($protocolVersion) || $protocolVersion > \Phlix\Session\SyncPlay\Messages::PROTOCOL_VERSION) {
+            // Floor >= 1 (SRV-46): 0/negative are as unsupported as future versions.
+            if (
+                !is_int($protocolVersion)
+                || $protocolVersion < 1
+                || $protocolVersion > \Phlix\Session\SyncPlay\Messages::PROTOCOL_VERSION
+            ) {
                 $connection->send(\Phlix\Session\SyncPlay\Messages::error(
                     'PROTOCOL_VERSION_MISMATCH',
                     'Unsupported protocol version'

@@ -26,7 +26,9 @@ are all `count = 1`, so a stall there is a 100% outage of that subsystem.
 Exceptions 1–7 are all HTTP-side; Exception 8 is the one resident exception
 in this register, and it was placed on its **own** dedicated `count = 1`
 worker (`phlix-natpmp-maintenance`, `start.php`) precisely so its stall
-costs nothing outside the NAT-PMP maintenance subsystem.
+costs nothing outside the NAT-PMP maintenance subsystem. Exceptions 9 and 10
+are contained the same way, on the `count = 1` background-timers fork and the
+`count = 1` `library-scan` managed worker respectively.
 
 ---
 
@@ -381,6 +383,50 @@ pre-built raw-socket round-trip probe).
 | Why it is sync | These tasks are subprocess-bound (`du -sb`, archive writers) or whole-table by nature (`media_items` walks). The design answer is not an async rewrite — it is **containment**: they already run on a dedicated `count = 1` process whose only job is this subsystem. |
 | Bound | Subprocess legs are bounded by their own work and the single-runner property (`count = 1` makes "one maintenance job at a time" true); the queue drain is poll-bounded (5 s cadence, one drain per tick) and boot-reaps exhausted-attempt rows so a wedged job cannot spin the queue; the newsletter leg is due-gated with a per-sweep send cap and a 60 s sweep period; the reaper/sweep legs are short batched DB work whose MySQL legs ride the hooked TCP path. The residual unbounded shape is honestly stated where it exists: a maintenance job that runs long (a whole-vault `du -sb` on a big library) delays every other timer on this fork for its duration — including the next `du -sb`. |
 | Cost | **Bounded blast radius by construction: the fork is not on any latency-critical path.** Nothing shares it — no HTTP worker, no WS/SyncPlay worker, no heartbeat or relay tunnel process. A stall here costs freshness of backups / storage stats / queue latency / newsletter sends, never playback or API availability. That containment is the exception's whole justification, and it is why the fork's start body re-raises `HookDeliveryException` loudly (`start.php:1038-1043`) while treating *everything else* as best-effort: the timers degrade silently by design, but running them under the crash-prone full hook mask is not a degradation the fork may accept. |
+
+---
+
+## Exception 10 — OMDb plugin https lookups routed to blocking cURL (registered 2026-11-12, OMB-6)
+
+| | |
+|---|---|
+| Site | The vendored plugin `detain/phlix-plugin-omdb`, `src/OmdbApi.php` (not in this tree): `httpGetJson()` reroutes a cache miss to `httpGetJsonCurl()` → `performCurlRequest()` (one `curl_exec()`) whenever `requiresBlockingCurl()` is true — an `https://` URL **and** `Worker::$eventLoopClass === 'Workerman\Events\Swoole'`. That predicate is a string-compare mirror of `Phlix\Common\Http\EventLoopTls::requiresBlockingCurl()`; the plugin cannot import a server class, so it restates the comparison. Every OMDb URL is https, so under the production adapter **every** OMDb cache miss takes this arm. |
+| Reached from | The `library-scan` managed worker only: `BackgroundEnrichmentSubscriber::drainTick()` (a re-arming 1 s `Workerman\Timer`, wired in the library-scan fork at `start.php:1375`) → `PluginMetadataEnricher` → `PluginSourceConsultation::consult()` → `OmdbPlugin::search()` (`OmdbApi::search()`) and then, only on a hit, `OmdbPlugin::getDetails()` (`OmdbApi::getByImdbId()`). Dispatch is due-gated by `SourceRateLimiter` at `config/metadata.php` `background_enrichment.source_intervals.omdb = 90` (s). The HTTP workers bootstrap enabled plugins too (`start.php:370`), so the source is *registered* there, but no HTTP-side path consults it: the resolvers' `includePluginSources` opt-in has no production caller. If one is ever added, this entry's Cost row is void and must be re-costed against the 14 HTTP workers before it ships. |
+| Why it is sync | Exception 2's reason, inherited: under `Workerman\Events\Swoole` the plugin's async `workerman/http-client` arm stalls after the TLS handshake and never completes, so the async arm is structurally dead in production. A bounded blocking fetch on a quota-capped, 90 s-paced enrichment call beats a request that can never complete. |
+| Bound | `CURLOPT_TIMEOUT => HTTP_TIMEOUT_SEC` (**10 s**). `CURLOPT_CONNECTTIMEOUT` is set to the same 10 s and is the narrower duplicate described under Exception 2. `CURLOPT_PROTOCOLS`/`CURLOPT_REDIR_PROTOCOLS = CURLPROTO_HTTPS` and `CURLOPT_FOLLOWLOCATION = false` keep the key-bearing request on one https hop. The bound was measured firing (below). |
+| Cost | **≤ 10 s of the `library-scan` worker per request**, ≈ 20 s worst case per enriched item (a `search()` that answers just inside its bound, then a `getDetails()` that stalls; a stalled `search()` returns no hit, so `getDetails()` never dispatches and the item costs 10 s). OMDb is consulted at most once per 90 s. The plugin's own 0.25 s inter-request spacing (`RATE_LIMIT_INTERVAL_SEC`) goes through `Timer::sleep()`, which is cooperative on this repo's Workerman 5. While the key's daily-limit cooldown is armed, cache misses short-circuit with zero I/O. Blast radius: the `library-scan` worker (`config/process.php`, `count = 1`, curated hook mask applied at `start.php:1316`, so cURL is unhooked and the stall is real). Scan-job progress, `MediaItemAdded` dispatch and the smart-collection refresh on that worker pause for the stall. Zero HTTP, WS, heartbeat, timer-fork or relay capacity is touched. |
+
+### Measurement (2026-11-12, birth certificate)
+
+Taken on the dev host with PHP 8.3.6 CLI and libcurl 8.5.0, against the plugin at
+`baf389fe`. The probe called the real `OmdbApi::performCurlRequest()` by reflection,
+with TLS verification off so a self-signed loopback peer was reachable. Two
+silent-peer shapes were tested, twice each:
+
+```text
+A  TLS peer, handshake completes then silent (openssl s_server, request received)
+   elapsed=10003.1ms  "Operation timed out after 10002 milliseconds with 0 bytes received"
+   elapsed=10002.8ms  "Operation timed out after 10002 milliseconds with 0 bytes received"
+B  TCP peer that never accepts / never handshakes
+   elapsed=10002.7ms  "Connection timed out after 10002 milliseconds"
+   elapsed=10002.5ms  "Connection timed out after 10002 milliseconds"
+```
+
+Shape A is the load-bearing case. With the same option set **minus**
+`CURLOPT_TIMEOUT`, the shape-A request was still hanging when it was killed at
+30 s (exit 124). The same mutant against shape B ended at 10 003 ms, because the
+connect timeout covers the handshake. As in Exception 2, only a peer that
+completes the handshake can show the real bound working.
+
+Regression guards (plugin-side, `tests/Unit/OmdbApiTest.php`):
+`test_swoole_loop_reroutes_https_dispatch_to_the_blocking_curl_transport`
+(routing), `test_default_event_loop_still_uses_the_async_transport_and_never_curl`
+(no cURL off the Swoole loop), and
+`test_curl_fallback_pins_https_only_bounded_verification_honoring_options` (a
+source pin on the `CURLOPT_TIMEOUT`/`CONNECTTIMEOUT`/protocol/TLS options). No
+guard in either tree shows the bound firing. The measurement above is the
+evidence for that, and it should be taken again whenever `performCurlRequest()`
+changes.
 
 ---
 

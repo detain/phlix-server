@@ -195,7 +195,8 @@ final class SharedUiController
         // the "out-of-range ports are rejected" promise must be real, not
         // aspirational (still fail-soft: rejection yields null, the shell
         // renders, the client falls back to same-origin derivation).
-        if (preg_match('#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#', $candidate, $parts) === 1) {
+        $pattern = '#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#';
+        if (preg_match($pattern, $candidate, $parts) === 1) {
             if (
                 $parts[2][0] === '['
                 && filter_var(substr($parts[2], 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false

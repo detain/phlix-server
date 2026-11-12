@@ -67,6 +67,24 @@ final class LogControllerTest extends TestCase
         $this->assertArrayHasKey('modified_at', $body['files'][0]);
     }
 
+    public function testIndexSortsNewestFirstByIntegerMtime(): void
+    {
+        file_put_contents($this->dir . '/old.log', "o\n");
+        touch($this->dir . '/app.log', 1_700_000_000);
+        touch($this->dir . '/error.log', 1_900_000_000);
+        touch($this->dir . '/old.log', 1_600_000_000);
+
+        $controller = new LogController($this->dir);
+        /** @var array{files: array<int, array<string, mixed>>} $body */
+        $body = json_decode($controller->index(new Request(), [])->body, true);
+        $names = array_column($body['files'], 'name');
+        @unlink($this->dir . '/old.log');
+
+        $this->assertSame(['error.log', 'app.log', 'old.log'], $names);
+        $this->assertSame(date('c', 1_900_000_000), $body['files'][0]['modified_at']);
+        $this->assertArrayNotHasKey('mtime', $body['files'][0]);
+    }
+
     public function testTailReturnsLastNLines(): void
     {
         $controller = new LogController($this->dir);

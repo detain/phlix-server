@@ -97,14 +97,22 @@ final class LogController
             $files[] = [
                 'name' => basename($path),
                 'size' => (int) (filesize($path) ?: 0),
-                'modified_at' => date('c', (int) (filemtime($path) ?: 0)),
+                'mtime' => (int) (filemtime($path) ?: 0),
             ];
         }
-        // Most-recently-modified first.
+        // Most-recently-modified first: sort on the integer mtime, then format.
         usort(
             $files,
-            static fn (array $a, array $b): int => strcmp((string) $b['modified_at'], (string) $a['modified_at']),
+            static fn (array $a, array $b): int => $b['mtime'] <=> $a['mtime'],
         );
+        foreach ($files as &$f) {
+            $f = [
+                'name' => $f['name'],
+                'size' => $f['size'],
+                'modified_at' => date('c', $f['mtime']),
+            ];
+        }
+        unset($f);
 
         return (new Response())->json(['files' => $files]);
     }

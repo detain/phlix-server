@@ -60,6 +60,13 @@ use Workerman\MySQL\Connection;
  * incompatible with per-coroutine leasing; Phlix never uses it (always the
  * `query($sql, $params)` form).
  *
+ * WARNING (positional binds): workerman/mysql's `bindMore()` mishandles
+ * positional (list) parameter arrays — PHP 8 PDO rejects param index 0. The
+ * default factory yields {@see PhlixMySQLConnection}, which re-keys positional
+ * arrays to 1-based; a test-supplied `$rawFactory` returning a bare
+ * `Connection` does NOT, so such a factory must normalise positional arrays
+ * itself or callers must use named placeholders.
+ *
  * NOTE: selected when `connections.mysql.pool_enabled` is true, which is now the
  * DEFAULT (Track S / S9) after this front was validated against the live coroutine
  * runtime under load. Setting `DB_POOL_ENABLED=0` (`pool_enabled=false`) is the

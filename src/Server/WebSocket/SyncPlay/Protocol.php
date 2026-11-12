@@ -53,6 +53,10 @@ use Phlix\Session\SyncPlay\Messages;
  * - **playback_position**: 8 bytes (uint64) - Current playback position in ms
  * - **playback_rate**: 4 bytes (uint32) - Playback rate (e.g., 1000 = 1.0x)
  *
+ * NOTE: currently DEAD CODE in production — no class under `src/` encodes or
+ * decodes with this protocol (SyncPlay traffic uses the JSON {@see Messages}
+ * path); it is exercised only by tests and kept as the reference binary format.
+ *
  * @author Phlix Development Team
  *
  * @see Messages For JSON message type definitions

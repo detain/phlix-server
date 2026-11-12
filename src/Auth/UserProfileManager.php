@@ -174,10 +174,12 @@ class UserProfileManager
      * ## Single enforcement point
      *
      * There are TWO places that cap profile creation: {@see self::create()}
-     * and the pre-check in `AdminProfileController::createForUser()`, which
-     * returns 400 before `create()` is ever reached. Wiring only the former
-     * would have left the admin API — the only route that creates profiles —
-     * still hardcoded at 5, so the setting would appear to do nothing. Both
+     * and the pre-check in `AdminProfileController::createForUser()`
+     * (route `POST /api/v1/admin/users/{userId}/profiles`, registered in
+     * `AdminRoutes`), which returns 400 before `create()` is ever reached.
+     * Wiring only the former would have left the admin API — the only HTTP
+     * route that creates profiles (AuthManager's register path creates one
+     * internally, not via a route) — still hardcoded at 5, so the setting would appear to do nothing. Both
      * now call this method.
      *
      * Read-path class (a) LIVE: resolved at check time, no restart.

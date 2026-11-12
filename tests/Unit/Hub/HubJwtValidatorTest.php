@@ -432,4 +432,41 @@ class HubJwtValidatorTest extends TestCase
         $jwt = $this->createJwt(['sub' => 'u', 'iss' => 'x'], time() + 600);
         $this->assertNull($validator->validate($jwt));
     }
+
+    private function cleartextWarnings(string $jwksUrl): int
+    {
+        $records = [];
+        $logger = new class ($records) extends \Psr\Log\AbstractLogger {
+            /** @param array<int, string> $records */
+            public function __construct(private array &$records)
+            {
+            }
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning' && str_contains((string) $message, 'cleartext')) {
+                    $this->records[] = (string) $message;
+                }
+            }
+        };
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('get')->willReturn($this->createJwksResponse());
+        $factory = $this->createMock(HttpClientFactoryInterface::class);
+        $factory->method('create')->willReturn($httpClient);
+        $validator = new HubJwtValidator($jwksUrl, $factory, $logger, 'test-server', new JwksCache(900), 900, 0);
+        $validator->refreshJwks();
+
+        return count($records);
+    }
+
+    public function testCleartextNonLoopbackJwksFetchWarns(): void
+    {
+        $this->assertSame(1, $this->cleartextWarnings('http://hub.example.com/.well-known/jwks.json'));
+    }
+
+    public function testHttpsAndLoopbackJwksFetchDoNotWarn(): void
+    {
+        $this->assertSame(0, $this->cleartextWarnings('https://hub.example.com/.well-known/jwks.json'));
+        $this->assertSame(0, $this->cleartextWarnings('http://127.0.0.1:9000/.well-known/jwks.json'));
+    }
 }

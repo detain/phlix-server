@@ -245,4 +245,14 @@ class HttpClientTest extends TestCase
         $this->expectExceptionMessage('cURL error');
         $m->invoke($client, 'GET', 'file:///etc/hostname', null, []);
     }
+
+    public function testRedirectProtocolsPinnedToHttpsForHttpsOrigin(): void
+    {
+        $this->assertSame(CURLPROTO_HTTPS, HttpClient::redirProtocolsFor('https://hub.example.com/x'));
+        $this->assertSame(CURLPROTO_HTTPS, HttpClient::redirProtocolsFor('HTTPS://hub.example.com/x'));
+        $this->assertSame(
+            CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            HttpClient::redirProtocolsFor('http://127.0.0.1:8080/x'),
+        );
+    }
 }

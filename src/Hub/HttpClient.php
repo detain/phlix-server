@@ -354,6 +354,16 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
+     * Redirect-protocol mask: an https origin may only be redirected to https.
+     *
+     * @internal exposed for the SRV-43 redirect-downgrade regression test
+     */
+    public static function redirProtocolsFor(string $url): int
+    {
+        return stripos($url, 'https://') === 0 ? CURLPROTO_HTTPS : (CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    }
+
+    /**
      * Fallback synchronous cURL request for CLI/testing contexts.
      *
      * @param array<string, string> $headers
@@ -369,11 +379,7 @@ class HttpClient implements HttpClientInterface
         // SRV-43: only http(s) may be dialled; an https origin may not be
         // redirected down to cleartext http.
         curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
-        curl_setopt(
-            $ch,
-            CURLOPT_REDIR_PROTOCOLS,
-            stripos($url, 'https://') === 0 ? CURLPROTO_HTTPS : (CURLPROTO_HTTP | CURLPROTO_HTTPS),
-        );
+        curl_setopt($ch, CURLOPT_REDIR_PROTOCOLS, self::redirProtocolsFor($url));
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
         curl_setopt($ch, CURLOPT_HEADER, true);
         $this->applyCurlTlsOptions($ch);

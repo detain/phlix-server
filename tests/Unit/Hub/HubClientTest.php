@@ -1169,4 +1169,52 @@ final class RecordingTimerHubClient extends HubClient
     {
         $this->canceled[] = $timerId;
     }
+
+    /**
+     * @return array{0: HubClient, 1: \Psr\Log\LoggerInterface}
+     */
+    private function clientWithCapturingLogger(array &$records): array
+    {
+        $logger = new class ($records) extends \Psr\Log\AbstractLogger {
+            /** @param array<int, array{0: string, 1: string}> $records */
+            public function __construct(private array &$records)
+            {
+            }
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                $this->records[] = [(string) $level, (string) $message];
+            }
+        };
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
+            'claimCode' => 'ABCD-1234',
+            'expiresIn' => 600,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
+        ]));
+
+        return [new HubClient(new Ed25519KeyManager($this->keyPath), $httpClient, $logger, $this->tmpDir), $logger];
+    }
+
+    public function test_initiatePairing_warns_on_cleartext_non_loopback_hub(): void
+    {
+        $records = [];
+        [$client] = $this->clientWithCapturingLogger($records);
+        $client->initiatePairing('http://hub.example.com', 'Test Server');
+
+        $warnings = array_filter($records, static fn(array $r): bool => $r[0] === 'warning' && str_contains($r[1], 'cleartext'));
+        $this->assertCount(1, $warnings);
+    }
+
+    public function test_initiatePairing_does_not_warn_for_https_or_loopback_hub(): void
+    {
+        $records = [];
+        [$client] = $this->clientWithCapturingLogger($records);
+        $client->initiatePairing('https://hub.example.com', 'Test Server');
+        $client->initiatePairing('http://127.0.0.1:8080', 'Test Server');
+
+        $warnings = array_filter($records, static fn(array $r): bool => $r[0] === 'warning');
+        $this->assertCount(0, $warnings);
+    }
 }

@@ -206,6 +206,13 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **Hub pairing and JWKS URLs are now restricted to http(s).** Non-http(s) hub
+  URLs are rejected at store time (admin 400, existing envelope), cURL is pinned
+  to http/https with an https-only redirect mask so an https hub cannot be
+  downgraded to cleartext, and pairing/JWKS fetches over cleartext http:// to a
+  non-loopback host log a warning. Already-paired http:// hubs are kept and only
+  warned about on dial. (SRV-S24 / SRV-43)
+
 - **The admin update banner no longer offers a `curl … master | sudo bash`
   pipe.** `updates.update_command` (surfaced by `GET
   /api/v1/admin/updates/status` for copy-to-clipboard) now defaults to the

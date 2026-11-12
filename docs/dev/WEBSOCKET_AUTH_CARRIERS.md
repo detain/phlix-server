@@ -97,9 +97,10 @@ handshake pre-101 with the existing reject idiom (pool reap + TCP close — no e
 zero new wire codes). An explicit `allow` is the straggler-host escape hatch and
 restores the byte-identical Phase-A acceptance. The parser vocabulary is unchanged by
 the flip: `deny` is the only value that denies — unrecognized values still fail open to
-`allow` (opt-in-tightening law). Bearer and admitted-cookie handshakes are byte-ident
+`allow` (opt-in-tightening law). Bearer and admitted-cookie handshakes are byte-identical
 under every setting — gate absent, `allow` or `deny` (precedence law CP-006 UNMOVED).
 PHASE C removes the branch; that remains an owner timing call trailing fleet update.
+
 ### The admin-row tier (wired 2026-11-10, off-kit owner ruling)
 
 The stored-home settings key `auth.ws_query_token` (phlix-shared

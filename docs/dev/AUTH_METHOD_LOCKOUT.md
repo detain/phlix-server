@@ -38,7 +38,7 @@ Both arms are produced by `AuthMethodLockoutException::publicMessage()`. The
 (`getMessage()`); its machine-token prefix and the `(s)` count squeeze never
 ride the wire — discriminate with the `reason` token, not the prose.
 
-What to do on each refusal: see the README table ("Auth-method lock-out guards") — in
+What to do on each refusal: see the README section "Auth-method lock-out guards" — in
 short, R1 means "keep one door open"; R2 means "give that admin a factor before you
 close this one" (the count in the message is how many admins are affected; the user ids
 stay server-side in the audit path, they are never on the wire).

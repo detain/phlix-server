@@ -105,7 +105,7 @@ is a latent defect, not a feature. When it is fixed, this call becomes a genuine
 
 ### The curated hook mask does not reach the worker
 
-This is a separate and larger issue than S44-b; it is recorded here because it is
+This is a separate and larger issue than S44-b (see "The bound did not exist before S44-b" above); it is recorded here because it is
 the only reason exception 2 is currently cheap.
 
 `start.php` installs the curated allowlist (`SwooleRuntime::resolveHookFlags()`,

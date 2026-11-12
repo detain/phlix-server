@@ -31,6 +31,15 @@ version: '3.8'
 
 services:
   phlix:
+    # Cap json-file logs so a long-running example cannot fill the disk.
+    # Caveat: only applies to the json-file driver; if the host daemon uses
+    # journald (or another driver) these keys are ignored — set retention
+    # via journald.conf (SystemMaxUse=) instead.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: "${PHLIX_SERVER_IMAGE:?PHLIX_SERVER_IMAGE must be set to an immutable pin, form ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia> — the mutable :latest tag drifts and is never a reproducible example}"
     container_name: phlix-server
     ports:

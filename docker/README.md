@@ -79,6 +79,18 @@ ephemeral repo-relative `var/jobs`, and the server-only example's healthcheck
 carries `start_period: 90s` — a compose `healthcheck` block REPLACES the image
 `HEALTHCHECK` wholesale, silently dropping the Dockerfile's start period.
 
+### Debugging and audit-log handling (ops notes)
+
+- Xdebug is not installed in the published images; there is nothing to
+  disable in production. Debug tooling belongs in a local dev build only.
+- `.logs/` PII and retention: `.logs/app.log`, `error.log` and the audit
+  log can contain usernames, IP addresses, user agents and media paths
+  (personal data). Keep the directory readable only by the service user,
+  exclude it from public backups/support bundles unless scrubbed, rotate it
+  (logrotate or the compose `logging` caps above for stdout), and delete per
+  your retention policy. Treat audit entries as personal data for GDPR-style
+  access/erasure requests.
+
 ### Verifying an image actually runs
 
 `docker build` never executes `CMD`, `ENTRYPOINT` or `HEALTHCHECK`, so a green

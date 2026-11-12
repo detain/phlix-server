@@ -151,6 +151,25 @@ class CorsManagerTest extends TestCase
     }
 
     /**
+     * A lowercase `vary` seed header is still merged (header names are
+     * case-insensitive) on both the decorate() and headerValues() paths.
+     */
+    public function testLowercaseVarySeedIsMergedNotDuplicated(): void
+    {
+        $cors = new CorsManager([self::ORIGIN]);
+        $request = $this->requestWithOrigin('GET', self::ORIGIN);
+
+        $base = (new Response())->json(['ok' => true])->header('vary', 'Accept-Encoding');
+        $response = $cors->decorate($request, $base);
+        $varyKeys = array_filter(array_keys($response->headers), static fn ($k) => strcasecmp((string) $k, 'vary') === 0);
+        $this->assertCount(1, $varyKeys);
+        $this->assertSame('Accept-Encoding, Origin', $response->headers['Vary']);
+
+        $values = $cors->headerValues($request, ['vary' => 'Accept-Encoding']);
+        $this->assertSame('Accept-Encoding, Origin', $values['Vary']);
+    }
+
+    /**
      * fromEnv() reads PHLIX_CORS_ALLOWED_ORIGINS and trims/splits it.
      */
     public function testFromEnvParsesCommaSeparatedAllowlist(): void

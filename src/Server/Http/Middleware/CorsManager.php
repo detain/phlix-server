@@ -209,7 +209,7 @@ final class CorsManager
             return [];
         }
 
-        return self::corsHeaders($origin, $existing['Vary'] ?? null);
+        return self::corsHeaders($origin, self::lookupHeader($existing, 'Vary'));
     }
 
     /**
@@ -255,7 +255,14 @@ final class CorsManager
      */
     private function withCorsHeaders(Response $response, string $origin): Response
     {
-        foreach (self::corsHeaders($origin, $response->headers['Vary'] ?? null) as $name => $value) {
+        $existingVary = self::lookupHeader($response->headers, 'Vary');
+        foreach (array_keys($response->headers) as $key) {
+            // Drop non-canonical Vary spellings so the merge doesn't leave a duplicate.
+            if ($key !== 'Vary' && strcasecmp($key, 'Vary') === 0) {
+                unset($response->headers[$key]);
+            }
+        }
+        foreach (self::corsHeaders($origin, $existingVary) as $name => $value) {
             $response = $response->header($name, $value);
         }
 
@@ -278,6 +285,23 @@ final class CorsManager
             'Access-Control-Allow-Credentials' => 'true',
             'Vary' => self::appendVaryOrigin($existingVary),
         ];
+    }
+
+    /**
+     * Case-insensitive header value lookup (RFC 9110 §4.2; the L-7 doctrine
+     * of SecurityHeaders::hasHeader()).
+     *
+     * @param array<string, string> $headers Header map.
+     */
+    private static function lookupHeader(array $headers, string $name): ?string
+    {
+        foreach ($headers as $key => $value) {
+            if (strcasecmp((string) $key, $name) === 0) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     /**

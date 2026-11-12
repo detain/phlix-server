@@ -4,7 +4,10 @@ Every first-party table the server ships, with the migration that **creates**
 it. This is a map, not a substitute for the DDL: column-level truth lives in
 `migrations/NNN_*.sql` (and any later `ALTER`s), which are replayed in full on
 a fresh database. The operator-facing migration workflow lives in
-[README — Database & migrations](../README.md#database--migrations).
+[README — Database & migrations](../README.md#database--migrations); the
+`php bin/phlix migrate` command surface (its `scripts/run-migrations.php`
+equivalence, exit codes and the closed idempotent-error list) lives in
+[README — CLI](../README.md#cli).
 
 ## Migration numbering law
 
@@ -151,6 +154,8 @@ Two unrelated families share a noun:
 | `first_admin_election` | 108 | Single-row sentinel serializing first-admin bootstrap. |
 | `casting_sessions` | 111 | DB-shared casting sessions re-attached by the DLNA/Roku/Chromecast/AirPlay managers. |
 | `login_rate_limit_account` | 126 | Per-account login failure window — sibling of `login_rate_limit` (074), keyed by the normalized submitted identifier instead of the client IP. |
+| `auth_token_sessions` | 127 | One row per login ceremony (a session "family"): access and refresh JWTs carry its id as the `sid` claim, so revoking one row signs exactly one device out while `users.tokens_not_valid_after` (107) stays the account-wide watermark. Tokens without a `sid` claim never consult it. |
+| `auth_refresh_grants` | 127 | One row per minted refresh token, keyed by its `jti` (FK → `auth_token_sessions`, cascade). Rotation stamps `consumed_at`; replaying a consumed grant outside the 10 s grace window revokes the family. 128 adds `expires_at` (the token's own `exp`; NULL on pre-128 rows) and `idx_arg_expires_at` for the expiry sweep. |
 
 ## Dead schema facts (measured at the 126-era tip)
 
@@ -190,15 +195,31 @@ feature revives one, rotate the pin in the same commit.
 
 ## Reading notes
 
-- **Completeness:** the header claim is kept honest by measurement — as of
-  this writing the distinct `CREATE TABLE` targets across `migrations/*.sql`
-  number 83, `migrations/` contains no `DROP TABLE`, and the catalog above is
-  exactly those 83 rows one-for-one. New migration → new row, or the claim
-  goes stale the way it once did (76 rows against 82 tables).
+- **Completeness:** the header claim is kept honest by measurement — at the
+  128-era tip the distinct `CREATE TABLE` targets across `migrations/*.sql`
+  number 85, `migrations/` contains no `DROP TABLE`, and the catalog above is
+  exactly those 85 rows one-for-one. New migration → new row, or the claim
+  goes stale the way it once did (76 rows against 82 tables, and again 83
+  rows against 85 tables before 127's pair was added). Re-measure, never
+  hand-copy: count statement lines only, because migration comments quote
+  `CREATE TABLE IF NOT EXISTS` in prose and a naive grep picks up words such
+  as `IF`/`so`/`for` as table names —
+  `` grep -hiE '^\s*CREATE TABLE' migrations/*.sql | grep -oiE 'CREATE TABLE( IF NOT EXISTS)? `?[a-z_0-9]+' | sed -E 's/.* `?//' | sort -u | wc -l ``.
 - "Created by" names the **first** migration whose `CREATE TABLE` reaches the
   table; later migrations may `ALTER` it (and a couple replay-guard their
   creation with `IF NOT EXISTS`). Follow the number in `migrations/` for
   column truth.
+- **`PREPARE`/`EXECUTE` guards hide DDL inside strings.** MySQL 8 has no
+  `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`, so a family of migrations
+  (16 files at the 128-era tip — e.g. `096`, `107`, `128`) probes
+  `INFORMATION_SCHEMA.COLUMNS`/`STATISTICS`, builds the `ALTER TABLE …` (or a
+  no-op `SELECT 1`) into a user variable with `SELECT IF(…)`, then runs it
+  via `PREPARE … FROM @var; EXECUTE …; DEALLOCATE PREPARE …`. The real DDL
+  is therefore a **quoted string literal**, not a statement line: a
+  line-anchored grep for `ALTER TABLE` misses those columns and indexes, so
+  read the quoted statements too when chasing column truth. The
+  `CREATE TABLE` census above is unaffected — no prepared string creates a
+  table at this tip.
 - Tables are InnoDB, `utf8mb4`, and since `120_collation_unicode_ci_conversion`
   consolidate on `utf8mb4_unicode_ci`; key columns are `CHAR(36)` UUIDs.
 - Server-side entity removal is mostly a hard `DELETE`; the library/item

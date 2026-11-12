@@ -4,6 +4,13 @@ One page, in order: install → admin account → first library → first play �
 the household → first watch party. Reference detail lives in the
 [README](../../README.md); this page is the journey.
 
+Want click-by-click detail for a step? The phlix-docs site
+carries the step-by-step guides: [install on Linux](https://detain.github.io/phlix-docs/install/linux)
+or [Docker](https://detain.github.io/phlix-docs/install/docker) (step 1),
+[first run](https://detain.github.io/phlix-docs/first-run) (steps 2-4),
+[libraries](https://detain.github.io/phlix-docs/libraries) (step 3) and
+[adding people](https://detain.github.io/phlix-docs/adding-people) (step 5).
+
 ## 1. Install
 
 Pick ONE path; each ends with a running server whose portal listens on

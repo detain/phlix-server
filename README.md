@@ -63,6 +63,12 @@ Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
 library → first play → household → watch party, one page, in order. The rest of this
 README is the reference; the quickstart is the journey.
+Prefer a click-by-click walkthrough? The phlix-docs site has step-by-step guides:
+[first run](https://detain.github.io/phlix-docs/first-run),
+[adding people](https://detain.github.io/phlix-docs/adding-people),
+[libraries](https://detain.github.io/phlix-docs/libraries) and
+[install on Linux](https://detain.github.io/phlix-docs/install/linux) /
+[Docker](https://detain.github.io/phlix-docs/install/docker).
 
 ## Architecture
 

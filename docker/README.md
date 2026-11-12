@@ -87,7 +87,7 @@ carries `start_period: 90s` — a compose `healthcheck` block REPLACES the image
   log can contain usernames, IP addresses, user agents and media paths
   (personal data). Keep the directory readable only by the service user,
   exclude it from public backups/support bundles unless scrubbed, rotate it
-  (logrotate or the compose `logging` caps above for stdout), and delete per
+  (logrotate or the example compose files' `logging` caps for stdout), and delete per
   your retention policy. Treat audit entries as personal data for GDPR-style
   access/erasure requests.
 

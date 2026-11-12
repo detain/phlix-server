@@ -521,4 +521,170 @@ class BookControllerTest extends TestCase
             \Phlix\Common\Fs\LibraryRootGuard::reset();
         }
     }
+
+    /**
+     * Runs $fn against a downloadable in-library book fixture with the given
+     * bytes, jailing its temp directory as the only library root.
+     *
+     * @param callable(string): void $fn Receives the absolute book path.
+     */
+    private function withDownloadFixture(string $bytes, string $name, string $ext, callable $fn): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_dl_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        $bookPath = $tempDir . '/book.' . $ext;
+        file_put_contents($bookPath, $bytes);
+
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-stream',
+            'name' => $name,
+            'type' => 'book',
+            'path' => $bookPath,
+            'metadata' => [],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $fn($bookPath);
+        } finally {
+            if (is_file($bookPath)) {
+                unlink($bookPath);
+            }
+            rmdir($tempDir);
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * SRV-17 pin: the download is handed to the event-loop file sender
+     * (withFile) — no book bytes are buffered into the Response body — and
+     * once materialized the wire shape matches the old buffered reply exactly:
+     * 200, same Content-Type, same Content-Disposition, Content-Length equal
+     * to the file size, identical bytes.
+     */
+    public function testDownloadBookStreamsWithHeaderParityToBufferedShape(): void
+    {
+        $bytes = str_repeat("PDF\x00\xFF", 1000);
+        $this->withDownloadFixture($bytes, 'Test Book', 'pdf', function (string $path) use ($bytes): void {
+            $response = $this->controller->downloadBook(new Request(), ['id' => 'book-stream']);
+
+            // Streamed, not buffered.
+            $this->assertSame($path, $response->filePath);
+            $this->assertSame(0, $response->fileOffset);
+            $this->assertSame(0, $response->fileLength, 'a full GET must pass no window (no forced 206)');
+            $this->assertSame('', $response->body);
+            $this->assertArrayNotHasKey('Content-Range', $response->headers);
+
+            $response->materializeFileWindow();
+
+            $this->assertSame(200, $response->statusCode);
+            $this->assertSame('application/pdf', $response->headers['Content-Type'] ?? null);
+            $this->assertSame(
+                "attachment; filename=\"Test Book.pdf\"; filename*=UTF-8''Test%20Book.pdf",
+                $response->headers['Content-Disposition'] ?? null
+            );
+            $this->assertSame((string) strlen($bytes), $response->headers['Content-Length'] ?? null);
+            $this->assertSame('bytes', $response->headers['Accept-Ranges'] ?? null);
+            $this->assertArrayNotHasKey('Content-Range', $response->headers);
+            $this->assertSame($bytes, $response->body);
+        });
+    }
+
+    /**
+     * SRV-17: a single byte-range resumes a download with a 206 window and
+     * keeps the attachment disposition.
+     */
+    public function testDownloadBookHonoursByteRangeWith206(): void
+    {
+        $bytes = '0123456789abcdefghij';
+        $this->withDownloadFixture($bytes, 'Ranged', 'epub', function (): void {
+            $request = new Request();
+            $request->headers['Range'] = 'bytes=5-9';
+
+            $response = $this->controller->downloadBook($request, ['id' => 'book-stream'])
+                ->materializeFileWindow();
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('application/epub+zip', $response->headers['Content-Type'] ?? null);
+            $this->assertStringStartsWith('attachment;', $response->headers['Content-Disposition'] ?? '');
+            $this->assertSame('bytes 5-9/20', $response->headers['Content-Range'] ?? null);
+            $this->assertSame('5', $response->headers['Content-Length'] ?? null);
+            $this->assertSame('56789', $response->body);
+        });
+    }
+
+    /**
+     * SRV-17: a suffix range serves the tail of the file.
+     */
+    public function testDownloadBookHonoursSuffixRange(): void
+    {
+        $this->withDownloadFixture('0123456789', 'Tail', 'cbz', function (): void {
+            $request = new Request();
+            $request->headers['RANGE'] = 'bytes=-3';
+
+            $response = $this->controller->downloadBook($request, ['id' => 'book-stream'])
+                ->materializeFileWindow();
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('bytes 7-9/10', $response->headers['Content-Range'] ?? null);
+            $this->assertSame('789', $response->body);
+        });
+    }
+
+    /**
+     * SRV-17: a range starting past EOF is answered 416 with the unsatisfied
+     * Content-Range, and no file is attached.
+     */
+    public function testDownloadBookUnsatisfiableRangeIs416(): void
+    {
+        $this->withDownloadFixture('0123456789', 'Short', 'epub', function (): void {
+            $request = new Request();
+            $request->headers['Range'] = 'bytes=50-60';
+
+            $response = $this->controller->downloadBook($request, ['id' => 'book-stream']);
+
+            $this->assertSame(416, $response->statusCode);
+            $this->assertSame('bytes */10', $response->headers['Content-Range'] ?? null);
+            $this->assertNull($response->filePath);
+        });
+    }
+
+    /**
+     * SRV-17 / RFC 7233 §3.2: a stale If-Range validator (the book changed
+     * since the client's window was negotiated) ignores the Range and answers
+     * the whole file 200; a matching validator keeps the 206.
+     */
+    public function testDownloadBookIfRangeValidatorGatesTheRange(): void
+    {
+        $this->withDownloadFixture('0123456789', 'Resume', 'epub', function (string $path): void {
+            $stale = new Request();
+            $stale->headers['Range'] = 'bytes=2-4';
+            $stale->headers['If-Range'] = 'Thu, 01 Jan 1970 00:00:00 GMT';
+
+            $response = $this->controller->downloadBook($stale, ['id' => 'book-stream'])
+                ->materializeFileWindow();
+            $this->assertSame(200, $response->statusCode);
+            $this->assertSame('0123456789', $response->body);
+            $this->assertArrayNotHasKey('Content-Range', $response->headers);
+
+            $mtime = filemtime($path);
+            $this->assertIsInt($mtime);
+            $fresh = new Request();
+            $fresh->headers['Range'] = 'bytes=2-4';
+            $fresh->headers['If-Range'] = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+
+            $response = $this->controller->downloadBook($fresh, ['id' => 'book-stream'])
+                ->materializeFileWindow();
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('234', $response->body);
+        });
+    }
 }

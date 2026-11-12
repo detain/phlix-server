@@ -636,6 +636,10 @@ class BookController
      *
      * GET /books/{id}/download
      *
+     * Streams the file via {@see Response::withFile()} (never buffered into
+     * worker memory) and honours a single HTTP `Range` (206 / 416) so an
+     * interrupted download or an e-reader partial fetch can resume.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Route parameters including 'id'
      * @return Response File download response or error
@@ -683,17 +687,54 @@ class BookController
 
         $bookName = is_string($book['name'] ?? null) ? $book['name'] : 'book';
         $filename = $bookName . '.' . $ext;
-        $content = file_get_contents($path);
+        $disposition = self::attachmentDisposition($filename);
 
-        if ($content === false) {
+        // SRV-17: stream the file through Workerman's event loop via withFile()
+        // instead of file_get_contents()-ing the whole book (multi-hundred-MB
+        // CBZ/PDF) into resident worker heap. Workerman derives Content-Length,
+        // Accept-Ranges and Last-Modified at send; the jail + parental gates
+        // above run unchanged BEFORE any byte is touched.
+        $fileSize = is_readable($path) ? @filesize($path) : false;
+        if ($fileSize === false) {
             return (new Response())->status(500)->json(['error' => 'Failed to read file']);
         }
 
+        // RFC 7233 §3.2: a Range is honoured only while If-Range (when sent)
+        // still matches the Last-Modified validator Workerman emits — a stale
+        // validator means the book changed under a resumed download, so the
+        // whole file is answered 200 rather than splicing changed bytes.
+        $rangeStale = false;
+        $ifRange = $request->getHeader('If-Range');
+        if (is_string($ifRange) && $ifRange !== '') {
+            $mtime = @filemtime($path);
+            $rangeStale = $mtime === false
+                || trim($ifRange) !== gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+        }
+
+        // Single byte-range (resume / e-reader partial fetch) → 206 window;
+        // unsatisfiable → 416; multi-range/malformed → whole-file 200.
+        $range = $rangeStale ? null : ByteRangeParser::parse($request->getHeader('Range'), $fileSize);
+        if ($range !== null) {
+            if (!$range['satisfiable']) {
+                return (new Response())
+                    ->status(416)
+                    ->header('Content-Type', $mimeType)
+                    ->header('Content-Range', "bytes */{$fileSize}");
+            }
+
+            return (new Response())
+                ->status(206)
+                ->header('Content-Type', $mimeType)
+                ->header('Content-Disposition', $disposition)
+                ->withFile($path, $range['start'], $range['end'] - $range['start'] + 1);
+        }
+
+        // Full-file GET: NO window (offset 0, length 0) — an explicit length
+        // would force a 206 + Content-Range onto a request that sent no Range.
         return (new Response())
             ->header('Content-Type', $mimeType)
-            ->header('Content-Disposition', self::attachmentDisposition($filename))
-            ->header('Content-Length', (string)strlen($content))
-            ->body($content);
+            ->header('Content-Disposition', $disposition)
+            ->withFile($path);
     }
 
     /**

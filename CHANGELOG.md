@@ -145,6 +145,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Book downloads stream instead of buffering the whole file.**
+  `GET /books/{id}/download` (and its OPDS twin) used to `file_get_contents()`
+  the entire EPUB/PDF/CBZ into worker memory before replying, so a
+  multi-hundred-MB comic pinned that much heap per concurrent download. It now
+  hands the file to the event-loop sender (`Response::withFile()`), with the
+  library-root jail and the parental-cap gate still running before any byte is
+  read. The reply keeps the old 200 shape — same `Content-Type`, same RFC 6266
+  `Content-Disposition`, `Content-Length` equal to the file size — and gains
+  `Accept-Ranges: bytes`: a single `Range` resumes with a 206 window, an
+  unsatisfiable one answers 416, and a stale `If-Range` validator falls back
+  to the whole file. [SRV-S14 / SRV-17]
 - **The README environment census now lists every knob it claimed to.** The
   "definitive census" was missing five server-read variables: `PHLIX_WS_URL` /
   `PHLIX_WS_PATH` (live SPA socket hints, also feeding the shell CSP),

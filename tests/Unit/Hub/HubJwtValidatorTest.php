@@ -438,8 +438,10 @@ class HubJwtValidatorTest extends TestCase
         $records = [];
         $logger = new class ($records) extends \Psr\Log\AbstractLogger {
             /** @param array<int, string> $records */
-            public function __construct(private array &$records)
-            {
+            public function __construct(
+                /** @phpstan-ignore property.onlyWritten */
+                private array &$records,
+            ) {
             }
 
             public function log($level, \Stringable|string $message, array $context = []): void

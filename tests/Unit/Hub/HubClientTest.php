@@ -1139,53 +1139,19 @@ class HubClientTest extends TestCase
             'a snapshot the fork just wrote is not stale'
         );
     }
-}
-
-/**
- * HubClient test double that records what {@see HubClient::startHeartbeatLoop()}
- * schedules instead of arming real Workerman timers (which throw outside a
- * running Workerman environment, i.e. everywhere in PHPUnit).
- */
-final class RecordingTimerHubClient extends HubClient
-{
-    /** @var list<array{interval: float|int, callback: callable, persistent: bool}> */
-    public array $scheduled = [];
-
-    /** @var list<int> Timer ids passed to the cancel seam, in cancel order. */
-    public array $canceled = [];
-
-    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): int
-    {
-        $this->scheduled[] = [
-            'interval' => $interval,
-            'callback' => $callback,
-            'persistent' => $persistent,
-        ];
-
-        return count($this->scheduled);
-    }
-
-    protected function cancelTimer(int $timerId): void
-    {
-        $this->canceled[] = $timerId;
-    }
 
     /**
-     * @return array{0: HubClient, 1: \Psr\Log\LoggerInterface}
+     * @param array<int, array{0: string, 1: string}> $records
+     * @return array{0: HubClient, 1: StructuredLogger}
      */
     private function clientWithCapturingLogger(array &$records): array
     {
-        $logger = new class ($records) extends \Psr\Log\AbstractLogger {
-            /** @param array<int, array{0: string, 1: string}> $records */
-            public function __construct(private array &$records)
-            {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->method('warning')->willReturnCallback(
+            static function (string|\Stringable $message) use (&$records): void {
+                $records[] = ['warning', (string) $message];
             }
-
-            public function log($level, \Stringable|string $message, array $context = []): void
-            {
-                $this->records[] = [(string) $level, (string) $message];
-            }
-        };
+        );
         $httpClient = $this->createMock(HttpClientInterface::class);
         $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
             'claimCode' => 'ABCD-1234',
@@ -1216,5 +1182,35 @@ final class RecordingTimerHubClient extends HubClient
 
         $warnings = array_filter($records, static fn(array $r): bool => $r[0] === 'warning');
         $this->assertCount(0, $warnings);
+    }
+}
+
+/**
+ * HubClient test double that records what {@see HubClient::startHeartbeatLoop()}
+ * schedules instead of arming real Workerman timers (which throw outside a
+ * running Workerman environment, i.e. everywhere in PHPUnit).
+ */
+final class RecordingTimerHubClient extends HubClient
+{
+    /** @var list<array{interval: float|int, callback: callable, persistent: bool}> */
+    public array $scheduled = [];
+
+    /** @var list<int> Timer ids passed to the cancel seam, in cancel order. */
+    public array $canceled = [];
+
+    protected function scheduleTimer(float|int $interval, callable $callback, bool $persistent): int
+    {
+        $this->scheduled[] = [
+            'interval' => $interval,
+            'callback' => $callback,
+            'persistent' => $persistent,
+        ];
+
+        return count($this->scheduled);
+    }
+
+    protected function cancelTimer(int $timerId): void
+    {
+        $this->canceled[] = $timerId;
     }
 }

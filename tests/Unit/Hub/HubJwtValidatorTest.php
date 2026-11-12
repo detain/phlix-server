@@ -414,4 +414,22 @@ class HubJwtValidatorTest extends TestCase
 
         $this->assertEquals(1, $callCount);
     }
+
+    public function testNonHttpJwksUrlIsNeverFetched(): void
+    {
+        $factory = $this->createMock(HttpClientFactoryInterface::class);
+        $factory->expects($this->never())->method('create');
+        $validator = new HubJwtValidator(
+            'file:///etc/passwd',
+            $factory,
+            new NullLogger(),
+            'test-server',
+            new JwksCache(900),
+            900,
+            0,
+        );
+
+        $jwt = $this->createJwt(['sub' => 'u', 'iss' => 'x'], time() + 600);
+        $this->assertNull($validator->validate($jwt));
+    }
 }

@@ -158,6 +158,13 @@ final class AdminHubController
                 ]);
             }
 
+            if (!\Phlix\Hub\HubUrlPolicy::isHttpScheme($hubUrl)) {
+                return (new Response())->status(400)->json([
+                    'success' => false,
+                    'message' => 'Hub URL must be an http:// or https:// URL.',
+                ]);
+            }
+
             $result = $hubClient->initiatePairing($hubUrl, $serverName);
 
             return (new Response())->json([
@@ -287,6 +294,16 @@ final class AdminHubController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'message' => 'Enrollment JWT, hub JWKS URL, server ID, and hub URL are required.',
+                ]);
+            }
+
+            if (
+                !\Phlix\Hub\HubUrlPolicy::isHttpScheme($hubUrl)
+                || !\Phlix\Hub\HubUrlPolicy::isHttpScheme($hubJwksUrl)
+            ) {
+                return (new Response())->status(400)->json([
+                    'success' => false,
+                    'message' => 'Hub URL and hub JWKS URL must be http:// or https:// URLs.',
                 ]);
             }
 

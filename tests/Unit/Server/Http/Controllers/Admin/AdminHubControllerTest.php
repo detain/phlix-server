@@ -535,6 +535,39 @@ final class AdminHubControllerTest extends TestCase
         return $request;
     }
 
+    public function testHubPairRejectsNonHttpSchemeWith400(): void
+    {
+        $response = $this->controller()->hubPair(
+            $this->postBody(['hubUrl' => 'file:///etc/passwd', 'serverName' => 'X']),
+            []
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $body = $this->decode($response->body);
+        $this->assertFalse($body['success']);
+        $this->assertSame('Hub URL must be an http:// or https:// URL.', $body['message']);
+    }
+
+    public function testHubCompleteRejectsNonHttpSchemeWith400(): void
+    {
+        foreach ([['gopher://h.test', 'https://h.test/jwks'], ['https://h.test', 'file:///x']] as [$hubUrl, $jwks]) {
+            $response = $this->controller()->hubComplete(
+                $this->postBody([
+                    'enrollmentJwt' => 'jwt', 'hubJwksUrl' => $jwks, 'serverId' => 's', 'hubUrl' => $hubUrl,
+                ]),
+                []
+            );
+
+            $this->assertSame(400, $response->statusCode);
+            $body = $this->decode($response->body);
+            $this->assertSame(
+                'Hub URL and hub JWKS URL must be http:// or https:// URLs.',
+                $body['message']
+            );
+        }
+        $this->assertFileDoesNotExist($this->dir . '/hub-enrollment.json');
+    }
+
     public function testHubPairFailureAnswersFixedCopyAndLogsTheCause(): void
     {
         $logPath = $this->initCapturedLogger();

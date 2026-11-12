@@ -278,6 +278,19 @@ final class HubJwtValidator implements HubJwtValidatorInterface
         $this->jwksCache->noteFetchAttempt();
 
         try {
+            if (!HubUrlPolicy::isHttpScheme($this->hubJwksUrl)) {
+                $this->logger->warning('Refusing to fetch hub JWKS over a non-http(s) scheme', [
+                    'url' => $this->hubJwksUrl,
+                ]);
+
+                return;
+            }
+            if (HubUrlPolicy::isCleartextNonLoopback($this->hubJwksUrl)) {
+                $this->logger->warning('Fetching hub JWKS over cleartext http:// to a non-loopback host', [
+                    'url' => $this->hubJwksUrl,
+                ]);
+            }
+
             $scheme = parse_url($this->hubJwksUrl, PHP_URL_SCHEME) ?: 'https';
             $host = parse_url($this->hubJwksUrl, PHP_URL_HOST) ?: '';
             $port = parse_url($this->hubJwksUrl, PHP_URL_PORT);

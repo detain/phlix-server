@@ -234,4 +234,15 @@ class HttpClientTest extends TestCase
         $this->assertEquals('application/json', $response->headers['content-type']);
         $this->assertEquals('public', $response->headers['cache-control']);
     }
+
+    public function testCurlPathRefusesNonHttpProtocols(): void
+    {
+        $client = new HttpClient('https://hub.example.com');
+        $m = new \ReflectionMethod($client, 'requestCurl');
+        $m->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('cURL error');
+        $m->invoke($client, 'GET', 'file:///etc/hostname', null, []);
+    }
 }

@@ -207,6 +207,12 @@ class HubClient
             protocolVersion: self::PROTOCOL_VERSION,
         ))->toPayload();
 
+        if (HubUrlPolicy::isCleartextNonLoopback($hubUrl)) {
+            $this->logger->warning('Hub pairing over cleartext http:// to a non-loopback host', [
+                'hub_url' => $hubUrl,
+            ]);
+        }
+
         $this->logger->info('Initiating pairing with hub', [
             'hub_url' => $hubUrl,
             'server_name' => $serverName,

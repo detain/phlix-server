@@ -329,7 +329,7 @@
                 {if $links_base}
                 <div class="footer-links">
                     <a href="{$links_base|escape:'html'}/app">Visit Phlix</a>
-                    <a href="{$links_base|escape:'html'}/app/settings">Preferences</a>
+                    <a href="{$links_base|escape:'html'}/app/settings">Settings</a>
                 </div>
                 {/if}
                 <p class="footer-text">
@@ -339,7 +339,7 @@
                     them, ask your server administrator to disable the newsletter.
                 </p>
                 <p class="footer-text">
-                    &copy; {$year|default:'2024'} Phlix Media Server. All rights reserved.
+                    &copy; {$year} Phlix Media Server. All rights reserved.
                 </p>
             </div>
         </div>

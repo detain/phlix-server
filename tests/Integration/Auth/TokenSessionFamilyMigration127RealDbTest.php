@@ -33,6 +33,15 @@
  * first, the overflow row excluded by execution (201 rows seeded, exactly
  * 200 returned), not by prose.
  *
+ * The SRV-S16 legs pin the two halves of grant-consume atomicity and the
+ * aged-revoked family sweep on real rows: markGrantConsumed() answers true
+ * for exactly ONE of two consumes of the same jti (the atomic arbiter the
+ * lost-race arm in AuthManager re-adjudicates on), and the per-user sweep at
+ * createSession() retires only the login user's families revoked past the
+ * derived horizon, deleting their grants BEFORE the family (a family whose
+ * grants overflow one batch survives to the next sweep, so the FK cascade is
+ * never the bound).
+ *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MPL-2.0
  */
@@ -635,5 +644,127 @@ final class TokenSessionFamilyMigration127RealDbTest extends TestCase
             2.0,
             'the stamped expires_at must be the mint\'s OWN baked claim (FROM_UNIXTIME round-trip)'
         );
+    }
+
+    public function testOnlyOneOfTwoConsumesOfTheSameGrantWins(): void
+    {
+        $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors']);
+
+        $u = 'user-' . bin2hex(random_bytes(6));
+        $this->seedUser($u);
+        $repo = new TokenSessionRepository($this->db);
+        $sid = $repo->createSession($u);
+        $jti = str_repeat('c3', 16);
+        $repo->recordGrant($jti, $sid, time() + 3600);
+
+        $this->assertTrue($repo->markGrantConsumed($jti), 'the first consume flips the row');
+        $this->assertFalse($repo->markGrantConsumed($jti), 'the second consume of the same jti LOSES');
+        $this->assertFalse($repo->markGrantConsumed(str_repeat('d4', 16)), 'an unknown jti consumes nothing');
+
+        $grant = $repo->findGrant($jti, 10);
+        $this->assertIsArray($grant);
+        $this->assertTrue($grant['consumed']);
+        $this->assertTrue($grant['withinGrace'], 'the loser re-reads the winner inside the window');
+    }
+
+    public function testAgedRevokedFamiliesAreSweptPerUserInOrder(): void
+    {
+        $this->assertSame([], $this->apply127()['errors']);
+        $this->assertSame([], $this->apply128()['errors']);
+
+        $u = 'user-' . bin2hex(random_bytes(6));
+        $other = 'user-' . bin2hex(random_bytes(6));
+        $this->seedUser($u);
+        $this->seedUser($other);
+        $repo = new TokenSessionRepository($this->db);
+
+        // Arm table, every clock value on the DATABASE clock. The horizon is
+        // MAX_REFRESH_TTL (90d) + PRUNE_GRACE (1d) = 91 days past revoked_at.
+        $agedRevoked = $repo->createSession($u);
+        $youngRevoked = $repo->createSession($u);
+        $agedActive = $repo->createSession($u);
+        $revokedNoStamp = $repo->createSession($u);
+        $foreignAged = $repo->createSession($other);
+        $overflow = $repo->createSession($u);
+
+        $age = static fn (string $interval): string => 'DATE_SUB(NOW(), INTERVAL ' . $interval . ')';
+        $revoke = function (string $sid, ?string $when): void {
+            $this->db->query(
+                "UPDATE auth_token_sessions SET status = 'revoked', revoke_reason = 'logout', revoked_at = "
+                . ($when ?? 'NULL') . ' WHERE id = ?',
+                [$sid]
+            );
+        };
+        $revoke($agedRevoked, $age('92 DAY'));
+        $revoke($youngRevoked, $age('90 DAY'));
+        $revoke($revokedNoStamp, null);
+        $revoke($foreignAged, $age('400 DAY'));
+        $revoke($overflow, $age('92 DAY'));
+        $this->db->query(
+            'UPDATE auth_token_sessions SET created_at = ' . $age('400 DAY') . ' WHERE id = ?',
+            [$agedActive]
+        );
+
+        $this->seedGrantArm(str_pad('a1', 32, '0', STR_PAD_LEFT), $agedRevoked, 'NOW()', 'NULL');
+        $this->seedGrantArm(str_pad('a2', 32, '0', STR_PAD_LEFT), $youngRevoked, 'NOW()', 'NULL');
+        $this->seedGrantArm(str_pad('a3', 32, '0', STR_PAD_LEFT), $foreignAged, 'NOW()', 'NULL');
+        // 1001 unstamped stragglers: one more than a sweep batch may remove.
+        $this->db->query(
+            'INSERT INTO auth_refresh_grants (jti, session_id)'
+            . ' WITH d(x) AS (SELECT 0 UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3'
+            . ' UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7'
+            . ' UNION ALL SELECT 8 UNION ALL SELECT 9),'
+            . ' n(i) AS (SELECT a.x * 100 + b.x * 10 + c.x FROM d a, d b, d c UNION ALL SELECT 1000)'
+            . " SELECT LPAD(CONCAT('b', i), 32, '0'), ? FROM n",
+            [$overflow]
+        );
+
+        $count = fn (string $sid): int => (int) ($this->rows(
+            'SELECT COUNT(*) AS n FROM auth_refresh_grants WHERE session_id = ?',
+            [$sid]
+        )[0]['n'] ?? -1);
+        $families = function (): array {
+            return array_map(
+                static fn (array $r): string => (string) $r['id'],
+                $this->rows('SELECT id FROM auth_token_sessions')
+            );
+        };
+
+        // Sweep 1 rides the login of $u. The overflow family's pick holds two
+        // aged-revoked ids; the batch-bounded grant DELETE removes 1000 rows
+        // in total across them, so at least one grant survives and the family
+        // that still holds it must survive too.
+        $fresh = $repo->createSession($u);
+        $this->assertTrue($repo->isSessionActive($fresh), 'the login still mints its family');
+
+        $after1 = $families();
+        $this->assertContains($youngRevoked, $after1, 'revoked inside the 91-day horizon is kept');
+        $this->assertContains($agedActive, $after1, 'an ancient ACTIVE family is not this sweep\'s business');
+        $this->assertContains($revokedNoStamp, $after1, 'a revoked row with no revoked_at is never guessed at');
+        $this->assertContains($foreignAged, $after1, 'the sweep is scoped to the login user only');
+        $this->assertSame(1, $count($foreignAged), 'a foreign family keeps its grants');
+        $this->assertSame(1, $count($youngRevoked));
+        $remaining = $count($overflow) + $count($agedRevoked);
+        $this->assertSame(2, $remaining, 'one batch (1000 grants) left exactly 1002 - 1000 stragglers');
+        foreach ([$overflow, $agedRevoked] as $sid) {
+            $this->assertSame(
+                $count($sid) > 0,
+                in_array($sid, $after1, true),
+                'a family survives the batch exactly while it still holds grants'
+            );
+        }
+
+        // Sweep 2 (the next login) finishes the ordered job.
+        $repo->createSession($u);
+        $after2 = $families();
+        $this->assertNotContains($agedRevoked, $after2, 'aged-revoked family retired');
+        $this->assertNotContains($overflow, $after2, 'the overflow family retires on the next sweep');
+        $this->assertSame(0, $count($overflow));
+        $this->assertSame(0, $count($agedRevoked));
+        $this->assertContains($youngRevoked, $after2);
+        $this->assertContains($foreignAged, $after2);
+        $this->assertContains($agedActive, $after2);
+        $this->assertContains($revokedNoStamp, $after2);
     }
 }

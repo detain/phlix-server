@@ -1721,6 +1721,17 @@ class AuthManager
      *    mid-way leaves the client's retry inside the grace window, where it
      *    rotates on — a post-mint consume would instead make the retry look
      *    like reuse.
+     *  - live, but the consume LOSES (SRV-S16: markGrantConsumed() reports
+     *    that this call did not flip the row — a concurrent rotation of the
+     *    same token won the atomic `consumed_at IS NULL` write between our read
+     *    and our write, or the grant vanished) → the stale read is discarded
+     *    and the presentation is re-adjudicated ONCE through this same table
+     *    on a fresh read: consumed outside the window revokes the family as
+     *    reuse, consumed inside it is the benign cross-worker race (rotate on,
+     *    exactly as a sequential in-window replay would), gone/revoked fails
+     *    closed. A second lost consume on the re-read is incoherent and dies
+     *    ('refresh_grant_consume_lost') — never a mint on a consumption this
+     *    presentation did not make.
      *
      * Every refusal throws the EXISTING 'Token has been revoked' message the
      * boundary already maps to 401 {'error': message} — zero new wire codes
@@ -1729,6 +1740,8 @@ class AuthManager
      * @param string $userId    Token subject.
      * @param string $sessionId The family id from the `sid` claim.
      * @param string $jti       The presented refresh token's jti ('' = absent).
+     * @param bool   $afterLostConsume True on the single SRV-S16 re-read after
+     *                                 a lost consume (bounds the re-entry).
      *
      * @return void
      *
@@ -1737,8 +1750,12 @@ class AuthManager
      *
      * @since CP-029 (D-1a session-family revocation)
      */
-    private function adjudicateRefreshFamily(string $userId, string $sessionId, string $jti): void
-    {
+    private function adjudicateRefreshFamily(
+        string $userId,
+        string $sessionId,
+        string $jti,
+        bool $afterLostConsume = false
+    ): void {
         if ($this->tokenSessions === null) {
             $this->auditLogger->logFailedAuth('token_store_unwired', [
                 'user_id' => $userId,
@@ -1811,7 +1828,25 @@ class AuthManager
             return;
         }
 
-        $this->tokenSessions->markGrantConsumed($jti);
+        if ($this->tokenSessions->markGrantConsumed($jti)) {
+            return;
+        }
+
+        // SRV-S16 lost race: our read said "live" but the atomic consume says
+        // this presentation did not consume the grant. Minting now would
+        // honor a consumption someone else made; re-adjudicate on a fresh
+        // read instead (reuse → revoke, in-window → benign, gone → refuse).
+        if ($afterLostConsume) {
+            $this->auditLogger->logFailedAuth('refresh_grant_consume_lost', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+                'session_id' => $sessionId,
+                'jti' => $jti,
+            ]);
+            throw new \InvalidArgumentException('Token has been revoked');
+        }
+
+        $this->adjudicateRefreshFamily($userId, $sessionId, $jti, true);
     }
 
     /**

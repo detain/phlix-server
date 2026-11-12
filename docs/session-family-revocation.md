@@ -1,8 +1,9 @@
 # Session-family revocation (D-1a) — how the server actually works
 
 Status: SHIPPED. Core at commit 413765b6 (migrations 126–127 + the store/ceremony
-code); retention parity cure at this working tip (migration 128 + prune legs),
-2026-11-11. Every file:line below is read from that shipped tree. This document
+code); retention parity cure (migration 128 + prune legs), 2026-11-11; SRV-S16
+(grant-consume atomicity + aged-revoked family sweep), 2026-11-12. Every
+file:line below is read from the SRV-S16 tree. This document
 describes what the code does — not what a design note hoped it would do.
 
 ## The problem this solves
@@ -22,9 +23,9 @@ places, and the family — the unit of trust — can be revoked as one row.
 | Family row (session) | `auth_token_sessions` — migration 127 (`migrations/127_auth_token_sessions.sql:36`) |
 | Grant row (jti → family) | `auth_refresh_grants` — migration 127 (`migrations/127_auth_token_sessions.sql:51`) |
 | Grant lifetime + sweep index | migration 128 (`migrations/128_auth_refresh_grants_expiry.sql`) |
-| The store | `src/Auth/TokenSessionRepository.php:57` (`class TokenSessionRepository`) |
-| The ceremony | `src/Auth/AuthManager.php:1584` (`refreshToken`) → `:1740` (`adjudicateRefreshFamily`) |
-| Mint-time registration | `src/Auth/AuthManager.php:2155` (recordGrant call in `buildAuthResponse`) |
+| The store | `src/Auth/TokenSessionRepository.php:58` (`class TokenSessionRepository`) |
+| The ceremony | `src/Auth/AuthManager.php:1584` (`refreshToken`) → `:1753` (`adjudicateRefreshFamily`) |
+| Mint-time registration | `src/Auth/AuthManager.php:2190` (recordGrant call in `buildAuthResponse`) |
 | Family claim on tokens | `src/Auth/JwtHandler.php:100` (`CLAIM_SESSION_ID = 'sid'`) |
 | HTTP surface | `src/Server/Core/Application.php:477–478` → `src/Server/Http/Controllers/AuthController.php:662` (`listTokenSessions`), `:707` (`revokeTokenSession`) |
 | Wiring | `src/Common/Container/Providers/AuthServicesProvider.php:633,639` |
@@ -42,27 +43,36 @@ places, and the family — the unit of trust — can be revoked as one row.
    dead token dies.
 2. **First contact opens a family.** A refresh token minted before D-1a carries
    no `sid` claim. On its first rotation the server calls
-   `TokenSessionRepository::createSession()` (src/Auth/TokenSessionRepository.php:112),
-   stamps the family into the successor tokens (:2132 sets
+   `TokenSessionRepository::createSession()` (src/Auth/TokenSessionRepository.php:131),
+   stamps the family into the successor tokens (:2167 sets
    `JwtHandler::CLAIM_SESSION_ID`), and registers the successor's `jti` as the
-   family's first grant (:2155).
+   family's first grant (:2190).
 3. **Inside a family, rotation consumes.** Presenting a family token looks its
-   `jti` up via `findGrant()` (src/Auth/TokenSessionRepository.php:177). An
-   unconsumed grant is marked consumed (markGrantConsumed :287) *before* the
+   `jti` up via `findGrant()` (src/Auth/TokenSessionRepository.php:197). An
+   unconsumed grant is marked consumed (markGrantConsumed :398) *before* the
    response returns, the successor `jti` is registered, and the family row is
    touched so `last_used_at` stays honest.
+   The consume is the atomic arbiter (SRV-S16): its `AND consumed_at IS NULL`
+   UPDATE flips the row for exactly one of N concurrent presentations, and
+   `markGrantConsumed()` returns whether THIS call flipped it (an int rowCount
+   of 0, or a `WriteResult::wroteNothing()` answer, is a loss). A loser never
+   mints on a consumption it did not make: it re-reads the grant once and
+   re-runs the same decision table — consumed inside the grace window is the
+   benign cross-worker race (rotate on), consumed outside it is reuse (step 4),
+   gone or revoked fails closed, and a second lost consume dies as
+   `refresh_grant_consume_lost`.
 4. **Reuse is revocation.** A grant already consumed, presenting outside the
    10-second rotation grace (`AuthManager::ROTATION_GRACE_SECONDS`,
    src/Auth/AuthManager.php:269), means two copies of the same token exist.
-   The whole family is revoked (`revokeSession`, src/Auth/TokenSessionRepository.php:325)
+   The whole family is revoked (`revokeSession`, src/Auth/TokenSessionRepository.php:443)
    and the presentation refused. The grace window is a database-clock fact
    (`consumed_at` vs `NOW()` inside findGrant's own query), not a PHP clock —
    proven by tests/Integration/Auth/TokenSessionFamilyMigration127RealDbTest.php.
 5. **Revocation paths.** Per-family: `AuthManager::revokeTokenSession()`
-   (src/Auth/AuthManager.php:2335) behind DELETE /api/v1/auth/sessions/{id};
+   (src/Auth/AuthManager.php:2370) behind DELETE /api/v1/auth/sessions/{id};
    per-account (nuclear, the legacy `users.tokens_not_valid_after` bump and
-   every live family at once): `revokeUserTokens()` (:2284) and
-   `revokeAllForUser()` (src/Auth/TokenSessionRepository.php:344).
+   every live family at once): `revokeUserTokens()` (:2319) and
+   `revokeAllForUser()` (src/Auth/TokenSessionRepository.php:462).
 
 ## Retention (the 2026-11-11 parity cure)
 
@@ -72,7 +82,7 @@ gaps, both closed now; the shape mirrors the hub twin
 shipped idioms:
 
 1. **Every grant carries its own lifetime claim.** `recordGrant()`
-   (src/Auth/TokenSessionRepository.php:231) takes the minted token's OWN baked
+   (src/Auth/TokenSessionRepository.php:251) takes the minted token's OWN baked
    `exp` — `buildAuthResponse` reads it back off the exact bytes the client
    received (src/Auth/AuthManager.php:2154) and hands it over; the INSERT
    stamps it with `FROM_UNIXTIME(?)` into the `expires_at` column migration 128
@@ -80,7 +90,7 @@ shipped idioms:
    `JwtHandler` baked, and a grant whose row-lifetime outlives its token is
    garbage that sweeps cannot see.
 2. **A write-time sweep retires dead rows.** `pruneExpired()`
-   (src/Auth/TokenSessionRepository.php:258) runs, bounded and best-effort, at
+   (src/Auth/TokenSessionRepository.php:278) runs, bounded and best-effort, at
    the head of every `recordGrant()` — the server has no sweeper daemon, and
    the house janitor idiom (`QuickConnectStateStore`) is what this repo
    actually ships. Two arms:
@@ -88,8 +98,8 @@ shipped idioms:
    - `expires_at IS NULL AND created_at < NOW() - 31536000 SECOND` — rows that
      predate the cure ride a one-year grandfather horizon instead of sweeping
      instantly (they still have live tokens).
-   The constants sit beside the method (PRUNE_GRACE_SECONDS :67,
-   PRUNE_BATCH_SIZE :70, UNSTAMPED_RETENTION_SECONDS :76).
+   The constants sit beside the method (PRUNE_GRACE_SECONDS :68,
+   PRUNE_BATCH_SIZE :71, UNSTAMPED_RETENTION_SECONDS :77).
    What the sweep must NEVER touch, and tests pin per-arm:
    - a CONSUMED-but-unexpired grant — that row IS the reuse detector; deleting
      it early would make token theft look like ordinary absence;
@@ -101,14 +111,29 @@ shipped idioms:
    the sweep failure is swallowed by design (janitorial, never load-bearing:
    worst case the table stays big until the next write, exactly as before).
 3. **The sessions list is bounded.** `listActiveSessions()`
-   (src/Auth/TokenSessionRepository.php:391) appends
-   `LIMIT 200` (public `MAX_LISTED_SESSIONS` :83). Newest activity first, so
+   (src/Auth/TokenSessionRepository.php:509) appends
+   `LIMIT 200` (public `MAX_LISTED_SESSIONS` :97). Newest activity first, so
    the page a user sees is the page that matters; DELETE by id
    (src/Server/Http/Controllers/AuthController.php:707) stays capability-neutral
    — the id lives in the client's own token claims, not in the list. A 201-row
    insert showing exactly-200-returned is pinned by execution, not prose
    (testTheSessionsListIsBoundedToTheCeiling).
-4. **The DDL contract is fingerprinted.** The migration 128 guards (column
+4. **Aged-revoked families retire per user (SRV-S16).** A revoked family is
+   terminal, so `createSession()` first runs `pruneRevokedFamilies($userId)`
+   (src/Auth/TokenSessionRepository.php:339) for the logging-in account: its
+   families revoked more than `REVOKED_RETENTION_SECONDS` ago — derived as
+   `TokenTtlPolicy::MAX_REFRESH_TTL + PRUNE_GRACE_SECONDS` (91 days), the point
+   by which every grant the family minted has expired and been grant-swept —
+   are removed in ORDER: pick up to 1000 family ids, delete their grants
+   (`LIMIT 1000`), then delete only the picked families that hold no grant any
+   more. The FK cascade is never the bound; a family whose grants overflow the
+   batch survives to the next login's sweep. Deletion is fail-closed: a missing
+   family/grant refuses exactly like a revoked one. Per-user rather than
+   global because there is no `(status, revoked_at)` index — a global arm
+   measured ~100ms of full scan per sweep at 100k families on MySQL 8.0, while
+   the per-user pick rides `idx_ats_user_status` — so no migration was added.
+   Best-effort: a sweep failure never blocks the login.
+5. **The DDL contract is fingerprinted.** The migration 128 guards (column
    probe, index probe, `PREPARE`-gated ALTER, no directive — the
    `@phlix-require-mysql` marker is for standalone DDL and per the M28 law must
    never attach to dynamic-DDL fragments) replay idempotently; the DDL

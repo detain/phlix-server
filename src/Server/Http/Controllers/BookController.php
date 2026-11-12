@@ -694,6 +694,10 @@ class BookController
         // CBZ/PDF) into resident worker heap. Workerman derives Content-Length,
         // Accept-Ranges and Last-Modified at send; the jail + parental gates
         // above run unchanged BEFORE any byte is touched.
+        // Resident workers outlive file changes: clear THIS path's stat-cache
+        // entry so a replaced book never has its If-Range validator or Range
+        // window judged against a stale size/mtime (SubtitleController idiom).
+        clearstatcache(true, $path);
         $fileSize = is_readable($path) ? @filesize($path) : false;
         if ($fileSize === false) {
             return (new Response())->status(500)->json(['error' => 'Failed to read file']);

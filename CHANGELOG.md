@@ -145,6 +145,23 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Revoked sign-in sessions no longer pile up forever, and a refresh that
+  loses a race to rotate the same token no longer mints on someone else's
+  rotation.** Each login now first retires that account's sign-in families
+  revoked more than 91 days ago (the longest refresh lifetime plus the grant
+  sweep's one-day grace), deleting their refresh grants before the family row
+  in bounded batches of 1000 so the database cascade is never the bound; a
+  sweep failure never blocks the login. Rotation's consume step now reports
+  whether it actually consumed the presented refresh token: when a concurrent
+  rotation of the same token won, the request re-reads the grant and re-runs
+  the reuse decision — inside the 10-second grace window it rotates on as the
+  benign multi-tab race, outside it the family is revoked as token reuse, and
+  a vanished grant is refused — instead of minting a fresh pair regardless.
+  No migration. [SRV-S16 / SRV-26, SRV-61]
+- **Book downloads re-read the file's size and date on every request.** A
+  resident worker now clears the stat cache for the book path before judging
+  `If-Range` and the `Range` window, so a book replaced on disk is never
+  served against its old size or modification time. [SRV-S16, SRV-S14 follow-up]
 - **Book downloads stream instead of buffering the whole file.**
   `GET /books/{id}/download` (and its OPDS twin) used to `file_get_contents()`
   the entire EPUB/PDF/CBZ into worker memory before replying, so a

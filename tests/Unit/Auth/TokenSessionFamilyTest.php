@@ -19,6 +19,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
+use Workerman\MySQL\Connection;
 
 /**
  * The D-1a adjudication law, executed.
@@ -247,8 +248,10 @@ final class TokenSessionFamilyTest extends TestCase
         $store->expects($this->once())
             ->method('markGrantConsumed')
             ->with($this->identicalTo($presentedJti))
-            ->willReturnCallback(function () use (&$consumedOrder): void {
+            ->willReturnCallback(function () use (&$consumedOrder): bool {
                 $consumedOrder[] = 'consumed';
+
+                return true;
             });
         $store->expects($this->once())
             ->method('touchSession')
@@ -584,6 +587,9 @@ final class TokenSessionFamilyTest extends TestCase
         $finds = 0;
         $store = $this->createMock(TokenSessionRepository::class);
         $store->method('createSession')->willReturn($family);
+        // Presentation 2 WINS its consume (SRV-S16: a lost consume would
+        // re-adjudicate and is pinned by its own legs below).
+        $store->method('markGrantConsumed')->willReturn(true);
         $store->method('findGrant')->willReturnCallback(
             function (string $jti, int $grace) use (&$finds, $family): array {
                 $finds++;
@@ -809,6 +815,258 @@ final class TokenSessionFamilyTest extends TestCase
         $store = $this->createMock(TokenSessionRepository::class);
         $store->expects($this->once())->method('listActiveSessions')->with(self::USER_ID)->willReturn($rows);
         $this->assertSame($rows, $this->manager($store)->listTokenSessions(self::USER_ID));
+    }
+
+    // ---------------------------------------------------------------------------
+    // SRV-S16 — lost-consume legs (grant-consume atomicity)
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Mint a family refresh token and return [token, jti, family].
+     *
+     * @return array{0: string, 1: string, 2: string}
+     */
+    private function familyToken(string $fill): array
+    {
+        $family = 'f' . str_repeat($fill, 35);
+        $token = $this->jwt->createRefreshToken(self::USER_ID, [JwtHandler::CLAIM_SESSION_ID => $family]);
+        $payload = $this->jwt->validateToken($token);
+        $this->assertIsArray($payload);
+
+        return [$token, (string) $payload['jti'], $family];
+    }
+
+    /**
+     * @param array<string, bool>|null $consumedState null = the grant vanished
+     *
+     * @return array{jti: string, sessionId: string, sessionStatus: string, consumed: bool, withinGrace: bool}|null
+     */
+    private static function grantRow(string $jti, string $family, ?array $consumedState): ?array
+    {
+        if ($consumedState === null) {
+            return null;
+        }
+
+        return [
+            'jti' => $jti,
+            'sessionId' => $family,
+            'sessionStatus' => 'active',
+            'consumed' => $consumedState['consumed'],
+            'withinGrace' => $consumedState['withinGrace'],
+        ];
+    }
+
+    /**
+     * LOST RACE, IN WINDOW: the read said live, the atomic consume says a
+     * concurrent rotation flipped the row first. The fresh re-read shows it
+     * consumed inside the grace window — the benign cross-worker race — so
+     * the presentation rotates on inside the family: one re-read, no second
+     * consume, no revocation.
+     */
+    public function testLostConsumeReadjudicatesAnInWindowWinnerAsTheBenignRace(): void
+    {
+        $this->harness();
+        [$token, $jti, $family] = $this->familyToken('8');
+
+        $reads = [
+            self::grantRow($jti, $family, ['consumed' => false, 'withinGrace' => false]),
+            self::grantRow($jti, $family, ['consumed' => true, 'withinGrace' => true]),
+        ];
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->expects($this->exactly(2))
+            ->method('findGrant')
+            ->with($this->identicalTo($jti))
+            ->willReturnCallback(function () use (&$reads): ?array {
+                return array_shift($reads);
+            });
+        $store->expects($this->once())->method('markGrantConsumed')->willReturn(false);
+        $store->expects($this->never())->method('revokeSession');
+        $store->expects($this->once())->method('recordGrant');
+        $this->audit->expects($this->never())->method('logFailedAuth');
+
+        $response = $this->manager($store)->refreshToken($token);
+
+        $fresh = $this->jwt->validateToken((string) $response['refresh_token']);
+        $this->assertIsArray($fresh);
+        $this->assertSame($family, $fresh['sid'] ?? null, 'the benign race rotates INSIDE the family');
+    }
+
+    /**
+     * LOST RACE, OUTSIDE WINDOW: the re-read shows the grant consumed long
+     * enough ago that the window has closed — a reuse verdict, routed through
+     * the same revocation arm as a sequential replay: family revoked with
+     * 'refresh_token_reuse', presentation refused, nothing minted.
+     */
+    public function testLostConsumeRoutesAnOutOfWindowWinnerThroughReuseRevocation(): void
+    {
+        $this->harness();
+        [$token, $jti, $family] = $this->familyToken('9');
+
+        $reads = [
+            self::grantRow($jti, $family, ['consumed' => false, 'withinGrace' => false]),
+            self::grantRow($jti, $family, ['consumed' => true, 'withinGrace' => false]),
+        ];
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturnCallback(function () use (&$reads): ?array {
+            return array_shift($reads);
+        });
+        $store->expects($this->once())->method('markGrantConsumed')->willReturn(false);
+        $store->expects($this->once())
+            ->method('revokeSession')
+            ->with($this->identicalTo($family), $this->identicalTo('refresh_token_reuse'));
+        $store->expects($this->never())->method('recordGrant');
+        $this->audit->expects($this->once())
+            ->method('logFailedAuth')
+            ->with($this->identicalTo('refresh_token_reuse'), $this::anything());
+
+        $this->expectExceptionObject(new \InvalidArgumentException('Token has been revoked'));
+        $this->manager($store)->refreshToken($token);
+    }
+
+    /**
+     * LOST CONSUME ON A VANISHED GRANT: the row was swept/removed between the
+     * read and the write — the re-read answers null and the unknown-grant arm
+     * fails closed, nothing minted.
+     */
+    public function testLostConsumeOnAVanishedGrantFailsClosed(): void
+    {
+        $this->harness();
+        [$token, $jti, $family] = $this->familyToken('a');
+
+        $reads = [self::grantRow($jti, $family, ['consumed' => false, 'withinGrace' => false]), null];
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturnCallback(function () use (&$reads): ?array {
+            return array_shift($reads);
+        });
+        $store->expects($this->once())->method('markGrantConsumed')->willReturn(false);
+        $store->expects($this->never())->method('revokeSession');
+        $store->expects($this->never())->method('recordGrant');
+        $this->audit->expects($this->once())
+            ->method('logFailedAuth')
+            ->with($this->identicalTo('refresh_grant_unknown'), $this::anything());
+
+        $this->expectExceptionObject(new \InvalidArgumentException('Token has been revoked'));
+        $this->manager($store)->refreshToken($token);
+    }
+
+    /**
+     * A SECOND LOST CONSUME is incoherent (the store keeps saying "live" but
+     * refuses every consume): the re-entry is bounded to one, the arm dies
+     * with its own audit name, and nothing is ever minted on a consumption
+     * this presentation did not make.
+     */
+    public function testASecondLostConsumeDiesWithoutMinting(): void
+    {
+        $this->harness();
+        [$token, $jti, $family] = $this->familyToken('b');
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->expects($this->exactly(2))
+            ->method('findGrant')
+            ->willReturn(self::grantRow($jti, $family, ['consumed' => false, 'withinGrace' => false]));
+        $store->expects($this->exactly(2))->method('markGrantConsumed')->willReturn(false);
+        $store->expects($this->never())->method('revokeSession');
+        $store->expects($this->never())->method('recordGrant');
+        $this->audit->expects($this->once())
+            ->method('logFailedAuth')
+            ->with(
+                $this->identicalTo('refresh_grant_consume_lost'),
+                $this->callback(fn (array $ctx): bool => ($ctx['jti'] ?? null) === $jti
+                    && ($ctx['session_id'] ?? null) === $family
+                    && ($ctx['context'] ?? null) === 'refresh')
+            );
+
+        $this->expectExceptionObject(new \InvalidArgumentException('Token has been revoked'));
+        $this->manager($store)->refreshToken($token);
+    }
+
+    // ---------------------------------------------------------------------------
+    // SRV-S16 — store write-result legs (mocked connection; SQL truth is the
+    // real-MySQL file's job)
+    // ---------------------------------------------------------------------------
+
+    /**
+     * markGrantConsumed() reports the WINNER only: an int rowCount of 1 is a
+     * consumption by this call; int 0 (another writer flipped the row, or it
+     * is gone) and the WriteResult wrote-nothing values (null — the reformat
+     * trap — and false) are all "not consumed by this call".
+     */
+    public function testMarkGrantConsumedReportsOnlyAnActualFlip(): void
+    {
+        $cases = [[1, true], [0, false], [null, false], [false, false]];
+        foreach ($cases as [$driverAnswer, $expected]) {
+            $db = $this->createMock(Connection::class);
+            $db->expects($this->once())
+                ->method('query')
+                ->with($this->stringStartsWith('UPDATE auth_refresh_grants SET consumed_at = NOW()'))
+                ->willReturn($driverAnswer);
+            $this->assertSame(
+                $expected,
+                (new TokenSessionRepository($db))->markGrantConsumed(str_repeat('0a', 16)),
+                'driver answer ' . var_export($driverAnswer, true)
+            );
+        }
+    }
+
+    /**
+     * The aged-revoked sweep runs IN ORDER and only on the picked batch:
+     * user-scoped pick, grants deleted before families, the family delete
+     * re-guards status and refuses any family that still holds a grant (the
+     * FK cascade is never the bound). An empty pick issues no DELETE at all.
+     */
+    public function testPruneRevokedFamiliesSweepsInOrderOnThePickedBatch(): void
+    {
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $binds = []) use (&$calls): mixed {
+                $calls[] = [$sql, $binds];
+
+                return str_starts_with($sql, 'SELECT') ? [['id' => 'fam-1'], ['id' => 'fam-2']] : 1;
+            }
+        );
+
+        (new TokenSessionRepository($db))->pruneRevokedFamilies('user-9');
+
+        $this->assertCount(3, $calls);
+        $this->assertStringContainsString("WHERE user_id = ? AND status = 'revoked'", $calls[0][0]);
+        $this->assertSame(['user-9'], $calls[0][1]);
+        $this->assertStringStartsWith('DELETE FROM auth_refresh_grants WHERE session_id IN (?, ?)', $calls[1][0]);
+        $this->assertStringContainsString('LIMIT 1000', $calls[1][0]);
+        $this->assertSame(['fam-1', 'fam-2'], $calls[1][1]);
+        $this->assertStringStartsWith('DELETE FROM auth_token_sessions WHERE id IN (?, ?)', $calls[2][0]);
+        $this->assertStringContainsString("AND status = 'revoked'", $calls[2][0]);
+        $this->assertStringContainsString('NOT EXISTS (SELECT 1 FROM auth_refresh_grants', $calls[2][0]);
+        $this->assertSame(['fam-1', 'fam-2'], $calls[2][1]);
+
+        $quiet = $this->createMock(Connection::class);
+        $quiet->expects($this->once())->method('query')->willReturn([]);
+        (new TokenSessionRepository($quiet))->pruneRevokedFamilies('user-9');
+    }
+
+    /**
+     * Janitorial posture: a sweep that throws never fails the login — the
+     * family INSERT still runs and its id is returned.
+     */
+    public function testARevokedSweepFailureNeverBlocksTheLogin(): void
+    {
+        $inserted = false;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$inserted): mixed {
+                if (str_starts_with($sql, 'SELECT')) {
+                    throw new \RuntimeException('lock wait timeout');
+                }
+                $inserted = $inserted || str_starts_with($sql, 'INSERT INTO auth_token_sessions');
+
+                return '0';
+            }
+        );
+
+        $sid = (new TokenSessionRepository($db))->createSession('user-9');
+
+        $this->assertTrue($inserted, 'the family row is written even when the sweep dies');
+        $this->assertSame(36, strlen($sid));
     }
 
     // ---------------------------------------------------------------------------

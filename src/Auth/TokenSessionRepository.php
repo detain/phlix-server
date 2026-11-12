@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Common\Database\WriteResult;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
@@ -76,6 +77,19 @@ class TokenSessionRepository
     private const UNSTAMPED_RETENTION_SECONDS = 31536000;
 
     /**
+     * How long a REVOKED family row outlives its revocation before the
+     * per-user sweep removes it (SRV-S16). Derived, not chosen: every grant
+     * the family ever minted expires by revoked_at + the longest refresh TTL
+     * the policy can bake ({@see TokenTtlPolicy::MAX_REFRESH_TTL}), and the
+     * grant sweep retires it PRUNE_GRACE_SECONDS later — so by this horizon
+     * the family's stamped grants are already gone and the ordered sweep
+     * only ever meets unstamped stragglers. Deleting earlier would still be
+     * fail-closed (a missing family/grant refuses exactly like a revoked
+     * one), but would throw away audit evidence for nothing.
+     */
+    private const REVOKED_RETENTION_SECONDS = TokenTtlPolicy::MAX_REFRESH_TTL + self::PRUNE_GRACE_SECONDS;
+
+    /**
      * Ceiling for {@see listActiveSessions()}. Capability-neutral: revoking a
      * family never requires seeing it in the list, so the honest bound trades
      * an unbounded per-request read for a capped page the UI cannot outgrow.
@@ -102,6 +116,11 @@ class TokenSessionRepository
      * optional display metadata — clients that do not send any (the OIDC
      * callbacks, WebAuthn finish) honestly show NULL in the session list.
      *
+     * The insert first runs {@see pruneRevokedFamilies()} for the same user —
+     * the login ceremony is the only thing that grows this table, so sweeping
+     * the account's aged-revoked families at that moment keeps it bounded
+     * without a cron (SRV-S16).
+     *
      * @param string      $userId     Owner of the family.
      * @param string|null $deviceType Display metadata ('tv', 'mobile', …) or null.
      * @param string|null $deviceName Display metadata, untrusted, length-capped
@@ -111,6 +130,7 @@ class TokenSessionRepository
      */
     public function createSession(string $userId, ?string $deviceType = null, ?string $deviceName = null): string
     {
+        $this->pruneRevokedFamilies($userId);
         $sessionId = Uuid::v4();
 
         $this->db->query(
@@ -278,18 +298,116 @@ class TokenSessionRepository
     }
 
     /**
-     * Mark the presented refresh token as used (rotation consumed it).
+     * Sweep ONE user's aged-revoked families out of the store (SRV-S16).
      *
-     * @param string $jti Presented token's `jti`.
+     * A revoked family is terminal — nothing ever reactivates it — so once
+     * {@see self::REVOKED_RETENTION_SECONDS} have passed since `revoked_at`
+     * its row is pure residue. Deleting it is fail-closed by construction:
+     * {@see isSessionActive()} answers false for a missing row exactly as for
+     * a revoked one, and {@see findGrant()} answers null (refused as
+     * 'refresh_grant_unknown') once the grants are gone.
+     *
+     * ## Ordered, bounded, FK-respecting
+     *
+     * `auth_refresh_grants.session_id` cascades on delete, but a cascade is an
+     * UNBOUNDED fan-out hidden inside one statement. The sweep therefore runs
+     * in order instead of leaning on it:
+     *
+     *  1. pick up to PRUNE_BATCH_SIZE aged-revoked family ids of this user;
+     *  2. delete their grants (LIMIT PRUNE_BATCH_SIZE);
+     *  3. delete only those picked families that no longer hold any grant —
+     *     a family whose grants overflowed the batch survives to the next
+     *     sweep, so no statement ever removes more than one batch of rows.
+     *
+     * ## Why per-user (measured, SRV-S16)
+     *
+     * There is no index on (status, revoked_at); a global arm measured ~100ms
+     * of full scan per sweep at 100k families on MySQL 8.0. Scoped to the
+     * login's own user, step 1 rides `idx_ats_user_status` (migration 127)
+     * and costs nothing measurable — so no migration is added. The bound
+     * holds because only the login ceremony grows the table: every account
+     * that keeps creating families keeps sweeping its own residue, and
+     * account deletion cascades the rest.
+     *
+     * Best-effort in the same janitor posture as {@see pruneExpired()}: it is
+     * never load-bearing for the auth decision, so a failure is swallowed.
+     *
+     * @param string $userId Owner whose aged-revoked families are swept.
      *
      * @return void
      */
-    public function markGrantConsumed(string $jti): void
+    public function pruneRevokedFamilies(string $userId): void
     {
-        $this->db->query(
+        try {
+            $rows = RowMap::listFromMixed($this->db->query(
+                "SELECT id FROM auth_token_sessions WHERE user_id = ? AND status = 'revoked'"
+                . ' AND revoked_at < NOW() - INTERVAL ' . self::REVOKED_RETENTION_SECONDS . ' SECOND'
+                . ' LIMIT ' . self::PRUNE_BATCH_SIZE,
+                [$userId]
+            ));
+
+            $ids = [];
+            foreach ($rows as $row) {
+                if (is_string($row['id'] ?? null)) {
+                    $ids[] = $row['id'];
+                }
+            }
+            if ($ids === []) {
+                return;
+            }
+
+            $in = implode(', ', array_fill(0, count($ids), '?'));
+            $this->db->query(
+                'DELETE FROM auth_refresh_grants WHERE session_id IN (' . $in . ')'
+                . ' LIMIT ' . self::PRUNE_BATCH_SIZE,
+                $ids
+            );
+            $this->db->query(
+                'DELETE FROM auth_token_sessions WHERE id IN (' . $in . ")"
+                . " AND status = 'revoked'"
+                . ' AND NOT EXISTS (SELECT 1 FROM auth_refresh_grants g WHERE g.session_id = auth_token_sessions.id)',
+                $ids
+            );
+        } catch (\Throwable) {
+            // Janitorial, never load-bearing: the createSession INSERT that
+            // follows is validated by its own caller, so a sweep failure only
+            // leaves residue for the next login to retire.
+        }
+    }
+
+    /**
+     * Mark the presented refresh token as used (rotation consumed it), and
+     * say whether THIS call is the one that consumed it (SRV-S16).
+     *
+     * The `AND consumed_at IS NULL` guard makes the write the atomic arbiter
+     * between concurrent rotations of one token: exactly one UPDATE flips the
+     * row. Every loser — and every answer the statement cannot vouch for —
+     * returns false, and the caller re-adjudicates through the reuse decision
+     * table ({@see \Phlix\Auth\AuthManager} lost-race arm) rather than
+     * minting on a consumption it never made.
+     *
+     * Return table ({@see WriteResult}): an `UPDATE` answers an int rowCount.
+     * `WriteResult::wroteNothing()` (null — the reformat trap — or false) and
+     * an int 0 (another writer flipped the row first, or the grant is gone)
+     * both read as "not consumed by this call".
+     *
+     * @param string $jti Presented token's `jti`.
+     *
+     * @return bool True only when this call flipped consumed_at.
+     */
+    public function markGrantConsumed(string $jti): bool
+    {
+        $result = $this->db->query(
             'UPDATE auth_refresh_grants SET consumed_at = NOW() WHERE jti = ? AND consumed_at IS NULL',
             [$jti]
         );
+
+        if (WriteResult::wroteNothing($result)) {
+            return false;
+        }
+
+        // An UPDATE answers an int rowCount: 0 = this call flipped nothing.
+        return $result !== 0;
     }
 
     /**

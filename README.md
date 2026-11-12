@@ -47,21 +47,17 @@ Phlix Media Server provides a complete media management and streaming solution:
   `/api/v1/profiles/{profileId}/schedules`; household walkthrough in
   [the quickstart](docs/user/quickstart.md)
 - **Webhooks**: outbound HTTP event delivery through two admin-managed surfaces — a signed
-  hook registry (per-hook secret, HMAC signature headers, SSRF-guarded targets) and a
-  domain-event subscription surface (`user.login`, `playback.*`, `library.*`; unsigned, see
-  the endpoint table). The same moment-of-use SSRF gate covers the notification plugin family
-  (`src/Webhooks/Plugins/` — Slack, Discord, ntfy, Apprise, Telegram, Pushover, MQTT): every
-  configured egress URL is re-validated against `SsrfGuard` at send time, so a config edited
-  or shipped to point at loopback, link-local metadata, or a private range is refused with a
-  logged warning and zero bytes out — the create+moment-of-use law the webhook surfaces proved.
-  Redirects are never followed: every guarded egress context pins
-  `follow_location=0`/`max_redirects=0`, so a public endpoint answering `302 →` a denied
-  range is refused at hop one (logged, zero bytes to the target). The guard's verdict is
-  check-time, before the socket connects; the sub-second resolver window is disclosed as a
-  bounded residual in `AbstractNotificationPlugin`'s egress law. The family ships ahead of its
-  dispatcher — no in-tree producer calls `send()` yet, so this is pre-deployment posture;
-  the wiring lane owns the refusal-marking law. Troubleshooting path:
-  [A webhook never fires](#a-webhook-never-fires)
+  hook registry (`/api/v1/admin/webhooks`: per-hook secret, HMAC signature headers) and a
+  domain-event subscription surface (`/api/v1/admin/webhooks/subscriptions`: `user.login`,
+  `playback.*`, `library.*`; unsigned, see the endpoint table). Both validate every target
+  against `SsrfGuard` at create *and* again at the moment of delivery, so a stored row later
+  edited to point at loopback, link-local metadata, or a private range is refused with zero
+  bytes out, and both refuse redirects outright (a `3xx` lands as a failed delivery, never a
+  hop to a second host). These two are the only outbound notification paths: the
+  Slack/Discord/ntfy/Apprise/Telegram/Pushover/MQTT notification-plugin family that used to
+  sit under `src/Webhooks/Plugins/` was never wired to a producer and was retired in
+  `12f056e8` (tripwire: `tests/Unit/Webhooks/NotificationPluginFamilyRetirementTest.php`).
+  Troubleshooting path: [A webhook never fires](#a-webhook-never-fires)
 
 Setting a server up for your household for the first time? Follow
 [docs/user/quickstart.md](docs/user/quickstart.md) — install → admin account → first
@@ -2119,25 +2115,47 @@ only authentication, while what DLNA advertises and serves is governed by
 
 ### A webhook never fires
 
-There are two webhook surfaces with separate stores: the legacy endpoint CRUD
+There are two webhook surfaces with separate stores: the legacy signed registry
 (`GET/POST/PUT/DELETE /api/v1/admin/webhooks`, `POST /api/v1/admin/webhooks/{id}/test`
-— `webhooks`/`webhook_logs` tables) and the V2 subscription system
-(`GET/POST /api/v1/admin/webhooks/subscriptions`, `GET /api/v1/admin/webhooks/deliveries`
-for per-event delivery history — `webhook_subscriptions`/`webhook_deliveries`).
-Use `{id}/test` (legacy) or check `/deliveries?event_id=…` (V2) to see whether
-the event never triggered or the delivery failed, and tail `.logs/` for the
-dispatcher's HTTP errors. Note the two subsystems differ in payload signing
-(see the `src/Webhooks/` docblocks). SSRF refusals are loud, not silent, but the
-surfaces differ in shape: the notification-plugin family logs
-`… notification blocked by SSRF guard` (and `… notification refused: HTTP
-redirect not followed`) on the application channel with the refused URL
-redacted from the reason — webhook paths and bot tokens ARE credentials. The
-older webhook surfaces log the guard's own message, which quotes the full URL:
-`WebhookService` writes `SSRF guard blocked URL: …` to the application channel
-and copies it into the delivery-record error, `WebhookDispatcher` puts the same
-line into the delivery-log row, and `MqttPlugin`'s inline guard logs its reason
-verbatim. Extending the redaction door to those legacy arms is registered
-forward-cure, not current behavior.
+— `webhooks`/`webhook_logs` tables, delivered by `WebhookDispatcher`) and the V2
+subscription system (`GET/POST/DELETE /api/v1/admin/webhooks/subscriptions`,
+`GET /api/v1/admin/webhooks/deliveries` for per-event delivery history —
+`webhook_subscriptions`/`webhook_deliveries`, delivered by `WebhookService`).
+Nothing else sends outbound notifications: the old notification-plugin family
+(Slack, Discord, ntfy, Apprise, Telegram, Pushover, MQTT) was retired in
+`12f056e8`, so there is no plugin log line to look for.
+
+Check the obvious first: domain events (`user.login`, `playback.*`, `library.*`)
+reach **only** V2 subscriptions. A hook in the legacy registry has no
+domain-event producer today; the one live delivery it makes is the operator's
+`{id}/test`. If you want events, create a subscription.
+
+Then find out whether the event never triggered or the delivery failed:
+
+- **Legacy registry** — `POST /api/v1/admin/webhooks/{id}/test` answers
+  synchronously with `success`, `failure_count` and a `failures` list carrying
+  the error for this attempt. Each delivery's outcome (after its synchronous
+  retries) is also recorded as one row in `webhook_logs` with the response
+  code or `error_message`. The dispatcher writes nothing to `.logs/` for a
+  failed delivery; the row is the record.
+- **V2 subscriptions** — `GET /api/v1/admin/webhooks/deliveries?event_id=…`
+  lists each delivery with its status, attempt count, response code and
+  response body (no `event_id` returns the pending retries). In `.logs/app.log`
+  a final failure is a warning, `Webhook delivery permanently failed`, with the
+  delivery id, response code and error; scheduled retries log
+  `Webhook delivery failed, scheduled retry` at debug level only.
+
+SSRF refusals are recorded, not silent, and the destination is redacted from
+the stored text (a webhook URL can itself be a credential). The guard's verdict
+reads `SSRF guard blocked URL: …` with the URL replaced by
+`<destination-redacted>`; the host/IP reason is kept. On the V2 surface that
+text goes into the delivery row's `response_body` and is logged to
+`.logs/app.log` as the warning `Webhook delivery refused by SSRF guard`. On the
+legacy surface it goes into the `webhook_logs.error_message` row only. The
+`{id}/test` response's `failures` list carries the guard's unredacted message,
+because that list already returns the hook's URL alongside it. Signing differs
+between the two surfaces too (signed registry vs unsigned subscriptions); the
+`src/Webhooks/` docblocks have the wire formats.
 
 ### Locked out of admin settings
 

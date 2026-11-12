@@ -172,7 +172,8 @@ final class SharedUiController
      * shipped {@see configuredSocketBaseUrl()} twin (env name follows this
      * repo's `PHLIX_*` convention; grammar and semantics are the hub's).
      *
-     * Accepted: `ws://127.0.0.1:8804`, `wss://hub.example.com`, `wss://hub.example.com:8804`.
+     * Accepted: `ws://127.0.0.1:8804`, `wss://hub.example.com`, `wss://hub.example.com:8804`,
+     * bracketed IPv6 literals such as `ws://[::1]:8804`.
      * Rejected (→ null): any non-ws(s) scheme, embedded path/query/userinfo,
      * a bare `//host`, or an out-of-range port.
      *
@@ -194,7 +195,13 @@ final class SharedUiController
         // the "out-of-range ports are rejected" promise must be real, not
         // aspirational (still fail-soft: rejection yields null, the shell
         // renders, the client falls back to same-origin derivation).
-        if (preg_match('#^(wss?)://([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$#', $candidate, $parts) === 1) {
+        if (preg_match('#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#', $candidate, $parts) === 1) {
+            if (
+                $parts[2][0] === '['
+                && filter_var(substr($parts[2], 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false
+            ) {
+                return null;
+            }
             $port = $parts[3] ?? '';
             if ($port === '') {
                 return $candidate;

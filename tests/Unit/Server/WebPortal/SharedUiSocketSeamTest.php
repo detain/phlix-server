@@ -99,6 +99,11 @@ final class SharedUiSocketSeamTest extends TestCase
             'surrounding whitespace trimmed' => ['  wss://pin.example.com  ', 'wss://pin.example.com'],
             'port one is in range' => ['ws://h.example.com:1', 'ws://h.example.com:1'],
             'port 65535 is in range' => ['wss://h.example.com:65535', 'wss://h.example.com:65535'],
+            'ipv6 loopback with port' => ['ws://[::1]:8804', 'ws://[::1]:8804'],
+            'ipv6 bare wss' => ['wss://[2001:db8::1]', 'wss://[2001:db8::1]'],
+            'ipv6 malformed rejected' => ['ws://[zzz]:8804', null],
+            'ipv6 unbracketed rejected' => ['ws://::1:8804', null],
+            'ipv6 empty brackets rejected' => ['ws://[]', null],
             'http scheme rejected' => ['http://hub.example.com', null],
             'https scheme rejected' => ['https://hub.example.com', null],
             'embedded path rejected' => ['ws://hub.example.com/syncplay', null],
@@ -202,6 +207,19 @@ final class SharedUiSocketSeamTest extends TestCase
         self::assertContains('wss://ws.example.com:8804', $sources, 'pinned cross-host origin must be allowed');
         self::assertContains('ws://phlix.example.com', $sources, 'legacy same-host allowance stays');
         self::assertContains('wss://phlix.example.com', $sources);
+    }
+
+    public function testIpv6ConfiguredOriginIsAddedToCspConnectSrc(): void
+    {
+        $_SERVER['HTTP_HOST'] = 'phlix.example.com';
+        putenv('PHLIX_WS_URL=ws://[2001:db8::1]:8804');
+
+        $response = (new SharedUiController($this->publicRoot))->shell(new Request());
+
+        $csp = $response->headers['Content-Security-Policy'] ?? '';
+        self::assertSame(1, preg_match('/connect-src ([^;]+);/', $csp, $m));
+        $sources = preg_split('/\s+/', trim($m[1] ?? '')) ?: [];
+        self::assertContains('ws://[2001:db8::1]:8804', $sources, 'CSP parity with the controller grammar');
     }
 
     public function testSameHostConfiguredOriginIsNotDuplicatedInTheCsp(): void

@@ -378,7 +378,13 @@ final class SecurityHeaders
         $candidate = trim($origin);
         if (
             $candidate === ''
-            || preg_match('#^(wss?)://([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$#', $candidate, $parts) !== 1
+            || preg_match('#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#', $candidate, $parts) !== 1
+        ) {
+            return null;
+        }
+        if (
+            $parts[2][0] === '['
+            && filter_var(substr($parts[2], 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false
         ) {
             return null;
         }

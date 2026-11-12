@@ -329,15 +329,12 @@ class StunClient
     }
 
     /**
-     * Generates a 12-byte random transaction ID.
+     * Generates a 12-byte random (CSPRNG) transaction ID.
      */
     private function generateTransactionId(): string
     {
-        $id = '';
-        for ($i = 0; $i < 12; $i++) {
-            $id .= chr(mt_rand(0, 255));
-        }
-        return $id;
+        // CSPRNG: RFC 5389 transaction IDs must be unpredictable (SRV-41).
+        return random_bytes(12);
     }
 
     /**

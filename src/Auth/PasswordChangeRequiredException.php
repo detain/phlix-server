@@ -41,7 +41,7 @@ use RuntimeException;
  * 403 with `{error: "...", code: "auth.password_change_required"}` that
  * the client UI can interpret as "this account is on hold — contact your
  * server administrator for a reset". The shipped posture is admin-reset: the
- * hold is cleared by an administrator (AdminUserController), there is no
+ * hold is cleared by an administrator (`bin/phlix user:reset-password`; AdminUserController::resetPassword only force-changes and revokes), there is no
  * self-service change-password path for a held account. That
  * boundary mapping is SHIPPED (SRV-M17): the password-login, LDAP-login,
  * passkey-finish, quick-connect-token and profile-switch legs catch this

@@ -771,7 +771,8 @@ installer path from the running checkout, so it names your real install director
 page shows the default `/var/www/phlix`. The server never runs it for you. It executes the
 installer already on disk (the one shipped with the release you are running) rather than piping
 a freshly fetched script into a root shell, then `--update` fetches `master` — the same ref the
-update check's `VERSION` marker tracks. Override the banner string per install with
+update check's `VERSION` marker tracks. The fetched `master` code (Composer, the migration runner)
+still runs as root; this form removes the fetch-time installer swap, not the trust in `master`. Override the banner string per install with
 `PHLIX_UPDATES_COMMAND` (e.g. Docker, where updates are image pulls).
 
 > **Caveat — the `master` pipe.** A remote one-liner also works, because `--update` discovers
@@ -1127,6 +1128,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_HTTP_WORKER_COUNT` | `14` (`worker.count`; `auto` → 14) | no | yes | same |
 | `PHLIX_WS_HOST` | `0.0.0.0` (`websocket.host`) | no | yes | same (WebSocket worker bind) |
 | `PHLIX_WS_PORT` | `8097` (`websocket.port`) | no | yes | same |
+| `PHLIX_WS_URL` / `PHLIX_WS_PATH` | _unset_ / _unset_ (both → `null`) | no | live | `SharedUiController::configuredSocketBaseUrl()` / `configuredSocketBasePath()` — `getenv()` on every SPA shell render, emitted as `window.__PHLIX__.wsUrl` / `wsPath` (a client dial hint only: neither changes what `:8097` binds). Precedence: a valid env value > `null` = the SPA's legacy same-origin socket derivation. `PHLIX_WS_URL` must be a bare `ws://`/`wss://` origin (optional `:port` in 1–65535, no path/query/userinfo) and is also added to the shell's CSP `connect-src` (re-validated by `SecurityHeaders::contentSecurityPolicy()`, skipped when its host is the request's own); `PHLIX_WS_PATH` must match `^/[A-Za-z0-9._~/-]*$`. Malformed values fail **soft** to `null` with no log line. A new value reaches the next shell load — already-open tabs keep the hint they booted with |
 
 #### Logging
 
@@ -1172,6 +1174,7 @@ every use; **n/a** = consumed by the CLI/shell layer, not the daemon. See
 | `PHLIX_SIGNED_URL_TTL` | `21600` s (6 h) | no | live | `src/Auth/SignedUrl.php` |
 | `PHLIX_COOKIE_INSECURE` | off | no | live | `src/Auth/CookiePolicy.php` — the SSOT behind `AuthController` and the OIDC/GitHub callback minters; the OAuth2 plugin's state-cookie helpers (`src/Plugins/OAuth2/StateCorrelation.php`, `src/Plugins/OAuth2/CallbackUrl.php`) read the env directly. Drops `Secure` on auth cookies for plain-HTTP dev (stored twin: `auth.cookie.insecure`). Dev-only — under `PHLIX_ENV=production` an active opt-in warns once per process |
 | `PHLIX_TLS_ENABLED` | off | no | yes | `config/hub.php` — https vs wss scheme composition |
+| `PHLIX_WS_QUERY_TOKEN` | _unset_ (operator silent → admin row → **deny**) | no | yes (env tier) | `config/server.php` → `websocket.query_token` → `WebSocketServer` → `SyncPlayAuthMiddleware` → `QueryTokenGatePolicy` — gates ONLY the legacy `?token=` WS handshake carrier (bearer and admitted-cookie carriers never consult it). Precedence: explicit env (set, non-empty) > admin row `auth.ws_query_token` (`allow`/`deny`, read **live** per handshake — no restart) > shipped default **deny** (CP-024 PHASE B). Among set env values only an exact `deny` denies; any other value (including a typo) behaves `allow`. The env tier is read once at boot; the admin row is the no-restart control. See [docs/dev/WEBSOCKET_AUTH_CARRIERS.md](docs/dev/WEBSOCKET_AUTH_CARRIERS.md) |
 
 #### Docker-entrypoint shell seams
 
@@ -1207,6 +1210,7 @@ while these were invisible:
 | `PHLIX_HUB_JWKS_URL` | derived from `PHLIX_HUB_URL` | no | yes | `config/hub.php` |
 | `PHLIX_HUB_HEARTBEAT_INTERVAL` | `60` s | no | yes | `config/hub.php` |
 | `PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD` | `86400` s | no | yes | `config/hub.php` |
+| `PHLIX_HUB_KEY_PATH` | `var/hub-server-key.pem` (unless a legacy `config/hub-server-key.pem` already exists) | no (a path — but the file it names is the hub-identity **private key**) | yes | `config/hub.php` `key_path` → `Ed25519KeyManager::resolveKeyPath()` (wired per worker by `HubServicesProvider`); the manual-fallback constructors (`AdminHubController`, `HealthController`, `Application`, `scripts/pair-with-hub.php`) call the same resolver, which re-reads the env itself. Precedence: configured `key_path` (itself this env) > env > a legacy `config/hub-server-key.pem` that **already exists** on disk (compat probe — installs paired before SH-019 keep their enrollment identity) > `var/hub-server-key.pem`. Changing it points the server at a different keypair, i.e. a different hub identity — restart, and re-pair if the new file holds a fresh key. `scripts/claim-subdomain.php` does **not** honor it (it builds its manager on `config/hub-signing-key.pem` directly) |
 | `PHLIX_HUB_TLS_VERIFY` / `PHLIX_HUB_TLS_CAFILE` | on / system CA | no | yes | `src/Hub/HttpClient.php` — CAFILE holds CA/**root** certificates only, never a hub/server leaf/fullchain (LEAF material rotates every ~60 days; pinning it is the silent-expiry class — audit §5.2); an explicitly-set (env or `$tlsCafile` ctor arg) but unreadable path now throws on every hub REST call naming the source (§3.2), while the unset default keeps trusting the system store |
 | `PHLIX_SUBDOMAIN_AUTO_CLAIM` | on (unless explicitly set off) | no | yes | `config/hub.php` — enforced by `scripts/claim-subdomain.php` (it refuses to claim when off); off with `0`/`false`/`off`/`no`/empty, on with `1`/`true`/`on`/`yes`, an unrecognized value fails toward off (same tolerant rule as `PHLIX_TLS_ENABLED`; previously an explicit `0` was silently treated as unset) |
 
@@ -1234,6 +1238,7 @@ breaks hls.js, and scale widths are forced even (`force_divisible_by=2` in the v
 | `PHLIX_SEGMENT_DIR` | `sys_get_temp_dir()/phlix_hls` | no | yes | `config/server.php` → `hls.segment_dir` — location of the HLS segment cache; see the persistence note below |
 | `PHLIX_SEGMENT_PREWARM_SEGMENTS` | `3` | no | yes | `config/server.php` → `hls.prewarm_segments` — how many top-rung segments a new job pre-generates in the background at creation; `0` disables the head start (segments are then built purely at read time, the pre-C6 behavior) |
 | `PHLIX_HLS_RELAY_MAX_BUFFER_SECONDS` / `PHLIX_HLS_RELAY_MAX_SEGMENTS` | see `config/hls_relay.php` | no | yes | `config/hls_relay.php` |
+| `PHLIX_SEGMENT_ENCODE_THREADS` | `max(2, floor(cores / 3))` (cores via `nproc`, else `/proc/cpuinfo`, else 1) | no | yes | `config/ffmpeg.php` → `segment_encode_threads` → `TranscodeServicesProvider` → `FfmpegRunner::setSegmentEncodeThreads()` on the per-worker DI runner; emitted as `-threads N` on the software **libx264** segment branch only (never copy, audio or hw-accel builders). Precedence: wired config value (env > computed default) > the runner's own env > default chain — a hand-built runner with nothing wired re-reads the env each time it builds a segment command. `0` or a negative value **disables** the flag (x264 auto-sizing); the value is `(int)`-cast, so `12x` → 12 and a non-numeric string → `0` (= disabled). Contention fairness across concurrent encodes, not throughput — see the docblock in `config/ffmpeg.php` |
 | `PREFERRED_ACCELERATOR` | `` (auto) | no | yes | `config/transcoding.php` |
 | `TONE_MAPPING_MODE` | `none` | no | yes | `config/transcoding.php` |
 | `PREFER_HDR_OUTPUT` | `false` | no | yes | `config/transcoding.php` |
@@ -1358,17 +1363,24 @@ operator with UI access can trigger that same graceful reload without a shell:
 cycles the workers after the response flushes. The short list of why, grouped
 by the mechanism that reads it early:
 
-- **Bound before the first fork (`start.php` master):** `PHLIX_HTTP_*`,
-  `PHLIX_WS_*` (listen URIs + counts), `PHLIX_CONTAINER_COMPILE` (the compiled
-  container is shared through fork inheritance).
+- **Bound before the first fork (`start.php` master):** `PHLIX_HTTP_HOST` /
+  `PHLIX_HTTP_PORT` / `PHLIX_HTTP_WORKER_COUNT` and `PHLIX_WS_HOST` /
+  `PHLIX_WS_PORT` (listen URIs + counts — **not** every `PHLIX_WS_*`:
+  `PHLIX_WS_URL` / `PHLIX_WS_PATH` are live and `PHLIX_WS_QUERY_TOKEN` is
+  listed below), `PHLIX_CONTAINER_COMPILE` (the compiled container is shared
+  through fork inheritance).
 - **Per-worker construction at boot:** `PHLIX_LOG_LEVEL` / `PHLIX_LOG_STDOUT` /
   `PHLIX_DEBUG_EVENTS` (handler graph), `DB_POOL_*` and all `DB_*`
   (`ConnectionPool::init()`), `PHLIX_METRICS_*` (collector per worker),
   the SyncPlay bridge sockets, Trakt/Last.fm **master switches**
   (`TRAKT_CLIENT_ID` empty and `LASTFM_ENABLED` decide whether the subsystem
   exists at all), `PHLIX_ENV`, relay/hub wiring (`PHLIX_RELAY_*`,
-  `PHLIX_HUB_*`, `PHLIX_TLS_ENABLED`), DLNA `enabled`/`cds_enabled` (the
-  `:1900` listener and SSDP advertisement are built at boot).
+  `PHLIX_HUB_*` including `PHLIX_HUB_KEY_PATH`, `PHLIX_TLS_ENABLED`), DLNA
+  `enabled`/`cds_enabled` (the `:1900` listener and SSDP advertisement are
+  built at boot), `PHLIX_SEGMENT_ENCODE_THREADS` (wired into the per-worker
+  `FfmpegRunner`), and the **env tier** of `PHLIX_WS_QUERY_TOKEN` (handed to
+  the WS worker's auth middleware at boot — its admin row
+  `auth.ws_query_token` stays live per handshake).
 - **Config-load paths:** the job-queue dirs (`PHLIX_JOB_QUEUE_ROOT`,
   `PHLIX_*_JOBS_DIR`) — a daemon and a standalone worker started at different
   times with different values will not share a queue until both restart.
@@ -1381,7 +1393,8 @@ by the mechanism that reads it early:
 
 Everything else (metadata keys like `metadata.*` — but **not** the TMDB key,
 which is resolved at worker start; see its `TMDB_API_KEY` row above —
-`PHLIX_SIGNED_URL_*`, `PHLIX_CORS_ALLOWED_ORIGINS`, and the plugin gates read
+`PHLIX_SIGNED_URL_*`, `PHLIX_CORS_ALLOWED_ORIGINS`, `PHLIX_WS_URL` /
+`PHLIX_WS_PATH` (re-read on every SPA shell render), and the plugin gates read
 at each composer/install invocation) is resolved at runtime and applies to the next
 request/job without a restart. `TRUSTED_PROXIES` is runtime as well, with one
 split: the REST path builds a fresh `TrustedProxyResolver` on every request

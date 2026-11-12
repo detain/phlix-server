@@ -145,6 +145,19 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **The README environment census now lists every knob it claimed to.** The
+  "definitive census" was missing five server-read variables: `PHLIX_WS_URL` /
+  `PHLIX_WS_PATH` (live SPA socket hints, also feeding the shell CSP),
+  `PHLIX_WS_QUERY_TOKEN` (boot-read env tier of the legacy `?token=` WS carrier
+  gate, above the live `auth.ws_query_token` admin row and the deny default),
+  `PHLIX_HUB_KEY_PATH` (hub-identity key location, with its legacy-probe
+  precedence and the `claim-subdomain.php` exception) and
+  `PHLIX_SEGMENT_ENCODE_THREADS` (libx264 `-threads` cap; `0` disables it).
+  Each row now carries its restart class and precedence chain, and "What
+  requires a restart" no longer claims every `PHLIX_WS_*` is bound before
+  the first fork — only `PHLIX_WS_HOST` / `PHLIX_WS_PORT` are. Docs only.
+  [SRV-S10 / SRV-10, SRV-11, SRV-31, SRV-32, SRV-66]
+
 - **Refresh-token grants now carry their own lifetime, a retention sweep runs,
   and GET /api/v1/auth/sessions is bounded.** Since the D-1a core shipped, every
   rotation left one grant row behind forever: the table had no lifetime column,
@@ -177,7 +190,10 @@ House discipline this file maintains (established by review W-min90/91/92):
   advertising `--update --branch v1.2.3`: the updater resets to
   `origin/<ref>`, which does not exist for a tag, so that command aborts —
   tag pins remain a fresh-install option. `PHLIX_UPDATES_COMMAND` still
-  overrides the string per install. [SRV-S9 / SRV-12]
+  overrides the string per install. The fetched `master` code still runs as
+  root — `--update` runs `composer install` and `scripts/run-migrations.php`
+  from the unpinned `master` checkout — so this form removes the fetch-time
+  installer swap, not the trust in `master`. [SRV-S9 / SRV-12]
 
 - **Signing out of one device now signs out exactly that device — and a stolen
   refresh token revokes its family, not the account.** Every login ceremony on

@@ -649,6 +649,70 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The hosted portal gains device-session management: `@phlix/ui` v0.99.26
+  re-pinned to v0.99.27, and the served `/app` bundle regenerated.** [ui27
+  cascade — server leg 2026-11-11]
+  - *Web UI pin.* `web-ui/package.json` moves the tarball pin v0.99.26 →
+    v0.99.27 (tag object `c262b681`, peel `1f906979`, ls-remote-verified
+    origin-living). The dependency edges ride unchanged — contracts
+    `#v0.5.7` / syncplay `#v0.1.7`, the blessed pair — so the lock delta is
+    surgical: `package-lock.json` 4+/4- (root echo + the ui node triple:
+    version/resolved/integrity; no upstream declaration line rode this wave —
+    the pinia peer widening had already landed at v0.99.26) and
+    `package.json` 1+/1-, produced by a real `npm install` under npm 11.19.0
+    on the S253-pinned node 24.20.0 with `NPM_CONFIG_USERCONFIG=/dev/null`
+    ("changed 1 package"); a second install is a byte-no-op — lock idempotence
+    proven. The vendored `dist/` matches the sibling cascade register's
+    consumer-target identities byte-exactly and equals the codeload tarball
+    of the tag (27,101,204 B, md5 `79bd2668…`) by recursive diff:
+    `phlix-ui.js` `c7368aa3…`, `player.js` `530ebbcf…`, `phlix-ui.umd.cjs`
+    `d5a51444…`, `player.umd.cjs` `2d0b2509…` — 891 dist files. Payload
+    carried: the D1a session-family revocation UI (`1f906979` —
+    `DeviceSessionsPage`, Settings entry, session i18n block) plus the ui
+    w31L3 test-only commit (`861a715d`), no behavior changes beyond those.
+  - *Bundle.* `/app` SPA regenerated (S253 byte-exactness law): `npm run
+    build` x2 under the pinned node, the two outputs byte-identical
+    (`diff -r`), aggregate md5 `cb91eb7705401a648114c46848e555de` (family
+    recipe `find | LC_ALL=C sort | xargs md5sum | md5sum`), corpus unchanged
+    at 200 tracked files. The entry chunk rotated `index-CUn_z3ex.js` →
+    `index-DH4NEqt0.js` and carries `0.99.27`; zero `0.99.26` residue under
+    `public/assets/app`. 125 hashed assets (js/map/cjs) renamed — churn
+    honestly attributed to the feature payload riding the pin, not a build
+    anomaly (builds x2 agree), with `index.html` + `.vite/manifest.json`
+    carrying the new refs.
+  - *New-shape proof.* The session UI demonstrably reaches the hosted
+    portal: ui `SettingsPage.vue` imports `DeviceSessionsPage.vue`
+    STATICALLY, so the server's rolldown build merges the page into the
+    entry chunk rather than emitting a standalone `DeviceSessionsPage-*.js`
+    (premise of the cascade brief, corrected here by measurement). Served
+    `index-DH4NEqt0.js` carries the page scope id `data-v-9f3b487c`,
+    `device-sessions-page` x12, `/api/v1/auth/sessions` x1,
+    `sessions.revokeAll` x3, `tabSessions` x6 and the `0.99.27` stamp x1.
+  - *Currency.* Unlike the v0.99.26 wave, the ui `src/i18n` diff
+    `dc2e70fe..1f906979` is NOT empty — 24 new session leaf keys
+    (`settings.tabSessions` + 23 `sessions.*`) ride into the bundle strings,
+    including the ja/pt/fr locale blocks (machine-drafted upstream, carried
+    verbatim). The server's web-ui i18n tests are dynamic assertions and
+    stayed green unmodified. No PHP era-test holds a real-bundle literal at
+    this tip (grep-proven), so the rotation table is empty — by measurement,
+    not assumption. README UI-truth line flips `v0.99.26` → `v0.99.27`.
+  - *Gates.* web-ui `node --test` 33/33 exact; bundle-aware PHP cohort
+    (WebUiBundleGate, PublicFrontControllerRemovalGuard, ViteAssetsMemo,
+    SharedUiControllerCspNonce, HttpHandlerServeStatic, BrowserE2EGate,
+    LicenseHeaderGuard, NginxAssetLocation, SharedUiSocketSeam) OK 104 tests
+    / 550 assertions, zero reds; `composer validate --strict` OK; phpstan
+    both configs [OK]; phpcs N/A — zero PHP files touched. Full batteries
+    before landing: Unit K=24 and Integration K=24/24-shard, each compared
+    to a pristine-parent baseline run under the identical command — ABN /
+    ERRORS / NO-TESTS / FAILURES name-sets identical on both suites (the
+    Unit-baseline one-file FAILURES was root-caused as the clone-lives-
+    under-/tmp path assertion, moot at a neutral path; the Integration
+    `ClientHeartbeatsMigration106RealDbTest` red is the documented
+    host-TZ-window class, present identically on the baseline; Unit
+    warning-count delta 48↔50 attributed to paraunit worker ordering —
+    the four delta classes behave identically in both repos in isolation).
+    [server ui27 cascade leg, 2026-11-11]
+
 - **The `:8097` legacy `?token=` WebSocket query carrier is refused by
   default.** The CP-007 gate shipped as "`PHLIX_WS_QUERY_TOKEN=allow|deny`
   (config `websocket.query_token`, default `allow`, read at boot)"; CP-024

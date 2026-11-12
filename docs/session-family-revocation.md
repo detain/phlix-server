@@ -56,7 +56,7 @@ places, and the family — the unit of trust — can be revoked as one row.
    UPDATE flips the row for exactly one of N concurrent presentations, and
    `markGrantConsumed()` returns whether THIS call flipped it (an int rowCount
    of 0, or a `WriteResult::wroteNothing()` answer, is a loss). A loser never
-   mints on a consumption it did not make: it re-reads the grant once and
+   mints on its stale read: it re-reads the grant once and
    re-runs the same decision table — consumed inside the grace window is the
    benign cross-worker race (rotate on), consumed outside it is reuse (step 4),
    gone or revoked fails closed, and a second lost consume dies as
@@ -84,7 +84,7 @@ shipped idioms:
 1. **Every grant carries its own lifetime claim.** `recordGrant()`
    (src/Auth/TokenSessionRepository.php:251) takes the minted token's OWN baked
    `exp` — `buildAuthResponse` reads it back off the exact bytes the client
-   received (src/Auth/AuthManager.php:2154) and hands it over; the INSERT
+   received (src/Auth/AuthManager.php:2189) and hands it over; the INSERT
    stamps it with `FROM_UNIXTIME(?)` into the `expires_at` column migration 128
    adds. The store never guesses a TTL from config: config can drift from what
    `JwtHandler` baked, and a grant whose row-lifetime outlives its token is

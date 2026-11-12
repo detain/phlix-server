@@ -48,6 +48,7 @@ use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\MostWatchedController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Server\Runtime\PidFile;
 use Phlix\Server\Updates\AsyncVersionMarkerFetcher;
 use Phlix\Server\Updates\CoreUpdateCheckService;
 use Phlix\Server\Updates\CoreUpdateCheckWorker;
@@ -302,15 +303,13 @@ final class AdminServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c): AdminRestartController {
                     /** @var array<string, mixed> $appConfig */
                     $appConfig = $c->get('app.config');
-                    $worker = $appConfig['worker'] ?? null;
 
-                    if (is_array($worker) && is_string($worker['pid_file'] ?? null)) {
-                        $pidFile = $worker['pid_file'];
-                    } else {
-                        $pidFile = '/var/run/phlix/pid';
-                    }
-
-                    return new AdminRestartController($pidFile);
+                    // SRV-S17: resolve the path the master ACTUALLY wrote —
+                    // worker.pid_file (env PHLIX_PID_FILE) when it held, else
+                    // Workerman's default, the same fallback start.php takes
+                    // and logs. Reading the configured path blindly 500'd every
+                    // restart on a degraded-rail boot.
+                    return new AdminRestartController(PidFile::effectivePath($appConfig));
                 }
             ),
 

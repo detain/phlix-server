@@ -92,10 +92,105 @@ final class AdminRestartControllerTest extends TestCase
         );
         self::assertIsString($provider);
         self::assertStringContainsString(
-            "\$worker['pid_file']",
+            'PidFile::effectivePath($appConfig)',
             $provider,
-            'AdminServicesProvider must source the restart controller pid path from worker.pid_file',
+            'AdminServicesProvider must source the restart controller pid path via PidFile::effectivePath()',
         );
+
+        // SRV-S17: the degraded-boot warning names the EFFECTIVE fallback path,
+        // computed by the same helper effectivePath() falls back to.
+        self::assertStringContainsString('PidFile::workermanDefaultPath(__FILE__)', $startPhp);
+    }
+
+    /**
+     * SRV-S17: `PHLIX_PID_FILE` is the env seam over `worker.pid_file`; an
+     * empty value counts as unset (EnvConfig::text()).
+     */
+    public function testPhlixPidFileEnvSeamOverridesTheConfiguredPath(): void
+    {
+        $repoRoot = dirname(__DIR__, 6);
+        $prior = getenv('PHLIX_PID_FILE');
+
+        try {
+            putenv('PHLIX_PID_FILE=/srv/phlix-run/master.pid');
+            /** @var array<string, mixed> $config */
+            $config = include $repoRoot . '/config/server.php';
+            self::assertSame('/srv/phlix-run/master.pid', PidFile::configuredPath($config));
+
+            putenv('PHLIX_PID_FILE=');
+            /** @var array<string, mixed> $config */
+            $config = include $repoRoot . '/config/server.php';
+            self::assertSame('/var/run/phlix/pid', PidFile::configuredPath($config));
+
+            putenv('PHLIX_PID_FILE');
+            /** @var array<string, mixed> $config */
+            $config = include $repoRoot . '/config/server.php';
+            self::assertSame('/var/run/phlix/pid', PidFile::configuredPath($config));
+        } finally {
+            putenv($prior === false ? 'PHLIX_PID_FILE' : 'PHLIX_PID_FILE=' . $prior);
+        }
+    }
+
+    public function testWorkermanDefaultPathMirrorsWorkermansOwnFallback(): void
+    {
+        $repoRoot = dirname(__DIR__, 6);
+
+        self::assertSame(
+            '/var/www/phlix/workerman.start.php.pid',
+            PidFile::workermanDefaultPath('/var/www/phlix/start.php'),
+        );
+        self::assertSame(
+            $repoRoot . '/workerman.start.php.pid',
+            PidFile::workermanDefaultPath(),
+        );
+    }
+
+    /**
+     * SRV-S17 (kills the self-restart 500): when the configured directory is
+     * unusable the master falls back to Workerman's default, and the restart
+     * endpoint's read path must follow it there — not keep reading the
+     * rejected configured path.
+     */
+    public function testEffectivePathFollowsTheDegradedBootOntoWorkermansDefault(): void
+    {
+        $saved = \Workerman\Worker::$pidFile;
+        \Workerman\Worker::$pidFile = '';
+
+        try {
+            $start = '/var/www/phlix/start.php';
+            $unusable = ['worker' => ['pid_file' => '/proc/phlix-nope/pid']];
+
+            // Writer: apply() refuses this path and leaves Workerman's default
+            // in force (pinned by testPidFileApplyReturnsNullForAnUnusableDirectory).
+            // Reader: resolves that same default.
+            self::assertSame(
+                PidFile::workermanDefaultPath($start),
+                PidFile::effectivePath($unusable, $start),
+            );
+            self::assertSame(
+                PidFile::workermanDefaultPath($start),
+                PidFile::effectivePath([], $start),
+            );
+
+            // A usable configured directory is honoured as-is.
+            $dir = sys_get_temp_dir() . '/phlix_pidfile_eff_' . uniqid('', true);
+            mkdir($dir);
+            try {
+                self::assertSame(
+                    $dir . '/pid',
+                    PidFile::effectivePath(['worker' => ['pid_file' => $dir . '/pid']], $start),
+                );
+            } finally {
+                @rmdir($dir);
+            }
+
+            // In a served worker the master's decision (inherited across the
+            // fork) is authoritative over any re-derivation.
+            \Workerman\Worker::$pidFile = '/run/master-decided.pid';
+            self::assertSame('/run/master-decided.pid', PidFile::effectivePath($unusable, $start));
+        } finally {
+            \Workerman\Worker::$pidFile = $saved;
+        }
     }
 
     public function testPidFileConfiguredPathReadsTheWorkerBlock(): void
@@ -145,7 +240,8 @@ final class AdminRestartControllerTest extends TestCase
         // SH-042 (CW10): the message names the actual config knob instead of a
         // nominalised abstraction, and is now pinned (previously unpinned).
         self::assertSame(
-            'The server may not be running, or the pid-file path is wrong (config/server.php: worker.pid_file).',
+            'The server may not be running, or the pid-file path is wrong'
+            . ' (config/server.php: worker.pid_file, env PHLIX_PID_FILE).',
             $body['message'],
         );
     }

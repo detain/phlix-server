@@ -1030,6 +1030,7 @@ final class TokenSessionFamilyTest extends TestCase
 
         $this->assertCount(3, $calls);
         $this->assertStringContainsString("WHERE user_id = ? AND status = 'revoked'", $calls[0][0]);
+        $this->assertStringContainsString('INTERVAL ' . (7776000 + 86400) . ' SECOND', $calls[0][0]);
         $this->assertSame(['user-9'], $calls[0][1]);
         $this->assertStringStartsWith('DELETE FROM auth_refresh_grants WHERE session_id IN (?, ?)', $calls[1][0]);
         $this->assertStringContainsString('LIMIT 1000', $calls[1][0]);
@@ -1051,10 +1052,12 @@ final class TokenSessionFamilyTest extends TestCase
     public function testARevokedSweepFailureNeverBlocksTheLogin(): void
     {
         $inserted = false;
+        $swept = false;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$inserted): mixed {
+            function (string $sql) use (&$inserted, &$swept): mixed {
                 if (str_starts_with($sql, 'SELECT')) {
+                    $swept = true;
                     throw new \RuntimeException('lock wait timeout');
                 }
                 $inserted = $inserted || str_starts_with($sql, 'INSERT INTO auth_token_sessions');
@@ -1065,6 +1068,7 @@ final class TokenSessionFamilyTest extends TestCase
 
         $sid = (new TokenSessionRepository($db))->createSession('user-9');
 
+        $this->assertTrue($swept, 'createSession() runs the revoked-family sweep before the INSERT');
         $this->assertTrue($inserted, 'the family row is written even when the sweep dies');
         $this->assertSame(36, strlen($sid));
     }

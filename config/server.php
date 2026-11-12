@@ -40,7 +40,13 @@ return [
         // and the container captures it likewise; redirecting it into a repo
         // file would mute both. Application-level logs go through Monolog —
         // see PHLIX_LOG_STDOUT / PHLIX_LOG_LEVEL in the README env table.
-        'pid_file' => '/var/run/phlix/pid',
+        // Master PID file (start.php → PidFile::apply(); the admin restart
+        // endpoint reads the same file via PidFile::effectivePath()). Env seam
+        // PHLIX_PID_FILE wins, empty string counts as unset (SRV-S17). If the
+        // directory cannot be created/written, boot keeps going on Workerman's
+        // default (<repo>/workerman.start.php.pid), logs that path, and the
+        // restart endpoint follows it there.
+        'pid_file' => EnvConfig::text('PHLIX_PID_FILE', '/var/run/phlix/pid'),
     ],
     'process' => [
         // → Worker::$reloadable on both listening workers (start.php §3/§4a).

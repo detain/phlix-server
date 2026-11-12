@@ -137,7 +137,8 @@ $syncPlayBridgeToken = $syncPlayBridgeConfig['token'] ?? null;
 // AdminRestartController reads the configured path — so the admin restart
 // endpoint 500s with "PID file not found" on every real box. Non-fatal: an
 // unusable directory leaves Workerman's default in place rather than aborting
-// boot. {@see \Phlix\Server\Runtime\PidFile}
+// boot. The path is env-seamed (PHLIX_PID_FILE, SRV-S17).
+// {@see \Phlix\Server\Runtime\PidFile}
 //
 // Deferred-item #15 (devops2 minor 2): stamp the boot identity FIRST and make
 // the degraded-restart-rail branch a LOG-CHANNEL RECORD, not just a bare
@@ -152,10 +153,16 @@ $syncPlayBridgeToken = $syncPlayBridgeConfig['token'] ?? null;
 BootIdentity::stamp();
 $pidFilePath = PidFile::apply($config);
 if ($pidFilePath === null) {
+    // SRV-S17: name the EFFECTIVE path, not just the rejected one — the
+    // operator needs to know where the master PID actually lands, and the
+    // restart endpoint resolves this same fallback (PidFile::effectivePath()),
+    // so the admin restart keeps working on the degraded rail.
     $configuredPidFile = PidFile::configuredPath($config) ?? '(unset)';
-    $pidWarning = '[phlix] boot rail DEGRADED: worker.pid_file is unusable ('
-        . $configuredPidFile . '); falling back to Workerman\'s default PID path. '
-        . 'POST /api/v1/admin/restart will not work until that directory is writable. '
+    $effectivePidFile = PidFile::workermanDefaultPath(__FILE__);
+    $pidWarning = '[phlix] boot rail DEGRADED: worker.pid_file / PHLIX_PID_FILE is unusable ('
+        . $configuredPidFile . '); falling back to Workerman\'s default PID path '
+        . $effectivePidFile . ' (POST /api/v1/admin/restart reads the same fallback). '
+        . 'Set PHLIX_PID_FILE to a writable location to restore the configured rail. '
         . BootIdentity::describe();
     fwrite(STDERR, "[phlix] WARNING: " . $pidWarning . "\n");
     error_log($pidWarning);

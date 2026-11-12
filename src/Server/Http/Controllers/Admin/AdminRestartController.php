@@ -22,9 +22,12 @@ use Workerman\Timer;
  * Graceful worker reload — `POST /api/v1/admin/restart`.
  *
  * Reads the master PID from the configured pid file (`config/server.php`'s
- * `worker.pid_file`, which {@see \Phlix\Server\Runtime\PidFile::apply()}
- * assigns to `Worker::$pidFile` in `start.php`, so the reader and the writer
- * agree) and signals the master to cycle its workers.
+ * `worker.pid_file`, env `PHLIX_PID_FILE`, which
+ * {@see \Phlix\Server\Runtime\PidFile::apply()} assigns to `Worker::$pidFile`
+ * in `start.php`; the DI factory hands this class
+ * {@see \Phlix\Server\Runtime\PidFile::effectivePath()}, which follows a
+ * degraded boot onto Workerman's default path, so the reader and the writer
+ * agree either way) and signals the master to cycle its workers.
  *
  * **Signal choice — SIGUSR2, not SIGUSR1.** In Workerman
  * (`Worker::reload()`: `$sig = static::getGracefulStop() ? SIGUSR2 : SIGUSR1;`)
@@ -153,7 +156,7 @@ class AdminRestartController
                     'error'   => 'PID file not found',
                     // SH-042 (CW10): name the knob an operator can actually check.
                     'message' => 'The server may not be running, or the pid-file path is wrong'
-                        . ' (config/server.php: worker.pid_file).',
+                        . ' (config/server.php: worker.pid_file, env PHLIX_PID_FILE).',
                 ]);
             }
 

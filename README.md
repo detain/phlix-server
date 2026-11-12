@@ -253,7 +253,7 @@ Every environment variable the server process reads is inventoried in the defini
     ledger to measure against), so a configured cap never restricts anything
   - Access schedules (allowed-time windows) — configured per profile via
     `/api/v1/profiles/{profileId}/schedules`; steps in
-    [the quickstart §4 (Add the household)](docs/user/quickstart.md#4-add-the-household)
+    [the quickstart §5 (Add the household)](docs/user/quickstart.md#5-add-the-household)
 - **Content Rating Filters**: Age-based access restrictions
 - **Audit Logging**: Complete security event logging
 - **Security Headers / CSP**: Every response carries `X-Content-Type-Options`, `X-Frame-Options`, HSTS,
@@ -474,6 +474,11 @@ the REST table below); signed subtitle URLs ride the HLS pipeline the same way
 segment URLs do.
 
 ### Session management
+- **Signed-in devices and sign-out**: `GET /api/v1/auth/sessions` lists the account's signed-in
+  token sessions and `DELETE /api/v1/auth/sessions/{id}` signs one device out, revoking its whole
+  token family; a refresh token presented twice revokes the family too. How it works:
+  [Session-family revocation](docs/session-family-revocation.md); the user-facing steps:
+  [the quickstart's signed-in devices note](docs/user/quickstart.md#signed-in-devices)
 - **Device Sessions**: Track authenticated devices with activity timestamps
 - **Playback Progress**: Resume where you left off across sessions
 - **Continue Watching**: Track items in progress per profile

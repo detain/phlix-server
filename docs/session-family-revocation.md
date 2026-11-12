@@ -6,6 +6,8 @@ code); retention parity cure (migration 128 + prune legs), 2026-11-11; SRV-S16
 file:line below is read from the SRV-S16 tree. This document
 describes what the code does — not what a design note hoped it would do.
 
+User-facing summary: [quickstart, Signed-in devices](user/quickstart.md#signed-in-devices); operator reference: README -> *Session management*.
+
 ## The problem this solves
 
 A refresh token is a bearer credential with a multi-day lifetime. Before D-1a a

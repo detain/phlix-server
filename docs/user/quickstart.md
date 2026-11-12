@@ -98,6 +98,15 @@ the hold. Hand the member the printed password; they should then pick their own
 under Settings. The same command is the escape hatch if the forced-change hold
 is ever left mid-flight (README → *Bad days: recovery from the CLI*).
 
+### Signed-in devices
+
+Every device a member signs in on is its own session. Signing one device out
+(`DELETE /api/v1/auth/sessions/{id}`, listed by `GET /api/v1/auth/sessions`)
+ends that device only and invalidates every token copy that came from it. If a
+copied refresh token is ever replayed, the server revokes that whole session
+rather than guessing which copy is the thief's. Details for operators:
+[Session-family revocation](../session-family-revocation.md).
+
 ## 6. Start your first watch party
 
 The walkthrough that names the buttons: README →

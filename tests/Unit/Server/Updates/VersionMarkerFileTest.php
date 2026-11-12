@@ -104,13 +104,53 @@ final class VersionMarkerFileTest extends TestCase
 
         self::assertStringContainsString('scripts/install.sh', $command);
         self::assertStringContainsString('--update', $command);
-        self::assertStringContainsString('phlix-server', $command);
 
         $installer = (string) file_get_contents(dirname(__DIR__, 4) . '/scripts/install.sh');
         self::assertStringContainsString(
             '--update)',
             $installer,
             'The advertised command passes --update; scripts/install.sh must actually parse it.',
+        );
+    }
+
+    /**
+     * SRV-12: the banner's default command is the canonical LOCAL-CHECKOUT
+     * updater — the installer already on disk in this checkout, run as a file —
+     * never a `curl … master | sudo bash` pipe, which executes whatever
+     * `master` holds at fetch time, as root, unpinned. The README's "Updating an
+     * existing install" section quotes this exact form as the banner string.
+     */
+    public function testTheDefaultUpdateCommandRunsTheLocalCheckoutInstallerNotAMasterPipe(): void
+    {
+        $previous = getenv('PHLIX_UPDATES_COMMAND');
+        putenv('PHLIX_UPDATES_COMMAND');
+
+        try {
+            /** @var array<string, mixed> $config */
+            $config = require dirname(__DIR__, 4) . '/config/updates.php';
+        } finally {
+            if ($previous !== false) {
+                putenv('PHLIX_UPDATES_COMMAND=' . $previous);
+            }
+        }
+
+        $command = $config['update_command'];
+        self::assertIsString($command);
+
+        $installer = dirname(__DIR__, 4) . '/scripts/install.sh';
+        self::assertFileExists($installer);
+        $quoted = preg_match('#^[A-Za-z0-9_./-]+$#', $installer) === 1 ? $installer : escapeshellarg($installer);
+        self::assertSame('sudo bash ' . $quoted . ' --update -y', $command);
+
+        self::assertStringNotContainsString('curl', $command);
+        self::assertStringNotContainsString('| sudo bash', $command);
+        self::assertStringNotContainsString('/master/', $command);
+
+        $readme = (string) file_get_contents(dirname(__DIR__, 4) . '/README.md');
+        self::assertStringContainsString(
+            'sudo bash /var/www/phlix/scripts/install.sh --update -y',
+            $readme,
+            'README must show the banner\'s local-checkout form (at the default install path).',
         );
     }
 }

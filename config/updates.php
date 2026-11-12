@@ -51,15 +51,30 @@ return [
         'https://raw.githubusercontent.com/detain/phlix-server/master/VERSION',
     ),
 
-    // Copy-to-clipboard command surfaced by GET /api/v1/admin/updates/status.
-    // The `--update` flag is real (`scripts/install.sh:185`) and discovers the
-    // install path from the systemd unit's WorkingDirectory, so the piped form
-    // works regardless of where the server was installed. Do not paraphrase it:
-    // an operator pastes this into a root shell.
+    // Copy-to-clipboard command surfaced by GET /api/v1/admin/updates/status
+    // (the admin update banner). Canonical form = the LOCAL-CHECKOUT updater:
+    // the installer already on disk in this very checkout (resolved from this
+    // file's location, so it names the real install path, not a guessed
+    // /var/www/phlix), run with `--update` (real flag, `scripts/install.sh`
+    // `--update)` arm). It executes the installer shipped with the release the
+    // box is already running, never a fresh `curl … master | sudo bash` pipe — that form runs
+    // whatever `master` holds at fetch time, as root, with no pin, checksum or
+    // review step (README "Updating an existing install" keeps it only as a
+    // caveated alternative). `--update` then fetches `master` as the install
+    // dir owner, exactly the ref the `marker_url` above tracks. Do not
+    // paraphrase it: an operator pastes this into a root shell. A path outside
+    // the shell-safe set is single-quoted. Override per install (e.g. Docker,
+    // where updates are image pulls) with PHLIX_UPDATES_COMMAND.
     'update_command' => $envStr(
         'PHLIX_UPDATES_COMMAND',
-        'curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh'
-        . ' | sudo bash -s -- --update -y',
+        (static function (): string {
+            $installer = dirname(__DIR__) . '/scripts/install.sh';
+            $quoted = preg_match('#^[A-Za-z0-9_./-]+$#', $installer) === 1
+                ? $installer
+                : escapeshellarg($installer);
+
+            return 'sudo bash ' . $quoted . ' --update -y';
+        })(),
     ),
 
     // Steady-state poll interval, seconds (default: daily). The worker ALSO

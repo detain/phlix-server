@@ -165,6 +165,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **The admin update banner no longer offers a `curl … master | sudo bash`
+  pipe.** `updates.update_command` (surfaced by `GET
+  /api/v1/admin/updates/status` for copy-to-clipboard) now defaults to the
+  local-checkout updater — `sudo bash <install dir>/scripts/install.sh --update
+  -y`, with the install dir resolved from the running checkout — so the
+  operator runs the installer already on disk instead of piping whatever
+  `master` holds at fetch time into a root shell. The README "Updating an
+  existing install" section leads with that same form as the canonical command
+  and demotes the `master` pipe to a caveated fallback. It also stops
+  advertising `--update --branch v1.2.3`: the updater resets to
+  `origin/<ref>`, which does not exist for a tag, so that command aborts —
+  tag pins remain a fresh-install option. `PHLIX_UPDATES_COMMAND` still
+  overrides the string per install. [SRV-S9 / SRV-12]
+
 - **Signing out of one device now signs out exactly that device — and a stolen
   refresh token revokes its family, not the account.** Every login ceremony on
   this server now mints its token pair inside a session family: a per-login

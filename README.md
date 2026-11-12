@@ -743,7 +743,7 @@ HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 | `--tmdb-api-key KEY` | TMDB API key for metadata — optional for the installer, required for provider metadata; can also be saved later in the SPA under Settings → Metadata (recorded in `/etc/phlix/env`) |
 | `--hub-url URL` | `PHLIX_HUB_URL` for hub relay (optional) |
 | `--service-user USER` | System user to run as (default `phlix` — dedicated system account, created if missing) |
-| `--branch NAME` | Git branch or tag to install (default `master`) |
+| `--branch NAME` | Git branch or tag to install (default `master`; a tag works for fresh installs only — on `--update` pass a branch, see [Updating an existing install](#updating-an-existing-install)) |
 | `--repo URL` | Git repository URL (default `detain/phlix-server`) |
 | `--tls` / `--no-tls` | Force or skip Let's Encrypt + HAProxy TLS |
 | `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy). In non-interactive mode this must be paired with `--i-know-plaintext-internet-facing` — a no-TLS public deploy needs that explicit typed ack too (interactive runs are prompted instead) |
@@ -764,24 +764,31 @@ service:
 sudo bash /var/www/phlix/scripts/install.sh --update -y
 ```
 
-Or via the one-liner, which works regardless of where the server was installed because
-`--update` discovers the install path from the systemd unit. **This is the exact string the
-admin section's update banner offers for copy-to-clipboard** (`config/updates.php`'s
-`update_command`, surfaced by `GET /api/v1/admin/updates/status`) — the server never runs it
-for you:
+**This local-checkout form is the canonical update command, and the exact string the admin
+section's update banner offers for copy-to-clipboard** (`config/updates.php`'s
+`update_command`, surfaced by `GET /api/v1/admin/updates/status`) — the banner resolves the
+installer path from the running checkout, so it names your real install directory where this
+page shows the default `/var/www/phlix`. The server never runs it for you. It executes the
+installer already on disk (the one shipped with the release you are running) rather than piping
+a freshly fetched script into a root shell, then `--update` fetches `master` — the same ref the
+update check's `VERSION` marker tracks. Override the banner string per install with
+`PHLIX_UPDATES_COMMAND` (e.g. Docker, where updates are image pulls).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
-  | sudo bash -s -- --update -y
-```
+> **Caveat — the `master` pipe.** A remote one-liner also works, because `--update` discovers
+> the install path from the systemd unit, but it is **not** the recommended form:
+> `curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash -s -- --update -y`
+> runs whatever `master` holds at fetch time, as root, with no pin, checksum, or review step —
+> the same supply-chain vector the install section's [supply-chain pin](#one-line-install-ubuntudebian) note rejects.
+> Use it only when the local installer is missing or damaged, and prefer download-and-inspect
+> (`curl … -o install.sh`, read it, then `sudo bash install.sh --update -y`).
 
-Pin to a specific tag or branch with `--branch` (published tags: the GitHub
-Releases page, or `git tag -l` in a clone — `v0.x` refs predate the server's
-tag scheme and will fail checkout):
-
-```bash
-sudo bash /var/www/phlix/scripts/install.sh --update --branch v1.2.3 -y
-```
+> **`--branch` takes a branch name on `--update`, not a tag.** The updater fetches the ref and
+> then checks out / resets to `origin/<ref>`, which only exists for branches: `--update --branch
+> v1.2.3` fetches the tag into `FETCH_HEAD` only, then aborts on the missing `origin/v1.2.3`
+> remote-tracking ref before Composer, migrations, or the restart run. Tag pins work for **fresh installs**
+> (`--branch v1.2.3` is a `git clone --branch`); on an existing install, update along a branch
+> (default `master`). Published tags: the GitHub Releases page, or `git tag -l` in a clone —
+> `v0.x` refs predate the server's tag scheme.
 
 `--update` discovers the install path from the systemd unit's `WorkingDirectory`, fetches code
 as the install dir owner (so it doesn't trip Git's CVE-2022-24765 dubious-ownership check),

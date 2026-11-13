@@ -65,7 +65,7 @@ did.
 
 ## Thresholds — derived, never invented
 
-| Constant | Value | Derived from |
+| Threshold | Constant | Value & derivation |
 |---|---|---|
 | Sync window | `POSITION_TOLERANCE` | 2000 ms — the pre-existing constant whose own docblock already said "out of sync" (S446 gives it its consumer) |
 | Nudge cooldown | `NUDGE_COOLDOWN_MS` | 1000 ms — `TimeSync::MAX_ACCEPTABLE_RTT`: one full round-trip envelope; re-issuing before the member could plausibly have acted on the first directive is spam |

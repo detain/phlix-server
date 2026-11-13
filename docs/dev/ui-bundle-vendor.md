@@ -21,7 +21,7 @@ phlix-server/public/assets/app/assets/    ←  what the browser actually loads
 
 ## Prerequisites
 
-- SSH access to the deploy user on the live host (`deploy@example.net` below; `sudo` is needed only for the service restart)
+- SSH access as the deploy user on the live host (`deploy@example.net` below; `sudo` is needed only for the service restart)
 - `npm` installed on the build machine (local or server)
 - `rsync` for syncing built assets to the live server
 
@@ -156,7 +156,7 @@ ssh deploy@example.net "grep -c 'toggleQuality' /var/www/phlix/public/assets/app
 The build may have produced chunks with **different names** (Vite's bundler uses content-based hashes). The old chunks may still be cached by the CDN. Ensure the HTML references the new chunk names and do a hard refresh (`Ctrl+Shift+R`).
 
 ### TDZ / "can't access lexical declaration before initialization" error
-The error typically appears in `Select.vue` when a `const` variable is used in a function that runs during setup (e.g., a `{ immediate: true }` watch) before the variable's declaration line is evaluated. Fix: move the `const` declaration **before** the code that triggers it. Example — if `selectedIndex` is used in `openList()` called by an immediate watch, `selectedIndex` must be declared **before** the watch.
+The error typically appears in `Select.vue` when a `const` variable is used in a function that runs during setup (e.g. a `{ immediate: true }` watch) before the variable's declaration line is evaluated. Fix: move the `const` declaration **before** the code that triggers it. Example — if `selectedIndex` is used in `openList()` called by an immediate watch, `selectedIndex` must be declared **before** the watch.
 
 ### Hub restarts
 

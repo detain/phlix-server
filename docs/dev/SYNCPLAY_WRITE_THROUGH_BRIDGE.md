@@ -48,7 +48,7 @@ the WS worker, fed by published deltas.
   primary access control** — no new port, no public exposure, other users
   cannot even open the path. The listener `unlink()`s a stale socket file at
   bind time (owner-only dir, TOCTOU-safe enough at 0600), stamps its 0600
-  `<socket>.owner` boot-identity sidecar (#15), and refuses to bind
+  `<socket>.owner` boot-identity sidecar (audit finding #15), and refuses to bind
   over a *live* listener (probe-connect first; see Failure modes).
 - **NDJSON, one frame per short-lived connection**: connect → single
   `fwrite($frame."\n")` → close. No interleaving is possible across 14

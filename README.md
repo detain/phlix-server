@@ -32,21 +32,21 @@ Phlix Media Server provides a complete media management and streaming solution:
 - **HLS Streaming**: Adaptive bitrate streaming for web clients with multi-quality playlists, normalized
   for browser playback — encoder-level detail under [HLS & transcoding](#hls--transcoding)
 - **WebSocket events**: Real-time progress and notification delivery
-- **Household quality-of-life**: watched status scrobbles to Trakt and Last.fm, trickplay scrub-preview
+- **Household quality-of-life**: Watched status scrobbles to Trakt and Last.fm, trickplay scrub-preview
   thumbnails and box-set collection sync are produced by background asset jobs
   (`PHLIX_MEDIA_ASSET_JOBS_DIR`, `PHLIX_COLLECTION_JOBS_DIR`), and intro/outro skip markers are exposed
   to players — see [Metadata providers & scrobblers](#metadata-providers--scrobblers)
-- **Subtitles**: embedded text tracks are extracted to WebVTT on demand and served through signed URLs, HLS transcodes emit sidecar subtitle tracks, and provider plugins add searchable remote subtitles (downloaded tracks attach to the item) — see [Subtitles (choosing them)](#subtitles-choosing-them)
-- **Hub / remote access**: enrolling the server with a [phlix-hub](https://github.com/detain/phlix-hub) links your account to the hub's single sign-on and opens an outbound relay path, so you can reach this server from outside your home network without port forwarding. The installer's `--hub-url` (or `PHLIX_HUB_URL`) is the server-side half; pairing completes with `scripts/pair-with-hub.php`. What a hub is for, step by step: [the quickstart's hub section](docs/user/quickstart.md#remote-access-the-hub)
+- **Subtitles**: Embedded text tracks are extracted to WebVTT on demand and served through signed URLs, HLS transcodes emit sidecar subtitle tracks, and provider plugins add searchable remote subtitles (downloaded tracks attach to the item) — see [Subtitles (choosing them)](#subtitles-choosing-them)
+- **Hub / remote access**: Enrolling the server with a [phlix-hub](https://github.com/detain/phlix-hub) links your account to the hub's single sign-on and opens an outbound relay path, so you can reach this server from outside your home network without port forwarding. The installer's `--hub-url` (or `PHLIX_HUB_URL`) is the server-side half; pairing completes with `scripts/pair-with-hub.php`. What a hub is for, step by step: [the quickstart's hub section](docs/user/quickstart.md#remote-access-the-hub)
 - **Backups**: Archives combining a full MySQL dump with the server's config, data, and SSL files, with count-based retention, optional S3 replication, and automatic scheduling — admin API, `bin/phlix` and an admin-only `/app` Backup page; see [Backups (admin-managed)](#backups-admin-managed)
 - **Themes (appearance)**: Three built-in token-map themes (`nocturne` / `daylight` / `midnight`) plus plugin-contributed themes, served by a signed-in catalogue API; selection is per-user and validated live — no clearing path exists; see [Themes (choosing an appearance)](#themes-choosing-an-appearance)
 - **Multi-Source Metadata**: Automatic metadata fetching from TMDB (movies), TVDB (TV series), Fanart.tv (artwork), and local NFO files with provider fallback. The 24-hour cache freshness window is tunable (`metadata.cache_ttl_hours`), and a minimum title/year match-confidence gate for accepted provider matches (`metadata.min_match_confidence`, default `0` = gate off) — both admin-editable and read live per lookup
 - **Content Filtering**: Parental controls with rating and genre-based filtering
-- **Access Schedules**: per-profile allowed-time windows ("who may watch when") enforced at the
+- **Access Schedules**: Per-profile allowed-time windows ("who may watch when") enforced at the
   request edge for kids' profiles and beyond — managed per profile (own-profile or admin) via
   `/api/v1/profiles/{profileId}/schedules`; household walkthrough in
   [the quickstart](docs/user/quickstart.md)
-- **Webhooks**: outbound HTTP event delivery through two admin-managed surfaces — a signed
+- **Webhooks**: Outbound HTTP event delivery through two admin-managed surfaces — a signed
   hook registry (`/api/v1/admin/webhooks`: per-hook secret, HMAC signature headers) and a
   domain-event subscription surface (`/api/v1/admin/webhooks/subscriptions`: `user.login`,
   `playback.*`, `library.*`; unsigned, see the endpoint table). Both validate every target
@@ -1109,7 +1109,6 @@ return [
 > `deploy/haproxy.cfg`), or firewall `8097` closed yourself. The docker
 > examples loopback-pin by default for exactly this reason.
 
-
 **Database credentials are not a `config/server.php` key.** The connection is
 loaded from `config/database.php` (wired as `db_config_path` by `start.php`),
 which reads every parameter — `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USER`
@@ -1595,7 +1594,7 @@ absence; a route missing from `openapi.yaml` turns CI red.
 | DELETE | `/api/v1/admin/backup/{id}` | Delete one backup (local file or S3 object plus its row); `404` unknown id — admin-only |
 | POST | `/api/v1/admin/backup/{id}/restore` | Synchronous restore — SHA-256 verified before anything is touched; re-imports the DB dump and the config files (not `data/`/SSL); failure incl. unknown id → `500` with the reason — admin-only |
 | POST | `/api/v1/admin/backup/{id}/upload-s3` | Push a still-local archive to S3 and mark the row `is_s3` (local file is left on disk, untracked); `500` when S3 is not configured or the upload fails — admin-only |
-| GET | `/api/v1/admin/backup/schedule` | Effective schedule — `auto_backup_interval_days` + `retention_count` re-read from `config/backup.php` per request, plus `next_scheduled_backup` (unix, `null` when the interval is <= 0 days; the `enabled` toggle gates the automatic timer separately) and its ISO form — admin-only |
+| GET | `/api/v1/admin/backup/schedule` | Effective schedule — `auto_backup_interval_days` + `retention_count` re-read from `config/backup.php` per request, plus `next_scheduled_backup` (unix, `null` when the interval is ≤ 0 days; the `enabled` toggle gates the automatic timer separately) and its ISO form — admin-only |
 | PUT | `/api/v1/admin/backup/schedule` | Update schedule — body `{auto_backup_interval_days?: int ≥ 0, retention_count?: int ≥ 1}` (non-numeric/negative/`<1` → `400`); rewrites `config/backup.php` (comments are lost); the running auto-backup timer adopts the new values at its next restart — admin-only |
 
 **Rate limiting.** `POST /auth/register`, `POST /auth/refresh`, the WebAuthn

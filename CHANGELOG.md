@@ -33,6 +33,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **Documentation prose sweep (SRV-S28).** README Overview bullets use one
+  capitalization convention, `<= 0` becomes `≤ 0`, stray double blank lines are
+  collapsed, and the AUTH_METHOD_LOCKOUT, BLOCKING_IO_EXCEPTIONS,
+  SYNCPLAY_MEMBER_SYNC_NUDGE, ui-bundle-vendor and SYNCPLAY_WRITE_THROUGH_BRIDGE
+  docs get wording and table-header fixes. No behaviour change.
+
 - **SyncPlay `syncplay_group_join` fallback `member_name` is now `'Host'` (was
   `'User'`).** Aligns with the `createGroup` default and the
   `@phlix/syncplay` client default (SPY-S13, owner ruling 2026-11-13).

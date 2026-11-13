@@ -16,7 +16,6 @@ The counts above are read from the table; rotate them with the rows
 (the "sixteen rows / fifteen keys" phrasing this intro carried predates `tmdb.api_key`
 joining the table).
 
-
 > **Scope note.** This table tracks the keys covered by the `EffectiveConfig` work plus
 > `tmdb.api_key`. The schema has since grown other `restart: true` keys (the
 > `server.rate_limit.*` family, `metrics.enabled`, `theme_music.*`, `dlna.*`) that were added

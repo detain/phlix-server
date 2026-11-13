@@ -214,12 +214,20 @@ final class RelayConfigTest extends TestCase
 
     // ---- R17-01: fail-closed require-TLS knob ----
 
-    public function test_require_tls_defaults_false(): void
+    public function test_require_tls_defaults_true(): void
     {
-        $this->assertFalse(
+        $this->assertTrue(
             (new RelayConfig())->requireTls,
-            'default must stay today\'s warn-only behavior — require_tls is opt-IN to the hard gate',
+            'require_tls is secure-by-default (SRV-45 flip); opt OUT with PHLIX_RELAY_REQUIRE_TLS=0',
         );
+        $this->assertTrue(RelayConfig::fromEnv()->requireTls, 'unset env must resolve to ON');
+    }
+
+    public function test_from_env_require_tls_opt_out(): void
+    {
+        putenv('PHLIX_RELAY_REQUIRE_TLS=0');
+
+        $this->assertFalse(RelayConfig::fromEnv()->requireTls);
     }
 
     public function test_from_env_reads_require_tls(): void

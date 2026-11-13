@@ -59,9 +59,15 @@ return [
     // of only warning — the plaintext tunnel honors X-Phlix-Relay-User verbatim, so
     // ws:// exposes every relayed request to path-positioned impersonation. This
     // flag WINS over allow_plaintext_tunnel: an explicit ACK cannot re-open a
-    // refused dial. Default false = today's warn-only behavior (docs lanes will
-    // surface this knob in the operator docs).
-    'require_tls' => filter_var(getenv('PHLIX_RELAY_REQUIRE_TLS') ?: 'false', FILTER_VALIDATE_BOOLEAN),
+    // refused dial. Default TRUE (secure-by-default, flipped from warn-only);
+    // PHLIX_RELAY_REQUIRE_TLS=0 opts out (a startup log line records it).
+    'require_tls' => (static function (): bool {
+        $raw = getenv('PHLIX_RELAY_REQUIRE_TLS');
+        if ($raw === false || trim($raw) === '') {
+            return true;
+        }
+        return filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+    })(),
 
     // This server's own local HTTP listener that relayed client bytes are piped to.
     'local_http_address' => '127.0.0.1:8096',

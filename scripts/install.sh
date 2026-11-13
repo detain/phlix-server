@@ -1737,7 +1737,6 @@ do_update() {
 		new_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 		info "Code: $prev_commit -> $new_commit"
 
-
 		# 1b. Self-update: hand over to the NEWLY fetched installer so the rest
 		# of the update (composer, extensions, migrations, systemd/HAProxy
 		# rewrites) runs the new release's logic, not this (previous) copy's.

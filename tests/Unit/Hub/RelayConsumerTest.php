@@ -225,6 +225,7 @@ class RelayConsumerTest extends TestCase
         ?RelayIdentityResolver $identityResolver = null,
     ): RelayConsumer {
         $config = $config ?? new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubRelayWsUrl: 'ws://hub.example.com:8802',
             localHttpAddress: '127.0.0.1:8096',
@@ -300,6 +301,7 @@ class RelayConsumerTest extends TestCase
         $opened = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -345,6 +347,7 @@ class RelayConsumerTest extends TestCase
         $opened = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -391,6 +394,7 @@ class RelayConsumerTest extends TestCase
         $opened = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -461,6 +465,7 @@ class RelayConsumerTest extends TestCase
 
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -868,7 +873,7 @@ class RelayConsumerTest extends TestCase
         $logger->expects($this->exactly(1))->method('warning');
 
         $consumer = new RelayConsumer(
-            new RelayConfig(enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
+            new RelayConfig(requireTls: false, enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
             $this->createMockHubClient(),
             $logger,
             'server-uuid-123',
@@ -887,7 +892,7 @@ class RelayConsumerTest extends TestCase
         $logger->expects($this->never())->method('warning');
 
         $consumer = new RelayConsumer(
-            new RelayConfig(enabled: true, hubRelayWsUrl: 'wss://hub.example.com:8802', relayTls: true),
+            new RelayConfig(requireTls: false, enabled: true, hubRelayWsUrl: 'wss://hub.example.com:8802', relayTls: true),
             $this->createMockHubClient(),
             $logger,
             'server-uuid-123',
@@ -905,6 +910,7 @@ class RelayConsumerTest extends TestCase
 
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 allowPlaintextTunnel: true,
@@ -1115,6 +1121,7 @@ class RelayConsumerTest extends TestCase
     public function test_build_hub_relay_ws_url_uses_explicit_value(): void
     {
         $config = new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubRelayWsUrl: 'ws://hub.example.com:8802',
         );
@@ -1127,6 +1134,7 @@ class RelayConsumerTest extends TestCase
         // an https/wss template derives a PLAINTEXT ws:// relay URL — the hub
         // relay listener is plaintext by default and a wss handshake to it hangs.
         $config = new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubWssUrl: 'wss://hub.example.com/api/v1/servers/{id}/relay',
         );
@@ -1137,6 +1145,7 @@ class RelayConsumerTest extends TestCase
     {
         // With relay TLS explicitly enabled the derived scheme becomes wss://.
         $config = new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubWssUrl: 'wss://hub.example.com/api/v1/servers/{id}/relay',
             relayTls: true,
@@ -1146,13 +1155,14 @@ class RelayConsumerTest extends TestCase
 
     public function test_build_local_http_url(): void
     {
-        $config = new RelayConfig(localHttpAddress: '127.0.0.1:8096');
+        $config = new RelayConfig(requireTls: false, localHttpAddress: '127.0.0.1:8096');
         $this->assertSame('tcp://127.0.0.1:8096', $config->buildLocalHttpUrl());
     }
 
     public function test_relay_config_builds_legacy_wss_url_with_server_id(): void
     {
         $config = new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubWssUrl: 'wss://hub.example.com/api/v1/servers/{id}/relay',
         );
@@ -2346,7 +2356,7 @@ class RelayConsumerTest extends TestCase
 
     public function test_transport_tls_permissive_when_verify_disabled(): void
     {
-        $config = new RelayConfig(relayTlsVerify: false);
+        $config = new RelayConfig(requireTls: false, relayTlsVerify: false);
         $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
 
         $this->assertTrue($t['useTls']);
@@ -2368,7 +2378,7 @@ class RelayConsumerTest extends TestCase
         $this->assertIsString($ca);
 
         try {
-            $config = new RelayConfig(relayTlsCafile: $ca);
+            $config = new RelayConfig(requireTls: false, relayTlsCafile: $ca);
             $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
 
             /** @var array<string, mixed> $ssl */
@@ -2389,7 +2399,7 @@ class RelayConsumerTest extends TestCase
     public function test_transport_tls_refuses_unreadable_cafile_loud(): void
     {
         $ghost = sys_get_temp_dir() . '/phlix-relay-ca-ghost-' . bin2hex(random_bytes(6)) . '.pem';
-        $config = new RelayConfig(relayTlsCafile: $ghost);
+        $config = new RelayConfig(requireTls: false, relayTlsCafile: $ghost);
 
         try {
             $this->resolveTransport($config, 'wss://hub.example.com:8802');
@@ -2407,7 +2417,7 @@ class RelayConsumerTest extends TestCase
     {
         // The verify opt-out arm must not trip the anchor refusal: PHLIX_-
         // RELAY_TLS_VERIFY=0 means "I know, let it dial" (self-signed hub).
-        $config = new RelayConfig(relayTlsVerify: false, relayTlsCafile: '/nonexistent/phlix-ghost-ca.pem');
+        $config = new RelayConfig(requireTls: false, relayTlsVerify: false, relayTlsCafile: '/nonexistent/phlix-ghost-ca.pem');
         $t = $this->resolveTransport($config, 'wss://hub.example.com:8802');
 
         /** @var array<string, mixed> $ssl */
@@ -2431,6 +2441,7 @@ class RelayConsumerTest extends TestCase
 
             $consumer = new RelayConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'ws://hub.example.com:8802',
                     localHttpAddress: '127.0.0.1:8096',
@@ -2484,6 +2495,7 @@ class RelayConsumerTest extends TestCase
 
             $consumer = new RelayConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'ws://hub.example.com:8802',
                 ),
@@ -2522,7 +2534,7 @@ class RelayConsumerTest extends TestCase
 
             // Enabled but with no resolvable relay URL at all.
             $consumer = new RelayConsumer(
-                new RelayConfig(enabled: true),
+                new RelayConfig(requireTls: false, enabled: true),
                 $this->createMockHubClient(),
                 new StructuredLogger('relay', []),
                 'server-uuid-123',
@@ -2637,7 +2649,7 @@ class RelayConsumerTest extends TestCase
         );
 
         $off = new RelayConsumer(
-            new RelayConfig(enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
+            new RelayConfig(requireTls: false, enabled: true, hubRelayWsUrl: 'ws://hub.example.com:8802'),
             $this->createMockHubClient(),
             new StructuredLogger('relay', []),
             'server-uuid-123',
@@ -2669,6 +2681,7 @@ class RelayConsumerTest extends TestCase
 
             $consumer = new RelayConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'ws://hub.example.com:8802',
                 ),
@@ -2721,6 +2734,7 @@ class RelayConsumerTest extends TestCase
             // reason" while the tunnel is actually up).
             $consumer = new RelayConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'wss://hub.example.com:8802',
                     relayTls: false,
@@ -2864,6 +2878,7 @@ class RelayConsumerTest extends TestCase
 
             $consumer = new RelayConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'ws://hub.example.com:8802',
                     localHttpAddress: '127.0.0.1:8096',
@@ -2914,6 +2929,7 @@ class RelayConsumerTest extends TestCase
         $this->withStateDir(function (RelayStateStore $store): void {
             $consumer = $this->createConsumer(
                 new RelayConfig(
+                    requireTls: false, // legacy plaintext fixtures (default is now ON)
                     enabled: true,
                     hubRelayWsUrl: 'ws://hub.example.com:8802',
                     localHttpAddress: '127.0.0.1:8096',
@@ -3483,6 +3499,7 @@ class RelayConsumerTest extends TestCase
         $locals = [];
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -3658,6 +3675,7 @@ class RelayConsumerTest extends TestCase
     public function testPingTimeoutBelowOneDisablesTheWatchdog(): void
     {
         $consumer = $this->createConsumer(new RelayConfig(
+            requireTls: false, // legacy plaintext fixtures (default is now ON)
             enabled: true,
             hubRelayWsUrl: 'ws://hub.example.com:8802',
             localHttpAddress: '127.0.0.1:8096',

@@ -206,6 +206,7 @@ final class RelayInteropTest extends TestCase
 
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',
@@ -290,6 +291,7 @@ final class RelayInteropTest extends TestCase
 
         $consumer = new RelayConsumer(
             new RelayConfig(
+                requireTls: false, // legacy plaintext fixtures (default is now ON)
                 enabled: true,
                 hubRelayWsUrl: 'ws://hub.example.com:8802',
                 localHttpAddress: '127.0.0.1:8096',

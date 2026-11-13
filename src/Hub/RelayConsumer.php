@@ -554,6 +554,14 @@ final class RelayConsumer
             return;
         }
 
+        if (!$this->config->requireTls) {
+            $this->logger->warning(
+                'RelayConsumer: require-TLS is OPTED OUT (PHLIX_RELAY_REQUIRE_TLS=0 / relay.require_tls=false); '
+                . 'plaintext ws:// hub dials are permitted with a warning only. Unset it to restore the '
+                . 'secure default (refuse non-wss:// dials).'
+            );
+        }
+
         $this->running = true;
         $this->connect();
     }
@@ -845,7 +853,7 @@ final class RelayConsumer
         // trust model honors X-Phlix-Relay-User verbatim, so ws:// exposes every
         // relayed request to path-positioned impersonation. require_tls WINS over
         // allow_plaintext_tunnel: an explicit ACK cannot re-open a refused dial.
-        // Default off = today's warn-only behavior (warnIfPlaintextTunnel below).
+        // Opted out (=0) = legacy warn-only behavior (warnIfPlaintextTunnel below).
         if ($this->refusePlaintextUnderRequireTls($wsUrl)) {
             $this->recordConnectError(
                 'plaintext relay dial refused: require_tls is enabled (PHLIX_RELAY_REQUIRE_TLS=1)'
@@ -1227,8 +1235,8 @@ final class RelayConsumer
      * rejected before a socket is ever opened, because the tunnel trust model
      * honors X-Phlix-Relay-User verbatim (path-positioned impersonation over
      * ws://). require_tls WINS over allow_plaintext_tunnel — an ACK silences
-     * the warning, it cannot re-open a refused dial. Default off keeps
-     * today's warn-only behavior byte-for-byte.
+     * the warning, it cannot re-open a refused dial. Default is ON (secure-by-default);
+     * PHLIX_RELAY_REQUIRE_TLS=0 opts out to the legacy warn-only behavior.
      *
      * @param string $wsUrl Resolved hub relay WS URL.
      *
@@ -1249,8 +1257,8 @@ final class RelayConsumer
             . 'enabled (PHLIX_RELAY_REQUIRE_TLS=1). The ws:// tunnel exposes every relayed '
             . 'request to path-positioned impersonation (X-Phlix-Relay-User is honored '
             . 'verbatim). Enable relay TLS (PHLIX_RELAY_TLS=1 here AND HUB_RELAY_TLS=true '
-            . 'on the hub, or configure a wss:// hub_relay_ws_url) — or unset '
-            . 'PHLIX_RELAY_REQUIRE_TLS to return to warn-only behavior.',
+            . 'on the hub, or configure a wss:// hub_relay_ws_url) — or set '
+            . 'PHLIX_RELAY_REQUIRE_TLS=0 to opt out to warn-only behavior.',
             ['url' => $wsUrl],
         );
 
@@ -1270,8 +1278,7 @@ final class RelayConsumer
      * user's UUID and be served as that user — full impersonation of every
      * relayed request, including authenticated API calls.
      *
-     * Connectivity is deliberately NOT changed (flipping the shipped plaintext
-     * default would break existing pairings); instead the risk is surfaced
+     * With require_tls opted out the risk is surfaced
      * loudly at connect time and silenced ONLY by explicit operator opt-in
      * (`PHLIX_RELAY_ALLOW_PLAINTEXT=1` / config `allow_plaintext_tunnel`), so
      * running it becomes an acknowledged decision rather than an accident.

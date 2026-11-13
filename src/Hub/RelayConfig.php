@@ -107,7 +107,8 @@ final class RelayConfig
      *                                      hardened deployments (PHLIX_RELAY_REQUIRE_TLS=1).
      *                                      This flag WINS over $allowPlaintextTunnel:
      *                                      an ACK cannot re-open a refused dial.
-     *                                      Default false = today's warn-only behavior.
+     *                                      Default TRUE (secure-by-default); set PHLIX_RELAY_REQUIRE_TLS=0 to opt
+     *                                      out to the legacy warn-only behavior (logged at startup).
      */
     public function __construct(
         public readonly bool $enabled = false,
@@ -125,7 +126,7 @@ final class RelayConfig
         public readonly bool $relayTlsVerify = true,
         public readonly string $relayTlsCafile = self::DEFAULT_TLS_CAFILE,
         public readonly bool $allowPlaintextTunnel = false,
-        public readonly bool $requireTls = false,
+        public readonly bool $requireTls = true,
     ) {
     }
 
@@ -168,9 +169,9 @@ final class RelayConfig
         // Opt-in ACK of the plaintext-tunnel impersonation risk (M5). Silence
         // the connect-time warning ONLY when the operator explicitly sets it.
         $allowPlaintextTunnel = self::getEnvBool('PHLIX_RELAY_ALLOW_PLAINTEXT', false);
-        // Fail-closed plaintext refusal (R17-01). Off by default = warn-only M5
-        // behavior; when on, RelayConsumer refuses non-wss:// dials outright.
-        $requireTls = self::getEnvBool('PHLIX_RELAY_REQUIRE_TLS', false);
+        // Fail-closed plaintext refusal (R17-01). ON by default; PHLIX_RELAY_REQUIRE_TLS=0 opts out to warn-only M5
+        // behavior (startup log line). When on, RelayConsumer refuses non-wss:// dials outright.
+        $requireTls = self::getEnvBool('PHLIX_RELAY_REQUIRE_TLS', true);
 
         if ($overrides !== null) {
             $enabled = is_bool($overrides['enabled'] ?? null)

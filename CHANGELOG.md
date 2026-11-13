@@ -244,11 +244,22 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Security
 
+- **BREAKING DEFAULT: the hub relay now requires TLS by default
+  (`PHLIX_RELAY_REQUIRE_TLS` defaults to ON).** A relay dial whose resolved
+  scheme is not `wss://` is refused outright instead of merely warned about,
+  closing the path-positioned impersonation exposure of the plaintext tunnel
+  (`X-Phlix-Relay-User` is honored verbatim). Opt out with
+  `PHLIX_RELAY_REQUIRE_TLS=0` (or `relay.require_tls=false`); an opted-out
+  server logs a WARNING at relay startup. **Upgrade note:** an existing
+  pairing that still dials a plaintext `ws://` hub will stop connecting after
+  this upgrade; enable TLS (`PHLIX_RELAY_TLS=1` here and `HUB_RELAY_TLS=true`
+  on the hub, or a `wss://` hub relay URL), or set
+  `PHLIX_RELAY_REQUIRE_TLS=0` to keep the old behavior (SRV-45).
+
 - **The WebSocket protocol-version check now has a floor: `protocol_version`
   below 1 is rejected as `PROTOCOL_VERSION_MISMATCH`, like a future version.**
   Real clients send 1, so nothing changes for them (SRV-46). The relay
-  require-TLS default flip (`PHLIX_RELAY_REQUIRE_TLS`, SRV-45) is NOT part of
-  this entry: it stays warn-only by default pending the owner's rollout decision.
+  require-TLS default flip (SRV-45) is the separate BREAKING entry above.
   Also: `pollClaimStatus` now logs the same cleartext-http warning as pairing.
 
 - **Hub pairing and JWKS URLs are now restricted to http(s).** Non-http(s) hub

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Network;
 
+use Phlix\Hub\HostnameCandidateSanitizer;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -271,8 +272,9 @@ TEXT;
             ];
         }
 
-        $hostname = gethostname();
-        if ($hostname !== false && $hostname !== '') {
+        // gethostname() may carry '_' etc.; map it onto the hub's RFC 1123 grammar.
+        $hostname = HostnameCandidateSanitizer::sanitizeHostname((string) gethostname());
+        if ($hostname !== '') {
             $candidates[] = [
                 'type' => 'lan-hostname',
                 'url' => 'http://' . $hostname . '.local:' . $this->port,

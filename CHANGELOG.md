@@ -31,6 +31,17 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hub claim/heartbeat no longer 400s when `gethostname()` is not RFC 1123.**
+  New `Phlix\Hub\HostnameCandidateSanitizer` maps the `lan-hostname` candidate
+  (`_` and other non-hostname bytes become `-`, case-folded, labels trimmed) in
+  `PortForwardService`, and `HubClient::getHostnameCandidates()` drops any
+  candidate outside the host grammar. Needed because phlix-shared >= 0.55.0
+  `HeartbeatDto`/`ClaimRequest` now reject the whole payload on one malformed
+  `hostnameCandidates` entry. Bump order: this server sanitizer lands BEFORE any
+  hub deploy that enforces the shared grammar (SHR-S1 owner ruling 2026-11-13).
+
 ### Changed
 
 - **Documentation prose sweep (SRV-S28).** README Overview bullets use one

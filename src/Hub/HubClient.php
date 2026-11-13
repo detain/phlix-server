@@ -1020,6 +1020,7 @@ class HubClient
             }
         }
 
-        return array_values(array_unique($candidates));
+        // The hub rejects the whole payload on one malformed entry; drop them here.
+        return array_values(array_unique(HostnameCandidateSanitizer::filter($candidates)));
     }
 }

@@ -149,8 +149,11 @@ class MediaUserDataController
 
         try {
             $this->userItemData->setRating($userId, $itemId, $rating, $profileId);
-        } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+        } catch (\InvalidArgumentException) {
+            // Repository prose is developer-register; translate at the boundary.
+            return (new Response())->status(400)->json(
+                ['error' => 'Rating must be an integer between 1 and 10, or null']
+            );
         }
 
         return (new Response())->json(['message' => 'Rating saved']);
@@ -197,8 +200,11 @@ class MediaUserDataController
 
         try {
             $this->userItemData->setLikeLevel($userId, $itemId, $level, $profileId);
-        } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+        } catch (\InvalidArgumentException) {
+            // Repository prose is developer-register; translate at the boundary.
+            return (new Response())->status(400)->json(
+                ['error' => 'Level must be an integer between -2 and 2']
+            );
         }
 
         return (new Response())->json(['message' => 'Love level saved']);

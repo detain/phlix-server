@@ -145,11 +145,16 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
-- WebSocket teardown no longer unwinds when a SyncPlay vacate/snapshot publish fails: the
+- **Rating and like-level 400 responses now carry user-facing copy.** The
+  media user-data controller translates the repository's developer-register
+  validation text at the boundary (`Rating must be an integer between 1 and 10,
+  or null` / `Level must be an integer between -2 and 2`); status codes and
+  contract codes are unchanged. [SRV-S4 / SRV-5]
+- **WebSocket teardown no longer unwinds when a SyncPlay vacate/snapshot publish fails.** The
   reaper and the close callback still remove the connection, close the socket and finish
   metrics bookkeeping; `Connection::send()` returns false instead of throwing on a dead
   transport; the `client_disconnected` broadcast now carries only `connection_id` (the
-  `user_id` field was dropped — no in-estate client consumed it).
+  `user_id` field was dropped — no in-estate client consumed it). [SRV-3/44/57]
 
 - **Revoked sign-in sessions no longer pile up forever, and a refresh that
   loses a race to rotate the same token no longer mints on someone else's

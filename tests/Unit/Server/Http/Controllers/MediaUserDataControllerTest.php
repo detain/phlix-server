@@ -172,6 +172,8 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->setRating($req, ['id' => 'item-1']);
 
         $this->assertSame(400, $response->statusCode);
+        $this->assertStringNotContainsString('out of range', (string) $response->body);
+        $this->assertStringContainsString('Rating must be an integer between 1 and 10', (string) $response->body);
     }
 
     public function testSetLikeLevelReturns401WhenUnauthenticated(): void
@@ -322,6 +324,8 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
 
         $this->assertSame(400, $response->statusCode);
+        $this->assertStringNotContainsString('out of range', (string) $response->body);
+        $this->assertStringContainsString('Level must be an integer between -2 and 2', (string) $response->body);
     }
 
     /**

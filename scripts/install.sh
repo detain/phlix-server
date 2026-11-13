@@ -202,6 +202,20 @@ phlix_haproxy_render_https_binds() {
 	fi
 }
 
+# Self-update guard (SRV-12 / SRV-S9). `--update` fetches the new release into
+# the install dir and then must run the NEW release's install logic, never the
+# previous release's (the running copy may be the old on-disk installer or a
+# piped one). do_update re-execs the installer from the updated checkout once,
+# marking the child with the PHLIX_INSTALL_REEXEC sentinel so it cannot loop.
+# Pure decision helper (--self-test covers it): $1 = sentinel value, $2 = path
+# of the updated installer. Returns 0 when a re-exec should happen.
+phlix_update_should_reexec() {
+	local sentinel="${1:-}" new_script="${2:-}"
+	[ "$sentinel" = "1" ] && return 1
+	[ -n "$new_script" ] && [ -f "$new_script" ] || return 1
+	return 0
+}
+
 # --self-test plumbing: equality assertions on plain stdout; nonzero exit if
 # any FAIL line was emitted.
 phlix_selftest_assert() {
@@ -255,6 +269,18 @@ phlix_run_self_tests() {
 	out="$(phlix_haproxy_render_https_binds live /etc/haproxy/certs no)"
 	want=''
 	phlix_selftest_assert 'render live/no domains/no extras => empty' "$want" "$out" || rc=1
+
+	local f_none="" f_real
+	f_real="$(mktemp)"
+	phlix_update_should_reexec "" "$f_real" && f_none="yes" || f_none="no"
+	phlix_selftest_assert 'reexec: no sentinel + new installer present => yes' yes "$f_none" || rc=1
+	phlix_update_should_reexec 1 "$f_real" && f_none="yes" || f_none="no"
+	phlix_selftest_assert 'reexec: sentinel set => no (loop guard)' no "$f_none" || rc=1
+	phlix_update_should_reexec "" "$f_real.missing" && f_none="yes" || f_none="no"
+	phlix_selftest_assert 'reexec: new installer missing => no' no "$f_none" || rc=1
+	phlix_update_should_reexec "" "" && f_none="yes" || f_none="no"
+	phlix_selftest_assert 'reexec: empty path => no' no "$f_none" || rc=1
+	rm -f "$f_real"
 
 	if command -v haproxy >/dev/null 2>&1; then
 		info "(haproxy found: '$(phlix_haproxy_installed_version)'; supports key-file bind: $(phlix_haproxy_supports_tls_key_file && echo yes || echo no))"
@@ -312,7 +338,7 @@ Options:
                           (prompts before each destructive step)
   --purge                 With --uninstall, also DROP the database and DELETE
                           the Let's Encrypt certificate (data loss)
-  --self-test             Run the installer's pure TLS-bind decision helpers
+  --self-test             Run the installer's pure decision helpers (TLS-bind, self-update re-exec guard)
                           (no root, no network, no side effects) and exit
   -y, --non-interactive   Never prompt; use defaults/flags (auto when no TTY)
   --interactive           Force prompts even when piped
@@ -345,6 +371,9 @@ EOF
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+# Keep the original argv so do_update can re-exec the freshly fetched installer
+# with exactly the flags the operator gave (see phlix_update_should_reexec).
+PHLIX_ORIG_ARGS=("$@")
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--install-path)
@@ -1669,33 +1698,57 @@ do_update() {
 
 	local prev_commit current_branch
 	prev_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	# Re-exec'd child: the parent already confirmed and fetched; report the
+	# commit the update started from, not the (already-updated) HEAD.
+	if [ "${PHLIX_INSTALL_REEXEC:-}" = "1" ] && [ -n "${PHLIX_UPDATE_PREV_COMMIT:-}" ]; then
+		prev_commit="$PHLIX_UPDATE_PREV_COMMIT"
+	fi
 	current_branch="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 
 	if [ -n "$("${as_owner[@]}" git -C "$INSTALL_PATH" status --porcelain 2>/dev/null)" ]; then
 		warn "Uncommitted local changes in $INSTALL_PATH will be discarded by 'git reset --hard'."
 	fi
 
-	echo
-	log "Update summary"
-	info "Install path : $INSTALL_PATH"
-	info "Owned by     : $repo_owner"
-	info "Env file     : $ENV_FILE  (DB password + secrets preserved)"
-	info "Database     : ${env_db_name:-$DB_NAME}"
-	info "Branch       : $current_branch  ->  $BRANCH"
-	info "Commit       : $prev_commit  ->  (fetching…)"
-	info "Repo         : $REPO_URL"
-	echo
-	confirm "Proceed with update?" || die "Aborted by user."
+	if [ "${PHLIX_INSTALL_REEXEC:-}" = "1" ]; then
+		log "Continuing update with the installer from the updated release"
+		local new_commit
+		new_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+		info "Code: $prev_commit -> $new_commit"
+	else
+		echo
+		log "Update summary"
+		info "Install path : $INSTALL_PATH"
+		info "Owned by     : $repo_owner"
+		info "Env file     : $ENV_FILE  (DB password + secrets preserved)"
+		info "Database     : ${env_db_name:-$DB_NAME}"
+		info "Branch       : $current_branch  ->  $BRANCH"
+		info "Commit       : $prev_commit  ->  (fetching…)"
+		info "Repo         : $REPO_URL"
+		echo
+		confirm "Proceed with update?" || die "Aborted by user."
 
-	# 1. Pull updated code as the install dir owner.
-	log "Fetching code"
-	"${as_owner[@]}" git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
-	"${as_owner[@]}" git -C "$INSTALL_PATH" checkout "$BRANCH" >/dev/null 2>&1 ||
-		"${as_owner[@]}" git -C "$INSTALL_PATH" checkout -B "$BRANCH" "origin/$BRANCH"
-	"${as_owner[@]}" git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
-	local new_commit
-	new_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-	info "Code: $prev_commit -> $new_commit"
+		# 1. Pull updated code as the install dir owner.
+		log "Fetching code"
+		"${as_owner[@]}" git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
+		"${as_owner[@]}" git -C "$INSTALL_PATH" checkout "$BRANCH" >/dev/null 2>&1 ||
+			"${as_owner[@]}" git -C "$INSTALL_PATH" checkout -B "$BRANCH" "origin/$BRANCH"
+		"${as_owner[@]}" git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
+		local new_commit
+		new_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+		info "Code: $prev_commit -> $new_commit"
+
+
+		# 1b. Self-update: hand over to the NEWLY fetched installer so the rest
+		# of the update (composer, extensions, migrations, systemd/HAProxy
+		# rewrites) runs the new release's logic, not this (previous) copy's.
+		# PHLIX_INSTALL_REEXEC=1 stops the child from re-exec'ing again.
+		local new_installer="$INSTALL_PATH/scripts/install.sh"
+		if phlix_update_should_reexec "${PHLIX_INSTALL_REEXEC:-}" "$new_installer"; then
+			log "Re-executing the updated installer ($new_installer)"
+			export PHLIX_INSTALL_REEXEC=1 PHLIX_UPDATE_PREV_COMMIT="$prev_commit"
+			exec bash "$new_installer" "${PHLIX_ORIG_ARGS[@]}"
+		fi
+	fi
 
 	# 2. Refresh PHP deps (composer.lock-driven, no surprise upgrades).
 	log "Updating PHP dependencies"

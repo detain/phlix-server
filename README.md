@@ -810,6 +810,12 @@ still runs as root; this form removes the fetch-time installer swap, not the tru
 > (default `master`). Published tags: the GitHub Releases page, or `git tag -l` in a clone —
 > `v0.x` refs predate the server's tag scheme.
 
+**Self-updating installer.** After fetching and resetting to the new release, `--update`
+re-executes `scripts/install.sh` from the updated checkout with the same flags (guarded by the
+`PHLIX_INSTALL_REEXEC=1` environment sentinel, so it cannot loop), so the Composer, extension,
+migration and service steps always run the *new* release's install logic rather than the
+previous release's. The summary prompt is shown once, before the hand-off.
+
 `--update` discovers the install path from the systemd unit's `WorkingDirectory`, fetches code
 as the install dir owner (so it doesn't trip Git's CVE-2022-24765 dubious-ownership check),
 runs `composer install --no-dev --optimize-autoloader`, clears `templates_c/`, runs

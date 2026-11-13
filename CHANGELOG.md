@@ -151,6 +151,20 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **`install.sh --update` now re-executes itself from the freshly updated
+  release, so an update always runs the NEW release's install logic.** Before,
+  the previous release's installer (the on-disk copy, or a piped one) ran the
+  whole update after fetching new code — composer, Swoole/php-uv, migrations,
+  systemd/HAProxy rewrites — so fixes shipped in the new installer only took
+  effect one update late. After the fetch + reset the installer now `exec`s
+  `$INSTALL_PATH/scripts/install.sh` with the original flags; the
+  `PHLIX_INSTALL_REEXEC=1` sentinel prevents a re-exec loop and suppresses the
+  second confirmation prompt, and the summary still reports the commit the
+  update started from. `--self-test` gained the re-exec decision cases, README
+  "Updating an existing install" documents the hand-off, and the update command
+  surfaced by `GET /api/v1/admin/updates/status` stays the local-checkout form.
+  (SRV-12 / SRV-S9)
+
 - **Browser login/register redirects now carry a machine `code` beside the human message.** The legacy-path 302s (`/login?error=…`, `/login?notice=…`, `/auth/register?error=…`) keep the human text in `error`/`notice` and add `&code=<contracts code>` (e.g. `auth.invalid_credentials`, `auth.password_change_required`, `auth.signups_disabled`) where the JSON twin has one; GitHub/OIDC callback legs keep the machine code itself in `error`. Renderers resolve `code ?? error` with the human text as fallback. [SRV-S12 / SRV-15]
 - **Opening a very large collection no longer risks exhausting the worker's memory.** The collection detail response hydrates at most 10,000 items (in chunks of 500); when a collection holds more, `total` is the true membership count and a new additive `truncated: true` field flags the capped `items` list. Shape is otherwise unchanged. [SRV-S6 / SRV-7]
 - **Rating and like-level 400 responses now carry user-facing copy.** The media user-data controller translates the repository's developer-register validation text at the boundary (`Rating must be an integer between 1 and 10` / `Level must be an integer between -2 and 2`); status codes and contract codes are unchanged. [SRV-S4 / SRV-5]

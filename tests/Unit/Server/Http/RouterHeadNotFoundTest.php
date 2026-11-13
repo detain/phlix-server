@@ -16,15 +16,15 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * ## The measurement this test is built around
  *
  * `notFound()` answers with `Response::json()`, which encodes with
- * `JSON_PRETTY_PRINT` (`Response.php`), so the 404 envelope is **exactly 83 bytes**.
- * Before this step all 83 of them reached the wire on a `HEAD`, under a truthful
- * `Content-Length: 83` — the three `notFound()` call sites returned the response
+ * `JSON_PRETTY_PRINT` (`Response.php`), so the 404 envelope is **exactly 84 bytes**.
+ * Before this step all 84 of them reached the wire on a `HEAD`, under a truthful
+ * `Content-Length: 84` — the three `notFound()` call sites returned the response
  * directly instead of through `markHeadOnly()`, which is the only writer of
  * `Response::$headOnly`.
  *
  * RFC 9110 §9.3.2 forbids that body. A header-only client stops reading at the blank
- * line, so those 83 bytes stay in the socket buffer and the NEXT reply on the
- * keep-alive connection is parsed starting 83 bytes late.
+ * line, so those 84 bytes stay in the socket buffer and the NEXT reply on the
+ * keep-alive connection is parsed starting 84 bytes late.
  *
  * ## Why every assertion is on encoded bytes
  *
@@ -34,11 +34,11 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * code and fail on the fixed code. Only `(string) $response->toWorkermanResponse()`
  * says what a client receives.
  *
- * ## Why the number 83 is load-bearing
+ * ## Why the number 84 is load-bearing
  *
  * "The HEAD reply has no body" is also satisfied by a reply that lost its length, or
  * by a 404 whose envelope silently changed. Each arm therefore pins the SAME
- * `Content-Length: 83` on the `HEAD` and on the `GET`, shows 83 body bytes on the
+ * `Content-Length: 84` on the `HEAD` and on the `GET`, shows 84 body bytes on the
  * GET and 0 on the HEAD, and derives the pre-fix bytes from the framework encoder as
  * a control — so a fix that answered `Content-Length: 0`, or one that emptied the
  * envelope, fails here.
@@ -54,7 +54,7 @@ final class RouterHeadNotFoundTest extends TestCase
         return (string) json_encode(
             [
                 'error' => 'Not Found',
-                'message' => 'The requested resource was not found',
+                'message' => 'The requested resource was not found.',
             ],
             JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
@@ -90,7 +90,7 @@ final class RouterHeadNotFoundTest extends TestCase
     private function assertConformantHeadNotFound(string $wire, string $context): void
     {
         $envelope = self::envelope();
-        self::assertSame(83, strlen($envelope), 'premise: JSON_PRETTY_PRINT makes the 404 envelope 83 bytes');
+        self::assertSame(84, strlen($envelope), 'premise: JSON_PRETTY_PRINT makes the 404 envelope 84 bytes');
 
         self::assertStringStartsWith("HTTP/1.1 404 Not Found\r\n", $wire, $context . ": encoded bytes were:\n" . $wire);
         self::assertSame(
@@ -99,7 +99,7 @@ final class RouterHeadNotFoundTest extends TestCase
             $context . ': a HEAD must carry NO body (RFC 9110 §9.3.2). Encoded bytes were:' . "\n" . $wire,
         );
         self::assertStringNotContainsString(
-            'The requested resource was not found',
+            'The requested resource was not found.',
             $wire,
             $context . ': not one byte of the envelope may reach a header-only client',
         );
@@ -109,9 +109,9 @@ final class RouterHeadNotFoundTest extends TestCase
             $context . ": exactly ONE Content-Length (RFC 9110 §8.6). Encoded bytes were:\n" . $wire,
         );
         self::assertStringContainsString(
-            "Content-Length: 83\r\n",
+            "Content-Length: 84\r\n",
             $wire,
-            $context . ': the HEAD must report the length the equivalent GET would have returned — 83, '
+            $context . ': the HEAD must report the length the equivalent GET would have returned — 84, '
             . "NOT 0. Encoded bytes were:\n" . $wire,
         );
     }
@@ -127,14 +127,14 @@ final class RouterHeadNotFoundTest extends TestCase
         $envelope = self::envelope();
         $preFix = (string) new WorkermanResponse(404, ['Content-Type' => 'application/json'], $envelope);
 
-        self::assertSame(83, strlen($envelope));
+        self::assertSame(84, strlen($envelope));
         self::assertSame(
             $envelope,
             self::bodyBytes($preFix),
-            "premise: unflagged, the 404 ships all 83 body bytes. Encoded bytes were:\n" . $preFix,
+            "premise: unflagged, the 404 ships all 84 body bytes. Encoded bytes were:\n" . $preFix,
         );
-        self::assertStringContainsString("Content-Length: 83\r\n", $preFix, 'premise: under a truthful length');
-        self::assertSame(185, strlen($preFix), 'premise: the whole pre-fix message is 185 bytes');
+        self::assertStringContainsString("Content-Length: 84\r\n", $preFix, 'premise: under a truthful length');
+        self::assertSame(186, strlen($preFix), 'premise: the whole pre-fix message is 186 bytes');
     }
 
     /**
@@ -196,7 +196,7 @@ final class RouterHeadNotFoundTest extends TestCase
 
     /**
      * DISCRIMINATING CONTROL: the fix must key on the METHOD, not on the status. A
-     * `GET` to the same unregistered path still ships all 83 bytes, byte-identical to
+     * `GET` to the same unregistered path still ships all 84 bytes, byte-identical to
      * the framework encoder — so this suite cannot be passed by suppressing every
      * 404 body.
      */
@@ -213,7 +213,7 @@ final class RouterHeadNotFoundTest extends TestCase
             // Deferred #2 (a69560b5): the 404 envelope is a json() reply, so the
             // live wire now carries its Cache-Control: no-store seed. Rotated from
             // the measured red; the byte-identity law (encoder-derived expectation,
-            // never transcription) and the whole-body/83-byte assertions stand —
+            // never transcription) and the whole-body/84-byte assertions stand —
             // the sibling pre-fix controls above intentionally stay seed-less
             // because they encode their own bytes, not the live path.
             (string) new WorkermanResponse(404, [
@@ -223,13 +223,13 @@ final class RouterHeadNotFoundTest extends TestCase
             $wire,
             "a GET 404 must be byte-identical to the framework encoder, body included. Encoded bytes were:\n" . $wire,
         );
-        self::assertSame(self::envelope(), self::bodyBytes($wire), 'a GET 404 still carries all 83 bytes');
-        self::assertStringContainsString("Content-Length: 83\r\n", $wire);
+        self::assertSame(self::envelope(), self::bodyBytes($wire), 'a GET 404 still carries all 84 bytes');
+        self::assertStringContainsString("Content-Length: 84\r\n", $wire);
     }
 
     /**
      * The keep-alive consequence, stated as bytes rather than as prose: two `HEAD`
-     * 404s pipelined on one connection. Before S113 the second reply began 83 bytes
+     * 404s pipelined on one connection. Before S113 the second reply began 84 bytes
      * into the stream from a header-only client's point of view; now the stream is
      * exactly two complete messages and nothing else.
      */
@@ -251,19 +251,19 @@ final class RouterHeadNotFoundTest extends TestCase
         self::assertSame(
             strlen($first),
             strpos($stream, 'HTTP/1.1 404 Not Found', 1),
-            'the second reply must start exactly where the first ended — no 83-byte desync',
+            'the second reply must start exactly where the first ended — no 84-byte desync',
         );
 
         // The pre-fix control: the same two replies WITH their bodies put the second
-        // status line 83 bytes further along than a header-only client expects.
+        // status line 84 bytes further along than a header-only client expects.
         $preFixOne = (string) new WorkermanResponse(404, ['Content-Type' => 'application/json'], self::envelope());
         $preFixStream = $preFixOne . $preFixOne;
         $preFixHeadEnd = strpos($preFixStream, "\r\n\r\n");
         self::assertIsInt($preFixHeadEnd);
         self::assertSame(
-            83,
+            84,
             (int) strpos($preFixStream, 'HTTP/1.1 404 Not Found', 1) - ($preFixHeadEnd + 4),
-            'premise: before the fix, 83 stray bytes sat between the first head and the second reply',
+            'premise: before the fix, 84 stray bytes sat between the first head and the second reply',
         );
     }
 }

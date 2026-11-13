@@ -46,7 +46,7 @@ final class RouterMethodNotAllowedTest extends TestCase
         return (string) json_encode(
             [
                 'error' => 'Method Not Allowed',
-                'message' => 'The requested resource does not support ' . $method . ' (allowed: ' . $allow . ')',
+                'message' => 'The requested resource does not support ' . $method . ' (allowed: ' . $allow . ').',
             ],
             JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
@@ -103,7 +103,7 @@ final class RouterMethodNotAllowedTest extends TestCase
                 );
         self::assertArrayNotHasKey('Allow', $response->headers);
         self::assertSame((string) json_encode(
-            ['error' => 'Not Found', 'message' => 'The requested resource was not found'],
+            ['error' => 'Not Found', 'message' => 'The requested resource was not found.'],
             JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         ), (string) $response->body);
     }

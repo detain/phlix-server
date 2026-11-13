@@ -117,7 +117,7 @@ final class ControllerCopySweepTest extends TestCase
         // prose is a consumer wire contract — the vendored @phlix/ui
         // strict-equality-matches the un-dotted form — so the byte-pin lives
         // in SyncPlayJoinRejectionWireContractTest, not in this punctuation
-        // sweep. The admin rail's dotted 'Invalid password.' arms
+        // sweep. The admin rail's 'Invalid password' arms (an error label: bare)
         // (AdminUserController) have no consumer matcher and stay in the
         // sentence family pinned by AdminUserControllerTest.
         $family = [
@@ -175,8 +175,8 @@ final class ControllerCopySweepTest extends TestCase
         foreach (['Profile created', 'Profile updated'] as $short) {
             self::assertSame(0, substr_count($source, "'" . $short . "'"), $short . ' must join the dominant successfully family (server__copywriter#5).');
         }
-        self::assertStringContainsString("'Profile created successfully'", $source);
-        self::assertStringContainsString("'Profile updated successfully'", $source);
+        self::assertStringContainsString("'Profile created successfully.'", $source);
+        self::assertStringContainsString("'Profile updated successfully.'", $source);
     }
 
     public function test_prose_spells_id_and_characters_in_full(): void
@@ -218,6 +218,53 @@ final class ControllerCopySweepTest extends TestCase
                 'line ' . ($number + 1) . ' of ' . $hits[0] . ' must be docblock prose, not a user-facing arm (SRV-m43 pointer family, server__copywriter#3).'
             );
         }
+    }
+
+    public function test_the_stream_limit_429_prose_has_one_home(): void
+    {
+        self::assertSame(
+            'This member profile is already streaming on the maximum number of devices.',
+            ControllerCopy::STREAM_LIMIT_MESSAGE
+        );
+        self::assertSame(
+            ['src/Server/Http/Controllers/ControllerCopy.php'],
+            self::srcFilesContaining('already streaming on the maximum number of devices'),
+            'SRV-58: the stream-limit 429 prose lives in ControllerCopy only; middleware and fast path reference the constant.'
+        );
+    }
+
+    public function test_single_line_message_prose_in_the_swept_controllers_ends_with_a_period(): void
+    {
+        // SRV-4/6/21-24: a `message` is a sentence and ends with a period; an
+        // `error` label is terse and stays bare (ControllerCopy house voice).
+        // Scope: the controllers the SRV-S5 sweep normalized; single-line
+        // literals only (concatenated tails carry their own period).
+        $swept = [
+            'AdminUserController', 'ProfilesController', 'UserAvatarController', 'AuthProviderController',
+            'PluginAdminController', 'TranscodeController', 'AdminSettingsController', 'BackupController',
+            'AccountLinkController', 'StreamLimitController', 'AirPlayController', 'LibraryController',
+            'AudiobookController', 'WebhookAdminController', 'MediaItemController', 'AccessScheduleController',
+            'AdminRestartController', 'WebAuthnController', 'AdminHubController',
+        ];
+        $offenders = [];
+        foreach (self::inScopeSources() as $label => $source) {
+            if (!in_array(basename($label, '.php'), $swept, true)) {
+                continue;
+            }
+            preg_match_all("/'message' => '((?:[^'\\\\]|\\\\.)*)'(?!\\s*\\.)/", $source, $m);
+            foreach ($m[1] as $value) {
+                if (strpos($value, ' ') !== false && preg_match('/[.!?:]$/', $value) !== 1) {
+                    $offenders[] = $label . ': ' . $value;
+                }
+            }
+            preg_match_all("/'error' => '([^']*\\.)'(?!\\s*\\.)/", $source, $e);
+            foreach ($e[1] as $value) {
+                if (substr_count($value, '. ') === 0) {
+                    $offenders[] = $label . ' (dotted error label): ' . $value;
+                }
+            }
+        }
+        self::assertSame([], $offenders);
     }
 
     /** @return array<string, string> label => source */

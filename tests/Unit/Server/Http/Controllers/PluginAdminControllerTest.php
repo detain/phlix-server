@@ -358,7 +358,7 @@ final class PluginAdminControllerTest extends TestCase
         // SH-003 (M-SERVER-05 idiom): the installer's exception text (which for
         // network/path failures embeds absolute staging paths and upstream
         // URLs) is logged, never echoed. Fixed copy; code + fields unchanged.
-        $this->assertSame('Plugin installation failed.', $body['error']);
+        $this->assertSame('Plugin installation failed', $body['error']);
         $this->assertSame('plugin.install.failed', $body['code']);
         $this->assertCount(2, $body['fields']);
         $this->assertSame('name', $body['fields'][0]['field']);

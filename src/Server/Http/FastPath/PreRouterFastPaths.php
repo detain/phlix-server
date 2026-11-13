@@ -601,7 +601,7 @@ final class PreRouterFastPaths
                     'error' => 'StreamLimitExceeded',
                     'code' => 'stream.limit_exceeded',
                     'denial_type' => 'stream_limit_exceeded',
-                    'message' => 'This member profile is already streaming on the maximum number of devices',
+                    'message' => \Phlix\Server\Http\Controllers\ControllerCopy::STREAM_LIMIT_MESSAGE,
                     'profile_id' => $profileId,
                 ], JSON_THROW_ON_ERROR));
         }

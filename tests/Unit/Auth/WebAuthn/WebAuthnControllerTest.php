@@ -168,7 +168,7 @@ final class WebAuthnControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $data */
         $data = json_decode($response->body, true);
-        $this->assertSame('Credential deleted successfully', $data['message']);
+        $this->assertSame('Credential deleted successfully.', $data['message']);
     }
 
     public function test_delete_credential_not_found(): void

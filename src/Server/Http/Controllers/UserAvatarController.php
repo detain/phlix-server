@@ -104,7 +104,7 @@ class UserAvatarController
             // "temporarily unavailable" lines); the exception itself — message
             // plus throw site — goes to the HTTP channel log, never to the wire.
             LoggerFactory::get(LogChannels::HTTP)->error('avatar storage error', ['exception' => $e]);
-            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later.']);
+            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later']);
         }
 
         $this->userRepository->updateAvatar($userId, $avatarPath);
@@ -144,6 +144,6 @@ class UserAvatarController
         $this->avatarStorage->delete($userId);
         $this->userRepository->clearAvatar($userId);
 
-        return (new Response())->json(['message' => 'Avatar removed']);
+        return (new Response())->json(['message' => 'Avatar removed.']);
     }
 }

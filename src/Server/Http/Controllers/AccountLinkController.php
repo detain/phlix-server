@@ -209,7 +209,7 @@ final class AccountLinkController
         if ($identityId === '') {
             return (new Response())->status(400)->json([
                 'error' => 'missing_identity_id',
-                'message' => 'An identity ID is required',
+                'message' => 'An identity ID is required.',
             ]);
         }
 
@@ -228,7 +228,7 @@ final class AccountLinkController
         if ($target === null) {
             return (new Response())->status(404)->json([
                 'error' => 'identity_not_found',
-                'message' => 'No such linked identity',
+                'message' => 'No such linked identity.',
             ]);
         }
 
@@ -242,7 +242,7 @@ final class AccountLinkController
         if (!$hasPassword && $otherIdentityCount <= 0) {
             return (new Response())->status(409)->json([
                 'error' => 'last_sign_in_method',
-                'message' => 'Cannot remove your only sign-in method',
+                'message' => 'Cannot remove your only sign-in method.',
             ]);
         }
 
@@ -257,7 +257,7 @@ final class AccountLinkController
 
         return (new Response())->status(200)->json([
             'success' => true,
-            'message' => 'Identity unlinked',
+            'message' => 'Identity unlinked.',
         ]);
     }
 
@@ -293,7 +293,7 @@ final class AccountLinkController
         if ($username === '' || $password === '') {
             return (new Response())->status(400)->json([
                 'error' => 'missing_credentials',
-                'message' => 'Username and password are required',
+                'message' => 'Username and password are required.',
             ]);
         }
 
@@ -330,7 +330,7 @@ final class AccountLinkController
             // single generic 401 so we never confirm whether an LDAP user exists.
             return (new Response())->status(401)->json([
                 'error' => 'invalid_credentials',
-                'message' => 'Invalid credentials',
+                'message' => 'Invalid credentials.',
             ]);
         }
 
@@ -572,7 +572,7 @@ final class AccountLinkController
     {
         return (new Response())->status(409)->json([
             'error' => 'identity_already_linked',
-            'message' => 'This external identity is already linked to another account',
+            'message' => 'This external identity is already linked to another account.',
         ]);
     }
 
@@ -589,7 +589,7 @@ final class AccountLinkController
         return (new Response())->status(503)->json([
             'error' => 'provider_unavailable',
             'code' => 'provider_unavailable',
-            'message' => 'LDAP provider is not available',
+            'message' => 'LDAP provider is not available.',
         ]);
     }
 }

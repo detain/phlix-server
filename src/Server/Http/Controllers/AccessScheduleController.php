@@ -175,7 +175,7 @@ final class AccessScheduleController
         return (new Response())->status(201)->json([
             'id' => $scheduleId,
             'schedule_id' => $scheduleId,
-            'message' => 'Schedule created successfully',
+            'message' => 'Schedule created successfully.',
         ]);
     }
 
@@ -295,7 +295,7 @@ final class AccessScheduleController
 
         return (new Response())->json([
             'schedule' => $updated?->toArray() ?? [],
-            'message' => 'Schedule updated successfully',
+            'message' => 'Schedule updated successfully.',
         ]);
     }
 
@@ -334,7 +334,7 @@ final class AccessScheduleController
 
         $this->accessScheduleService->deleteSchedule($scheduleId);
 
-        return (new Response())->json(['message' => 'Schedule deleted successfully']);
+        return (new Response())->json(['message' => 'Schedule deleted successfully.']);
     }
 
     /**

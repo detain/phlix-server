@@ -165,7 +165,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Failed to read PID file',
-                    'message' => 'The server may not be running, or the PID file is unreadable',
+                    'message' => 'The server may not be running, or the PID file is unreadable.',
                 ]);
             }
 
@@ -174,7 +174,7 @@ class AdminRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'Invalid PID in file',
-                    'message' => 'The PID file contains an invalid value',
+                    'message' => 'The PID file contains an invalid value.',
                 ]);
             }
 
@@ -202,7 +202,7 @@ class AdminRestartController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Restart signal sent',
+                'message' => 'Restart signal sent.',
             ]);
         } catch (Throwable $e) {
             self::logFailure('Restart failed', $e);

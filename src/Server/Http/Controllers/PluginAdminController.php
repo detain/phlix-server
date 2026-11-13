@@ -341,7 +341,7 @@ final class PluginAdminController
                 'line' => $e->getLine(),
             ]);
             $body = [
-                'error' => 'Plugin installation failed.',
+                'error' => 'Plugin installation failed',
                 'code'  => 'plugin.install.failed',
             ];
             $validation = $e->validationErrors();

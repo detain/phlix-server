@@ -298,7 +298,7 @@ class MediaItemController
 
         $this->itemRepository->delete($params['id']);
 
-        return (new Response())->json(['message' => 'Item deleted successfully']);
+        return (new Response())->json(['message' => 'Item deleted successfully.']);
     }
 
     /**
@@ -672,7 +672,7 @@ class MediaItemController
         if (!isset($chapters[$index])) {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'That chapter does not exist',
+                'message' => 'That chapter does not exist.',
             ]);
         }
 
@@ -686,7 +686,7 @@ class MediaItemController
         if ($startSeconds === null) {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'Chapter start time is invalid',
+                'message' => 'Chapter start time is invalid.',
             ]);
         }
         $startMs = $startSeconds * 1000;
@@ -704,7 +704,7 @@ class MediaItemController
         if ($chapterMarker === null || $chapterMarker->thumbnailPath === null || $chapterMarker->thumbnailPath === '') {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'Chapter thumbnail not found',
+                'message' => 'Chapter thumbnail not found.',
             ]);
         }
 
@@ -714,7 +714,7 @@ class MediaItemController
         if (!file_exists($thumbnailPath)) {
             return (new Response())->status(404)->json([
                 'error' => 'Chapter not found',
-                'message' => 'Chapter thumbnail not found',
+                'message' => 'Chapter thumbnail not found.',
             ]);
         }
 

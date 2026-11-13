@@ -157,7 +157,7 @@ final class UserAvatarControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
         // R20-05: exception messages are server-log material, not wire content.
-        $this->assertSame('Storage error, please try again later.', $body['error']);
+        $this->assertSame('Storage error, please try again later', $body['error']);
         $this->assertStringNotContainsString('Disk full', $body['error']);
     }
 
@@ -185,7 +185,7 @@ final class UserAvatarControllerTest extends TestCase
             $this->assertSame(500, $response->statusCode);
             /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
-            $this->assertSame('Storage error, please try again later.', $body['error']);
+            $this->assertSame('Storage error, please try again later', $body['error']);
             $this->assertStringNotContainsString('avatars', $body['error'], 'no storage-dir name on the wire');
             $this->assertStringNotContainsString('.locked', $body['error'], 'no filesystem layout on the wire');
             $this->assertStringNotContainsString(sys_get_temp_dir(), $body['error'], 'no absolute path on the wire');
@@ -243,7 +243,7 @@ final class UserAvatarControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Avatar removed', $body['message']);
+        $this->assertSame('Avatar removed.', $body['message']);
     }
 
     private function createTempAvatarFile(): string

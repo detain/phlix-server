@@ -147,7 +147,7 @@ final class ProfilesController
 
         return (new Response())->status(201)->json([
             'profile_id' => $profileId,
-            'message' => 'Profile created successfully',
+            'message' => 'Profile created successfully.',
         ]);
     }
 
@@ -238,7 +238,7 @@ final class ProfilesController
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
 
-        return (new Response())->json(['message' => 'Profile updated successfully']);
+        return (new Response())->json(['message' => 'Profile updated successfully.']);
     }
 
     /**
@@ -280,7 +280,7 @@ final class ProfilesController
 
         $this->profiles->delete($profileId);
 
-        return (new Response())->json(['message' => 'Profile deleted successfully']);
+        return (new Response())->json(['message' => 'Profile deleted successfully.']);
     }
 
     /**
@@ -314,7 +314,7 @@ final class ProfilesController
 
         if ($pin === null || $pin === '') {
             $this->profiles->removePin($profileId);
-            return (new Response())->json(['message' => 'PIN cleared successfully']);
+            return (new Response())->json(['message' => 'PIN cleared successfully.']);
         }
 
         if (!is_string($pin)) {
@@ -333,7 +333,7 @@ final class ProfilesController
         }
 
         $this->profiles->setPin($profileId, $pin);
-        return (new Response())->json(['message' => 'PIN set successfully']);
+        return (new Response())->json(['message' => 'PIN set successfully.']);
     }
 
     /**
@@ -359,7 +359,7 @@ final class ProfilesController
         }
 
         $this->profiles->removePin($profileId);
-        return (new Response())->json(['message' => 'PIN cleared successfully']);
+        return (new Response())->json(['message' => 'PIN cleared successfully.']);
     }
 
     /**
@@ -524,7 +524,7 @@ final class ProfilesController
             // R20-05: generic client copy; exception detail goes to the HTTP
             // channel log only (mirror of UserAvatarController's upload arm).
             LoggerFactory::get(LogChannels::HTTP)->error('profile avatar storage error', ['exception' => $e]);
-            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later.']);
+            return (new Response())->status(500)->json(['error' => 'Storage error, please try again later']);
         }
 
         $this->profiles->update($profileId, ['avatar_url' => $avatarPath]);

@@ -523,7 +523,7 @@ class RouterTest extends TestCase
     public function testTheGetToHeadFallbackFlagsAParametricMiddlewareShortCircuitOnTheWire(): void
     {
         $payload = [
-            'error' => 'DLNA access is not permitted from this network address.',
+            'error' => 'DLNA access is not permitted from this network address',
             'code'  => 'dlna.forbidden',
         ];
         $gate = fn($req) => (new Response())->status(403)->json($payload);
@@ -582,7 +582,7 @@ class RouterTest extends TestCase
      */
     public function testAStaticHeadRegisteredRouteBehindAGateIsFlaggedOnTheWire(): void
     {
-        $payload = ['error' => 'DLNA access is not permitted from this network address.'];
+        $payload = ['error' => 'DLNA access is not permitted from this network address'];
         $gate = fn($req) => (new Response())->status(403)->json($payload);
 
         // Registered for HEAD IN ITS OWN RIGHT and static, so $staticRoutes['HEAD']

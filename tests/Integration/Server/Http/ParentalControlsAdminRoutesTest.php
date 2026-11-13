@@ -134,7 +134,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
                 'DELETE',
                 "/api/v1/admin/profiles/{$profile}/schedules/" . self::SCHEDULE_ID,
                 [],
-                'Schedule deleted successfully',
+                'Schedule deleted successfully.',
             ],
             'GET tags' => [
                 'GET',
@@ -171,7 +171,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
                 'PUT',
                 "/api/v1/admin/profiles/{$profile}/stream-limits",
                 ['max_concurrent_streams' => 3],
-                'Stream limits updated',
+                'Stream limits updated.',
             ],
         ];
     }
@@ -194,7 +194,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
             $response->statusCode,
             "{$method} {$path} must resolve to a handler — it 404'd, which is the S208 defect",
         );
-        $this->assertStringNotContainsString('The requested resource was not found', (string) $response->body);
+        $this->assertStringNotContainsString('The requested resource was not found.', (string) $response->body);
         $this->assertStringContainsString(
             $handlerMarker,
             (string) $response->body,
@@ -216,7 +216,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
         ));
 
         $this->assertNotSame(404, $response->statusCode);
-        $this->assertStringContainsString('Schedule updated successfully', (string) $response->body);
+        $this->assertStringContainsString('Schedule updated successfully.', (string) $response->body);
     }
 
     public function testTheAdminByIdScheduleGetExists(): void
@@ -257,7 +257,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
         ));
 
         $this->assertSame(403, $response->statusCode);
-        $this->assertStringNotContainsString('Schedule deleted successfully', (string) $response->body);
+        $this->assertStringNotContainsString('Schedule deleted successfully.', (string) $response->body);
     }
 
     public function testAnAnonymousCallerIsRefusedByTheAdminGroupGate(): void
@@ -288,7 +288,7 @@ final class ParentalControlsAdminRoutesTest extends TestCase
         ) {
             $response = $this->router->dispatch($this->request($method, $path, self::ADMIN_ID, ['pin' => '1234']));
             $this->assertStringNotContainsString(
-                'The requested resource was not found',
+                'The requested resource was not found.',
                 (string) $response->body,
                 "{$method} {$path} must still resolve",
             );

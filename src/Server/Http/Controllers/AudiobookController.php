@@ -308,7 +308,7 @@ class AudiobookController
         $this->libraryManager->saveProgress($userId, $audiobookId, $progress);
 
         return (new Response())->json([
-            'message' => 'Progress saved',
+            'message' => 'Progress saved.',
             'progress' => $progress->toArray(),
         ]);
     }

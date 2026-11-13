@@ -271,7 +271,7 @@ final class ExceptionMessageContainmentTest extends TestCase
         $pluginSource = (string) file_get_contents(
             dirname(__DIR__, 6) . '/src/Server/Http/Controllers/PluginAdminController.php',
         );
-        $this->assertStringContainsString("'error' => 'Plugin installation failed.'", $pluginSource);
+        $this->assertStringContainsString("'error' => 'Plugin installation failed'", $pluginSource);
     }
 
     /**

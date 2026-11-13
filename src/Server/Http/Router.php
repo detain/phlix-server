@@ -1022,7 +1022,7 @@ class Router
             ->status(404)
             ->json([
                 'error' => 'Not Found',
-                'message' => 'The requested resource was not found',
+                'message' => 'The requested resource was not found.',
             ]));
     }
 
@@ -1096,7 +1096,7 @@ class Router
             ->json([
                 'error' => 'Method Not Allowed',
                 'message' => 'The requested resource does not support ' . $request->method
-                    . ' (allowed: ' . $allow . ')',
+                    . ' (allowed: ' . $allow . ').',
             ]));
     }
 

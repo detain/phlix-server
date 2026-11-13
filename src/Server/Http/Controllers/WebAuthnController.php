@@ -291,7 +291,7 @@ final class WebAuthnController
 
             return (new Response())->json([
                 'credential_id' => $credentialId,
-                'message' => 'Passkey registered successfully'
+                'message' => 'Passkey registered successfully.'
             ]);
         } catch (\InvalidArgumentException $e) {
             return self::ceremonyFailure(400, 'registration_finish', $e);
@@ -439,7 +439,7 @@ final class WebAuthnController
 
             if ($deleted) {
                 return (new Response())->json([
-                    'message' => 'Credential deleted successfully'
+                    'message' => 'Credential deleted successfully.'
                 ]);
             }
 

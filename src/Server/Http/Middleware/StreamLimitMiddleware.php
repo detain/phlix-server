@@ -138,7 +138,7 @@ final class StreamLimitMiddleware
         if (!$registered) {
             return (new Response())->error(429, 'stream.limit_exceeded', 'StreamLimitExceeded', [
                 'denial_type' => 'stream_limit_exceeded',
-                'message' => 'This member profile is already streaming on the maximum number of devices',
+                'message' => \Phlix\Server\Http\Controllers\ControllerCopy::STREAM_LIMIT_MESSAGE,
                 'profile_id' => $profileId,
             ]);
         }

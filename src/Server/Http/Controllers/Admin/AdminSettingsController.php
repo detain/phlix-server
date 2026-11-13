@@ -655,7 +655,7 @@ final class AdminSettingsController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error'   => 'Invalid payload',
-                    'message' => 'Body must contain a non-empty "settings" object',
+                    'message' => 'Body must contain a non-empty "settings" object.',
                 ]);
             }
 
@@ -702,7 +702,7 @@ final class AdminSettingsController
 
                 return (new Response())->json([
                     'success' => true,
-                    'message' => 'Settings updated',
+                    'message' => 'Settings updated.',
                     'data'    => [
                         'settings'   => self::maskSecrets($merged['values']),
                         'overridden' => $merged['overridden'],
@@ -743,7 +743,7 @@ final class AdminSettingsController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Settings updated',
+                'message' => 'Settings updated.',
                 'data'    => [
                     'settings'   => self::maskSecrets($merged['values']),
                     'overridden' => $merged['overridden'],
@@ -862,7 +862,7 @@ final class AdminSettingsController
 
         return (new Response())->json([
             'success' => true,
-            'message' => 'Settings updated',
+            'message' => 'Settings updated.',
             'data'    => [
                 'settings'   => self::maskSecrets($merged['values']),
                 'overridden' => $merged['overridden'],

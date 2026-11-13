@@ -195,7 +195,7 @@ final class AdminUserControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('user_id', $body);
         $this->assertSame('new-user-id', $body['user_id']);
-        $this->assertSame('User created successfully', $body['message']);
+        $this->assertSame('User created successfully.', $body['message']);
     }
 
     public function testCreateValidationUsernameTooShort(): void
@@ -258,7 +258,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Invalid password.', $body['error']);
+        $this->assertSame('Invalid password', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
         $this->assertArrayHasKey('password', $body['field_errors']);
     }
@@ -290,7 +290,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('User updated successfully', $body['message']);
+        $this->assertSame('User updated successfully.', $body['message']);
     }
 
     public function testUpdateNotFound(): void
@@ -386,7 +386,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('User deleted successfully', $body['message']);
+        $this->assertSame('User deleted successfully.', $body['message']);
 
         $this->clearCurrentUser();
     }
@@ -482,7 +482,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('User admin status updated successfully', $body['message']);
+        $this->assertSame('User admin status updated successfully.', $body['message']);
     }
 
     public function testSetAdminDemoteHappyPath(): void
@@ -755,7 +755,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('User disabled successfully', $body['message']);
+        $this->assertSame('User disabled successfully.', $body['message']);
 
         $this->clearCurrentUser();
     }
@@ -831,7 +831,7 @@ final class AdminUserControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
-        $this->assertSame('Request declined', $body['message']);
+        $this->assertSame('Request declined.', $body['message']);
     }
 
     public function testRejectNotFound(): void

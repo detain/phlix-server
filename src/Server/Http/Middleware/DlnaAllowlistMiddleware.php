@@ -134,7 +134,7 @@ final class DlnaAllowlistMiddleware
         }
 
         return (new Response())->status(403)->json([
-            'error' => 'DLNA access is not permitted from this network address.',
+            'error' => 'DLNA access is not permitted from this network address',
             'code'  => 'dlna.forbidden',
         ]);
     }

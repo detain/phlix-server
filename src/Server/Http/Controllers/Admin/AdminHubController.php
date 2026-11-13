@@ -791,7 +791,7 @@ final class AdminHubController
             if (!$result['success']) {
                 return (new Response())->status(500)->json([
                     'success' => false,
-                    'message' => 'Failed to enable port forwarding: ' . ($result['method'] ?? 'unknown error'),
+                    'message' => 'Failed to enable port forwarding: ' . ($result['method'] ?? 'unknown error') . '.',
                 ]);
             }
 

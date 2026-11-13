@@ -397,7 +397,7 @@ final class AccountLinkControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Invalid credentials', $body['message']);
+        $this->assertSame('Invalid credentials.', $body['message']);
     }
 
     public function test_link_ldap_conflict_when_identity_owned_by_another_user(): void

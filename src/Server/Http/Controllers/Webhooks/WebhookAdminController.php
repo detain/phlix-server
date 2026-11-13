@@ -336,7 +336,7 @@ class WebhookAdminController
         $testEvent = new WebhookEvent(
             'webhook.test',
             [
-                'message' => 'This is a test webhook event',
+                'message' => 'This is a test webhook event.',
                 'webhook_id' => $id,
             ],
             new DateTimeImmutable()

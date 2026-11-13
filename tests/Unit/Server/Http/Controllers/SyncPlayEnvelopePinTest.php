@@ -592,7 +592,7 @@ final class SyncPlayEnvelopePinTest extends TestCase
             . '({error} alone / {success, ...}); if it collapses, the success pins above stop proving dispatch'
         );
         $this->assertSame('Not Found', $missBody['error']);
-        $this->assertSame('The requested resource was not found', $missBody['message']);
+        $this->assertSame('The requested resource was not found.', $missBody['message']);
     }
 
     // -----------------------------------------------------------------

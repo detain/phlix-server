@@ -171,7 +171,7 @@ final class AdminUserController
         // this worker, ≤5s cross-worker (documented AuthManager ceiling).
         $this->authManager?->revokeUserTokens($id, 'admin_disable');
         $this->authManager?->invalidateUserStatusCache($id);
-        return (new Response())->json(['message' => 'User disabled successfully']);
+        return (new Response())->json(['message' => 'User disabled successfully.']);
     }
 
     /**
@@ -207,7 +207,7 @@ final class AdminUserController
         $this->authManager?->revokeUserTokens($id, 'user_rejected');
         $this->userRepository->delete($id);
         $this->authManager?->invalidateUserStatusCache($id);
-        return (new Response())->json(['message' => 'Request declined']);
+        return (new Response())->json(['message' => 'Request declined.']);
     }
 
     /**
@@ -307,7 +307,7 @@ final class AdminUserController
         $passwordError = $this->passwordPolicy()->validate($password);
         if ($passwordError !== null) {
             return (new Response())->status(400)->json([
-                'error' => 'Invalid password.',
+                'error' => 'Invalid password',
                 'field_errors' => ['password' => $passwordError],
             ]);
         }
@@ -333,7 +333,7 @@ final class AdminUserController
 
         return (new Response())->status(201)->json([
             'user_id' => $userId,
-            'message' => 'User created successfully',
+            'message' => 'User created successfully.',
         ]);
     }
 
@@ -398,7 +398,7 @@ final class AdminUserController
             $passwordError = $this->passwordPolicy()->validate($password);
             if ($passwordError !== null) {
                 return (new Response())->status(400)->json([
-                    'error' => 'Invalid password.',
+                    'error' => 'Invalid password',
                     'field_errors' => ['password' => $passwordError],
                 ]);
             }
@@ -422,7 +422,7 @@ final class AdminUserController
             $this->userRepository->update($id, $data);
         }
 
-        return (new Response())->json(['message' => 'User updated successfully']);
+        return (new Response())->json(['message' => 'User updated successfully.']);
     }
 
     /**
@@ -459,7 +459,7 @@ final class AdminUserController
         $this->authManager?->revokeUserTokens($id, 'admin_delete');
         $this->userRepository->delete($id);
         $this->authManager?->invalidateUserStatusCache($id);
-        return (new Response())->json(['message' => 'User deleted successfully']);
+        return (new Response())->json(['message' => 'User deleted successfully.']);
     }
 
     /**
@@ -495,7 +495,7 @@ final class AdminUserController
         }
 
         $this->userRepository->setAdmin($id, $isAdmin);
-        return (new Response())->json(['message' => 'User admin status updated successfully']);
+        return (new Response())->json(['message' => 'User admin status updated successfully.']);
     }
 
     /**

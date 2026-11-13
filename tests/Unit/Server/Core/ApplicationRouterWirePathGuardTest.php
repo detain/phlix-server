@@ -1338,7 +1338,7 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         $control = $application->dispatch($this->request('/trickplay/no-such-job/thumbs.bif-MUTATED'));
         $this->assertSame(404, $control->statusCode);
         $this->assertSame(
-            'The requested resource was not found',
+            'The requested resource was not found.',
             $this->body($control)['message'] ?? null,
             "the ROUTER's miss must be distinguishable from the handler's miss, otherwise the "
             . 'assertion above cannot tell a served route from a deleted one'

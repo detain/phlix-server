@@ -62,6 +62,14 @@ final class ControllerCopy
      */
     public const HUB_NOT_ENROLLED = "This server isn't enrolled with a Phlix Hub yet. Go to Admin > Hub to enroll it.";
 
+    /**
+     * Stream-limit 429 body prose, shared by StreamLimitMiddleware and the
+     * pre-router fast path (SRV-58: two byte-identical literals, one home).
+     * The `error` label `StreamLimitExceeded` is deliberately NOT lowercased:
+     * it is a legacy consumer-pinned token (phlix-ui playerErrors, mobile).
+     */
+    public const STREAM_LIMIT_MESSAGE = 'This member profile is already streaming on the maximum number of devices.';
+
     /** Single home; every constant above is referenced, never instantiated. */
     private function __construct()
     {

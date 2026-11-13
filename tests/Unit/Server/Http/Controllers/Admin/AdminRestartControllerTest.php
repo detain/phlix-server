@@ -307,7 +307,7 @@ final class AdminRestartControllerTest extends TestCase
 
         $body = $this->decode($response->body);
         self::assertTrue($body['success']);
-        self::assertSame('Restart signal sent', $body['message']);
+        self::assertSame('Restart signal sent.', $body['message']);
 
         // The ONLY signal actually delivered inline is the no-op probe (0).
         // Anything else here would mean the master was signalled mid-request,

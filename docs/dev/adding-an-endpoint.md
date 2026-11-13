@@ -20,8 +20,8 @@ union of both routers; `Application` wins on overlap (`HttpHandler` tries it fir
 
 ## 3. Middleware
 
-Pass the route-level middleware as the last argument (or the `group()` `$middleware`
-array), e.g. `[new \Phlix\Server\Http\Middleware\AuthMiddleware()]`. A route with no
+Pass middleware as the `$middleware` array of `group()` (`Router::get/post/put/delete`
+accept only `($path, $handler)`), e.g. `[new \Phlix\Server\Http\Middleware\AuthMiddleware()]`. A route with no
 middleware is anonymous: if a handler must be gated, gate it explicitly. Chain order matters
 and is checked.
 

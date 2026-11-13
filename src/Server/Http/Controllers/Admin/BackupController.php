@@ -76,7 +76,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid label',
-                    'message' => 'Backup label must be text',
+                    'message' => 'Backup label must be text.',
                 ]);
             }
 
@@ -84,7 +84,7 @@ class BackupController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Backup created successfully',
+                'message' => 'Backup created successfully.',
                 'data' => $result,
             ]);
         } catch (Throwable $e) {
@@ -158,7 +158,7 @@ class BackupController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Backup deleted successfully',
+                'message' => 'Backup deleted successfully.',
             ]);
         } catch (Throwable $e) {
             self::logFailure('Failed to delete backup', $e);
@@ -242,13 +242,13 @@ class BackupController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error' => 'S3 upload failed',
-                    'message' => 'Failed to upload backup to S3',
+                    'message' => 'Failed to upload backup to S3.',
                 ]);
             }
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Backup uploaded to S3 successfully',
+                'message' => 'Backup uploaded to S3 successfully.',
             ]);
         } catch (Throwable $e) {
             self::logFailure('S3 upload failed', $e);
@@ -326,7 +326,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid interval',
-                    'message' => 'Auto backup interval must be a number of days',
+                    'message' => 'Auto backup interval must be a number of days.',
                 ]);
             }
 
@@ -334,7 +334,7 @@ class BackupController
                 return (new Response())->status(400)->json([
                     'success' => false,
                     'error' => 'Invalid retention count',
-                    'message' => 'Backup retention count must be a number',
+                    'message' => 'Backup retention count must be a number.',
                 ]);
             }
 
@@ -381,7 +381,7 @@ class BackupController
 
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Schedule updated successfully',
+                'message' => 'Schedule updated successfully.',
                 'data' => [
                     'auto_backup_interval_days' => $config['auto_backup_interval_days'],
                     'retention_count' => $config['retention_count'],

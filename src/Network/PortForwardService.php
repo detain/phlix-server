@@ -742,7 +742,9 @@ TEXT;
     {
         $configFile = $this->getConfigFilePath();
         $dir = dirname($configFile);
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+        // A non-directory squatting on the path can never become one; bail before
+        // mkdir() raises a (suppressed-but-still-recorded) warning for it.
+        if (!is_dir($dir) && (file_exists($dir) || (!@mkdir($dir, 0755, true) && !is_dir($dir)))) {
             $this->logger->warning('Port-forward config directory could not be created', ['dir' => $dir]);
             return false;
         }

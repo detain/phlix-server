@@ -389,7 +389,7 @@ class ContentDirectoryTest extends TestCase
                 static fn (array $ctx): bool => $ctx['rows_scanned'] === $max * 50 && $ctx['container_total'] === $total
             ));
 
-        $cd = new ContentDirectory($this->itemRepositoryMock, $logger);
+        $cd = new ContentDirectory($this->createMock(ItemRepository::class), $logger);
         $cd->setLibraryBridge($bridge);
         $cd->search('library-video', 'dc:title contains "Hay 1"', '*', 0, 0);
 

@@ -33,6 +33,9 @@ use Phlix\Media\Library\ItemRepository;
  */
 class ContentDirectory
 {
+    /** Upper bound on pages (of LibraryBridge::MAX_PAGE_ROWS) a Search will scan. */
+    private const SEARCH_MAX_PAGES = 50;
+
     /** Root object ID for the content directory hierarchy */
     public const OBJECT_ID_ROOT = '0';
 
@@ -240,6 +243,12 @@ class ContentDirectory
 
         // Perform search based on parsed criteria
         $items = $this->performSearch($containerId, $parsedSearch);
+
+        // Same window rules as browse: the matched set is fully in memory, so
+        // the sort is global and applied BEFORE the window is taken.
+        if ($sortCriteria !== '') {
+            $items = $this->sortItems($items, $sortCriteria);
+        }
 
         $this->totalMatches = count($items);
 
@@ -690,12 +699,26 @@ class ContentDirectory
      */
     private function performSearch(string $containerId, array $criteria): array
     {
-        $items = $this->getChildren($containerId);
+        // Bounded page-loop: walk the container one MAX_PAGE_ROWS page at a
+        // time so rows beyond the first page are searched (a single
+        // getChildren() call silently capped the haystack), stopping at the
+        // container's reported total or SEARCH_MAX_PAGES, whichever is first.
+        // TotalMatches is then the count of matches actually found.
         $filtered = [];
+        $offset = 0;
 
-        foreach ($items as $item) {
-            if ($this->itemMatchesCriteria($item, $criteria)) {
-                $filtered[] = $item;
+        for ($page = 0; $page < self::SEARCH_MAX_PAGES; $page++) {
+            $chunk = $this->childPage($containerId, $offset, LibraryBridge::MAX_PAGE_ROWS);
+
+            foreach ($chunk['items'] as $item) {
+                if ($this->itemMatchesCriteria($item, $criteria)) {
+                    $filtered[] = $item;
+                }
+            }
+
+            $offset += LibraryBridge::MAX_PAGE_ROWS;
+            if ($chunk['items'] === [] || $offset >= $chunk['total']) {
+                break;
             }
         }
 
@@ -821,7 +844,7 @@ class ContentDirectory
         );
 
         $didl .= sprintf('<dc:title>%s</dc:title>', $name);
-        $didl .= sprintf('<upnp:class>%s</upnp:class>', $upnpClass);
+        $didl .= sprintf('<upnp:class>%s</upnp:class>', htmlspecialchars($upnpClass));
 
         if ($isContainer) {
             $childCountRaw = $item['child_count'] ?? 0;

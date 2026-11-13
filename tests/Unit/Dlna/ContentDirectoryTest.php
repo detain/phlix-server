@@ -310,4 +310,54 @@ class ContentDirectoryTest extends TestCase
             'TotalMatches must come from countByParent(), not from re-listing the container'
         );
     }
+
+    public function testUpnpClassIsXmlEscapedInDidl(): void
+    {
+        $didl = $this->contentDirectory->generateDidl([
+            ['id' => 'i-1', 'parent_id' => 'p', 'name' => 'x', 'type' => 'movie', 'class' => 'object.item.<b>&"x'],
+        ]);
+
+        $this->assertStringContainsString('<upnp:class>object.item.&lt;b&gt;&amp;&quot;x</upnp:class>', $didl);
+        $this->assertStringNotContainsString('<b>', $didl);
+    }
+
+    /**
+     * Search pages through the container: a match sitting beyond row
+     * MAX_PAGE_ROWS is found and TotalMatches / StartingIndex stay honest.
+     */
+    public function testSearchScansPastFirstPageWithHonestTotals(): void
+    {
+        $max = \Phlix\Dlna\LibraryBridge::MAX_PAGE_ROWS;
+        $total = $max + 5;
+        $bridge = $this->createMock(\Phlix\Dlna\LibraryBridge::class);
+        $bridge->method('browsePage')->willReturnCallback(
+            static function (string $id, ?string $type, int $offset, int $limit) use ($total): array {
+                $items = [];
+                for ($i = $offset; $i < min($total, $offset + $limit); $i++) {
+                    $items[] = [
+                        'id' => "i-$i",
+                        'parent_id' => 'library-video',
+                        'name' => $i >= 2000 ? sprintf('Needle %04d', $i) : "Hay $i",
+                        'type' => 'movie',
+                    ];
+                }
+
+                return ['items' => $items, 'total' => $total];
+            }
+        );
+        $this->contentDirectory->setLibraryBridge($bridge);
+
+        $r = $this->contentDirectory->search('library-video', 'dc:title contains "Needle"', '*', 0, 0);
+        $this->assertSame(5, $r['TotalMatches']);
+        $this->assertSame(5, $r['NumberReturned']);
+
+        $r = $this->contentDirectory->search('library-video', 'dc:title contains "Needle"', '*', 3, 10);
+        $this->assertSame(5, $r['TotalMatches']);
+        $this->assertSame(2, $r['NumberReturned']);
+
+        $r = $this->contentDirectory->search('library-video', 'dc:title contains "Needle"', '*', 0, 2, '-dc:title');
+        $this->assertSame(2, $r['NumberReturned']);
+        $this->assertStringContainsString('Needle ' . ($total - 1), (string) $r['Result']);
+        $this->assertStringNotContainsString('Needle ' . $max, (string) $r['Result']);
+    }
 }

@@ -39,6 +39,15 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Added
 
+- **Season/episode list rows now carry per-user watched and progress state.**
+  `GET /api/v1/media?parentId=<id>` rows gain an add-only `user_data` block
+  `{watched, position_ticks, duration_ticks, progress_percent}` (watched = manual
+  flag OR completed history), resolved with two batch queries per page
+  (`UserItemDataRepository::getWatchedMap`, `WatchHistory::getProgressMap`) so
+  clients need no per-row detail fetch. Top-level browse and unauthenticated
+  responses are unchanged. Unblocks the Roku watched/progress indicator
+  (ROK-S23 / ROK-24).
+
 - **The WS query-carrier gate gained its stored-home admin control:
   `auth.ws_query_token` is now a live lever, not a promise.** For an admin
   to retire (or temporarily restore) the legacy `?token=` handshake carrier

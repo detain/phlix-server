@@ -804,6 +804,66 @@ class WebPortalRouter
     }
 
     /**
+     * Attach the add-only per-row `user_data` block to drill-down list rows.
+     *
+     * Shape: `{watched: bool, position_ticks: int, duration_ticks: int,
+     * progress_percent: float}`. `watched` is true when the profile manually
+     * marked the item watched OR its playback history is completed. The three
+     * progress keys are 0 when the profile has never played the row. Two batch
+     * queries cover the whole page. Rows are returned unchanged (no `user_data`
+     * key) when the request is unauthenticated or the per-user stores are not
+     * wired, so older/unauthenticated callers see the pre-existing shape.
+     *
+     * @param Request                         $request The HTTP request (carries userId/profileId).
+     * @param list<array<string, mixed>>      $items   Shaped media rows.
+     *
+     * @return list<array<string, mixed>> The same rows, each with `user_data` when resolvable.
+     */
+    private function attachChildUserData(Request $request, array $items): array
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '' || $items === [] || ($this->userItemData === null && $this->watchHistory === null)) {
+            return $items;
+        }
+
+        $ids = [];
+        foreach ($items as $item) {
+            $id = $item['id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                $ids[] = $id;
+            }
+        }
+
+        $profileId = $this->resolveProfileId($request, $userId);
+
+        $watchedMap = [];
+        $progressMap = [];
+        try {
+            if ($this->userItemData !== null) {
+                $watchedMap = $this->userItemData->getWatchedMap($userId, $ids, $profileId);
+            }
+        } catch (\Phlix\Auth\ProfileNotOwnedException) {
+            $watchedMap = [];
+        }
+        if ($this->watchHistory !== null && $profileId !== null) {
+            $progressMap = $this->watchHistory->getProgressMap($profileId, $ids);
+        }
+
+        foreach ($items as $i => $item) {
+            $id = is_string($item['id'] ?? null) ? $item['id'] : '';
+            $progress = $progressMap[$id] ?? null;
+            $items[$i]['user_data'] = [
+                'watched' => ($watchedMap[$id] ?? false) || ($progress['completed'] ?? false),
+                'position_ticks' => $progress['position_ticks'] ?? 0,
+                'duration_ticks' => $progress['duration_ticks'] ?? 0,
+                'progress_percent' => $progress['progress_percent'] ?? 0.0,
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
      * Determines whether the given user ID belongs to an ACTIVE admin user.
      *
      * Delegates to {@see \Phlix\Auth\UserRepository::findAdminById()} — the same
@@ -1170,6 +1230,13 @@ class WebPortalRouter
         $items = array_map(function (array $item): array {
             return $this->shapeMediaItem($item);
         }, $rows);
+
+        // Drill-down rows (season/episode lists) carry a per-row, ADD-ONLY
+        // `user_data` block so a client can paint watched/progress marks without
+        // an N+1 detail fetch per row. Only attached for `?parentId=` queries.
+        if (isset($queryParams['parentId'])) {
+            $items = $this->attachChildUserData($request, $items);
+        }
 
         return (new Response())->json([
             'items' => $items,

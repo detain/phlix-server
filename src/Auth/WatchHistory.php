@@ -962,6 +962,51 @@ class WatchHistory
     }
 
     /**
+     * Batch progress lookup for many items at once (one query).
+     *
+     * Feeds the add-only per-row `user_data` block on child-list rows
+     * (`GET /api/v1/media?parentId=`). Items the profile has never played are
+     * absent from the result.
+     *
+     * @param string       $profileId    Profile UUID.
+     * @param list<string> $mediaItemIds Media item UUIDs.
+     *
+     * @return array<string, array{position_ticks: int, duration_ticks: int, progress_percent: float, completed: bool}>
+     *         Map of media item id => progress summary.
+     */
+    public function getProgressMap(string $profileId, array $mediaItemIds): array
+    {
+        if ($mediaItemIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($mediaItemIds), '?'));
+        $result = $this->db->query(
+            "SELECT media_item_id, position_ticks, duration_ticks, progress_percent, playback_status
+             FROM watch_history
+             WHERE profile_id = ? AND media_item_id IN ({$placeholders})",
+            array_merge([$profileId], array_values($mediaItemIds))
+        );
+
+        $map = [];
+        foreach (RowMap::listFromMixed($result) as $row) {
+            $id = $row['media_item_id'] ?? null;
+            if (!is_string($id) || $id === '') {
+                continue;
+            }
+            $percent = is_numeric($row['progress_percent'] ?? null) ? (float) $row['progress_percent'] : 0.0;
+            $map[$id] = [
+                'position_ticks' => UserRow::int($row, 'position_ticks', 0),
+                'duration_ticks' => UserRow::int($row, 'duration_ticks', 0),
+                'progress_percent' => $percent,
+                'completed' => ($row['playback_status'] ?? null) === self::STATUS_COMPLETED
+                    || $percent >= self::COMPLETED_THRESHOLD,
+            ];
+        }
+        return $map;
+    }
+
+    /**
      * Get resume position for a media item.
      *
      * Returns the saved playback position where the user left off,

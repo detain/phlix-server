@@ -339,6 +339,46 @@ class UserItemDataRepository
     }
 
     /**
+     * Batch lookup of the manual `watched` flag for many items at once.
+     *
+     * Feeds the add-only per-row `user_data` block on child-list rows
+     * (`GET /api/v1/media?parentId=`) so a season/episode list needs ONE query
+     * instead of a detail fetch per row. Items without a row are simply absent
+     * from the result (callers treat absent as unwatched).
+     *
+     * @param string       $userId    User UUID.
+     * @param list<string> $itemIds   Media item UUIDs.
+     * @param string|null  $profileId Profile UUID to scope to, or null for the
+     *                                account's active/first profile.
+     *
+     * @return array<string, bool> Map of item id => watched, only for items with a row.
+     *
+     * @throws ProfileNotOwnedException When `$profileId` is not owned by `$userId`.
+     */
+    public function getWatchedMap(string $userId, array $itemIds, ?string $profileId = null): array
+    {
+        if ($itemIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($itemIds), '?'));
+        $result = $this->db->query(
+            "SELECT item_id, watched FROM user_item_data
+             WHERE user_id = ? AND profile_id = ? AND item_id IN ({$placeholders})",
+            array_merge([$userId, $this->scope($userId, $profileId)], array_values($itemIds))
+        );
+
+        $map = [];
+        foreach (RowMap::listFromMixed($result) as $row) {
+            $id = $row['item_id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                $map[$id] = (bool) UserRow::int($row, 'watched', 0);
+            }
+        }
+        return $map;
+    }
+
+    /**
      * Resolve the profile every statement in this class is scoped to.
      *
      * A thin, single-purpose delegate so the ownership check cannot be forgotten

@@ -468,10 +468,12 @@ class WebSocketServer
      */
     private function reapConnection(Connection $wsConnection): void
     {
-        $this->finalizeConnectionTeardown($wsConnection);
-
-        $wsConnection->close();
-        $this->connections->remove($wsConnection->getId());
+        try {
+            $this->finalizeConnectionTeardown($wsConnection);
+        } finally {
+            $this->connections->remove($wsConnection->getId());
+            $wsConnection->close();
+        }
     }
 
     /**
@@ -504,8 +506,17 @@ class WebSocketServer
      */
     private function finalizeConnectionTeardown(Connection $wsConnection): void
     {
+        // SRV-3: contain a vacate/DB-publish failure so it can never unwind the
+        // rest of teardown (metrics touch, marker unset, pool removal, close).
         if ($this->syncPlayManager !== null) {
-            $this->syncPlayManager->onConnectionClose($wsConnection->getId());
+            try {
+                $this->syncPlayManager->onConnectionClose($wsConnection->getId());
+            } catch (\Throwable $e) {
+                LoggerFactory::get(LogChannels::WEBSOCKET)->error('SyncPlay vacate failed during teardown', [
+                    'connection_id' => $wsConnection->getId(),
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         $connectionId = $wsConnection->getId();
@@ -914,12 +925,19 @@ class WebSocketServer
 
             $this->connections->remove($wsConnection->getId());
 
-            // Broadcast disconnection if authenticated
+            // Broadcast disconnection if authenticated. SRV-44: the payload
+            // carries only the opaque connection_id — user_id was dropped so a
+            // peer cannot learn which account went offline (no in-estate client
+            // consumes the field; DEP-7 grep clean). A failing broadcast must
+            // not propagate out of the close callback.
             if ($wsConnection->isAuthenticated()) {
-                $this->handler->broadcast('client_disconnected', [
-                    'connection_id' => $wsConnection->getId(),
-                    'user_id' => $wsConnection->getUserId(),
-                ], [$wsConnection->getId()]);
+                try {
+                    $this->handler->broadcast('client_disconnected', [
+                        'connection_id' => $wsConnection->getId(),
+                    ], [$wsConnection->getId()]);
+                } catch (\Throwable $e) {
+                    $logger->warning('client_disconnected broadcast failed', ['error' => $e->getMessage()]);
+                }
             }
 
             // (The final metrics touch moved into finalizeConnectionTeardown above;

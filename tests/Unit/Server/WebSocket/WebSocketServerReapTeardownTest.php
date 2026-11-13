@@ -275,4 +275,73 @@ final class WebSocketServerReapTeardownTest extends TestCase
         );
         self::assertSame(8765, $record['bytes_out']);
     }
+
+    /**
+     * SRV-3: a throwing SyncPlay vacate (DB-publish failure) must not unwind the
+     * rest of the reaper teardown — the wrapper still leaves the pool and the
+     * socket is still closed.
+     */
+    public function testThrowingVacateDoesNotUnwindReapTeardown(): void
+    {
+        $handler = new MessageHandler(ConnectionPool::getInstance());
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097], $handler);
+        $manager = $this->createMock(SyncPlayManager::class);
+        $manager->method('onConnectionClose')->willThrowException(new \RuntimeException('db down'));
+        $server->setSyncPlayManager($manager);
+
+        $closed = false;
+        $tcp = $this->createMock(TcpConnection::class);
+        $tcp->method('close')->willReturnCallback(function () use (&$closed): void {
+            $closed = true;
+        });
+        ConnectionPool::getInstance()->add(new Connection($tcp));
+
+        $server->reapStaleConnections(-1);
+
+        self::assertTrue($closed, 'socket must still be closed');
+        self::assertSame(0, ConnectionPool::getInstance()->count(), 'wrapper must still leave the pool');
+    }
+
+    /**
+     * SRV-3 + SRV-44: onClose survives a throwing vacate and the
+     * client_disconnected broadcast carries no user_id.
+     */
+    public function testOnCloseBroadcastIsScopedToConnectionIdAndSurvivesVacateFailure(): void
+    {
+        $handler = new MessageHandler(ConnectionPool::getInstance());
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097], $handler);
+        $manager = $this->createMock(SyncPlayManager::class);
+        $manager->method('onConnectionClose')->willThrowException(new \RuntimeException('db down'));
+        $server->setSyncPlayManager($manager);
+
+        $peerPayloads = [];
+        $peerTcp = $this->createMock(TcpConnection::class);
+        $peerTcp->method('send')->willReturnCallback(function (string $d) use (&$peerPayloads): bool {
+            $peerPayloads[] = $d;
+            return true;
+        });
+        ConnectionPool::getInstance()->add(new Connection($peerTcp));
+
+        $tcp = $this->createMock(TcpConnection::class);
+        $leaver = new Connection($tcp);
+        $leaver->setAuthenticated(true, 'user-42');
+        ConnectionPool::getInstance()->add($leaver);
+
+        $server->onClose($tcp);
+
+        self::assertSame(1, ConnectionPool::getInstance()->count());
+        self::assertCount(1, $peerPayloads);
+        $decoded = json_decode($peerPayloads[0], true);
+        self::assertSame('client_disconnected', $decoded['type']);
+        self::assertSame(['connection_id' => $leaver->getId()], $decoded['data']);
+        self::assertStringNotContainsString('user-42', $peerPayloads[0]);
+    }
+
+    /** SRV-57: a throwing transport yields false, never an exception. */
+    public function testConnectionSendContainsTransportFailure(): void
+    {
+        $tcp = $this->createMock(TcpConnection::class);
+        $tcp->method('send')->willThrowException(new \RuntimeException('closed'));
+        self::assertFalse((new Connection($tcp))->send('x'));
+    }
 }

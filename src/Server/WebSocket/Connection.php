@@ -107,6 +107,8 @@ class Connection implements ConnectionInterface
      *
      * @param string|array<string, mixed> $data Data to send (arrays are JSON encoded)
      * @return bool True if the data was sent successfully, false if the send buffer is full
+     *              or the transport is closed/closing. Fan-out callers must treat false as a
+     *              per-connection outcome, never as an error (SRV-57).
      *
      * @throws \JsonException If array data cannot be encoded
      */
@@ -116,7 +118,14 @@ class Connection implements ConnectionInterface
             $data = json_encode($data, JSON_THROW_ON_ERROR);
         }
 
-        $result = $this->connection->send($data);
+        try {
+            $result = $this->connection->send($data);
+        } catch (\Throwable) {
+            // SRV-57: a dead/closing transport is a per-connection outcome, not an
+            // error — report it as false so fan-out loops keep going; the close
+            // callback owns the teardown.
+            return false;
+        }
         $this->updateActivity();
 
         // send() returns false when the send buffer is full (backpressure)

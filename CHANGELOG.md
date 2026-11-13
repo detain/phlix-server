@@ -145,6 +145,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- WebSocket teardown no longer unwinds when a SyncPlay vacate/snapshot publish fails: the
+  reaper and the close callback still remove the connection, close the socket and finish
+  metrics bookkeeping; `Connection::send()` returns false instead of throwing on a dead
+  transport; the `client_disconnected` broadcast now carries only `connection_id` (the
+  `user_id` field was dropped — no in-estate client consumed it).
+
 - **Revoked sign-in sessions no longer pile up forever, and a refresh that
   loses a race to rotate the same token no longer mints on someone else's
   rotation.** Each login now first retires that account's sign-in families

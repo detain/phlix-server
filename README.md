@@ -166,6 +166,8 @@ Every environment variable the server process reads is inventoried in the defini
 ## Features
 
 ### Foundation
+> External `phlix-docs` links below follow the live docs site (unpinned) and may drift from this release. Adding an endpoint? See [docs/dev/adding-an-endpoint.md](docs/dev/adding-an-endpoint.md).
+
 - **PSR-11 DI container (PHP-DI 7)**: auto-wired services with provider-based
   composition; see [phlix-docs / dev / architecture-server](https://detain.github.io/phlix-docs/dev/architecture-server).
 - **PSR-14 event dispatcher (Tukio)**: playback, library-scan, and auth

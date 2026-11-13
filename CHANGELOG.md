@@ -787,6 +787,10 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The served web SPA is re-pinned to `@phlix/ui` v1.0.1 and `/app` regenerated (SRV-15 / SRV-S12 ui render leg).** `LoginPage`/`SignupPage` now
+  render the redirect envelope (`?error=`/`?notice=` human text plus optional `&code=` machine code, and the OAuth legs' bare
+  `?error=<code>`): the code localizes through the contracts error catalog and the human text is the fallback, closing the
+  seam. `web-ui/package.json` + lock move v1.0.0 -> v1.0.1 (surgical 5+/5-); `/app` rebuilt on node 24.20.0, two consecutive builds byte-identical.
 - **The served web SPA is re-pinned to `@phlix/ui` v1.0.0 and `/app` regenerated (ui v1.0.0 adoption).** `web-ui/package.json` + lock
   move v0.99.28 -> v1.0.0 (tag peel `5901e055`; the lock delta is surgical, 6+/6-, and carries the ui's own
   `@phlix/contracts` v0.5.7 -> v0.5.8 request); `/app` rebuilt on the pinned node 24.20.0, two consecutive builds

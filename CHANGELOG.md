@@ -730,6 +730,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Changed
 
+- **The served web SPA is re-pinned to `@phlix/ui` v0.99.28 and `/app` regenerated (SRV-15 re-vendor leg).** `web-ui/package.json` + lock
+  move v0.99.27 -> v0.99.28 (tag peel `dfe8fc65`, lock delta surgical 4+/4-); `/app` rebuilt on the pinned node 24.20.0,
+  two consecutive builds byte-identical. v0.99.28 does not yet read the redirect envelope's machine `code` on
+  LoginPage/SignupPage (no `route.query` handling in the vendored sources), so the browser-side render of the
+  redirect-carried `code` remains a ui follow-up; the server emits it and keeps human `error`/`notice` as fallback.
+  README UI-truth line flips `v0.99.27` -> `v0.99.28`.
 - **The hosted portal gains device-session management: `@phlix/ui` v0.99.26
   re-pinned to v0.99.27, and the served `/app` bundle regenerated.** [ui27
   cascade — server leg 2026-11-11]

@@ -224,6 +224,60 @@ class CollectionManagerTest extends TestCase
         $this->assertEquals('col-1', $result->collection->id);
         $this->assertCount(2, $result->items);
         $this->assertEquals(2, $result->total);
+        $this->assertFalse($result->truncated);
+    }
+
+    public function testGetCollectionWithItemsCapsAtCeilingChunksAndFlagsTruncation(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $collectionRepo = $this->createMock(CollectionRepository::class);
+        $itemRepo = $this->createMock(CollectionItemRepository::class);
+        $engine = new SmartPlaylistEngine($this->createMock(ItemRepository::class));
+        $playlistRepo = new SmartPlaylistRepository($db);
+        $mediaItemRepo = $this->createMock(ItemRepository::class);
+
+        $ceiling = CollectionItemRepository::DETAIL_ROW_CEILING;
+        $collectionRepo->method('findById')->willReturn(new Collection(
+            id: 'col-big',
+            name: 'Big',
+            libraryId: 'lib-1',
+            smartPlaylistId: null,
+            parentId: null,
+        ));
+
+        // Repo hands back ceiling + 1 ids (the over-fetch probe) -> truncated.
+        $ids = [];
+        for ($i = 0; $i <= $ceiling; $i++) {
+            $ids[] = 'm' . $i;
+        }
+        $itemRepo->expects($this->once())
+            ->method('findMediaItemIdsForCollection')
+            ->with('col-big', $ceiling + 1)
+            ->willReturn($ids);
+        $itemRepo->method('countForCollection')->willReturn(25000);
+
+        $maxChunk = 0;
+        $hydrated = 0;
+        $mediaItemRepo->method('findByIds')->willReturnCallback(
+            function (array $chunk) use (&$maxChunk, &$hydrated): array {
+                $maxChunk = max($maxChunk, count($chunk));
+                $hydrated += count($chunk);
+                return array_map(static fn (string $id): array => ['id' => $id], $chunk);
+            }
+        );
+
+        $manager = new CollectionManager($collectionRepo, $itemRepo, $engine, $playlistRepo, $mediaItemRepo, $db);
+        $result = $manager->getCollectionWithItems('col-big');
+
+        $this->assertNotNull($result);
+        $this->assertTrue($result->truncated);
+        $this->assertSame(25000, $result->total);
+        $this->assertCount($ceiling, $result->items);
+        $this->assertSame($ceiling, $hydrated);
+        $this->assertLessThanOrEqual(CollectionItemRepository::HYDRATE_CHUNK, $maxChunk);
+        $this->assertSame('m0', $result->items[0]['id']);
+        $this->assertSame('m' . ($ceiling - 1), $result->items[$ceiling - 1]['id']);
+        $this->assertTrue($result->toArray()['truncated']);
     }
 
     public function testGetCollectionWithItemsReturnsNullWhenNotFound(): void

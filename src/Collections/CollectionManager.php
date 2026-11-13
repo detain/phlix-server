@@ -199,16 +199,32 @@ class CollectionManager
             return null;
         }
 
-        $mediaItemIds = $this->itemRepo->findMediaItemIdsForCollection($id);
-        // Single query instead of N queries (one per item)
-        $items = $this->items->findByIds($mediaItemIds);
+        // Fetch one past the ceiling so truncation is detected without a COUNT.
+        $mediaItemIds = $this->itemRepo->findMediaItemIdsForCollection(
+            $id,
+            CollectionItemRepository::DETAIL_ROW_CEILING + 1
+        );
+        $truncated = count($mediaItemIds) > CollectionItemRepository::DETAIL_ROW_CEILING;
+        if ($truncated) {
+            $mediaItemIds = array_slice($mediaItemIds, 0, CollectionItemRepository::DETAIL_ROW_CEILING);
+        }
 
-        $total = count($items);
+        // Chunked IN() hydration (bounded statement size); order preserved by concatenation.
+        $items = [];
+        foreach (array_chunk($mediaItemIds, CollectionItemRepository::HYDRATE_CHUNK) as $chunk) {
+            foreach ($this->items->findByIds($chunk) as $row) {
+                $items[] = $row;
+            }
+        }
+
+        // When truncated, `total` is the honest membership count, not the capped page.
+        $total = $truncated ? $this->itemRepo->countForCollection($id) : count($items);
 
         return new CollectionWithItems(
             collection: $collection,
             items: $items,
             total: $total,
+            truncated: $truncated,
         );
     }
 

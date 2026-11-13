@@ -23,6 +23,19 @@ use Workerman\MySQL\Connection;
  */
 class CollectionItemRepository
 {
+    /**
+     * Absolute row ceiling for the collection DETAIL hydration.
+     *
+     * Mirrors the ceiling law of {@see \Phlix\Media\Library\ItemRepository}
+     * (ABSOLUTE_ROW_CEILING, 10000): a last-resort backstop so one huge
+     * collection can never hydrate an unbounded media_items set inside a
+     * resident worker. Membership beyond it is reported via `truncated`.
+     */
+    public const DETAIL_ROW_CEILING = 10000;
+
+    /** IDs per hydration `IN (...)` chunk (see CollectionManager::getCollectionWithItems()). */
+    public const HYDRATE_CHUNK = 500;
+
     public function __construct(
         private readonly Connection $db,
     ) {
@@ -112,17 +125,21 @@ class CollectionItemRepository
      * Get all media item IDs for a collection.
      *
      * @param string $collectionId Collection UUID
+     * @param int|null $limit Optional row cap (clamped to 1..DETAIL_ROW_CEILING + 1);
+     *                        null = unbounded (smart-refresh diff needs full membership)
      * @return array<int, string> Array of media item UUIDs in sort order
      *
      * @since 0.14.0
      */
-    public function findMediaItemIdsForCollection(string $collectionId): array
+    public function findMediaItemIdsForCollection(string $collectionId, ?int $limit = null): array
     {
-        $results = $this->db->query(
-            "SELECT media_item_id FROM collection_items
-             WHERE collection_id = ? ORDER BY sort_order, added_at",
-            [$collectionId]
-        );
+        $sql = "SELECT media_item_id FROM collection_items
+             WHERE collection_id = ? ORDER BY sort_order, added_at";
+        if ($limit !== null) {
+            $limit = max(1, min($limit, self::DETAIL_ROW_CEILING + 1));
+            $sql .= " LIMIT " . $limit;
+        }
+        $results = $this->db->query($sql, [$collectionId]);
 
         if (!is_array($results)) {
             return [];

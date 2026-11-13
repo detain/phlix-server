@@ -117,6 +117,25 @@ class CollectionItemRepositoryTest extends TestCase
         $this->assertEquals('media-3', $result[2]);
     }
 
+    public function testFindMediaItemIdsForCollectionAppliesClampedLimit(): void
+    {
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$captured): array {
+            $captured[] = $sql;
+            return [];
+        });
+
+        $repo = new CollectionItemRepository($db);
+        $repo->findMediaItemIdsForCollection('c', 99999999);
+        $repo->findMediaItemIdsForCollection('c', 0);
+        $repo->findMediaItemIdsForCollection('c');
+
+        $this->assertStringContainsString('LIMIT ' . (CollectionItemRepository::DETAIL_ROW_CEILING + 1), $captured[0]);
+        $this->assertStringContainsString('LIMIT 1', $captured[1]);
+        $this->assertStringNotContainsString('LIMIT', $captured[2]);
+    }
+
     public function testFindMediaItemIdsForCollectionReturnsEmptyWhenNoItems(): void
     {
         $db = $this->createMock(Connection::class);

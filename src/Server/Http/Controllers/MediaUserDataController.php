@@ -35,6 +35,12 @@ use Phlix\Session\PlaybackController;
  */
 class MediaUserDataController
 {
+    /** User-facing 400 copy for an invalid rating (shared by the up-front and repository-catch arms). */
+    private const RATING_INVALID_COPY = 'Rating must be an integer between 1 and 10';
+
+    /** User-facing 400 copy for an invalid like level (shared by the up-front and repository-catch arms). */
+    private const LEVEL_INVALID_COPY = 'Level must be an integer between -2 and 2';
+
     /** @var ItemRepository Verifies the target media item exists (404 otherwise). */
     private ItemRepository $itemRepository;
 
@@ -141,7 +147,7 @@ class MediaUserDataController
             // or null. Bools are numeric-adjacent in PHP but never a valid rating.
             if (is_bool($raw) || !is_numeric($raw) || (float) $raw !== floor((float) $raw)) {
                 return (new Response())->status(400)->json(
-                    ['error' => 'Rating must be an integer between 1 and 10, or null']
+                    ['error' => self::RATING_INVALID_COPY]
                 );
             }
             $rating = (int) $raw;
@@ -152,7 +158,7 @@ class MediaUserDataController
         } catch (\InvalidArgumentException) {
             // Repository prose is developer-register; translate at the boundary.
             return (new Response())->status(400)->json(
-                ['error' => 'Rating must be an integer between 1 and 10, or null']
+                ['error' => self::RATING_INVALID_COPY]
             );
         }
 
@@ -193,7 +199,7 @@ class MediaUserDataController
             || (float) $raw !== floor((float) $raw)
         ) {
             return (new Response())->status(400)->json(
-                ['error' => 'Level must be an integer between -2 and 2']
+                ['error' => self::LEVEL_INVALID_COPY]
             );
         }
         $level = (int) $raw;
@@ -203,7 +209,7 @@ class MediaUserDataController
         } catch (\InvalidArgumentException) {
             // Repository prose is developer-register; translate at the boundary.
             return (new Response())->status(400)->json(
-                ['error' => 'Level must be an integer between -2 and 2']
+                ['error' => self::LEVEL_INVALID_COPY]
             );
         }
 

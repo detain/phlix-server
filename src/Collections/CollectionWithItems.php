@@ -24,12 +24,14 @@ final class CollectionWithItems
     /**
      * @param Collection $collection The collection entity
      * @param array<int, array<string, mixed>> $items Hydrated media items
-     * @param int $total Total item count
+     * @param int $total Total item count (true membership count when truncated)
+     * @param bool $truncated True when membership exceeded the hydration ceiling and `items` is capped
      */
     public function __construct(
         public readonly Collection $collection,
         public readonly array $items,
         public readonly int $total,
+        public readonly bool $truncated = false,
     ) {
     }
 
@@ -46,6 +48,7 @@ final class CollectionWithItems
             'collection' => $this->collection->toArray(),
             'items' => $this->items,
             'total' => $this->total,
+            'truncated' => $this->truncated,
         ];
     }
 }

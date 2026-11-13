@@ -442,6 +442,12 @@ playing the same kind of item — the party syncs playback positions, not catalo
    and can rewind/fast-forward the whole group through the host gate. Chat and
    typing indicators live in the same dialog; the queue holds up to 1000 items.
 
+**Friends outside your network.** Remote guests need an account here and a way
+to reach the server: the [hub](https://github.com/detain/phlix-hub) relay (no
+port forwarding) or your own HTTPS reverse proxy. Never port-forward `:8097`
+directly: it is plaintext and JWT-bearing (see the *Exposure note* under
+Configuration); `install.sh` deliberately never opens it.
+
 Stuck? See [A SyncPlay / watch group gets stuck](#a-syncplay--watch-group-gets-stuck).
 
 ### Subtitles (choosing them)

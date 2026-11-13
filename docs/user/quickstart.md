@@ -38,12 +38,20 @@ unit's `EnvironmentFile=/etc/phlix/env` (or your shell when you run
 
 ## 2. Create the admin account
 
-Open the portal, choose **Create an account** (the sign-in page's link; the form
+Open the portal (`http://<your-host>:8096/app`; the old `/login` path just
+redirects to `/app/login`), choose **Create an account** (the sign-in page's link; the form
 itself is headed **Create your account**), and fill it in. The **first**
 account on an empty server always becomes the active admin (and is admitted
 regardless of the signup gate). Every later self-service registration goes to
 the approval queue (see step 5) — the shipped default is `signup_mode: approval`,
 so strangers cannot slip in just because the port is reachable.
+
+What each person sees afterwards depends on who they are. The first account
+lands signed in as admin. Every later signup is **not** signed in: the portal
+sends them back to the sign-in page with a notice that the account is awaiting
+administrator approval, and correct credentials are refused until you approve
+them. Once approved they simply sign in. (An admin can change the mode to
+`open` or `disabled` under the server settings; it applies live.)
 
 ## 3. Add your first library
 
@@ -58,7 +66,14 @@ Fetching that art needs a (free) TMDB API key: pass `--tmdb-api-key` to the
 installer, or save it later in **Admin → Settings → Metadata** — without a
 key, only local NFO metadata and artwork work. A key saved through the admin
 UI is read when the workers start, so restart the server to apply it (the
-settings screen flags such keys as needing a restart).
+settings screen flags such keys as needing a restart). To restart: use the
+restart button on that settings banner, or on the host run
+`sudo systemctl restart phlix-server` (the unit the installer creates).
+
+**File naming.** The scanner matches titles from folder and file names, so keep
+them tidy (title and year for movies; show, season and episode numbers for
+series). The click-by-click naming rules live in the phlix-docs
+[libraries guide](https://detain.github.io/phlix-docs/libraries).
 
 ## 4. Play your first title
 
@@ -82,8 +97,13 @@ from the CLI (`user:list --status=pending`, `user:approve`). Then per account:
   watch history, rating cap (G/PG/PG-13/R/NC-17/X/UNRATED), genre allow/block
   lists and an optional 4- or 6-digit PIN. This is where a shared living-room
   login becomes a kid-safe profile.
-- **Access schedules**: per-profile allowed-time windows for who may watch when
-  (admin API surface `/api/v1/profiles/{profileId}/schedules`).
+- **Access schedules**: per-profile allowed-time windows for who may watch when.
+  In the portal: **Parental controls** (`/app/parental`) → **Schedules** tab →
+  create a schedule. (The same thing is available over the API at
+  `/api/v1/profiles/{profileId}/schedules`.)
+- **Themes**: each member picks their own appearance under **Settings →
+  Appearance** (built-in `nocturne`, `daylight`, `midnight`, plus any theme
+  plugins you install); it is per-user and does not change anyone else's view.
 
 What a child profile actually sees: titles above its rating cap and blocked
 genres are filtered out of every rail and search result — the cap is enforced
@@ -114,6 +134,14 @@ The walkthrough that names the buttons: README →
 Short version: open a movie in the player → **SyncPlay** → **Create room**,
 then send everyone the **room id** (plus the password, if you set one). The
 party's host controls play/pause/seek for everyone.
+
+**Friends outside your home network** can join too, provided they have an
+account on your server and can reach it: either through the
+[hub](#remote-access-the-hub) relay (no router changes) or through your own
+HTTPS reverse proxy. Do **not** port-forward the watch-party WebSocket
+(`:8097`) directly: it is plaintext and carries login tokens, and the installer
+deliberately never opens it. Front it with TLS (README → *Exposure note*) and
+send the remote guest the room id (plus password) exactly as for local ones.
 
 ## Remote access: the hub
 
@@ -148,6 +176,9 @@ reverse-proxy question, covered by
 | **profile** | Two kinds meet here: a *household profile* is the per-person viewer profile with rating caps and history (step 5); a *quality profile* is a playback-device preset (stream-limits API). The endpoints say which one they mean. |
 | **JWT** | The signed bearer token the API hands you at login (`Authorization: Bearer …`) and the WebSocket carries. |
 | **signed URL** | A media/thumbnail URL carrying an expiring signature, so short-lived requests (segments, subtitles) can be fetched by dumb `<img>`/`<video>` machinery without a header. |
+| **rail** | A horizontal row of titles on the home or browse screens (e.g. continue watching, recently added). Rails are filtered by a profile's rating cap and blocked genres. |
+| **trick previews** | The scrub thumbnails shown when you drag along the player's timeline (trickplay); generated with `ffmpeg`. |
+| **NFO** | A small `.nfo` sidecar file next to a media file carrying its metadata; the scanner reads it, and it works even without a TMDB key. |
 | **HLS** | HTTP Live Streaming: the server chops media into segments + a playlist so browsers and TVs can stream it adaptively. |
 | **DLNA / OPDS** | LAN media-server compatibility (TVs, consoles) and the catalog-browsing endpoint respectively. |
 

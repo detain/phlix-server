@@ -322,4 +322,45 @@ final class MetricsRegistryTest extends TestCase
         $this->assertArrayHasKey(1000, $drained['overall']);
         $this->assertArrayHasKey(1001, $drained['overall']);
     }
+
+    public function test_restore_rollups_merges_drained_rows_back_additively(): void
+    {
+        $reg = $this->registry(10);
+        $reg->recordRequest('GET', '/a', 500, 40.0, 10, 20, 1000);
+        $drained = $reg->drainRollups(1000);
+
+        // New traffic lands in the same bucket after the failed flush.
+        $reg->recordRequest('GET', '/a', 200, 60.0, 1, 2, 1001);
+        $reg->restoreRollups($drained['overall'], $drained['routes']);
+
+        $again = $reg->drainRollups(1001);
+        $b = $again['overall'][1000];
+        $this->assertSame(2, $b['request_count']);
+        $this->assertSame(1, $b['error_count']);
+        $this->assertSame(100, $b['duration_ms_sum']);
+        $this->assertSame(60, $b['duration_ms_max']);
+        $this->assertSame(11, $b['bytes_in']);
+        $this->assertSame(22, $b['bytes_out']);
+        $this->assertSame(2, array_sum($b['histogram']));
+        $this->assertCount(1, $again['routes']);
+        $this->assertSame(2, $again['routes'][0]['request_count']);
+    }
+
+    public function test_restore_rollups_bounds_retained_buckets_dropping_oldest(): void
+    {
+        $reg = $this->registry(10);
+        $cap = MetricsRegistry::MAX_RETAINED_BUCKETS;
+        for ($i = 0; $i < $cap + 5; $i++) {
+            $reg->recordRequest('GET', '/a', 200, 1.0, 0, 0, $i * 10);
+        }
+        $drained = $reg->drainRollups(0);
+        $this->assertCount($cap + 5, $drained['overall']);
+
+        $reg->restoreRollups($drained['overall'], $drained['routes']);
+        $again = $reg->drainRollups(0);
+
+        $this->assertCount($cap, $again['overall']);
+        $this->assertArrayNotHasKey(0, $again['overall'], 'oldest bucket dropped');
+        $this->assertArrayHasKey(($cap + 4) * 10, $again['overall'], 'newest bucket kept');
+    }
 }

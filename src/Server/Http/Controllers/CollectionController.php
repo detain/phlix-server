@@ -463,7 +463,7 @@ final class CollectionController
         $this->manager->bulkAddFromSearch($collectionId, $validIds);
 
         return (new Response())->json([
-            'message' => 'Items added to collection',
+            'message' => 'Items added to collection.',
             'added_count' => count($validIds),
         ]);
     }
@@ -520,7 +520,7 @@ final class CollectionController
         }
 
         return (new Response())->json([
-            'message' => 'Smart collection refreshed',
+            'message' => 'Smart collection refreshed.',
             'items_added' => $diff['items_added'],
             'items_removed' => $diff['items_removed'],
         ]);

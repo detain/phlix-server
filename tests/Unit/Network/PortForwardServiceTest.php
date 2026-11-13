@@ -326,6 +326,32 @@ class PortForwardServiceTest extends TestCase
         $this->assertFileExists($this->tmpDir . '/config/port-forward.json');
     }
 
+    public function testMergeStateReturnsPersistOutcomeAndNamesStaleRecord(): void
+    {
+        file_put_contents($this->tmpDir . '/config', 'blocker');
+        $messages = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('warning')->willReturnCallback(function (string $m) use (&$messages): void {
+            $messages[] = $m;
+        });
+
+        $service = new PortForwardService(
+            $this->createMock(UpnpIgdClient::class),
+            $this->createMock(StunClient::class),
+            $this->createMock(NatPmpClient::class),
+            $logger,
+            32400,
+            true,
+            $this->tmpDir
+        );
+
+        $this->assertFalse($service->mergeState(['mapping_last_sssoe' => 1]));
+        $this->assertContains('Port-forward state could not be persisted; the on-disk record is stale', $messages);
+
+        @unlink($this->tmpDir . '/config');
+        $this->assertTrue($service->mergeState(['mapping_last_sssoe' => 2]));
+    }
+
     public function testDisableRemovesConfig(): void
     {
         $upnp = $this->createMock(UpnpIgdClient::class);

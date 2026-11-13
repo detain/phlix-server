@@ -53,6 +53,7 @@ final class SystemInfoPayloadHygieneTest extends TestCase
     private string $loggerConfigPath = '';
     private ?ContainerInterface $sharedContainer = null;
     private ?Application $sharedApplication = null;
+    private ?\Phlix\Admin\SettingsRepository $settingsOverride = null;
 
     protected function setUp(): void
     {
@@ -123,9 +124,11 @@ final class SystemInfoPayloadHygieneTest extends TestCase
         $connection = $this->createMock(Connection::class);
 
         $providers = ContainerFactory::defaultProviders();
-        $providers[] = new class ($connection) implements ServiceProviderInterface {
-            public function __construct(private Connection $connection)
-            {
+        $providers[] = new class ($connection, $this->settingsOverride) implements ServiceProviderInterface {
+            public function __construct(
+                private Connection $connection,
+                private ?\Phlix\Admin\SettingsRepository $settings,
+            ) {
             }
 
             public function register(ContainerBuilder $builder, array $appConfig): void
@@ -135,6 +138,14 @@ final class SystemInfoPayloadHygieneTest extends TestCase
                 $builder->addDefinitions([
                     Connection::class => factory(static fn (): Connection => $connection),
                 ]);
+                if ($this->settings !== null) {
+                    $settings = $this->settings;
+                    $builder->addDefinitions([
+                        \Phlix\Admin\SettingsRepository::class => factory(
+                            static fn (): \Phlix\Admin\SettingsRepository => $settings
+                        ),
+                    ]);
+                }
             }
         };
 
@@ -221,5 +232,18 @@ final class SystemInfoPayloadHygieneTest extends TestCase
         $this->assertIsInt($body['password_min_length']);
         $this->assertGreaterThanOrEqual(\Phlix\Auth\PasswordPolicy::ABSOLUTE_MIN_LENGTH, $body['password_min_length']);
         $this->assertLessThanOrEqual(\Phlix\Auth\PasswordPolicy::ABSOLUTE_MAX_LENGTH, $body['password_min_length']);
+    }
+
+    public function testAnonymousSystemInfoSurfacesTheConfiguredPasswordMinLength(): void
+    {
+        $settings = $this->createMock(\Phlix\Admin\SettingsRepository::class);
+        $settings->method('getEffective')->willReturnCallback(
+            static fn (string $key): mixed => $key === \Phlix\Auth\PasswordPolicy::SETTING_KEY ? 14 : null
+        );
+        $this->settingsOverride = $settings;
+
+        $body = $this->body($this->application()->dispatch($this->request('/system/info')));
+
+        $this->assertSame(14, $body['password_min_length'], 'a configured value above the floor is surfaced verbatim');
     }
 }

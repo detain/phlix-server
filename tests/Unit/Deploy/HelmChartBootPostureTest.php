@@ -48,9 +48,13 @@ final class HelmChartBootPostureTest extends TestCase
         self::assertMatchesRegularExpression('/fsGroup: 65534\b/', $d, 'daemon runs as nobody');
         self::assertStringContainsString('allowPrivilegeEscalation: false', $d);
         self::assertMatchesRegularExpression('/drop:\s*\n\s*- ALL/', $d);
-        foreach (['SETUID', 'SETGID', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'KILL'] as $cap) {
-            self::assertMatchesRegularExpression('/add:[\s\S]*- ' . $cap . '\b/', $d, $cap);
-        }
+        // Parse the `add:` list (consecutive `- CAP` items) and pin the EXACT
+        // minimal set: a stray extra capability must fail, not just a missing one.
+        self::assertSame(1, preg_match('/^\s*add:\s*\n((?:\s*- [A-Z_]+\s*\n)+)/m', $d, $m), 'capabilities.add block');
+        preg_match_all('/- ([A-Z_]+)/', $m[1], $caps);
+        $added = $caps[1];
+        sort($added);
+        self::assertSame(['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'KILL', 'SETGID', 'SETUID'], $added);
     }
 
     public function testChartPostureMatchesImageBootChain(): void

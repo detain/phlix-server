@@ -7,8 +7,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 House discipline this file maintains (established by review W-min90/91/92):
 
-- `## [Unreleased]` carries **one section per type** (`### Added`, `### Changed`,
-  `### Removed`, `### Fixed`, `### Security`) — a batch PREPENDS its entries under
+- `## [Unreleased]` carries **one section per type** (`### Added`, `### Changed`,- **Case-insensitive header lookup lives in one place.** New `Phlix\Server\Http\Middleware\HeaderMap` (`get()`/`has()`) replaces the duplicated private helpers in `SecurityHeaders` and `CorsManager`; behaviour is identical. [SRV-S20]
+
+  `### Removed`, `### Fixed`-- **The admin log list sorts newest-first by true modification time.** `LogController` now orders on the integer file mtime before formatting `modified_at`, so out-of-order mtimes (and sub-format-resolution ties) no longer reorder rows; a pin test covers it. [SRV-S32 / SRV-79]
+ **DLNA search now logs when its scan cap truncates the result, and the metrics rollup retry buffer is bounded.** A `Search` over a container larger than 50 pages (100k rows) still stops there on purpose, but now emits a `DLNA search truncated at the scan cap` warning instead of silently undercounting `TotalMatches`; `MetricsRegistry::restoreRollups()` keeps at most 720 buckets (oldest dropped) so a long database outage cannot grow worker memory without bound. [SRV-S15, SRV-S2]
+- **`PortForwardService` names a stale on-disk record instead of dropping a failed config write.** A mapping that succeeded on the router but could not be persisted (or a teardown whose config could not be cleared) now logs `Port-forward state could not be persisted; the on-disk record is stale`; `mergeState()` returns the write outcome. [SRV-S13]
+- **Hub pairing no longer persists a non-http(s) JWKS URL handed back by the hub.** `hubPoll` refuses (502) a claimed enrollment whose `hub_jwks_url` is not `http://`/`https://`, matching `hubComplete`. [SRV-S24]
+- **`scripts/install.sh --help` no longer advertises a tag on `--update`.** `--branch` is documented as a branch for `--update` (a tag aborts) and a branch or tag for fresh installs, matching the README. [SRV-S9]
+- **Remaining controller success/notice messages end with a period** (`Playback completed.`, `Items added to collection.`, `Smart collection refreshed.`, `Tag added successfully.`, `Progress saved.` (book), `Profile created successfully.` (admin), `Settings updated.` (admin updates), the two marker `No ... marker has been detected ...` messages). Status codes and shapes unchanged. [SRV-S5]
+, `### Security`) — a batch PREPENDS its entries under
   the matching heading instead of dragging in a duplicate heading set. The single
   auxiliary section `### Known gaps (documented, NOT fixed)` is a deliberate
   exception: it lists what is NOT fixed and must never fold into `### Fixed`.
@@ -193,7 +200,11 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 - **Browser login/register redirects now carry a machine `code` beside the human message.** The legacy-path 302s (`/login?error=…`, `/login?notice=…`, `/auth/register?error=…`) keep the human text in `error`/`notice` and add `&code=<contracts code>` (e.g. `auth.invalid_credentials`, `auth.password_change_required`, `auth.signups_disabled`) where the JSON twin has one; GitHub/OIDC callback legs keep the machine code itself in `error`. Renderers resolve `code ?? error` with the human text as fallback. [SRV-S12 / SRV-15]
 - **Opening a very large collection no longer risks exhausting the worker's memory.** The collection detail response hydrates at most 10,000 items (in chunks of 500); when a collection holds more, `total` is the true membership count and a new additive `truncated: true` field flags the capped `items` list. Shape is otherwise unchanged. [SRV-S6 / SRV-7]
-- **Rating and like-level 400 responses now carry user-facing copy.** The media user-data controller translates the repository's developer-register validation text at the boundary (`Rating must be an integer between 1 and 10` / `Level must be an integer between -2 and 2`); status codes and contract codes are unchanged. [SRV-S4 / SRV-5]
+- **Rating and like-level 400 responses now carry user-facing copy.** The
+  media user-data controller translates the repository's developer-register
+  validation text at the boundary (`Rating must be an integer between 1 and 10`
+  / `Level must be an integer between -2 and 2`); status codes and
+  contract codes are unchanged. [SRV-S4 / SRV-5]
 - **WebSocket teardown no longer unwinds when a SyncPlay vacate/snapshot publish fails.** The
   reaper and the close callback still remove the connection, close the socket and finish
   metrics bookkeeping; `Connection::send()` returns false instead of throwing on a dead

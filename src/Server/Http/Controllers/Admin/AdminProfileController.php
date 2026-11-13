@@ -164,7 +164,7 @@ final class AdminProfileController
         $newId = $this->profileManager->create($userId, $data);
         return (new Response())->status(201)->json([
             'profile_id' => $newId,
-            'message' => 'Profile created successfully',
+            'message' => 'Profile created successfully.',
         ]);
     }
 

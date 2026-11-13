@@ -267,7 +267,7 @@ class SessionController
         }
 
         return (new Response())->json([
-            'message' => 'Playback completed',
+            'message' => 'Playback completed.',
             'reached_end' => $reachedEnd,
         ]);
     }

@@ -360,4 +360,39 @@ class ContentDirectoryTest extends TestCase
         $this->assertStringContainsString('Needle ' . ($total - 1), (string) $r['Result']);
         $this->assertStringNotContainsString('Needle ' . $max, (string) $r['Result']);
     }
+
+    /**
+     * The scan cap is a deliberate bound; when it bites the undercount is
+     * logged (not silent) and the scan stops at exactly SEARCH_MAX_PAGES pages.
+     */
+    public function testSearchLogsWhenScanCapTruncatesTheHaystack(): void
+    {
+        $max = \Phlix\Dlna\LibraryBridge::MAX_PAGE_ROWS;
+        $total = $max * 60; // more pages than the 50-page cap
+        $calls = 0;
+        $bridge = $this->createMock(\Phlix\Dlna\LibraryBridge::class);
+        $bridge->method('browsePage')->willReturnCallback(
+            static function (string $id, ?string $type, int $offset, int $limit) use ($total, &$calls): array {
+                $calls++;
+                $items = [];
+                for ($i = $offset; $i < min($total, $offset + $limit); $i++) {
+                    $items[] = ['id' => "i-$i", 'parent_id' => 'library-video', 'name' => "Hay $i", 'type' => 'movie'];
+                }
+
+                return ['items' => $items, 'total' => $total];
+            }
+        );
+
+        $logger = $this->createMock(\Phlix\Common\Logger\StructuredLogger::class);
+        $logger->expects($this->once())->method('warning')
+            ->with($this->stringContains('truncated'), $this->callback(
+                static fn (array $ctx): bool => $ctx['rows_scanned'] === $max * 50 && $ctx['container_total'] === $total
+            ));
+
+        $cd = new ContentDirectory($this->itemRepositoryMock, $logger);
+        $cd->setLibraryBridge($bridge);
+        $cd->search('library-video', 'dc:title contains "Hay 1"', '*', 0, 0);
+
+        $this->assertSame(50, $calls);
+    }
 }

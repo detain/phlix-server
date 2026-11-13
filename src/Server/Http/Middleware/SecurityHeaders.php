@@ -88,7 +88,7 @@ final class SecurityHeaders
         // enforce the UNION of all policies, so the weaker-looking duplicate key
         // silently changes semantics). Mirrors Response::asHeadReply()'s
         // strcasecmp scan.
-        if (!self::hasHeader($existing, 'X-Content-Type-Options')) {
+        if (!HeaderMap::has($existing, 'X-Content-Type-Options')) {
             $out['X-Content-Type-Options'] = 'nosniff';
         }
 
@@ -98,7 +98,7 @@ final class SecurityHeaders
         // is what modern browsers obey either way — see the policy's
         // DO-NOT-EXPOSE note for why the CSP itself is not settings-backed).
         $frameOptions = $this->policy->frameOptions();
-        if ($frameOptions !== SecurityHeadersPolicy::NONE && !self::hasHeader($existing, 'X-Frame-Options')) {
+        if ($frameOptions !== SecurityHeadersPolicy::NONE && !HeaderMap::has($existing, 'X-Frame-Options')) {
             $out['X-Frame-Options'] = $frameOptions;
         }
 
@@ -110,7 +110,7 @@ final class SecurityHeaders
         // never had request/TLS context and always emitted the header; the
         // plain-text MITM-injection concern remains a known open item.
         // max-age=0 is the standard clear-the-pin signal.
-        if (!self::hasHeader($existing, 'Strict-Transport-Security')) {
+        if (!HeaderMap::has($existing, 'Strict-Transport-Security')) {
             $out['Strict-Transport-Security']
                 = 'max-age=' . $this->policy->hstsMaxAgeSeconds() . '; includeSubDomains';
         }
@@ -131,7 +131,7 @@ final class SecurityHeaders
         // exactly this — it serves an inline bootstrap `<script>` and sets a CSP
         // carrying a per-request `'nonce-…'` so the inline block executes
         // without weakening `script-src` to `'unsafe-inline'`.
-        if (!self::hasHeader($existing, 'Content-Security-Policy')) {
+        if (!HeaderMap::has($existing, 'Content-Security-Policy')) {
             $out['Content-Security-Policy'] = self::contentSecurityPolicy();
         }
 
@@ -152,28 +152,6 @@ final class SecurityHeaders
         }
 
         return $response;
-    }
-
-    /**
-     * Case-insensitive presence check over a response's header map.
-     *
-     * Response::header() stores the key in the exact case it was called with,
-     * while HTTP treats field names case-insensitively — so a plain isset()
-     * guard misses a caller that wrote 'content-security-policy' or
-     * 'x-frame-options' and decorates a second copy beside it.
-     *
-     * @param array<string, string> $headers The response header map.
-     * @param string                $name    The field name to look up.
-     */
-    private static function hasHeader(array $headers, string $name): bool
-    {
-        foreach (array_keys($headers) as $key) {
-            if (strcasecmp($key, $name) === 0) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

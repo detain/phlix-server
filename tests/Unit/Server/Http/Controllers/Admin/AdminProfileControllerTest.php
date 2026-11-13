@@ -133,7 +133,7 @@ final class AdminProfileControllerTest extends TestCase
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('profile_id', $body);
-        $this->assertSame('Profile created successfully', $body['message']);
+        $this->assertSame('Profile created successfully.', $body['message']);
     }
 
     public function testCreateForUserMapsTvRatingInt(): void

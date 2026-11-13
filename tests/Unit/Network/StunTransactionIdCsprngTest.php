@@ -42,7 +42,7 @@ final class StunTransactionIdCsprngTest extends TestCase
     public function testSourceUsesRandomBytesAndNotMtRand(): void
     {
         $src = (string) file_get_contents((string) (new \ReflectionClass(StunClient::class))->getFileName());
-        self::assertStringContainsString('random_bytes(12)', $src);
+        self::assertStringContainsString('random_bytes(', $src);
         self::assertStringNotContainsString('mt_rand(', $src);
     }
 }

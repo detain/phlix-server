@@ -86,7 +86,7 @@ class MarkerController
         if ($markerSet->intro === null) {
             return (new Response())->status(404)->json([
                 'error' => 'Intro marker not found',
-                'message' => 'No intro marker has been detected for this media item',
+                'message' => 'No intro marker has been detected for this media item.',
             ]);
         }
 
@@ -118,7 +118,7 @@ class MarkerController
         if ($markerSet->outro === null) {
             return (new Response())->status(404)->json([
                 'error' => 'Outro marker not found',
-                'message' => 'No outro marker has been detected for this media item',
+                'message' => 'No outro marker has been detected for this media item.',
             ]);
         }
 

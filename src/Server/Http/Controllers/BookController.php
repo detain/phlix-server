@@ -514,7 +514,7 @@ class BookController
         $this->progressStore->saveProgress($progress);
 
         return (new Response())->json([
-            'message' => 'Progress saved',
+            'message' => 'Progress saved.',
             'progress' => $progress->toArray(),
         ]);
     }

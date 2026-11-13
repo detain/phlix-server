@@ -540,7 +540,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Items added to collection', $body['message']);
+        $this->assertSame('Items added to collection.', $body['message']);
         $this->assertSame(2, $body['added_count']);
     }
 
@@ -639,7 +639,7 @@ class CollectionControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Smart collection refreshed', $body['message']);
+        $this->assertSame('Smart collection refreshed.', $body['message']);
         // SRV-M19: a success 200 now carries the real diff — a silent no-op
         // cannot masquerade as success (review recommendation).
         $this->assertSame(2, $body['items_added']);

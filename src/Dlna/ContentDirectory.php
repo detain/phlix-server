@@ -720,6 +720,17 @@ class ContentDirectory
             if ($chunk['items'] === [] || $offset >= $chunk['total']) {
                 break;
             }
+
+            // Cap reached with rows still unscanned: the search is bounded on
+            // purpose (memory/latency), so TotalMatches can undercount. Say so.
+            if ($page === self::SEARCH_MAX_PAGES - 1) {
+                $this->logger->warning('DLNA search truncated at the scan cap; TotalMatches may undercount', [
+                    'container_id' => $containerId,
+                    'rows_scanned' => $offset,
+                    'container_total' => $chunk['total'],
+                    'max_pages' => self::SEARCH_MAX_PAGES,
+                ]);
+            }
         }
 
         return $filtered;

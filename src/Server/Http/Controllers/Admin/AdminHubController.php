@@ -233,6 +233,18 @@ final class AdminHubController
                 $enrollmentJwt = $result->enrollmentJwt ?? '';
                 $resultJwksUrl = $result->hubJwksUrl ?? '';
                 $resultServerId = $result->serverId ?? '';
+
+                // The JWKS URL comes from the hub's response: refuse to persist a
+                // non-http(s) value (an empty one is tolerated — older hubs omit
+                // it), mirroring hubComplete()'s scheme gate. HubJwtValidator also
+                // refuses such a URL at fetch time; this keeps it off disk at all.
+                if ($resultJwksUrl !== '' && !\Phlix\Hub\HubUrlPolicy::isHttpScheme($resultJwksUrl)) {
+                    return (new Response())->status(502)->json([
+                        'success' => false,
+                        'message' => 'Hub returned an invalid JWKS URL; it must be an http:// or https:// URL.',
+                    ]);
+                }
+
                 $hubClient->storeEnrollment($enrollmentJwt, $resultJwksUrl, $resultServerId, $hubUrl);
 
                 return (new Response())->json([

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Hub\ClaimStatusResult;
+use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayStateStore;
 use Phlix\Server\Http\Controllers\Admin\AdminHubController;
 use Phlix\Server\Http\Request;
@@ -566,6 +568,76 @@ final class AdminHubControllerTest extends TestCase
             );
         }
         $this->assertFileDoesNotExist($this->dir . '/hub-enrollment.json');
+    }
+
+    /**
+     * Controller whose HubClient is a mock returning $result from pollClaimStatus().
+     * `$stored` flips true when storeEnrollment() is reached.
+     */
+    private function pollControllerReturning(ClaimStatusResult $result, bool &$stored): AdminHubController
+    {
+        $client = $this->getMockBuilder(HubClient::class)->disableOriginalConstructor()->getMock();
+        $client->method('pollClaimStatus')->willReturn($result);
+        $client->method('storeEnrollment')->willReturnCallback(function () use (&$stored): void {
+            $stored = true;
+        });
+        $container = new class ($client) implements \Psr\Container\ContainerInterface {
+            public function __construct(private object $client)
+            {
+            }
+
+            public function get(string $id): mixed
+            {
+                return $this->client;
+            }
+
+            public function has(string $id): bool
+            {
+                return true;
+            }
+        };
+
+        return new AdminHubController($container, $this->dir);
+    }
+
+    public function testHubPollRefusesToStoreANonHttpJwksUrlFromTheHub(): void
+    {
+        foreach (['file:///etc/passwd', 'javascript:alert(1)', 'gopher://h.test/jwks'] as $jwks) {
+            $stored = false;
+            $controller = $this->pollControllerReturning(
+                new ClaimStatusResult(ClaimStatusResult::STATUS_CLAIMED, 'jwt', $jwks, 'srv-1'),
+                $stored
+            );
+            $response = $controller->hubPoll(
+                $this->postBody(['claimId' => 'abc123', 'hubUrl' => 'https://hub.test']),
+                []
+            );
+
+            $this->assertSame(502, $response->statusCode, $jwks);
+            $this->assertFalse($this->decode($response->body)['success']);
+            $this->assertFalse($stored, 'non-http JWKS URL must never reach storeEnrollment()');
+        }
+    }
+
+    public function testHubPollStoresAHttpsJwksUrl(): void
+    {
+        $stored = false;
+        $controller = $this->pollControllerReturning(
+            new ClaimStatusResult(
+                ClaimStatusResult::STATUS_CLAIMED,
+                'jwt',
+                'https://hub.test/.well-known/jwks.json',
+                'srv-1'
+            ),
+            $stored
+        );
+        $response = $controller->hubPoll(
+            $this->postBody(['claimId' => 'abc123', 'hubUrl' => 'https://hub.test']),
+            []
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertTrue($stored);
     }
 
     public function testHubPairFailureAnswersFixedCopyAndLogsTheCause(): void

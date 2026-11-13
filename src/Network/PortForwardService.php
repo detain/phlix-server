@@ -119,7 +119,7 @@ class PortForwardService
                         'local_ip' => $localIp,
                         'port' => $this->port,
                     ]);
-                    $this->persistConfig([
+                    $this->persistOrWarn([
                         'method' => 'upnp',
                         'external_ip' => $externalIp,
                         'port' => $this->port,
@@ -154,7 +154,7 @@ class PortForwardService
                         'granted_lifetime' => $grantedLifetime,
                         'renew_at' => $renewAt,
                     ]);
-                    $this->persistConfig([
+                    $this->persistOrWarn([
                         'method' => 'natpmp',
                         'external_ip' => $externalIp,
                         'port' => $assignedPort,
@@ -198,7 +198,7 @@ class PortForwardService
                     'public_ip' => $publicIp,
                     'port' => $this->port,
                 ]);
-                $this->persistConfig([
+                $this->persistOrWarn([
                     'method' => 'stun-already-open',
                     'external_ip' => $publicIp,
                     'port' => $this->port,
@@ -372,11 +372,13 @@ TEXT;
      *
      * @param array<string,mixed> $patch
      *
+     * @return bool True when the merge was durably written.
+     *
      * @since 1.8.0
      */
-    public function mergeState(array $patch): void
+    public function mergeState(array $patch): bool
     {
-        $this->persistConfig($patch);
+        return $this->persistOrWarn($patch);
     }
 
     /**
@@ -544,7 +546,7 @@ TEXT;
         // renew-at deadline, failure backoff, gateway source-pin and
         // announcement observations must not linger in the config for the
         // resident NatPmpMaintenanceWorker (or any future owner) to act on.
-        $this->persistConfig([
+        $this->persistOrWarn([
             'enabled' => false,
             'mapping_granted_lifetime' => null,
             'mapping_renew_at' => null,
@@ -704,6 +706,28 @@ TEXT;
         // Overriding this method remains the test seam: an override never reaches
         // the guard, exactly as it never reached the old bare construction.
         return CoroutineSocketGuard::create(AF_INET, $type, 0);
+    }
+
+    /**
+     * Persist after a mapping/teardown that already took effect on the network.
+     *
+     * The mapping outcome stands either way, but a failed write leaves the
+     * on-disk record (and so the renewal worker's view) out of step with the
+     * router — persistConfig() only logs the low-level cause, so name the
+     * consequence here instead of silently dropping the bool.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function persistOrWarn(array $config): bool
+    {
+        $ok = $this->persistConfig($config);
+        if (!$ok) {
+            $this->logger->warning('Port-forward state could not be persisted; the on-disk record is stale', [
+                'operation' => is_string($config['method'] ?? null) ? $config['method'] : 'teardown',
+            ]);
+        }
+
+        return $ok;
     }
 
     /**

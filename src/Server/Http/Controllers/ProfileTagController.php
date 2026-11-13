@@ -165,7 +165,7 @@ final class ProfileTagController
         return (new Response())->status(201)->json([
             'id' => $tagId,
             'tag_id' => $tagId,
-            'message' => 'Tag added successfully',
+            'message' => 'Tag added successfully.',
         ]);
     }
 

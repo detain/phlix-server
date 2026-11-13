@@ -514,7 +514,7 @@ class SessionControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Playback completed', $body['message']);
+        $this->assertSame('Playback completed.', $body['message']);
         $this->assertTrue($body['reached_end']);
     }
 
@@ -598,7 +598,7 @@ class SessionControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('Playback completed', $body['message']);
+        $this->assertSame('Playback completed.', $body['message']);
         $this->assertTrue($body['reached_end']);
     }
 

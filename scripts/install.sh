@@ -319,7 +319,8 @@ Options:
                           installer, required for provider metadata)
   --hub-url URL           PHLIX_HUB_URL for hub relay     (optional)
   --service-user USER     System user to run as           (default: phlix)
-  --branch NAME           Git branch / tag to install     (default: master)
+  --branch NAME           Git branch (or tag, fresh install only) to install
+                          (default: master; --update takes a branch, not a tag)
   --repo URL              Git repository URL              (default: detain/phlix-server)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
@@ -363,8 +364,9 @@ Examples:
   # Update an existing install to the latest master (preserves env + secrets)
   sudo bash install.sh --update -y
 
-  # Update and switch to a different branch / tag (published tags: 'git tag -l')
-  sudo bash install.sh --update --branch v1.2.3 -y
+  # Update and switch to a different branch (a tag aborts on --update; tags are
+  # for fresh installs only: install.sh --branch v1.2.3)
+  sudo bash install.sh --update --branch release-1.x -y
 EOF
 }
 

@@ -54,6 +54,16 @@ final class MetricsRegistry
      */
     public const DEFAULT_LATENCY_BUCKETS_MS = [10, 50, 100, 250, 500, 1000, 2500, 5000];
 
+    /**
+     * Maximum distinct time buckets retained after {@see self::restoreRollups()}.
+     *
+     * During a long database outage every failed flush merges its buckets back,
+     * so without a bound the accumulators would grow for the whole outage. When
+     * the cap is exceeded the OLDEST buckets are dropped (newest data is the
+     * most useful once persistence recovers).
+     */
+    public const MAX_RETAINED_BUCKETS = 720;
+
     /** @var int Bucket granularity in seconds (buckets aligned to floor(ts/N)*N). */
     private int $bucketSeconds;
 
@@ -519,6 +529,23 @@ final class MetricsRegistry
             $r['duration_ms_sum'] += $row['duration_ms_sum'];
             $r['duration_ms_max']  = max($r['duration_ms_max'], $row['duration_ms_max']);
             $this->routeBuckets[$ts][$key] = $r;
+        }
+
+        $this->trimRetainedBuckets();
+    }
+
+    /**
+     * Drop the oldest buckets beyond {@see self::MAX_RETAINED_BUCKETS}.
+     */
+    private function trimRetainedBuckets(): void
+    {
+        if (count($this->buckets) > self::MAX_RETAINED_BUCKETS) {
+            ksort($this->buckets);
+            $this->buckets = array_slice($this->buckets, -self::MAX_RETAINED_BUCKETS, null, true);
+        }
+        if (count($this->routeBuckets) > self::MAX_RETAINED_BUCKETS) {
+            ksort($this->routeBuckets);
+            $this->routeBuckets = array_slice($this->routeBuckets, -self::MAX_RETAINED_BUCKETS, null, true);
         }
     }
 

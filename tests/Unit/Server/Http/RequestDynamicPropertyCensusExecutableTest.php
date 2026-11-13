@@ -1232,7 +1232,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 127RealDbTest.php (real-MySQL replay + grace-clock proof); the reads/
     // writes denominators re-run untouched (none of the three speaks on a
     // Request root); 2094 measured from the phpunit red.
-    private const EXPECTED_PHP_FILES = 2094;
+    // +5 2094→2099: the fix-program tail lands five new first-party PHP files;
+    // 2099 measured from the CI phpunit red (undeclared-read leg still green).
+    private const EXPECTED_PHP_FILES = 2099;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1377,7 +1379,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      * subject). All on declared members, post-rotation; the undeclared-read
      * leg re-convicts any name not in DECLARED_MEMBERS, measured 481.
      */
-    private const EXPECTED_DECLARED_READS = 481;
+    // +7 481→488 (fix-program tail): seven more reads, all on declared members;
+    // 488 measured from the CI phpunit red; the undeclared-read leg still guards.
+    private const EXPECTED_DECLARED_READS = 488;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request

@@ -487,7 +487,7 @@ final class MetricsRegistry
                     'histogram'       => $this->emptyHistogram(),
                 ];
             }
-            $b = &$this->buckets[$ts];
+            $b = $this->buckets[$ts];
             $b['request_count']   += $row['request_count'];
             $b['error_count']     += $row['error_count'];
             $b['duration_ms_sum'] += $row['duration_ms_sum'];
@@ -497,7 +497,7 @@ final class MetricsRegistry
             foreach ($row['histogram'] as $idx => $count) {
                 $b['histogram'][$idx] = ($b['histogram'][$idx] ?? 0) + $count;
             }
-            unset($b);
+            $this->buckets[$ts] = $b;
         }
 
         foreach ($routes as $row) {
@@ -513,12 +513,12 @@ final class MetricsRegistry
                     'duration_ms_max' => 0,
                 ];
             }
-            $r = &$this->routeBuckets[$ts][$key];
+            $r = $this->routeBuckets[$ts][$key];
             $r['request_count']   += $row['request_count'];
             $r['error_count']     += $row['error_count'];
             $r['duration_ms_sum'] += $row['duration_ms_sum'];
             $r['duration_ms_max']  = max($r['duration_ms_max'], $row['duration_ms_max']);
-            unset($r);
+            $this->routeBuckets[$ts][$key] = $r;
         }
     }
 

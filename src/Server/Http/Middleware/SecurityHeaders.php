@@ -378,7 +378,11 @@ final class SecurityHeaders
         $candidate = trim($origin);
         if (
             $candidate === ''
-            || preg_match('#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#', $candidate, $parts) !== 1
+            || preg_match(
+                '#^(wss?)://([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$#',
+                $candidate,
+                $parts
+            ) !== 1
         ) {
             return null;
         }

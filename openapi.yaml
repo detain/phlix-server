@@ -11898,6 +11898,16 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+                properties:
+                  server:
+                    type: string
+                  version:
+                    type: string
+                  password_min_length:
+                    type: integer
+                    minimum: 8
+                    maximum: 128
+                    description: "Effective minimum password length (clamped policy value; no secret material)."
   "/trickplay/{jobId}/sprite.jpg":
     get:
       operationId: "get_trickplay_jobId_sprite_jpg"

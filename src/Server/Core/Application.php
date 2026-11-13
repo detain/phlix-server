@@ -253,9 +253,16 @@ class Application
                 ? $serverConfig['name']
                 : 'Phlix Media Server';
 
+            // SRV-49: the EFFECTIVE signup/password minimum length so a client
+            // can show the real policy before submitting. Additive; value is
+            // the clamped integer only (no secret material). Degrades to the
+            // absolute floor when the settings store is unavailable.
+            $passwordPolicy = new \Phlix\Auth\PasswordPolicy($this->optionalSettingsRepository());
+
             return (new Response())->json([
                 'server' => $serverName,
                 'version' => Version::STRING,
+                'password_min_length' => $passwordPolicy->minLength(),
             ]);
         });
 

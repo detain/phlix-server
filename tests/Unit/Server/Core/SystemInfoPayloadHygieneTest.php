@@ -212,4 +212,14 @@ final class SystemInfoPayloadHygieneTest extends TestCase
             'L-3: Workerman\Worker::VERSION is stack fingerprinting; no consumer reads it.'
         );
     }
+
+    public function testAnonymousSystemInfoExposesEffectivePasswordMinLength(): void
+    {
+        $body = $this->body($this->application()->dispatch($this->request('/system/info')));
+
+        $this->assertArrayHasKey('password_min_length', $body);
+        $this->assertIsInt($body['password_min_length']);
+        $this->assertGreaterThanOrEqual(\Phlix\Auth\PasswordPolicy::ABSOLUTE_MIN_LENGTH, $body['password_min_length']);
+        $this->assertLessThanOrEqual(\Phlix\Auth\PasswordPolicy::ABSOLUTE_MAX_LENGTH, $body['password_min_length']);
+    }
 }

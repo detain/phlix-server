@@ -68,6 +68,7 @@ final class AuthControllerLdapLoginTest extends TestCase
         // S44 Finding 5 — the raw provider error code is NOT echoed back; a
         // single generic credential-rejection message is returned.
         $this->assertSame('Invalid credentials', $body['error']);
+        $this->assertSame('auth.invalid_credentials', $body['code']);
     }
 
     /**
@@ -95,7 +96,10 @@ final class AuthControllerLdapLoginTest extends TestCase
             $body = json_decode($response->body, true);
             $this->assertSame('Invalid credentials', $body['error'], "for provider error: {$providerError}");
             // The raw provider code must never be reflected to the client.
-            $this->assertStringNotContainsString($providerError, $response->body);
+            // (SRV-S27: the stable `auth.invalid_credentials` code is the one
+            // sanctioned wire token; it is identical for both provider errors.)
+            $this->assertSame('auth.invalid_credentials', $body['code']);
+            $this->assertStringNotContainsString($providerError, (string) $body['error']);
         }
     }
 

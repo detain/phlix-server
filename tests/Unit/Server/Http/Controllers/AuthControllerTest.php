@@ -139,6 +139,7 @@ class AuthControllerTest extends TestCase
         /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Invalid credentials', $body['error']);
+        $this->assertSame('auth.invalid_credentials', $body['code']);
     }
 
     /**

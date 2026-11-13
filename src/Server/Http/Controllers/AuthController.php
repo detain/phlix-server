@@ -318,7 +318,11 @@ class AuthController
             if ($isBrowser) {
                 return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
             }
-            return (new Response())->status(401)->json(['error' => $e->getMessage()]);
+            // SRV-S27: stable contracts-registered code; message byte-identical.
+            return (new Response())->status(401)->json([
+                'error' => $e->getMessage(),
+                'code' => 'auth.invalid_credentials',
+            ]);
         }
     }
 
@@ -405,7 +409,10 @@ class AuthController
             if ($isBrowser) {
                 return (new Response())->redirect('/login?error=' . rawurlencode($msg));
             }
-            return (new Response())->status(401)->json(['error' => $msg]);
+            return (new Response())->status(401)->json([
+                'error' => $msg,
+                'code' => 'auth.invalid_credentials',
+            ]);
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17 (and the F8 note in REVIEW-SRV-MAJORS-T3): the provider IS
             // available and the credentials were correct — the ACCOUNT is held.

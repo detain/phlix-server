@@ -172,7 +172,7 @@ final class AdminUpdatesController
 
         return (new Response())->json([
             'success' => true,
-            'message' => 'Settings updated.',
+            'message' => 'Settings updated',
             'data'    => $this->updates->status()->toArray(),
         ]);
     }

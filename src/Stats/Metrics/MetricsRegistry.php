@@ -443,6 +443,86 @@ final class MetricsRegistry
     }
 
     /**
+     * Merge previously drained rollup rows back into the live accumulators.
+     *
+     * Used by the flush service when a persistence write fails after
+     * {@see self::drainRollups()} already reset the buckets, so the undelivered
+     * counts are retried on the next tick instead of being lost. Counters add,
+     * maxima take the larger value, histograms add per bound.
+     *
+     * @param array<int, array{
+     *     bucket_started_at: int,
+     *     request_count: int,
+     *     error_count: int,
+     *     duration_ms_sum: int,
+     *     duration_ms_max: int,
+     *     bytes_in: int,
+     *     bytes_out: int,
+     *     histogram: array<int, int>
+     * }> $overall Rows shaped like drainRollups()['overall'].
+     * @param array<int, array{
+     *     bucket_started_at: int,
+     *     method: string,
+     *     route: string,
+     *     request_count: int,
+     *     error_count: int,
+     *     duration_ms_sum: int,
+     *     duration_ms_max: int
+     * }> $routes Rows shaped like drainRollups()['routes'].
+     *
+     * @return void
+     */
+    public function restoreRollups(array $overall, array $routes): void
+    {
+        foreach ($overall as $row) {
+            $ts = $row['bucket_started_at'];
+            if (!isset($this->buckets[$ts])) {
+                $this->buckets[$ts] = [
+                    'request_count'   => 0,
+                    'error_count'     => 0,
+                    'duration_ms_sum' => 0,
+                    'duration_ms_max' => 0,
+                    'bytes_in'        => 0,
+                    'bytes_out'       => 0,
+                    'histogram'       => $this->emptyHistogram(),
+                ];
+            }
+            $b = &$this->buckets[$ts];
+            $b['request_count']   += $row['request_count'];
+            $b['error_count']     += $row['error_count'];
+            $b['duration_ms_sum'] += $row['duration_ms_sum'];
+            $b['duration_ms_max']  = max($b['duration_ms_max'], $row['duration_ms_max']);
+            $b['bytes_in']        += $row['bytes_in'];
+            $b['bytes_out']       += $row['bytes_out'];
+            foreach ($row['histogram'] as $idx => $count) {
+                $b['histogram'][$idx] = ($b['histogram'][$idx] ?? 0) + $count;
+            }
+            unset($b);
+        }
+
+        foreach ($routes as $row) {
+            $ts  = $row['bucket_started_at'];
+            $key = $row['method'] . ' ' . $row['route'];
+            if (!isset($this->routeBuckets[$ts][$key])) {
+                $this->routeBuckets[$ts][$key] = [
+                    'method'          => $row['method'],
+                    'route'           => $row['route'],
+                    'request_count'   => 0,
+                    'error_count'     => 0,
+                    'duration_ms_sum' => 0,
+                    'duration_ms_max' => 0,
+                ];
+            }
+            $r = &$this->routeBuckets[$ts][$key];
+            $r['request_count']   += $row['request_count'];
+            $r['error_count']     += $row['error_count'];
+            $r['duration_ms_sum'] += $row['duration_ms_sum'];
+            $r['duration_ms_max']  = max($r['duration_ms_max'], $row['duration_ms_max']);
+            unset($r);
+        }
+    }
+
+    /**
      * Return a copy of the active-connection map (no reset).
      *
      * @return array<string, array{

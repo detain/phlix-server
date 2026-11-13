@@ -300,4 +300,77 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertArrayNotHasKey('idle', $snap, 'Idle connection past TTL is pruned from the registry.');
         $this->assertArrayHasKey('live', $snap, 'A recently-touched connection is retained.');
     }
+
+    public function test_failed_write_restores_drained_rollups_for_retry(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $registry->recordRequest('GET', '/a', 200, 5.0, 10, 20, 1000);
+        $registry->recordRequest('GET', '/a', 500, 600.0, 1, 2, 1000);
+
+        $state = new \stdClass();
+        $state->fail = true;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $bindings = []) use ($state): array {
+                if ($state->fail) {
+                    throw new \RuntimeException('db down');
+                }
+                $this->queries[] = ['sql' => $sql, 'params' => $bindings];
+                return [];
+            }
+        );
+        $svc = $this->service($db, $collector);
+
+        try {
+            $svc->flush(3, 1000);
+            $this->fail('flush must rethrow so the timer barrier can log');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('db down', $e->getMessage());
+        }
+
+        $state->fail = false;
+        $svc->flush(3, 1005);
+
+        $overall = $this->queriesMatching('INSERT INTO metrics_rollup');
+        $this->assertCount(1, $overall);
+        $this->assertSame(2, $overall[0]['params'][2]);   // request_count survived
+        $this->assertSame(1, $overall[0]['params'][3]);   // error_count
+        $this->assertSame(605, $overall[0]['params'][4]);
+        $this->assertSame(600, $overall[0]['params'][5]);
+        $this->assertSame(1, $overall[0]['params'][8]);   // h_le_10
+        $this->assertCount(1, $this->queriesMatching('INSERT INTO metrics_route_rollup'));
+    }
+
+    public function test_route_failure_does_not_redeliver_written_overall_rows(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $registry->recordRequest('GET', '/a', 200, 5.0, 0, 0, 1000);
+
+        $state = new \stdClass();
+        $state->failRoutes = true;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $bindings = []) use ($state): array {
+                if ($state->failRoutes && str_contains($sql, 'metrics_route_rollup')) {
+                    throw new \RuntimeException('route write failed');
+                }
+                $this->queries[] = ['sql' => $sql, 'params' => $bindings];
+                return [];
+            }
+        );
+        $svc = $this->service($db, $collector);
+
+        try {
+            $svc->flush(3, 1000);
+            $this->fail('expected rethrow');
+        } catch (\RuntimeException) {
+        }
+        $state->failRoutes = false;
+        $svc->flush(3, 1005);
+
+        $this->assertCount(1, $this->queriesMatching('INSERT INTO metrics_rollup'));
+        $this->assertCount(1, $this->queriesMatching('INSERT INTO metrics_route_rollup'));
+    }
 }

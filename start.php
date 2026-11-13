@@ -681,7 +681,15 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         \Workerman\Timer::add(
             $flushInterval,
             static function () use ($flushService, $w): void {
-                $flushService->flush((int) $w->id, (int) time());
+                // Timer barrier: a failed tick must log and let the next tick retry.
+                try {
+                    $flushService->flush((int) $w->id, (int) time());
+                } catch (\Throwable $e) {
+                    LoggerFactory::get(LogChannels::APPLICATION)->error(
+                        'Metrics flush tick failed',
+                        ['worker_id' => (int) $w->id, 'error' => $e->getMessage()],
+                    );
+                }
             },
         );
     }
@@ -938,7 +946,15 @@ try {
             \Workerman\Timer::add(
                 $wsFlushInterval,
                 static function () use ($wsFlushService, $wsWorkerId): void {
-                    $wsFlushService->flush($wsWorkerId, (int) time());
+                    // Timer barrier: log and retry on the next tick.
+                    try {
+                        $wsFlushService->flush($wsWorkerId, (int) time());
+                    } catch (\Throwable $e) {
+                        LoggerFactory::get(LogChannels::APPLICATION)->error(
+                            'Metrics flush tick failed',
+                            ['worker_id' => $wsWorkerId, 'error' => $e->getMessage()],
+                        );
+                    }
                 },
             );
         }

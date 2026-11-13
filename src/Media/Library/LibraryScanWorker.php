@@ -500,6 +500,16 @@ class LibraryScanWorker
             ]);
         }
 
-        Timer::add($pollSeconds, fn(): bool => $this->runOnce());
+        // Timer barrier: a throw from the claim (DB hiccup) must not escape the tick.
+        Timer::add($pollSeconds, function (): bool {
+            try {
+                return $this->runOnce();
+            } catch (Throwable $e) {
+                $this->logger->error('LibraryScanWorker: poll tick failed', [
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
+            }
+        });
     }
 }

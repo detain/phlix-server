@@ -750,4 +750,52 @@ class LibraryScanWorkerTest extends TestCase
             $workersProp->setValue(null, $saved);
         }
     }
+
+    /**
+     * Timer barrier: a throw from claimNext() inside the armed poll tick must be
+     * logged and swallowed, never escape to the event loop.
+     */
+    public function testPollTickLogsAndSwallowsClaimFailure(): void
+    {
+        $workersProp = new \ReflectionProperty(Worker::class, 'workers');
+        $workersProp->setAccessible(true);
+        /** @var array<int, Worker> $saved */
+        $saved = $workersProp->getValue();
+
+        $stub = new Worker();
+        $workersProp->setValue(null, [spl_object_id($stub) => $stub]);
+        Timer::delAll();
+
+        try {
+            $jobs = $this->createMock(ScanJobRepository::class);
+            $jobs->method('claimNext')->willThrowException(new RuntimeException('claim db down'));
+
+            $logger = $this->createMock(StructuredLogger::class);
+            $logger->expects($this->once())
+                ->method('error')
+                ->with($this->stringContains('poll tick failed'), $this->arrayHasKey('error'));
+
+            $worker = new LibraryScanWorker(
+                $jobs,
+                $this->createMock(LibraryManager::class),
+                $this->makeUnusedMatcher(),
+                $logger,
+            );
+            $worker->start(5);
+
+            $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
+            $tasksProp->setAccessible(true);
+            /** @var array<int, mixed> $tasks */
+            $tasks = $tasksProp->getValue();
+            $this->assertNotEmpty($tasks);
+            $byId = reset($tasks);
+            $task = is_array($byId) ? reset($byId) : null;
+            $callback = is_array($task) ? $task[0] : null;
+            $this->assertIsCallable($callback);
+            $this->assertFalse($callback());
+        } finally {
+            Timer::delAll();
+            $workersProp->setValue(null, $saved);
+        }
+    }
 }

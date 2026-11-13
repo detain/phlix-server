@@ -94,8 +94,24 @@ final class MetricsFlushService
         $registry = $this->collector->registry();
         $drained  = $registry->drainRollups($nowTs);
 
-        $this->flushOverall($workerId, $drained['overall']);
-        $this->flushRoutes($workerId, $drained['routes']);
+        // Write-then-drain: the registry was reset by drainRollups(), so any row
+        // that fails to persist is merged back (see restoreRollups) and retried
+        // on the next tick rather than silently lost. The failure is rethrown so
+        // the timer barrier in start.php logs it.
+        $overall = array_values($drained['overall']);
+        $routes  = $drained['routes'];
+        try {
+            $this->flushOverall($workerId, $overall);
+        } catch (\Throwable $e) {
+            $registry->restoreRollups($overall, $routes);
+            throw $e;
+        }
+        try {
+            $this->flushRoutes($workerId, $routes);
+        } catch (\Throwable $e) {
+            $registry->restoreRollups([], $routes);
+            throw $e;
+        }
         $this->flushConnections($workerId, $registry->snapshotConnections(), $nowTs);
 
         // Prune roughly once per minute rather than every flush. Evict stale rows
@@ -149,13 +165,14 @@ final class MetricsFlushService
      *     bytes_in: int,
      *     bytes_out: int,
      *     histogram: array<int, int>
-     * }> $buckets
+     * }> $buckets Consumed by reference: written rows are removed so a failure leaves only the undelivered remainder.
      *
      * @return void
      */
-    private function flushOverall(int $workerId, array $buckets): void
+    private function flushOverall(int $workerId, array &$buckets): void
     {
-        foreach ($buckets as $b) {
+        while ($buckets !== []) {
+            $b = $buckets[array_key_first($buckets)];
             $h = $b['histogram'];
             $this->db->query(
                 "INSERT INTO metrics_rollup
@@ -200,6 +217,7 @@ final class MetricsFlushService
                     $h[-1] ?? 0,
                 ]
             );
+            unset($buckets[array_key_first($buckets)]);
         }
     }
 
@@ -215,13 +233,14 @@ final class MetricsFlushService
      *     error_count: int,
      *     duration_ms_sum: int,
      *     duration_ms_max: int
-     * }> $routes
+     * }> $routes Consumed by reference (written rows removed).
      *
      * @return void
      */
-    private function flushRoutes(int $workerId, array $routes): void
+    private function flushRoutes(int $workerId, array &$routes): void
     {
-        foreach ($routes as $r) {
+        while ($routes !== []) {
+            $r = $routes[array_key_first($routes)];
             $this->db->query(
                 "INSERT INTO metrics_route_rollup
                  (bucket_started_at, worker_id, method, route,
@@ -243,6 +262,7 @@ final class MetricsFlushService
                     $r['duration_ms_max'],
                 ]
             );
+            unset($routes[array_key_first($routes)]);
         }
     }
 

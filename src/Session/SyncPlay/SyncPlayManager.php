@@ -1966,7 +1966,7 @@ class SyncPlayManager
         }
 
         $groupId = self::stringFromMixed($payload['group_id'] ?? '');
-        $memberName = self::stringFromMixed($payload['member_name'] ?? 'User');
+        $memberName = self::stringFromMixed($payload['member_name'] ?? 'Host');
 
         // HIGH-1 — same boundary gate parse as handleGroupCreate(): spec
         // `password_hash` verbatim, legacy `password` hashed, malformed refused.

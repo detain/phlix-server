@@ -31,6 +31,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ## [Unreleased]
 
+### Changed
+
+- **SyncPlay `syncplay_group_join` fallback `member_name` is now `'Host'` (was
+  `'User'`).** Aligns with the `createGroup` default and the
+  `@phlix/syncplay` client default (SPY-S13, owner ruling 2026-11-13).
+
 ### Added
 
 - **The WS query-carrier gate gained its stored-home admin control:

@@ -211,7 +211,7 @@ class SyncPlayManagerTest extends TestCase
     public function testGetStatsReturnsStatistics(): void
     {
         $this->manager->createGroup('Group 1');
-        $this->manager->createGroup('Group 2', null, 'member_1', 'User');
+        $this->manager->createGroup('Group 2', null, 'member_1', 'Host');
 
         $stats = $this->manager->getStats();
 

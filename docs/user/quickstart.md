@@ -143,6 +143,11 @@ HTTPS reverse proxy. Do **not** port-forward the watch-party WebSocket
 deliberately never opens it. Front it with TLS (README → *Exposure note*) and
 send the remote guest the room id (plus password) exactly as for local ones.
 
+**Automatic port forwarding is on by default.** Phlix asks your router (UPnP /
+NAT-PMP) to open the server port to the internet. If you do not want that, set
+`PHLIX_PORT_FORWARD_AUTO=false` (and `PHLIX_UPNP_ENABLED=false`) and remove any
+existing mapping from your router's admin page.
+
 ## Remote access: the hub
 
 A **hub** ([`phlix-hub`](https://github.com/detain/phlix-hub)) is a small

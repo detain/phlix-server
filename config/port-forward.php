@@ -2,6 +2,13 @@
 
 declare(strict_types=1);
 
+/*
+ * WARNING (exposure): with `auto` and `upnp_enabled` true (the defaults), the
+ * server asks the LAN router via NAT-PMP/UPnP to publish `port` to the
+ * internet. To opt out set PHLIX_PORT_FORWARD_AUTO=false and
+ * PHLIX_UPNP_ENABLED=false, and delete any existing mapping on the router.
+ * The defaults are owner-gated and intentionally unchanged here.
+ */
 return [
     'port_forwarding' => [
         'auto' => (bool) ($_ENV['PHLIX_PORT_FORWARD_AUTO'] ?? true),

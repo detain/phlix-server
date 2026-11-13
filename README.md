@@ -1356,8 +1356,8 @@ SAPI pre-populates `$_ENV`).
 | Variable | Config default | Purpose |
 |----------|----------------|---------|
 | `PHLIX_CROSSFADE_DURATION` / `PHLIX_CROSSFADE_FADE_OUT` / `PHLIX_CROSSFADE_FADE_IN` | `0` / `0.3` / `0.3` | audio crossfade (disabled by default) |
-| `PHLIX_UPNP_ENABLED` | `true` | UPnP IGD discovery |
-| `PHLIX_PORT_FORWARD_AUTO` | `true` | automatic NAT-PMP/UPnP pinholing |
+| `PHLIX_UPNP_ENABLED` | `true` | UPnP IGD discovery. **Exposure:** a successful mapping opens the server port to the internet on your router. Disable with `PHLIX_UPNP_ENABLED=false` |
+| `PHLIX_PORT_FORWARD_AUTO` | `true` | automatic NAT-PMP/UPnP pinholing. **Exposure:** on by default, it asks the router to publish the server port publicly. Disable with `PHLIX_PORT_FORWARD_AUTO=false` (UPnP alone: `PHLIX_UPNP_ENABLED=false`); remove an existing mapping on the router's admin page if one was made |
 | `PHLIX_EXTERNAL_PORT` / `PHLIX_EXTERNAL_HTTP_PORT` / `PHLIX_EXTERNAL_HTTPS_PORT` | `32400` / `8080` / `8443` | advertised external ports |
 | `PHLIX_STUN_SERVER` / `PHLIX_STUN_PORT` | `stun.l.google.com` / `19302` | STUN reachability probe |
 

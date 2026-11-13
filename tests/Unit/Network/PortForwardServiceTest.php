@@ -301,6 +301,31 @@ class PortForwardServiceTest extends TestCase
         $this->assertEquals('203.0.113.42:32400', $status['endpoint']);
     }
 
+    public function testPersistConfigReportsWriteFailureAndLogsWarning(): void
+    {
+        // A regular FILE where the config/ directory must go: mkdir fails.
+        file_put_contents($this->tmpDir . '/config', 'blocker');
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('warning');
+
+        $service = new PortForwardService(
+            $this->createMock(UpnpIgdClient::class),
+            $this->createMock(StunClient::class),
+            $this->createMock(NatPmpClient::class),
+            $logger,
+            32400,
+            true,
+            $this->tmpDir
+        );
+        $m = new \ReflectionMethod($service, 'persistConfig');
+        $m->setAccessible(true);
+        $this->assertFalse($m->invoke($service, ['enabled' => true]));
+        @unlink($this->tmpDir . '/config');
+
+        $this->assertTrue($m->invoke($service, ['enabled' => true]));
+        $this->assertFileExists($this->tmpDir . '/config/port-forward.json');
+    }
+
     public function testDisableRemovesConfig(): void
     {
         $upnp = $this->createMock(UpnpIgdClient::class);

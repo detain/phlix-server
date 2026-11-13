@@ -435,7 +435,7 @@ TEXT;
 
         $grantedLifetime = (int) $mapping['granted_lifetime'];
         $renewAt = time() + intdiv($grantedLifetime, 2);
-        $this->persistConfig([
+        $persisted = $this->persistConfig([
             'method' => 'natpmp',
             'external_ip' => $externalIp,
             'port' => $mapping['external_port'],
@@ -446,6 +446,12 @@ TEXT;
             'mapping_retry_at' => null,
             'mapping_failed_attempts' => 0,
         ]);
+        if (!$persisted) {
+            $this->logger->error('NAT-PMP mapping renewed but renewal deadline could not be persisted', [
+                'gateway' => $gatewayIp,
+                'renew_at' => $renewAt,
+            ]);
+        }
         $this->logger->info('NAT-PMP mapping renewed', [
             'gateway' => $gatewayIp,
             'external_ip' => $externalIp,
@@ -482,9 +488,10 @@ TEXT;
         if ($gatewayIp !== null) {
             $patch['gateway_ip'] = $gatewayIp;
         }
-        $this->persistConfig($patch);
+        $parked = $this->persistConfig($patch);
 
         $this->logger->warning('NAT-PMP renewal failed, backing off', [
+            'ledger_persisted' => $parked,
             'reason' => $reason,
             'consecutive_failures' => $attempts,
             'retry_in_seconds' => $delay,
@@ -701,19 +708,33 @@ TEXT;
      * Persists the port-forward configuration to disk.
      *
      * @param array<string, mixed> $config
+     *
+     * @return bool True when the config was durably written; false (and a
+     *              warning logged) when the directory or file write failed.
      */
-    private function persistConfig(array $config): void
+    private function persistConfig(array $config): bool
     {
         $configFile = $this->getConfigFilePath();
         $dir = dirname($configFile);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            $this->logger->warning('Port-forward config directory could not be created', ['dir' => $dir]);
+            return false;
         }
 
         $existing = $this->loadConfig();
         $merged = $existing !== null ? array_merge($existing, $config) : $config;
 
-        @file_put_contents($configFile, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+        $written = @file_put_contents(
+            $configFile,
+            json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+            LOCK_EX
+        );
+        if ($written === false) {
+            $this->logger->warning('Port-forward config write failed', ['file' => $configFile]);
+            return false;
+        }
+
+        return true;
     }
 
     /**

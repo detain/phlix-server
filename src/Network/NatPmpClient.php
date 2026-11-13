@@ -111,9 +111,9 @@ class NatPmpClient
         $fromAddr = '';
         $fromPort = 0;
 
-        $startTime = microtime(true);
+        $startTime = hrtime(true);
 
-        while ((microtime(true) - $startTime) * 1000 < $this->timeout) {
+        while ((hrtime(true) - $startTime) / 1_000_000 < $this->timeout) {
             $read = [$socket];
             $write = null;
             $except = null;
@@ -228,8 +228,8 @@ class NatPmpClient
         $fromAddr = '';
         $fromPort = 0;
 
-        $startTime = microtime(true);
-        while ((microtime(true) - $startTime) * 1000 < $this->timeout) {
+        $startTime = hrtime(true);
+        while ((hrtime(true) - $startTime) / 1_000_000 < $this->timeout) {
             $read = [$socket];
             $write = null;
             $except = null;
@@ -307,8 +307,8 @@ class NatPmpClient
         $fromAddr = '';
         $fromPort = 0;
 
-        $startTime = microtime(true);
-        while ((microtime(true) - $startTime) * 1000 < $this->timeout) {
+        $startTime = hrtime(true);
+        while ((hrtime(true) - $startTime) / 1_000_000 < $this->timeout) {
             $read = [$socket];
             $write = null;
             $except = null;

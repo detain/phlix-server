@@ -145,12 +145,9 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **Browser login/register redirects now carry a machine `code` beside the human message.** The legacy-path 302s (`/login?error=…`, `/login?notice=…`, `/auth/register?error=…`) keep the human text in `error`/`notice` and add `&code=<contracts code>` (e.g. `auth.invalid_credentials`, `auth.password_change_required`, `auth.signups_disabled`) where the JSON twin has one; GitHub/OIDC callback legs keep the machine code itself in `error`. Renderers resolve `code ?? error` with the human text as fallback. [SRV-S12 / SRV-15]
 - **Opening a very large collection no longer risks exhausting the worker's memory.** The collection detail response hydrates at most 10,000 items (in chunks of 500); when a collection holds more, `total` is the true membership count and a new additive `truncated: true` field flags the capped `items` list. Shape is otherwise unchanged. [SRV-S6 / SRV-7]
-- **Rating and like-level 400 responses now carry user-facing copy.** The
-  media user-data controller translates the repository's developer-register
-  validation text at the boundary (`Rating must be an integer between 1 and 10`
-  / `Level must be an integer between -2 and 2`); status codes and
-  contract codes are unchanged. [SRV-S4 / SRV-5]
+- **Rating and like-level 400 responses now carry user-facing copy.** The media user-data controller translates the repository's developer-register validation text at the boundary (`Rating must be an integer between 1 and 10` / `Level must be an integer between -2 and 2`); status codes and contract codes are unchanged. [SRV-S4 / SRV-5]
 - **WebSocket teardown no longer unwinds when a SyncPlay vacate/snapshot publish fails.** The
   reaper and the close callback still remove the connection, close the socket and finish
   metrics bookkeeping; `Connection::send()` returns false instead of throwing on a dead

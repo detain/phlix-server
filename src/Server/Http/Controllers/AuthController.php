@@ -185,7 +185,7 @@ class AuthController
         ) {
             $msg = 'Missing required fields: username, email, password';
             return $isBrowser
-                ? (new Response())->redirect('/auth/register?error=' . rawurlencode($msg))
+                ? $this->messageRedirect('/auth/register', 'error', $msg)
                 : (new Response())->status(400)->json(['error' => $msg]);
         }
 
@@ -199,7 +199,7 @@ class AuthController
                     $msg = is_string($result['message'] ?? null)
                         ? $result['message']
                         : 'Your account is awaiting administrator approval.';
-                    return (new Response())->redirect('/login?notice=' . rawurlencode($msg));
+                    return $this->messageRedirect('/login', 'notice', $msg);
                 }
                 return (new Response())->status(202)->json($result);
             }
@@ -217,7 +217,12 @@ class AuthController
             return $response;
         } catch (SignupDisabledException $e) {
             if ($isBrowser) {
-                return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect(
+                    '/auth/register',
+                    'error',
+                    $e->getMessage(),
+                    SignupDisabledException::ERROR_CODE,
+                );
             }
             return (new Response())->status(403)->json([
                 'error' => $e->getMessage(),
@@ -225,7 +230,7 @@ class AuthController
             ]);
         } catch (InvalidArgumentException $e) {
             if ($isBrowser) {
-                return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect('/auth/register', 'error', $e->getMessage());
             }
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
@@ -262,7 +267,7 @@ class AuthController
         if (!is_string($username) || $username === '' || !is_string($password) || $password === '') {
             $msg = 'Missing required fields: username, password';
             return $isBrowser
-                ? (new Response())->redirect('/login?error=' . rawurlencode($msg))
+                ? $this->messageRedirect('/login', 'error', $msg)
                 : (new Response())->status(400)->json(['error' => $msg]);
         }
 
@@ -295,7 +300,7 @@ class AuthController
             // Correct credentials but the account is pending/disabled — 403 with
             // a distinct code so clients can show the right message.
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect('/login', 'error', $e->getMessage(), $e->errorCode);
             }
             return (new Response())->status(403)->json([
                 'error' => $e->getMessage(),
@@ -308,7 +313,7 @@ class AuthController
             // contracts-registered member of the auth.* family, so the SPA
             // shows the change-password guidance instead of a bare 500.
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect('/login', 'error', $e->getMessage(), $e->errorCode);
             }
             return (new Response())->status(403)->json([
                 'error' => $e->getMessage(),
@@ -316,7 +321,7 @@ class AuthController
             ]);
         } catch (InvalidArgumentException $e) {
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect('/login', 'error', $e->getMessage(), 'auth.invalid_credentials');
             }
             // SRV-S27: stable contracts-registered code; message byte-identical.
             return (new Response())->status(401)->json([
@@ -397,7 +402,7 @@ class AuthController
             if (str_starts_with($e->getMessage(), 'ldap_error:')) {
                 $msg = 'LDAP authentication is temporarily unavailable.';
                 if ($isBrowser) {
-                    return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+                    return $this->messageRedirect('/login', 'error', $msg, 'provider_unavailable');
                 }
                 return (new Response())->status(503)->json([
                     'error' => $msg,
@@ -407,7 +412,7 @@ class AuthController
 
             $msg = 'Invalid credentials';
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+                return $this->messageRedirect('/login', 'error', $msg, 'auth.invalid_credentials');
             }
             return (new Response())->status(401)->json([
                 'error' => $msg,
@@ -420,7 +425,7 @@ class AuthController
             // letting this RuntimeException fall into the arm below, which
             // mislabels a hold as an infrastructure outage ('not available').
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+                return $this->messageRedirect('/login', 'error', $e->getMessage(), $e->errorCode);
             }
             return (new Response())->status(403)->json([
                 'error' => $e->getMessage(),
@@ -435,7 +440,7 @@ class AuthController
             // Full auth-failure status mapping is the SRV-M17 named follow-up.
             $msg = 'LDAP authentication is not enabled on this server.';
             if ($isBrowser) {
-                return (new Response())->redirect('/login?error=' . rawurlencode($msg));
+                return $this->messageRedirect('/login', 'error', $msg);
             }
             return (new Response())->status(503)->json([
                 'error' => $msg,
@@ -792,6 +797,27 @@ class AuthController
         }
 
         return CookiePolicy::MODE_COOKIE;
+    }
+
+    /**
+     * Build the legacy-path 302 that carries a human message to the SPA.
+     *
+     * Envelope contract (SRV-S12, converged with the OAuth legs): the query
+     * param `error` (or `notice`) always holds the human-readable fallback
+     * text; when the arm has a stable contracts-registered machine code it
+     * is added as `code` (same value the JSON twin answers). OAuth callback
+     * legs (GitHub/OIDC) carry the machine code itself in `error` and no
+     * `code`. A renderer resolves `code ?? error` and prefers its own copy
+     * for known codes, falling back to the human text.
+     */
+    private function messageRedirect(string $path, string $param, string $message, ?string $code = null): Response
+    {
+        $url = $path . '?' . $param . '=' . rawurlencode($message);
+        if ($code !== null) {
+            $url .= '&code=' . rawurlencode($code);
+        }
+
+        return (new Response())->redirect($url);
     }
 
     /**

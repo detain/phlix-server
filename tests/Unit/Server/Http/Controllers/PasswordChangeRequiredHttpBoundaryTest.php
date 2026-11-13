@@ -90,7 +90,7 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
 
         self::assertSame(302, $response->statusCode);
         self::assertSame(
-            '/login?error=' . rawurlencode(self::HOLD_COPY),
+            '/login?error=' . rawurlencode(self::HOLD_COPY) . '&code=auth.password_change_required',
             $response->headers['Location'] ?? null
         );
     }

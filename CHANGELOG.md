@@ -7,15 +7,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 House discipline this file maintains (established by review W-min90/91/92):
 
-- `## [Unreleased]` carries **one section per type** (`### Added`, `### Changed`,- **Case-insensitive header lookup lives in one place.** New `Phlix\Server\Http\Middleware\HeaderMap` (`get()`/`has()`) replaces the duplicated private helpers in `SecurityHeaders` and `CorsManager`; behaviour is identical. [SRV-S20]
-
-  `### Removed`, `### Fixed`-- **The admin log list sorts newest-first by true modification time.** `LogController` now orders on the integer file mtime before formatting `modified_at`, so out-of-order mtimes (and sub-format-resolution ties) no longer reorder rows; a pin test covers it. [SRV-S32 / SRV-79]
- **DLNA search now logs when its scan cap truncates the result, and the metrics rollup retry buffer is bounded.** A `Search` over a container larger than 50 pages (100k rows) still stops there on purpose, but now emits a `DLNA search truncated at the scan cap` warning instead of silently undercounting `TotalMatches`; `MetricsRegistry::restoreRollups()` keeps at most 720 buckets (oldest dropped) so a long database outage cannot grow worker memory without bound. [SRV-S15, SRV-S2]
-- **`PortForwardService` names a stale on-disk record instead of dropping a failed config write.** A mapping that succeeded on the router but could not be persisted (or a teardown whose config could not be cleared) now logs `Port-forward state could not be persisted; the on-disk record is stale`; `mergeState()` returns the write outcome. [SRV-S13]
-- **Hub pairing no longer persists a non-http(s) JWKS URL handed back by the hub.** `hubPoll` refuses (502) a claimed enrollment whose `hub_jwks_url` is not `http://`/`https://`, matching `hubComplete`. [SRV-S24]
-- **`scripts/install.sh --help` no longer advertises a tag on `--update`.** `--branch` is documented as a branch for `--update` (a tag aborts) and a branch or tag for fresh installs, matching the README. [SRV-S9]
-- **Remaining controller success/notice messages end with a period** (`Playback completed.`, `Items added to collection.`, `Smart collection refreshed.`, `Tag added successfully.`, `Progress saved.` (book), `Profile created successfully.` (admin), `Settings updated.` (admin updates), the two marker `No ... marker has been detected ...` messages). Status codes and shapes unchanged. [SRV-S5]
-, `### Security`) — a batch PREPENDS its entries under
+- `## [Unreleased]` carries **one section per type** (`### Added`, `### Changed`,
+  `### Removed`, `### Fixed`, `### Security`) — a batch PREPENDS its entries under
   the matching heading instead of dragging in a duplicate heading set. The single
   auxiliary section `### Known gaps (documented, NOT fixed)` is a deliberate
   exception: it lists what is NOT fixed and must never fold into `### Fixed`.
@@ -40,6 +33,12 @@ House discipline this file maintains (established by review W-min90/91/92):
 
 ### Fixed
 
+- **DLNA search now logs when its scan cap truncates the result, and the metrics rollup retry buffer is bounded.** A `Search` over a container larger than 50 pages (100k rows) still stops there on purpose, but now emits a `DLNA search truncated at the scan cap` warning instead of silently undercounting `TotalMatches`; `MetricsRegistry::restoreRollups()` keeps at most 720 buckets (oldest dropped) so a long database outage cannot grow worker memory without bound. [SRV-S15, SRV-S2]
+- **The admin log list sorts newest-first by true modification time.** `LogController` now orders on the integer file mtime before formatting `modified_at`, so out-of-order mtimes (and sub-format-resolution ties) no longer reorder rows; a pin test covers it. [SRV-S32 / SRV-79]
+- **`PortForwardService` names a stale on-disk record instead of dropping a failed config write.** A mapping that succeeded on the router but could not be persisted (or a teardown whose config could not be cleared) now logs `Port-forward state could not be persisted; the on-disk record is stale`; `mergeState()` returns the write outcome. [SRV-S13]
+- **Hub pairing no longer persists a non-http(s) JWKS URL handed back by the hub.** `hubPoll` refuses (502) a claimed enrollment whose `hub_jwks_url` is not `http://`/`https://`, matching `hubComplete`. [SRV-S24]
+- **`scripts/install.sh --help` no longer advertises a tag on `--update`.** `--branch` is documented as a branch for `--update` (a tag aborts) and a branch or tag for fresh installs, matching the README. [SRV-S9]
+- **Remaining controller success/notice messages end with a period** (`Playback completed.`, `Items added to collection.`, `Smart collection refreshed.`, `Tag added successfully.`, `Progress saved.` (book), `Profile created successfully.` (admin), `Settings updated.` (admin updates), the two marker `No ... marker has been detected ...` messages). Status codes and shapes unchanged. [SRV-S5]
 - **Hub claim/heartbeat no longer 400s when `gethostname()` is not RFC 1123.**
   New `Phlix\Hub\HostnameCandidateSanitizer` maps the `lan-hostname` candidate
   (`_` and other non-hostname bytes become `-`, case-folded, labels trimmed) in
@@ -50,6 +49,8 @@ House discipline this file maintains (established by review W-min90/91/92):
   hub deploy that enforces the shared grammar (SHR-S1 owner ruling 2026-11-13).
 
 ### Changed
+
+- **Case-insensitive header lookup lives in one place.** New `Phlix\Server\Http\Middleware\HeaderMap` (`get()`/`has()`) replaces the duplicated private helpers in `SecurityHeaders` and `CorsManager`; behaviour is identical. [SRV-S20]
 
 - **Documentation prose sweep (SRV-S28).** README Overview bullets use one
   capitalization convention, `<= 0` becomes `≤ 0`, stray double blank lines are

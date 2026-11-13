@@ -1234,7 +1234,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // Request root); 2094 measured from the phpunit red.
     // +5 2094→2099: the fix-program tail lands five new first-party PHP files;
     // 2099 measured from the CI phpunit red (undeclared-read leg still green).
-    private const EXPECTED_PHP_FILES = 2099;
+    // +7 2099→2106 (minors round): HeaderMap.php plus its test and the minors'
+    // test files land; 2106 measured from the phpunit red.
+    private const EXPECTED_PHP_FILES = 2106;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1381,7 +1383,8 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
      */
     // +7 481→488 (fix-program tail): seven more reads, all on declared members;
     // 488 measured from the CI phpunit red; the undeclared-read leg still guards.
-    private const EXPECTED_DECLARED_READS = 488;
+    // +1 488→489 (minors round): one more read on a declared member; measured.
+    private const EXPECTED_DECLARED_READS = 489;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1730,7 +1733,8 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // validated `sid` claim onto the request (src/Server/Http/
     // RequestAuthenticator.php); the controller legs only READ it. Measured
     // from the phpunit red (1231), not predicted.
-    private const EXPECTED_DECLARED_WRITES = 1231;
+    // +7 1231→1238 (minors round): measured from the phpunit red, declared members.
+    private const EXPECTED_DECLARED_WRITES = 1238;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

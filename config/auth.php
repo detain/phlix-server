@@ -95,6 +95,28 @@ return [
         'enabled' => false,
     ],
 
+    /**
+     * Auth-cookie switches (phlix-shared v0.55 schema keys, SRV-S35).
+     *
+     * `auth.cookie.enabled` / `auth.cookie.insecure` are read live from the
+     * stored rows by {@see \Phlix\Auth\CookiePolicy}; these values satisfy the
+     * schema-defaults resolvability contract and DOCUMENT the shipped posture
+     * (cookies on, Secure attribute kept), not a second switch.
+     */
+    'cookie' => [
+        'enabled'  => true,
+        'insecure' => false,
+    ],
+
+    /**
+     * Legacy `?token=` WebSocket carrier gate (CP-024 PHASE B default: deny).
+     * Documents the shipped default for the schema key `auth.ws_query_token`;
+     * the live decision resolves in
+     * {@see \Phlix\Server\WebSocket\QueryTokenGatePolicy} (env > admin row >
+     * deny), which never reads this value as an allow.
+     */
+    'ws_query_token' => 'deny',
+
     'ldap' => [
         'enabled' => false,
     ],

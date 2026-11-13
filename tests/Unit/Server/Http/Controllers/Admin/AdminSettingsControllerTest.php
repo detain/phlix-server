@@ -369,6 +369,12 @@ final class AdminSettingsControllerTest extends TestCase
             // `number` property → internal `float`.
             'metadata.min_match_confidence'             => 'float',
             'metadata.cache_ttl_hours'                  => 'int',
+
+            // phlix-shared v0.55.0 (SRV-S35): the auth-cookie switches and the
+            // legacy ?token= WS carrier gate (string enum allow|deny, default deny).
+            'auth.cookie.enabled'                       => 'bool',
+            'auth.cookie.insecure'                      => 'bool',
+            'auth.ws_query_token'                       => 'string',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
@@ -377,7 +383,9 @@ final class AdminSettingsControllerTest extends TestCase
         // 73 -> 84 in phlix-shared v0.51.0: F7 auth quintet, W2 discovery duo,
         // W4 security duo, W3 metadata duo — the owner-gated re-vendor seam
         // CLOSED; all 84 keys are admitted by the vendored schema above.
-        $this->assertCount(84, $actual);
+        // 84 -> 87 in phlix-shared v0.55.0: auth.cookie.{enabled,insecure}
+        // + auth.ws_query_token (SRV-S35).
+        $this->assertCount(87, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -458,7 +466,8 @@ final class AdminSettingsControllerTest extends TestCase
         // 72 -> 73 in phlix-shared v0.49.0: transcoding.segment_format (S313).
         // 73 -> 84 in phlix-shared v0.51.0: the eleven v0.51.0 keys (see the
         // allowedKeys pin above for the family breakdown).
-        $this->assertCount(84, $meta);
+        // 84 -> 87 in phlix-shared v0.55.0 (SRV-S35, see the allowedKeys pin).
+        $this->assertCount(87, $meta);
         foreach (array_keys(AdminSettingsController::allowedKeys()) as $key) {
             $this->assertArrayHasKey($key, $meta, sprintf('%s must carry a meta block', $key));
         }

@@ -30,7 +30,7 @@
         "ext-zip": "*",
         "ext-zlib": "*",
         "crell/tukio": "^2.0",
-        "detain/phlix-shared": "^0.54.0",
+        "detain/phlix-shared": "^0.55.0",
         "directorytree/ldaprecord": "^3.0",
         "james-heinrich/getid3": "^1.9",
         "justinrainbow/json-schema": "^6.0",

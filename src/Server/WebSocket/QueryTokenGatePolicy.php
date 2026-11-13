@@ -150,10 +150,9 @@ final class QueryTokenGatePolicy
         }
 
         if ($stored === SyncPlayAuthMiddleware::QUERY_TOKEN_DENY || $stored === null) {
-            // Exact stored deny, or no row anywhere (the schema-declared
-            // 'allow' is stale prose the sibling schema lane retires — it is
-            // NOT a server-side default and must never leak here: the CP-024
-            // shipped default is deny, and only absence answers tier 3).
+            // Exact stored deny, or no row anywhere (phlix-shared v0.55+
+            // declares 'deny' as the schema default, matching the CP-024
+            // shipped default; only absence answers tier 3, and tier 3 is deny).
             return false;
         }
 

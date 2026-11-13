@@ -139,9 +139,11 @@ EXPLICIT ENV PHLIX_WS_QUERY_TOKEN  >  ADMIN ROW auth.ws_query_token  >  PHASE B 
   (`PHLIX_WS_QUERY_TOKEN=allow|deny`) for continuity of the log
   vocabulary; the disposition they describe may now also come from the
   admin row or the default.
-- The key becomes PUT-able through the admin settings API when the server
-  re-vendors the phlix-shared schema that carries it (schema prose +
-  admission ride that sibling wave); the resolver reads the row through the
+- The key is PUT-able through the admin settings API: the server vendors
+  phlix-shared ^0.55 (SRV-S35), whose schema declares the `deny`
+  default and carries the key's prose and admission, so the deny-default
+  is now live through the vendored library and the old allow-default
+  skew is closed; the resolver reads the row through the
   store whatever the write path — a row landed by SQL or a settings restore
   is honored identically.
 

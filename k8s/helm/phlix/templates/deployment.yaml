@@ -24,10 +24,19 @@ spec:
       {{- if and .Values.hwAccel.enabled .Values.hwAccel.runtimeClassName }}
       runtimeClassName: {{ .Values.hwAccel.runtimeClassName }}
       {{- end }}
+      # SRV-S1 (SRV-1): the image's CMD is /docker-entrypoint.sh, which runs
+      # migrations + writes the JWT secret file as ROOT and then starts
+      # supervisord (user=root) that drops the daemon to `nobody` (uid 65534,
+      # supervisord.conf [program:phlix]). A pod-level runAsNonRoot/runAsUser
+      # 1000 made supervisord refuse to start ("Can't drop privilege as
+      # nonroot user") and the pod CrashLoop on every install. So the pod
+      # runs the entrypoint as root with a MINIMAL capability set (below) and
+      # fsGroup 65534 so the `nobody` daemon can write the PVCs.
+      # tests/Unit/Deploy/HelmChartBootPostureTest.php pins this pair.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        runAsNonRoot: false
+        runAsUser: 0
+        fsGroup: 65534
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -35,6 +44,17 @@ spec:
             capabilities:
               drop:
                 - ALL
+              # root minus everything except what entrypoint + supervisord use:
+              # CHOWN/DAC_OVERRIDE/FOWNER (log + secret files on volumes),
+              # SETUID/SETGID (supervisord user=nobody), KILL (signal the
+              # nobody-owned daemon group on stop/restart).
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - SETUID
+                - SETGID
+                - KILL
           image: '{{ .Values.image.repository }}:{{ required "phlix chart: image.tag is REQUIRED — nothing falls back silently. Mutable :latest drifts and the old AppVersion fallback (1.2.3) was never published to ghcr. Set image.tag to a deterministic immutable tag, form: ghcr.io/detain/phlix-server:<full-sha>-<latest|intel|nvidia>" .Values.image.tag }}'
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:

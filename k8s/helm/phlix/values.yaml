@@ -236,10 +236,15 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
+# SRV-S1 (SRV-29): budget = initialDelaySeconds + periodSeconds * failureThreshold
+# = 10 + 5*60 = 310s. The old 160s (30 x 5) was shorter than a first boot that
+# runs the migration chain (strict by default) before supervisord's 15s
+# startsecs, so the kubelet killed the pod mid-migration. Raise further for
+# very large first-boot schemas; liveness/readiness only begin after it passes.
 startupProbe:
   httpGet:
     path: /health
     port: http
   initialDelaySeconds: 10
   periodSeconds: 5
-  failureThreshold: 30
+  failureThreshold: 60

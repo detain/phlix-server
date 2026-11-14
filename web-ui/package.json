@@ -12,7 +12,7 @@
     "test": "node --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
-    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v1.0.1.tar.gz"
+    "@phlix/ui": "https://github.com/detain/phlix-ui/archive/refs/tags/v1.0.2.tar.gz"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

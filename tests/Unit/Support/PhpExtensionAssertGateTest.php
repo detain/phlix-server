@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Support;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S304 — the extension gate must fail LOUDLY, and must stay WIRED.
@@ -89,10 +90,10 @@ final class PhpExtensionAssertGateTest extends TestCase
      * Argument hygiene precedes any green: empty, bare and unknown argument forms
      * all exit 1, so a typo in a workflow step can never read as "no extras".
      *
-     * @dataProvider malformedArgumentForms
      *
      * @param list<string> $args
      */
+    #[DataProvider('malformedArgumentForms')]
     public function testMalformedArgumentsAreRejectedLoudly(array $args, string $expectedInOutput): void
     {
         $result = $this->runScript($args);

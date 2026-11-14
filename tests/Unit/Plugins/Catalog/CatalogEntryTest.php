@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 use Phlix\Plugins\Catalog\CatalogEntry;
 use Phlix\Plugins\Catalog\CatalogEntryValidationException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CatalogEntryTest extends TestCase
 {
@@ -50,10 +51,10 @@ final class CatalogEntryTest extends TestCase
     }
 
     /**
-     * @dataProvider invalidEntries
      *
      * @param array<array-key, mixed>|string $raw
      */
+    #[DataProvider('invalidEntries')]
     public function test_returns_null_for_invalid_entries(array|string $raw): void
     {
         self::assertNull(CatalogEntry::fromArray($raw));
@@ -74,10 +75,10 @@ final class CatalogEntryTest extends TestCase
     }
 
     /**
-     * @dataProvider invalidPluginNames
      *
      * @param string $name
      */
+    #[DataProvider('invalidPluginNames')]
     public function test_throws_for_plugin_name_not_matching_pattern(string $name): void
     {
         $this->expectException(CatalogEntryValidationException::class);
@@ -170,9 +171,7 @@ final class CatalogEntryTest extends TestCase
         self::assertTrue($entry->verified());
     }
 
-    /**
-     * @dataProvider malformedPins
-     */
+    #[DataProvider('malformedPins')]
     public function test_malformed_pins_are_coerced_to_unpinned(string $field, mixed $value): void
     {
         $entry = CatalogEntry::fromArray([

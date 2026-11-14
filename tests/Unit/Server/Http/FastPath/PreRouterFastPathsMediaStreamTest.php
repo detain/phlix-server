@@ -17,6 +17,7 @@ use Phlix\Server\Workerman\BodylessResponse;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S301 — the direct-play byte stream, moved verbatim from
@@ -299,9 +300,8 @@ final class PreRouterFastPathsMediaStreamTest extends TestCase
     /**
      * Directly pins the extension→MIME mapping for the audio formats added in
      * X8 (plus a couple of retained video mappings), moved with the method.
-     *
-     * @dataProvider mimeCases
      */
+    #[DataProvider('mimeCases')]
     public function testStreamMimeForMapsAudioExtensions(string $file, string $expected): void
     {
         $m = new ReflectionMethod(PreRouterFastPaths::class, 'streamMimeFor');

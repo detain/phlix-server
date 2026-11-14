@@ -15,6 +15,7 @@ use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 use function DI\factory;
 
@@ -70,9 +71,7 @@ final class InstallEnableDisableTest extends TestCase
         }
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function test_full_lifecycle_with_fixture_plugin(): void
     {
         if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {

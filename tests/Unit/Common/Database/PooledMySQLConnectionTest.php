@@ -8,6 +8,7 @@ use Phlix\Common\Database\PooledMySQLConnection;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 /**
  * Unit coverage for the parts of {@see PooledMySQLConnection} that DON'T need a
@@ -147,9 +148,8 @@ final class PooledMySQLConnectionTest extends TestCase
      * marks that connection dead (simulating the DB having dropped it while
      * idle) and runs coroutine B, which must: evict + close() the dead
      * connection, then open and use a brand-new one.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testDeadIdleConnectionIsClosedBeforeEviction(): void
     {
         if (!extension_loaded('swoole')) {
@@ -254,9 +254,8 @@ final class PooledMySQLConnectionTest extends TestCase
      * complete. The pool's own counters ({@see PooledMySQLConnection::poolStats()})
      * stay bounded in both shapes — proving the failure is the lease LIFETIME,
      * not the accounting.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testOversubscribedCoroutinesDoNotExhaustThePoolWhenLoopsAreSlow(): void
     {
         if (!extension_loaded('swoole')) {
@@ -396,9 +395,8 @@ final class PooledMySQLConnectionTest extends TestCase
      * With the bug, A's lastInsertId() releases its connection to C, C INSERTs
      * on it, and A's id resolves to C's INSERT — wrong. With the fix, A's
      * lastInsertId() keeps the lease and resolves on its own INSERT.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testLastInsertIdResolvesOnTheInsertingConnectionEvenUnderContention(): void
     {
         if (!extension_loaded('swoole')) {
@@ -529,9 +527,8 @@ final class PooledMySQLConnectionTest extends TestCase
      * distinguishable from a dead dependency, which must surface immediately
      * as the connect error instead of making every caller burn the full
      * acquireTimeout and then blame the pool.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testADeadDependencySurfacesImmediatelyNotAsPoolExhaustion(): void
     {
         if (!extension_loaded('swoole')) {

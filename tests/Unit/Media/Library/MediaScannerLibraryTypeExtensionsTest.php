@@ -8,6 +8,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaScanner;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Regression guard for the `libraries.type` -> extension-class translation in
@@ -169,9 +170,7 @@ final class MediaScannerLibraryTypeExtensionsTest extends TestCase
         return ['movie' => ['movie'], 'series' => ['series'], 'video' => ['video']];
     }
 
-    /**
-     * @dataProvider videoLibraryTypes
-     */
+    #[DataProvider('videoLibraryTypes')]
     public function test_video_content_library_types_scan_video_extensions(string $type): void
     {
         $this->tmpDir = $this->mixedFixture();
@@ -192,9 +191,7 @@ final class MediaScannerLibraryTypeExtensionsTest extends TestCase
         return ['libraries.type spelling' => ['photo'], 'translated literal' => ['image']];
     }
 
-    /**
-     * @dataProvider imageLibraryTypes
-     */
+    #[DataProvider('imageLibraryTypes')]
     public function test_photo_and_image_both_scan_image_extensions(string $type): void
     {
         $this->tmpDir = $this->mixedFixture();

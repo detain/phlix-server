@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Dlna;
 use Phlix\Dlna\DlnaMimeTypes;
 use Phlix\Dlna\DlnaProtocolInfo;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see DlnaProtocolInfo} — what a renderer is TOLD about a resource.
@@ -64,9 +65,8 @@ final class DlnaProtocolInfoTest extends TestCase
 
     /**
      * @param array<string, mixed> $item
-     *
-     * @dataProvider itemProvider
      */
+    #[DataProvider('itemProvider')]
     public function test_protocol_info_for_a_row(array $item, string $expected): void
     {
         self::assertSame($expected, DlnaProtocolInfo::forItem($item));

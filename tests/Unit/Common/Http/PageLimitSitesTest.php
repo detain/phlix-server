@@ -21,6 +21,7 @@ use Phlix\Server\Http\Controllers\AudiobookController;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * minors M-SERVER-84 (W-min100): the three book/audiobook listing endpoints
@@ -60,9 +61,7 @@ final class PageLimitSitesTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider coerceTable
-     */
+    #[DataProvider('coerceTable')]
     public function testCoerceIsExactlyTheParseHalfOfClamp(mixed $raw, int $default, int $want): void
     {
         $this->assertSame($want, PageLimit::coerce($raw, $default));
@@ -92,9 +91,7 @@ final class PageLimitSitesTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider limitOffsetTable
-     */
+    #[DataProvider('limitOffsetTable')]
     public function testBookListParsesPagingThroughThePolicy(
         ?string $limit,
         ?string $offset,
@@ -118,9 +115,7 @@ final class PageLimitSitesTest extends TestCase
     // BookController::opdsLibraryBooks — the OPDS acquisition feed
     // ------------------------------------------------------------------
 
-    /**
-     * @dataProvider limitOffsetTable
-     */
+    #[DataProvider('limitOffsetTable')]
     public function testOpdsAcquisitionFeedPagesThroughThePolicy(
         ?string $limit,
         ?string $offset,
@@ -148,9 +143,7 @@ final class PageLimitSitesTest extends TestCase
     // AudiobookController::listAudiobooks — /audiobooks
     // ------------------------------------------------------------------
 
-    /**
-     * @dataProvider limitOffsetTable
-     */
+    #[DataProvider('limitOffsetTable')]
     public function testAudiobookListParsesPagingThroughThePolicy(
         ?string $limit,
         ?string $offset,

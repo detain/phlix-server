@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Admin;
 
 use PHPUnit\Framework\TestCase;
-use Smarty;
+use Smarty\Smarty;
 
 /**
  * Review server__copywriter SRV-M1: the newsletter HTML leg said

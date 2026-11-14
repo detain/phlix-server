@@ -7,6 +7,9 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\RestoreResult;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 class BackupManagerTest extends TestCase
 {
@@ -107,11 +110,10 @@ class BackupManagerTest extends TestCase
      * `database.sql` — that is mysqldump's contract, not this method's, and asserting
      * it here would reintroduce the venue dependency the skip wrongly claimed.
      *
-     * @group integration
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[Group('integration')]
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testCreateBackupGeneratesIdAndPath(): void
     {
         self::assertFalse(defined('PHLIX_CONFIG_DIR'), 'the isolated process must start with the constant free');
@@ -366,10 +368,9 @@ class BackupManagerTest extends TestCase
      *
      * Venue: a closed port (127.0.0.1:1) makes mysqldump exit non-zero within
      * milliseconds; no MySQL server involvement, no credentials.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testCreateDatabaseDumpThrowsOnNonZeroExitDespitePartialFile(): void
     {
         self::assertFalse(defined('PHLIX_CONFIG_DIR'), 'the isolated process must start with the constant free');

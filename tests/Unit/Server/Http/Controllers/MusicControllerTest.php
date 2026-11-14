@@ -14,6 +14,8 @@ use Phlix\Server\Http\Controllers\MusicController;
 use Phlix\Server\Http\Request;
 use Phlix\Session\SessionManager;
 use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for MusicController.
@@ -93,9 +95,7 @@ class MusicControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListArtistsReturnsJson(): void
     {
         $request = new Request();
@@ -133,9 +133,8 @@ class MusicControllerTest extends TestCase
     /**
      * The artists listing must resolve album titles for the WHOLE page in one
      * batched call — never one query per artist (N+1 in a resident worker).
-     *
-     * @test
      */
+    #[Test]
     public function testListArtistsBatchesAlbumTitlesForThePage(): void
     {
         $this->musicLibrary->method('getAllArtists')->willReturn([
@@ -153,9 +152,7 @@ class MusicControllerTest extends TestCase
         $this->assertEquals(200, $response->statusCode);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListArtistsClampsAndEchoesPagination(): void
     {
         $request = new Request();
@@ -186,9 +183,7 @@ class MusicControllerTest extends TestCase
         $this->assertSame(25, $body['offset']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetArtistReturns404WhenNotFound(): void
     {
         $this->musicLibrary->method('findArtistByName')->willReturn(null);
@@ -205,9 +200,8 @@ class MusicControllerTest extends TestCase
     /**
      * `/artists/{mbid}` is NAME-keyed — the route param is the artist's display
      * name, which is what `phlix-ui` puts in the URL.
-     *
-     * @test
      */
+    #[Test]
     public function testGetArtistLooksTheArtistUpByName(): void
     {
         $this->musicLibrary->expects($this->once())
@@ -244,9 +238,8 @@ class MusicControllerTest extends TestCase
      * live library has three artists above that (142 / 109 / 104 albums). A client
      * rendering `albums` beside "142 albums" must be able to tell that the list is
      * short — the same contract `tracks_truncated` gives the album listing.
-     *
-     * @test
      */
+    #[Test]
     public function testTruncatedArtistAlbumListIsFlaggedAndKeepsTheTrueCount(): void
     {
         // Production's Michael Jackson shape: 142 albums, 100 titles returned.
@@ -277,9 +270,8 @@ class MusicControllerTest extends TestCase
      * The complement: a complete album list must NOT be flagged, or the flag is
      * noise. Includes the exactly-at-the-window boundary, where the list is
      * complete and must stay unflagged.
-     *
-     * @test
      */
+    #[Test]
     public function testCompleteArtistAlbumListIsNotFlaggedAsTruncated(): void
     {
         $titles = [];
@@ -313,9 +305,8 @@ class MusicControllerTest extends TestCase
      * window to the absolute batch ceiling — exactly as `getAlbum()` does for
      * tracks. Before S99 review r2 it passed the default 100 and returned 100 of
      * Michael Jackson's 142 albums on the one endpoint that must not truncate.
-     *
-     * @test
      */
+    #[Test]
     public function testGetArtistRaisesThePerArtistAlbumWindowToTheBatchCeiling(): void
     {
         $this->musicLibrary->method('findArtistByName')->willReturn([
@@ -340,9 +331,8 @@ class MusicControllerTest extends TestCase
     /**
      * And the detail endpoint still flags truncation when even the raised window
      * cannot carry the whole discography, so the invariant holds on both shapes.
-     *
-     * @test
      */
+    #[Test]
     public function testArtistDetailStillFlagsTruncationAboveTheBatchCeiling(): void
     {
         $this->musicLibrary->method('findArtistByName')->willReturn([
@@ -366,9 +356,7 @@ class MusicControllerTest extends TestCase
         $this->assertTrue($body['artist']['albums_truncated']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListAlbumsReturnsJson(): void
     {
         $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow()]);
@@ -395,9 +383,7 @@ class MusicControllerTest extends TestCase
         $this->assertSame(5091, $body['total']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListAlbumsBatchesTrackFetchForThePage(): void
     {
         $this->musicLibrary->method('getAllAlbums')->willReturn([
@@ -421,9 +407,8 @@ class MusicControllerTest extends TestCase
      * HIGH-1: an album whose embedded track list was cut by the row cap must SAY
      * so. `track_count` stays the true indexed total and `tracks_truncated` is
      * `true`, so a client can never mistake a capped list for a complete one.
-     *
-     * @test
      */
+    #[Test]
     public function testTruncatedEmbeddedTrackListIsFlaggedAndKeepsTheTrueCount(): void
     {
         $rows = [];
@@ -447,9 +432,8 @@ class MusicControllerTest extends TestCase
 
     /**
      * The complement: a complete list must NOT be flagged, or the flag is noise.
-     *
-     * @test
      */
+    #[Test]
     public function testCompleteEmbeddedTrackListIsNotFlaggedAsTruncated(): void
     {
         $this->musicLibrary->method('getAllAlbums')->willReturn([$this->albumRow(7)]);
@@ -470,9 +454,8 @@ class MusicControllerTest extends TestCase
      * `total` — and be echoed back. Filtering client-side instead is what left 77
      * of the 100 visible artists drilling down to an empty album list, because page
      * 1 of `/albums` spans only 23 of production's 2,197 artists.
-     *
-     * @test
      */
+    #[Test]
     public function testListAlbumsAppliesTheArtistFilterServerSide(): void
     {
         $request = new Request();
@@ -500,10 +483,9 @@ class MusicControllerTest extends TestCase
     /**
      * An absent or blank `?artist=` means "every artist", never "the artist whose
      * name is the empty string" (which would return an empty library).
-     *
-     * @test
-     * @dataProvider blankArtistFilterProvider
      */
+    #[Test]
+    #[DataProvider('blankArtistFilterProvider')]
     public function testBlankArtistFilterMeansNoFilter(?string $raw): void
     {
         $request = new Request();
@@ -539,9 +521,7 @@ class MusicControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetAlbumReturnsJsonWithTracks(): void
     {
         $this->musicLibrary->expects($this->once())
@@ -571,9 +551,8 @@ class MusicControllerTest extends TestCase
      * MED-3: `/albums/{title}?artist=` must reach the lookup. A title is not an
      * identity — 2,622 of production's 5,091 albums share one — so without this the
      * endpoint can only return a deterministic first match, not the right album.
-     *
-     * @test
      */
+    #[Test]
     public function testGetAlbumPassesTheArtistDisambiguatorToTheLookup(): void
     {
         $request = new Request();
@@ -596,9 +575,8 @@ class MusicControllerTest extends TestCase
      * window to the absolute batch ceiling: it is the endpoint that must not
      * truncate a long compilation (production's longest album has 125 tracks),
      * while the LIST endpoint is the one under fan-out pressure.
-     *
-     * @test
      */
+    #[Test]
     public function testGetAlbumRaisesThePerAlbumTrackWindowToTheBatchCeiling(): void
     {
         $this->musicLibrary->method('findAlbumByTitle')->willReturn($this->albumRow(7));
@@ -611,9 +589,7 @@ class MusicControllerTest extends TestCase
         $this->assertSame(200, $this->controller->getAlbum(new Request(), ['mbid' => 'x'])->statusCode);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetAlbumReturns404WhenNotFound(): void
     {
         $this->musicLibrary->method('findAlbumByTitle')->willReturn(null);
@@ -627,9 +603,7 @@ class MusicControllerTest extends TestCase
         $this->assertEquals('Album not found', $body['error']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListTracksReturnsJson(): void
     {
         $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
@@ -661,9 +635,8 @@ class MusicControllerTest extends TestCase
      * The track payload must NOT expose the server's absolute filesystem path.
      * `MediaItemShaper` never emitted one, and this payload is now reachable over
      * the internet-facing hub relay.
-     *
-     * @test
      */
+    #[Test]
     public function testTrackPayloadDoesNotLeakTheFilesystemPath(): void
     {
         $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
@@ -696,10 +669,9 @@ class MusicControllerTest extends TestCase
      * just matched by `->with()`: a mock expectation mismatch reports "did not
      * perform any assertions" (Risky), which fails CI but tells whoever broke the
      * clamp nothing about the number that reached the query (S99 review r1, LOW-11).
-     *
-     * @test
-     * @dataProvider absurdLimitProvider
      */
+    #[Test]
+    #[DataProvider('absurdLimitProvider')]
     public function testListEndpointsClampAnAbsurdLimit(string $rawLimit): void
     {
         $request = new Request();
@@ -764,9 +736,8 @@ class MusicControllerTest extends TestCase
     /**
      * A negative or non-numeric `?limit=` must fall back to the default page size,
      * never to 0 (which would render an empty library) or a negative LIMIT.
-     *
-     * @test
      */
+    #[Test]
     public function testListTracksRejectsNegativeAndGarbageLimits(): void
     {
         foreach (['-1', '0', 'DROP TABLE', ''] as $raw) {
@@ -784,9 +755,8 @@ class MusicControllerTest extends TestCase
      * `total` must be a real count. The pre-S99 handler summed
      * `libraries.item_count`, a column the schema does not have, so `?? 0` fired
      * unconditionally and `total` was 0 for every caller, forever.
-     *
-     * @test
      */
+    #[Test]
     public function testListTracksTotalIsCountedFromTheMusicTables(): void
     {
         $this->musicLibrary->method('getAllTracks')->willReturn([$this->trackRow()]);
@@ -799,9 +769,7 @@ class MusicControllerTest extends TestCase
         $this->assertNotSame(0, $body['total']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListTracksRespectsPaginationParams(): void
     {
         $request = new Request();
@@ -824,9 +792,7 @@ class MusicControllerTest extends TestCase
         $this->assertCount(1, $body['tracks']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testNowPlayingReturnsCurrentSession(): void
     {
         $request = new Request();
@@ -860,9 +826,7 @@ class MusicControllerTest extends TestCase
         $this->assertSame('session-456', $body['now_playing']['session_id']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testNowPlayingReturnsNullWhenNoUser(): void
     {
         $response = $this->controller->nowPlaying(new Request(), []);
@@ -874,9 +838,7 @@ class MusicControllerTest extends TestCase
         $this->assertNull($body['now_playing']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testNowPlayingReturnsNullWhenNoSession(): void
     {
         $request = new Request();
@@ -891,9 +853,7 @@ class MusicControllerTest extends TestCase
         $this->assertNull($body['now_playing']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetArtistReturns400WhenMbidMissing(): void
     {
         $response = $this->controller->getArtist(new Request(), []);
@@ -905,9 +865,7 @@ class MusicControllerTest extends TestCase
         $this->assertEquals('Artist name is required', $body['error']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetAlbumReturns400WhenMbidMissing(): void
     {
         $response = $this->controller->getAlbum(new Request(), []);
@@ -919,9 +877,7 @@ class MusicControllerTest extends TestCase
         $this->assertEquals('Album name is required', $body['error']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetTrackReturns404WhenNotFound(): void
     {
         $this->musicLibrary->method('findTrackByMediaItemId')->willReturn(null);
@@ -935,9 +891,7 @@ class MusicControllerTest extends TestCase
         $this->assertEquals('Track not found', $body['error']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetTrackReturns400WhenIdMissing(): void
     {
         $response = $this->controller->getTrack(new Request(), []);
@@ -949,9 +903,8 @@ class MusicControllerTest extends TestCase
      * The track lookup must be a KEYED lookup on the media-item UUID. The pre-S99
      * helper paged the first 1,000 rows of each library and compared ids in PHP,
      * so track 1,001+ was unplayable (404).
-     *
-     * @test
      */
+    #[Test]
     public function testGetTrackResolvesByMediaItemIdRatherThanScanningAPage(): void
     {
         $this->musicLibrary->expects($this->once())
@@ -970,9 +923,8 @@ class MusicControllerTest extends TestCase
      * the generic Range-safe GET /media/{trackId}/stream endpoint, so the UI
      * can direct-play music tracks (mirrors the AudiobookController convention).
      * The signed path must carry the MEDIA-ITEM UUID, not music_tracks.id.
-     *
-     * @test
      */
+    #[Test]
     public function testGetTrackEmitsSignedStreamUrl(): void
     {
         SignedUrl::resetSharedForTesting();

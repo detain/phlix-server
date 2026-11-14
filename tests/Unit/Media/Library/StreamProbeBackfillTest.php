@@ -16,6 +16,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\StreamProbeBackfill;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\NullLogger;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Lazy playback-info stream backfill (migration 071): pre-071 items get ONE
@@ -236,9 +237,8 @@ class StreamProbeBackfillTest extends TestCase
      *    BRACKETS and no colon after `]`, so the message parser cannot see it
      *    and only `errorInfo` can. One is recognised by its errno (2002) and one
      *    by its SQLSTATE class (08004), so neither signal alone carries both.
-     *
-     * @dataProvider transientWriteFailures
      */
+    #[DataProvider('transientWriteFailures')]
     public function testTransientStreamWriteFailureIsNotStampedSoTheItemStaysRepairable(
         \Throwable $failure
     ): void {
@@ -322,9 +322,8 @@ class StreamProbeBackfillTest extends TestCase
      * values — cannot flip a permanent failure to "transient", and a CONNECT
      * failure that will never clear by itself (1045) stays deterministic even
      * though `errorInfo` makes its errno readable.
-     *
-     * @dataProvider deterministicWriteFailures
      */
+    #[DataProvider('deterministicWriteFailures')]
     public function testDeterministicStreamWriteFailureIsStampedSoTheProbeCannotHotLoop(
         \Throwable $failure
     ): void {

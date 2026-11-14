@@ -8,6 +8,7 @@ use Phlix\Auth\ProfileNotOwnedException;
 use Phlix\Auth\UserProfileManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see UserProfileManager::resolveProfileIdForUser()} (S79).
@@ -148,9 +149,8 @@ final class UserProfileManagerResolveProfileScopeTest extends TestCase
      * An empty or whitespace-only requested id is treated as "not supplied"
      * rather than as a profile named ''. Otherwise a client sending
      * `?profile_id=` would get a refusal instead of its own data.
-     *
-     * @dataProvider blankRequestProvider
      */
+    #[DataProvider('blankRequestProvider')]
     public function testABlankRequestedProfileIsTreatedAsAbsent(?string $requested): void
     {
         $db = $this->createMock(Connection::class);
@@ -258,9 +258,8 @@ final class UserProfileManagerResolveProfileScopeTest extends TestCase
      * {@see UserProfileManager::MAX_NAME_LENGTH} bytes, which is exactly the
      * predicate `create()` itself validates — the fallback name is used instead of
      * letting `create()` throw.
-     *
-     * @dataProvider unusableUsernameProvider
      */
+    #[DataProvider('unusableUsernameProvider')]
     public function testAnUnusableUsernameFallsBackToTheDefaultProfileName(mixed $username): void
     {
         $seen = [];

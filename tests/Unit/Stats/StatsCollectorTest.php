@@ -11,6 +11,7 @@ use Phlix\Media\MediaItemType;
 use Phlix\Stats\StatsCollector;
 use RuntimeException;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class StatsCollectorTest extends TestCase
 {
@@ -117,9 +118,7 @@ class StatsCollectorTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider writeFailureProvider
-     */
+    #[DataProvider('writeFailureProvider')]
     public function testAFailingWriteIsContainedAndNeverPropagates(\Throwable $failure): void
     {
         $db = $this->createMock(Connection::class);
@@ -168,9 +167,8 @@ class StatsCollectorTest extends TestCase
 
     /**
      * @param callable(StatsCollector): mixed $read
-     *
-     * @dataProvider readMethodProvider
      */
+    #[DataProvider('readMethodProvider')]
     public function testReadFailuresStillPropagate(callable $read): void
     {
         $db = $this->createMock(Connection::class);
@@ -554,9 +552,8 @@ class StatsCollectorTest extends TestCase
      * manipulation. The gap itself is rewound by reflection rather than slept through:
      * the point is the window arithmetic, and a test that slept 6 s to prove it would be
      * paid for on every run of the suite forever.
-     *
-     * @dataProvider snapshotRunGapProvider
      */
+    #[DataProvider('snapshotRunGapProvider')]
     public function testAStallLongerThanTheGapWindowStartsANewRun(
         float $gapSeconds,
         bool $expectSameRun

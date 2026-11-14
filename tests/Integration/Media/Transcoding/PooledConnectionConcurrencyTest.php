@@ -11,6 +11,7 @@ use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Throwable;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Real-MySQL proof for S9 — the coroutine DB connection pool
@@ -345,9 +346,8 @@ final class PooledConnectionConcurrencyTest extends TestCase
      * must all complete: the blocking acquire() (channel-pop) path is exercised
      * hard, catching a lease leak or a deadlock that only shows up once
      * `created >= maxSize` forces waiters to block on releases.
-     *
-     * @group soak
      */
+    #[Group('soak')]
     public function testSustainedChurnWithPoolExhaustionDoesNotDeadlockOrLeak(): void
     {
         $this->runChurn(

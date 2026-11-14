@@ -8,6 +8,7 @@ use LdapRecord\Connection;
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\Ldap\LdapConnection;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Pins the bound that makes the LDAP blocking-I/O exception legitimate — that
@@ -218,9 +219,7 @@ final class LdapConnectionTimeoutTest extends TestCase
         $this->assertLessThanOrEqual(30, LdapConnection::NETWORK_TIMEOUT_SECONDS);
     }
 
-    /**
-     * @group slow
-     */
+    #[Group('slow')]
     public function test_a_peer_that_never_answers_consumes_the_operation_bound(): void
     {
         // THE load-bearing case: the dead dependency accepts the TCP connection
@@ -258,9 +257,7 @@ final class LdapConnectionTimeoutTest extends TestCase
         );
     }
 
-    /**
-     * @group slow
-     */
+    #[Group('slow')]
     public function test_a_refused_peer_fails_fast_distinguishing_refusal_from_hang(): void
     {
         // DEAD-DEPENDENCY CONTROL: a just-closed loopback port refuses the

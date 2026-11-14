@@ -21,6 +21,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 use function DI\factory;
 
@@ -60,9 +61,8 @@ require_once __DIR__ . '/../Plugins/InstallEnableDisableTest.php';
  * served-body polling loop exhausts the budget red — the W99 live symptom
  * (≈6/30 stale `/api/v1/themes` after an app-flow uninstall) reproduced in a
  * fixture. Proof captured in steps/w99/s498srv.PROGRESS.md.
- *
- * @group integration
  */
+#[Group('integration')]
 final class CrossWorkerThemeRegistryFleetFlushTest extends TestCase
 {
     /** AC1 freshness budget: every worker consistent within 5 s, no restarts. */

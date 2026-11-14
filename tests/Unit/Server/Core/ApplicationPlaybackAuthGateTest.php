@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -133,9 +134,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider gatedPlaybackRoutes
-     */
+    #[DataProvider('gatedPlaybackRoutes')]
     public function testAnonymousRequestIsRejected(string $method, string $path): void
     {
         $response = $this->routerFromRealRegistration()->dispatch($this->request($method, $path));
@@ -188,9 +187,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider deliberatelyPublicMediaRoutes
-     */
+    #[DataProvider('deliberatelyPublicMediaRoutes')]
     public function testDeliberatelyPublicMediaRoutesCarryNoAuthMiddleware(string $registeredPath): void
     {
         $middleware = $this->middlewareFor($this->routerFromRealRegistration(), 'GET', $registeredPath);
@@ -223,9 +220,7 @@ final class ApplicationPlaybackAuthGateTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider gatedRegisteredPaths
-     */
+    #[DataProvider('gatedRegisteredPaths')]
     public function testGatedRoutesCarryAuthMiddleware(string $method, string $registeredPath): void
     {
         $middleware = $this->middlewareFor($this->routerFromRealRegistration(), $method, $registeredPath);

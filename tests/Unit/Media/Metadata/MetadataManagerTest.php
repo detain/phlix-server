@@ -9,6 +9,7 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MetadataProviderInterface;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Common\Logger\LoggerFactory;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class MetadataManagerTest extends TestCase
 {
@@ -277,9 +278,8 @@ PHP;
      * so no provider resolves, the item is never mutated, and the method
      * returns false. This is the exact call `MusicLibraryManager::
      * enrichTrackMetadata()` makes (`MusicLibraryManager.php:298`).
-     *
-     * @dataProvider musicTypeProvider
      */
+    #[DataProvider('musicTypeProvider')]
     public function testMusicItemEnrichmentIsGracefulNoOp(string $musicType): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

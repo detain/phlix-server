@@ -17,6 +17,7 @@ use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * L-4 (security scan, CGI/web-portal twin) — `GET /api/v1/libraries` and
@@ -173,9 +174,7 @@ final class WebPortalRouterPathsRedactionTest extends TestCase
         return ['disabled' => ['disabled'], 'pending' => ['pending'], 'suspended' => ['suspended']];
     }
 
-    /**
-     * @dataProvider nonActiveStatuses
-     */
+    #[DataProvider('nonActiveStatuses')]
     public function testGetLibrariesRedactsPathsForInactiveAdmins(string $status): void
     {
         $libraryManager = $this->createMock(LibraryManager::class);
@@ -191,9 +190,7 @@ final class WebPortalRouterPathsRedactionTest extends TestCase
         $this->assertSame('lib-1', $decoded['libraries'][0]['id']);
     }
 
-    /**
-     * @dataProvider nonActiveStatuses
-     */
+    #[DataProvider('nonActiveStatuses')]
     public function testGetLibraryRedactsPathsForInactiveAdmins(string $status): void
     {
         $libraryManager = $this->createMock(LibraryManager::class);

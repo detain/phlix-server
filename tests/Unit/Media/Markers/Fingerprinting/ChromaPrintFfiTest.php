@@ -5,6 +5,7 @@ namespace Phlix\Tests\Unit\Media\Markers\Fingerprinting;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintFfi;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintFingerprintFailedException;
+use PHPUnit\Framework\Attributes\Group;
 
 class ChromaPrintFfiTest extends TestCase
 {
@@ -18,9 +19,7 @@ class ChromaPrintFfiTest extends TestCase
         $this->assertFalse($result);
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function testFingerprintThrowsWhenFileNotFound(): void
     {
         $chromaprint = new ChromaPrintFfi();

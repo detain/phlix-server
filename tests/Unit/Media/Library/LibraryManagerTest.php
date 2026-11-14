@@ -15,6 +15,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 use InvalidArgumentException;
 use RuntimeException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class LibraryManagerTest extends TestCase
 {
@@ -966,9 +967,8 @@ class LibraryManagerTest extends TestCase
      *
      * @param string $libraryType          `libraries.type` as stored.
      * @param string $expectedScannerLabel The label `MediaScanner::scan()` must receive.
-     *
-     * @dataProvider nonVideoLibraryTypesProvider
      */
+    #[DataProvider('nonVideoLibraryTypesProvider')]
     public function testScanLibraryRoutesEachTypeToItsHelperAndReportsWhatItAdded(
         string $libraryType,
         string $expectedScannerLabel

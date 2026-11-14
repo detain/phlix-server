@@ -8,6 +8,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Metadata\EmbeddedWritePolicy;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S89 — EmbeddedWritePolicy: the destructive-mode gate ships OFF and only an
@@ -86,9 +87,7 @@ final class EmbeddedWritePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider onSpellings
-     */
+    #[DataProvider('onSpellings')]
     public function test_explicit_on_spellings_enable(mixed $stored): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -97,9 +96,7 @@ final class EmbeddedWritePolicyTest extends TestCase
         $this->assertTrue((new EmbeddedWritePolicy($settings))->embeddedWriteEnabled());
     }
 
-    /**
-     * @dataProvider offAndAmbiguousSpellings
-     */
+    #[DataProvider('offAndAmbiguousSpellings')]
     public function test_off_and_ambiguous_spellings_stay_off(mixed $stored): void
     {
         $settings = $this->createMock(SettingsRepository::class);

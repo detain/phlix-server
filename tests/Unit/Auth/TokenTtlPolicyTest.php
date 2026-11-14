@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Auth;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\TokenTtlPolicy;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Behaviour of the policy object behind `auth.access_ttl` / `auth.refresh_ttl`.
@@ -181,9 +182,7 @@ final class TokenTtlPolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonNumericOverrides
-     */
+    #[DataProvider('nonNumericOverrides')]
     public function test_a_non_numeric_override_falls_back_to_the_default(mixed $value): void
     {
         $policy = $this->policy([

@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Metadata\MetadataCachePolicy;
 use RuntimeException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * W3 — MetadataCachePolicy: the `metadata.cache_ttl_hours` window ships at the
@@ -81,9 +82,7 @@ final class MetadataCachePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider recognizedValues
-     */
+    #[DataProvider('recognizedValues')]
     public function test_recognized_values_are_read_back_as_hours(mixed $stored, int $expected): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -108,9 +107,7 @@ final class MetadataCachePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider unrecognizedValues
-     */
+    #[DataProvider('unrecognizedValues')]
     public function test_unrecognized_values_fall_back_to_the_shipped_24h(mixed $stored): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -136,9 +133,7 @@ final class MetadataCachePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider outOfDomainValues
-     */
+    #[DataProvider('outOfDomainValues')]
     public function test_out_of_domain_values_are_clamped_into_the_defended_domain(mixed $stored, int $expected): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -240,9 +235,7 @@ final class MetadataCachePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonFreshTimestamps
-     */
+    #[DataProvider('nonFreshTimestamps')]
     public function test_absent_or_unparseable_timestamps_are_never_fresh(?string $raw): void
     {
         // Same answers the pre-policy hasRecentMetadata() gave for these rows.

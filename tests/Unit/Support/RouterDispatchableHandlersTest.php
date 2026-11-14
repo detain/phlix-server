@@ -16,6 +16,7 @@ use RecursiveIteratorIterator;
 use ReflectionMethod;
 use SplFileInfo;
 use TypeError;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S323 review round 1 — the pin under {@see RouterDispatchableHandlers}, the
@@ -157,9 +158,8 @@ final class RouterDispatchableHandlersTest extends TestCase
     /**
      * The two shapes measured escaping the old predicate, named individually so
      * a failure says WHICH regression came back.
-     *
-     * @dataProvider escapingShapeProvider
      */
+    #[DataProvider('escapingShapeProvider')]
     public function testTheShapesThatEscapedTheOldPredicateAreDispatchable(string $method): void
     {
         self::assertTrue(
@@ -185,9 +185,8 @@ final class RouterDispatchableHandlersTest extends TestCase
      *
      * Without this, a predicate hardwired to `return true` would pass every
      * other test in this file.
-     *
-     * @dataProvider undispatchableShapeProvider
      */
+    #[DataProvider('undispatchableShapeProvider')]
     public function testShapesPhpWouldRefuseAreNotEnumerated(string $method, string $why): void
     {
         self::assertFalse(

@@ -11,6 +11,7 @@ use Phlix\Theming\ThemeAudio;
 use Phlix\Theming\ThemeMedia;
 use Phlix\Theming\ThemeMediaRepository;
 use Phlix\Theming\ThemeVideo;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see ThemeMediaStreamController}.
@@ -311,9 +312,8 @@ class ThemeMediaStreamControllerTest extends TestCase
 
     /**
      * Verifies correct content types for different audio formats.
-     *
-     * @dataProvider audioFormatProvider
      */
+    #[DataProvider('audioFormatProvider')]
     public function testStreamAudioReturnsCorrectContentType(string $format, string $expectedContentType): void
     {
         $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
@@ -341,9 +341,8 @@ class ThemeMediaStreamControllerTest extends TestCase
 
     /**
      * Verifies correct content types for different video formats.
-     *
-     * @dataProvider videoFormatProvider
      */
+    #[DataProvider('videoFormatProvider')]
     public function testStreamVideoReturnsCorrectContentType(string $format, string $expectedContentType): void
     {
         $tempFile = tempnam(sys_get_temp_dir(), 'theme_video_');

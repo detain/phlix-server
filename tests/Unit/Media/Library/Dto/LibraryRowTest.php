@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Library\Dto;
 
 use Phlix\Media\Library\Dto\LibraryRow;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Smoke tests for the LibraryRow DTO.
@@ -53,9 +54,8 @@ class LibraryRowTest extends TestCase
 
     /**
      * seriesPerDirectory() coerces a range of truthy representations to true.
-     *
-     * @dataProvider truthySeriesPerDirectoryProvider
      */
+    #[DataProvider('truthySeriesPerDirectoryProvider')]
     public function testSeriesPerDirectoryCoercesTruthyValues(mixed $value): void
     {
         $row = LibraryRow::fromRow([
@@ -86,9 +86,8 @@ class LibraryRowTest extends TestCase
 
     /**
      * seriesPerDirectory() returns false for falsy / absent / unrecognised values.
-     *
-     * @dataProvider falsySeriesPerDirectoryProvider
      */
+    #[DataProvider('falsySeriesPerDirectoryProvider')]
     public function testSeriesPerDirectoryCoercesFalsyValues(mixed $value): void
     {
         $row = LibraryRow::fromRow([
@@ -168,9 +167,8 @@ class LibraryRowTest extends TestCase
 
     /**
      * metadataPriority() returns null for a range of malformed shapes.
-     *
-     * @dataProvider malformedMetadataPriorityProvider
      */
+    #[DataProvider('malformedMetadataPriorityProvider')]
     public function testMetadataPriorityNullForMalformedMap(mixed $value): void
     {
         $row = LibraryRow::fromRow([
@@ -309,9 +307,8 @@ class LibraryRowTest extends TestCase
     /**
      * S33: an explicit stored `{"enabled":true}` reads as enabled, and a range of
      * truthy encodings ("1"/"true"/1) all coerce to true.
-     *
-     * @dataProvider truthyAutoCollectionsProvider
      */
+    #[DataProvider('truthyAutoCollectionsProvider')]
     public function testAutoCollectionsEnabledReadsTruthyValues(mixed $value): void
     {
         $row = LibraryRow::fromRow([

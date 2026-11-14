@@ -12,6 +12,7 @@ use Phlix\Server\Workerman\HttpHandler;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  *
@@ -195,9 +196,7 @@ final class HttpHandlerCompressionTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonCompressibleTypeProvider
-     */
+    #[DataProvider('nonCompressibleTypeProvider')]
     public function testMediaContentTypesAreNeverCompressed(string $contentType): void
     {
         $handler = $this->makeHandler();
@@ -231,9 +230,7 @@ final class HttpHandlerCompressionTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider compressibleTypeProvider
-     */
+    #[DataProvider('compressibleTypeProvider')]
     public function testTextContentTypesAreCompressed(string $contentType): void
     {
         $handler = $this->makeHandler();

@@ -14,6 +14,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use Phlix\Server\Http\Request;
 use Phlix\Server\WebPortal\Controllers\SharedUiController;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * LW-077-a: the server-side `wsUrl`/`wsPath` bootstrap seam.
@@ -120,9 +121,7 @@ final class SharedUiSocketSeamTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider urlGrammarProvider
-     */
+    #[DataProvider('urlGrammarProvider')]
     public function testConfiguredSocketBaseUrlGrammarArms(string $raw, ?string $expected): void
     {
         putenv('PHLIX_WS_URL=' . $raw);
@@ -152,9 +151,7 @@ final class SharedUiSocketSeamTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider pathGrammarProvider
-     */
+    #[DataProvider('pathGrammarProvider')]
     public function testConfiguredSocketBasePathGrammarArms(string $raw, ?string $expected): void
     {
         putenv('PHLIX_WS_PATH=' . $raw);

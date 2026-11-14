@@ -10,6 +10,7 @@ use Phlix\Dlna\SsdpAdvertiser;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see DlnaAdvertisedHost} — the ONE place `dlna.advertise_host` is read.
@@ -86,9 +87,7 @@ final class DlnaAdvertisedHostTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider sanitizeProvider
-     */
+    #[DataProvider('sanitizeProvider')]
     public function test_sanitize(string $input, string $expected): void
     {
         self::assertSame($expected, DlnaAdvertisedHost::sanitize($input));

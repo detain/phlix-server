@@ -13,6 +13,7 @@ namespace Phlix\Tests\Unit\Server\Http\Middleware;
 
 use Phlix\Server\Http\Middleware\SecurityHeaders;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Consolidated review C1: the watch-party WebSocket on :8097 is cross-PORT
@@ -95,9 +96,7 @@ final class SecurityHeadersCspWebSocketTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider provide_host_headers
-     */
+    #[DataProvider('provide_host_headers')]
     public function test_host_header_sanitizer(?string $header, ?string $expected): void
     {
         self::assertSame($expected, SecurityHeaders::webSocketHostFromHeader($header));

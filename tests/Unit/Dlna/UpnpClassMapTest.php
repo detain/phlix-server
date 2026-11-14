@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Dlna;
 use PHPUnit\Framework\TestCase;
 use Phlix\Dlna\UpnpClassMap;
 use Phlix\Media\Library\MediaItemShaper;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class UpnpClassMapTest extends TestCase
 {
@@ -143,9 +144,7 @@ class UpnpClassMapTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider typeClassProvider
-     */
+    #[DataProvider('typeClassProvider')]
     public function testForTypeResolvesEachEnumMember(string $type, string $expected): void
     {
         $this->assertSame($expected, UpnpClassMap::forType($type));

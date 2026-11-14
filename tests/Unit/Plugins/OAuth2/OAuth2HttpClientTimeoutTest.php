@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Plugins\OAuth2\OAuth2HttpClient;
 use Phlix\Plugins\Oidc\OidcHttpClient;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Proves the bound on accepted blocking-I/O exception #2 actually FIRES.
@@ -52,9 +53,8 @@ use Phlix\Plugins\Oidc\OidcHttpClient;
  * `CURLOPT_CONNECTTIMEOUT` is deliberately not pinned separately: with
  * `CURLOPT_TIMEOUT` present it is a narrower duplicate, so no case can
  * distinguish its removal. It is defence in depth, not the bound.
- *
- * @group slow
  */
+#[Group('slow')]
 final class OAuth2HttpClientTimeoutTest extends TestCase
 {
     /** @var resource|closed-resource|null */

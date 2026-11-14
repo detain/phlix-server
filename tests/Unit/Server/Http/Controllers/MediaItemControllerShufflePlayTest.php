@@ -17,6 +17,7 @@ use Phlix\Media\Streaming\Trickplay\TrickplayController;
 use Phlix\Server\Http\Controllers\MediaItemController;
 use Phlix\Server\Http\Request;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests for MediaItemController::shufflePlay().
@@ -114,9 +115,7 @@ class MediaItemControllerShufflePlayTest extends TestCase
         return $request;
     }
 
-    /**
-     * @dataProvider playableLeafTypeProvider
-     */
+    #[DataProvider('playableLeafTypeProvider')]
     public function testChildlessLeafTypePlaysAsSingle(string $type): void
     {
         $response = $this->controllerFor($type)->shufflePlay($this->requestFor('item-1'), []);
@@ -133,9 +132,7 @@ class MediaItemControllerShufflePlayTest extends TestCase
         $this->assertSame(['item-1'], $body['shuffled_ids']);
     }
 
-    /**
-     * @dataProvider containerTypeProvider
-     */
+    #[DataProvider('containerTypeProvider')]
     public function testChildlessContainerTypeReturns404(string $type): void
     {
         $response = $this->controllerFor($type)->shufflePlay($this->requestFor('item-1'), []);

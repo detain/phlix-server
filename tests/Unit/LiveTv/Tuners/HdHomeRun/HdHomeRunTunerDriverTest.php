@@ -9,6 +9,7 @@ use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 class HdHomeRunTunerDriverTest extends TestCase
 {
@@ -141,9 +142,8 @@ class HdHomeRunTunerDriverTest extends TestCase
      * inside a Swoole coroutine (cooperative Coroutine::sleep) rather than
      * blocking the worker with usleep. Proven behaviorally: a sibling coroutine
      * started alongside the sleep must interleave DURING it.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testScanDelayYieldsEventLoopInsideCoroutine(): void
     {
         if (! extension_loaded('swoole')) {

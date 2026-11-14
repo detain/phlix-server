@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Recorder;
 use Phlix\Server\Http\Controllers\LiveTvStreamController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see LiveTvStreamController} (SV-3.1 f-c / h).
@@ -315,9 +316,8 @@ class LiveTvStreamControllerTest extends TestCase
      * The path-jail rejects any name that is not an exact seg_<digits>.ts BEFORE
      * the session is even resolved (getTimeShift must never be called) and BEFORE
      * any name touches the filesystem.
-     *
-     * @dataProvider unsafeSegmentNameProvider
      */
+    #[DataProvider('unsafeSegmentNameProvider')]
     public function testStreamTimeShiftSegmentRejectsUnsafeNames(string $segment): void
     {
         $recorder = $this->createMock(Recorder::class);

@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 
 use Phlix\Media\Metadata\SeriesCandidateSelector;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Every fixture in this file is a REAL `/search/tv` payload shape captured from
@@ -41,9 +42,7 @@ final class SeriesCandidateSelectorTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider normalizeCases
-     */
+    #[DataProvider('normalizeCases')]
     public function testNormalizeFoldsToAComparisonKey(string $input, string $expected): void
     {
         $this->assertSame($expected, $this->selector->normalize($input));
@@ -110,9 +109,7 @@ final class SeriesCandidateSelectorTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider extendedTitleCases
-     */
+    #[DataProvider('extendedTitleCases')]
     public function testNeitherFoldAcceptsACandidateThatExtendsTheQuery(string $query, string $name): void
     {
         $candidate = ['id' => '1', 'name' => $name];
@@ -330,9 +327,7 @@ final class SeriesCandidateSelectorTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider strictNormalizeCases
-     */
+    #[DataProvider('strictNormalizeCases')]
     public function testStrictNormalizeKeepsDistinguishingMarks(string $input, string $expected): void
     {
         $this->assertSame($expected, $this->selector->normalizeStrict($input));
@@ -375,9 +370,7 @@ final class SeriesCandidateSelectorTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider foldCollisionCases
-     */
+    #[DataProvider('foldCollisionCases')]
     public function testStrictMatchSeparatesTheLiveFoldCollisions(string $query, string $other): void
     {
         $candidate = ['id' => '1', 'name' => $other];

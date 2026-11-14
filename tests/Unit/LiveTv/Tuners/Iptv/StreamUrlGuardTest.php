@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\LiveTv\Tuners\Iptv\StreamUrlGuard;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * F-1 regression suite: IPTV stream/playlist URL jail.
@@ -38,9 +39,7 @@ final class StreamUrlGuardTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider deniedSchemeProvider
-     */
+    #[DataProvider('deniedSchemeProvider')]
     public function testNonHttpSchemeIsRefused(string $url): void
     {
         $this->assertFalse(StreamUrlGuard::isTunable($url));
@@ -67,9 +66,7 @@ final class StreamUrlGuardTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider deniedLiteralHostProvider
-     */
+    #[DataProvider('deniedLiteralHostProvider')]
     public function testDangerousLiteralHostIsRefused(string $url): void
     {
         $this->assertFalse(StreamUrlGuard::isTunable($url));
@@ -92,9 +89,7 @@ final class StreamUrlGuardTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider allowedDefaultProvider
-     */
+    #[DataProvider('allowedDefaultProvider')]
     public function testLanAndPublicTargetsTuneInDefaultMode(string $url): void
     {
         $this->assertTrue(StreamUrlGuard::isTunable($url));

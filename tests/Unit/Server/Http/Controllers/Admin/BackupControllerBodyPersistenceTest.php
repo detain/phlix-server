@@ -46,6 +46,8 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Request;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 final class BackupControllerBodyPersistenceTest extends TestCase
 {
@@ -194,10 +196,9 @@ final class BackupControllerBodyPersistenceTest extends TestCase
      * `test` job and the S180 probe job, both of which ship a live MySQL.
      * The other two tests in this file mock the DB with `never()` arms and
      * need no gate.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_supplied_label_reaches_the_persisted_backup_row(): void
     {
         // Guard FIRST: the skip must happen before any define/scratch work,
@@ -287,10 +288,9 @@ final class BackupControllerBodyPersistenceTest extends TestCase
      * property, so neither schedule parameter ever reached the config file it
      * rewrites. Persistence here is the REWRITTEN FILE on disk — read back
      * with a fresh `include`, so the assertion is on durable state.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_schedule_request_body_reaches_the_persisted_config_file(): void
     {
         $backupDir = $this->tmpdir('phlix_s271_backups_');
@@ -346,10 +346,9 @@ final class BackupControllerBodyPersistenceTest extends TestCase
      * config file keeps the seeded values untouched. The OLD dead property
      * read could not take these branches at all — it only ever saw null —
      * so each refusal doubles as a live-read control.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_non_numeric_schedule_values_are_refused_and_nothing_is_persisted(): void
     {
         $backupDir = $this->tmpdir('phlix_s271_backups_');

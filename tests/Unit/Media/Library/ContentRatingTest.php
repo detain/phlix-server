@@ -8,6 +8,7 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Media\Library\ContentRating;
 use Phlix\Media\Library\ItemRepository;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Covers the canonical content-rating vocabulary + normalization and asserts the
@@ -59,9 +60,7 @@ final class ContentRatingTest extends TestCase
         $this->assertSame(ContentRating::RANKS, UserProfileManager::RATING_ORDER);
     }
 
-    /**
-     * @dataProvider normalizationCases
-     */
+    #[DataProvider('normalizationCases')]
     public function testNormalize(mixed $input, ?string $expected): void
     {
         $this->assertSame($expected, ContentRating::normalize($input));
@@ -89,9 +88,7 @@ final class ContentRatingTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider normalizeOrRestrictCases
-     */
+    #[DataProvider('normalizeOrRestrictCases')]
     public function testNormalizeOrRestrict(mixed $input, ?string $expected): void
     {
         $this->assertSame($expected, ContentRating::normalizeOrRestrict($input));

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 use Phlix\Media\Metadata\TitleSuffixStripper;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see SceneFilenameNormalizer}: parsing dirty release filenames
@@ -628,9 +629,8 @@ final class SceneFilenameNormalizerTest extends TestCase
 
     /**
      * Noise-suffix matching is case-insensitive regardless of input casing.
-     *
-     * @dataProvider provideCaseVariantSuffixes
      */
+    #[DataProvider('provideCaseVariantSuffixes')]
     public function testNormalizeStripsNoiseSuffixCaseInsensitively(string $filename): void
     {
         $result = SceneFilenameNormalizer::normalize($filename);
@@ -659,9 +659,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * Uses "Directors Cut" (a pure NOISE_SUFFIX phrase, NOT a QUALITY_TOKEN) so the
      * assertion isolates the Step 13.1 end-anchored peel from the pre-existing
      * token-level quality stripping in the no-year branch.
-     *
-     * @dataProvider provideSeparatorVariants
      */
+    #[DataProvider('provideSeparatorVariants')]
     public function testNormalizeStripsNoiseSuffixAcrossSeparatorVariants(string $filename): void
     {
         $result = SceneFilenameNormalizer::normalize($filename);
@@ -714,9 +713,8 @@ final class SceneFilenameNormalizerTest extends TestCase
     /**
      * A legitimate title that merely CONTAINS a noise word mid-string (not at the
      * trailing edge) must NOT be stripped — only end-anchored matches are peeled.
-     *
-     * @dataProvider provideMidStringNoiseWordTitles
      */
+    #[DataProvider('provideMidStringNoiseWordTitles')]
     public function testNormalizeDoesNotStripMidStringNoiseWord(string $filename, string $expectedTitle): void
     {
         $result = SceneFilenameNormalizer::normalize($filename);
@@ -927,9 +925,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * falls back to `$cleaned` — and returning `$cleaned` untouched would store a
      * title containing the very dangling `(` this step exists to remove. This is
      * the only path in `normalize()` that could still emit unbalanced brackets.
-     *
-     * @dataProvider provideBracketedYearFallbackFilenames
      */
+    #[DataProvider('provideBracketedYearFallbackFilenames')]
     public function testNormalizeRepairsBracketedYearBranchFallback(
         string $filename,
         string $expected,
@@ -972,9 +969,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * release-tag fragment that sat between the orphan and that closer survives as
      * bare title text. Repairing only on the way out leaves the junk inside a
      * group the strip swallows whole.
-     *
-     * @dataProvider provideOrphanHeadedReleaseTagRuns
      */
+    #[DataProvider('provideOrphanHeadedReleaseTagRuns')]
     public function testNormalizeDoesNotPromoteReleaseTagJunkIntoTitle(string $filename, string $expected): void
     {
         $result = SceneFilenameNormalizer::normalize($filename);
@@ -1015,9 +1011,8 @@ final class SceneFilenameNormalizerTest extends TestCase
     /**
      * The global invariant: `normalize()` never returns a title that ends in an
      * unbalanced opener, and never returns a title whose brackets are unbalanced.
-     *
-     * @dataProvider provideBracketSoupFilenames
      */
+    #[DataProvider('provideBracketSoupFilenames')]
     public function testNormalizeNeverEmitsUnbalancedBrackets(string $filename): void
     {
         $title = SceneFilenameNormalizer::normalize($filename)['title'];
@@ -1215,9 +1210,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * Direct unit coverage of the private helper: it removes ONLY unmatched
      * bracket characters and leaves every matched pair (including nested pairs)
      * in place for `stripBracketedTags()` to handle.
-     *
-     * @dataProvider provideBracketBalanceRepairs
      */
+    #[DataProvider('provideBracketBalanceRepairs')]
     public function testRepairBracketBalanceDropsOnlyUnmatchedBrackets(string $input, string $expected): void
     {
         $method = new \ReflectionMethod(SceneFilenameNormalizer::class, 'repairBracketBalance');
@@ -1388,9 +1382,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * can reuse the exact same three patterns instead of growing a second copy
      * that would drift (the fullwidth `【…】` pair is the easy one to forget).
      * Narrowing it again breaks that caller, so the visibility is pinned here.
-     *
-     * @dataProvider bracketedTagCases
      */
+    #[DataProvider('bracketedTagCases')]
     public function testStripBracketedTagsIsPublicAndKeepsTheSurroundingText(
         string $input,
         string $expected
@@ -1425,9 +1418,8 @@ final class SceneFilenameNormalizerTest extends TestCase
      * is one of them. While it was private the episode path was the only
      * consumer of stripBracketedTags() without the balance guarantee, and an
      * orphan opener went straight into `media_items.name` ("Title [720p").
-     *
-     * @dataProvider orphanBracketRepairCases
      */
+    #[DataProvider('orphanBracketRepairCases')]
     public function testRepairBracketBalanceIsPublicAndDropsOrphans(
         string $input,
         string $expected

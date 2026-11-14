@@ -13,6 +13,7 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Server\Http\Controllers\LibraryController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see LibraryController}.
@@ -765,10 +766,10 @@ class LibraryControllerTest extends TestCase
      * float) is malformed → 400, rather than being silently coerced to `false`
      * by toBool(). The manager is never called.
      *
-     * @dataProvider provideNonBoolAutoCollectionsEnabled
      *
      * @param mixed $enabledValue The malformed `enabled` value to reject.
      */
+    #[DataProvider('provideNonBoolAutoCollectionsEnabled')]
     public function testUpdateRejectsNonBoolAutoCollectionsEnabled(mixed $enabledValue): void
     {
         $libraryManager = $this->createMock(LibraryManager::class);
@@ -811,10 +812,10 @@ class LibraryControllerTest extends TestCase
      * canonical `{enabled: bool}` shape — proving the non-bool tightening did NOT
      * over-reject a genuine boolean `enabled`.
      *
-     * @dataProvider provideValidAutoCollectionsEnabledBool
      *
      * @param bool $enabled The valid boolean `enabled` value.
      */
+    #[DataProvider('provideValidAutoCollectionsEnabledBool')]
     public function testCreateAcceptsValidBoolAutoCollectionsEnabled(bool $enabled): void
     {
         $libraryManager = $this->createMock(LibraryManager::class);

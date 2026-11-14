@@ -11,6 +11,7 @@ use ReflectionMethod;
 use RuntimeException;
 use Throwable;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class MigrationRunnerTest extends TestCase
 {
@@ -167,9 +168,7 @@ class MigrationRunnerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider idempotentMessageProvider
-     */
+    #[DataProvider('idempotentMessageProvider')]
     public function testIdempotentErrorsAreDowngradedToNotes(string $message): void
     {
         $this->writeMigration('001.sql', 'ALTER TABLE x ADD COLUMN y INT;');
@@ -242,9 +241,7 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame(3, $result['skipped_count']);
     }
 
-    /**
-     * @dataProvider idempotentMessageProvider
-     */
+    #[DataProvider('idempotentMessageProvider')]
     public function testIsAlreadyAppliedNoteRecognisesIdempotentClasses(string $message): void
     {
         $this->assertTrue(MigrationRunner::isAlreadyAppliedNote($message));
@@ -387,9 +384,7 @@ class MigrationRunnerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider realDriverMessageProvider
-     */
+    #[DataProvider('realDriverMessageProvider')]
     public function testClassificationUsesTheDriverErrnoNotTheStatementText(
         string $message,
         bool $expectedIdempotent
@@ -549,9 +544,8 @@ class MigrationRunnerTest extends TestCase
     /**
      * End to end through `run()`: a `CREATE TABLE` that fails 1826 / 3822 must
      * exit 1 AND must NOT be recorded in the ledger, so the next run retries it.
-     *
-     * @dataProvider duplicateConstraintNameProvider
      */
+    #[DataProvider('duplicateConstraintNameProvider')]
     public function testDuplicateConstraintNameOnCreateTableFailsAndIsNotRecorded(
         string $statement,
         string $driverMessage
@@ -717,9 +711,7 @@ class MigrationRunnerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider statementAwareEquivalenceProvider
-     */
+    #[DataProvider('statementAwareEquivalenceProvider')]
     public function testSupplyingTheStatementDoesNotChangeTheOrdinaryCases(
         string $statement,
         string $message,
@@ -1253,9 +1245,8 @@ class MigrationRunnerTest extends TestCase
      * this class into class (b) would redden every legitimate re-deploy — MySQL
      * 8 has no `IF NOT EXISTS` on `ADD COLUMN`/`ADD INDEX`, so a replay raises
      * one of these per statement — and the whole change would be reverted.
-     *
-     * @dataProvider idempotentMessageProvider
      */
+    #[DataProvider('idempotentMessageProvider')]
     public function testExitCodeIsSuccessForAnAlreadyAppliedReplay(string $message): void
     {
         $this->writeMigration('001.sql', 'ALTER TABLE x ADD COLUMN y INT;');

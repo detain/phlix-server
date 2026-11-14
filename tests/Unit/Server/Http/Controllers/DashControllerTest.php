@@ -10,6 +10,7 @@ use Phlix\Media\Transcoding\SegmentCacheFullException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\DashController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see DashController}.
@@ -164,9 +165,7 @@ class DashControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider segmentShapes
-     */
+    #[DataProvider('segmentShapes')]
     public function testEveryManifestReferenceShapeTriggersItsOwnEncode(
         string $file,
         ?string $variant,
@@ -452,9 +451,7 @@ class DashControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider traversalJobIdShapes
-     */
+    #[DataProvider('traversalJobIdShapes')]
     public function testTraversalShapedJobIdsAreRefusedWithTheExistingFourHundredEnvelope(string $jobId): void
     {
         $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'manifest.mpd']);

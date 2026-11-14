@@ -65,9 +65,13 @@ final class RequiredPhpExtensionsContractTest extends TestCase
      * ext-reflection. The contract header's own reasoning says it is never
      * ours to list: PHP cannot be built without it.
      *
+     * 'date' — webmozart/assert v2.5.0 (transitive via the 2026-11-13
+     * dependency upgrade) requires ext-date. Like reflection it is compiled
+     * into every PHP build and can never be absent, so it is not ours to list.
+     *
      * @var list<string>
      */
-    private const VENDOR_DECLARED_ADDITIONS = ['reflection'];
+    private const VENDOR_DECLARED_ADDITIONS = ['reflection', 'date'];
 
     /**
      * The lowest PHP the project supports, and therefore the version

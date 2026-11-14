@@ -285,7 +285,7 @@
                 <div class="top-media">
                     <h2 class="section-title">Your Top Media This Week</h2>
                     <div class="media-grid">
-                        {foreach item=$media from=$top_media key=key}
+                        {foreach item=media from=$top_media key=key}
                         <div class="media-item">
                             {if $media.poster_url}
                             <img

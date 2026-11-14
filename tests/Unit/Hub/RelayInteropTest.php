@@ -14,6 +14,7 @@ use Phlix\Hub\StoredEnrollment;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Workerman\Connection\AsyncTcpConnection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function chr;
 use function json_decode;
@@ -153,9 +154,7 @@ final class RelayInteropTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider hubBinaryFrameProvider
-     */
+    #[DataProvider('hubBinaryFrameProvider')]
     public function test_server_codec_decodes_hub_binary_frames(
         RelayFrameType $type,
         int $seq,

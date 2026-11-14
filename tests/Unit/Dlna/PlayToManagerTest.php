@@ -12,9 +12,9 @@ use Phlix\Dlna\RendererControlClient;
 use Phlix\Dlna\RendererDiscovery;
 use Phlix\Dlna\PlayToSession;
 use Phlix\Session\PlaybackController;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
- * @group network
  *
  * These tests construct PlayToManager with real (192.168.x) renderer URLs
  * and exercise the production code path that instantiates a real
@@ -24,6 +24,7 @@ use Phlix\Session\PlaybackController;
  * Unit run; opt in with `--group network` to exercise locally against
  * a real DLNA renderer.
  */
+#[Group('network')]
 class PlayToManagerTest extends TestCase
 {
     /** @var RendererDiscovery&MockObject */

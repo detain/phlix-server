@@ -8,6 +8,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Installer\ComposerRunner;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 final class ComposerRunnerTest extends TestCase
 {
@@ -55,9 +56,7 @@ final class ComposerRunnerTest extends TestCase
         $runner->install($this->tmpDir);
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function test_install_succeeds_on_minimal_composer_json(): void
     {
         if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {

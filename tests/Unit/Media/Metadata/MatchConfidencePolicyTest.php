@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Metadata\MatchConfidencePolicy;
 use RuntimeException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * W3/F3 — MatchConfidencePolicy: the `metadata.min_match_confidence` gate
@@ -71,9 +72,7 @@ final class MatchConfidencePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider recognizedValues
-     */
+    #[DataProvider('recognizedValues')]
     public function test_recognized_values_are_read_back(mixed $stored, float $expected): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -98,9 +97,7 @@ final class MatchConfidencePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider unrecognizedValues
-     */
+    #[DataProvider('unrecognizedValues')]
     public function test_unrecognized_values_fall_back_to_the_shipped_default(mixed $stored): void
     {
         $settings = $this->createMock(SettingsRepository::class);
@@ -125,9 +122,7 @@ final class MatchConfidencePolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider outOfDomainValues
-     */
+    #[DataProvider('outOfDomainValues')]
     public function test_out_of_domain_numbers_are_clamped_into_the_score_domain(mixed $stored, float $expected): void
     {
         $settings = $this->createMock(SettingsRepository::class);

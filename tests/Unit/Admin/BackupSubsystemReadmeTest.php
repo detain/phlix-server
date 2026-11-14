@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Admin;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Review server__enduser M-SERVER-21: "The whole backup subsystem is
@@ -111,8 +112,8 @@ final class BackupSubsystemReadmeTest extends TestCase
     /**
      * @param string $readmePath   the path as the README documents it
      * @param string $sourceMarker the verb call + group-relative path in AdminRoutes.php
-     * @dataProvider backupRouteProvider
      */
+    #[DataProvider('backupRouteProvider')]
     public function testEveryDocumentedBackupRouteIsReallyRegistered(string $readmePath, string $sourceMarker): void
     {
         // R-SERVER-25: a bare substring check could not tell sibling rows

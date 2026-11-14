@@ -4,6 +4,7 @@ namespace Phlix\Tests\Unit\Media\Streaming;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\QualitySelector;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class QualitySelectorTest extends TestCase
 {
@@ -331,9 +332,8 @@ class QualitySelectorTest extends TestCase
      * none of the five legacy profiles carries a single gate key, so canDirectPlay
      * stays byte-identical for them (the behavioural tv-4k test above is one face
      * of this; the shape test here is the exhaustive one, covering all five).
-     *
-     * @dataProvider preExistingProfileProvider
      */
+    #[DataProvider('preExistingProfileProvider')]
     public function testPreExistingProfilesDeclareNoOptionalGateKeys(string $profileName): void
     {
         $selector = new QualitySelector();
@@ -408,9 +408,8 @@ class QualitySelectorTest extends TestCase
      * the offered video codec omits HEVC (transcodes to h264). This is the exhaustive
      * proof that all aliases in {@see QualitySelector::HEVC_CODECS} are dropped, not
      * just the canonical `h265` a stock profile happens to list.
-     *
-     * @dataProvider hevcAliasProvider
      */
+    #[DataProvider('hevcAliasProvider')]
     public function testExcludeHevcDropsHevcFromOfferedCodecs(string $codec): void
     {
         $selector = new QualitySelector();

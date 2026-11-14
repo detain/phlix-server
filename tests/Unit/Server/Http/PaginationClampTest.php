@@ -21,6 +21,7 @@ use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SECURITY regression tests: an over-large `?limit=` must never reach a
@@ -63,9 +64,7 @@ final class PaginationClampTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider clampCases
-     */
+    #[DataProvider('clampCases')]
     public function testClampBoundsEveryRequestedPageSize(mixed $raw, int $expected): void
     {
         self::assertSame($expected, PageLimit::clamp($raw));

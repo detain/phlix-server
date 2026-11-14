@@ -11,6 +11,7 @@ use Phlix\Media\Metadata\MetadataCachePolicy;
 use Phlix\Server\Http\Middleware\SecurityHeadersPolicy;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * W2+W4 config-side reachability for all six schema keys this wave declares
@@ -70,9 +71,7 @@ final class PhaseW2W4SettingsReachabilityTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider keyProvider
-     */
+    #[DataProvider('keyProvider')]
     public function test_key_resolves_through_real_config(string $key, mixed $expected): void
     {
         $repo = $this->repositoryOverRealConfigDir();

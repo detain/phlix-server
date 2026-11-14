@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Server\Http\Controllers\SegmentRequestParser;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S310 — the shared filename → `ensureSegment()` router, tested directly.
@@ -65,9 +66,7 @@ final class SegmentRequestParserTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider fmp4Shapes
-     */
+    #[DataProvider('fmp4Shapes')]
     public function testTheHlsExtensionSetParsesEveryFmp4Shape(
         string $file,
         ?string $variant,
@@ -80,9 +79,7 @@ final class SegmentRequestParserTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider mpegtsShapes
-     */
+    #[DataProvider('mpegtsShapes')]
     public function testTheHlsExtensionSetStillParsesEveryMpegTsShape(
         string $file,
         ?string $variant,
@@ -95,9 +92,7 @@ final class SegmentRequestParserTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider fmp4Shapes
-     */
+    #[DataProvider('fmp4Shapes')]
     public function testTheDashExtensionSetParsesEveryFmp4Shape(
         string $file,
         ?string $variant,
@@ -114,9 +109,8 @@ final class SegmentRequestParserTest extends TestCase
      * DASH must NOT claim an MPEG-TS name: `.ts` is HlsController's artefact and
      * an MPEG-TS job has no manifest referencing it. This is the property S59
      * shipped and S310 must not lose in the extraction.
-     *
-     * @dataProvider mpegtsShapes
      */
+    #[DataProvider('mpegtsShapes')]
     public function testTheDashExtensionSetRefusesEveryMpegTsShape(string $file): void
     {
         $this->assertNull(SegmentRequestParser::parse($file, SegmentRequestParser::DASH_EXTENSIONS));
@@ -128,9 +122,8 @@ final class SegmentRequestParserTest extends TestCase
      * name. Nothing in `src/` passes this extension set today — it is asserted
      * so the extension parameter is a real gate rather than decoration that
      * happens to be right for the two live call sites.
-     *
-     * @dataProvider fmp4Shapes
      */
+    #[DataProvider('fmp4Shapes')]
     public function testAnMpegTsOnlyCallerRefusesEveryFmp4Shape(string $file): void
     {
         $this->assertNull(SegmentRequestParser::parse($file, [SegmentRequestParser::EXT_MPEGTS]));
@@ -218,9 +211,7 @@ final class SegmentRequestParserTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonArtefacts
-     */
+    #[DataProvider('nonArtefacts')]
     public function testANonArtefactNameRoutesNowhereForEitherCaller(string $file): void
     {
         $this->assertNull(

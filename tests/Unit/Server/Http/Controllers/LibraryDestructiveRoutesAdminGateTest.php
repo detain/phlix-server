@@ -13,6 +13,7 @@ use Phlix\Server\Http\Controllers\LibraryController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S272 — pins the admin gate on the six destructive
@@ -125,9 +126,8 @@ final class LibraryDestructiveRoutesAdminGateTest extends TestCase
      *
      * On its own this proves nothing (see the class docblock); it is the floor
      * of the three-way control.
-     *
-     * @dataProvider destructiveActionProvider
      */
+    #[DataProvider('destructiveActionProvider')]
     public function testAnonymousRequestIsRejectedWith401(string $method): void
     {
         $controller = $this->makeController('admin-1');
@@ -150,9 +150,8 @@ final class LibraryDestructiveRoutesAdminGateTest extends TestCase
      * `auth.not_admin` code (as opposed to `auth.required`) proves the ADMIN
      * branch fired rather than the auth branch, so a regression that downgrades
      * the gate to auth-only reds here.
-     *
-     * @dataProvider destructiveActionProvider
      */
+    #[DataProvider('destructiveActionProvider')]
     public function testAuthenticatedNonAdminIsRejectedWith403(string $method): void
     {
         // 'admin-1' is the only admin; the caller is 'user-1'.
@@ -182,9 +181,8 @@ final class LibraryDestructiveRoutesAdminGateTest extends TestCase
      *
      * The succeeding control beside the refusal: without it, a gate that denied
      * EVERY request would pass the 401 and 403 cases and look correct.
-     *
-     * @dataProvider destructiveActionProvider
      */
+    #[DataProvider('destructiveActionProvider')]
     public function testAuthenticatedAdminReachesHandlerAndEnqueuesJob(
         string $method,
         string $jobType

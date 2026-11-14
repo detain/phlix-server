@@ -6,15 +6,15 @@ namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\SeasonDirectoryClassifier;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class SeasonDirectoryClassifierTest extends TestCase
 {
     /**
      * SEASON directories → ['type' => 'season', 'season' => N] with N extracted,
      * ignoring trailing year ranges / subtitles / letter suffixes ("3b" → 3).
-     *
-     * @dataProvider seasonCases
      */
+    #[DataProvider('seasonCases')]
     public function testClassifiesSeasonDirectories(string $dirName, int $expectedSeason): void
     {
         // hasMedia = true so a non-season name could never be forced to 'skip';
@@ -48,9 +48,8 @@ class SeasonDirectoryClassifierTest extends TestCase
     /**
      * SPECIALS directories → ['type' => 'specials'] (season 0). Covers the word
      * forms plus explicit Season 0 / S00, and OVA/Extras treated as specials.
-     *
-     * @dataProvider specialsCases
      */
+    #[DataProvider('specialsCases')]
     public function testClassifiesSpecialsDirectories(string $dirName): void
     {
         $result = SeasonDirectoryClassifier::classify($dirName, true);
@@ -78,9 +77,8 @@ class SeasonDirectoryClassifierTest extends TestCase
      * SKIP directories → ['type' => 'skip'] — junk "you might also like" / pointer
      * folders. Classified as junk on the NAME alone (hasMedia = true proves the
      * junk heuristic, not the empty-dir shortcut, is what skips them).
-     *
-     * @dataProvider skipCases
      */
+    #[DataProvider('skipCases')]
     public function testClassifiesJunkDirectoriesAsSkipEvenWithMedia(string $dirName): void
     {
         $result = SeasonDirectoryClassifier::classify($dirName, true);
@@ -117,9 +115,8 @@ class SeasonDirectoryClassifierTest extends TestCase
     /**
      * LOOSE directories → ['type' => 'loose'] — hold standalone media but are not
      * a season and not junk. Scanned without a forced season.
-     *
-     * @dataProvider looseCases
      */
+    #[DataProvider('looseCases')]
     public function testClassifiesLooseMediaDirectories(string $dirName): void
     {
         $result = SeasonDirectoryClassifier::classify($dirName, true);

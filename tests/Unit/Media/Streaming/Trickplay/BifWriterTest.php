@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Streaming\Trickplay;
 use InvalidArgumentException;
 use Phlix\Media\Streaming\Trickplay\BifWriter;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S275 — the Roku BIF container, asserted against the published byte layout.
@@ -297,9 +298,7 @@ final class BifWriterTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider corruptedArchiveProvider
-     */
+    #[DataProvider('corruptedArchiveProvider')]
     public function testTheIndexWalkerRejectsAPlausibleButWrongOffsetTable(
         string $label,
         string $corrupted

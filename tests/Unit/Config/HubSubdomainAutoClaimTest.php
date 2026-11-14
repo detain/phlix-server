@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Config;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * PHLIX_SUBDOMAIN_AUTO_CLAIM must be an actual opt-out.
@@ -65,9 +66,7 @@ final class HubSubdomainAutoClaimTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider offValueProvider
-     */
+    #[DataProvider('offValueProvider')]
     public function testExplicitOffValuesDisableTheClaim(string $value): void
     {
         putenv(self::ENV_KEY . '=' . $value);
@@ -87,9 +86,7 @@ final class HubSubdomainAutoClaimTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider onValueProvider
-     */
+    #[DataProvider('onValueProvider')]
     public function testExplicitOnValuesKeepTheClaimEnabled(string $value): void
     {
         putenv(self::ENV_KEY . '=' . $value);

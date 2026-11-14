@@ -11,6 +11,7 @@ use Phlix\Tests\Support\Database\RequiresRealDatabase;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Real-DB proof that a multi-byte ffprobe `tags.language` survives the write to
@@ -93,9 +94,8 @@ final class StreamLanguageUtf8RoundTripTest extends TestCase
      * The full scanner path: a probe carrying a multi-byte language tag is
      * summarised, persisted through the real ItemRepository, and read back
      * byte-identical.
-     *
-     * @dataProvider multiByteLanguageCases
      */
+    #[DataProvider('multiByteLanguageCases')]
     public function testMultiByteLanguageSurvivesTheRoundTrip(string $tag, string $expected): void
     {
         $this->assertNotNull($this->db);
@@ -141,9 +141,8 @@ final class StreamLanguageUtf8RoundTripTest extends TestCase
      *
      * ⚠ The try/catch here wraps only the deliberately-bad INSERT, never the
      * guard acquisition (which happens in setUp()) — see RequiresRealDatabase.
-     *
-     * @dataProvider multiByteLanguageCases
      */
+    #[DataProvider('multiByteLanguageCases')]
     public function testByteWiseTruncationIsRejectedByMysql(string $tag): void
     {
         $this->assertNotNull($this->db);

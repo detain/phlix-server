@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Auth;
 use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\MediaItemShaper;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class SignedUrlTest extends TestCase
 {
@@ -405,9 +406,8 @@ final class SignedUrlTest extends TestCase
      * refreshArtworkUrl() EXACTLY as it entered — zero changed bytes, nothing
      * decoded, nothing re-minted. A stale signature on such a URL is inert and
      * the serving gate 401s it; a valid payload is never smuggled out signed.
-     *
-     * @dataProvider decodeDriftSizeProvider
      */
+    #[DataProvider('decodeDriftSizeProvider')]
     public function testS449RefreshPassesHostileEncodedSizesThroughUntouched(string $stored, string $why): void
     {
         putenv('PHLIX_SIGNED_URL_SECRET=' . self::SECRET);

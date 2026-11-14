@@ -22,6 +22,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -91,10 +92,10 @@ final class CookiePolicyWiringGuardTest extends TestCase
      * silently inert ON THAT SURFACE ONLY, while every hand-built callback
      * suite leg stays GREEN because none of them resolve the container.
      *
-     * @dataProvider callbackControllerClasses
      *
      * @param class-string<object> $controllerClass
      */
+    #[DataProvider('callbackControllerClasses')]
     public function testTheContainerComposedCallbackCarriesTheCookiePolicySingleton(string $controllerClass): void
     {
         $controller = $this->container()->get($controllerClass);

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\MetadataFailureKind;
 use Phlix\Media\Metadata\MetadataHttpResult;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Covers the classification that separates "no results" from "bad API key".
@@ -92,9 +93,7 @@ class MetadataHttpResultTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider providerAuthStatusCodes
-     */
+    #[DataProvider('providerAuthStatusCodes')]
     public function testProviderAuthStatusCodesAllClassifyAsAuth(
         int $httpStatus,
         int $providerCode,

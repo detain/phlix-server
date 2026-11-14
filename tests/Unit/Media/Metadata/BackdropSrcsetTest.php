@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\BackdropSrcset;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class BackdropSrcsetTest extends TestCase
 {
@@ -165,9 +166,8 @@ final class BackdropSrcsetTest extends TestCase
      * row srcset plus the `/original` candidate. Pinned structurally (not as two
      * hard-coded strings) so tuning the ladder can never move one budget without
      * the other — the drift the duplicated `WIDTHS`/`ROW_WIDTHS` pair invited.
-     *
-     * @dataProvider ladderUrlProvider
      */
+    #[DataProvider('ladderUrlProvider')]
     public function testTheHeroSrcsetIsExactlyTheRowSrcsetPlusOriginal(string $url): void
     {
         $row = BackdropSrcset::rowSrcset($url);
@@ -187,9 +187,8 @@ final class BackdropSrcsetTest extends TestCase
      * The single-URL row base is the SMALLEST step of the shared ladder, so a
      * non-`srcset` client fetches the cheapest candidate rather than a size that
      * is not on the ladder at all.
-     *
-     * @dataProvider ladderUrlProvider
      */
+    #[DataProvider('ladderUrlProvider')]
     public function testRowUrlUsesTheSmallestStepOfTheSharedLadder(string $url): void
     {
         $row = BackdropSrcset::rowSrcset($url);

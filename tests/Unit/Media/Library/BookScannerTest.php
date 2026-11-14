@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\BookScanner;
 use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for BookScanner EPUB/PDF/CBZ harvesting functionality.
@@ -27,9 +28,7 @@ class BookScannerTest extends TestCase
         $this->scanner = new BookScanner($this->db, $this->itemRepo);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestEpubParsesContentOpf(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -51,9 +50,7 @@ class BookScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestEpubReturnsEmptyOnInvalid(): void
     {
         // Test with non-existent file
@@ -75,9 +72,7 @@ class BookScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestPdfExtractsMetadata(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -99,9 +94,7 @@ class BookScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestCbzExtractsPagesAndCover(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -130,9 +123,7 @@ class BookScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testScanBookLibraryYieldsItems(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -171,9 +162,7 @@ class BookScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testIsBookExtension(): void
     {
         $this->assertTrue($this->scanner->isBookExtension('epub'));

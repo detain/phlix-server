@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Transcoding\EncodeSettings;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S56 — the `transcoding.segment_format` flag and, more importantly, its
@@ -161,9 +162,8 @@ final class EncodeSettingsSegmentFormatTest extends TestCase
      * this case; asserting the constant would make it unfalsifiable.
      * `'fmp4 segments'` and `'cmaf'` are the interesting rows — they are the
      * near-misses a hand-edited config produces.
-     *
-     * @dataProvider rejectedValues
      */
+    #[DataProvider('rejectedValues')]
     public function test_anything_unrecognised_falls_back_to_the_shipped_default(mixed $configured): void
     {
         $this->assertSame(

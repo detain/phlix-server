@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Common\Net;
 use InvalidArgumentException;
 use Phlix\Common\Net\SsrfGuard;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Covers the shared SSRF guard: scheme enforcement, each blocked address range,
@@ -104,9 +105,7 @@ final class SsrfGuardTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider blockedLiteralProvider
-     */
+    #[DataProvider('blockedLiteralProvider')]
     public function test_rejects_blocked_ip_literal(string $url): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -137,9 +136,7 @@ final class SsrfGuardTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider ipv4MappedLiteralProvider
-     */
+    #[DataProvider('ipv4MappedLiteralProvider')]
     public function test_rejects_ipv4_mapped_ipv6_literal(string $url): void
     {
         $this->expectException(InvalidArgumentException::class);

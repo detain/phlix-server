@@ -16,6 +16,7 @@ use Phlix\Theming\ThemeSourceRegistry;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Verifies the SQL built by {@see UserRepository::updateSettings()} is a valid
@@ -269,8 +270,8 @@ final class UserRepositorySettingsTest extends TestCase
 
     /**
      * @param mixed $theme
-     * @dataProvider provide_invalid_theme_values
      */
+    #[DataProvider('provide_invalid_theme_values')]
     public function test_update_settings_rejects_non_string_theme(mixed $theme): void
     {
         $db = $this->createMock(Connection::class);

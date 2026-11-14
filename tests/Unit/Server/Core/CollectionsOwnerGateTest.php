@@ -25,6 +25,7 @@ use Phlix\Server\Http\Router;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -220,9 +221,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider gatedWriteRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('gatedWriteRouteProvider')]
     public function testMemberWriteOnOwnCollectionReachesHandler(
         string $verb,
         string $path,
@@ -253,9 +254,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider gatedWriteRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('gatedWriteRouteProvider')]
     public function testMemberWriteOnForeignCollectionIsRefusedLikeAbsence(
         string $verb,
         string $path,
@@ -277,9 +278,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider gatedWriteRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('gatedWriteRouteProvider')]
     public function testMemberWriteOnLegacyNullCollectionIsRefusedLikeAbsence(
         string $verb,
         string $path,
@@ -304,9 +305,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider gatedWriteRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('gatedWriteRouteProvider')]
     public function testActiveAdminWriteOnForeignCollectionReachesHandler(
         string $verb,
         string $path,
@@ -328,9 +329,9 @@ final class CollectionsOwnerGateTest extends TestCase
     }
 
     /**
-     * @dataProvider gatedWriteRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('gatedWriteRouteProvider')]
     public function testActiveAdminWriteOnLegacyNullCollectionReachesHandler(
         string $verb,
         string $path,
@@ -357,9 +358,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider writeRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('writeRouteProvider')]
     public function testAnonymousWriteIsRejectedWith401BeforeAnyHandlerWork(
         string $verb,
         string $path,
@@ -383,9 +384,9 @@ final class CollectionsOwnerGateTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * @dataProvider createRouteProvider
      * @param array<string, mixed> $body
      */
+    #[DataProvider('createRouteProvider')]
     public function testMemberCreateStampsActorAsOwner(
         string $verb,
         string $path,

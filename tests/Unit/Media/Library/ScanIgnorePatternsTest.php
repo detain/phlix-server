@@ -10,6 +10,7 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanIgnorePatterns;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Consequence tests for `scanner.ignore_patterns`.
@@ -333,9 +334,7 @@ final class ScanIgnorePatternsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonArrayValues
-     */
+    #[DataProvider('nonArrayValues')]
     public function test_a_non_array_value_falls_back_to_the_defaults(mixed $value): void
     {
         $this->tmpDir = $this->makeTempDirWith(['Half Done.part.mkv', 'Movie.mkv']);

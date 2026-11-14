@@ -8,6 +8,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -17,9 +18,8 @@ use PHPUnit\Framework\TestCase;
  * upstream of this controller and is covered by the middleware's own tests;
  * here we assert the controller's GET/PUT behaviour (effective merge, happy
  * path, validation failures) given an already-admin request.
- *
- * @covers \Phlix\Server\Http\Controllers\Admin\AdminSettingsController
  */
+#[CoversClass(AdminSettingsController::class)]
 final class AdminSettingsControllerTest extends TestCase
 {
 

@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoScanner;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for PhotoScanner class.
@@ -256,9 +257,8 @@ class PhotoScannerTest extends TestCase
      * to float BEFORE a strict zero-check on the denominator. String "0" and
      * "0.0" denominators must yield 0.0 (never INF from float division), valid
      * rationals divide exactly, and a garbage denominator degrades to 0.0.
-     *
-     * @dataProvider provideRationalStrings
      */
+    #[DataProvider('provideRationalStrings')]
     public function testRationalToFloatHandlesStringDenominatorsStrictly(string $value, float $expected): void
     {
         $method = new \ReflectionMethod(PhotoScanner::class, 'rationalToFloat');

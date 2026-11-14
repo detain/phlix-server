@@ -14,6 +14,7 @@ use Phlix\Server\Http\Routes\AdminRoutes;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -178,9 +179,8 @@ final class ParentalControlsAdminRoutesTest extends TestCase
 
     /**
      * @param array<string, mixed> $body
-     *
-     * @dataProvider spaPathProvider
      */
+    #[DataProvider('spaPathProvider')]
     public function testEverySpaPathResolvesToItsHandler(
         string $method,
         string $path,

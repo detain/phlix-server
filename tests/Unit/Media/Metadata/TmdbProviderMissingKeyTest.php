@@ -10,6 +10,7 @@ use Phlix\Media\Metadata\MetadataHttpClient;
 use Phlix\Media\Metadata\MetadataHttpResult;
 use Phlix\Media\Metadata\TmdbProvider;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * An unconfigured {@see TmdbProvider} must be OBSERVABLE, and recoverable.
@@ -143,9 +144,8 @@ final class TmdbProviderMissingKeyTest extends TestCase
     /**
      * Every public lookup must funnel through the guarded request path — a
      * method that still called the HTTP client directly would be silent again.
-     *
-     * @dataProvider lookupProvider
      */
+    #[DataProvider('lookupProvider')]
     public function test_every_lookup_entry_point_is_guarded(callable $lookup): void
     {
         $warnings = [];
@@ -298,9 +298,8 @@ final class TmdbProviderMissingKeyTest extends TestCase
     /**
      * A resolver returning a non-string (settings stores are untyped — a JSON
      * column, a null row, a bool) must be ignored, never coerced into a key.
-     *
-     * @dataProvider junkProvider
      */
+    #[DataProvider('junkProvider')]
     public function test_a_junk_resolution_is_ignored(mixed $value): void
     {
         $provider = new TmdbProvider(

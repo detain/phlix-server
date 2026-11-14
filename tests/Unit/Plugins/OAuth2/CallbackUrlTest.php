@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Plugins\OAuth2;
 
 use Phlix\Plugins\OAuth2\CallbackUrl;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S48 review r1 Finding 1 (HIGH) — the OAuth2/OIDC `redirect_uri` must be an
@@ -14,9 +15,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class CallbackUrlTest extends TestCase
 {
-    /**
-     * @dataProvider absoluteUrls
-     */
+    #[DataProvider('absoluteUrls')]
     public function test_accepts_absolute_http_urls(string $url): void
     {
         $this->assertTrue(CallbackUrl::isAbsolute($url));
@@ -35,9 +34,7 @@ final class CallbackUrlTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider rejectedUrls
-     */
+    #[DataProvider('rejectedUrls')]
     public function test_rejects_non_absolute_or_unsafe_values(string $url): void
     {
         $this->assertFalse(CallbackUrl::isAbsolute($url));
@@ -119,9 +116,8 @@ final class CallbackUrlTest extends TestCase
     /**
      * An allowlist IS configured here, so these assert the HOST-SHAPE rules (and
      * not merely the fail-closed rule the empty-allowlist tests below cover).
-     *
-     * @dataProvider unusableHosts
      */
+    #[DataProvider('unusableHosts')]
     public function test_returns_null_when_no_absolute_url_can_be_built(?string $host): void
     {
         $this->assertNull(CallbackUrl::resolve('', $host, null, '/auth/github/callback', 'phlix.example'));
@@ -154,9 +150,7 @@ final class CallbackUrlTest extends TestCase
     // Host must never become a redirect_uri.
     // -----------------------------------------------------------------------
 
-    /**
-     * @dataProvider mismatchedHosts
-     */
+    #[DataProvider('mismatchedHosts')]
     public function test_a_host_that_is_not_the_configured_domain_derives_nothing(string $host): void
     {
         $this->assertNull(
@@ -180,9 +174,7 @@ final class CallbackUrlTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider matchingHosts
-     */
+    #[DataProvider('matchingHosts')]
     public function test_the_configured_domain_still_derives(string $host, string $expected): void
     {
         $this->assertSame(
@@ -213,9 +205,7 @@ final class CallbackUrlTest extends TestCase
     // `redirect_uri=https://media.example.com:1337/auth/github/callback`.
     // -----------------------------------------------------------------------
 
-    /**
-     * @dataProvider portPinning
-     */
+    #[DataProvider('portPinning')]
     public function test_the_port_is_part_of_the_allowlisted_origin(
         string $host,
         string $allowed,
@@ -289,9 +279,7 @@ final class CallbackUrlTest extends TestCase
     // silently accept a genuinely different origin.
     // -----------------------------------------------------------------------
 
-    /**
-     * @dataProvider defaultPortMatrix
-     */
+    #[DataProvider('defaultPortMatrix')]
     public function test_a_default_port_is_default_only_for_its_own_scheme(
         string $host,
         string $forwardedProto,
@@ -492,9 +480,7 @@ final class CallbackUrlTest extends TestCase
     // population of working end-to-end logins to break.
     // -----------------------------------------------------------------------
 
-    /**
-     * @dataProvider anyValidHost
-     */
+    #[DataProvider('anyValidHost')]
     public function test_no_configured_domain_derives_nothing(string $host): void
     {
         $this->assertNull(

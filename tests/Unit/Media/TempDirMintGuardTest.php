@@ -31,6 +31,7 @@ use Phlix\Session\SessionManager;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * S167 — prefix-agnostic guard against the per-construction `/tmp/phlix_*` temp-dir mint.
@@ -104,9 +105,7 @@ final class TempDirMintGuardTest extends TestCase
         RokuManager::class,
     ];
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testConstructingConvertedLoggerSurfaceMintsNoTempDirs(): void
     {
         $before = $this->phlixTempEntries();

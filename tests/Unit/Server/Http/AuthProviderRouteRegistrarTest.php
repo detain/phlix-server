@@ -12,6 +12,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Psr\Container\ContainerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S47 — the centralized, mandatory auth-provider route registrar. This is the
@@ -41,9 +42,7 @@ final class AuthProviderRouteRegistrarTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider authenticatedRoutes
-     */
+    #[DataProvider('authenticatedRoutes')]
     public function test_authenticated_routes_are_registered_behind_auth(string $method, string $path): void
     {
         $router = new Router();
@@ -78,9 +77,7 @@ final class AuthProviderRouteRegistrarTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider oidcLoginRoutes
-     */
+    #[DataProvider('oidcLoginRoutes')]
     public function test_oidc_login_routes_are_registered_unauthenticated(string $method, string $path): void
     {
         $fake = new class {
@@ -129,9 +126,7 @@ final class AuthProviderRouteRegistrarTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider githubLoginRoutes
-     */
+    #[DataProvider('githubLoginRoutes')]
     public function test_github_login_routes_are_registered_unauthenticated(string $method, string $path): void
     {
         $fake = new class {

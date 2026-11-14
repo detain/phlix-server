@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Roku;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Roku\RokuEcpClient;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 class RokuEcpClientTest extends TestCase
 {
@@ -151,9 +152,8 @@ class RokuEcpClientTest extends TestCase
      * SV-4.5 / S-F15: the channel-launch delay must yield the event loop when
      * inside a Swoole coroutine (cooperative Coroutine::sleep) rather than
      * blocking with usleep. Proven behaviorally by sibling-coroutine interleave.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testCoroutineAwareSleepYieldsInsideCoroutine(): void
     {
         if (! extension_loaded('swoole')) {

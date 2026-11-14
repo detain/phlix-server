@@ -13,6 +13,7 @@ use Phlix\Server\Updates\VersionMarkerFetcherInterface;
 use Phlix\Tests\Support\Database\InMemoryServerSettingsConnection;
 use Phlix\Tests\Support\Updates\RecordingVersionMarkerFetcher;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see CoreUpdateCheckService} — S74 / updates.md #48.
@@ -97,9 +98,7 @@ final class CoreUpdateCheckServiceTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider comparisonProvider
-     */
+    #[DataProvider('comparisonProvider')]
     public function testIsNewerComparesStrictly(string $candidate, string $current, bool $expected): void
     {
         self::assertSame($expected, CoreUpdateCheckService::isNewer($candidate, $current));

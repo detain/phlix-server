@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Common\Runtime;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Runtime\WorkerContext;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 /**
  * SV-0.4 — exercises the Swoole\Coroutine\Channel cooperative-wait mechanism the
@@ -24,9 +25,8 @@ use Phlix\Common\Runtime\WorkerContext;
  * exact false-timeout bug, and it emits a PHP warning that would (correctly)
  * fail the suite. Instead {@see WorkerContext::inCoroutine()} guards that call
  * — asserted here to flip false→true across the coroutine boundary.
- *
- * @requires extension swoole
  */
+#[RequiresPhpExtension('swoole')]
 final class CoroutineChannelWaitTest extends TestCase
 {
     protected function setUp(): void

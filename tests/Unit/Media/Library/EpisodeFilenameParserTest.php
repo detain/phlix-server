@@ -6,12 +6,11 @@ namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\EpisodeFilenameParser;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class EpisodeFilenameParserTest extends TestCase
 {
-    /**
-     * @dataProvider seasonEpisodeCases
-     */
+    #[DataProvider('seasonEpisodeCases')]
     public function testSeasonEpisodePatterns(
         string $filename,
         string $series,
@@ -97,9 +96,7 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertSame(3, $result['episode']);
     }
 
-    /**
-     * @dataProvider absoluteCases
-     */
+    #[DataProvider('absoluteCases')]
     public function testAbsolutePatternsOnlyWhenAllowed(
         string $filename,
         string $series,
@@ -161,9 +158,8 @@ class EpisodeFilenameParserTest extends TestCase
      * library: 501 of the 1,328 episodes that have NO title at all carry one in
      * exactly this shape, and the old first-bracket cut deleted every one of
      * them. Every filename below is a real prod basename.
-     *
-     * @dataProvider titleAfterQualityTagCases
      */
+    #[DataProvider('titleAfterQualityTagCases')]
     public function testTitleSurvivesAQualityTagThatPrecedesIt(
         string $filename,
         string $expected
@@ -204,9 +200,8 @@ class EpisodeFilenameParserTest extends TestCase
      * A dot-separated scene name keeps its title and loses only the trailing
      * release run — and the kept prefix keeps its ORIGINAL separators, so an
      * abbreviation ("Mr.Monk") is never rewritten into spaces.
-     *
-     * @dataProvider sceneRunCases
      */
+    #[DataProvider('sceneRunCases')]
     public function testTrailingReleaseRunIsCutWithoutRewritingSeparators(
         string $filename,
         ?string $expected
@@ -272,9 +267,8 @@ class EpisodeFilenameParserTest extends TestCase
      * A trailing part marker is TMDB's own spelling ("Kobol's Last Gleaming (2)")
      * and is what keeps two halves of a two-parter from collapsing into one
      * title. Measured: dropping it collided 20 rows into 10 duplicate pairs.
-     *
-     * @dataProvider partMarkerCases
      */
+    #[DataProvider('partMarkerCases')]
     public function testTrailingPartMarkerIsPreserved(string $filename, string $expected): void
     {
         $result = EpisodeFilenameParser::parse($filename, true);
@@ -323,9 +317,8 @@ class EpisodeFilenameParserTest extends TestCase
      * episode title (which is a sentence, not a movie name) corrupts 86 genuine
      * titles in the reference library to clean up 81 junk ones. These are all
      * real prod titles.
-     *
-     * @dataProvider englishWordsThatLookLikeTagsCases
      */
+    #[DataProvider('englishWordsThatLookLikeTagsCases')]
     public function testEnglishWordsSharedWithQualityTokensAreNotStripped(
         string $filename,
         string $expected
@@ -403,9 +396,8 @@ class EpisodeFilenameParserTest extends TestCase
      * genuine episode titles, 21 of which the previous parser already returned.
      * Every filename below is a real prod basename; the expected value is the
      * real episode title.
-     *
-     * @dataProvider shortTitleCases
      */
+    #[DataProvider('shortTitleCases')]
     public function testShortAndPunctuationOnlyTitlesAreKept(string $filename, string $expected): void
     {
         $result = EpisodeFilenameParser::parse($filename, true);
@@ -495,9 +487,7 @@ class EpisodeFilenameParserTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider nonEpisodeCases
-     */
+    #[DataProvider('nonEpisodeCases')]
     public function testNonEpisodesReturnNull(string $filename): void
     {
         $this->assertNull(EpisodeFilenameParser::parse($filename, true), "must NOT parse as episode: {$filename}");
@@ -522,9 +512,8 @@ class EpisodeFilenameParserTest extends TestCase
     /**
      * Trailing edition/noise phrases on the SERIES segment must be peeled (via
      * the shared TitleSuffixStripper) so the show title matches metadata cleanly.
-     *
-     * @dataProvider seriesNoiseCases
      */
+    #[DataProvider('seriesNoiseCases')]
     public function testSeriesNoiseSuffixesStripped(
         string $filename,
         string $expectedSeries,
@@ -640,9 +629,8 @@ class EpisodeFilenameParserTest extends TestCase
      * F1. A release-group suffix that a removed tag group leaves behind is no
      * longer promoted to a title. These three were STRICTLY WORSE than the
      * pre-change parser, which returned null for all of them.
-     *
-     * @dataProvider groupSuffixCases
      */
+    #[DataProvider('groupSuffixCases')]
     public function testAReleaseGroupSuffixIsNeverPromotedToATitle(string $filename): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -669,9 +657,8 @@ class EpisodeFilenameParserTest extends TestCase
      * F1. The live evidence: 8 prod rows produced the title "INTERNAL" because
      * the cut started at "1080p" and left the scene's own prefix marker behind.
      * "INTERNAL"/"WEB"/"NF"/"AMZN" are absorbed into the run instead.
-     *
-     * @dataProvider wholeSceneRunCases
      */
+    #[DataProvider('wholeSceneRunCases')]
     public function testAWholeSceneRunLeavesNoResidue(string $filename): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -722,9 +709,8 @@ class EpisodeFilenameParserTest extends TestCase
      * F2. SM-0.1's balanced-bracket guarantee reaches the episode path too:
      * `repairBracketBalance()` runs immediately AFTER `stripBracketedTags()`,
      * never before, exactly as `normalize()` does at every other call site.
-     *
-     * @dataProvider orphanBracketCases
      */
+    #[DataProvider('orphanBracketCases')]
     public function testAnOrphanBracketNeverReachesTheEpisodeTitle(
         string $filename,
         ?string $expected
@@ -776,9 +762,8 @@ class EpisodeFilenameParserTest extends TestCase
      * F3. Ordinary English words that collide with a scene marker no longer
      * destroy the title. Before the run rule these returned "A", "The", "The"
      * and null respectively, because the cut was a PREFIX cut.
-     *
-     * @dataProvider englishWordCollisionCases
      */
+    #[DataProvider('englishWordCollisionCases')]
     public function testAMarkerThatIsAlsoAnEnglishWordDoesNotCutTheTitle(
         string $filename,
         string $expected
@@ -815,9 +800,8 @@ class EpisodeFilenameParserTest extends TestCase
      * happened at "1080p", so "10bit" never mattered). Under the run rule it is
      * load-bearing: without it the run breaks at "10bit" and the resolution
      * survives into the title.
-     *
-     * @dataProvider bitDepthCases
      */
+    #[DataProvider('bitDepthCases')]
     public function testABitDepthTokenKeepsTheReleaseRunTogether(string $filename): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -870,9 +854,8 @@ class EpisodeFilenameParserTest extends TestCase
      * Scrap is DASH-led only. A broader "does not start with a letter or a digit"
      * test looked identical and cost 26 real titles on the reference library.
      * All five below are real prod basenames.
-     *
-     * @dataProvider punctuationLedTitleCases
      */
+    #[DataProvider('punctuationLedTitleCases')]
     public function testAPunctuationLedTitleIsNotScrap(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -908,9 +891,8 @@ class EpisodeFilenameParserTest extends TestCase
      * A digits-only token is title text, not junk — it breaks a run rather than
      * joining one. All four are real prod basenames whose provider title is
      * exactly the number, and all four sit immediately after a quality tag.
-     *
-     * @dataProvider numericTitleCases
      */
+    #[DataProvider('numericTitleCases')]
     public function testANumericTitleAfterATagSurvives(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -940,9 +922,8 @@ class EpisodeFilenameParserTest extends TestCase
      * absorb — AAC, Atmos, DTS, AVC, HDR, HDR10, SDR, DV, MULTi, SUBBED, and
      * "H.265" whose dot split separates "H" from "265". None of them is listed;
      * the resolution / bit-depth PATTERN is what cuts.
-     *
-     * @dataProvider brokenReleaseRunCases
      */
+    #[DataProvider('brokenReleaseRunCases')]
     public function testAResolutionTokenIsNeverPromotedIntoTheTitle(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -980,9 +961,8 @@ class EpisodeFilenameParserTest extends TestCase
      * cut lands on the resolution and leaves the title whole. If
      * isHardReleaseMarker() were widened to the whole marker dictionary these
      * would all collapse to "The".
-     *
-     * @dataProvider wordMarkerInsideATitleCases
      */
+    #[DataProvider('wordMarkerInsideATitleCases')]
     public function testAWordMarkerInsideATitleStillDoesNotCut(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -1005,9 +985,8 @@ class EpisodeFilenameParserTest extends TestCase
      * "Show SxxEyy [480p] Title" IS the recovery convention this whole step
      * exists for — all 501 recovered prod titles are that shape — so letting
      * "[480p]" prove its own run would delete every one of them.
-     *
-     * @dataProvider bracketedResolutionCases
      */
+    #[DataProvider('bracketedResolutionCases')]
     public function testABracketedResolutionNeverProvesItsOwnRun(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -1040,9 +1019,8 @@ class EpisodeFilenameParserTest extends TestCase
      * {@see revisionOrCrcShapedTitleCases()}. "Show S01E01 v2 The Title" keeps
      * master's "v2 The Title" precisely so "V2 Rocket Base" survives; the two
      * are the same rule firing.
-     *
-     * @dataProvider bareMarkerBeforeTextCases
      */
+    #[DataProvider('bareMarkerBeforeTextCases')]
     public function testABareMarkerInFrontOfTheTextYieldsNoTitle(string $filename): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);
@@ -1077,9 +1055,8 @@ class EpisodeFilenameParserTest extends TestCase
      * Both patterns remain ordinary markers in
      * EpisodeFilenameParser::isPatternReleaseMarker(), which is what keeps
      * defect D6 closed — see {@see revisionOrCrcMarkerStillCutsCases()}.
-     *
-     * @dataProvider revisionOrCrcShapedTitleCases
      */
+    #[DataProvider('revisionOrCrcShapedTitleCases')]
     public function testARevisionOrCrcShapedTokenIsNotAHardMarker(
         string $filename,
         string $expected
@@ -1147,9 +1124,8 @@ class EpisodeFilenameParserTest extends TestCase
      *
      * ⚠ These are the cases that fail if either pattern is deleted from
      * isPatternReleaseMarker() rather than merely demoted out of the HARD set.
-     *
-     * @dataProvider revisionOrCrcMarkerStillCutsCases
      */
+    #[DataProvider('revisionOrCrcMarkerStillCutsCases')]
     public function testARevisionOrCrcMarkerStillCutsWhenCorroborated(
         string $filename,
         ?string $expected
@@ -1191,9 +1167,8 @@ class EpisodeFilenameParserTest extends TestCase
      * — but a resolution-less scene name does, and there the run rule is the
      * ONLY thing that cuts (no pattern marker exists to fall back on). Raising
      * the threshold to 3 leaves the whole tail on all three.
-     *
-     * @dataProvider twoBareMarkerCases
      */
+    #[DataProvider('twoBareMarkerCases')]
     public function testTwoBareMarkersAreEnoughWhenThereIsNoResolutionToCutAt(
         string $filename,
         string $expected
@@ -1209,9 +1184,8 @@ class EpisodeFilenameParserTest extends TestCase
      * that proves a run on its own, so without the digits-only SOLID rule
      * "11001001" — a real Star Trek TNG episode title — would cut the run open
      * and take the rest of the title with it.
-     *
-     * @dataProvider allDigitTokenCases
      */
+    #[DataProvider('allDigitTokenCases')]
     public function testAnAllDigitTokenIsTitleTextNotACrcStamp(string $filename, string $expected): void
     {
         $r = EpisodeFilenameParser::parse($filename, true);

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\LiveTv\Relay;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 use Phlix\Tests\Support\Workerman\WorkermanTimerFixture;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Unit tests for HlsSegmentPrefetcher.
@@ -111,10 +112,8 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
-    /**
-     * @group workerman
-     * @group integration
-     */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testStartPrefetchDoesNotThrow(): void
     {
         $sessionId = 'test-session-123';
@@ -138,10 +137,8 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
-    /**
-     * @group workerman
-     * @group integration
-     */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testStartAndStopPrefetch(): void
     {
         $sessionId = 'session-stop-test';
@@ -153,10 +150,8 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
-    /**
-     * @group workerman
-     * @group integration
-     */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testMultipleStartPrefetchReplacesPrevious(): void
     {
         $sessionId = 'session-multi-start';

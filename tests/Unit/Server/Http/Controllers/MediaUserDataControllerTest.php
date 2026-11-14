@@ -9,6 +9,7 @@ use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see MediaUserDataController} (E10 favorites/ratings routes).
@@ -224,9 +225,8 @@ class MediaUserDataControllerTest extends TestCase
     /**
      * Each valid level on the signed −2..2 thumbs axis (including the negative
      * dislike values) persists and returns a 200 `{message}` envelope.
-     *
-     * @dataProvider validLikeLevels
      */
+    #[DataProvider('validLikeLevels')]
     public function testSetLikeLevelPersistsValidLevel(int $level): void
     {
         $userData = $this->createMock(UserItemDataRepository::class);
@@ -268,9 +268,8 @@ class MediaUserDataControllerTest extends TestCase
      * like setRating defers the 1-10 range to setRating()).
      *
      * @param mixed $level
-     *
-     * @dataProvider malformedLikeLevels
      */
+    #[DataProvider('malformedLikeLevels')]
     public function testSetLikeLevelRejectsMalformedInput($level): void
     {
         $userData = $this->createMock(UserItemDataRepository::class);
@@ -306,9 +305,8 @@ class MediaUserDataControllerTest extends TestCase
      * (−2..2 range) is mapped to a 400 — exactly mirroring setRating's
      * testSetRatingRejectsOutOfRangeFromRepository. Net result for the client:
      * 3/-3 → 400.
-     *
-     * @dataProvider outOfRangeLikeLevels
      */
+    #[DataProvider('outOfRangeLikeLevels')]
     public function testSetLikeLevelOutOfRangeReturns400ViaRepository(int $level): void
     {
         $userData = $this->createMock(UserItemDataRepository::class);

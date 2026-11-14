@@ -11,6 +11,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The bytes half of DLNA playback: `GET|HEAD /dlna/stream/{mediaItemId}`.
@@ -309,9 +310,8 @@ final class DlnaStreamControllerTest extends TestCase
      * The repository mock asserts `findById` is NEVER called: the id is rejected
      * on shape first. Dropping the id-pattern check makes this test fail even
      * though the response status would still be 404.
-     *
-     * @dataProvider hostileIds
      */
+    #[DataProvider('hostileIds')]
     public function test_a_hostile_id_is_rejected_before_any_lookup(string $id): void
     {
         $items = $this->createMock(ItemRepository::class);
@@ -376,9 +376,8 @@ final class DlnaStreamControllerTest extends TestCase
     /**
      * CONSEQUENCE: a row whose file is gone (or is a directory, as every
      * container object's `path` is) is 404, not a 500.
-     *
-     * @dataProvider unservablePaths
      */
+    #[DataProvider('unservablePaths')]
     public function test_an_unservable_path_is_404(string $suffix): void
     {
         $response = $this->handle(
@@ -400,9 +399,8 @@ final class DlnaStreamControllerTest extends TestCase
 
     /**
      * CONSEQUENCE: a row with a missing/blank/non-string `path` is 404.
-     *
-     * @dataProvider brokenRowPaths
      */
+    #[DataProvider('brokenRowPaths')]
     public function test_a_row_without_a_usable_path_is_404(mixed $path): void
     {
         $response = $this->handle($this->controller($this->row(['path' => $path])), $this->request());

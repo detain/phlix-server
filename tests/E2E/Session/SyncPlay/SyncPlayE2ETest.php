@@ -11,6 +11,7 @@ use Phlix\Session\SyncPlay\GroupState;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\ConnectionInterface;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * E2E tests for SyncPlay functionality.
@@ -24,10 +25,9 @@ use ReflectionMethod;
  *
  * These tests use mock connections to simulate multiple WebSocket clients
  * and verify the complete end-to-end behavior of the SyncPlay feature.
- *
- * @group syncplay
- * @group e2e
  */
+#[Group('syncplay')]
+#[Group('e2e')]
 class SyncPlayE2ETest extends TestCase
 {
     private SyncPlayManager $manager;

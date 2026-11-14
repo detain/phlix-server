@@ -11,6 +11,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SV-3.1 f security regression tests for the time-shift buffer writer.
@@ -57,9 +58,8 @@ final class RecorderTimeShiftSecurityTest extends TestCase
      * The REAL command builder escapes EVERY interpolated value. Reverting any
      * `escapeshellarg(...)` to a raw interpolation drops the quoted form from the
      * emitted command string, flipping the matching assertion RED.
-     *
-     * @dataProvider hostileInputs
      */
+    #[DataProvider('hostileInputs')]
     public function testSpawnTimeShiftBufferEscapesEveryInterpolatedValue(
         string $hostileUrl,
         string $hostileDir

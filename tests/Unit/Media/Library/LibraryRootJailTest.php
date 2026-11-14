@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 use Phlix\Media\Library\LibraryRootJail;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Second-layer path guard for the AUTHLESS DLNA stream route.
@@ -183,10 +184,10 @@ final class LibraryRootJailTest extends TestCase
      * that keeps a database hiccup from turning the authless route into an
      * open file server.
      *
-     * @dataProvider unusableRootSets
      *
      * @param list<mixed> $pathsColumns
      */
+    #[DataProvider('unusableRootSets')]
     public function test_an_unusable_root_set_denies_everything(array $pathsColumns): void
     {
         $jail = $this->jailOver($pathsColumns);

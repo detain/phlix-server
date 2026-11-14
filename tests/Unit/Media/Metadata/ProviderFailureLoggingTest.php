@@ -11,6 +11,7 @@ use Phlix\Media\Metadata\MetadataHttpClient;
 use Phlix\Media\Metadata\MetadataHttpResult;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Metadata\TvdbProvider;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The regression test for the 2026-07-28 TMDB observability incident.
@@ -211,9 +212,9 @@ class ProviderFailureLoggingTest extends TestCase
     }
 
     /**
-     * @dataProvider tmdbEntryPoints
      * @param array<int, mixed> $args
      */
+    #[DataProvider('tmdbEntryPoints')]
     public function testEveryTmdbEntryPointEscalatesAnInvalidKey(string $method, array $args): void
     {
         $provider = new TmdbProvider(

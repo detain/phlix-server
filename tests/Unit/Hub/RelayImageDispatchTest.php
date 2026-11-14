@@ -21,6 +21,7 @@ use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -281,10 +282,10 @@ final class RelayImageDispatchTest extends TestCase
      * An ANONYMOUS relayed request — no user, no signature — is refused on both
      * paths. Making the images reachable must not make them public.
      *
-     * @dataProvider imagePaths
      *
      * @param array<string, string> $query
      */
+    #[DataProvider('imagePaths')]
     public function testAnAnonymousRequestIsRefusedOnBothImagePaths(string $path, array $query): void
     {
         $response = $this->dispatch($this->anonymousRequest($path, $query));
@@ -360,9 +361,8 @@ final class RelayImageDispatchTest extends TestCase
      * 404s and proves nothing about which produced it. Measured: loosening
      * `AVATAR_PATTERN` to swallow `/api/v1/users/avatar` left a status-only
      * version of this test GREEN.
-     *
-     * @dataProvider nearMissPaths
      */
+    #[DataProvider('nearMissPaths')]
     public function testNearMissPathsFallThroughToTheRouter(string $path): void
     {
         $response = $this->dispatch($this->relayedRequest($path));

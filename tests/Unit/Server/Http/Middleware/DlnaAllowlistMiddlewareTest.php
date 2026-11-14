@@ -13,6 +13,7 @@ use Phlix\Server\Http\Router;
 use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Consequence tests for the DLNA inbound IP allowlist.
@@ -78,9 +79,8 @@ final class DlnaAllowlistMiddlewareTest extends TestCase
     /**
      * CONSEQUENCE: with the shipped defaults, loopback and every private/local
      * range are admitted.
-     *
-     * @dataProvider lanAddresses
      */
+    #[DataProvider('lanAddresses')]
     public function test_default_posture_admits_lan_addresses(string $ip): void
     {
         self::assertTrue(
@@ -108,9 +108,8 @@ final class DlnaAllowlistMiddlewareTest extends TestCase
      * CONSEQUENCE: with the shipped defaults, a PUBLIC address is rejected.
      *
      * This is the whole point — an off-LAN caller cannot browse the library.
-     *
-     * @dataProvider publicAddresses
      */
+    #[DataProvider('publicAddresses')]
     public function test_default_posture_rejects_public_addresses(string $ip): void
     {
         self::assertFalse(

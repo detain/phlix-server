@@ -11,6 +11,7 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\MatchConfidencePolicy;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * W3/F3 — the match-confidence gate on
@@ -130,10 +131,10 @@ final class MovieMetadataResolverConfidenceTest extends TestCase
     }
 
     /**
-     * @dataProvider scoreTable
      *
      * @param array<string, mixed> $candidate
      */
+    #[DataProvider('scoreTable')]
     public function test_match_confidence_score_table(array $candidate, string $wanted, ?int $year, float $expected): void
     {
         $this->assertEqualsWithDelta(

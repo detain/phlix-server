@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Plugins;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Plugins\PluginFieldHelp;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Link coverage and dead-link regression guards for the plugin help overlay
@@ -188,9 +189,8 @@ class PluginFieldHelpLinkCoverageTest extends TestCase
      *
      * A 403 is NOT treated as dead: anidb.net and opensubtitles.com both sit
      * behind a Cloudflare bot challenge that returns 403 to non-browser clients.
-     *
-     * @group network
      */
+    #[Group('network')]
     public function test_every_link_resolves(): void
     {
         $ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '

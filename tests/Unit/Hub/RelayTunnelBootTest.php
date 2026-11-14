@@ -11,6 +11,7 @@ use Phlix\Hub\RelayTunnelBoot;
 use Phlix\Server\Http\Controllers\Admin\HealthController;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S39: the relay operator kill-switch must ACTUALLY kill the tunnel.
@@ -94,9 +95,7 @@ final class RelayTunnelBootTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider envSpellings
-     */
+    #[DataProvider('envSpellings')]
     public function testEnvDisablesRecognisesOnlyTruthySpellings(string|false|null $raw, bool $expected): void
     {
         self::assertSame($expected, RelayTunnelBoot::envDisables($raw));

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Docker;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SH-024 enforcement pins — the durability posture must be asserted IN THE
@@ -76,9 +77,8 @@ final class DockerDurabilityEnvPinsTest extends TestCase
 
     /**
      * @param string $file repo-relative artifact path
-     *
-     * @dataProvider runtimeDockerfiles
      */
+    #[DataProvider('runtimeDockerfiles')]
     public function testEveryRuntimeDockerfileArmsTheStdoutLogSink(string $file): void
     {
         $lines = self::directiveLines($file);
@@ -95,9 +95,8 @@ final class DockerDurabilityEnvPinsTest extends TestCase
 
     /**
      * @param string $file repo-relative artifact path
-     *
-     * @dataProvider runtimeDockerfiles
      */
+    #[DataProvider('runtimeDockerfiles')]
     public function testEveryRuntimeDockerfileArmsTheProductionCredentialGuard(string $file): void
     {
         $lines = self::directiveLines($file);
@@ -126,9 +125,8 @@ final class DockerDurabilityEnvPinsTest extends TestCase
 
     /**
      * @param string $file repo-relative artifact path
-     *
-     * @dataProvider composeExamples
      */
+    #[DataProvider('composeExamples')]
     public function testEveryComposeExampleCarriesTheStdoutSinkEntry(string $file): void
     {
         $lines = self::directiveLines($file);
@@ -144,9 +142,8 @@ final class DockerDurabilityEnvPinsTest extends TestCase
 
     /**
      * @param string $file repo-relative artifact path
-     *
-     * @dataProvider composeExamples
      */
+    #[DataProvider('composeExamples')]
     public function testEveryComposeExampleCarriesTheDurableJobQueueRoot(string $file): void
     {
         $lines = self::directiveLines($file);

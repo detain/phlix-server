@@ -14,6 +14,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use InvalidArgumentException;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * minors M-SERVER-77 (W-min100): the ffmpeg-argv boundary allowlist.
@@ -57,9 +58,7 @@ final class FfmpegRunnerArgvBoundaryTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider rejectedParamProvider
-     */
+    #[DataProvider('rejectedParamProvider')]
     public function testSegmentCommandRejectsParamsOutsideTheArgvAllowlist(string $key, string $poison): void
     {
         $this->expectException(InvalidArgumentException::class);

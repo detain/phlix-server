@@ -16,6 +16,7 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Music\MusicLibraryType;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for MusicLibraryManager.
@@ -182,9 +183,7 @@ class MusicLibraryManagerTest extends TestCase
         );
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testRescanLibraryReturnsScanResult(): void
     {
         $libraryId = 'test-lib-123';
@@ -236,9 +235,7 @@ class MusicLibraryManagerTest extends TestCase
         );
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testRescanLibraryCallsScanner(): void
     {
         $libraryId = 'test-lib-456';
@@ -268,9 +265,7 @@ class MusicLibraryManagerTest extends TestCase
         $this->assertInstanceOf(ScanResult::class, $result);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testRescanLibraryThrowsForNonexistentLibrary(): void
     {
         $this->db->method('query')->willReturn([]);
@@ -281,9 +276,7 @@ class MusicLibraryManagerTest extends TestCase
         $this->manager->rescanLibrary('non-existent-id');
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testUpsertTrackStoresTags(): void
     {
         $libraryId = 'test-lib-789';
@@ -312,9 +305,7 @@ class MusicLibraryManagerTest extends TestCase
         $this->assertNull($item); // No tags in minimal file, returns null
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testUpsertTrackReturnsNullForNonexistentFile(): void
     {
         $result = $this->manager->upsertTrack('lib-123', '/non/existent/file.mp3');
@@ -322,9 +313,7 @@ class MusicLibraryManagerTest extends TestCase
         $this->assertNull($result);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testUpsertTrackEnrichesViaMetadataManager(): void
     {
         $libraryId = 'test-lib-enrich';
@@ -368,9 +357,7 @@ class MusicLibraryManagerTest extends TestCase
         unlink($tempFile);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetLibraryReturnsDecodedPathsAndOptions(): void
     {
         $libraryId = 'test-lib-decode';
@@ -392,9 +379,7 @@ class MusicLibraryManagerTest extends TestCase
         $this->assertEquals(['scan_interval' => 3600], $library['options']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetLibraryReturnsNullWhenNotFound(): void
     {
         $this->db->method('query')->willReturn([]);

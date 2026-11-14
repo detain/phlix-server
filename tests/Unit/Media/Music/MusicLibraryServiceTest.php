@@ -9,6 +9,7 @@ use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see MusicLibraryService}, focused on the scan/progress
@@ -160,9 +161,9 @@ final class MusicLibraryServiceTest extends TestCase
     /**
      * The batch ceiling is absolute: it must bind, not merely exist.
      *
-     * @dataProvider embeddedTrackBoundProvider
      * @param list<int> $albumIds
      */
+    #[DataProvider('embeddedTrackBoundProvider')]
     public function testGetTracksByAlbumIdsBoundsAreAbsolute(
         array $albumIds,
         int $perAlbumLimit,

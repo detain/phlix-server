@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Dlna\ContentDirectory;
 use Phlix\Media\Library\ItemRepository;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class ContentDirectoryTest extends TestCase
 {
@@ -155,9 +156,8 @@ class ContentDirectoryTest extends TestCase
     /**
      * Every ENUM member must emit its exact spec-defined class — no invented
      * `object.item.book` / `object.item.unknown` fallbacks.
-     *
-     * @dataProvider upnpClassProvider
      */
+    #[DataProvider('upnpClassProvider')]
     public function testGenerateDidlEmitsSpecDefinedClassForEveryType(string $type, string $expected): void
     {
         $didl = $this->contentDirectory->generateDidl([

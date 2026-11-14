@@ -19,6 +19,7 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S323 phase 2 — the {@see AdminMiddleware} dependency of
@@ -376,9 +377,8 @@ final class MediaPosterControllerAdminGateIsStructuralTest extends TestCase
      * The floor of the control, and on its own worth little: `requireAdmin()`'s own
      * userId check emits the same 401 with no middleware at all. Arm 2 is the
      * experiment.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAnonymousCallerIsRefused(string $method): void
     {
         $response = $this->makeController()->{$method}(new Request(), ['id' => 'm1']);
@@ -394,9 +394,8 @@ final class MediaPosterControllerAdminGateIsStructuralTest extends TestCase
      * request with the handler's own 404/200 response; the distinct
      * `auth.not_admin` code proves the ADMIN branch decided it, not the auth
      * branch.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedNonAdminIsRefusedOnTheAdminBranch(string $method): void
     {
         $request = new Request();
@@ -424,9 +423,8 @@ final class MediaPosterControllerAdminGateIsStructuralTest extends TestCase
      *
      * The succeeding control beside the refusals: without it a gate that denied
      * every request would pass arms 1 and 2 and look correct.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedAdminReachesTheHandlerBody(string $method, int $expected): void
     {
         $request = new Request();

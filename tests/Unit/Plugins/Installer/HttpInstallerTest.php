@@ -10,6 +10,7 @@ use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 final class HttpInstallerTest extends TestCase
 {
@@ -326,9 +327,7 @@ final class HttpInstallerTest extends TestCase
         $this->installer()->install('file://' . $zipPath);
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function test_install_throws_when_destination_rename_fails_due_to_read_only_base(): void
     {
         // Make pluginsBaseDir exist but be read-only so the final
@@ -511,9 +510,7 @@ final class HttpInstallerTest extends TestCase
         }
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function test_install_throws_a_clear_error_when_base_dir_is_read_only(): void
     {
         // Reproduces the production failure: the plugins base dir exists but is

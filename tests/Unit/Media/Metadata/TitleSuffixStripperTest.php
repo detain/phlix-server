@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\TitleSuffixStripper;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see TitleSuffixStripper}: the single source of truth for
@@ -18,9 +19,8 @@ final class TitleSuffixStripperTest extends TestCase
     /**
      * Longest-first ordering: a multi-word phrase must be peeled whole rather
      * than leaving a residue from a shorter prefix match.
-     *
-     * @dataProvider longestFirstCases
      */
+    #[DataProvider('longestFirstCases')]
     public function testLongestFirstOrdering(string $input, string $expected): void
     {
         $this->assertSame($expected, TitleSuffixStripper::strip($input));
@@ -46,9 +46,8 @@ final class TitleSuffixStripperTest extends TestCase
      * is a word character, so the `\b`-anchored regex requires a NON-word
      * separator like ` -.` immediately before the phrase, matching the original
      * SceneFilenameNormalizer behavior.)
-     *
-     * @dataProvider separatorCases
      */
+    #[DataProvider('separatorCases')]
     public function testSeparatorVariants(string $input): void
     {
         $this->assertSame('Highlander', TitleSuffixStripper::strip($input));
@@ -85,9 +84,8 @@ final class TitleSuffixStripperTest extends TestCase
 
     /**
      * Case-insensitive matching.
-     *
-     * @dataProvider caseCases
      */
+    #[DataProvider('caseCases')]
     public function testCaseInsensitivity(string $input): void
     {
         $this->assertSame('Blade Runner', TitleSuffixStripper::strip($input));
@@ -174,9 +172,8 @@ final class TitleSuffixStripperTest extends TestCase
     /**
      * Mid-string / substring noise must NOT be stripped — only genuine trailing
      * phrases on a word boundary.
-     *
-     * @dataProvider midStringCases
      */
+    #[DataProvider('midStringCases')]
     public function testMidStringNoiseNotStripped(string $input, string $expected): void
     {
         $this->assertSame($expected, TitleSuffixStripper::strip($input));
@@ -232,10 +229,10 @@ final class TitleSuffixStripperTest extends TestCase
      * A null OR empty injected list falls back to the built-in const — an empty
      * admin override must never blank the noise list.
      *
-     * @dataProvider emptyOverrideCases
      *
      * @param list<string>|null $suffixes
      */
+    #[DataProvider('emptyOverrideCases')]
     public function testNullOrEmptyOverrideFallsBackToConst(?array $suffixes): void
     {
         $this->assertSame('Blade Runner', TitleSuffixStripper::strip('Blade Runner Directors Cut', false, $suffixes));

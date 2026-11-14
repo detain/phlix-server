@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for AudioScanner tag harvesting functionality.
@@ -25,27 +26,21 @@ class AudioScannerTest extends TestCase
         $this->scanner = new AudioScanner($this->db, $this->itemRepo);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsReturnsEmptyArrayForNonExistentFile(): void
     {
         $result = $this->scanner->harvestTags('/non/existent/file.mp3');
         $this->assertEquals([], $result);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsReturnsEmptyArrayForUnreadableFile(): void
     {
         $result = $this->scanner->harvestTags('/root/secret.mp3');
         $this->assertEquals([], $result);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsFlac(): void
     {
         // Create a minimal FLAC file structure to test parsing
@@ -67,9 +62,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsMp3Id3v2(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -89,9 +82,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsM4a(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -111,9 +102,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsReturnsPartialOnFailure(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -132,9 +121,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testScanMusicLibraryYieldsItems(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -162,9 +149,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testScanMusicLibraryGeneratorIsLazy(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -310,9 +295,7 @@ class AudioScannerTest extends TestCase
         return $data;
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsReturnsStructuredArray(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -344,9 +327,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsNeverThrows(): void
     {
         // Test with various invalid inputs - should never throw
@@ -361,9 +342,7 @@ class AudioScannerTest extends TestCase
         }
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsFlacWithDuration(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -385,9 +364,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testHarvestTagsFlacWithZeroTotalSamplesReturnsNoDuration(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -409,9 +386,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetFlacDurationWithValidFlacReturnsInt(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -432,9 +407,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetFlacDurationWithInvalidSampleRateReturnsNull(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -454,9 +427,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetFlacDurationWithZeroTotalSamplesReturnsNull(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -476,9 +447,7 @@ class AudioScannerTest extends TestCase
         rmdir($tempDir);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetFlacDurationWithStreaminfoNotFirstBlockReturnsNull(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();

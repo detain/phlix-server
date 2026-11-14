@@ -8,6 +8,7 @@ use Phlix\Common\Database\PhlixMySQLConnection;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 /**
  * Unit coverage for {@see PhlixMySQLConnection} transaction mutex.
@@ -395,9 +396,8 @@ final class PhlixMySQLConnectionTest extends TestCase
      * detector — it catches the replaced mutex at width 2 as well (2 distinct
      * channels observed), before any coroutine has had a chance to hang — and
      * the two are asserted together because they fail for the same reason.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testTheTransactionMutexSurvivesBeingHandedOn(): void
     {
         if (!extension_loaded('swoole')) {
@@ -1170,9 +1170,8 @@ final class PhlixMySQLConnectionTest extends TestCase
      * is to catch a regression in the other direction — a change to the release
      * path that breaks the mode the fix is not aimed at. `maxSize=1` is included
      * because it is the pooled configuration closest to the shared socket.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testThePooledFrontIsUnaffectedAtProductionWidth(): void
     {
         if (!extension_loaded('swoole')) {
@@ -1548,9 +1547,8 @@ final class PhlixMySQLConnectionTest extends TestCase
      * 2026-07-31 was observable — see
      * {@see testTheTransactionMutexSurvivesBeingHandedOn}, which is why that one
      * runs at 8 and 16 as well.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function testConcurrentTransactionsDoNotInterleave(): void
     {
         if (!extension_loaded('swoole')) {

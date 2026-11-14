@@ -9,6 +9,7 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Media\UserItemDataRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see UserItemDataRepository} (E10 favorites/ratings, re-scoped
@@ -290,9 +291,7 @@ class UserItemDataRepositoryTest extends TestCase
         return [[-2], [-1], [0], [1], [2]];
     }
 
-    /**
-     * @dataProvider validLikeLevelProvider
-     */
+    #[DataProvider('validLikeLevelProvider')]
     public function testSetLikeLevelUpsertsEachValidLevel(int $level): void
     {
         $db = $this->createMock(Connection::class);
@@ -409,9 +408,8 @@ class UserItemDataRepositoryTest extends TestCase
      * resolver here deliberately returns a DIFFERENT id from the one requested, so
      * a repository that passed the request value straight through to SQL would
      * bind `'attacker-supplied'` and fail.
-     *
-     * @dataProvider scopedOperationProvider
      */
+    #[DataProvider('scopedOperationProvider')]
     public function testEveryOperationBindsTheResolvedProfileNotTheRequestedOne(string $operation): void
     {
         $bound = null;

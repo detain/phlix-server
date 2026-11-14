@@ -17,6 +17,7 @@ use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Tests\Support\Dash\MpdSchema;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S58 — the VOD DASH manifest `writeVodPlaylists()` publishes beside the HLS
@@ -124,9 +125,8 @@ final class TranscodeManagerVodMpdTest extends TestCase
      * shipped `AdaptationSet` emitted before S58 (`@id` a name rather than an
      * `xs:unsignedInt`, and a `@bandwidth` attribute that does not exist on an
      * AdaptationSet).
-     *
-     * @dataProvider malformedManifests
      */
+    #[DataProvider('malformedManifests')]
     public function test_the_schema_validator_rejects_a_malformed_manifest(string $why, string $xml): void
     {
         $errors = MpdSchema::errors($xml);

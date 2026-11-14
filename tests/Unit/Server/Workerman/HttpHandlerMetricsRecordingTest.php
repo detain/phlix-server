@@ -14,6 +14,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  *
@@ -125,9 +126,7 @@ final class HttpHandlerMetricsRecordingTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider routeTemplateProvider
-     */
+    #[DataProvider('routeTemplateProvider')]
     public function testRouteTemplateNormalisation(string $path, string $expected): void
     {
         self::assertSame($expected, $this->invokeRouteTemplate($path));

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Docker;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S159 — the smoke check for `docker/docker-entrypoint.sh`.
@@ -441,9 +442,7 @@ class DockerEntrypointTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider strictValueProvider
-     */
+    #[DataProvider('strictValueProvider')]
     public function testStrictModeRefusesToStartOnAFailedMigration(string $strictValue): void
     {
         $this->stubPhp(1);
@@ -476,9 +475,8 @@ class DockerEntrypointTest extends TestCase
      * A docker `env_file` preserves surrounding whitespace, so
      * `PHLIX_MIGRATIONS_STRICT=1 ` used to fall through to boot-anyway — an
      * opt-in that looks applied and is not (S159 review finding 6, secondary).
-     *
-     * @dataProvider paddedStrictValueProvider
      */
+    #[DataProvider('paddedStrictValueProvider')]
     public function testStrictModeIgnoresSurroundingWhitespace(string $strictValue): void
     {
         $this->stubPhp(1);
@@ -511,9 +509,8 @@ class DockerEntrypointTest extends TestCase
      * Anything that is not an explicit truthy value leaves the default
      * (boot-anyway) behaviour in place — a typo must not silently turn a media
      * server into a crash loop.
-     *
-     * @dataProvider nonStrictValueProvider
      */
+    #[DataProvider('nonStrictValueProvider')]
     public function testNonTruthyStrictValuesKeepTheDefaultBehaviour(string $strictValue): void
     {
         $this->stubPhp(1);
@@ -881,9 +878,7 @@ class DockerEntrypointTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider placeholderSecretProvider
-     */
+    #[DataProvider('placeholderSecretProvider')]
     public function testAPlaceholderJwtSecretRefusesToStart(string $placeholder): void
     {
         $this->stubPhp(0);
@@ -899,9 +894,7 @@ class DockerEntrypointTest extends TestCase
         self::assertStringContainsString('PHLIX-PLACEHOLDER-SECRET', $run['stderr']);
     }
 
-    /**
-     * @dataProvider placeholderSecretProvider
-     */
+    #[DataProvider('placeholderSecretProvider')]
     public function testAPlaceholderPhlixSecretKeyRefusesToStart(string $placeholder): void
     {
         $this->stubPhp(0);
@@ -964,9 +957,8 @@ class DockerEntrypointTest extends TestCase
 
     /**
      * The shipped example must not hand anyone a working-looking secret.
-     *
-     * @dataProvider exampleSecretVariableProvider
      */
+    #[DataProvider('exampleSecretVariableProvider')]
     public function testTheEnvExampleShipsNoUsableSecretValue(string $variable): void
     {
         $example = (string) file_get_contents(
@@ -1512,9 +1504,7 @@ class DockerEntrypointTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider dockerfileProvider
-     */
+    #[DataProvider('dockerfileProvider')]
     public function testEveryDockerfileCopiesTheEntrypointToThePathItsCmdNames(string $relative): void
     {
         $dockerfile = dirname(__DIR__, 3) . '/' . $relative;
@@ -1538,9 +1528,8 @@ class DockerEntrypointTest extends TestCase
      * The harness always overrides PHLIX_APP_ROOT / PHLIX_SUPERVISORD_CONF, so
      * the DEFAULTS — the only values a real container uses — would otherwise be
      * unasserted (S159 review finding 8, second half).
-     *
-     * @dataProvider dockerfileProvider
      */
+    #[DataProvider('dockerfileProvider')]
     public function testEntrypointDefaultsMatchTheDockerfileLayout(string $relative): void
     {
         $dockerfile = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
@@ -1675,9 +1664,7 @@ class DockerEntrypointTest extends TestCase
         self::assertStringContainsString('.logs/', $ignore);
     }
 
-    /**
-     * @dataProvider dockerfileProvider
-     */
+    #[DataProvider('dockerfileProvider')]
     public function testEveryDockerfileExposesThePortsTheDaemonBinds(string $relative): void
     {
         $contents = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
@@ -1697,9 +1684,8 @@ class DockerEntrypointTest extends TestCase
     /**
      * The absence of a HEALTHCHECK is why a container that 502'd every request
      * for 22 minutes reported `Up 22 minutes`.
-     *
-     * @dataProvider dockerfileProvider
      */
+    #[DataProvider('dockerfileProvider')]
     public function testEveryDockerfileDeclaresAHealthcheck(string $relative): void
     {
         $contents = (string) file_get_contents(dirname(__DIR__, 3) . '/' . $relative);
@@ -1716,9 +1702,7 @@ class DockerEntrypointTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider allDockerfileProvider
-     */
+    #[DataProvider('allDockerfileProvider')]
     public function testNoDockerfileWiresNginxOrPhpFpmIntoTheImage(string $relative): void
     {
         $contents = self::directivesOnly(
@@ -1790,9 +1774,8 @@ class DockerEntrypointTest extends TestCase
     /**
      * `--ignore-platform-reqs` is what let ext-ldap — a HARD composer.json
      * requirement — be absent from every image while the build stayed green.
-     *
-     * @dataProvider allDockerfileProvider
      */
+    #[DataProvider('allDockerfileProvider')]
     public function testNoDockerfileMasksMissingPlatformRequirements(string $relative): void
     {
         $contents = self::directivesOnly(

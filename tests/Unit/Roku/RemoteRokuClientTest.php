@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Roku;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Roku\RemoteRokuClient;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 /**
  * SV-4.5 / S-F15 — the remote Roku control client must not stall the worker:
@@ -45,9 +46,7 @@ final class RemoteRokuClientTest extends TestCase
         $this->assertFalse($client->blockingCalled, 'blocking file_get_contents must NOT be used in-coroutine');
     }
 
-    /**
-     * @requires extension swoole
-     */
+    #[RequiresPhpExtension('swoole')]
     public function testCoroutineAwareSleepYieldsInsideCoroutine(): void
     {
         if (! extension_loaded('swoole')) {

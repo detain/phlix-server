@@ -14,6 +14,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The relay tunnel must not be a way into the authless DLNA surface.
@@ -105,9 +106,8 @@ final class RelayRequestDispatcherTest extends TestCase
      *
      * RED ON REVERT: deleting the deny turns every one of these into the
      * application router's 200.
-     *
-     * @dataProvider deniedPaths
      */
+    #[DataProvider('deniedPaths')]
     public function test_the_dlna_surface_is_refused_over_the_relay(string $path, string $method): void
     {
         $app = $this->createMock(Application::class);
@@ -157,9 +157,8 @@ final class RelayRequestDispatcherTest extends TestCase
      * POSITIVE CONTROL: the deny is scoped to DLNA and does not break the traffic
      * the tunnel exists to carry. Without this, the tests above would also pass
      * against a dispatcher that refused everything.
-     *
-     * @dataProvider allowedPaths
      */
+    #[DataProvider('allowedPaths')]
     public function test_ordinary_relay_traffic_still_reaches_the_router(string $path): void
     {
         $dispatcher = new RelayRequestDispatcher(
@@ -196,9 +195,8 @@ final class RelayRequestDispatcherTest extends TestCase
      * inline auth, and the router is never asked. RED ON REVERT: moving the
      * stream path back out of {@see PreRouterFastPaths} makes the router answer
      * (or 404) and this fails.
-     *
-     * @dataProvider streamPaths
      */
+    #[DataProvider('streamPaths')]
     public function test_the_stream_path_is_served_by_the_fast_stage_not_the_router(string $path, string $method): void
     {
         $app = $this->createMock(Application::class);

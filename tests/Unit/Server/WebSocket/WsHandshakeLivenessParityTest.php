@@ -14,6 +14,7 @@ use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\SyncPlayAuthMiddleware;
 use Workerman\Connection\TcpConnection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * M35 (seceng2 M1) pins: the WS :8097 handshake gate enforces the SAME
@@ -173,9 +174,8 @@ final class WsHandshakeLivenessParityTest extends TestCase
      * (PHP tolerates the extra argument), the disabled/deleted/revoked rows
      * authenticated, and every expect-false row ran RED — the measured
      * red-on-parent for M35.
-     *
-     * @dataProvider livenessMatrix
      */
+    #[DataProvider('livenessMatrix')]
     public function testHttpAndWsHandshakeVerdictsMatchOverTheLivenessMatrix(
         callable $stateScript,
         bool $expectLive

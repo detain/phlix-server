@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 
 use Phlix\Media\Library\SortTitle;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class SortTitleTest extends TestCase
 {
@@ -53,9 +54,7 @@ final class SortTitleTest extends TestCase
         yield 'keeps accented The'         => ['Thé Café', 'Thé Café'];
     }
 
-    /**
-     * @dataProvider titleProvider
-     */
+    #[DataProvider('titleProvider')]
     public function testFromComputesSortKey(string $name, string $expected): void
     {
         $this->assertSame($expected, SortTitle::from($name));

@@ -8,6 +8,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\Workerman\BodylessResponse;
 use PHPUnit\Framework\TestCase;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The one thing this class exists for: a `HEAD` reply must put the size of the
@@ -125,10 +126,10 @@ final class BodylessResponseTest extends TestCase
      * EXACTLY as the parent renders it — asserted against the parent's real output,
      * so the two encoders cannot drift.
      *
-     * @dataProvider delegatedShapes
      *
      * @param array<string, string> $headers
      */
+    #[DataProvider('delegatedShapes')]
     public function test_every_other_shape_is_byte_identical_to_the_parent(
         int $status,
         array $headers,
@@ -193,10 +194,10 @@ final class BodylessResponseTest extends TestCase
      * divergence into a red test. A literal byte string would pin the copy to
      * today's Workerman and prove nothing about tomorrow's.
      *
-     * @dataProvider authoritativeShapes
      *
      * @param array<string, string|list<string>> $headers
      */
+    #[DataProvider('authoritativeShapes')]
     public function test_the_authoritative_branch_is_the_parent_minus_its_generated_length(
         int $status,
         array $headers,

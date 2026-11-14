@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Common\Http;
 
 use Phlix\Common\Http\TrustedProxyResolver;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SV-4.15 HIGH fix: trusted-proxy-aware client-IP resolution used to build
@@ -171,9 +172,7 @@ final class TrustedProxyResolverTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider cidrCases
-     */
+    #[DataProvider('cidrCases')]
     public function testIpMatches(string $ip, string $range, bool $expected): void
     {
         self::assertSame($expected, TrustedProxyResolver::ipMatches($ip, $range));

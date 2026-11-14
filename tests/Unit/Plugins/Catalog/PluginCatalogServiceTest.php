@@ -12,6 +12,9 @@ use Phlix\Plugins\Catalog\CatalogSourceResolver;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Installer\SourceUrlResolver;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 
 final class PluginCatalogServiceTest extends TestCase
 {
@@ -140,9 +143,7 @@ final class PluginCatalogServiceTest extends TestCase
         $service->addSource('https://example.com/extra.json');
     }
 
-    /**
-     * @dataProvider invalidSourceUrls
-     */
+    #[DataProvider('invalidSourceUrls')]
     public function test_add_source_rejects_non_http_urls(string $url): void
     {
         $store = [];
@@ -470,9 +471,8 @@ final class PluginCatalogServiceTest extends TestCase
      * Swoole\Coroutine\Channel. Proven by the error shape: a cURL transport
      * error, NOT the async "async fetch timed out" that a false Channel::pop()
      * would raise (the S-F12 / SV-0.4 defect this step fixes).
-     *
-     * @group network
      */
+    #[Group('network')]
     public function test_default_fetcher_uses_blocking_curl_branch_outside_coroutine(): void
     {
         self::assertFalse(
@@ -500,9 +500,8 @@ final class PluginCatalogServiceTest extends TestCase
      * Swoole\Coroutine\Channel that is woken by the client's async success
      * callback, returning the response body. Mirrors the production callback:
      * `$channel->push(true)` on completion, `$channel->pop($timeout)` to wait.
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function test_async_fetch_wakes_on_success_callback_inside_coroutine(): void
     {
         if (! \extension_loaded('swoole')) {
@@ -539,9 +538,8 @@ final class PluginCatalogServiceTest extends TestCase
      * yields a CLEAN timeout — it actually waits the timeout window and then
      * throws "async fetch timed out", as opposed to the spurious IMMEDIATE
      * false a Channel::pop() outside a coroutine would return (S-F12 / SV-0.4).
-     *
-     * @requires extension swoole
      */
+    #[RequiresPhpExtension('swoole')]
     public function test_async_fetch_times_out_cleanly_inside_coroutine(): void
     {
         if (! \extension_loaded('swoole')) {
@@ -610,9 +608,8 @@ final class PluginCatalogServiceTest extends TestCase
      * (`@group network`): phpunit.xml excludes the group from the default
      * suite so no uncontrolled remote sits on the load-bearing critical path
      * (the S308/S309 lesson). Run explicitly: --group network.
-     *
-     * @group network
      */
+    #[Group('network')]
     public function test_stable_channel_at_pinned_tag_serves_verified_sample_theme_install(): void
     {
         // Zero env overrides: the operator escape hatch must be ABSENT for the

@@ -7,9 +7,9 @@ namespace Phlix\Tests\Unit\Dlna;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Dlna\RendererControlClient;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
- * @group network
  *
  * Every test below issues a real SOAP request to a hardcoded LAN
  * address (192.168.1.100). Without that host present the requests
@@ -17,6 +17,7 @@ use Phlix\Dlna\RendererControlClient;
  * the suite runtime. Excluded from the default Unit run; opt in with
  * `--group network` against a real renderer.
  */
+#[Group('network')]
 class RendererControlClientTest extends TestCase
 {
     private StructuredLogger $logger;
@@ -26,9 +27,7 @@ class RendererControlClientTest extends TestCase
         $this->logger = $this->createMock(StructuredLogger::class);
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testSetAvTransportUriBuildsCorrectSoapRequest(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -44,9 +43,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testPlaySendsPlayAction(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -54,9 +51,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testGetPositionInfoParsesResponse(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -64,9 +59,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testPauseSendsPauseAction(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -74,9 +67,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testStopSendsStopAction(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -84,9 +75,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testSeekSendsSeekAction(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -94,9 +83,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testGetTransportInfoReturnsArray(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
@@ -104,9 +91,7 @@ class RendererControlClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0, count($result));
     }
 
-    /**
-     * @group network
-     */
+    #[Group('network')]
     public function testGetMediaInfoReturnsArray(): void
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);

@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Hub\RelayMessageFramer;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests for the multiplexed WS relay wire codec.
@@ -65,9 +66,7 @@ class RelayMessageFramerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider boundarySizeProvider
-     */
+    #[DataProvider('boundarySizeProvider')]
     public function test_encode_decode_round_trips_at_boundary_sizes(int $size): void
     {
         $payload = str_repeat('A', $size);

@@ -8,6 +8,7 @@ use Phlix\Admin\SettingsRepository;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * F7 config-side reachability: every `auth.<method>.enabled` schema key must
@@ -43,9 +44,7 @@ final class AuthMethodFlagsReachabilityTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider toggleProvider
-     */
+    #[DataProvider('toggleProvider')]
     public function test_toggle_key_resolves_through_real_config(string $key, bool $expected): void
     {
         $repo = $this->repositoryOverRealConfigDir();

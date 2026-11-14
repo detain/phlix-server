@@ -48,6 +48,7 @@ use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -765,9 +766,7 @@ final class ContainerFactoryTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider explicitlyBoundOptionalParams
-     */
+    #[DataProvider('explicitlyBoundOptionalParams')]
     public function test_optional_ctor_param_is_explicitly_bound_not_skipped(
         string $id,
         string $param
@@ -812,9 +811,7 @@ final class ContainerFactoryTest extends TestCase
         return $out;
     }
 
-    /**
-     * @dataProvider classesWithNewlyBoundDependencies
-     */
+    #[DataProvider('classesWithNewlyBoundDependencies')]
     public function test_container_resolves_class_with_its_newly_bound_dependencies(string $id): void
     {
         $container = $this->containerWithMockedDb();

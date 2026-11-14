@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\MediaItemShaper;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class MediaItemShaperTest extends TestCase
 {
@@ -371,9 +372,8 @@ final class MediaItemShaperTest extends TestCase
      * only 6 of the 13 members (plus a non-existent `image`), so a genuine
      * `photo`/`book`/`audiobook`/`track`/… row was silently relabelled `movie`
      * on its way to API clients.
-     *
-     * @dataProvider mediaItemTypeEnumProvider
      */
+    #[DataProvider('mediaItemTypeEnumProvider')]
     public function testShapePreservesEveryMemberOfTheTypeColumnEnum(string $type): void
     {
         $shaped = MediaItemShaper::shape(['id' => 'x', 'name' => 'X', 'type' => $type]);
@@ -798,9 +798,8 @@ final class MediaItemShaperTest extends TestCase
      * `metadata_json.backdrop_url`, so both keys degrade to null — never a
      * broken/synthesised URL. The keys stay PRESENT so the response shape is
      * stable for every row.
-     *
-     * @dataProvider backdroplessTypeProvider
      */
+    #[DataProvider('backdroplessTypeProvider')]
     public function testShapeYieldsNullBackdropForTypesWithoutLandscapeArt(string $type): void
     {
         $shaped = MediaItemShaper::shape([
@@ -1065,9 +1064,8 @@ final class MediaItemShaperTest extends TestCase
      * INTERIOR space parses in a browser as one URL plus TWO descriptors
      * (`…/bg jpg 780w` → url `…/bg`, descriptors `jpg` and `780w`).
      * `BackdropSrcset::parse()` guards exactly this on the derived path.
-     *
-     * @dataProvider unsafeBackdropSrcsetProvider
      */
+    #[DataProvider('unsafeBackdropSrcsetProvider')]
     public function testShapeRejectsAStoredBackdropSrcsetWithABadDescriptorOrSpacedUrl(
         string $stored,
         string $why,
@@ -1148,9 +1146,8 @@ final class MediaItemShaperTest extends TestCase
      * …and the descriptor check must not over-reject: every legitimate candidate
      * form survives, and the rebuilt value is the same set of pairs (normalised to
      * `", "` separators).
-     *
-     * @dataProvider legitimateBackdropSrcsetProvider
      */
+    #[DataProvider('legitimateBackdropSrcsetProvider')]
     public function testShapeKeepsEveryLegitimateStoredBackdropSrcsetForm(string $stored, string $expected): void
     {
         $shaped = MediaItemShaper::shape([
@@ -1268,9 +1265,8 @@ final class MediaItemShaperTest extends TestCase
      * built FROM it) on up to PageLimit::MAX rows, so a non-`http(s)`/non-relative
      * value must become null rather than being echoed — and a TMDB URL carrying an
      * attribute-breakout payload must never be width-swapped INTO the srcset.
-     *
-     * @dataProvider unsafeBackdropUrlProvider
      */
+    #[DataProvider('unsafeBackdropUrlProvider')]
     public function testShapeRejectsUnsafeBackdropUrlSchemes(string $stored, string $why): void
     {
         $shaped = MediaItemShaper::shape([
@@ -1338,9 +1334,8 @@ final class MediaItemShaperTest extends TestCase
      * The allowlist must not break a single legitimate backdrop shape: TMDB,
      * fanart.tv, thetvdb, plain `http://`, a server-relative artwork path, and the
      * `/api/v1/artwork/{id}` form S72 introduces.
-     *
-     * @dataProvider legitimateBackdropUrlProvider
      */
+    #[DataProvider('legitimateBackdropUrlProvider')]
     public function testShapeKeepsEveryLegitimateBackdropUrlShape(string $stored, string $expected): void
     {
         $shaped = MediaItemShaper::shape([
@@ -1418,9 +1413,8 @@ final class MediaItemShaperTest extends TestCase
      * `^`-anchored TMDB regex rejects the leading space, so the client got the
      * padded URL verbatim AND lost the whole width ladder (`backdrop_srcset` null)
      * — an invisible regression, because browsers trim `src` themselves.
-     *
-     * @dataProvider paddedBackdropUrlProvider
      */
+    #[DataProvider('paddedBackdropUrlProvider')]
     public function testShapeTrimsAPaddedBackdropUrlAndKeepsItsSrcset(string $stored): void
     {
         $shaped = MediaItemShaper::shape([
@@ -1517,9 +1511,8 @@ final class MediaItemShaperTest extends TestCase
      * width-swaps it into `backdrop_url_large` and seeds all THREE hero srcset
      * candidates from it. One unvalidated payload was therefore emitted five times
      * over in the one response that renders it largest.
-     *
-     * @dataProvider unsafeBackdropUrlProvider
      */
+    #[DataProvider('unsafeBackdropUrlProvider')]
     public function testShapeDetailRejectsUnsafeBackdropUrlSchemes(string $stored, string $why): void
     {
         $shaped = MediaItemShaper::shapeDetail([
@@ -2283,9 +2276,8 @@ final class MediaItemShaperTest extends TestCase
      * BOTH paths (the poster chain rides shape() and shapeDetail() — the detail
      * shape merges the list shape), and nothing is derived from it: a null
      * poster_url yields a null poster_srcset.
-     *
-     * @dataProvider unsafeUrlPayloadProvider
      */
+    #[DataProvider('unsafeUrlPayloadProvider')]
     public function testShapeRejectsUnsafePosterUrlSchemes(string $stored, string $why): void
     {
         $list = MediaItemShaper::shape([
@@ -2310,9 +2302,8 @@ final class MediaItemShaperTest extends TestCase
      * the chain — `cover_image_large` (with poster_url blank, the AniList shape)
      * and `cover_image_extralarge` each emit their payload as `poster_url`, so
      * both legs must reject the whole set to null too.
-     *
-     * @dataProvider unsafeUrlPayloadProvider
      */
+    #[DataProvider('unsafeUrlPayloadProvider')]
     public function testShapeRejectsUnsafePosterChainFallbackCandidates(string $stored, string $why): void
     {
         $large = MediaItemShaper::shape([
@@ -2357,9 +2348,7 @@ final class MediaItemShaperTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider edgePaddedPosterSrcsetProvider
-     */
+    #[DataProvider('edgePaddedPosterSrcsetProvider')]
     public function testShapeTrimsEdgePaddingFromAWholeValueStoredPosterSrcset(
         string $stored,
         string $expected,
@@ -2377,9 +2366,8 @@ final class MediaItemShaperTest extends TestCase
      * emitted. 14 of the 17 payloads reject (the 3 whose edge byte is stripped
      * by the value-level trim are pinned as sanitised in
      * {@see self::testShapeTrimsEdgePaddingFromAWholeValueStoredPosterSrcset()}).
-     *
-     * @dataProvider unsafePosterSrcsetWholeValueProvider
      */
+    #[DataProvider('unsafePosterSrcsetWholeValueProvider')]
     public function testShapeRejectsUnsafeStoredPosterSrcsetAsWholeValue(string $stored, string $why): void
     {
         $shaped = MediaItemShaper::shape([
@@ -2416,9 +2404,8 @@ final class MediaItemShaperTest extends TestCase
      * byte-for-byte the PosterSrcset output, proving the rejected payload was
      * never width-swap-embedded. Covers the three srcset-class shapes the
      * descriptor half of the guard exists for.
-     *
-     * @dataProvider unsafePosterSrcsetCandidateProvider
      */
+    #[DataProvider('unsafePosterSrcsetCandidateProvider')]
     public function testShapeRejectsAPosterSrcsetCandidateAmongValidOnesAndDerivesInstead(
         string $stored,
         string $why,
@@ -2511,9 +2498,8 @@ final class MediaItemShaperTest extends TestCase
     /**
      * AC1, surface 3: every payload in `trailer_url` becomes null on the detail
      * path (the only path that emits the key).
-     *
-     * @dataProvider unsafeUrlPayloadProvider
      */
+    #[DataProvider('unsafeUrlPayloadProvider')]
     public function testShapeDetailRejectsUnsafeTrailerUrlSchemes(string $stored, string $why): void
     {
         $shaped = MediaItemShaper::shapeDetail([
@@ -2529,9 +2515,8 @@ final class MediaItemShaperTest extends TestCase
      * signing secret live, so this also pins the ordering the review called
      * out: the allowlist runs BEFORE SignedUrl::refreshArtworkUrl(), i.e. a
      * payload is nulled, never echoed back through the re-mint stage.
-     *
-     * @dataProvider unsafeUrlPayloadProvider
      */
+    #[DataProvider('unsafeUrlPayloadProvider')]
     public function testShapeDetailRejectsUnsafeLogoUrlSchemesBeforeReMint(string $stored, string $why): void
     {
         putenv('PHLIX_SIGNED_URL_SECRET=s112-logo-guard-secret');
@@ -2554,9 +2539,8 @@ final class MediaItemShaperTest extends TestCase
     /**
      * AC1, surface 5: the NESTED production_companies[].logo_url rejects the
      * whole set while the ENTRY survives — name and origin_country untouched.
-     *
-     * @dataProvider unsafeUrlPayloadProvider
      */
+    #[DataProvider('unsafeUrlPayloadProvider')]
     public function testShapeDetailRejectsUnsafeNestedCompanyLogoUrls(string $stored, string $why): void
     {
         $shaped = MediaItemShaper::shapeDetail([
@@ -2718,9 +2702,8 @@ final class MediaItemShaperTest extends TestCase
      * AC2: legitimate shapes per key, byte-for-byte, on BOTH paths. The poster
      * rows also pin the REAL derived ladder (w185/342/500/780 — PosterSrcset
      * WIDTHS) where the URL is a TMDB one, and null where it is not.
-     *
-     * @dataProvider legitimateSurfaceUrlProvider
      */
+    #[DataProvider('legitimateSurfaceUrlProvider')]
     public function testShapeKeepsLegitimatePosterUrlsByteIdenticallyOnBothPaths(
         string $stored,
         string $expected,
@@ -2745,9 +2728,8 @@ final class MediaItemShaperTest extends TestCase
      * AC2: the same legitimate set passes the trailer and logo guards on the
      * detail path — the logo byte-identically too (none of these forms carry a
      * `/api/v1/artwork/` prefix, so the re-mint stage is a pass-through).
-     *
-     * @dataProvider legitimateSurfaceUrlProvider
      */
+    #[DataProvider('legitimateSurfaceUrlProvider')]
     public function testShapeDetailKeepsLegitimateTrailerAndLogoUrlsByteIdentically(
         string $stored,
         string $expected,
@@ -2767,9 +2749,8 @@ final class MediaItemShaperTest extends TestCase
 
     /**
      * AC2: the nested company logo passes the guard byte-identically as well.
-     *
-     * @dataProvider legitimateSurfaceUrlProvider
      */
+    #[DataProvider('legitimateSurfaceUrlProvider')]
     public function testShapeDetailKeepsLegitimateNestedCompanyLogoUrlsByteIdentically(
         string $stored,
         string $expected,
@@ -2836,9 +2817,8 @@ final class MediaItemShaperTest extends TestCase
      * `", "`-separator forms (safeImageSrcset RECONSTRUCTS, so deviant
      * whitespace normalises — asserted in the second fixture row, never as
      * identity). Both paths.
-     *
-     * @dataProvider legitimateStoredPosterSrcsetProvider
      */
+    #[DataProvider('legitimateStoredPosterSrcsetProvider')]
     public function testShapeKeepsLegitimateStoredPosterSrcsetOnBothPaths(string $stored, string $expected): void
     {
         $list = MediaItemShaper::shape([

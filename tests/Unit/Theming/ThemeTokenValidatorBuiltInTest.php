@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Theming;
 use Phlix\Theming\Exception\InvalidThemeDefinition;
 use Phlix\Theming\ThemeTokenValidator;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Pins {@see ThemeTokenValidator::validateBuiltIn()} — the S85 entry point that
@@ -98,9 +99,8 @@ final class ThemeTokenValidatorBuiltInTest extends TestCase
     /**
      * The value grammar is untouched by the relaxed id rule — the built-in path
      * is not a way to smuggle CSS in under the host's name.
-     *
-     * @dataProvider injectionPayloads
      */
+    #[DataProvider('injectionPayloads')]
     public function testRefusesACssInjectionPayloadInATokenValue(string $value): void
     {
         $this->expectException(InvalidThemeDefinition::class);

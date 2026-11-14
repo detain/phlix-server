@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\LiveTv\Epg\SchedulesDirect;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\Epg\SchedulesDirect\SdApiClient;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class SdApiClientTest extends TestCase
 {
@@ -129,9 +130,7 @@ class SdApiClientTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider hostile_system_id_provider
-     */
+    #[DataProvider('hostile_system_id_provider')]
     public function test_station_path_refuses_non_bare_token(string $systemId): void
     {
         $this->expectException(\InvalidArgumentException::class);

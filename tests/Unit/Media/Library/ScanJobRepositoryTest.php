@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Phlix\Media\Library\ScanJobRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for the library scan-job store (Step 1.1a).
@@ -82,9 +83,8 @@ final class ScanJobRepositoryTest extends TestCase
     /**
      * The four fine-grained maintenance job types (migration 084) are accepted
      * by enqueue() and forwarded as the third INSERT parameter.
-     *
-     * @dataProvider maintenanceTypeProvider
      */
+    #[DataProvider('maintenanceTypeProvider')]
     public function testEnqueueAcceptsMaintenanceTypes(string $type): void
     {
         $db = $this->createMock(Connection::class);

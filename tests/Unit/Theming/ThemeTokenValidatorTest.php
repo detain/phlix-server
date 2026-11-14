@@ -9,6 +9,7 @@ use Phlix\Theming\ThemeTokenAllowlist;
 use Phlix\Theming\ThemeTokenValidator;
 use Phlix\Theming\TokenTheme;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S84's security boundary.
@@ -169,9 +170,7 @@ final class ThemeTokenValidatorTest extends TestCase
         yield 'rgb with too many arguments' => ['rgba(0,0,0,0,0,0)'];
     }
 
-    /**
-     * @dataProvider injectionPayloads
-     */
+    #[DataProvider('injectionPayloads')]
     public function testRejectsACssInjectionPayloadInATokenValue(string $hostile): void
     {
         $this->expectException(InvalidThemeDefinition::class);
@@ -183,9 +182,8 @@ final class ThemeTokenValidatorTest extends TestCase
     /**
      * The same matrix straight at the predicate, so a failure here isolates the
      * grammar from the payload plumbing around it.
-     *
-     * @dataProvider injectionPayloads
      */
+    #[DataProvider('injectionPayloads')]
     public function testTheValueGrammarItselfRefusesTheInjectionPayload(string $hostile): void
     {
         $this->assertFalse(
@@ -235,9 +233,7 @@ final class ThemeTokenValidatorTest extends TestCase
         yield 'CURRENTCOLOR'          => ['CURRENTCOLOR'];
     }
 
-    /**
-     * @dataProvider realTokenValues
-     */
+    #[DataProvider('realTokenValues')]
     public function testAcceptsTheValueShapesTheBuiltInThemesUse(string $value): void
     {
         $this->assertTrue(ThemeTokenValidator::isSafeValue($value), $value . ' must be accepted');

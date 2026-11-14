@@ -13,6 +13,7 @@ use Phlix\Theming\ThemeSourceRegistry;
 use Phlix\Theming\ThemeTokenAllowlist;
 use Phlix\Theming\ThemeTokenValidator;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Behaviour of the S85 theme catalogue endpoints, at the controller.
@@ -268,9 +269,8 @@ final class ThemesControllerTest extends TestCase
     /**
      * The 404 contract: status AND body, so a change to either is a visible
      * diff rather than a silent client break.
-     *
-     * @dataProvider unknownIds
      */
+    #[DataProvider('unknownIds')]
     public function testShowReturnsA404WithTheStandardErrorShapeForAnUnknownId(string $id): void
     {
         $response = (new ThemesController(new ThemeSourceRegistry()))->show(new Request(), ['id' => $id]);

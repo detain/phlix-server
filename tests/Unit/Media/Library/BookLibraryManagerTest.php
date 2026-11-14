@@ -11,6 +11,7 @@ use Phlix\Media\Library\BookScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\ScanResult;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for BookLibraryManager.
@@ -33,9 +34,7 @@ class BookLibraryManagerTest extends TestCase
         $this->manager = new BookLibraryManager($this->scanner, $this->itemRepo);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testRescanLibraryCallsScanner(): void
     {
         $libraryId = 'test-lib-123';
@@ -98,9 +97,7 @@ class BookLibraryManagerTest extends TestCase
         rmdir($paths[0]);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testUpsertBookStoresMetadata(): void
     {
         $libraryId = 'test-lib-book-456';

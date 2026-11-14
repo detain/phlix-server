@@ -19,6 +19,7 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S338 — the {@see AdminMiddleware} dependency of {@see MaintenanceController} is
@@ -388,9 +389,8 @@ final class MaintenanceControllerAdminGateIsStructuralTest extends TestCase
      * rejects a null `userId` BEFORE the guard is consulted, so even the old
      * fail-open shape answered 401 here. See the class docblock — the 403 arm is
      * the experiment.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAnonymousCallerIsRefused(string $method): void
     {
         $response = $this->makeController()->{$method}(new Request(), ['id' => 'job-1']);
@@ -406,9 +406,8 @@ final class MaintenanceControllerAdminGateIsStructuralTest extends TestCase
      * request with the handler's own success response (200/404/202) — the
      * fail-open. The distinct `auth.not_admin` code proves the ADMIN branch
      * decided it, not the auth branch.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedNonAdminIsRefusedOnTheAdminBranch(string $method): void
     {
         $request = new Request();
@@ -436,9 +435,8 @@ final class MaintenanceControllerAdminGateIsStructuralTest extends TestCase
      *
      * The succeeding control beside the refusal: without it a gate that denied
      * every request would pass arms 1 and 2 and look correct.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedAdminReachesTheHandlerBody(string $method, int $expected): void
     {
         $request = new Request();

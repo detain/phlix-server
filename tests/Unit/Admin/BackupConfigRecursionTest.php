@@ -15,6 +15,8 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Admin\BackupManager;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 /**
  * `backupConfigs()` used a flat `glob($dir . '/*.php')`, so the only nested
@@ -131,10 +133,9 @@ final class BackupConfigRecursionTest extends TestCase
 
     /**
      * End-to-end backup, in its own process so `PHLIX_CONFIG_DIR` is free.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_backup_writes_nested_config_into_the_archive_tree(): void
     {
         $configDir = $this->tmpdir('phlix_cfg_');
@@ -163,10 +164,9 @@ final class BackupConfigRecursionTest extends TestCase
      * Every archive already on disk is FLAT, because nested files were never
      * captured. Restoring one must still work — a fix that only understood the
      * new layout would break every existing backup.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_restore_handles_both_a_flat_legacy_archive_and_a_nested_one(): void
     {
         $configDir = $this->tmpdir('phlix_target_');
@@ -195,10 +195,9 @@ final class BackupConfigRecursionTest extends TestCase
     /**
      * A restore unpacks attacker-influenced paths, so an entry must not be able
      * to escape the config directory.
-     *
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
      */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_restore_refuses_to_write_outside_the_config_directory(): void
     {
         $base = $this->tmpdir('phlix_esc_');

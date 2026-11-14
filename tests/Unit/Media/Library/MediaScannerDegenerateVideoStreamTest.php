@@ -9,6 +9,7 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\StreamProbeBackfill;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * How the scanner treats a DEGENERATE ffprobe "video" stream — one whose own
@@ -335,12 +336,12 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * Asserted as an exact row-key list, so the test fails whether a row is
      * dropped, duplicated or renumbered.
      *
-     * @dataProvider mixedVideoStreamShapes
      *
      * @param array<int, array<string, mixed>> $rawStreams
      * @param list<array{0: string, 1: int}>   $expectedRows
      * @param array<string, mixed>             $expectedSource
      */
+    #[DataProvider('mixedVideoStreamShapes')]
     public function testEveryVideoStreamKeepsItsRowWhenAPlausibleSiblingExists(
         array $rawStreams,
         array $expectedRows,
@@ -453,9 +454,8 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * Named individually because these are the CONTENT-LOSS cases with real
      * users behind them: `encv` is any Widevine/PlayReady MP4 and `drmi` is
      * FairPlay, i.e. every DRM title in a library.
-     *
-     * @dataProvider unmappableFourccs
      */
+    #[DataProvider('unmappableFourccs')]
     public function testAnUnmappableFourccKeepsItsRowAndItsSourceRole(string $fourcc): void
     {
         $summary = $this->summarize([
@@ -566,10 +566,10 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * A file whose EVERY video stream is degenerate keeps EVERY one of them —
      * not just one via a fallback.
      *
-     * @dataProvider allDegenerateFiles
      *
      * @param array<int, array<string, mixed>> $rawStreams
      */
+    #[DataProvider('allDegenerateFiles')]
     public function testEveryVideoRowSurvivesWhenAllOfThemAreDegenerate(array $rawStreams, int $expectedVideoRows): void
     {
         $summary = $this->summarize(['streams' => $rawStreams, 'format' => []]);
@@ -638,9 +638,8 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * A stream with implausible geometry may not define `source` — modelled with
      * the junk FIRST so "first video stream wins" would have picked it — and it
      * keeps its row anyway.
-     *
-     * @dataProvider impossibleGeometries
      */
+    #[DataProvider('impossibleGeometries')]
     public function testImpossibleGeometryLosesTheSourceRoleButKeepsItsRow(
         ?int $width,
         ?int $height,
@@ -704,9 +703,8 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      *
      * The measured production library spans 184-3840 px and aspect 1.02-3.00, so
      * every case here already sits outside real content and is still accepted.
-     *
-     * @dataProvider plausibleGeometries
      */
+    #[DataProvider('plausibleGeometries')]
     public function testPlausibleGeometryKeepsTheSourceRole(int $width, int $height, string $codec): void
     {
         $summary = $this->summarize([
@@ -880,11 +878,11 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * so a failure that appears in A/B/C but not in D isolates the promotion
      * path rather than the cover-art skip in general.
      *
-     * @dataProvider posterPromotionShapes
      *
      * @param array<int, array<string, mixed>> $rawStreams
      * @param list<array{0: string, 1: int}>   $masterRows
      */
+    #[DataProvider('posterPromotionShapes')]
     public function testAPromotedPosterNeverGainsARowMasterWouldNotHaveWritten(
         array $rawStreams,
         array $masterRows,
@@ -1017,11 +1015,11 @@ final class MediaScannerDegenerateVideoStreamTest extends TestCase
      * so a `>` silently becoming `>=` (or a bound being widened) is caught here
      * and not only through the selection logic.
      *
-     * @dataProvider predicateCases
      *
      * @param array<string, mixed> $stream
      * @param list<string>         $expected
      */
+    #[DataProvider('predicateCases')]
     public function testTheDefectListAtItsBoundaries(array $stream, array $expected, string $why): void
     {
         $this->assertSame($expected, $this->defects($stream), $why);

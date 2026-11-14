@@ -9,6 +9,7 @@ use Phlix\Plugins\Github\GithubOAuthProvider;
 use Phlix\Plugins\Github\Plugin;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Exercises the S48 DB-backed plugin settings path ({@see \Phlix\Plugins\PluginDbSettings})
@@ -139,9 +140,8 @@ final class GithubPluginDbSettingsTest extends TestCase
     /**
      * A malformed legacy `settings.json` must degrade to "no settings" rather than
      * throwing on the request path — and must not be imported into the DB store.
-     *
-     * @dataProvider unusableLegacyFiles
      */
+    #[DataProvider('unusableLegacyFiles')]
     public function test_an_unusable_legacy_settings_file_yields_no_settings(string $contents): void
     {
         file_put_contents($this->pluginDir . '/settings.json', $contents);

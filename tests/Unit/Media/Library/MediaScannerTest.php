@@ -13,6 +13,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Shared\Events\Library\MediaItemAdded;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class MediaScannerTest extends TestCase
 {
@@ -1581,9 +1582,8 @@ class MediaScannerTest extends TestCase
      * Each case asserts the guard is real (the byte-wise cut genuinely IS
      * invalid UTF-8) before asserting the value survives, so the fixture cannot
      * silently decay into a case that no longer exercises the boundary.
-     *
-     * @dataProvider multiByteLanguageCases
      */
+    #[DataProvider('multiByteLanguageCases')]
     public function testStreamLanguageTruncatesOnCharacterBoundariesNotBytes(
         string $tag,
         string $expected,
@@ -1662,9 +1662,8 @@ class MediaScannerTest extends TestCase
      * isAttachedPic() truth table — `1` and `"1"` are true; `0`, `"0"`, other
      * numerics, a missing key, a non-array disposition, and a non-array stream
      * are all false.
-     *
-     * @dataProvider attachedPicCases
      */
+    #[DataProvider('attachedPicCases')]
     public function testIsAttachedPicTruthTable(mixed $stream, bool $expected, string $desc): void
     {
         $this->assertSame($expected, $this->invokeIsAttachedPic($stream), $desc);

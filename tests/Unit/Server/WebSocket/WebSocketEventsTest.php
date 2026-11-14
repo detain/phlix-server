@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\WebSocket;
 use PHPUnit\Framework\TestCase;
 use Phlix\Server\WebSocket\WebSocketEvents;
 use Phlix\Session\SyncPlay\Messages;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SV-4.7 Gap 6: privileged-vs-public event classification.
@@ -26,9 +27,7 @@ class WebSocketEventsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider publicEventProvider
-     */
+    #[DataProvider('publicEventProvider')]
     public function testPublicEventsAreNotPrivileged(string $type): void
     {
         $this->assertTrue(WebSocketEvents::isPublic($type));
@@ -53,9 +52,7 @@ class WebSocketEventsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider privilegedEventProvider
-     */
+    #[DataProvider('privilegedEventProvider')]
     public function testPrivilegedEventsRequireAuth(string $type): void
     {
         $this->assertTrue(WebSocketEvents::isPrivileged($type));

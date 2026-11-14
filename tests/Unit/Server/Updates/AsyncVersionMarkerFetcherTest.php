@@ -15,6 +15,7 @@ use ReflectionProperty;
 use Workerman\Http\Client;
 use Workerman\Timer;
 use Workerman\Worker;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see AsyncVersionMarkerFetcher} — S74.
@@ -472,9 +473,7 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider refProvider
-     */
+    #[DataProvider('refProvider')]
     public function testTheFallbackPreservesRefAndPath(string $primary, string $expectedFallback): void
     {
         $client = new CapturingHttpClient();

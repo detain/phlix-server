@@ -26,6 +26,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Plugins\Oidc\DiscoveryDocument;
 use Psr\Http\Message\ResponseInterface;
 use Workerman\Http\Response as WorkermanResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class OidcCallbackControllerTest extends TestCase
 {
@@ -503,9 +504,8 @@ final class OidcCallbackControllerTest extends TestCase
      * authorize() must reject any non-same-origin / non-relative return target
      * BEFORE binding it into the state (so it can never be exfiltrated in the
      * callback's 302).
-     *
-     * @dataProvider unsafeRedirectProvider
      */
+    #[DataProvider('unsafeRedirectProvider')]
     public function test_authorize_rejects_unsafe_redirect_uri(string $redirectUri): void
     {
         $registry = new AuthProviderRegistry();

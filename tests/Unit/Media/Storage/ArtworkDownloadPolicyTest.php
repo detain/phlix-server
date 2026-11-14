@@ -12,6 +12,7 @@ use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Storage\ArtworkDownloadPolicy;
 use Phlix\Media\Storage\ArtworkStorage;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Consequence tests for `artwork.download_enabled`.
@@ -98,9 +99,7 @@ final class ArtworkDownloadPolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider coercibleValues
-     */
+    #[DataProvider('coercibleValues')]
     public function test_textual_and_numeric_values_are_coerced(mixed $value, bool $expected): void
     {
         $this->assertSame($expected, $this->policyFor($value)->downloadsEnabled());
@@ -127,9 +126,7 @@ final class ArtworkDownloadPolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider hostileValues
-     */
+    #[DataProvider('hostileValues')]
     public function test_unparseable_values_degrade_to_enabled(mixed $value): void
     {
         $this->assertTrue($this->policyFor($value)->downloadsEnabled());

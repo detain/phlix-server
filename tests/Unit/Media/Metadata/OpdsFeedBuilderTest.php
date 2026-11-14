@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for OpdsFeedBuilder.
@@ -25,9 +26,7 @@ class OpdsFeedBuilderTest extends TestCase
         $this->builder = new OpdsFeedBuilder($this->itemRepo, 'http://localhost:8080');
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testBuildRootFeedHasOpdsNamespace(): void
     {
         $xml = $this->builder->buildRootFeed();
@@ -44,9 +43,7 @@ class OpdsFeedBuilderTest extends TestCase
         $this->assertStringContainsString('xmlns', $xml);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testBuildNavigationFeedContainsLinks(): void
     {
         $libraries = [
@@ -67,9 +64,7 @@ class OpdsFeedBuilderTest extends TestCase
         $this->assertStringContainsString('kind=navigation', $xml);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testBuildAcquisitionFeedContainsEntries(): void
     {
         $libraryId = 'test-lib-123';
@@ -116,9 +111,7 @@ class OpdsFeedBuilderTest extends TestCase
         $this->assertStringContainsString('kind=acquisition', $xml);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testBuildEntryHasRequiredFields(): void
     {
         $book = [
@@ -152,9 +145,7 @@ class OpdsFeedBuilderTest extends TestCase
         $this->assertStringContainsString('link', $xml);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testBuildEntryHandlesMissingMetadata(): void
     {
         $book = [

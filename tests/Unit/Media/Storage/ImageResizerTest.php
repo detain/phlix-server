@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Storage;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\ImageResizer;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for the generic, item-agnostic {@see ImageResizer} service extracted
@@ -170,9 +171,8 @@ final class ImageResizerTest extends TestCase
      * B3: every key outside the flat [a-zA-Z0-9-]+ charset — empty, nested,
      * traversal, backslash, whitespace, NUL, dot segments — is refused with the
      * EXACT message 'Invalid target key for image storage'.
-     *
-     * @dataProvider invalidTargetKeys
      */
+    #[DataProvider('invalidTargetKeys')]
     public function testTargetDirRejectsInvalidKeysWithExactMessage(string $key): void
     {
         $resizer = new ImageResizer($this->tmpDir . '/store');
@@ -189,9 +189,8 @@ final class ImageResizerTest extends TestCase
      * B3: ensureTargetDirExists() fails the same keys with the same exact
      * message AND creates nothing — the base directory listing is byte-identical
      * before and after (the gate runs strictly pre-filesystem).
-     *
-     * @dataProvider invalidTargetKeys
      */
+    #[DataProvider('invalidTargetKeys')]
     public function testEnsureTargetDirExistsRejectsInvalidKeysWithoutTouchingFilesystem(string $key): void
     {
         $base = $this->tmpDir . '/gate';
@@ -428,9 +427,8 @@ final class ImageResizerTest extends TestCase
      * nested, NUL-byte — throws the exact 'Invalid filename for image storage'
      * message and touches no filesystem (the key dir, the base dir, and every
      * sanitized ghost form stay absent).
-     *
-     * @dataProvider invalidStoreFilenames
      */
+    #[DataProvider('invalidStoreFilenames')]
     public function testStoreBytesRejectsInvalidFilenamesWithoutTouchingFilesystem(string $filename): void
     {
         $base = $this->tmpDir . '/store';
@@ -642,9 +640,8 @@ final class ImageResizerTest extends TestCase
      * ArtworkStorage rejects a malformed id with the exact pre-S71 wording
      * 'Invalid item ID for artwork storage' BEFORE any filesystem or network
      * effect (the base dir stays entirely uncreated).
-     *
-     * @dataProvider invalidItemIds
      */
+    #[DataProvider('invalidItemIds')]
     public function testEveryItemEntryPointRejectsInvalidItemIdWithExactWording(string $badId): void
     {
         $base = $this->tmpDir . '/parity';
@@ -711,9 +708,8 @@ final class ImageResizerTest extends TestCase
      * and the storage base directory is never even created — a download that
      * had started would have written a temp file and then failed with a
      * \RuntimeException, not the typed InvalidArgumentException gate.
-     *
-     * @dataProvider invalidItemIds
      */
+    #[DataProvider('invalidItemIds')]
     public function testDownloadSeamsRejectInvalidItemIdBeforeAnyNetwork(string $badId): void
     {
         $base = $this->tmpDir . '/dl';

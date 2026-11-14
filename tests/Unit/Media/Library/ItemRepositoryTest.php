@@ -7,6 +7,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\RequestContext;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class ItemRepositoryTest extends TestCase
 {
@@ -1730,9 +1731,8 @@ class ItemRepositoryTest extends TestCase
      * The ceiling must NOT be PageLimit::MAX: PhotoController's slideshow
      * legitimately asks for 10,000 rows, so clamping to 100 here would silently
      * truncate it.
-     *
-     * @dataProvider getByTypeLimitProvider
      */
+    #[DataProvider('getByTypeLimitProvider')]
     public function testGetByTypeClampsTheBoundRowLimit(int $requested, int $expected): void
     {
         $captured = ['sql' => '', 'params' => []];
@@ -1808,9 +1808,8 @@ class ItemRepositoryTest extends TestCase
      * A non-string rating (array/int/float/bool) is NOT materialized — the
      * column stays NULL, exactly as JSON_UNQUOTE(JSON_EXTRACT()) yielded no
      * usable scalar string for these shapes.
-     *
-     * @dataProvider malformedRatingShapes
      */
+    #[DataProvider('malformedRatingShapes')]
     public function testExtractContentRatingReturnsNullForMalformedRatingShapes(mixed $rating): void
     {
         $this->assertNull(ItemRepository::extractContentRating(['rating' => $rating]));

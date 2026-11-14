@@ -12,6 +12,7 @@ use Phlix\Media\Transcoding\SegmentCacheFullException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see HlsController}.
@@ -798,9 +799,7 @@ class HlsControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider fmp4Shapes
-     */
+    #[DataProvider('fmp4Shapes')]
     public function testEveryFmp4PlaylistReferenceShapeTriggersItsOwnEncode(
         string $file,
         ?string $variant,
@@ -1082,9 +1081,7 @@ class HlsControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider traversalJobIdShapes
-     */
+    #[DataProvider('traversalJobIdShapes')]
     public function testTraversalShapedJobIdsAreRefusedWithTheExistingFourHundredEnvelope(string $jobId): void
     {
         $res = $this->controller()->serveFile(new Request(), ['job_id' => $jobId, 'file' => 'master.m3u8']);

@@ -16,6 +16,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function DI\factory;
 
@@ -66,9 +67,8 @@ final class CastingWiringGuardTest extends TestCase
 
     /**
      * @param class-string $managerClass
-     *
-     * @dataProvider managerProvider
      */
+    #[DataProvider('managerProvider')]
     public function testTheContainerComposedManagerCarriesTheSharedStore(string $managerClass): void
     {
         $manager = $this->container()->get($managerClass);

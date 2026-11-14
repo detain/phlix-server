@@ -10,6 +10,7 @@ use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Session\SyncPlay\Messages;
 use Workerman\Connection\TcpConnection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for frame shape handling (SP2 - flat canonical wire format).
@@ -224,9 +225,8 @@ class MessageHandlerFrameShapeTest extends TestCase
     /**
      * SRV-46: the protocol floor — zero and negative versions are rejected
      * the same way as future ones (floor is >= 1, inert for real clients).
-     *
-     * @dataProvider belowFloorVersions
      */
+    #[DataProvider('belowFloorVersions')]
     public function testProtocolVersionBelowFloorIsRejected(int $version): void
     {
         $handler = $this->createMessageHandler();

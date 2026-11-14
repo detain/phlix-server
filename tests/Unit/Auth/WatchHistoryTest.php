@@ -6,6 +6,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\WatchHistory;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class WatchHistoryTest extends TestCase
 {
@@ -427,9 +428,8 @@ class WatchHistoryTest extends TestCase
      * fan-out in getNextUp() — never a bound `?` LIMIT (emulated prepares raise
      * a 1064 on a bound LIMIT in this repo), and never unbounded. The cap is
      * `max($limit * NEXT_UP_SERIES_SCAN_MULTIPLIER, NEXT_UP_SERIES_SCAN_FLOOR)`.
-     *
-     * @dataProvider nextUpScanCapProvider
      */
+    #[DataProvider('nextUpScanCapProvider')]
     public function testGetNextUpInlinesBoundedSeriesScanLimit(int $limit, int $expectedCap): void
     {
         $capturedSql = null;

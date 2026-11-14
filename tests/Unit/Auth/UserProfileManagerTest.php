@@ -6,6 +6,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserProfileManager;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class UserProfileManagerTest extends TestCase
 {
@@ -57,9 +58,8 @@ class UserProfileManagerTest extends TestCase
      * the CANONICAL 0-based rank of the profile's content_rating (a KEY lookup
      * into RATING_ORDER, with NO `-1` offset). The old array_search-against-int
      * code always missed and defaulted every profile to 6.
-     *
-     * @dataProvider profileRatingRankCases
      */
+    #[DataProvider('profileRatingRankCases')]
     public function testFindByIdExposesCanonicalRatingRank(string $contentRating, int $expectedRank): void
     {
         $this->db->method('query')->willReturn([

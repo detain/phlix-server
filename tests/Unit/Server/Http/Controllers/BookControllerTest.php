@@ -12,6 +12,7 @@ use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Unit tests for BookController.
@@ -37,9 +38,7 @@ class BookControllerTest extends TestCase
         );
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testOpdsRootReturnsOpdsXml(): void
     {
         $request = new Request();
@@ -51,9 +50,7 @@ class BookControllerTest extends TestCase
         $this->assertStringContainsString('opds-catalog', $contentType);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testOpdsLibrariesReturnsNavigationFeed(): void
     {
         // Setup mock to return book libraries
@@ -71,9 +68,7 @@ class BookControllerTest extends TestCase
         $this->assertStringContainsString('kind=navigation', $contentType);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testOpdsLibraryBooksReturnsAcquisitionFeed(): void
     {
         // Setup mock to return a book library
@@ -103,9 +98,7 @@ class BookControllerTest extends TestCase
         $this->assertStringContainsString('kind=acquisition', $contentType);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetBookReturnsJson(): void
     {
         $book = [
@@ -132,9 +125,7 @@ class BookControllerTest extends TestCase
         $this->assertEquals('Test Book', $body['book']['name']);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetBookReturns404ForNonExistent(): void
     {
         $this->itemRepo->method('findById')
@@ -148,9 +139,7 @@ class BookControllerTest extends TestCase
         $this->assertEquals(404, $response->statusCode);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testDownloadBookReturnsFile(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -202,9 +191,8 @@ class BookControllerTest extends TestCase
      * S11/C4 path jail: a poisoned book path pointing OUTSIDE the configured
      * library roots (e.g. /etc/passwd) must yield 404 on download — never read
      * the file and never disclose its existence.
-     *
-     * @test
      */
+    #[Test]
     public function testDownloadBookReturns404WhenPathEscapesLibraryRoots(): void
     {
         $this->itemRepo->method('findById')->willReturn([
@@ -238,9 +226,8 @@ class BookControllerTest extends TestCase
 
     /**
      * S11/C4 path jail: a legitimate in-library cover_path serves the image.
-     *
-     * @test
      */
+    #[Test]
     public function testGetCoverServesLegitInLibraryCover(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
@@ -280,9 +267,8 @@ class BookControllerTest extends TestCase
     /**
      * S11/C4 path jail: a poisoned cover_path pointing OUTSIDE the configured
      * library roots (e.g. /etc/passwd) must yield 404 on getCover.
-     *
-     * @test
      */
+    #[Test]
     public function testGetCoverReturns404WhenCoverPathEscapesLibraryRoots(): void
     {
         $this->itemRepo->method('findById')->willReturn([
@@ -313,9 +299,7 @@ class BookControllerTest extends TestCase
         }
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testListBooksReturnsJson(): void
     {
         $books = [
@@ -352,9 +336,7 @@ class BookControllerTest extends TestCase
         $this->assertArrayHasKey('books', $body);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testReadBookReturnsReaderStub(): void
     {
         $book = [
@@ -378,9 +360,7 @@ class BookControllerTest extends TestCase
         $this->assertEquals(200, $response->statusCode);
     }
 
-    /**
-     * @test
-     */
+    #[Test]
     public function testGetBookMintsVerifiableSignedUrls(): void
     {
         $this->itemRepo->method('findById')->willReturn([
@@ -420,9 +400,8 @@ class BookControllerTest extends TestCase
      * with divergent (or abortive) filenames. The law now is RFC 6266/5987:
      * an ASCII fallback `filename` plus `filename*=UTF-8''<percent-encoded>`
      * as the authoritative slot.
-     *
-     * @test
      */
+    #[Test]
     public function testDownloadBookEmitsRfc6266QuotedFilenamePair(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
@@ -481,9 +460,8 @@ class BookControllerTest extends TestCase
      * fallback slot replaces the control bytes and the ext slot percent-
      * encodes them. This is the same injection class the newsletter fix
      * guards; both slots stay on one line.
-     *
-     * @test
      */
+    #[Test]
     public function testDownloadBookFilenameCannotBreakHeaderFraming(): void
     {
         $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();

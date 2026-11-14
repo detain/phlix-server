@@ -18,6 +18,7 @@ use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 use function DI\factory;
 
@@ -113,9 +114,7 @@ final class SampleThemeLifecycleTest extends TestCase
         }
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
     public function test_sample_theme_plugin_reaches_the_themes_endpoint_and_leaves_cleanly(): void
@@ -192,9 +191,8 @@ final class SampleThemeLifecycleTest extends TestCase
      * worker. The invariant is asserted on chain COUNT and callable IDENTITY
      * (per-callable object ids) — never on a stringified name, because
      * `[$classLoader, 'loadClass']` stringifies identically across generations.
-     *
-     * @group integration
      */
+    #[Group('integration')]
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
     public function test_autoload_chain_returns_to_baseline_across_full_lifecycle_cycle(): void
@@ -243,9 +241,8 @@ final class SampleThemeLifecycleTest extends TestCase
      * S166 — the lazy admin-API path registers the plugin autoloader WITHOUT
      * any enable cycle, so `uninstall()` must clean it up on its own, not only
      * via `disable()`.
-     *
-     * @group integration
      */
+    #[Group('integration')]
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
     public function test_lazy_get_entry_instance_registration_is_removed_by_uninstall(): void
@@ -289,9 +286,8 @@ final class SampleThemeLifecycleTest extends TestCase
      * disable() detached the handles, enable() cannot rely on the require to
      * re-register them; only re-attaching the captured callables keeps plugin
      * classes that have not yet been autoloaded resolvable.
-     *
-     * @group integration
      */
+    #[Group('integration')]
     #[RunInSeparateProcess]
     #[PreserveGlobalState(false)]
     public function test_re_enable_reattaches_captured_autoloader_and_uninstall_leaves_chain_clean(): void

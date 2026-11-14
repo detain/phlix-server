@@ -10,6 +10,7 @@ use Phlix\Media\Streaming\Dash\AdaptationSet;
 use Phlix\Media\Streaming\Dash\Representation;
 use Phlix\Media\Streaming\Dash\SegmentTemplate;
 use Phlix\Tests\Support\Dash\MpdSchema;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class DashStreamerTest extends TestCase
 {
@@ -113,9 +114,7 @@ class DashStreamerTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider durations
-     */
+    #[DataProvider('durations')]
     public function testXsDurationRoundsUpToTheMillisecond(float $seconds, string $expected): void
     {
         $this->assertSame($expected, DashStreamer::xsDuration($seconds));

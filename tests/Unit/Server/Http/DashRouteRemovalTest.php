@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http;
 use Phlix\Server\Http\Controllers\DashController;
 use Phlix\Server\Http\Router;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S28 sub-task (c): the dead DASH route helper stays gone.
@@ -43,9 +44,7 @@ final class DashRouteRemovalTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider phantomMethods
-     */
+    #[DataProvider('phantomMethods')]
     public function testDashControllerHasNoPhantomHandlerMethods(string $method): void
     {
         self::assertFalse(

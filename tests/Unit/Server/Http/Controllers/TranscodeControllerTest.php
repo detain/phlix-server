@@ -9,6 +9,7 @@ use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see TranscodeController} — the start/status endpoints that
@@ -76,9 +77,8 @@ class TranscodeControllerTest extends TestCase
     /**
      * With no explicit `?profile=`, the `X-Phlix-Device-Type` header drives the
      * profile choice instead of always defaulting to `web`.
-     *
-     * @dataProvider deviceTypeProfileProvider
      */
+    #[DataProvider('deviceTypeProfileProvider')]
     public function testStartMapsDeviceTypeHeaderToProfile(string $deviceType, string $expectedProfile): void
     {
         $manager = $this->createMock(TranscodeManager::class);

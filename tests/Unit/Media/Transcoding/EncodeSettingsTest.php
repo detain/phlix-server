@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Media\Transcoding\EncodeSettings;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Behaviour of the policy behind `transcoding.preset`, `transcoding.crf_h264`
@@ -90,9 +91,7 @@ final class EncodeSettingsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider badPresets
-     */
+    #[DataProvider('badPresets')]
     public function test_an_invalid_preset_falls_back_instead_of_reaching_ffmpeg(mixed $value): void
     {
         // The injection case is the pointed one: params are concatenated into a
@@ -225,9 +224,7 @@ final class EncodeSettingsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider badAudioBitrates
-     */
+    #[DataProvider('badAudioBitrates')]
     public function test_an_unparseable_audio_bitrate_falls_back(mixed $value): void
     {
         $this->assertSame(

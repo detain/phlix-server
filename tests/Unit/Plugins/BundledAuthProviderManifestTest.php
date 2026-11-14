@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Plugins;
 
 use Phlix\Shared\Plugin\ManifestType;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S48 review r1 Finding 13 — every bundled auth-provider plugin ships a
@@ -46,9 +47,7 @@ final class BundledAuthProviderManifestTest extends TestCase
         return $decoded;
     }
 
-    /**
-     * @dataProvider bundledProviders
-     */
+    #[DataProvider('bundledProviders')]
     public function test_manifest_matches_the_bundled_provider_schema(
         string $dir,
         string $name,

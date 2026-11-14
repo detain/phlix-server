@@ -19,6 +19,7 @@ use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Request;
 use Phlix\Tests\Unit\Plugins\OAuth2\FakeOAuth2HttpClient;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Covers the GitHub OAuth2 login + link flow hardening (mirrors OidcPkceTest and
@@ -859,9 +860,8 @@ final class GithubCallbackControllerTest extends TestCase
      * an allowlist entry that can never match, and never as "no allowlist, derive
      * anything". A URL, a trailing dot, a trailing colon and an out-of-range port
      * are all normalised to "unconfigured".
-     *
-     * @dataProvider garbageDomains
      */
+    #[DataProvider('garbageDomains')]
     public function test_a_garbage_phlix_domain_fails_closed_like_an_unset_one(string $domain): void
     {
         putenv('PHLIX_DOMAIN=' . $domain);
@@ -1111,9 +1111,8 @@ final class GithubCallbackControllerTest extends TestCase
      * `redirect_uri` arrives inside the client-visible `state` blob, so it is
      * attacker-craftable: the callback MUST re-run the same-origin allowlist
      * before any Location header, and must not consume the state while doing so.
-     *
-     * @dataProvider foreignRedirectTargets
      */
+    #[DataProvider('foreignRedirectTargets')]
     public function test_callback_rejects_foreign_redirect_uri_carried_in_state(string $target): void
     {
         $http = new FakeOAuth2HttpClient();

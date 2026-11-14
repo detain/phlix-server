@@ -10,6 +10,7 @@ use Phlix\Dlna\LibraryBridge;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Streaming\HlsStreamer;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests for LibraryBridge class.
@@ -309,10 +310,10 @@ class LibraryBridgeTest extends TestCase
     }
 
     /**
-     * @dataProvider previouslyMalformedTypeProvider
      *
      * @since 0.12.0
      */
+    #[DataProvider('previouslyMalformedTypeProvider')]
     public function testItemToCdsObjectEmitsSpecClassForPreviouslyMalformedTypes(
         string $type,
         string $expectedClass

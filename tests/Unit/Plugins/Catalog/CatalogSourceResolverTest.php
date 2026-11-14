@@ -6,15 +6,15 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 
 use Phlix\Plugins\Catalog\CatalogSourceResolver;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class CatalogSourceResolverTest extends TestCase
 {
     /**
      * SV-S2b: the OFFICIAL catalog repo (detain/phlix-plugins) resolves to the
      * configured PINNED ref, never the moving `HEAD` default branch.
-     *
-     * @dataProvider githubRepoUrls
      */
+    #[DataProvider('githubRepoUrls')]
     public function test_official_repo_resolves_to_pinned_ref_not_head(string $input): void
     {
         $pinned = CatalogSourceResolver::OFFICIAL_PINNED_REF;
@@ -141,9 +141,7 @@ final class CatalogSourceResolverTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider directJsonUrls
-     */
+    #[DataProvider('directJsonUrls')]
     public function test_direct_json_urls_pass_through_unchanged(string $input): void
     {
         self::assertSame(trim($input), CatalogSourceResolver::normalize($input));
@@ -161,9 +159,7 @@ final class CatalogSourceResolverTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider unrecognisedUrls
-     */
+    #[DataProvider('unrecognisedUrls')]
     public function test_unrecognised_urls_pass_through_unchanged(string $input): void
     {
         self::assertSame($input, CatalogSourceResolver::normalize($input));

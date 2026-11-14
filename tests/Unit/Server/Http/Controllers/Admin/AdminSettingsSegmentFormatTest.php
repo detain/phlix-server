@@ -10,6 +10,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S313 — `transcoding.segment_format` over the admin settings API.
@@ -324,9 +325,7 @@ final class AdminSettingsSegmentFormatTest extends TestCase
         yield 'a near miss' => ['fmp'];
     }
 
-    /**
-     * @dataProvider rejectedValues
-     */
+    #[DataProvider('rejectedValues')]
     public function test_values_outside_the_enum_are_rejected(mixed $value): void
     {
         $repo = $this->repoExpectingNoWrite();

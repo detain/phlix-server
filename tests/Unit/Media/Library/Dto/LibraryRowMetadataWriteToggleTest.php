@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Media\Library\Dto;
 
 use Phlix\Media\Library\Dto\LibraryRow;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S87 — the per-library metadata write-back toggle read from the same
@@ -64,9 +65,8 @@ final class LibraryRowMetadataWriteToggleTest extends TestCase
      * carry strings where a UI stored them verbatim.
      *
      * @param scalar $stored
-     *
-     * @dataProvider truthyStoredValues
      */
+    #[DataProvider('truthyStoredValues')]
     public function test_truthy_coercions_enable($stored): void
     {
         $this->assertTrue(
@@ -92,9 +92,8 @@ final class LibraryRowMetadataWriteToggleTest extends TestCase
 
     /**
      * @param scalar $stored
-     *
-     * @dataProvider falsyStoredValues
      */
+    #[DataProvider('falsyStoredValues')]
     public function test_falsy_coercions_disable($stored): void
     {
         $this->assertFalse(

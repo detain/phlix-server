@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Dlna;
 
 use Phlix\Dlna\DlnaMimeTypes;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The MIME table shared by the DLNA browse response and the DLNA byte stream.
@@ -28,9 +29,8 @@ final class DlnaMimeTypesTest extends TestCase
      * CONSEQUENCE: a recognised container resolves to its real MIME, from the
      * extension alone, without touching the filesystem (the paths below do not
      * exist).
-     *
-     * @dataProvider knownContainers
      */
+    #[DataProvider('knownContainers')]
     public function test_known_container_resolves_from_its_extension(string $path, string $expected): void
     {
         self::assertSame($expected, DlnaMimeTypes::forPath($path));
@@ -62,9 +62,8 @@ final class DlnaMimeTypesTest extends TestCase
      * This is the discriminating case: `.iso` and `.rar` are exactly the files a
      * renderer must be told it cannot play. A table that defaulted to
      * `video/mp4` would pass a "returns a string" test and break playback.
-     *
-     * @dataProvider unknownContainers
      */
+    #[DataProvider('unknownContainers')]
     public function test_unrecognised_container_is_reported_as_the_fallback(string $path): void
     {
         self::assertSame(

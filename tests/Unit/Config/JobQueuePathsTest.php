@@ -13,6 +13,7 @@ use Phlix\Media\Metadata\Writer\MetadataWriteJobStore;
 use Phlix\Media\SimilarityJobStore;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * R14-14: the five file-backed job queues must resolve through exactly one
@@ -140,9 +141,7 @@ final class JobQueuePathsTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider invalidNameProvider
-     */
+    #[DataProvider('invalidNameProvider')]
     public function test_path_unsafe_names_fail_fast(string $name): void
     {
         $this->expectException(InvalidArgumentException::class);

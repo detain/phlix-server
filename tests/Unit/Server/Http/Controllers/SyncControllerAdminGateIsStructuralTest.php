@@ -20,6 +20,7 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S323 phase 2 — the {@see AdminMiddleware} dependency of the TRaSH-Guides
@@ -393,9 +394,8 @@ final class SyncControllerAdminGateIsStructuralTest extends TestCase
      * The status on its own is worth little: `requireAuth()` emits the same 401
      * with no middleware at all. Arm 2 is the experiment. The side-effect
      * assertion is what makes this arm more than a status check.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAnonymousCallerIsRefused(string $method): void
     {
         $controller = $this->makeController();
@@ -416,9 +416,8 @@ final class SyncControllerAdminGateIsStructuralTest extends TestCase
      * that meant any logged-in user could start a full outbound sync. The distinct
      * `auth.not_admin` code proves the ADMIN branch decided it, not the auth
      * branch.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedNonAdminIsRefusedOnTheAdminBranch(string $method): void
     {
         $controller = $this->makeController();
@@ -449,9 +448,8 @@ final class SyncControllerAdminGateIsStructuralTest extends TestCase
      *
      * The succeeding control beside the refusals: without it a gate that denied
      * every request would pass arms 1 and 2 and look correct.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedAdminReachesTheHandlerBody(string $method, int $expected): void
     {
         $request = new Request();

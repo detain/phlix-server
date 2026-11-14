@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Codeception\acceptance;
 
 use Phlix\Tests\Codeception\SyncPlayTester;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * SyncPlay E2E Acceptance Tests.
@@ -18,10 +19,9 @@ use Phlix\Tests\Codeception\SyncPlayTester;
  *
  * These tests verify the complete end-to-end behavior of the SyncPlay
  * feature without requiring an actual WebSocket server.
- *
- * @group syncplay
- * @group e2e
  */
+#[Group('syncplay')]
+#[Group('e2e')]
 class SyncPlayCest
 {
     /**

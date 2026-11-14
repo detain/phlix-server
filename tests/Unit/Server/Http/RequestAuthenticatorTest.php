@@ -16,6 +16,7 @@ use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  *
@@ -414,9 +415,7 @@ final class RequestAuthenticatorTest extends TestCase
         self::assertFalse($this->authenticator()->validateCsrfOrigin($request));
     }
 
-    /**
-     * @dataProvider nonBeltSecFetchProvider
-     */
+    #[DataProvider('nonBeltSecFetchProvider')]
     public function testNonBeltSecFetchValuesLeaveTheVerdictToTheArms(string $declared): void
     {
         // The belt rejects ONLY the exact promise 'cross-site'. A broadened
@@ -492,9 +491,7 @@ final class RequestAuthenticatorTest extends TestCase
 
     // --- Case 10: safe methods are never CSRF-checked -----------------------
 
-    /**
-     * @dataProvider safeMethodProvider
-     */
+    #[DataProvider('safeMethodProvider')]
     public function testSafeMethodsAllowedRegardlessOfOrigin(string $method): void
     {
         // GET/HEAD/OPTIONS are not state-changing — a cross-origin value must

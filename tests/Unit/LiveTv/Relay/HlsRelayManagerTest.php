@@ -12,6 +12,7 @@ use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Tests\Support\Workerman\WorkermanTimerFixture;
 use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Stub RelayConsumer for testing since RelayConsumer is final.
@@ -93,10 +94,8 @@ class HlsRelayManagerTest extends TestCase
         $this->assertInstanceOf(HlsRelayManager::class, $this->manager);
     }
 
-    /**
-     * @group workerman
-     * @group integration
-     */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testStartRelaySessionCreatesTuneRequest(): void
     {
         $channelId = 'channel-123';
@@ -133,10 +132,8 @@ class HlsRelayManagerTest extends TestCase
         $this->assertEquals($tuneResult['id'], $session->getTuneRequestId());
     }
 
-    /**
-     * @group workerman
-     * @group integration
-     */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testStartRelaySessionStoresInDb(): void
     {
         $channelId = 'channel-abc';
@@ -341,10 +338,10 @@ class HlsRelayManagerTest extends TestCase
      * Session teardown must drop the per-session SegmentCache so the
      * buffered bytes are released back to PHP's memory pool.
      *
-     * @group workerman
-     * @group integration
      * @since Wave 2 (post-O.7)
      */
+    #[Group('workerman')]
+    #[Group('integration')]
     public function testStopRelaySessionDropsPerSessionSegmentCache(): void
     {
         $channelId = 'channel-cache-teardown';

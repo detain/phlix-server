@@ -6,12 +6,11 @@ namespace Phlix\Tests\Unit\Plugins\Installer;
 
 use Phlix\Plugins\Installer\SourceUrlResolver;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class SourceUrlResolverTest extends TestCase
 {
-    /**
-     * @dataProvider githubRepoUrls
-     */
+    #[DataProvider('githubRepoUrls')]
     public function test_rewrites_github_repository_urls_to_default_branch_tarball(string $input): void
     {
         self::assertSame(
@@ -54,9 +53,7 @@ final class SourceUrlResolverTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider passthroughUrls
-     */
+    #[DataProvider('passthroughUrls')]
     public function test_leaves_non_repository_urls_unchanged(string $input): void
     {
         self::assertSame($input, SourceUrlResolver::normalize($input));

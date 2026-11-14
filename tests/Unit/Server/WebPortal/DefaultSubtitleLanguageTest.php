@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\WebPortal\WebPortalRouter;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Consequence tests for `subtitles.default_language`.
@@ -95,9 +96,8 @@ class DefaultSubtitleLanguageTest extends TestCase
     /**
      * A non-string or empty override must not reach the client as a malformed
      * language code.
-     *
-     * @dataProvider junkProvider
      */
+    #[DataProvider('junkProvider')]
     public function test_junk_override_falls_back_to_en(mixed $value): void
     {
         $settings = $this->createMock(SettingsRepository::class);

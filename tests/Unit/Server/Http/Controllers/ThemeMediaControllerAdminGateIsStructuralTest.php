@@ -20,6 +20,7 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S323 — the {@see AdminMiddleware} dependency of {@see ThemeMediaController} is
@@ -340,9 +341,8 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      * Carries its own positive control: each source slice must contain the
      * `checkAccess()` call. Without it, a pattern that matched nothing — because
      * the slice was empty, or the method was renamed — would read as a pass.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testGatedHandlerHasNoNullGuardAroundTheGate(string $handler): void
     {
         $method = new ReflectionMethod(ThemeMediaController::class, $handler);
@@ -381,9 +381,8 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      * these handlers have no `requireAuth()` in front of the admin check, so
      * before this step an unwired controller answered an anonymous POST/DELETE
      * with the handler's own success/404 response — an unauthenticated write.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAnonymousCallerIsRefused(string $method): void
     {
         $response = $this->makeController()->{$method}(new Request(), ['id' => 'lib-1']);
@@ -402,9 +401,8 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      *
      * The distinct `auth.not_admin` code proves the ADMIN branch decided it, not
      * some incidental auth check.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedNonAdminIsRefusedOnTheAdminBranch(string $method): void
     {
         $request = new Request();
@@ -431,9 +429,8 @@ final class ThemeMediaControllerAdminGateIsStructuralTest extends TestCase
      *
      * The succeeding control beside the refusals: without it a gate that denied
      * every request would pass arms 1 and 2 and look correct.
-     *
-     * @dataProvider adminGatedHandlerProvider
      */
+    #[DataProvider('adminGatedHandlerProvider')]
     public function testAuthenticatedAdminReachesTheHandlerBody(string $method, int $expected): void
     {
         $request = new Request();

@@ -347,8 +347,11 @@ class LdapConnection
             'base_dn' => $this->baseDn,
             'username' => $username,
             'password' => $password,
-            'use_ssl' => $this->ssl,
-            'use_tls' => !$this->ssl,
+            // LdapRecord 4 renamed the transport flags: `use_tls` is now the
+            // ldaps:// transport (was `use_ssl` in 3.x) and `use_starttls` is the
+            // STARTTLS upgrade of a plain ldap:// socket (was `use_tls` in 3.x).
+            'use_tls' => $this->ssl,
+            'use_starttls' => !$this->ssl,
             'timeout' => self::NETWORK_TIMEOUT_SECONDS,
             'options' => [
                 LDAP_OPT_TIMEOUT => self::OPERATION_TIMEOUT_SECONDS,

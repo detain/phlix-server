@@ -6,6 +6,7 @@ namespace Phlix\Tests\Unit\Plugins;
 
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Verifies that every `class_alias` entry registered by
@@ -88,9 +89,7 @@ final class AliasCompatShimTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider aliasProvider
-     */
+    #[DataProvider('aliasProvider')]
     public function test_alias_resolves_to_shared_fqcn(string $oldFqcn, string $newFqcn): void
     {
         // class_exists with autoload covers classes and enums; for the

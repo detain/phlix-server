@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Server\Core\Application;
 use Phlix\Tests\Support\Database\RequiresRealDatabase;
+use PHPUnit\Framework\Attributes\Group;
 
 class ApplicationTest extends TestCase
 {
@@ -31,9 +32,7 @@ class ApplicationTest extends TestCase
         parent::tearDown();
     }
 
-    /**
-     * @group integration
-     */
+    #[Group('integration')]
     public function testApplicationCanBeInstantiated(): void
     {
         $app = $this->bootApplication();
@@ -45,9 +44,8 @@ class ApplicationTest extends TestCase
      * registered under the same `/api/v1` prefix as the rest of the API and
      * as documented in phlix-docs `reference/api.md`. OPDS is the deliberate
      * exception and keeps its spec path `/opds/v1.2`.
-     *
-     * @group integration
      */
+    #[Group('integration')]
     public function testMediaRoutesAreRegisteredUnderApiV1(): void
     {
         $app = $this->bootApplication();
@@ -84,9 +82,8 @@ class ApplicationTest extends TestCase
      * AdminMiddleware, exactly like the sibling `/api/v1/admin/services/*`
      * routes. PR #260 originally registered them on the bare router with no
      * middleware, so any authenticated user could link a Last.fm account.
-     *
-     * @group integration
      */
+    #[Group('integration')]
     public function testLastfmOAuthRoutesAreAdminGated(): void
     {
         $app = $this->bootApplication();

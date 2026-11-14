@@ -10,6 +10,7 @@ use Phlix\Media\MediaItemType;
 use Phlix\Stats\StorageSnapshotHelper;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The DRIFT ALARM for the `media_items.type` vocabulary (S102).
@@ -519,9 +520,7 @@ final class MediaItemTypeDriftTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider definitionStyleProvider
-     */
+    #[DataProvider('definitionStyleProvider')]
     public function testTheParserSeesEveryDefinitionStyleThisRepoUses(string $sql): void
     {
         $this->assertSame(
@@ -568,9 +567,7 @@ final class MediaItemTypeDriftTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider nonDefinitionProvider
-     */
+    #[DataProvider('nonDefinitionProvider')]
     public function testTheParserIgnoresSqlThatDoesNotDefineTheColumn(string $sql): void
     {
         $this->assertSame([], $this->enumDefinitionsIn($sql, 'media_items', 'type'));
@@ -683,9 +680,7 @@ final class MediaItemTypeDriftTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider untrustworthyBodyProvider
-     */
+    #[DataProvider('untrustworthyBodyProvider')]
     public function testAnUntrustworthyMemberListIsRejectedRatherThanReturned(string $sql): void
     {
         $this->assertSame([], $this->enumDefinitionsIn($sql, 'media_items', 'type'));

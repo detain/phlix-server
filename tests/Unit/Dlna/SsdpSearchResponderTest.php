@@ -9,6 +9,7 @@ use Phlix\Common\Version;
 use Phlix\Dlna\DlnaDevice;
 use Phlix\Dlna\SsdpAdvertiser;
 use Phlix\Dlna\SsdpSearchResponder;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * The SSDP `M-SEARCH` protocol rules, table-tested.
@@ -257,9 +258,8 @@ final class SsdpSearchResponderTest extends TestCase
      * The clamp is what stops a hostile searcher pinning a pending timer far
      * into the future; the non-negativity is what stops `Timer::add()` throwing
      * `$timeInterval can not less than 0` inside the event loop.
-     *
-     * @dataProvider mxCases
      */
+    #[DataProvider('mxCases')]
     public function test_mx_is_clamped(?string $mx, int $expected, string $why): void
     {
         self::assertSame($expected, SsdpSearchResponder::delayCapSeconds($this->search('ssdp:all', $mx)), $why);

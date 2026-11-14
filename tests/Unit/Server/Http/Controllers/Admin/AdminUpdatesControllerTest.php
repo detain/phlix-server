@@ -16,6 +16,7 @@ use Phlix\Tests\Support\Database\InMemoryServerSettingsConnection;
 use Phlix\Tests\Support\Updates\RecordingVersionMarkerFetcher;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see AdminUpdatesController} — S74 / updates.md #48.
@@ -213,9 +214,8 @@ final class AdminUpdatesControllerTest extends TestCase
      * A coerced toggle would let `"false"` (truthy) ENABLE the check and `0`
      * disable it — this setting decides whether a server ever learns about a
      * security release, so it is not coerced.
-     *
-     * @dataProvider nonBooleanProvider
      */
+    #[DataProvider('nonBooleanProvider')]
     public function testANonBooleanToggleIsRejectedRatherThanCoerced(mixed $value): void
     {
         $service = $this->service('1.2.2');

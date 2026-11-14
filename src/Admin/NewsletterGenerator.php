@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Admin;
 
 use DateTimeInterface;
-use Smarty;
+use Smarty\Smarty;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;

@@ -9,6 +9,7 @@ use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Stats\StatsCollector;
 use Phlix\Stats\StorageSnapshotHelper;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class StorageSnapshotHelperTest extends TestCase
 {
@@ -318,9 +319,7 @@ class StorageSnapshotHelperTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider futureDatedSnapshotProvider
-     */
+    #[DataProvider('futureDatedSnapshotProvider')]
     public function testBootstrapSnapshotRecordsWhenTheNewestSnapshotIsDatedInTheFuture(int $age): void
     {
         $db = $this->dbReturningTypeCounts([['type' => 'movie', 'item_count' => 10]], $age);

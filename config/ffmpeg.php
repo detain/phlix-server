@@ -32,6 +32,10 @@ return [
     'ffprobe_path' => '/usr/bin/ffprobe',
     'transcode_dir' => '/var/transcodes',
     'segment_dir' => '/var/segments',
+    // INERT — kept for config/admin-UI compatibility only. No admission path enforces
+    // it: on-demand jobs are never 'running', and a job is a playlist that costs no CPU
+    // until a segment is requested. The real encode ceiling is
+    // server.hls.max_concurrent_segments (HLS_MAX_CONCURRENT_SEGMENTS, default 8).
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
 

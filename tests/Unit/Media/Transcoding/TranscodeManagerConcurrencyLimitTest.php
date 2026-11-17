@@ -106,6 +106,58 @@ final class TranscodeManagerConcurrencyLimitTest extends TestCase
     }
 
     /**
+     * Admission no longer gates on a job count. The old gate read
+     * `COUNT(*) ... transcode_jobs WHERE status = 'running'`, which nothing ever
+     * writes on the on-demand path, so it was inert. Even when that count query
+     * reports far more running jobs than the ceiling, ensureHlsJob() must go on to
+     * the media lookup instead of refusing with "Maximum concurrent transcodes".
+     */
+    public function testAdmissionDoesNotRefuseOnAJobCountQuery(): void
+    {
+        $issued = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use (&$issued): array {
+                $issued[] = $sql;
+                if (str_contains($sql, 'COUNT(*) AS c FROM transcode_jobs')) {
+                    return [['c' => 99]];
+                }
+
+                return [];
+            },
+        );
+
+        $manager = new TranscodeManager(
+            $db,
+            $this->createMock(FfmpegRunner::class),
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            2,
+        );
+
+        try {
+            $manager->ensureHlsJob('no-such-item');
+            self::fail('Expected the media lookup to fail for an unknown item.');
+        } catch (\InvalidArgumentException $e) {
+            self::assertSame('Media item not found', $e->getMessage());
+        }
+
+        foreach ($issued as $sql) {
+            self::assertStringNotContainsString('COUNT(*) AS c FROM transcode_jobs', $sql);
+        }
+    }
+
+    /**
      * The shipped config default and the class fallback must agree, or the
      * "default" shown in the admin UI is not the value the server uses.
      */

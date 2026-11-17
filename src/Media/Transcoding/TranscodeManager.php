@@ -64,7 +64,11 @@ class TranscodeManager
      */
     private DashStreamer $dashStreamer;
 
-    /** @var int Maximum concurrent transcode jobs allowed */
+    /**
+     * @var int Retained for constructor/config compatibility ONLY. Not enforced:
+     *          no admission path reads it (see {@see ensureHlsJob()}). The effective
+     *          encode bound is the in-flight segment cap, {@see $maxConcurrentSegments}.
+     */
     private int $maxConcurrentTranscodes;
 
     /**
@@ -501,9 +505,10 @@ class TranscodeManager
     private const LEGACY_BANDWIDTH = 3000000;
 
     /**
-     * Fallback ceiling on simultaneously-running transcode jobs when the
-     * caller supplies none. Mirrors `config/ffmpeg.php`'s
-     * `max_concurrent_transcodes` default.
+     * Fallback for the INERT job-count knob (see the constructor's
+     * `$maxConcurrentTranscodes`). Mirrors `config/ffmpeg.php`'s
+     * `max_concurrent_transcodes` default, which is kept so the shipped
+     * value and the class fallback agree.
      */
     public const DEFAULT_MAX_CONCURRENT_TRANSCODES = 4;
 
@@ -542,16 +547,14 @@ class TranscodeManager
      *                                  from `config/ffmpeg.php`'s `loudness` block, or null when
      *                                  disabled/unconfigured. Stored only — INERT until sub-step 1B
      *                                  consumes it at the encode param-assembly sites.
-     * @param int|null $maxConcurrentTranscodes Ceiling on simultaneously-running transcode JOBS
-     *                                  (enforced in {@see ensureHlsJob()}). Resolved by
-     *                                  {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider}
-     *                                  from the EFFECTIVE `ffmpeg.max_concurrent_transcodes`
-     *                                  (`config/ffmpeg.php` default merged with any admin
-     *                                  `server_settings` override). Null → {@see DEFAULT_MAX_CONCURRENT_TRANSCODES}.
-     *                                  Until this parameter existed the ctor assigned a bare
-     *                                  literal `4`, so the shipped config key and its admin-UI
-     *                                  setting were both completely inert — an admin who followed
-     *                                  the setting's own help text and set 8 still got 4.
+     * @param int|null $maxConcurrentTranscodes INERT, retained for compatibility. Resolved
+     *                                  by TranscodeServicesProvider from
+     *                                  `ffmpeg.max_concurrent_transcodes` and stored, but no
+     *                                  admission path enforces it: the on-demand job row is
+     *                                  never 'running', so a job-count gate cannot count live
+     *                                  encodes. The effective ceiling is
+     *                                  `server.hls.max_concurrent_segments`
+     *                                  ({@see $maxConcurrentSegments}). Null → the default.
      * @param int|null $prewarmSegments C6 head-start window: top-rung segments the
      *                                  creation path pre-generates in the background
      *                                  (see {@see self::PREWARM_SEGMENT_COUNT}). Null →
@@ -731,11 +734,12 @@ class TranscodeManager
             ];
         }
 
-        if ($this->getRunningJobCount() >= $this->maxConcurrentTranscodes) {
-            throw new \RuntimeException(
-                "Maximum concurrent transcodes ({$this->maxConcurrentTranscodes}) reached"
-            );
-        }
+        // No job-count admission gate here. The on-demand model creates a job as a
+        // playlist row (status 'completed') and spends CPU only when a segment is
+        // requested, so a job is not a unit of encode work. The real encode bound is
+        // the in-flight SEGMENT cap (`server.hls.max_concurrent_segments`, default 8),
+        // enforced in produceSegment()/ensureSegmentInternal() with a 503 + Retry-After.
+        // See {@see $maxConcurrentTranscodes} for why the job-count knob is inert.
 
         $item = $this->getMediaItem($mediaItemId);
         if (!$item) {
@@ -971,6 +975,8 @@ class TranscodeManager
             'audio_codec' => $segParams['audio_codec'] ?? null,
             'subtitle_tracks' => count($tracks),
             'prewarmed_segments' => $prewarmed,
+            // Surfaced so an operator can see the configured job ceiling is not enforced.
+            'configured_job_ceiling_inert' => $this->maxConcurrentTranscodes,
         ]);
 
         return [
@@ -4598,19 +4604,6 @@ class TranscodeManager
     }
 
     /**
-     * Counts the running jobs as recorded in the database.
-     *
-     * @return int Number of jobs with status='running'.
-     */
-    private function getRunningJobCount(): int
-    {
-        $result = $this->db->query("SELECT COUNT(*) AS c FROM transcode_jobs WHERE status = 'running'");
-        $rows = RowMap::listFromMixed($result);
-        $c = $rows[0]['c'] ?? 0;
-        return is_numeric($c) ? (int) $c : 0;
-    }
-
-    /**
      * The DASH manifest URL for a job, or null when the job has no manifest.
      *
      * S11 removed `dash_url` from the transcode payloads because it always
@@ -5304,14 +5297,13 @@ class TranscodeManager
 
     /**
      * Reap DB-recorded 'running' jobs that are no longer alive, marking them
-     * 'failed' so they stop counting against {@see $maxConcurrentTranscodes}.
+     * 'failed' so the status column tells the truth.
      *
-     * The concurrency gate counts `status='running'` rows in the DB. When the
-     * worker restarts (e.g. after a deploy) the DB still holds the previous run's
-     * 'running' rows — ghosts with no live ffmpeg behind them. Enough of them
-     * ({@see $maxConcurrentTranscodes}) and every new playback request is refused
-     * with "Maximum concurrent transcodes reached", which surfaces to the user as
-     * a video that simply will not play. A job is considered dead when:
+     * Nothing writes 'running' on the on-demand path any more (the job INSERT seeds
+     * 'completed'), so this reaps only legacy rows left by an older build or a
+     * crashed writer. It no longer gates admission: the job-count gate that used to
+     * read these rows was removed because it was inert (see {@see ensureHlsJob()}).
+     * A job is considered dead when:
      *
      *   - its working directory is gone (a live job creates that dir before it
      *     inserts the row, so a 'running' row without one is a corpse), or

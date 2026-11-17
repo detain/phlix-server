@@ -481,15 +481,28 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('completed', $result['status']);
     }
 
-    public function testEnsureHlsJobThrowsWhenConcurrencyExhausted(): void
+    /**
+     * The job-count gate was removed (it read 'running' rows that never exist on the
+     * on-demand path). A count query reporting the ceiling as reached must no longer
+     * refuse admission: the job is still created and reported 'completed'.
+     */
+    public function testEnsureHlsJobIsNotRefusedByAJobCountCeiling(): void
     {
         $captured = [];
         $db = $this->mockDb([], 4, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Maximum concurrent transcodes');
-        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertSame('completed', $result['status']);
+        $this->assertFalse($result['reused']);
     }
 
     public function testEnsureHlsJobThrowsWhenItemNotFound(): void

@@ -90,12 +90,22 @@ final class PreRouterFastPathsRatingGateTest extends TestCase
 
         $gate = new RatingGate($repo, $pm, $users);
 
+        // #13a: the stream path applies the access schedule; these cases test the
+        // rating gate, so the schedule has no windows.
+        $noSchedule = $this->createMock(\Workerman\MySQL\Connection::class);
+        $noSchedule->method('query')->willReturn([]);
+        $unscheduled = new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($noSchedule),
+            $pm,
+        );
+
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
-            static function (string $class) use ($repo, $pm, $gate) {
+            static function (string $class) use ($repo, $pm, $gate, $unscheduled) {
                 return match ($class) {
                     RatingGate::class => $gate,
                     UserProfileManager::class => $pm,
+                    \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class => $unscheduled,
                     default => $repo,
                 };
             }

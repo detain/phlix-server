@@ -18,6 +18,7 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Controllers\ByteRangeParser;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Middleware\StreamLimitMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -531,6 +532,44 @@ final class PreRouterFastPaths
     }
 
     /**
+     * Apply the profile's access-schedule window to a direct-play request (#13a).
+     *
+     * The router's global {@see AccessScheduleMiddleware} reads the request identity
+     * from {@see RequestContext}, which only the route-level AuthMiddleware publishes.
+     * This path has no route middleware, so it publishes the identity the transport
+     * already verified (the verified account, and the profile this stream resolved to,
+     * which is the same profile {@see checkStreamLimit()} counts against) and then runs
+     * the SAME middleware instance. The check and its 403 shape are therefore shared
+     * with the router, not copied. A container failure propagates rather than
+     * streaming unchecked.
+     *
+     * @param Request $request   The request being served.
+     * @param string  $userId    The verified account id (non-empty).
+     * @param string  $profileId The profile this stream runs as (non-empty).
+     *
+     * @return Response|null The 403 schedule refusal, or null to continue.
+     */
+    private function accessScheduleDenial(Request $request, string $userId, string $profileId): ?Response
+    {
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+        // The middleware reads and (on success) writes RequestContext. Put back
+        // exactly what was there before, so this fast path leaves no identity behind
+        // for the rest of the coroutine (or, under the test runner, the next case).
+        $previousUserId = RequestContext::getUserId();
+        $previousProfileId = RequestContext::getProfileId();
+        RequestContext::setUserId($userId);
+        RequestContext::setProfileId($profileId);
+        try {
+            return $middleware($request);
+        } finally {
+            RequestContext::setUserId($previousUserId);
+            RequestContext::setProfileId($previousProfileId);
+        }
+    }
+
+    /**
      * Enforce per-profile concurrent stream limits for direct-play requests
      * (S301, moved verbatim from {@see \Phlix\Server\Workerman\HttpHandler}).
      *
@@ -571,6 +610,18 @@ final class PreRouterFastPaths
             if ($profileId === null) {
                 return $this->profileNotFoundResponse();
             }
+        }
+
+        // Access-schedule window (#13a). The router runs AccessScheduleMiddleware as a
+        // global middleware for every routed request; this endpoint is in no route
+        // table, so without this check a schedule-restricted profile could stream
+        // direct play outside its allowed hours. It runs here, after the profile is
+        // resolved (a session with no profile keeps its named profile.not_found
+        // refusal) and before any stream is registered, so a refused request never
+        // takes a concurrent-stream slot.
+        $scheduleResponse = $this->accessScheduleDenial($request, $userId, $profileId);
+        if ($scheduleResponse !== null) {
+            return $scheduleResponse;
         }
 
         $deviceId = $this->getStreamDeviceId($request);

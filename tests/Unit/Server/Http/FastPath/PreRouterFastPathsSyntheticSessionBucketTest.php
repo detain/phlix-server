@@ -133,10 +133,20 @@ final class PreRouterFastPathsSyntheticSessionBucketTest extends TestCase
 
         $streams = new StreamSessionService($db);
 
+        // #13a: the stream path applies the access schedule; this file tests the
+        // synthetic session bucket, so the schedule has no windows.
+        $noSchedule = $this->createMock(\Workerman\MySQL\Connection::class);
+        $noSchedule->method('query')->willReturn([]);
+        $unscheduled = new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($noSchedule),
+            $profiles,
+        );
+
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
             static fn (string $class): object => match ($class) {
                 UserProfileManager::class => $profiles,
+                \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class => $unscheduled,
                 StreamSessionService::class => $streams,
                 default => $repo,
             },

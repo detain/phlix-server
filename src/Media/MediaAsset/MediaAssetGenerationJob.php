@@ -253,22 +253,38 @@ class MediaAssetGenerationJob
                 @mkdir($spriteDir, 0755, true);
             }
 
-            $result = $this->ffmpeg->generateTrickplaySprites($path, $spriteDir, self::DEFAULT_TRICKPLAY_COUNT);
+            // ONE ffmpeg pass produces the sprite, its timeline and the BIF frames.
+            // The sprite and the BIF used to be two passes, each decoding the whole
+            // file. See FfmpegRunner::generateTrickplayArtefacts().
+            $result = $this->ffmpeg->generateTrickplayArtefacts(
+                $path,
+                $spriteDir,
+                self::DEFAULT_TRICKPLAY_COUNT,
+                $this->bifFrameCount($job->duration),
+                self::BIF_FRAME_WIDTH
+            );
 
-            if ($result === null) {
+            if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
                 return false;
             }
 
-            [$spritePath, $timelinePath] = $result;
-            $this->itemRepo->updateMarkers($itemId, [
-                'trickplay_sprite_path' => $spritePath,
-                'trickplay_timeline_path' => $timelinePath,
-            ]);
+            $frames = $result['bif_frames'];
+            try {
+                $this->itemRepo->updateMarkers($itemId, [
+                    'trickplay_sprite_path' => $result['sprite'],
+                    'trickplay_timeline_path' => $result['timeline'],
+                ]);
 
-            // Best-effort, and deliberately NOT folded into this method's return
-            // value: the sprite sheet is what the web player needs, and losing
-            // the BIF must not mark the whole asset job failed.
-            $this->generateTrickplayBif($job, $spriteDir);
+                // Best-effort, and deliberately NOT folded into this method's return
+                // value: the sprite sheet is what the web player needs, and losing
+                // the BIF must not mark the whole asset job failed.
+                $this->writeTrickplayBif($job, $frames, $result['bif_interval_ms'], $spriteDir);
+            } finally {
+                // The per-frame JPEGs are an intermediate; only the archive is served.
+                foreach ($frames as $frame) {
+                    @unlink($frame);
+                }
+            }
 
             return true;
         } catch (\Throwable $e) {
@@ -282,7 +298,26 @@ class MediaAssetGenerationJob
     }
 
     /**
-     * Write the Roku BIF archive next to the sprite sheet.
+     * Number of BIF frames for an item of the given runtime.
+     *
+     * One frame per {@see self::BIF_TARGET_INTERVAL_SECONDS}, clamped to
+     * [2, {@see self::BIF_MAX_FRAMES}]. An unknown runtime falls back to the
+     * sprite count.
+     */
+    private function bifFrameCount(float $duration): int
+    {
+        if ($duration <= 0) {
+            return self::DEFAULT_TRICKPLAY_COUNT;
+        }
+
+        $count = (int) ceil($duration / self::BIF_TARGET_INTERVAL_SECONDS);
+
+        return max(2, min(self::BIF_MAX_FRAMES, $count));
+    }
+
+    /**
+     * Write the Roku BIF archive next to the sprite sheet from frames the
+     * combined pass already extracted.
      *
      * Runs here, in the background media-asset worker, rather than on demand:
      * the HTTP side is a resident Workerman event loop, and shelling ffmpeg
@@ -290,35 +325,23 @@ class MediaAssetGenerationJob
      * other connection in the worker for the length of a full decode pass.
      * Pre-generating means the first scrub costs one static file read.
      *
-     * @param MediaAssetJob $job       The job being processed.
-     * @param string        $spriteDir The item's trickplay directory.
+     * The caller owns the frame files and deletes them; this method only
+     * builds the archive from them.
+     *
+     * @param MediaAssetJob  $job        The job being processed.
+     * @param list<string>   $frames     BIF frame JPEGs in capture order (empty when the BIF branch failed).
+     * @param int            $intervalMs Milliseconds between consecutive frames.
+     * @param string         $spriteDir  The item's trickplay directory.
      *
      * @return bool True if `thumbs.bif` was written.
      */
-    private function generateTrickplayBif(MediaAssetJob $job, string $spriteDir): bool
+    private function writeTrickplayBif(MediaAssetJob $job, array $frames, int $intervalMs, string $spriteDir): bool
     {
-        $frames = [];
+        if (count($frames) < 2) {
+            return false;
+        }
 
         try {
-            $count = self::DEFAULT_TRICKPLAY_COUNT;
-            if ($job->duration > 0) {
-                $count = (int) ceil($job->duration / self::BIF_TARGET_INTERVAL_SECONDS);
-                $count = max(2, min(self::BIF_MAX_FRAMES, $count));
-            }
-
-            $extracted = $this->ffmpeg->generateBifFrames(
-                $job->path,
-                $spriteDir,
-                $count,
-                self::BIF_FRAME_WIDTH
-            );
-
-            if ($extracted === null) {
-                return false;
-            }
-
-            [$frames, $intervalMs] = $extracted;
-
             BifWriter::writeFromFiles($frames, $intervalMs, $spriteDir . '/' . self::BIF_FILENAME);
 
             $this->logger->info('MediaAssetGenerationJob: BIF written', [
@@ -335,11 +358,6 @@ class MediaAssetGenerationJob
             ]);
 
             return false;
-        } finally {
-            // The per-frame JPEGs are an intermediate; only the archive is served.
-            foreach ($frames as $frame) {
-                @unlink($frame);
-            }
         }
     }
 }

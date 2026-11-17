@@ -1,0 +1,301 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Tests\Unit\Media\Transcoding;
+
+use Phlix\Media\Transcoding\FfmpegRunner;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * The single-pass trickplay command (sprite sheet, timeline and BIF frames from
+ * one decode) and its orchestration.
+ *
+ * The runner is subclassed so the probe and the process launch are scripted:
+ * the test captures the built command and writes the artefacts that ffmpeg would
+ * have produced. That exercises the real command builder and the real
+ * gating/timeline/cleanup logic without a binary.
+ */
+final class FfmpegRunnerTrickplayPassTest extends TestCase
+{
+    private string $dir;
+
+    protected function setUp(): void
+    {
+        $this->dir = sys_get_temp_dir() . '/trickplay_pass_' . uniqid('', true);
+        mkdir($this->dir, 0755, true);
+    }
+
+    protected function tearDown(): void
+    {
+        $this->removeDirectory($this->dir);
+    }
+
+    private function removeDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (array_diff(scandir($dir) ?: [], ['.', '..']) as $entry) {
+            $path = $dir . '/' . $entry;
+            is_dir($path) ? $this->removeDirectory($path) : unlink($path);
+        }
+        rmdir($dir);
+    }
+
+    private function scripted(float $duration = 6000.0): ScriptedTrickplayRunner
+    {
+        return new ScriptedTrickplayRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', $this->dir, $duration);
+    }
+
+    public function testCombinedPassDecodesOnceAndFansOutToBothOutputs(): void
+    {
+        $runner = $this->scripted();
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result);
+        $this->assertCount(1, $runner->commands, 'Both outputs must come from ONE ffmpeg process.');
+        $cmd = $runner->commands[0];
+        $this->assertSame(1, substr_count($cmd, ' -i '), 'There must be exactly one input, so one decode.');
+        $this->assertStringContainsString('split=2', $cmd);
+        $this->assertStringContainsString('-map "[sprite]"', $cmd);
+        $this->assertStringContainsString('-map "[bif]"', $cmd);
+    }
+
+    public function testCommandIsNicedCappedAndHasNoKeyframeOnlyDecode(): void
+    {
+        $runner = $this->scripted();
+
+        $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $cmd = $runner->commands[0];
+        $this->assertStringStartsWith('nice -n 19 ', $cmd);
+        $this->assertStringContainsString('-threads 4', $cmd);
+        // Keyframe-only decode would move every sample to the nearest keyframe
+        // (measured mean 1.6 s, max 5.1 s error on the BIF grid), so it must not
+        // be used. The ONLY way to change this is a deliberate, measured decision.
+        $this->assertStringNotContainsString('skip_frame', $cmd);
+    }
+
+    public function testSharedSeekSitsAtTheEarliestSampleAndEachBranchTrimsToItsOwnGrid(): void
+    {
+        // duration 6000 s: sprite interval 100 s (offset 50 s); BIF count 600 means
+        // interval 10 s (offset 5 s). The one input seek sits at the earlier sample,
+        // 5 s, and the sprite branch trims the remaining 45 s, so every sample still
+        // lands at its original absolute time.
+        $runner = $this->scripted(6000.0);
+
+        $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $cmd = $runner->commands[0];
+        $this->assertStringContainsString("-ss '5'", $cmd);
+        // Each branch shifts its clock by its own trim, so its fps grid stays
+        // anchored on its own offset (PTS-STARTPTS would move it by a frame).
+        $this->assertStringContainsString('trim=start=45,setpts=PTS-45/TB,fps=1/100,scale=160:90,tile=6x10:margin=2:padding=1[sprite]', $cmd);
+        $this->assertStringContainsString('trim=start=0,setpts=PTS-0/TB,fps=1/10,scale=320:-2[bif]', $cmd);
+        $this->assertStringNotContainsString('STARTPTS', $cmd);
+    }
+
+    public function testSpriteOnlyPassHasNoSplitAndNoBifOutput(): void
+    {
+        $runner = $this->scripted();
+
+        $result = $runner->generateTrickplaySprites('/in.mkv', $this->dir . '/out', 60);
+
+        $this->assertNotNull($result);
+        $cmd = $runner->commands[0];
+        $this->assertStringNotContainsString('split=2', $cmd);
+        $this->assertStringNotContainsString('[bif]', $cmd);
+        $this->assertStringContainsString('-map "[sprite]"', $cmd);
+    }
+
+    public function testTimelineMatchesTheSpriteGridAtTheSampledTimes(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $timeline = json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true);
+        $this->assertIsArray($timeline);
+        $this->assertCount(60, $timeline);
+        // Thumbnail 0 is the midpoint of the first interval, not the t=0 slate.
+        $this->assertEquals(50.0, $timeline[0]['time']);
+        $this->assertSame(['x' => 2, 'y' => 2], ['x' => $timeline[0]['x'], 'y' => $timeline[0]['y']]);
+        // Column 5 starts at margin + 5 * (160 + 1) = 807; row 1 at margin + 91 = 93.
+        $this->assertSame(['x' => 807, 'y' => 2], ['x' => $timeline[5]['x'], 'y' => $timeline[5]['y']]);
+        $this->assertSame(['x' => 2, 'y' => 93], ['x' => $timeline[6]['x'], 'y' => $timeline[6]['y']]);
+    }
+
+    public function testBifFramesAreReturnedInCaptureOrderWithTheirInterval(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result);
+        $this->assertCount(600, $result['bif_frames']);
+        $this->assertSame($this->dir . '/out/bifframe_00001.jpg', $result['bif_frames'][0]);
+        $this->assertSame($this->dir . '/out/bifframe_00600.jpg', $result['bif_frames'][599]);
+        $this->assertSame(10000, $result['bif_interval_ms']);
+    }
+
+    public function testBifFramesStopAtTheFirstGap(): void
+    {
+        $runner = $this->scripted(6000.0);
+        $runner->skipBifIndexes = [6];
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 0, 10, 320);
+
+        $this->assertNotNull($result);
+        $this->assertCount(5, $result['bif_frames'], 'A hole in the index must truncate, not skip.');
+    }
+
+    public function testSpriteFailureReturnsNullAndRemovesTheBifFrames(): void
+    {
+        $runner = $this->scripted();
+        $runner->writeSprite = false;
+        $runner->bifFramesToWrite = 5;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 5, 320);
+
+        $this->assertNull($result);
+        for ($i = 1; $i <= 5; $i++) {
+            $this->assertFileDoesNotExist(sprintf($this->dir . '/out/bifframe_%05d.jpg', $i));
+        }
+    }
+
+    public function testBifBranchFailureDoesNotFailTheSprite(): void
+    {
+        $runner = $this->scripted();
+        $runner->bifFramesToWrite = 0;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result, 'A BIF failure must not cost the sprite the web player needs.');
+        $this->assertNotNull($result['sprite']);
+        $this->assertNotNull($result['timeline']);
+        $this->assertSame([], $result['bif_frames']);
+        $this->assertSame(0, $result['bif_interval_ms']);
+    }
+
+    public function testATooShortBifIsDiscardedAndItsFileRemoved(): void
+    {
+        $runner = $this->scripted();
+        $runner->bifFramesToWrite = 1;
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result);
+        $this->assertSame([], $result['bif_frames']);
+        $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
+    }
+
+    public function testRejectsRequestsWithNoBranchOrAnUnusableBif(): void
+    {
+        $runner = $this->scripted();
+
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 0, 0, 320));
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 1, 320));
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 60, 1));
+        $this->assertSame([], $runner->commands, 'An invalid request must not launch ffmpeg.');
+    }
+
+    public function testAnUnprobeableOrZeroLengthFileReturnsNull(): void
+    {
+        $unprobeable = $this->scripted();
+        $unprobeable->probeFails = true;
+        $this->assertNull($unprobeable->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 60, 320));
+
+        $zero = $this->scripted(0.0);
+        $this->assertNull($zero->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 60, 320));
+        $this->assertSame([], $zero->commands);
+    }
+
+    public function testBifOnlyWrapperReturnsFramesAndIntervalMs(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateBifFrames('/in.mkv', $this->dir . '/out', 60, 320);
+
+        $this->assertNotNull($result);
+        [$frames, $intervalMs] = $result;
+        $this->assertCount(60, $frames);
+        $this->assertSame(100000, $intervalMs);
+        $this->assertStringNotContainsString('[sprite]', $runner->commands[0]);
+    }
+
+    public function testSpriteWrapperReturnsSpriteAndTimelinePaths(): void
+    {
+        $runner = $this->scripted();
+
+        $result = $runner->generateTrickplaySprites('/in.mkv', $this->dir . '/out', 60);
+
+        $this->assertSame(
+            [$this->dir . '/out/sprite.jpg', $this->dir . '/out/timeline.json'],
+            $result
+        );
+    }
+}
+
+/**
+ * Runner whose probe and process launch are scripted. The launch seam writes the
+ * artefacts the command names, the way ffmpeg would.
+ */
+final class ScriptedTrickplayRunner extends FfmpegRunner
+{
+    private const JPEG = "\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xD9";
+
+    /** @var list<string> */
+    public array $commands = [];
+
+    public bool $writeSprite = true;
+
+    public bool $probeFails = false;
+
+    /** How many BIF frames the scripted ffmpeg writes. */
+    public int $bifFramesToWrite = 600;
+
+    /** @var list<int> BIF frame indexes to leave unwritten (a hole in the sequence). */
+    public array $skipBifIndexes = [];
+
+    public function __construct(string $ffmpeg, string $ffprobe, string $transcodeDir, private float $duration)
+    {
+        parent::__construct($ffmpeg, $ffprobe, $transcodeDir);
+    }
+
+    /**
+     * @return array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null
+     */
+    public function probe(string $inputPath): ?array
+    {
+        if ($this->probeFails) {
+            return null;
+        }
+
+        return [
+            'streams' => [],
+            'format' => ['duration' => (string) $this->duration],
+        ];
+    }
+
+    protected function runTrickplayCommand(string $cmd, array &$output, int &$exitCode): void
+    {
+        $this->commands[] = $cmd;
+        $output = [];
+        $exitCode = 0;
+
+        if ($this->writeSprite && preg_match("#'([^']*/sprite\\.jpg)'#", $cmd, $m) === 1) {
+            file_put_contents($m[1], self::JPEG);
+        }
+
+        if (preg_match("#'([^']*/bifframe_%05d\\.jpg)'#", $cmd, $m) === 1) {
+            for ($i = 1; $i <= $this->bifFramesToWrite; $i++) {
+                if (in_array($i, $this->skipBifIndexes, true)) {
+                    continue;
+                }
+                file_put_contents(sprintf($m[1], $i), self::JPEG);
+            }
+        }
+    }
+}

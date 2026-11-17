@@ -89,7 +89,7 @@ class TrickplayEnabledGateTest extends TestCase
     public function test_disabled_setting_prevents_sprite_generation(): void
     {
         $ffmpeg = $this->createMock(FfmpegRunner::class);
-        $ffmpeg->expects($this->never())->method('generateTrickplaySprites');
+        $ffmpeg->expects($this->never())->method('generateTrickplayArtefacts');
 
         $job = $this->makeJob(false, $ffmpeg);
 
@@ -109,7 +109,7 @@ class TrickplayEnabledGateTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $ffmpeg->method('getTranscodeDir')->willReturn(sys_get_temp_dir() . '/phlix-trickplay-test');
         $ffmpeg->expects($this->once())
-            ->method('generateTrickplaySprites')
+            ->method('generateTrickplayArtefacts')
             ->willReturn(null);
 
         $job = $this->makeJob(true, $ffmpeg);
@@ -126,7 +126,7 @@ class TrickplayEnabledGateTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $ffmpeg->method('getTranscodeDir')->willReturn(sys_get_temp_dir() . '/phlix-trickplay-test');
         $ffmpeg->expects($this->once())
-            ->method('generateTrickplaySprites')
+            ->method('generateTrickplayArtefacts')
             ->willReturn(null);
 
         $job = $this->makeJob(null, $ffmpeg);
@@ -146,7 +146,7 @@ class TrickplayEnabledGateTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $ffmpeg->method('getTranscodeDir')->willReturn(sys_get_temp_dir() . '/phlix-trickplay-test');
         $ffmpeg->expects($this->once())
-            ->method('generateTrickplaySprites')
+            ->method('generateTrickplayArtefacts')
             ->willReturn(null);
 
         $job = new MediaAssetGenerationJob(

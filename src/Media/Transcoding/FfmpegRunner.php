@@ -428,6 +428,25 @@ class FfmpegRunner
      */
     private function runProbeCommand(string $cmd): ?string
     {
+        return $this->runShellCapture($cmd);
+    }
+
+    /**
+     * Runs a shell command line and returns its captured stdout, coroutine-aware.
+     *
+     * Shared by the ffprobe path ({@see runProbeCommand()}) and the detached
+     * segment launch ({@see launchDetachedSegment()}). Inside a Swoole coroutine it
+     * uses {@see \Swoole\Coroutine\System::exec()}, which yields to the event loop
+     * until the command exits; outside one (CLI scanners, unit tests) it falls back
+     * to a blocking `shell_exec()`, which is correct where there is no event loop
+     * to stall. Both paths run the line via `/bin/sh -c`.
+     *
+     * @param string $cmd Fully built, shell-escaped command line.
+     *
+     * @return string|null Captured stdout, or null when execution failed.
+     */
+    private function runShellCapture(string $cmd): ?string
+    {
         if (
             extension_loaded('swoole')
             && class_exists(\Swoole\Coroutine::class)
@@ -2758,7 +2777,12 @@ class FfmpegRunner
             $start
         );
 
-        $pid = shell_exec($full);
+        // perf #10: the launch line only forks the encode (`nohup setsid … & echo $!`)
+        // and the shell exits at once, but a blocking shell_exec() still stalls the
+        // worker for that fork + shell start. Inside a coroutine this goes through
+        // Swoole's async exec, so other connections keep being served; the encode
+        // itself is detached either way and outlives the request.
+        $pid = $this->runShellCapture($full);
         if (!is_string($pid) || trim($pid) === '') {
             $this->logger->error('Failed to launch on-demand segment encode', ['segment' => $outFile]);
             return 0;

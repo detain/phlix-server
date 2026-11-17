@@ -124,6 +124,24 @@ final class TranscodeManagerPrewarmTest extends TestCase
     }
 
     /**
+     * A TRANSCODE top rung (HEVC source: no stream-copy) is a full CPU encode per
+     * segment, so creation warms only segment 0 — the one whose latency the viewer
+     * feels — instead of the full 3-segment window (the old behaviour spent two
+     * extra encodes on a rung the player may never start on).
+     */
+    public function test_transcode_top_rung_warms_only_the_first_segment(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches, 'hevc'), 3, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused']);
+        $this->assertCount(1, $launches, 'a transcode rung warms exactly one segment');
+        $this->assertSame(0.0, $launches[0]['start'], 'the single warmed segment is segment 0');
+    }
+
+    /**
      * Law 5a: the knob disables pre-generation outright — creation must behave
      * exactly like today (write playlists, commit the row, launch nothing).
      */
@@ -601,12 +619,12 @@ final class TranscodeManagerPrewarmTest extends TestCase
      *
      * @param list<array{out:string,start:float,init:?string}> $launches
      */
-    private function recordingRunner(array &$launches): FfmpegRunner
+    private function recordingRunner(array &$launches, string $videoCodec = 'h264'): FfmpegRunner
     {
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->method('probe')->willReturn([
             'streams' => [
-                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'video', 'codec_name' => $videoCodec, 'width' => 1280, 'height' => 720],
                 ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
             ],
             'format' => ['duration' => '25.0'],

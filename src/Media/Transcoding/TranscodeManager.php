@@ -1043,6 +1043,15 @@ class TranscodeManager
     private const PREWARM_SEGMENT_COUNT = 3;
 
     /**
+     * Head-start window for a TRANSCODE target rung (not stream-copy), in segments.
+     * A transcode segment is a full CPU encode; warming only the first keeps the
+     * start-latency win and drops the other encodes that would otherwise run at
+     * job creation for a rung the player may never start on. See
+     * {@see prewarmFirstSegments()}.
+     */
+    private const PREWARM_TRANSCODE_SEGMENT_COUNT = 1;
+
+    /**
      * Default ceiling on simultaneous on-demand segment encodes across ALL jobs.
      *
      * Each segment is a full decode+encode; letting an unbounded number run at
@@ -1736,8 +1745,11 @@ class TranscodeManager
      * FIELD's traces show the client requesting first), video-bearing segments
      * only (an audio-group rendition's fragments are not the cold-start
      * blocker: the first read pays for what is requested, and hls.js starts
-     * from the top variant), and the shipped window length — lower rungs and
-     * the rest of the timeline stay purely demand-shaped.
+     * from the top variant), and the window length depends on the rung's cost:
+     * `original` stream-copy → the full {@see $prewarmSegments} (a remux is
+     * near-free); `original` transcode (or a legacy single-variant job) →
+     * {@see self::PREWARM_TRANSCODE_SEGMENT_COUNT} (segment 0 only). Lower rungs
+     * and the rest of the timeline stay purely demand-shaped.
      *
      * Failures here are INVISIBLE to the play request by design: the worst
      * case is exactly the pre-C6 world (cold inline build at read time).
@@ -1763,6 +1775,13 @@ class TranscodeManager
         // will: multi-variant jobs take the ladder's `original` rung; legacy
         // single-variant rows (variants IS NULL) take the unprefixed null rung.
         $variantId = null;
+        // Window length. A stream-copy rung is a `-c copy` remux (cheap), so it keeps the
+        // full head start. A transcode rung (HEVC/AC3/etc. source, or any legacy
+        // single-variant job, whose segments are always encoded) is a full libx264 encode
+        // per segment, so it warms only the first segment: that is the one whose latency
+        // the viewer feels (3.0–6.6 s cold inline), and later segments encode on demand
+        // faster than real time once playback starts.
+        $windowSegments = self::PREWARM_TRANSCODE_SEGMENT_COUNT;
         $variantsRaw = $row['variants'] ?? null;
         if (is_string($variantsRaw) && $variantsRaw !== '') {
             $decoded = $entry['variants'];
@@ -1774,11 +1793,15 @@ class TranscodeManager
                 return 0; // not a ladder shape we recognise — hands off
             }
             $variantId = $original['id'];
+            if (($original['is_copy'] ?? false) === true) {
+                $windowSegments = $this->prewarmSegments;
+            }
         }
+        $windowSegments = min($windowSegments, $this->prewarmSegments);
 
         $launched = 0;
         try {
-            for ($i = 0; $i < $this->prewarmSegments; $i++) {
+            for ($i = 0; $i < $windowSegments; $i++) {
                 if ($this->ensureSegmentInternal($jobId, $variantId, $i, null, false) === null) {
                     break; // out of range / sibling holds it / cap / A′ budget — stop
                 }

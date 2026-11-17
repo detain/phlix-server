@@ -23,8 +23,10 @@ use Phlix\Server\Http\Response;
  * Both protocols are produced by a single CMAF encode into one job directory and
  * reference their segments by relative filename, so serving is identical: validate
  * the requested filename (no path traversal) and reply with the right content type
- * / caching. Playlists & manifests are `no-cache` (they may be rewritten while the
- * encode runs); segments are immutable and cached hard.
+ * / caching. Live and in-progress playlists & manifests are `no-cache` (they may be
+ * rewritten while the encode runs); a FINISHED VOD playlist gets a short private
+ * max-age and an ETag (#13c); segments are immutable and cached hard, as `private`
+ * so a shared cache never stores access-controlled bytes.
  *
  * Bodies are streamed through Workerman's event loop via {@see Response::withFile()}
  * rather than buffered into worker memory with `file_get_contents()`: multi-MB
@@ -37,6 +39,12 @@ use Phlix\Server\Http\Response;
 trait TranscodeFileServer
 {
     /**
+     * Bytes read from the end of an `.m3u8` to look for its closing `#EXT-X-ENDLIST`
+     * (#13c). A finished VOD playlist ends with that tag, so 512 bytes is ample.
+     */
+    private const ENDLIST_PROBE_BYTES = 512;
+
+    /**
      * Serves a single file from a transcode job directory.
      *
      * The file is streamed via {@see Response::withFile()} (event-loop file sender)
@@ -44,8 +52,10 @@ trait TranscodeFileServer
      *   - `Range: bytes=A-B` / `bytes=A-` / `bytes=-N` (suffix) → 206 + `Content-Range`
      *     (Workerman derives these from the offset/length window; an over-long `B` is
      *     clamped to EOF per RFC 7233 §2.1, not rejected); unsatisfiable range → 416.
-     *   - `If-Modified-Since` matching the file mtime → 304 (immutable segments
-     *     only; `no-cache` playlists/manifests are never short-circuited).
+     *   - `If-Modified-Since` matching the file mtime → 304 (immutable segments and
+     *     finished VOD playlists; live `no-cache` playlists/manifests are never
+     *     short-circuited).
+     *   - `If-None-Match` matching the ETag of a finished VOD playlist → 304 (#13c).
      *   - Otherwise 200 with the whole file. `Content-Length`, `Accept-Ranges`, and
      *     `Last-Modified` are emitted automatically by the Workerman file sender.
      *
@@ -108,25 +118,48 @@ trait TranscodeFileServer
         }
 
         $contentType = self::contentTypeFor($file);
-        $cacheControl = self::cacheControlFor($file);
+        // PHP's stat cache holds one entry, and a rewritten playlist must not be
+        // validated against its previous size or mtime (#13c ETag): drop it first.
+        clearstatcache(true, $path);
         $fileSize = (int) filesize($path);
+        // #13c: a FINISHED VOD playlist is immutable, so it gets a short private
+        // max-age and an ETag. A live or in-progress playlist stays `no-cache`.
+        $completeVod = self::isCompletedVodPlaylist($path, $file, $fileSize);
+        $cacheControl = self::cacheControlFor($file, $completeVod);
+        $mtime = filemtime($path);
+        $lastModified = $mtime !== false ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : null;
+        $etag = $completeVod && $mtime !== false ? self::etagFor($mtime, $fileSize) : null;
 
         // Conditional GET: immutable segments carry a year-long max-age, so a
         // revalidating client/cache can be answered 304 without re-sending the body.
-        // Playlists/manifests are `no-cache` (they may be rewritten during the
-        // encode) and are never short-circuited to 304.
-        if ($cacheControl !== 'no-cache') {
-            $mtime = filemtime($path);
-            if ($mtime !== false) {
-                $lastModified = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
-                $ims = $request->getHeader('If-Modified-Since');
-                if (is_string($ims) && trim($ims) === $lastModified) {
-                    return (new Response())
+        // In-progress playlists/manifests are `no-cache` (they may be rewritten during
+        // the encode) and are never short-circuited to 304. RFC 7232 §3.3: when an
+        // If-None-Match is present it decides alone, so the date check applies only
+        // when it is absent.
+        $ifNoneMatchPresent = $request->getHeader('If-None-Match') !== null;
+        if ($cacheControl !== 'no-cache' && $lastModified !== null && !$ifNoneMatchPresent) {
+            $ims = $request->getHeader('If-Modified-Since');
+            if (is_string($ims) && trim($ims) === $lastModified) {
+                return self::withValidator(
+                    (new Response())
                         ->status(304)
                         ->header('Cache-Control', $cacheControl)
-                        ->header('Last-Modified', $lastModified);
-                }
+                        ->header('Last-Modified', $lastModified),
+                    $etag,
+                );
             }
+        }
+
+        // ETag revalidation for a finished VOD playlist (#13c): a matching
+        // If-None-Match answers 304 without re-sending the playlist.
+        if ($etag !== null && self::ifNoneMatchMatches($request->getHeader('If-None-Match'), $etag)) {
+            return self::withValidator(
+                (new Response())
+                    ->status(304)
+                    ->header('Cache-Control', $cacheControl)
+                    ->header('Last-Modified', (string) $lastModified),
+                $etag,
+            );
         }
 
         // RFC 7233 §3.2 (minors M-SERVER-48, W-min108): a Range is only
@@ -163,17 +196,100 @@ trait TranscodeFileServer
                     ->header('Content-Type', $contentType)
                     ->header('Content-Range', "bytes */{$fileSize}");
             }
-            return (new Response())
-                ->status(206)
-                ->header('Content-Type', $contentType)
-                ->header('Cache-Control', $cacheControl)
-                ->withFile($path, $range['start'], $range['end'] - $range['start'] + 1);
+            return self::withValidator(
+                (new Response())
+                    ->status(206)
+                    ->header('Content-Type', $contentType)
+                    ->header('Cache-Control', $cacheControl),
+                $etag,
+            )->withFile($path, $range['start'], $range['end'] - $range['start'] + 1);
         }
 
-        return (new Response())
-            ->header('Content-Type', $contentType)
-            ->header('Cache-Control', $cacheControl)
-            ->withFile($path);
+        return self::withValidator(
+            (new Response())
+                ->header('Content-Type', $contentType)
+                ->header('Cache-Control', $cacheControl),
+            $etag,
+        )->withFile($path);
+    }
+
+    /**
+     * Attach an ETag to a response when one applies (a finished VOD playlist).
+     *
+     * @param Response    $response The response being built.
+     * @param string|null $etag     The validator, or null for none.
+     */
+    private static function withValidator(Response $response, ?string $etag): Response
+    {
+        return $etag === null ? $response : $response->header('ETag', $etag);
+    }
+
+    /**
+     * The validator for a finished VOD playlist: a digest of its mtime and size, so
+     * it changes whenever the bytes can have changed (#13c).
+     *
+     * @param int $mtime Last-modified time, seconds.
+     * @param int $size  File size, bytes.
+     */
+    private static function etagFor(int $mtime, int $size): string
+    {
+        return '"' . md5($mtime . ':' . $size) . '"';
+    }
+
+    /**
+     * RFC 7232 §3.2 `If-None-Match` for a single validator: `*`, or a comma-separated
+     * list containing the ETag (a weak `W/` prefix is ignored for this GET).
+     *
+     * @param mixed  $header The raw header value, or null/false when absent.
+     * @param string $etag   The current validator.
+     */
+    private static function ifNoneMatchMatches(mixed $header, string $etag): bool
+    {
+        if (!is_string($header) || trim($header) === '') {
+            return false;
+        }
+        if (trim($header) === '*') {
+            return true;
+        }
+        foreach (explode(',', $header) as $candidate) {
+            $candidate = trim($candidate);
+            if (str_starts_with($candidate, 'W/')) {
+                $candidate = substr($candidate, 2);
+            }
+            if ($candidate === $etag) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when an HLS playlist is a FINISHED VOD playlist: its closing
+     * `#EXT-X-ENDLIST` sits in the last bytes of the file at the size the caller
+     * stat'ed (#13c). A live or in-progress playlist has no ENDLIST yet, so it is
+     * never treated as complete.
+     *
+     * I/O: one read of at most {@see self::ENDLIST_PROBE_BYTES} bytes from the
+     * playlist, on the request path, and only for an `.m3u8` request. It is a small
+     * local read of the same class as the stat calls this method already sits beside,
+     * but it is a blocking read: see docs/dev/BLOCKING_IO_EXCEPTIONS.md, which the
+     * owner has to decide on before it is accepted for a network-mounted transcode dir.
+     *
+     * @param string $path The playlist's resolved absolute path.
+     * @param string $file The requested filename (extension decides the check).
+     * @param int    $size The size of the file as stat'ed, bytes.
+     */
+    private static function isCompletedVodPlaylist(string $path, string $file, int $size): bool
+    {
+        if (strtolower(pathinfo($file, PATHINFO_EXTENSION)) !== 'm3u8' || $size <= 0) {
+            return false;
+        }
+
+        $window = min($size, self::ENDLIST_PROBE_BYTES);
+        $tail = @file_get_contents($path, false, null, $size - $window, $window);
+
+        return is_string($tail) && str_contains($tail, '#EXT-X-ENDLIST');
     }
 
     /**
@@ -318,12 +434,24 @@ trait TranscodeFileServer
     }
 
     /**
-     * Playlists/manifests must not be cached (they update during the encode);
-     * immutable segments are cached for a year.
+     * Cache policy per file kind.
+     *
+     * - Segments are immutable and cached for a year, as `private` (#13c): they are
+     *   access-controlled bytes, and a shared cache must not store them.
+     * - A FINISHED VOD playlist (#13c) is immutable once its job completes: `private`
+     *   with a short max-age, revalidated by its ETag.
+     * - Live and in-progress playlists/manifests must not be cached, because they
+     *   update during the encode.
+     *
+     * @param string $file               The requested filename.
+     * @param bool   $completeVodPlaylist True when an `.m3u8` is a finished VOD playlist.
      */
-    private static function cacheControlFor(string $file): string
+    private static function cacheControlFor(string $file, bool $completeVodPlaylist = false): string
     {
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-        return ($ext === 'm3u8' || $ext === 'mpd') ? 'no-cache' : 'public, max-age=31536000';
+        if ($ext === 'm3u8' && $completeVodPlaylist) {
+            return 'private, max-age=60';
+        }
+        return ($ext === 'm3u8' || $ext === 'mpd') ? 'no-cache' : 'private, max-age=31536000';
     }
 }

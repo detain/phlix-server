@@ -85,6 +85,7 @@ final class AbrLadderTest extends TestCase
                 'url' => null,
                 'is_original' => false,
                 'is_copy' => false,
+                'audio_copy' => false,
                 'video_bitrate' => 5_000_000,
             ],
             $result->renditions[0]->toArray(),
@@ -101,6 +102,7 @@ final class AbrLadderTest extends TestCase
                 'url' => null,
                 'is_original' => false,
                 'is_copy' => false,
+                'audio_copy' => false,
                 'video_bitrate' => 400_000,
             ],
             $result->renditions[4]->toArray(),
@@ -598,8 +600,37 @@ final class AbrLadderTest extends TestCase
             'generic', false, 'Original (1080p)', 1920, 1080, 12_968_000, $codec1080,
         ];
 
-        yield 'non-aac audio (ac3) -> transcode original' => [
+        // Video is H.264, so the Original is a VIDEO stream copy even though the audio
+        // is AC-3: the audio is re-encoded to AAC-LC (see testCopyOriginalAudioCopyFlag)
+        // and the advertised bandwidth is the video plus the AAC allowance (not the
+        // source's AC-3 bitrate). Previously this row fell back to a full re-encode.
+        yield 'non-aac audio (ac3) -> copy original with AAC audio re-encode' => [
             new SourceProfile(1920, 1080, 'h264', 8_000_000, 'ac3', 192_000),
+            'generic', true, 'Original (1080p)', 1920, 1080, 8_128_000, $codec1080,
+        ];
+
+        // 8-bit 4:2:0 H.264 is the browser-decodable class: copied.
+        yield 'h264 yuv420p 8-bit -> copy original' => [
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000, 'yuv420p'),
+            'generic', true, 'Original (1080p)', 1920, 1080, 8_192_000, $codec1080,
+        ];
+
+        // Unknown pixel format is accepted (matches the legacy TranscodeManager rule).
+        yield 'h264 unknown pix_fmt -> copy original' => [
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000, null),
+            'generic', true, 'Original (1080p)', 1920, 1080, 8_192_000, $codec1080,
+        ];
+
+        // 10-bit H.264 loads in the browser but cannot be decoded by MSE/hls.js, so a
+        // copy would be unplayable: it must be re-encoded to 8-bit.
+        yield 'h264 10-bit (yuv420p10le) -> transcode original, not copied' => [
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000, 'yuv420p10le'),
+            'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
+        ];
+
+        // 4:2:2 chroma is outside the browser's High 4:2:0 decode set.
+        yield 'h264 4:2:2 (yuv422p) -> transcode original, not copied' => [
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000, 'yuv422p'),
             'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
         ];
 
@@ -654,6 +685,52 @@ final class AbrLadderTest extends TestCase
         self::assertTrue($original->isCopy);
         self::assertSame(2048, $original->width, 'advertised width is even-floored, never overstates the frame');
         self::assertSame('avc1.640032,mp4a.40.2', $original->codecs, 'level derived from the true 2049px frame');
+    }
+
+    /**
+     * The copy Original copies its audio only when that audio is AAC. A non-AAC
+     * track is re-encoded, so the descriptor says so (`audioCopy`), advertises the
+     * AAC allowance instead of the source's codec bitrate, and serialises the
+     * `audio_copy` flag the segment builder reads. A transcode rung never copies.
+     */
+    public function testCopyOriginalAudioCopyFlag(): void
+    {
+        $aac = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000),
+            'generic',
+        )->original;
+        self::assertTrue($aac->isCopy);
+        self::assertTrue($aac->audioCopy, 'AAC audio is copied');
+        self::assertSame(8_192_000, $aac->bandwidth(), 'AAC keeps its source bitrate (192 kbps)');
+        self::assertTrue($aac->toArray()['audio_copy']);
+
+        $ac3 = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'ac3', 640_000),
+            'generic',
+        )->original;
+        self::assertTrue($ac3->isCopy, 'AC-3 audio does not block the video copy');
+        self::assertFalse($ac3->audioCopy, 'AC-3 audio is re-encoded to AAC');
+        self::assertSame(
+            8_000_000 + Rendition::AUDIO_BANDWIDTH,
+            $ac3->bandwidth(),
+            'the advertised bandwidth uses the AAC allowance, not the 640 kbps AC-3 rate',
+        );
+        self::assertFalse($ac3->toArray()['audio_copy']);
+
+        $noAudio = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, null, null),
+            'generic',
+        )->original;
+        self::assertTrue($noAudio->isCopy, 'a source with no recognised audio still copies its video');
+        self::assertFalse($noAudio->audioCopy);
+
+        // A transcode Original (10-bit) never reports a copied audio track.
+        $transcode = $this->ladder->build(
+            new SourceProfile(1920, 1080, 'h264', 8_000_000, 'aac', 192_000, 'yuv420p10le'),
+            'generic',
+        )->original;
+        self::assertFalse($transcode->isCopy);
+        self::assertFalse($transcode->toArray()['audio_copy']);
     }
 
     // -----------------------------------------------------------------

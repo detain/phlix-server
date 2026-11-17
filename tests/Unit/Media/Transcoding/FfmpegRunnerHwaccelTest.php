@@ -809,6 +809,30 @@ final class FfmpegRunnerHwaccelTest extends TestCase
     }
 
     /**
+     * perf #1: on a GPU venue a stream-copy ("Original") rung must stay a copy.
+     * The hwaccel builder has no copy branch and would splice `-c:v <hw encoder>`
+     * in its place, silently re-encoding the rung that exists to avoid the encode.
+     * A copy never decodes or encodes video, so it takes the software builder.
+     */
+    public function testHardwareVenueRuntimeSelectionCopyRungStaysACopy(): void
+    {
+        $runner = $this->runtimeSelectionRunner(['vaapi' => $this->probedVaapiCapability()], 4);
+
+        $cmd = $runner->resolveSegmentEncodeCommand(
+            '/input.mkv',
+            '/tmp/out.ts',
+            252.0,
+            6.0,
+            ['video_codec' => 'copy', 'audio_codec' => 'copy'],
+        );
+
+        $this->assertStringContainsString(' -c:v copy', $cmd);
+        $this->assertStringContainsString(' -c:a copy', $cmd);
+        $this->assertStringNotContainsString('h264_vaapi', $cmd);
+        $this->assertStringNotContainsString('-hwaccel', $cmd);
+    }
+
+    /**
      * The hardware law, asserted at the RUNTIME seam (the pinned builder tests
      * cover the builder; this covers the selection): a real nvenc capability
      * still assembles through the hwaccel shape — `-hwaccel` input flags, the

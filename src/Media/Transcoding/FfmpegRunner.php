@@ -2644,7 +2644,14 @@ class FfmpegRunner
         $hwaccelEnabled = ($this->config['enabled'] ?? false) === true;
         $preferHardware = ($this->config['prefer_hardware'] ?? true) === true;
 
-        if ($hwaccelEnabled && $preferHardware) {
+        // A stream-copy rung (`video_codec = copy`) never decodes or encodes video, so
+        // there is nothing for a hardware encoder to do. The hwaccel builder has no
+        // copy branch and would splice a `-c:v <hw encoder>` in its place, silently
+        // re-encoding the "Original" on a GPU venue. Copy therefore always takes the
+        // software builder, whose `-c:v copy` branch is the only correct one.
+        $isVideoCopy = self::paramString($params, 'video_codec') === 'copy';
+
+        if ($hwaccelEnabled && $preferHardware && !$isVideoCopy) {
             $capability = $this->resolveHwaccelCapability($params);
             // The gate: a capability that resolves to the SOFTWARE vendor is
             // software work wearing an hwaccel config — hand it to the software

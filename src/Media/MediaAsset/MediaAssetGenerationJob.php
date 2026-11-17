@@ -16,6 +16,7 @@ use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
 use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -33,32 +34,6 @@ use Workerman\MySQL\Connection;
  */
 class MediaAssetGenerationJob
 {
-    /**
-     * Default number of trickplay sprites.
-     *
-     * 60 thumbnails at 160x90 laid out by {@see FfmpegRunner} as **6 columns by
-     * 10 rows** — the `10x6` this comment used to claim was the transpose, and
-     * `config/trickplay.php`'s `grid_columns: 8` / `grid_rows: 4` belonged to the
-     * deleted second implementation and never described anything that ran.
-     */
-    private const DEFAULT_TRICKPLAY_COUNT = 60;
-
-    /** Seconds between BIF frames that the frame count is derived from. */
-    private const BIF_TARGET_INTERVAL_SECONDS = 10;
-
-    /**
-     * Hard cap on BIF frames.
-     *
-     * The archive embeds every frame, so its size is linear in this number and
-     * it is downloaded whole by the device before scrubbing works. 600 frames at
-     * ~12 KB is roughly 7 MB; past a 100-minute runtime the effective interval
-     * stretches rather than the file growing without bound.
-     */
-    private const BIF_MAX_FRAMES = 600;
-
-    /** BIF frame width in pixels — Roku's recommended HD trickplay width. */
-    private const BIF_FRAME_WIDTH = 320;
-
     /**
      * Chapters extracted per ffmpeg process.
      *
@@ -303,9 +278,9 @@ class MediaAssetGenerationJob
             $result = $this->ffmpeg->generateTrickplayArtefacts(
                 $path,
                 $spriteDir,
-                self::DEFAULT_TRICKPLAY_COUNT,
-                $this->bifFrameCount($job->duration),
-                self::BIF_FRAME_WIDTH
+                TrickplayArtefacts::SPRITE_COUNT,
+                TrickplayArtefacts::bifFrameCount($job->duration),
+                TrickplayArtefacts::BIF_FRAME_WIDTH
             );
 
             if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
@@ -342,24 +317,6 @@ class MediaAssetGenerationJob
     }
 
     /**
-     * Number of BIF frames for an item of the given runtime.
-     *
-     * One frame per {@see self::BIF_TARGET_INTERVAL_SECONDS}, clamped to
-     * [2, {@see self::BIF_MAX_FRAMES}]. An unknown runtime falls back to the
-     * sprite count.
-     */
-    private function bifFrameCount(float $duration): int
-    {
-        if ($duration <= 0) {
-            return self::DEFAULT_TRICKPLAY_COUNT;
-        }
-
-        $count = (int) ceil($duration / self::BIF_TARGET_INTERVAL_SECONDS);
-
-        return max(2, min(self::BIF_MAX_FRAMES, $count));
-    }
-
-    /**
      * Write the Roku BIF archive next to the sprite sheet from frames the
      * combined pass already extracted.
      *
@@ -381,12 +338,10 @@ class MediaAssetGenerationJob
      */
     private function writeTrickplayBif(MediaAssetJob $job, array $frames, int $intervalMs, string $spriteDir): bool
     {
-        if (count($frames) < 2) {
-            return false;
-        }
-
         try {
-            BifWriter::writeFromFiles($frames, $intervalMs, $spriteDir . '/' . self::BIF_FILENAME);
+            if (!TrickplayArtefacts::writeBif($frames, $intervalMs, $spriteDir)) {
+                return false;
+            }
 
             $this->logger->info('MediaAssetGenerationJob: BIF written', [
                 'item_id' => $job->itemId,

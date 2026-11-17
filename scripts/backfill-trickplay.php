@@ -3,20 +3,24 @@
 declare(strict_types=1);
 
 /*
- * Backfill trickplay sprite sheets for already-indexed media items.
+ * Backfill trickplay artefacts (sprite sheet, timeline JSON and Roku BIF) for
+ * already-indexed media items.
  *
- * Generates a 60-thumb (6x10) sprite sheet + timeline JSON for scrubbing
- * preview in compatible players. Candidates are time-based items
- * (video/movie/episode) that have chapters but lack trickplay paths.
+ * Candidates are time-based items (video/movie/episode) that have chapters.
+ * The database path columns are not used to decide anything: an item can have
+ * a sprite and still lack its BIF, and only the disk can say which artefacts
+ * exist. An item whose three artefacts are all on disk is skipped with no
+ * decode (its database paths are filled in if they are missing). Anything else
+ * is generated in ONE ffmpeg pass that produces the sprite, timeline and BIF.
  *
- * Re-running is safe: items that already have trickplay paths no longer
- * match the WHERE clause. Sprite generation is read-only and never
+ * Re-running is safe: complete items are skipped, and a half-finished item is
+ * regenerated rather than trusted. Sprite generation is read-only and never
  * modifies the source file.
  *
  * Usage:
  *   php scripts/backfill-trickplay.php                    # all libraries
  *   php scripts/backfill-trickplay.php --library=<id>   # scope to one library
- *   php scripts/backfill-trickplay.php --limit=500       # cap rows this run
+ *   php scripts/backfill-trickplay.php --limit=500       # cap items generated this run
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -24,6 +28,7 @@ require_once __DIR__ . '/bootstrap_env.php';
 
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 
 $libraryFilter = null;
@@ -62,51 +67,43 @@ if (!is_dir($spriteBaseDir)) {
     mkdir($spriteBaseDir, 0755, true);
 }
 
-// Candidate rows: time-based items with chapters but no trickplay paths.
-$sql = "SELECT id, type, path
+// Candidate rows: time-based items with chapters. The trickplay path columns are
+// deliberately NOT filtered on here (see the header): the on-disk check below is
+// the only thing that decides whether an item is done.
+$sql = "SELECT id, type, path, trickplay_sprite_path, trickplay_timeline_path
         FROM media_items
         WHERE type IN ('video', 'movie', 'episode')
           AND chapters_json IS NOT NULL
           AND chapters_json != '[]'
           AND chapters_json != 'null'
-          AND chapters_json != ''
-          AND (trickplay_sprite_path IS NULL OR trickplay_timeline_path IS NULL)";
-
-if ($libraryFilter !== null) {
-    $sql .= " AND library_id = ?";
-}
-
-$sql .= " ORDER BY created_at ASC";
-
-if ($limit !== null && $limit > 0) {
-    $sql .= " LIMIT ?";
-}
+          AND chapters_json != ''";
 
 $bindings = [];
 if ($libraryFilter !== null) {
+    $sql .= " AND library_id = ?";
     $bindings[] = $libraryFilter;
 }
-if ($limit !== null && $limit > 0) {
-    $bindings[] = $limit;
-}
+
+$sql .= " ORDER BY created_at ASC";
 
 $rows = $db->query($sql, $bindings);
 if (!is_array($rows)) {
     $rows = [];
 }
 
-echo 'Found ' . count($rows) . " candidate item(s) missing trickplay data.\n";
+echo 'Found ' . count($rows) . " candidate item(s) with chapters.\n";
 if ($libraryFilter !== null) {
     echo "Library filter: {$libraryFilter}\n";
 }
 if ($limit !== null && $limit > 0) {
-    echo "Row limit: {$limit}\n";
+    echo "Generation limit: {$limit} item(s)\n";
 }
 echo str_repeat('-', 60) . "\n";
 
 $updated = 0;
 $skipped = 0;
 $failed = 0;
+$attempted = 0;
 
 foreach ($rows as $row) {
     if (!is_array($row)) {
@@ -128,28 +125,89 @@ foreach ($rows as $row) {
         continue;
     }
 
-    $result = $ffmpeg->generateTrickplaySprites($path, $spriteBaseDir . '/' . $itemId, 60);
-    if ($result === null) {
-        echo "  FAIL: {$path} (sprite generation failed)\n";
+    $itemDir = $spriteBaseDir . '/' . $itemId;
+    $spritePath = $itemDir . '/' . FfmpegRunner::SPRITE_FILENAME;
+    $timelinePath = $itemDir . '/' . FfmpegRunner::TIMELINE_FILENAME;
+
+    // Already complete on disk: never decode it again. Only restore the database
+    // paths when the row has lost them.
+    if (TrickplayArtefacts::isComplete($itemDir)) {
+        $rowHasPaths = is_string($row['trickplay_sprite_path'] ?? null)
+            && is_string($row['trickplay_timeline_path'] ?? null);
+        if (!$rowHasPaths) {
+            try {
+                $repo->updateMarkers($itemId, [
+                    'trickplay_sprite_path' => $spritePath,
+                    'trickplay_timeline_path' => $timelinePath,
+                ]);
+            } catch (\Throwable $e) {
+                echo "  FAIL: {$path} (store failed: {$e->getMessage()})\n";
+                $failed++;
+                continue;
+            }
+            echo "  paths: {$path} (artefacts on disk, database paths restored)\n";
+        } else {
+            echo "  skip: {$path} (artefacts already on disk)\n";
+        }
+        $skipped++;
+        continue;
+    }
+
+    // The limit counts items that are actually generated, so skipped items never
+    // use it up.
+    if ($limit !== null && $limit > 0 && $attempted >= $limit) {
+        echo "  stop: generation limit reached\n";
+        break;
+    }
+    $attempted++;
+
+    $probe = $ffmpeg->probe($path);
+    $rawDuration = $probe['format']['duration'] ?? null;
+    $duration = is_numeric($rawDuration) ? (float) $rawDuration : 0.0;
+
+    $result = $ffmpeg->generateTrickplayArtefacts(
+        $path,
+        $itemDir,
+        TrickplayArtefacts::SPRITE_COUNT,
+        TrickplayArtefacts::bifFrameCount($duration),
+        TrickplayArtefacts::BIF_FRAME_WIDTH
+    );
+    if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
+        echo "  FAIL: {$path} (trickplay generation failed)\n";
         $failed++;
         continue;
     }
 
-    [$spritePath, $timelinePath] = $result;
+    $frames = $result['bif_frames'];
 
     try {
         $repo->updateMarkers($itemId, [
-            'trickplay_sprite_path' => $spritePath,
-            'trickplay_timeline_path' => $timelinePath,
+            'trickplay_sprite_path' => $result['sprite'],
+            'trickplay_timeline_path' => $result['timeline'],
         ]);
     } catch (\Throwable $e) {
+        foreach ($frames as $frame) {
+            @unlink($frame);
+        }
         echo "  FAIL: {$path} (store failed: {$e->getMessage()})\n";
         $failed++;
         continue;
     }
 
+    // Best-effort, like the job: a BIF failure must not undo the sprite.
+    $bifWritten = false;
+    try {
+        $bifWritten = TrickplayArtefacts::writeBif($frames, $result['bif_interval_ms'], $itemDir);
+    } catch (\Throwable $e) {
+        echo "  warn: {$path} (BIF not written: {$e->getMessage()})\n";
+    } finally {
+        foreach ($frames as $frame) {
+            @unlink($frame);
+        }
+    }
+
     $updated++;
-    echo "  ok:   {$path}\n";
+    echo '  ok:   ' . $path . ($bifWritten ? '' : ' (no BIF)') . "\n";
 }
 
 echo str_repeat('-', 60) . "\n";

@@ -430,6 +430,26 @@ changes.
 
 ---
 
+## Pending owner decision — direct-play and playlist file reads on the event loop (registered 2026-11-17, UNMEASURED)
+
+> **Status: DECISION NEEDED. This is not an accepted exception.** It is recorded
+> because it is a real blocking read on the HTTP worker that no entry above covers.
+> No timing has been taken for it, so no bound is claimed. Under the rule above it
+> is not "accepted" until it is measured, bounded and approved by the owner.
+
+| | |
+|---|---|
+| Site (a) | `vendor/workerman/workerman/src/Protocols/Http.php` `sendStream()` (≈ lines 449–490): the direct-play body loop reads `fread($handler, $size)` with `$size = 1024 * 1024` (1 MB) on the event loop, once per write-buffer drain. Files under 2 MB take one blocking `file_get_contents()` instead (`encode()`, ≈ line 425). Reached through `Response::toWorkermanResponse()` → `WorkermanResponse::withFile()`, so **every `withFile()` reply shares it**: direct play (`PreRouterFastPaths::serveMediaStream()`, `GET|HEAD /media/{id}/stream`), HLS/DASH segments (`TranscodeFileServer`), artwork, avatars, book, photo and audiobook bodies. |
+| Site (b) | `src/Server/Http/Controllers/TranscodeFileServer.php` `isCompletedVodPlaylist()` (added 2026-11-17, #13c): one `file_get_contents()` of at most `ENDLIST_PROBE_BYTES` = 512 bytes from the end of an `.m3u8` on each playlist request, to tell a finished VOD playlist from a live one. Same class of read, far smaller, and only for playlists. |
+| Reached from | Authenticated direct play and every transcode/segment request on the HTTP workers (14 by default). The relay tunnel also streams these bodies (`RelayConsumer::streamFileChunks()`); how that path reads the file was **not** inspected for this entry and must be checked before a decision. |
+| Why it is sync | The FILE hook is deliberately excluded from the curated Swoole mask (`src/Server/Runtime/SwooleRuntime.php`, header comment): `SWOOLE_HOOK_FILE` (io_uring) segfaulted the worker in production, so a plain `fread()` is a blocking syscall on the event loop. Workerman's own `sendStream()` has no async file path, and the fix must not re-enable the hook. |
+| Bound | **None enforced.** Each `fread()` is capped at 1 MB by Workerman, so each call moves at most 1 MB, but nothing caps how long the kernel takes to return that 1 MB. No timeout wraps the read. The per-chunk cap bounds the bytes, not the time. |
+| Risk | **The live media library is on sshfs.** A slow or stalled sshfs mount makes each `fread()` block for as long as the mount takes to answer. That freezes every connection on that worker (about 1/14 of HTTP capacity) for the duration, not only the one direct-play request. The playlist read (b) carries the same risk at 512 bytes. Duration is unmeasured; under a hung mount it is unbounded. |
+| Decision needed (owner) | Pick one, and the choice needs a measurement first: **(1)** accept site (a) and (b) as bounded-per-chunk with a measured worst case on the sshfs mount, and write that into an accepted entry; **(2)** move direct-play and playlist body reads off the event loop (for example, a bounded read in a dedicated worker or process, as Exception 8 did for NAT-PMP); **(3)** keep media on local disk for the HTTP workers, or refuse direct play from network mounts. This change does not pick one, and does not touch the hook mask. |
+| Measurement | **Not taken.** A birth-certificate measurement (stall time of `fread()` of a 1 MB window from the live sshfs mount under load, and of a 512-byte tail read) is the first step before any entry is accepted. |
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

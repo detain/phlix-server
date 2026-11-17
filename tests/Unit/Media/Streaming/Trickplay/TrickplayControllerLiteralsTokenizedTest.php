@@ -44,7 +44,7 @@ use PHPUnit\Framework\TestCase;
  *     draft; the value-level needle catches both the slash-prefixed and bare
  *     re-spellings.
  *  2. **Per-site inventory (the five named sites):** each of the five methods —
- *     `getSpriteUrl`, `getTimelineUrl`, `getSpriteContent`, `getTimelineContent`,
+ *     `getSpriteUrl`, `getTimelineUrl`, `resolveSpritePath`, `resolveTimelinePath`,
  *     `getSprite` — has a body that references its constant
  *     (`FfmpegRunner::SPRITE_FILENAME` or `FfmpegRunner::TIMELINE_FILENAME`) and
  *     does not re-spell either filename value. This is the "assert about the
@@ -70,18 +70,18 @@ final class TrickplayControllerLiteralsTokenizedTest extends TestCase
      * The order mirrors the five re-spelled sites the S344 sweep found:
      *  - `getSpriteUrl`       (was `…/sprite.jpg` URL build)
      *  - `getTimelineUrl`     (was `…/timeline.json` URL build)
-     *  - `getSpriteContent`   (was `$jobDir . '/sprite.jpg'` read path)
-     *  - `getTimelineContent` (was `…/timeline.json` read path)
+     *  - `resolveSpritePath`   (was `$jobDir . '/sprite.jpg'` read path)
+     *  - `resolveTimelinePath` (was `…/timeline.json` read path)
      *  - `getSprite`          (was `!file_exists($jobDir . '/sprite.jpg')` 404 fallback)
      *
      * @var array<string, string>
      */
     private const SITES = [
-        'getSpriteUrl'       => 'FfmpegRunner::SPRITE_FILENAME',
-        'getTimelineUrl'     => 'FfmpegRunner::TIMELINE_FILENAME',
-        'getSpriteContent'   => 'FfmpegRunner::SPRITE_FILENAME',
-        'getTimelineContent' => 'FfmpegRunner::TIMELINE_FILENAME',
-        'getSprite'          => 'FfmpegRunner::SPRITE_FILENAME',
+        'getSpriteUrl'        => 'FfmpegRunner::SPRITE_FILENAME',
+        'getTimelineUrl'      => 'FfmpegRunner::TIMELINE_FILENAME',
+        'resolveSpritePath'   => 'FfmpegRunner::SPRITE_FILENAME',
+        'resolveTimelinePath' => 'FfmpegRunner::TIMELINE_FILENAME',
+        'getSprite'           => 'FfmpegRunner::SPRITE_FILENAME',
     ];
 
     /**

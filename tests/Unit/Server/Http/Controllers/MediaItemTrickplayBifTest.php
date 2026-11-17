@@ -154,7 +154,7 @@ final class MediaItemTrickplayBifTest extends TestCase
         $this->assertSame(1, preg_match('#^/trickplay/([^/]+)/thumbs\.bif$#', $advertised, $m));
 
         $controller = new TrickplayController($this->tempDir, '');
-        $served = $controller->getBif(new Request(), ['jobId' => $m[1]]);
+        $served = $controller->getBif(new Request(), ['jobId' => $m[1]])->materializeFileWindow();
 
         $this->assertSame(200, $served->statusCode);
         $this->assertSame($bif, $served->body);

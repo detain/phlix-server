@@ -1155,7 +1155,7 @@ class FfmpegRunner
         $inputArgs = '';
         $outputArgs = '';
         foreach ($timestamps as $index => $timestamp) {
-            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            $framePath = $outputDir . '/' . self::batchFrameFileName($index);
 
             // Input-side seek: `-ss` before its own `-i` re-open of the same
             // file performs a fast demuxer-level seek instead of decoding
@@ -1167,8 +1167,11 @@ class FfmpegRunner
             // strictness flag leads the group (output options bind to the
             // filename that follows; placing it before -map keeps every
             // contiguous `-map … -vframes 1 …` shape pin intact).
+            // `-q:v 2` is the same JPEG quality {@see buildThumbnailCommand()} uses for a
+            // single frame. Without it the batch wrote frames about a third smaller than
+            // the one-process-per-chapter path it replaced.
             $outputArgs .= sprintf(
-                ' %s -map %d:v:0 -vframes 1 %s',
+                ' -q:v 2 %s -map %d:v:0 -vframes 1 %s',
                 self::MJPEG_STRICTNESS_ARGS,
                 $index,
                 escapeshellarg($framePath)
@@ -1181,6 +1184,21 @@ class FfmpegRunner
             $inputArgs,
             $outputArgs
         );
+    }
+
+    /**
+     * File name {@see generateThumbnailBatch()} writes for the frame at a position.
+     *
+     * Public so a caller that renames the frames into their own names (the
+     * chapter-thumbnail job does) reads the same spelling the batch writes.
+     *
+     * @param int $index Position of the timestamp in the batch, from 0.
+     *
+     * @return string `frame_NNNNN.jpg`
+     */
+    public static function batchFrameFileName(int $index): string
+    {
+        return 'frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
     }
 
     /**
@@ -1232,7 +1250,7 @@ class FfmpegRunner
         }
 
         foreach (array_keys($timestamps) as $index) {
-            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            $framePath = $outputDir . '/' . self::batchFrameFileName($index);
             if (is_file($framePath) && filesize($framePath) > 0) {
                 return true;
             }

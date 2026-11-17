@@ -60,6 +60,15 @@ class MediaAssetGenerationJob
     private const BIF_FRAME_WIDTH = 320;
 
     /**
+     * Chapters extracted per ffmpeg process.
+     *
+     * The batch opens the media file once per timestamp, so one process's input
+     * count, open file handles and memory grow with the batch. 20 keeps a
+     * 200-chapter title to ten processes without an unbounded command line.
+     */
+    private const CHAPTER_THUMB_BATCH_SIZE = 20;
+
+    /**
      * File name of the BIF archive inside a media item's trickplay directory.
      *
      * Aliased from {@see BifWriter::FILENAME}, which
@@ -144,6 +153,20 @@ class MediaAssetGenerationJob
     }
 
     /**
+     * Reads the chapter list from the container (ffprobe `-show_chapters`).
+     *
+     * A seam, so the batch path can be exercised without a media file. The
+     * {@see ChapterMarkerService} this job uses is the Media one
+     * (`Phlix\Media\Markers`), not the LiveTv recording one.
+     *
+     * @return array<int, \Phlix\Media\Markers\ChapterMarker>
+     */
+    protected function extractChapters(string $path): array
+    {
+        return (new ChapterMarkerService($this->ffmpeg))->extractFromFile($path);
+    }
+
+    /**
      * Generate per-chapter thumbnail images and store chapter markers.
      *
      * @param MediaAssetJob $job
@@ -164,8 +187,7 @@ class MediaAssetGenerationJob
         }
 
         try {
-            $chapterService = new ChapterMarkerService($this->ffmpeg);
-            $chapters = $chapterService->extractFromFile($path);
+            $chapters = $this->extractChapters($path);
 
             if (empty($chapters)) {
                 return false;
@@ -180,12 +202,34 @@ class MediaAssetGenerationJob
             $mediaMarkerService = new MarkerService($this->db);
             $anySuccess = false;
 
-            foreach ($chapters as $index => $chapter) {
-                $thumbPath = $chapterDir . '/' . $index . '.jpg';
-                $startSeconds = $chapter->start_seconds;
+            // One ffmpeg process per batch of chapters, not one per chapter. Each
+            // process pays its own start-up, probe and open cost, which dominated a
+            // long chapter list. Batch frames are renamed to their chapter index.
+            foreach (array_chunk($chapters, self::CHAPTER_THUMB_BATCH_SIZE, true) as $batch) {
+                $timestamps = [];
+                foreach ($batch as $chapter) {
+                    $timestamps[] = $chapter->start_seconds;
+                }
 
-                $success = $this->ffmpeg->generateThumbnail($path, $thumbPath, $startSeconds);
-                if ($success) {
+                for ($position = 0; $position < count($batch); $position++) {
+                    @unlink($chapterDir . '/' . FfmpegRunner::batchFrameFileName($position));
+                }
+                $this->ffmpeg->generateThumbnailBatch($path, $timestamps, $chapterDir);
+
+                // Judge each chapter by the frame file it produced, not by the
+                // batch's exit code: a batch with one unreachable timestamp still
+                // writes the others, and the exit code does not say which.
+                $position = 0;
+                foreach ($batch as $index => $chapter) {
+                    $frame = $chapterDir . '/' . FfmpegRunner::batchFrameFileName($position++);
+                    $thumbPath = $chapterDir . '/' . $index . '.jpg';
+                    $startSeconds = $chapter->start_seconds;
+
+                    if (!is_file($frame) || filesize($frame) === 0 || !rename($frame, $thumbPath)) {
+                        @unlink($frame);
+                        continue;
+                    }
+
                     $mediaMarkerService->upsert(
                         $itemId,
                         MarkerType::Chapter,

@@ -157,6 +157,17 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
         $this->assertGreaterThan($lastInputPos, $flagPos);
     }
 
+    public function testEveryBatchOutputGroupAsksForTheSingleThumbnailJpegQuality(): void
+    {
+        $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [0, 30, 60], '/out');
+
+        // The same `-q:v 2` buildThumbnailCommand() uses. Without it a batch frame is a
+        // visibly lower-quality image than the one-process-per-chapter path it replaced
+        // (measured: about a third smaller on the same frame).
+        $this->assertSame(3, substr_count($cmd, ' -q:v 2 '));
+        $this->assertSame(3, substr_count($cmd, '-q:v 2 -strict unofficial -map'));
+    }
+
     public function testSingleThumbnailCommandCarriesTheMjpegStrictnessFlag(): void
     {
         $cmd = $this->runner()->buildThumbnailCommand('/in.mkv', '/out/thumb.jpg', 30);

@@ -124,6 +124,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $ffmpegConfig['segment_encode_threads']
             : null;
 
+        // perf #5: the software decoder's input-side thread cap, same rule as the
+        // encode cap above (is_int, so 0 — "auto" — is a real value).
+        $segmentDecodeThreads = is_int($ffmpegConfig['segment_decode_threads'] ?? null)
+            ? $ffmpegConfig['segment_decode_threads']
+            : null;
+
         $loudnormParams = null;
         $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
         if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
@@ -153,7 +159,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $ffmpegPath,
                     $ffprobePath,
                     $transcodeDir,
-                    $segmentEncodeThreads
+                    $segmentEncodeThreads,
+                    $segmentDecodeThreads
                 ): FfmpegRunner {
                     // Static cache: only instantiate once per worker process.
                     static $runner = null;
@@ -176,6 +183,7 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // playback-lag wave C: software-encode thread cap (setter per
                     // this constructor's documented "signature unchanged" law).
                     $runner->setSegmentEncodeThreads($segmentEncodeThreads);
+                    $runner->setSegmentDecodeThreads($segmentDecodeThreads);
 
                     // SV-4.2: wire the segment-process registry so on-demand encode
                     // PIDs are tracked for cancellation / wait-timeout kill.

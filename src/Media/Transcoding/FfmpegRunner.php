@@ -156,6 +156,14 @@ class FfmpegRunner
     private ?int $segmentEncodeThreads = null;
 
     /**
+     * Thread cap for the software DECODER of a software segment encode (perf #5),
+     * or null to resolve it at build time from `PHLIX_SEGMENT_DECODE_THREADS` / the
+     * default — see {@see resolveSegmentDecodeThreads()}. Wired by
+     * {@see setSegmentDecodeThreads()} from `config/ffmpeg.php`.
+     */
+    private ?int $segmentDecodeThreads = null;
+
+    /**
      * Creates a new FFmpegRunner instance.
      *
      * @param string $ffmpegPath Path to FFmpeg binary (default: /usr/bin/ffmpeg)
@@ -213,6 +221,19 @@ class FfmpegRunner
     }
 
     /**
+     * Wire the software-decode thread cap (perf #5). Same contract as
+     * {@see setSegmentEncodeThreads()}: null re-enables the build-time chain
+     * (`PHLIX_SEGMENT_DECODE_THREADS` env → default 2); a value <= 0 drops the
+     * input-side `-threads` flag so the decoder auto-sizes.
+     *
+     * @since perf #5
+     */
+    public function setSegmentDecodeThreads(?int $threads): void
+    {
+        $this->segmentDecodeThreads = $threads;
+    }
+
+    /**
      * Resolve the libx264 `-threads` value: wired config value first, else the
      * same env → default chain `config/ffmpeg.php` applies, so a hand-built
      * runner (tests, scripts) gets production semantics for free.
@@ -223,6 +244,16 @@ class FfmpegRunner
             'PHLIX_SEGMENT_ENCODE_THREADS',
             self::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount())
         );
+    }
+
+    /**
+     * Resolve the input-side software-decode `-threads` value (perf #5): the wired
+     * config value first, else `PHLIX_SEGMENT_DECODE_THREADS`, else 2. Mirrors
+     * {@see resolveSegmentEncodeThreads()} so a hand-built runner behaves like production.
+     */
+    private function resolveSegmentDecodeThreads(): int
+    {
+        return $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 2);
     }
 
     /**
@@ -1807,6 +1838,16 @@ class FfmpegRunner
         // Accurate input seek BEFORE -i so the decode starts at the segment boundary.
         $cmd = sprintf('%s -nostdin -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
         $cmd .= ' -ss ' . $startArg;
+        // perf #5: an INPUT-side `-threads` caps the software decoder's frame-thread
+        // pool (the output-side cap below only sizes the encoder). A stream copy
+        // decodes nothing, so it takes no flag. The hardware builders are separate
+        // methods and never reach this line.
+        if ($this->argvParam($params, 'video_codec') !== 'copy') {
+            $decodeThreads = $this->resolveSegmentDecodeThreads();
+            if ($decodeThreads > 0) {
+                $cmd .= ' -threads ' . $decodeThreads;
+            }
+        }
         $cmd .= ' -i ' . escapeshellarg($inputPath);
         $cmd .= ' -t ' . $durArg;
 

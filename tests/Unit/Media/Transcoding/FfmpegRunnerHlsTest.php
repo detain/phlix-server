@@ -482,7 +482,7 @@ class FfmpegRunnerHlsTest extends TestCase
         ]);
 
         // Accurate fast INPUT seek (before -i) to the segment start.
-        $this->assertMatchesRegularExpression('/-ss 780 -i /', $cmd);
+        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $cmd);
         $this->assertStringContainsString('-t 6', $cmd);
         // First output frame is an IDR → independently decodable segment.
         $this->assertStringContainsString("-force_key_frames 'expr:eq(n,0)'", $cmd);
@@ -726,7 +726,7 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('-force_key_frames', $cmd);
         $this->assertStringNotContainsString('scale=', $cmd);
         // Same segment framing as the video segments (shared VOD timeline).
-        $this->assertStringContainsString('-ss 780 -i ', $cmd);
+        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $cmd);
         $this->assertStringContainsString('-t 6', $cmd);
         $this->assertStringContainsString('-output_ts_offset 780', $cmd);
         $this->assertStringContainsString('-muxdelay 0 -muxpreload 0', $cmd);
@@ -812,13 +812,16 @@ class FfmpegRunnerHlsTest extends TestCase
                 "-force_key_frames 'expr:eq(n,0)'",
                 '-output_ts_offset 780',
                 '-muxdelay 0 -muxpreload 0',
-                '-ss 780 -i ',
                 '-t 6',
             ] as $shared
         ) {
             $this->assertStringContainsString($shared, $rung480);
             $this->assertStringContainsString($shared, $rung1080);
         }
+        // The seek+input framing is shared too; the optional input-side decode cap
+        // (perf #5) is the same on both rungs, so match it without pinning its value.
+        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $rung480);
+        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $rung1080);
 
         // ...and ONLY the scale/bitrate/level differ.
         $this->assertStringContainsString('scale=854:480', $rung480);
@@ -837,7 +840,7 @@ class FfmpegRunnerHlsTest extends TestCase
             'video_codec' => 'libx264',
         ]);
 
-        $this->assertStringContainsString('-ss 1422 -i ', $cmd);
+        $this->assertMatchesRegularExpression('/-ss 1422 (-threads \d+ )?-i /', $cmd);
         $this->assertStringContainsString('-t 1.4', $cmd);
         $this->assertStringContainsString('-output_ts_offset 1422', $cmd);
     }

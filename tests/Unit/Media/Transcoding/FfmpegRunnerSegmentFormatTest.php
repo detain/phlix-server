@@ -104,7 +104,13 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
 
     private function runner(): FfmpegRunner
     {
-        return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp/segs');
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp/segs');
+        // perf #5 added an input-side decoder cap (default 2) between `-ss` and `-i`.
+        // These goldens pin the pre-#5 argv, so the decode cap is held OFF here; its
+        // own placement is pinned in FfmpegRunnerDecodeThreadsTest.
+        $runner->setSegmentDecodeThreads(0);
+
+        return $runner;
     }
 
     /**

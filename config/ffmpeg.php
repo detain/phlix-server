@@ -68,6 +68,28 @@ return [
         max(2, intdiv(EnvConfig::availableCpuCount(), 3))
     ),
 
+    /**
+     * perf #5: thread cap for the SOFTWARE decoder of a software segment encode.
+     *
+     * Emitted as an INPUT option, `-threads N` before `-i`, so it sizes the
+     * decoder's frame-thread pool. `segment_encode_threads` above caps only the
+     * output side (the x264 pool); without this the decoder auto-sizes to the whole
+     * machine on every concurrent encode. Applies to the software builder's
+     * non-copy video path only: a stream copy decodes nothing, and the hardware
+     * decode paths are not touched.
+     *
+     * MEASURED (hub.phlix, 12-core EPYC, 30 s of 1080p H.264 at -ss 1800, output
+     * `-threads 4` held fixed, two passes): decoder auto vs 1 / 2 / 4 threads gave
+     * wall 10.1–10.8 s and user 32.5–35.6 s, all within run-to-run noise. The
+     * decoder is a small share of an x264 encode, so one clip cannot show the
+     * contention benefit this cap is for. 2 is the default: it keeps frame-threaded
+     * decode for 4K-class sources (a single decoder thread is the bottleneck there)
+     * while bounding the pool from the auto count. 0 (or negative) disables the flag
+     * and restores the decoder's auto-sizing. Env override:
+     * PHLIX_SEGMENT_DECODE_THREADS (the `"0"`-survives rule, as for the encode cap).
+     */
+    'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 2),
+
     // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
     // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors
     // the max_concurrent_transcodes knob's style/placement.

@@ -2378,8 +2378,9 @@ class TranscodeManager
 
     /**
      * Count on-demand segment encodes in flight across ALL jobs and ALL workers, by
-     * globbing the shared segment directory for the `*.part-*` atomic-write temp
-     * files. Bounds the global concurrency ceiling in {@see produceSegment()}.
+     * scanning the shared segment tree for the `*.part-*` atomic-write temp files
+     * ({@see scanInFlightTemps()}, which reads only the job directories that can
+     * hold a live temp). Bounds the global concurrency ceiling in {@see produceSegment()}.
      *
      * INTENTIONALLY a real-time, whole-tree glob — NOT derived from the throttled
      * in-worker snapshot. A prior version of this step summed the exact local set
@@ -2408,17 +2409,82 @@ class TranscodeManager
         // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
         // families differently.
         //
-        // Fix A′′′: what the globs return first passes through
+        // Fix A′′′: what the scan returns first passes through
         // {@see purgeDeadInFlightTemps()} — provably-dead orphaned temps are
-        // unlinked and stop counting. The S2 real-time whole-tree glob doctrine
-        // is untouched (this is still never derived from memory); only the
-        // definition of LIVE changed, and it changed to something the wrapper
-        // timeout can prove.
-        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        $total = is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
-        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+        // unlinked and stop counting. The count is still read from the shared
+        // tree live, never from memory; see {@see scanInFlightTemps()} for why the
+        // live read is now bounded to the job directories that can hold a live temp.
+        $families = $this->scanInFlightTemps();
 
-        return $total + (is_array($prewarmParts) ? count($this->purgeDeadInFlightTemps($prewarmParts)) : 0);
+        return count($this->purgeDeadInFlightTemps($families['base']))
+            + count($this->purgeDeadInFlightTemps($families['prewarm']));
+    }
+
+    /**
+     * Every in-flight atomic-write temp in the shared segment tree, split into the
+     * two families (`base` = untagged on-demand, `prewarm` = `.part-p{8 hex}`),
+     * read live from disk.
+     *
+     * Replaces the former whole-tree globs (`{segmentDir}/*\/seg-*.part-…`, one per
+     * family, on every launch decision, plus the reconcile pass). A glob over
+     * `{segmentDir}/*\/…` lists every segment of every job on the box, so its cost
+     * grows with the cache, not with the load: hundreds of jobs × hundreds of
+     * segments, twice, per cache miss. This scan instead:
+     *
+     *   1. lists only the top-level job directories (names, no per-file listing);
+     *   2. skips a job directory whose mtime is older than the temp death bound
+     *      ({@see inflightTempDeathSeconds()}). A temp is created inside its job
+     *      directory, which bumps that directory's mtime to at least the temp's
+     *      creation time, so any directory holding a temp younger than the bound has
+     *      mtime >= now - bound. A skipped directory can hold only temps the purge
+     *      already treats as dead, so the result is the same set of LIVE temps the
+     *      whole-tree glob produced;
+     *   3. globs the surviving directories once, for both families together.
+     *
+     * When the death bound is unset (`ffmpeg.transcode_timeout` <= 0) no bound is
+     * provable and the purge stands down, so every directory is scanned, exactly as
+     * before.
+     *
+     * Family split: the base pattern matches an 8-char suffix after `.part-` and the
+     * prewarm pattern matches a 9-char suffix starting with `p`, so the two are
+     * disjoint by length. The split uses the same rule.
+     *
+     * @return array{base: list<string>, prewarm: list<string>}
+     */
+    private function scanInFlightTemps(): array
+    {
+        $families = ['base' => [], 'prewarm' => []];
+        $dirs = glob("{$this->segmentDir}/*", GLOB_ONLYDIR);
+        if (!is_array($dirs) || $dirs === []) {
+            return $families;
+        }
+
+        $deathSeconds = $this->inflightTempDeathSeconds();
+        $cutoff = $deathSeconds > 0 ? time() - $deathSeconds : null;
+        $pattern = '{' . self::INFLIGHT_TEMP_GLOB . ',' . self::INFLIGHT_PREWARM_TEMP_GLOB . '}';
+
+        foreach ($dirs as $dir) {
+            if ($cutoff !== null) {
+                $mtime = @filemtime($dir);
+                if ($mtime === false || $mtime < $cutoff) {
+                    continue; // no temp in here can be younger than the death bound
+                }
+            }
+            $parts = glob($dir . '/' . $pattern, GLOB_BRACE);
+            if (!is_array($parts)) {
+                continue;
+            }
+            foreach ($parts as $part) {
+                $suffix = substr($part, (int) strrpos($part, '.part-') + 6);
+                if (strlen($suffix) === 9) {
+                    $families['prewarm'][] = $part;
+                } else {
+                    $families['base'][] = $part;
+                }
+            }
+        }
+
+        return $families;
     }
 
     /**
@@ -2434,9 +2500,7 @@ class TranscodeManager
      */
     private function countInFlightPrewarmEncodes(): int
     {
-        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
-
-        return is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
+        return count($this->purgeDeadInFlightTemps($this->scanInFlightTemps()['prewarm']));
     }
 
     /**
@@ -2568,11 +2632,10 @@ class TranscodeManager
         // reconcile tick after its wrapper timeout provably expired — the
         // fresh requester then RESERVES and re-encodes instead of riding a
         // ≤30 s piggyback poll into a 404 forever.
-        $baseParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+        $families = $this->scanInFlightTemps();
         $allParts = array_merge(
-            $this->purgeDeadInFlightTemps(is_array($baseParts) ? $baseParts : []),
-            $this->purgeDeadInFlightTemps(is_array($prewarmParts) ? $prewarmParts : [])
+            $this->purgeDeadInFlightTemps($families['base']),
+            $this->purgeDeadInFlightTemps($families['prewarm'])
         );
         foreach ($allParts as $part) {
             $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);

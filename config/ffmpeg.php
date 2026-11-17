@@ -90,6 +90,22 @@ return [
      */
     'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 2),
 
+    /**
+     * perf #11: directory for the persisted, cross-worker ffprobe cache
+     * ({@see \Phlix\Media\Transcoding\ProbeCache}). One small JSON file per media
+     * path, keyed by realpath and validated by size + mtime, so it survives worker
+     * restarts and is shared by all 14 HTTP workers. Without it each worker re-probes
+     * every file once and the first request after a restart pays for it.
+     *
+     * Entries are written atomically (mode 0600) and bounded: entries over 64 KiB
+     * are not stored and the directory is pruned to 9000 entries once it passes
+     * 10000. A directory that cannot be created or written is a cache miss, never a
+     * request failure. Point PHLIX_PROBE_CACHE_DIR at a persistent path (e.g. under
+     * /var/phlix) to keep the cache across reboots; the default lives in the system
+     * temp directory and is therefore lost on reboot, which only costs re-probing.
+     */
+    'probe_cache_dir' => EnvConfig::text('PHLIX_PROBE_CACHE_DIR', sys_get_temp_dir() . '/phlix-ffprobe-cache'),
+
     // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
     // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors
     // the max_concurrent_transcodes knob's style/placement.

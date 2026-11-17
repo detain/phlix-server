@@ -19,6 +19,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\EncodeSettings;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\ProbeCache;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Psr\Container\ContainerInterface;
@@ -130,6 +131,13 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $ffmpegConfig['segment_decode_threads']
             : null;
 
+        // perf #11: persisted, cross-worker ffprobe cache directory. A non-empty
+        // string enables the disk cache; anything else leaves the runner memo-only.
+        $probeCacheDir = is_string($ffmpegConfig['probe_cache_dir'] ?? null)
+            && trim((string) $ffmpegConfig['probe_cache_dir']) !== ''
+            ? (string) $ffmpegConfig['probe_cache_dir']
+            : null;
+
         $loudnormParams = null;
         $loudnessConfig = is_array($ffmpegConfig['loudness'] ?? null) ? $ffmpegConfig['loudness'] : [];
         if (($loudnessConfig['enabled'] ?? false) === true && is_numeric($loudnessConfig['I'] ?? null)) {
@@ -160,7 +168,8 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $ffprobePath,
                     $transcodeDir,
                     $segmentEncodeThreads,
-                    $segmentDecodeThreads
+                    $segmentDecodeThreads,
+                    $probeCacheDir
                 ): FfmpegRunner {
                     // Static cache: only instantiate once per worker process.
                     static $runner = null;
@@ -184,6 +193,11 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // this constructor's documented "signature unchanged" law).
                     $runner->setSegmentEncodeThreads($segmentEncodeThreads);
                     $runner->setSegmentDecodeThreads($segmentDecodeThreads);
+                    $runner->setProbeCache(
+                        $probeCacheDir !== null
+                            ? new ProbeCache($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
+                            : null
+                    );
 
                     // SV-4.2: wire the segment-process registry so on-demand encode
                     // PIDs are tracked for cancellation / wait-timeout kill.

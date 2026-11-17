@@ -113,14 +113,25 @@ class FfmpegRunner
     private array $config = [];
 
     /**
-     * Per-worker probe memoization cache: keyed by "path:mtime", value is the
+     * Per-worker probe memoization cache: keyed by "path:mtime:size", value is the
      * cached probe result. Caps ffprobe invocations to at most one per file per
      * worker lifetime — critical for the tone-map decision path where multiple
-     * segment encodes can ask about the same file in quick succession.
+     * segment encodes can ask about the same file in quick succession. Bounded at
+     * {@see self::PROBE_MEMO_LIMIT} entries; the persisted {@see ProbeCache} sits
+     * beneath it and survives restarts (perf #11).
      *
      * @var array<string, array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null>
      */
     private array $probeMemo = [];
+
+    /** Maximum in-process probe memo entries per worker (oldest evicted first). */
+    private const PROBE_MEMO_LIMIT = 512;
+
+    /**
+     * Optional persisted probe cache shared across workers (perf #11), or null for
+     * the memo-only behaviour. Wired by the container; see {@see setProbeCache()}.
+     */
+    private ?ProbeCache $probeCache = null;
 
     /** @var bool|null Whether FFmpeg has libplacebo filter support (null = not yet checked) */
     private ?bool $hasLibplacebo = null;
@@ -336,13 +347,23 @@ class FfmpegRunner
      */
     public function probe(string $inputPath): ?array
     {
-        // Memoize by path + mtime so at most one probe per file per worker
-        // lifetime. The mtime guard handles the case where the file changes
-        // on disk (e.g. after a re-encode).
-        $mtime = is_file($inputPath) ? (string) @filemtime($inputPath) : '';
-        $cacheKey = $inputPath . ':' . $mtime;
+        // Memoize by path + size + mtime so at most one probe per file per worker
+        // lifetime. The size/mtime guard handles a file that changes on disk (e.g.
+        // after a re-encode). A failed probe is memoized as null but is retried.
+        $stamp = $this->probeFileStamp($inputPath);
+        $cacheKey = $inputPath . ':' . ($stamp === null ? '' : $stamp['mtime'] . ':' . $stamp['size']);
         if (isset($this->probeMemo[$cacheKey])) {
             return $this->probeMemo[$cacheKey];
+        }
+
+        // perf #11: a persisted result for this exact file (realpath + size + mtime)
+        // skips the ffprobe run, and it is shared with every other worker.
+        if ($stamp !== null && $this->probeCache !== null) {
+            $persisted = $this->probeCache->read($stamp['realpath'], $stamp['size'], $stamp['mtime']);
+            if ($persisted !== null) {
+                $this->rememberProbe($cacheKey, $persisted);
+                return $persisted;
+            }
         }
 
         $cmd = sprintf(
@@ -351,22 +372,86 @@ class FfmpegRunner
             escapeshellarg($inputPath)
         );
 
-        $output = $this->runProbeCommand($cmd);
+        $result = $this->parseProbeOutput($this->runProbeCommand($cmd));
+        $this->rememberProbe($cacheKey, $result);
+
+        // Only a successful probe is persisted; a failure may be transient and is retried.
+        if ($result !== null && $stamp !== null && $this->probeCache !== null) {
+            $this->probeCache->write($stamp['realpath'], $stamp['size'], $stamp['mtime'], $result);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Wire the persisted, cross-worker ffprobe cache (perf #11). Null (the default,
+     * and what CLI scripts and unit tests get) keeps the in-process memo only.
+     *
+     * @since perf #11
+     */
+    public function setProbeCache(?ProbeCache $cache): void
+    {
+        $this->probeCache = $cache;
+    }
+
+    /**
+     * The size, mtime and realpath a probe result is keyed on, or null when the path
+     * is not a readable regular file.
+     *
+     * @return array{realpath: string, size: int, mtime: int}|null
+     */
+    private function probeFileStamp(string $inputPath): ?array
+    {
+        if (!is_file($inputPath)) {
+            return null;
+        }
+        $realPath = realpath($inputPath);
+        if ($realPath === false) {
+            return null;
+        }
+        $size = @filesize($realPath);
+        $mtime = @filemtime($realPath);
+        if (!is_int($size) || !is_int($mtime)) {
+            return null;
+        }
+
+        return ['realpath' => $realPath, 'size' => $size, 'mtime' => $mtime];
+    }
+
+    /**
+     * Store a probe result in the in-process memo, evicting the oldest entry once the
+     * per-worker cap is reached so a long-lived worker's memo cannot grow without bound.
+     *
+     * @param array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null $result
+     */
+    private function rememberProbe(string $cacheKey, ?array $result): void
+    {
+        $this->probeMemo[$cacheKey] = $result;
+        if (count($this->probeMemo) > self::PROBE_MEMO_LIMIT) {
+            array_shift($this->probeMemo);
+        }
+    }
+
+    /**
+     * Normalize ffprobe's JSON stdout into the probe shape, or null when it is empty
+     * or malformed.
+     *
+     * @return array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null
+     */
+    private function parseProbeOutput(?string $output): ?array
+    {
         if ($output === null || $output === '') {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $data = json_decode($output, true);
         if (!is_array($data)) {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $rawStreams = $data['streams'] ?? [];
         $rawFormat = $data['format'] ?? [];
         if (!is_array($rawStreams) || !is_array($rawFormat)) {
-            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
@@ -391,12 +476,10 @@ class FfmpegRunner
             }
         }
 
-        $result = [
+        return [
             'streams' => $streams,
             'format' => $format,
         ];
-        $this->probeMemo[$cacheKey] = $result;
-        return $result;
     }
 
     /**

@@ -38,12 +38,18 @@ use Psr\Log\NullLogger;
  *     — otherwise the cap/dedup globs would count a dead encode as in-flight.
  *
  * Wait-timeout semantics (SV-4.2 finding #2): a single request's poll wait
- * timing out is NOT abandonment. {@see releaseAfterWaitTimeout()} therefore only
- * stops tracking the encode (and cleans the temp IFF the encode is already dead)
- * — it never kills a still-running encode, so a slow-but-wanted software 4K/HEVC
- * transcode is left to finish and publish for the retrying requester. The
- * `timeout <transcode_timeout>` wrapper is the backstop for a genuinely stuck
- * encode; genuine abandonment kills promptly via the cancel path.
+ * timing out is NOT abandonment. {@see releaseAfterWaitTimeout()} never kills a
+ * still-running encode, so a slow-but-wanted software 4K/HEVC transcode is left
+ * to finish and publish for the retrying requester. A LIVE encode is handed to the
+ * watchdog ({@see sweep()}) rather than forgotten, so a stalled one still has an
+ * owner. A DEAD one has its temp cleaned right away. Genuine abandonment kills
+ * promptly via the cancel path.
+ *
+ * Watchdog (stall and wall-clock): {@see sweep()} reaps a live encode whose temp
+ * family has not grown for {@see configureWatchdog()}'s stall window, or that
+ * exceeds its wall-clock cap. Both are far tighter than the `timeout` wrapper.
+ * A reaped encode's slot and `.part` temp are released once the process is dead.
+ * The sweep is non-blocking: SIGTERM now, SIGKILL on a later sweep.
  *
  * Shared-encode landmine guard (SV-4.2-disconnect): an on-demand encode is
  * deduplicated by its output path, so a SECOND concurrent requester piggybacks
@@ -202,6 +208,52 @@ final class SegmentProcessRegistry
     private float $gracePeriodSeconds;
 
     /**
+     * Per-key progress of a TRACKED launch (cancel key => progress), read by the
+     * watchdog in {@see sweep()}. `startedNs` is the registration instant, `lastSize`
+     * the total bytes of the encode's temp family last observed, and `lastGrowNs`
+     * the last instant that size grew. All monotonic (hrtime). Dropped with the key.
+     *
+     * @var array<string, array{startedNs: int, lastSize: int, lastGrowNs: int}>
+     */
+    private array $progress = [];
+
+    /**
+     * Launches the watchdog now owns. A launch lands here when its poll gave up while
+     * the encode was still alive ({@see releaseAfterWaitTimeout()}), or when the
+     * watchdog itself judged it stalled or over the wall-clock cap. A slow-but-
+     * growing encode is never moved here by the poll alone, so SV-4.2 finding #2
+     * still holds. An orphan is removed when its process is dead, after its temps
+     * are cleaned. Bounded by the watchdog's own wall-clock and stall rules.
+     *
+     * @var list<array{key: string, pids: array<int, int>, tmps: array<int, string>,
+     *     startedNs: int, lastSize: int, lastGrowNs: int, termNs: int|null}>
+     */
+    private array $orphans = [];
+
+    /**
+     * Seconds without the encode's temp growing before it is declared stalled and
+     * killed. Segments are 6 s of content and a healthy libx264 encode writes output
+     * several times a second once started. 30 s is 5× the segment length, so a
+     * healthy encode never trips it, and it is the same order as a hung sshfs read.
+     */
+    private float $stallSeconds = 30.0;
+
+    /**
+     * Wall-clock cap, in seconds, for one on-demand segment encode. A 6 s segment
+     * finishes in seconds, so 120 s is 20× realtime for one segment. Far below the
+     * 7200 s `timeout` wrapper, which only fires as the last backstop.
+     */
+    private float $maxWallSeconds = 120.0;
+
+    /**
+     * Total bytes of an encode's temp family: fn(array<int, string> $tmps): int.
+     * Defaults to summing each temp and its CMAF siblings. Overridable in tests.
+     *
+     * @var callable(array<int, string>): int
+     */
+    private $sizeProbe;
+
+    /**
      * @param callable(int, int): void|null $signalSender
      * @param callable(int): bool|null      $isAlive
      * @param callable(string): void|null   $tempCleaner
@@ -218,6 +270,36 @@ final class SegmentProcessRegistry
         $this->isAlive = $isAlive ?? self::defaultLivenessProbe();
         $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
+        $this->sizeProbe = self::defaultSizeProbe();
+    }
+
+    /**
+     * Configure the stall and wall-clock watchdog that {@see sweep()} applies to every
+     * detached segment encode. Non-positive values keep the shipped default, so a
+     * bad config can never turn the watchdog off or make it kill everything.
+     *
+     * @param float $stallSeconds   Seconds without temp growth before a live encode is killed.
+     * @param float $maxWallSeconds Wall-clock cap for one encode, in seconds.
+     */
+    public function configureWatchdog(float $stallSeconds, float $maxWallSeconds): void
+    {
+        if ($stallSeconds > 0.0) {
+            $this->stallSeconds = $stallSeconds;
+        }
+        if ($maxWallSeconds > 0.0) {
+            $this->maxWallSeconds = $maxWallSeconds;
+        }
+    }
+
+    /**
+     * Override the temp-family size probe used by the watchdog. Null restores the
+     * default (sum of each temp and its CMAF siblings). Exists for tests.
+     *
+     * @param (callable(array<int, string>): int)|null $sizeProbe
+     */
+    public function setSizeProbe(?callable $sizeProbe): void
+    {
+        $this->sizeProbe = $sizeProbe ?? self::defaultSizeProbe();
     }
 
     /**
@@ -276,6 +358,10 @@ final class SegmentProcessRegistry
             $this->tmpsByKey[$key][] = $tmp;
         }
 
+        // The watchdog's clock starts at the first registration for this key.
+        $now = (int) hrtime(true);
+        $this->progress[$key] ??= ['startedNs' => $now, 'lastSize' => 0, 'lastGrowNs' => $now];
+
         if ($group !== null && $group !== '' && !isset($this->groupOfKey[$key])) {
             $this->keysByGroup[$group][] = $key;
             $this->groupOfKey[$key] = $group;
@@ -316,17 +402,284 @@ final class SegmentProcessRegistry
             }
         }
 
+        if ($anyAlive) {
+            // A poll timing out is not abandonment, so the encode is not killed here.
+            // But forgetting a LIVE encode would leave it with no owner: nothing could
+            // kill a stalled one until the 7200 s wrapper. Hand it to the watchdog
+            // instead, which reaps it on stall or wall-clock overrun and removes it once
+            // it is dead.
+            $this->orphan($key);
+            return;
+        }
+
         $this->drop($key);
 
-        if (!$anyAlive) {
-            // Dead (or never tracked) without publishing → clean THIS launcher's
-            // own corpse temp only (never the `{$final}.part-*` family, so a
-            // sibling worker's live temp for the same final path is untouched —
-            // SV-4.2 re-review Low). A naturally-exiting encode already ran its
-            // `|| rm`, so this is a harmless no-op then; the case that matters is
-            // the `timeout` backstop signalling it (which skips the `|| rm`).
-            $this->cleanTemps($tmps);
+        // Dead (or never tracked) without publishing → clean THIS launcher's
+        // own corpse temp only (never the `{$final}.part-*` family, so a
+        // sibling worker's live temp for the same final path is untouched —
+        // SV-4.2 re-review Low). A naturally-exiting encode already ran its
+        // `|| rm`, so this is a harmless no-op then; the case that matters is
+        // the `timeout` backstop signalling it (which skips the `|| rm`).
+        $this->cleanTemps($tmps);
+    }
+
+    /**
+     * Watchdog pass over every detached segment encode this worker launched: reaps
+     * the stalled ones, the ones over the wall-clock cap, and the orphans that
+     * have died. It never blocks. SIGTERM is sent now, and SIGKILL is sent on a
+     * later pass once the grace period has elapsed. The temp family is removed
+     * only after the process is dead. Driven by a per-worker timer and also,
+     * throttled, from the cap check in TranscodeManager.
+     *
+     * Rules, per launch:
+     *  - dead → temps cleaned, entry dropped (a stalled encode's slot and .part are
+     *    freed here);
+     *  - alive and past the wall-clock cap → reaped;
+     *  - alive and the temp family has not grown for {@see configureWatchdog()}'s
+     *    stall window → reaped. Only applies when a temp was registered, so a launch
+     *    we cannot observe is never killed for silence.
+     * A reaped TRACKED launch also has its dedup reservation invalidated through the
+     * reap callback, exactly as {@see kill()} does, so the next requester re-launches.
+     *
+     * @param int|null $nowNs Monotonic instant to judge against (hrtime). Null = now.
+     *
+     * @return int Number of encodes newly signalled (SIGTERM) by this pass.
+     */
+    public function sweep(?int $nowNs = null): int
+    {
+        $now = $nowNs ?? (int) hrtime(true);
+        $signalled = 0;
+
+        foreach (array_keys($this->pids) as $key) {
+            $pids = $this->pids[$key] ?? [];
+            if ($pids === []) {
+                continue;
+            }
+            if (!$this->anyAlive($pids)) {
+                $tmps = $this->tmpsByKey[$key] ?? [];
+                $this->drop($key);
+                $this->cleanTemps($tmps);
+                continue;
+            }
+
+            $progress = $this->progress[$key] ?? null;
+            if ($progress === null) {
+                continue;
+            }
+            $tmps = $this->tmpsByKey[$key] ?? [];
+            $lastSize = $progress['lastSize'];
+            $lastGrowNs = $progress['lastGrowNs'];
+            $this->observeGrowth($tmps, $lastSize, $lastGrowNs, $now);
+            $this->progress[$key] = [
+                'startedNs' => $progress['startedNs'],
+                'lastSize' => $lastSize,
+                'lastGrowNs' => $lastGrowNs,
+            ];
+
+            $reason = $this->watchdogReason($progress['startedNs'], $lastGrowNs, $tmps !== [], $now);
+            if ($reason === null) {
+                continue;
+            }
+
+            $this->logger->warning('SegmentProcessRegistry: reaping stalled segment encode', [
+                'key' => $key,
+                'reason' => $reason,
+                'pids' => $pids,
+            ]);
+            // Invalidate the dedup reservation BEFORE the signal, exactly as kill()
+            // does, so a requester arriving now re-launches instead of deduping onto
+            // the encode about to die.
+            if ($this->onReap !== null) {
+                ($this->onReap)($key);
+            }
+            $signalled += $this->signalOrphanForStall($this->orphan($key), $now);
         }
+
+        $keep = [];
+        foreach ($this->orphans as $orphan) {
+            if (!$this->anyAlive($orphan['pids'])) {
+                $this->cleanTemps($orphan['tmps']);
+                continue; // dead → gone
+            }
+
+            if ($orphan['termNs'] !== null) {
+                // Already signalled: escalate to SIGKILL once the grace has elapsed.
+                // Non-blocking, so a pass never waits here.
+                if ($now - $orphan['termNs'] >= (int) ($this->gracePeriodSeconds * 1_000_000_000)) {
+                    foreach ($orphan['pids'] as $pid) {
+                        if (($this->isAlive)($pid)) {
+                            ($this->signalSender)($pid, self::sigKill());
+                        }
+                    }
+                }
+                $keep[] = $orphan;
+                continue;
+            }
+
+            $lastSize = $orphan['lastSize'];
+            $lastGrowNs = $orphan['lastGrowNs'];
+            $this->observeGrowth($orphan['tmps'], $lastSize, $lastGrowNs, $now);
+            $orphan['lastSize'] = $lastSize;
+            $orphan['lastGrowNs'] = $lastGrowNs;
+
+            $reason = $this->watchdogReason($orphan['startedNs'], $lastGrowNs, $orphan['tmps'] !== [], $now);
+            if ($reason !== null) {
+                $this->logger->warning('SegmentProcessRegistry: reaping orphaned segment encode', [
+                    'key' => $orphan['key'],
+                    'reason' => $reason,
+                    'pids' => $orphan['pids'],
+                ]);
+                $orphan['termNs'] = $now;
+                foreach ($orphan['pids'] as $pid) {
+                    ($this->signalSender)($pid, self::sigTerm());
+                }
+                $signalled++;
+            }
+            $keep[] = $orphan;
+        }
+        $this->orphans = $keep;
+
+        return $signalled;
+    }
+
+    /**
+     * Number of live encodes the watchdog owns past their poll (see {@see sweep()}).
+     * Exposed for observability and leak assertions.
+     */
+    public function orphanCount(): int
+    {
+        return count($this->orphans);
+    }
+
+    /**
+     * Move a TRACKED launch to the watchdog's ownership: its pids, temps and progress
+     * leave the keyed maps (freeing the key for a fresh launch) and become one orphan
+     * record. The group link is torn down by drop(), so a later killGroup() no longer
+     * reaches it, which matches the wait-timeout release it replaces.
+     *
+     * @param string $key Tracked cancel key.
+     *
+     * @return int|null Index of the new orphan record, or null when there was nothing to move.
+     */
+    private function orphan(string $key): ?int
+    {
+        $pids = $this->pids[$key] ?? [];
+        $tmps = $this->tmpsByKey[$key] ?? [];
+        $progress = $this->progress[$key] ?? null;
+        $this->drop($key);
+
+        if ($pids === [] || $progress === null) {
+            return null;
+        }
+
+        $this->orphans[] = [
+            'key' => $key,
+            'pids' => $pids,
+            'tmps' => $tmps,
+            'startedNs' => $progress['startedNs'],
+            'lastSize' => $progress['lastSize'],
+            'lastGrowNs' => $progress['lastGrowNs'],
+            'termNs' => null,
+        ];
+
+        return array_key_last($this->orphans);
+    }
+
+    /**
+     * Send SIGTERM to the orphan at the given index for a stall/wall reap, marking it
+     * as signalled so the next pass escalates it to SIGKILL if it outlives the grace.
+     *
+     * @param int|null $index Index into {@see $orphans}; null is a no-op.
+     *
+     * @return int 1 when the orphan was signalled, 0 otherwise.
+     */
+    private function signalOrphanForStall(?int $index, int $now): int
+    {
+        if ($index === null || !isset($this->orphans[$index])) {
+            return 0;
+        }
+        $this->orphans[$index]['termNs'] = $now;
+        foreach ($this->orphans[$index]['pids'] as $pid) {
+            ($this->signalSender)($pid, self::sigTerm());
+        }
+
+        return 1;
+    }
+
+    /**
+     * Fold the temp family's current size into the progress pair. A size increase
+     * refreshes the last-growth instant.
+     *
+     * @param array<int, string> $tmps
+     */
+    private function observeGrowth(array $tmps, int &$lastSize, int &$lastGrowNs, int $now): void
+    {
+        if ($tmps === []) {
+            return;
+        }
+        $size = ($this->sizeProbe)($tmps);
+        if ($size > $lastSize) {
+            $lastSize = $size;
+            $lastGrowNs = $now;
+        }
+    }
+
+    /**
+     * The watchdog verdict for one live launch, or null to leave it alone.
+     *
+     * @return string|null 'wall-clock', 'stall', or null
+     */
+    private function watchdogReason(int $startedNs, int $lastGrowNs, bool $observable, int $now): ?string
+    {
+        if ($now - $startedNs > (int) ($this->maxWallSeconds * 1_000_000_000)) {
+            return 'wall-clock';
+        }
+        if ($observable && $now - $lastGrowNs > (int) ($this->stallSeconds * 1_000_000_000)) {
+            return 'stall';
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<int, int> $pids
+     */
+    private function anyAlive(array $pids): bool
+    {
+        foreach ($pids as $pid) {
+            if (($this->isAlive)($pid)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Default temp-family size: each temp plus its CMAF siblings (`{tmp}.i`,
+     * `{tmp}.s0`, `{tmp}.m3u8`), matched by the same unique hex as the temp itself,
+     * never a `{final}.part-*` family glob.
+     *
+     * @return callable(array<int, string>): int
+     */
+    private static function defaultSizeProbe(): callable
+    {
+        return static function (array $tmps): int {
+            $total = 0;
+            foreach ($tmps as $tmp) {
+                if ($tmp === '') {
+                    continue;
+                }
+                $escaped = addcslashes($tmp, '*?[]\\');
+                foreach (glob($escaped . '*') ?: [] as $file) {
+                    $size = @filesize($file);
+                    if (is_int($size)) {
+                        $total += $size;
+                    }
+                }
+            }
+            return $total;
+        };
     }
 
     /**
@@ -484,7 +837,7 @@ final class SegmentProcessRegistry
      */
     private function drop(string $key): void
     {
-        unset($this->pids[$key], $this->tmpsByKey[$key]);
+        unset($this->pids[$key], $this->tmpsByKey[$key], $this->progress[$key]);
 
         $group = $this->groupOfKey[$key] ?? null;
         unset($this->groupOfKey[$key]);

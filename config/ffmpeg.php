@@ -38,6 +38,14 @@ return [
     // server.hls.max_concurrent_segments (HLS_MAX_CONCURRENT_SEGMENTS, default 8).
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
+    // Watchdog for detached on-demand SEGMENT encodes (SegmentProcessRegistry::sweep()).
+    // A segment is 6 s of content, so a healthy encode writes output several times a
+    // second. Killing one whose temp has not grown for 30 s (5× the segment length, the
+    // order of a hung sshfs read) frees its cap slot and its .part temp. The 120 s wall
+    // cap is 20× realtime for one segment. Both are far below transcode_timeout, which
+    // remains the last backstop. Non-positive values fall back to the registry defaults.
+    'segment_stall_seconds' => 30,
+    'segment_max_wall_seconds' => 120,
 
     /**
      * playback-lag wave C: thread cap for the SOFTWARE libx264 segment encoder

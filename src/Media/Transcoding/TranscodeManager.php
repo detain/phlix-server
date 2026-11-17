@@ -271,6 +271,26 @@ class TranscodeManager
     private const SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS = 1000;
 
     /**
+     * The per-worker registry of detached segment-encode process groups. The stall
+     * and wall-clock watchdog ({@see SegmentProcessRegistry::sweep()}) runs on it, so
+     * an encode whose poll gave up still has an owner that can reap it. Wired from the
+     * container (TranscodeServicesProvider) via {@see setSegmentProcessRegistry()}.
+     */
+    private ?SegmentProcessRegistry $segmentRegistry = null;
+
+    /** Workerman timer id of this worker's encode watchdog; null until armed, 0 if no event loop. */
+    private ?int $watchdogTimerId = null;
+
+    /** Monotonic ms of the last request-driven watchdog sweep (throttled). */
+    private ?int $lastWatchdogSweepMs = null;
+
+    /** Period (s) of the per-worker watchdog timer. */
+    private const ENCODE_WATCHDOG_TICK_SECONDS = 5;
+
+    /** Minimum spacing (ms) between request-driven watchdog sweeps. */
+    private const ENCODE_WATCHDOG_REQUEST_SWEEP_MS = 1000;
+
+    /**
      * Grace (ms) before a tracked encode with neither a live `.part-*` temp nor a
      * finished segment on disk is treated as dead and dropped from
      * {@see $segmentEncodesInFlight}. Covers the brief launch→temp-file-appears
@@ -1526,6 +1546,7 @@ class TranscodeManager
             // seek-storm scenario this cap exists to prevent. Real-time accuracy is
             // preserved because this glob only runs on an actual launch decision
             // (after the dedup check found no in-flight encode for this segment).
+            $this->watchdogTick();
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
                 $overCap = true;
                 // Roll back the reservation immediately — the finally below never
@@ -1974,6 +1995,7 @@ class TranscodeManager
             $this->segmentEncodesInFlight[$final] = ['at' => $this->monotonicMs(), 'gen' => $myGen];
             $reserved = true;
 
+            $this->watchdogTick();
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
                 $overCap = true;
                 $this->clearReservationIfMine($final, $myGen);
@@ -2588,6 +2610,7 @@ class TranscodeManager
         return intdiv($this->maxConcurrentSegments, 2);
     }
 
+
     /**
      * Reconcile the in-worker DEDUP bookkeeping against the shared segment tree —
      * throttled to at most one glob per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
@@ -2691,6 +2714,71 @@ class TranscodeManager
     {
         return (int) (hrtime(true) / 1_000_000);
     }
+
+    /**
+     * Wire the per-worker segment-process registry the encode watchdog sweeps. Null
+     * disables the watchdog (the request-driven sweep and the timer both stand down).
+     */
+    public function setSegmentProcessRegistry(?SegmentProcessRegistry $registry): void
+    {
+        $this->segmentRegistry = $registry;
+    }
+
+    /**
+     * Run before every launch decision: arm the per-worker watchdog timer once, and
+     * run a throttled sweep so slots held by stalled or over-age encodes are freed
+     * even when no timer tick has fired yet. Cheap when there is nothing to reap.
+     */
+    private function watchdogTick(): void
+    {
+        $this->armEncodeWatchdog();
+
+        if ($this->segmentRegistry === null) {
+            return;
+        }
+        $now = $this->monotonicMs();
+        if (
+            $this->lastWatchdogSweepMs !== null
+            && ($now - $this->lastWatchdogSweepMs) < self::ENCODE_WATCHDOG_REQUEST_SWEEP_MS
+        ) {
+            return;
+        }
+        $this->lastWatchdogSweepMs = $now;
+        $this->segmentRegistry->sweep();
+    }
+
+    /**
+     * Arm this worker's Workerman timer that sweeps the segment registry every
+     * {@see self::ENCODE_WATCHDOG_TICK_SECONDS}, so a stalled encode is reaped even
+     * when no request arrives. Armed at most once per worker. Outside a Workerman
+     * runtime (CLI, unit tests) Timer::add() throws, and the request-driven sweep
+     * alone carries the watchdog.
+     */
+    private function armEncodeWatchdog(): void
+    {
+        if ($this->watchdogTimerId !== null || $this->segmentRegistry === null) {
+            return;
+        }
+
+        $registry = $this->segmentRegistry;
+        $logger = $this->logger;
+        try {
+            $this->watchdogTimerId = (int) \Workerman\Timer::add(
+                self::ENCODE_WATCHDOG_TICK_SECONDS,
+                static function () use ($registry, $logger): void {
+                    try {
+                        $registry->sweep();
+                    } catch (\Throwable $e) {
+                        // A watchdog failure must never stop the timer or reach the event loop.
+                        $logger->warning('HLS encode watchdog sweep failed', ['exception' => $e->getMessage()]);
+                    }
+                },
+            );
+        } catch (\Throwable) {
+            $this->watchdogTimerId = 0;
+        }
+    }
+
 
     /**
      * Bumps a job directory's mtime so the LRU sweep ({@see sweepSegmentCache()})

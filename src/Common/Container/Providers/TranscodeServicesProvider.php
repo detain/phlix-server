@@ -144,7 +144,18 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c): SegmentProcessRegistry {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
-                    return new SegmentProcessRegistry($logger);
+                    $registry = new SegmentProcessRegistry($logger);
+                    // Stall and wall-clock watchdog bounds (config/ffmpeg.php). A missing
+                    // or non-numeric value passes 0.0, and the registry keeps its default.
+                    $ffmpegCfg = \Phlix\Config\EffectiveConfig::file('ffmpeg');
+                    $stallSeconds = $ffmpegCfg['segment_stall_seconds'] ?? null;
+                    $maxWallSeconds = $ffmpegCfg['segment_max_wall_seconds'] ?? null;
+                    $registry->configureWatchdog(
+                        is_numeric($stallSeconds) ? (float) $stallSeconds : 0.0,
+                        is_numeric($maxWallSeconds) ? (float) $maxWallSeconds : 0.0,
+                    );
+
+                    return $registry;
                 }
             ),
 
@@ -309,6 +320,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // → both entrypoints (public/index.php + start.php) get it.
                     /** @var SegmentProcessRegistry $registry */
                     $registry = $c->get(SegmentProcessRegistry::class);
+                    // The stall / wall-clock watchdog sweeps the same registry, so the
+                    // manager needs it to free a stalled encode's slot after its poll gives up.
+                    $manager->setSegmentProcessRegistry($registry);
                     $registry->setWaiterGuard(
                         static fn (string $key): bool => $manager->hasOtherWaiter($key)
                     );

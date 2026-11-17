@@ -635,4 +635,48 @@ class MediaItemControllerParentalTest extends TestCase
             @unlink($thumb);
         }
     }
+
+    public function testGetChapterThumbnailIsAWholeFile200NotAPartialWindow(): void
+    {
+        // #13b: a whole-file chapter thumbnail was sent with withFile($path, 0, $size),
+        // so Workerman read a non-zero length as a byte window and answered the
+        // full-file GET with a 206 and a Content-Range. A full file carries no window.
+        $thumb = sys_get_temp_dir() . '/phlix_13b_thumb_' . bin2hex(random_bytes(4)) . '.jpg';
+        file_put_contents($thumb, 'JPEGDATA');
+
+        try {
+            $item = $this->overCapTrickplayItem();
+            $item['chapters_json'] = json_encode([['start' => 0, 'title' => 'Chapter 1']]);
+            $markerRows = [[
+                'id' => 7,
+                'media_item_id' => 'm1',
+                'marker_type' => 'chapter',
+                'start_time_ms' => 0,
+                'end_time_ms' => 60000,
+                'label' => 'Chapter 1',
+                'user_id' => null,
+                'thumbnail_path' => $thumb,
+            ]];
+
+            $controller = $this->assetController($item, $this->gate($this->pg13Filter()), $markerRows);
+
+            $resp = $controller->getChapterThumbnail($this->anonymousRequest(), ['id' => 'm1', 'index' => '0']);
+
+            $this->assertSame(200, $resp->statusCode);
+            $this->assertSame($thumb, $resp->filePath);
+            $this->assertSame(0, $resp->fileOffset);
+            $this->assertSame(0, $resp->fileLength, 'a full-file reply must not carry a byte window');
+
+            // The wire shape Workerman derives from that window: a plain 200 with the
+            // whole body and no Content-Range.
+            $wire = clone $resp;
+            $wire->materializeFileWindow();
+            $this->assertSame(200, $wire->statusCode);
+            $this->assertArrayNotHasKey('Content-Range', $wire->headers);
+            $this->assertSame('8', $wire->headers['Content-Length'] ?? null);
+            $this->assertSame('JPEGDATA', $wire->body);
+        } finally {
+            @unlink($thumb);
+        }
+    }
 }

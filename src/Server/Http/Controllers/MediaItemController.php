@@ -755,6 +755,10 @@ class MediaItemController
         // buffering the whole file in memory. ETag and Last-Modified are set
         // explicitly to ensure identical values on both the event-loop and
         // CGI fallback paths.
+        //
+        // The whole file is passed WITHOUT a window (#13b). A non-zero length is a
+        // byte window to Workerman, which would then answer this full-file 200 with
+        // a 206 and a Content-Range covering the whole file.
         return (new Response())
             ->status(200)
             ->header('Content-Type', $contentType)
@@ -762,7 +766,7 @@ class MediaItemController
             ->header('ETag', $etag)
             ->header('Last-Modified', $lastModified)
             ->header('Cache-Control', 'public, max-age=86400')
-            ->withFile($thumbnailPath, 0, $fileSize);
+            ->withFile($thumbnailPath);
     }
 
     /**

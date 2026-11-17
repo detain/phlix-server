@@ -291,6 +291,13 @@ class TranscodeManager
     private const ENCODE_WATCHDOG_REQUEST_SWEEP_MS = 1000;
 
     /**
+     * Slots kept free for interactive (reader-driven) encodes. A prewarm launch is
+     * refused once the in-flight count would leave fewer than this many slots, so
+     * prewarm yields to a seek before the seek is refused. See {@see prewarmFirstSegments()}.
+     */
+    private const INTERACTIVE_HEADROOM_SLOTS = 2;
+
+    /**
      * Grace (ms) before a tracked encode with neither a live `.part-*` temp nor a
      * finished segment on disk is treated as dead and dropped from
      * {@see $segmentEncodesInFlight}. Covers the brief launch→temp-file-appears
@@ -1521,6 +1528,7 @@ class TranscodeManager
         $reserved = false;
         $overCap = false;
         $myGen = 0;
+        $inFlight = 0;
         if (!$this->segmentEncodeInFlight($final)) {
             // Record the launch in-worker BEFORE the yieldable glob. The add and the
             // dedup check above run with no coroutine yield between them, so this
@@ -1547,16 +1555,25 @@ class TranscodeManager
             // preserved because this glob only runs on an actual launch decision
             // (after the dedup check found no in-flight encode for this segment).
             $this->watchdogTick();
-            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                $overCap = true;
+            $inFlight = $this->countInFlightSegmentEncodes();
+            if ($inFlight >= $this->maxConcurrentSegments) {
+                // (8a) A sibling worker may already be encoding this exact segment. The
+                // in-worker dedup cannot see that (its snapshot lags by up to one reconcile
+                // interval), so check the shared tree for this segment only. If it is being
+                // encoded, join it as a waiter instead of refusing the seek. Only a segment
+                // nobody is encoding is refused, so the cap stays a real bound.
+                $overCap = !$this->liveEncodeExistsFor($final);
                 // Roll back the reservation immediately — the finally below never
                 // runs on this throw (it precedes the try), so the rollback must
                 // happen here. Compare-and-clear on our own generation so it stays
                 // correct even in the (guaranteed-safe here) event of concurrency.
                 $this->clearReservationIfMine($final, $myGen);
-                throw new SegmentBusyException(
-                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                );
+                if ($overCap) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                $reserved = false; // join the live encode below, as a dedup hit
             }
         }
 
@@ -1596,6 +1613,15 @@ class TranscodeManager
             // back half of the box to demand. This is what ends the measured
             // 7.9 s seg0-inline stall: creation could previously stack its
             // whole window against the ceiling ahead of the first real request.
+            // (8b) Prewarm yields to interactive demand BEFORE a seek is refused. Once this
+            // launch would leave fewer than INTERACTIVE_HEADROOM_SLOTS free, the head start
+            // stands down, so a seek (video + audio) always finds the slots it needs. The
+            // reader keeps the full ceiling, as before; only prewarm is held back.
+            if ($inFlight + 1 > $this->maxConcurrentSegments - $this->interactiveHeadroom()) {
+                $this->clearReservationIfMine($final, $myGen);
+
+                return null;
+            }
             if ($this->countInFlightPrewarmEncodes() >= $this->prewarmInFlightBudget()) {
                 // Same compare-and-clear discipline as the cap rollback above:
                 // we reserved this slot at :1433's family and own the generation.
@@ -1997,11 +2023,16 @@ class TranscodeManager
 
             $this->watchdogTick();
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                $overCap = true;
+                // (8a) As in produceSegment(): join a live sibling encode of this exact
+                // segment instead of refusing it. Only an unclaimed segment is refused.
+                $overCap = !$this->liveEncodeExistsFor($final);
                 $this->clearReservationIfMine($final, $myGen);
-                throw new SegmentBusyException(
-                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                );
+                if ($overCap) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                $reserved = false; // join the live encode below, as a dedup hit
             }
         }
 
@@ -2610,6 +2641,16 @@ class TranscodeManager
         return intdiv($this->maxConcurrentSegments, 2);
     }
 
+    /**
+     * Slots the interactive (reader) path keeps free from prewarm: the fixed
+     * {@see self::INTERACTIVE_HEADROOM_SLOTS}, but never more than the reader's own
+     * half of the ceiling, ceil(cap / 2). So a 2-slot box still lets prewarm hold its
+     * one slot (the wave A′ law), and a 1-slot box stands prewarm down entirely.
+     */
+    private function interactiveHeadroom(): int
+    {
+        return min(self::INTERACTIVE_HEADROOM_SLOTS, intdiv($this->maxConcurrentSegments + 1, 2));
+    }
 
     /**
      * Reconcile the in-worker DEDUP bookkeeping against the shared segment tree —
@@ -2779,6 +2820,24 @@ class TranscodeManager
         }
     }
 
+    /**
+     * True when a LIVE encode for exactly this segment exists in the shared tree,
+     * whichever worker launched it. Scoped to this one job directory, so it costs a
+     * single directory listing rather than a tree scan. Used to piggyback on a
+     * sibling worker's in-flight encode instead of refusing the request with
+     * SegmentBusyException (the in-worker dedup cannot see it: its snapshot is up to
+     * one reconcile interval stale).
+     *
+     * @param string $final Absolute path of the target segment.
+     */
+    private function liveEncodeExistsFor(string $final): bool
+    {
+        $pattern = addcslashes(dirname($final), '*?[]\\')
+            . '/' . addcslashes(basename($final), '*?[]\\') . '.part-*';
+        $hits = glob($pattern);
+
+        return is_array($hits) && $hits !== [] && $this->purgeDeadInFlightTemps($hits) !== [];
+    }
 
     /**
      * Bumps a job directory's mtime so the LRU sweep ({@see sweepSegmentCache()})

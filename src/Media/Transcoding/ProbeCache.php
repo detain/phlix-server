@@ -33,8 +33,10 @@ use Workerman\Timer;
  *    in-process memo, so the next probe runs ffprobe again. A stamp further ahead than that cap is
  *    not racy, and its result is persisted and memoized like an old one. So a racy file is re-probed
  *    on every {@see FfmpegRunner::probe()} call, with or without this cache, until the clock passes
- *    its stamp plus RACY_WINDOW_SECONDS. That is at most MAX_FUTURE_SKEW_SECONDS + RACY_WINDOW_SECONDS
- *    (86 402 s) after the probe. Each probe() call that runs is one ffprobe launch. The per-segment
+ *    its stamp plus RACY_WINDOW_SECONDS. For a stamp within the cap when probed, that is at most
+ *    MAX_FUTURE_SKEW_SECONDS + RACY_WINDOW_SECONDS (86 402 s) after the probe. A stamp beyond the cap when
+ *    probed becomes racy at its stamp minus MAX_FUTURE_SKEW_SECONDS, so its window is not bounded from the
+ *    probe time. Each probe() call that runs is one ffprobe launch. The per-segment
  *    counts for the software and hwaccel paths are in docs/dev/BLOCKING_IO_EXCEPTIONS.md, Exception 11.
  *    A rewrite after the window cannot leave the stamp unchanged, because the mtime has moved on, so
  *    it is a miss. The residue is a filesystem whose timestamps are 4 seconds or coarser. A non-racy

@@ -452,5 +452,12 @@ SH;
         $now = $t0;
         $runner->probe($this->media);
         self::assertSame(3, $this->probeRuns(), 'back at t0 the kept memo entry answers without ffprobe');
+
+        // The disk entry written at t0 must survive the racy phase. A fresh worker at t0 reads it: no launch,
+        // and width 1920. The racy store is keyed by the same sha1(realpath).json name, so a racy write that
+        // reached the disk store would have replaced it with width 1280 and this assertion would fail.
+        $atT0 = $this->runnerAt($cacheDir, $t0, $ffprobe)->probe($this->media);
+        self::assertSame(3, $this->probeRuns(), 'back at t0 a fresh worker is served from disk, no new launch');
+        self::assertSame(1920, $atT0['streams'][0]['width'] ?? null, 'the t0 result is still on disk, not the racy 1280');
     }
 }

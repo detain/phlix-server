@@ -294,14 +294,21 @@ final class SegmentProcessRegistry
 
     /**
      * Seconds without the encode's progress advancing before it is declared stalled
-     * and killed. A healthy CMAF encode advances `out_time_us` about every second
-     * (measured: 0.2–2 s steps on 360p and 720p `veryslow`, 1 thread), and its
-     * progress file is rewritten every 0.5 s. During the pre-first-packet lookahead
-     * `out_time_us` is N/A, and the file's mtime carries the signal. 30 s is therefore
-     * 15–60× the healthy cadence. It is also the order of a hung sshfs read, which is
-     * the failure this rule exists for.
+     * and killed. Two healthy phases look like a freeze, so the window must cover them.
+     *  - Mid-encode, `out_time_us` advances every 0.2–2 s (measured, 360p and 720p
+     *    `veryslow`, 1 thread).
+     *  - The end-of-input flush: ffmpeg writes no progress block at all while the
+     *    encoder drains its lookahead. Measured at 720p `veryslow`, 1 thread, out_time
+     *    froze for 4.7 s (3.44 s to 5.88 s) and the progress file gained no block for
+     *    that span. A 4K encode is about 9× the pixels, so its flush is about 42 s on
+     *    one thread, and about 84 s under 2× contention. The default thread cap is at
+     *    least 2, which halves that. 90 s covers the one-thread case under 2× contention.
+     *    The 30 s window this replaces would have killed a healthy 4K encode during its
+     *    flush.
+     * Before the first packet, `out_time_us` is N/A and the progress file's mtime
+     * carries the signal. A hung read freezes both, so it is still caught, at 90 s.
      */
-    private float $stallSeconds = 30.0;
+    private float $stallSeconds = 90.0;
 
     /**
      * Wall-clock cap, in seconds, for one on-demand segment encode. Measured: a 6 s

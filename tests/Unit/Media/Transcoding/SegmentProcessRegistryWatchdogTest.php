@@ -62,6 +62,8 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
         });
         // A fake process table: no test reads the real /proc for its fake PIDs.
         $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // These scenarios were written against a 30 s stall window. The shipped default is 90 s.
+        $registry->configureWatchdog(30.0, 300.0);
         $registry->setReapCallback(function (string $key): void {
             $this->reaped[] = $key;
         });
@@ -226,7 +228,8 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
         $start = $this->launch($registry, '/segs/job/seg-00008.ts', 4009, $tmp);
         $registry->configureWatchdog(0.0, -5.0);
 
-        // Defaults stand (30 s stall, 300 s wall): 31 s of silence still reaps.
+        // Non-positive values are ignored, so the 30 s stall and 300 s wall pinned by
+        // registry() stand: 31 s of silence still reaps.
         $registry->sweep($start + 31 * self::SEC);
         self::assertSame([self::SIGTERM], $this->signalsFor(4009));
     }

@@ -67,6 +67,8 @@ final class SegmentProcessRegistryProgressTest extends TestCase
         );
         // No real /proc for the fake PIDs.
         $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // These scenarios were written against a 30 s stall window. The default is tested apart.
+        $registry->configureWatchdog(30.0, 300.0);
 
         return $registry;
     }
@@ -175,6 +177,34 @@ final class SegmentProcessRegistryProgressTest extends TestCase
 
         $registry->sweep($t0 + 51 * self::SEC); // 31 s since growth: stalled
         self::assertSame([self::SIGTERM], $this->signalsFor(4104));
+    }
+
+    public function testTheShippedStallWindowIsNinetySeconds(): void
+    {
+        // A flat progress token (no growth at all), so only the stall rule can fire.
+        // The window must cover a healthy 4K end-of-input flush (see the registry docblock).
+        $this->alive[4107] = true;
+        $registry = new SegmentProcessRegistry(
+            null,
+            function (int $pid, int $signal): void {
+                $this->signals[] = [$pid, $signal];
+            },
+            fn (int $pid): bool => $this->alive[$pid] ?? false,
+            0.5,
+            static function (string $tmp): void {
+            },
+        );
+        $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        $registry->setProgressProbe(static fn (array $tmps): int => 0);
+        $tmp = $this->dir . '/seg-v720p-00005.ts.part-5e6f7081';
+        $registry->register($tmp, 4107, null, $tmp);
+        $t0 = hrtime(true);
+
+        $registry->sweep($t0 + 89 * self::SEC);
+        self::assertSame([], $this->signals, 'a 89 s flat progress token is inside the 90 s window');
+
+        $registry->sweep($t0 + 91 * self::SEC);
+        self::assertSame([self::SIGTERM], $this->signalsFor(4107), 'a 91 s flat token is a stall');
     }
 
     public function testTheShippedWallCapIsFiveMinutes(): void

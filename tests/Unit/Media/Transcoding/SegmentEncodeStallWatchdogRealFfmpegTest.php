@@ -12,11 +12,12 @@ use PHPUnit\Framework\TestCase;
  * A real local ffmpeg CMAF segment encode, through the real command builder and the
  * real registry, must not be reaped by the stall rule.
  *
- * The encode is a short 640x360 `veryslow` one-thread segment of a generated test
- * pattern, so the run stays well under half a minute. The stall window is set to 3 s,
- * far tighter than production (30 s). The encode writes no bytes to its temp family
- * until the end, so the old byte-size signal sees 3 s of silence and reaps it. The
- * progress file keeps the encode alive. Skipped when ffmpeg is not installed.
+ * The encode is a 720p `veryslow` one-thread segment of a generated test pattern. It
+ * takes about 17 s on the dev host. The stall window is set to 10 s, tighter than
+ * production (90 s). The encode writes no bytes to its temp family until the end, so
+ * the old byte-size signal sees 10 s of silence and reaps it. The progress file keeps
+ * the encode alive. The longest healthy freeze measured on this encode is the 4.7 s
+ * end-of-input flush, so 10 s leaves room. Skipped when ffmpeg is not installed.
  */
 final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
 {
@@ -60,7 +61,7 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         $source = $this->dir . '/source.mp4';
         exec(
             escapeshellarg($ffmpeg) . ' -nostdin -y -hide_banner -loglevel error'
-            . ' -f lavfi -i ' . escapeshellarg('testsrc2=size=640x360:rate=25')
+            . ' -f lavfi -i ' . escapeshellarg('testsrc2=size=1280x720:rate=25')
             . ' -t 8 -c:v libx264 -preset ultrafast -pix_fmt yuv420p '
             . escapeshellarg($source) . ' < /dev/null',
             $out,
@@ -73,10 +74,10 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         $runner = new FfmpegRunner($ffmpeg, '/usr/bin/ffprobe', $this->dir);
         $runner->setSegmentEncodeThreads(1);
         $registry = new SegmentProcessRegistry();
-        $registry->configureWatchdog(3.0, 60.0);
+        $registry->configureWatchdog(10.0, 120.0);
         $runner->setSegmentProcessRegistry($registry);
 
-        $final = $this->dir . '/seg-v360p-00000.m4s';
+        $final = $this->dir . '/seg-v720p-00000.m4s';
         $pid = $runner->startSegmentEncode(
             $source,
             $final,
@@ -86,8 +87,8 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
                 'video_codec' => 'libx264',
                 'preset' => 'veryslow',
                 'crf' => 23,
-                'width' => 640,
-                'height' => 360,
+                'width' => 1280,
+                'height' => 720,
                 'pix_fmt' => 'yuv420p',
                 'profile' => 'high',
                 'level' => '4.1',
@@ -95,7 +96,7 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
                 'audio_bitrate' => '128k',
                 'audio_channels' => 2,
                 'segment_format' => 'fmp4',
-                'init_file' => $this->dir . '/init-v360p.m4s',
+                'init_file' => $this->dir . '/init-v720p.m4s',
             ],
             $final,
         );

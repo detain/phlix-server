@@ -27,19 +27,32 @@ use Workerman\Timer;
  *    realpath, size, mtime, ctime and inode, and a read is a hit only when all five
  *    still match. ctime and inode are there because mtime is whole seconds: a
  *    same-size rewrite within one second, or a replace-by-rename, is a miss.
- *  - Trust: the directory is used only when it is a real directory (not a symlink),
- *    owned by the process uid, and has no group or other write bit. Another local user
- *    therefore cannot plant or replace entries. {@see createIfSecure()} checks this once
- *    at container build; every read and write re-checks it with one lstat, so a
- *    directory swapped after build is refused too. A failed check disables the disk
- *    cache and the caller probes as it always did.
+ *  - Trust: the directory is used only when all of these hold. It is a real directory
+ *    (not a symlink). It is owned by the effective uid, which is the identity that
+ *    writes the entries. It has no group or other write bit. Each ancestor directory,
+ *    walked up to /, is not writable by group or other unless it has the sticky bit.
+ *    That chain is checked once, by {@see createIfSecure()}, at container build. Every
+ *    read and write re-checks the directory itself with one lstat, and compares its
+ *    device and inode with the pair recorded at build. A directory that was replaced
+ *    or widened is refused, and the cache is switched off for the rest of the process
+ *    with one warning. A failed check disables the disk cache and the caller probes as
+ *    it always did.
+ *  - Residual race: PHP has no openat(2), no directory file descriptors and no
+ *    O_NOFOLLOW for directories, so the lstat and the later fopen or rename are two path
+ *    lookups. A directory swapped inside that window (microseconds) is not closed. The
+ *    ancestor check stops another local user from renaming the directory, because a
+ *    sticky ancestor only lets a file's owner rename it, and a non-sticky writable
+ *    ancestor is refused. The device and inode comparison catches a swap that is still
+ *    in place at the next operation. Root, or the owner of the directory, is out of scope.
  *  - Writes are atomic and private: the entry is written to a sibling `.tmp` file that
  *    is chmod'ed 0600 before any byte is written (ffprobe tags can carry personal
  *    metadata), then renamed into place, so a reader never observes a partial file.
  *  - Bounded: an entry over {@see self::MAX_ENTRY_BYTES} is not stored. Pruning is not
- *    on the probe path: {@see startPruneTimer()} runs {@see prune()} on the Workerman
- *    event loop, and each pass is bounded (scan, delete and a stop at the first failed
- *    unlink, so a failing unlink never causes a rescan loop).
+ *    on the probe path: {@see startPruneTimer()} runs {@see pruneIfDue()} on the Workerman
+ *    event loop. Every worker shares the directory, so {@see pruneIfDue()} takes a
+ *    non-blocking lock and a TTL before it scans, and one pass runs per interval across
+ *    all workers. Each pass is bounded and stops at the first failed unlink, so a
+ *    failing unlink never causes a rescan loop.
  *  - Never fatal: every I/O failure (unwritable directory, corrupt JSON, a race with
  *    another worker's rename) is a cache miss. The caller then probes as it always
  *    did, so an unusable cache directory degrades to the pre-#11 behaviour and
@@ -47,8 +60,9 @@ use Workerman\Timer;
  *
  * Local small-file reads and writes only: no network, no subprocess. The probe that
  * fills the cache is still run by {@see FfmpegRunner} through its coroutine-aware path.
- * The remaining blocking I/O (one stat, one read of at most 64 KiB, and one write of
- * at most 64 KiB per successful probe) is accepted in docs/dev/BLOCKING_IO_EXCEPTIONS.md.
+ * The remaining blocking I/O (one stat, one read of at most 64 KiB, one write of at
+ * most 64 KiB per successful probe, and the prune lock file) is accepted in
+ * docs/dev/BLOCKING_IO_EXCEPTIONS.md.
  */
 final class ProbeCache
 {
@@ -58,10 +72,18 @@ final class ProbeCache
     /** Largest entry (bytes of encoded JSON) stored. Larger probes are simply not cached. */
     public const MAX_ENTRY_BYTES = 65536;
 
-    /** Upper bound on cached entries; pruning removes the oldest down to 90 % of it. */
+    /**
+     * Entry-count cap. A prune pass evicts only while the count is above this cap, and once
+     * above it evicts down to 90 % of the cap. A directory at or below the cap is left alone.
+     */
     public const MAX_ENTRIES = 10000;
 
-    /** Directory names examined per prune pass (readdir bound). */
+    /**
+     * Directory names read per prune pass (readdir bound). Above this many names, the
+     * pass sees only the first PRUNE_SCAN_LIMIT names in readdir order, so eviction is not
+     * a global oldest-first. It converges over successive ticks, because each pass removes
+     * the oldest of the names it sees and the next pass reads further.
+     */
     public const PRUNE_SCAN_LIMIT = 20000;
 
     /** Files unlinked per prune pass. A failed unlink ends the pass; the next tick retries. */
@@ -73,9 +95,13 @@ final class ProbeCache
     /** Default period of the background prune timer, in seconds. */
     public const PRUNE_INTERVAL_SECONDS = 300;
 
-    /** stat() mode bits: the file-type field and the directory type. */
+    /** Lock and TTL file that makes one worker per interval prune the shared directory. */
+    public const PRUNE_LOCK_FILE = '.prune.lock';
+
+    /** stat() mode bits: the file-type field, the directory type, and the sticky bit. */
     private const S_IFMT = 0170000;
     private const S_IFDIR = 0040000;
+    private const S_ISVTX = 01000;
 
     /** The uid the directory must be owned by, resolved once per instance; null = untrusted. */
     private ?int $expectedUid;
@@ -84,11 +110,23 @@ final class ProbeCache
     private ?int $pruneTimerId = null;
 
     /**
+     * Device and inode of the directory, recorded when trust is first established (by
+     * {@see createIfSecure()}), and compared on every later check. Null until then.
+     *
+     * @var array{dev: int, ino: int}|null
+     */
+    private ?array $identity = null;
+
+    /** True once the directory's identity changed. The cache stays off for this process. */
+    private bool $replaced = false;
+
+    /**
      * @param string               $directory   Cache directory (created on first write, mode 0700).
      * @param int                  $maxEntries  Entry cap that {@see prune()} enforces.
      * @param LoggerInterface|null $logger      Receives debug notes for skipped writes.
      * @param int|null             $expectedUid Owner the directory must have. Null = the
-     *                                          process uid (posix_getuid()). Injectable for tests.
+     *                                          effective uid (posix_geteuid()), which is the
+     *                                          identity that writes the entries. Injectable for tests.
      */
     public function __construct(
         private readonly string $directory,
@@ -96,14 +134,16 @@ final class ProbeCache
         private readonly ?LoggerInterface $logger = null,
         ?int $expectedUid = null,
     ) {
-        $this->expectedUid = $expectedUid ?? (function_exists('posix_getuid') ? posix_getuid() : null);
+        $this->expectedUid = $expectedUid ?? (function_exists('posix_geteuid') ? posix_geteuid() : null);
     }
 
     /**
      * Build the cache only when its directory passes the trust check. Called once per
      * worker by the container, never per probe. Returns null when the disk cache must be
-     * disabled: the path is a symlink or not a directory, it is not owned by the process
-     * uid, or it has a group or other write bit. Logs one warning when it refuses.
+     * disabled, and logs one warning with the reason. The reasons: an ancestor is writable
+     * by group or other without the sticky bit; the path is a symlink or not a directory;
+     * it is not owned by the effective uid; it has a group or other write bit; or the posix
+     * extension is missing, so ownership cannot be checked.
      */
     public static function createIfSecure(
         string $directory,
@@ -112,6 +152,15 @@ final class ProbeCache
         ?int $expectedUid = null,
     ): ?self {
         try {
+            $unsafeAncestor = self::unsafeAncestorOf($directory);
+            if ($unsafeAncestor !== null) {
+                $logger?->warning(
+                    'ffprobe disk cache disabled: an ancestor directory is writable by group or other '
+                    . 'without the sticky bit',
+                    ['directory' => $directory, 'ancestor' => $unsafeAncestor]
+                );
+                return null;
+            }
             if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
                 $logger?->warning(
                     'ffprobe disk cache disabled: directory is not creatable',
@@ -120,9 +169,11 @@ final class ProbeCache
                 return null;
             }
             $cache = new self($directory, $maxEntries, $logger, $expectedUid);
-            if (!$cache->directoryIsTrusted()) {
+            // Establishes the identity (device and inode) that every later check compares against.
+            $reason = $cache->trustFailure();
+            if ($reason !== null) {
                 $logger?->warning(
-                    'ffprobe disk cache disabled: directory must be a private directory owned by this user',
+                    'ffprobe disk cache disabled: ' . $reason,
                     ['directory' => $directory]
                 );
                 return null;
@@ -143,7 +194,7 @@ final class ProbeCache
     public function read(string $realPath, int $size, int $mtime, int $ctime, int $inode): ?array
     {
         try {
-            if (!$this->directoryIsTrusted()) {
+            if ($this->trustFailure() !== null) {
                 return null;
             }
             $file = $this->fileFor($realPath);
@@ -222,8 +273,9 @@ final class ProbeCache
                 $this->skip('probe cache directory is not creatable');
                 return;
             }
-            if (!$this->directoryIsTrusted()) {
-                $this->skip('probe cache directory is not trusted');
+            $reason = $this->trustFailure();
+            if ($reason !== null) {
+                $this->skip('probe cache directory is not trusted: ' . $reason);
                 return;
             }
 
@@ -281,7 +333,7 @@ final class ProbeCache
     }
 
     /**
-     * Schedule {@see prune()} on the Workerman event loop, once per instance, so pruning
+     * Schedule {@see pruneIfDue()} on the Workerman event loop, once per instance, so pruning
      * never runs on a probe request. Outside a running worker (CLI, unit tests)
      * Timer::add() throws; that is caught and this process simply does not prune.
      */
@@ -291,9 +343,9 @@ final class ProbeCache
             return;
         }
         try {
-            $this->pruneTimerId = Timer::add($intervalSeconds, function (): void {
+            $this->pruneTimerId = Timer::add($intervalSeconds, function () use ($intervalSeconds): void {
                 try {
-                    $this->prune();
+                    $this->pruneIfDue($intervalSeconds);
                 } catch (\Throwable $e) {
                     $this->logger?->debug('ffprobe cache prune failed', ['exception' => $e::class]);
                 }
@@ -304,16 +356,62 @@ final class ProbeCache
     }
 
     /**
-     * One bounded maintenance pass. Removes stale `.tmp` files, then the oldest `.json`
-     * entries down to 90 % of the cap. Examines at most {@see self::PRUNE_SCAN_LIMIT}
-     * names and unlinks at most {@see self::PRUNE_DELETE_LIMIT} files. The first failed
-     * unlink ends the pass: there is no rescan within a pass, and the next tick retries.
+     * Runs {@see prune()} for this directory, unless another worker holds the prune lock or
+     * pruned the directory within the last half interval. Every worker has its own timer and
+     * all of them share one directory, so without this the scan repeats once per worker. The
+     * lock is a non-blocking flock on {@see self::PRUNE_LOCK_FILE}, and that file's mtime is
+     * the TTL. The lock is held only for the synchronous pass, and it is released with the handle.
+     *
+     * @return int Number of files removed; 0 when this call skipped the pass.
+     */
+    public function pruneIfDue(int $intervalSeconds = self::PRUNE_INTERVAL_SECONDS): int
+    {
+        if ($this->trustFailure() !== null) {
+            return 0;
+        }
+        $lock = $this->directory . '/' . self::PRUNE_LOCK_FILE;
+        // A lock file created by this call has no earlier pass to honour, so the TTL applies only
+        // to a file that already existed (its mtime is the last pass).
+        $existed = is_file($lock);
+        $handle = @fopen($lock, 'c');
+        if ($handle === false) {
+            return 0;
+        }
+        try {
+            if (!flock($handle, LOCK_EX | LOCK_NB)) {
+                return 0;
+            }
+            clearstatcache(true, $lock);
+            $last = $existed ? @filemtime($lock) : false;
+            if (is_int($last) && time() - $last < intdiv($intervalSeconds, 2)) {
+                return 0;
+            }
+            @touch($lock);
+
+            return $this->prune();
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /**
+     * One bounded maintenance pass. It returns 0 at once when the directory fails the trust
+     * check. Otherwise it removes stale `.tmp` files, then, only while the `.json` count is
+     * above the cap, the oldest entries down to 90 % of the cap. It reads at most
+     * {@see self::PRUNE_SCAN_LIMIT} names, in readdir order. Above that count the eviction is
+     * therefore not a global oldest-first: it sees only those names, and it converges over
+     * successive ticks. It unlinks at most {@see self::PRUNE_DELETE_LIMIT} files. The first
+     * failed unlink, whether of a stale temp or of an entry, ends the pass at once: there is
+     * no further unlink, no eviction and no rescan, and the next tick retries.
      * File ages compare against wall-clock file mtimes, so a monotonic clock does not apply.
      *
      * @return int Number of files removed.
      */
     public function prune(): int
     {
+        if ($this->trustFailure() !== null) {
+            return 0;
+        }
         $dh = @opendir($this->directory);
         if ($dh === false) {
             return 0;
@@ -340,8 +438,11 @@ final class ProbeCache
 
         $removed = 0;
         foreach ($staleTmp as $tmp) {
-            if ($removed >= self::PRUNE_DELETE_LIMIT || !@unlink($tmp)) {
-                break;
+            if ($removed >= self::PRUNE_DELETE_LIMIT) {
+                return $removed;
+            }
+            if (!@unlink($tmp)) {
+                return $removed;
             }
             $removed++;
         }
@@ -350,9 +451,9 @@ final class ProbeCache
             asort($entries);
             $keep = (int) floor($this->maxEntries * 0.9);
             $excess = min(count($entries) - $keep, self::PRUNE_DELETE_LIMIT - $removed);
-            foreach (array_slice(array_keys($entries), 0, $excess) as $oldest) {
+            foreach (array_slice(array_keys($entries), 0, max(0, $excess)) as $oldest) {
                 if (!@unlink($oldest)) {
-                    break;
+                    return $removed;
                 }
                 $removed++;
             }
@@ -362,25 +463,78 @@ final class ProbeCache
     }
 
     /**
-     * True when the directory is a real directory (lstat, so a symlink is refused), owned
-     * by the expected uid, and free of group and other write bits.
+     * Null when the directory passes every check. Otherwise the reason it does not, which the
+     * caller logs or skips on. The checks: a real directory (lstat, so a symlink is refused),
+     * owned by the expected uid, no group or other write bit, and the same device and inode
+     * as when trust was first established. An instance built without {@see createIfSecure()}
+     * records its identity at its first check. A changed identity switches the cache off for
+     * this process and logs one warning.
      */
-    private function directoryIsTrusted(): bool
+    private function trustFailure(): ?string
     {
+        if ($this->replaced) {
+            return 'directory was replaced after the trust check';
+        }
         if ($this->expectedUid === null) {
-            return false;
+            return 'the posix extension is not loaded, so the owner cannot be checked';
         }
         // PHP keeps the last stat() result per path. Without this, a re-check of the same
         // directory in a long-lived worker could return the mode from before a chmod.
         clearstatcache(true, $this->directory);
         $st = @lstat($this->directory);
         if ($st === false) {
-            return false;
+            return 'directory does not exist';
+        }
+        // The identity comparison runs before the type, owner and mode checks, so a swapped
+        // path is always reported as a replacement, even when the new one would also fail.
+        if ($this->identity === null) {
+            $this->identity = ['dev' => $st['dev'], 'ino' => $st['ino']];
+        } elseif ($st['dev'] !== $this->identity['dev'] || $st['ino'] !== $this->identity['ino']) {
+            $this->replaced = true;
+            $this->logger?->warning(
+                'ffprobe disk cache disabled: directory was replaced after the trust check',
+                ['directory' => $this->directory]
+            );
+
+            return 'directory was replaced after the trust check';
+        }
+        if (($st['mode'] & self::S_IFMT) !== self::S_IFDIR) {
+            return 'path is a symlink or not a directory';
+        }
+        if ($st['uid'] !== $this->expectedUid) {
+            return 'directory is not owned by this user';
+        }
+        if (($st['mode'] & 0022) !== 0) {
+            return 'directory is writable by group or other';
         }
 
-        return ($st['mode'] & self::S_IFMT) === self::S_IFDIR
-            && ($st['mode'] & 0022) === 0
-            && $st['uid'] === $this->expectedUid;
+        return null;
+    }
+
+    /**
+     * The first ancestor of $directory, walking up to /, that is writable by group or other
+     * without the sticky bit, or null when none is. An ancestor is checked with stat(), so a
+     * symlinked ancestor is judged by its target. A missing ancestor is skipped, because the
+     * cache creates the missing levels itself, private, with mkdir(0700, recursive).
+     */
+    private static function unsafeAncestorOf(string $directory): ?string
+    {
+        $current = dirname($directory);
+        while (true) {
+            $st = @stat($current);
+            if (
+                $st !== false
+                && ($st['mode'] & 0022) !== 0
+                && ($st['mode'] & self::S_ISVTX) === 0
+            ) {
+                return $current;
+            }
+            $parent = dirname($current);
+            if ($parent === $current) {
+                return null;
+            }
+            $current = $parent;
+        }
     }
 
     /** Absolute path of the entry for a realpath. */

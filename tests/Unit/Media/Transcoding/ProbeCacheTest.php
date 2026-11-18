@@ -292,4 +292,70 @@ final class ProbeCacheTest extends TestCase
 
         $this->cache()->startPruneTimer();
     }
+
+    /** Item 3: a failed stale-temp unlink ends the pass before any eviction. */
+    public function testAFailedStaleTempUnlinkEndsThePassBeforeEviction(): void
+    {
+        $cache = $this->cache(5);
+        for ($i = 0; $i < 8; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+        // A non-empty directory named like a stale temp file: unlink() on it fails, while
+        // every .json entry is removable.
+        $stale = $this->dir . '/cache/.blocked.json.deadbeef.tmp';
+        mkdir($stale);
+        file_put_contents($stale . '/inside', 'x');
+        touch($stale, time() - ProbeCache::STALE_TMP_SECONDS - 60);
+
+        self::assertSame(0, $cache->prune(), 'the failed temp unlink returns before the entries are evicted');
+        self::assertCount(8, glob($this->dir . '/cache/*.json') ?: [], 'no eviction after a failed unlink');
+    }
+
+    /** Item 7: eviction starts only above the cap, so exactly the cap is left alone. */
+    public function testPruneDoesNotEvictAtExactlyTheCap(): void
+    {
+        $cache = $this->cache(5);
+        for ($i = 0; $i < 5; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        self::assertSame(0, $cache->prune());
+        self::assertCount(5, glob($this->dir . '/cache/*.json') ?: []);
+    }
+
+    /** Item 6: a second call inside the TTL is skipped, so only one worker's pass runs per interval. */
+    public function testPruneIfDueRunsOnceWithinTheTtl(): void
+    {
+        $cache = $this->cache(5);
+        for ($i = 0; $i < 8; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        self::assertSame(4, $cache->pruneIfDue(), 'the first call in an interval runs the pass');
+        for ($i = 8; $i < 13; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        self::assertSame(0, $cache->pruneIfDue(), 'a second worker inside the TTL skips the pass');
+        self::assertCount(9, glob($this->dir . '/cache/*.json') ?: []);
+    }
+
+    /** Item 6: a pass is skipped while another worker holds the prune lock. */
+    public function testPruneIfDueIsSkippedWhileAnotherWorkerHoldsTheLock(): void
+    {
+        $cache = $this->cache(5);
+        for ($i = 0; $i < 8; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+        $held = fopen($this->dir . '/cache/' . ProbeCache::PRUNE_LOCK_FILE, 'c');
+        self::assertIsResource($held);
+        self::assertTrue(flock($held, LOCK_EX));
+        try {
+            self::assertSame(0, $cache->pruneIfDue(), 'the lock is held elsewhere, so this worker does not scan');
+            self::assertCount(8, glob($this->dir . '/cache/*.json') ?: []);
+        } finally {
+            flock($held, LOCK_UN);
+            fclose($held);
+        }
+    }
 }

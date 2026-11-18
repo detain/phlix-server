@@ -1394,9 +1394,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 488 measured from the CI phpunit red; the undeclared-read leg still guards.
     // +1 488→489 (minors round): one more read on a declared member; measured.
     // +18 489→507 (perf/C round 5): the branch's net declared-member reads on Request roots,
-    // measured from the phpunit red at 507 on the branch tip. Attributed in the commit message
-    // (src/ reads on the gate, the artwork and avatar fast paths, the quick-connect mint, and the
-    // rest in the new and updated tests).
+    // measured from the phpunit red at 507 on the branch tip. The census's own root inference is
+    // the authority. The read sites are the gate, the artwork and avatar fast paths, the
+    // quick-connect mint, and the new and updated tests. A textual count of them does not
+    // reconcile exactly, so the per-site list is not pinned here.
     private const EXPECTED_DECLARED_READS = 507;
 
     /**

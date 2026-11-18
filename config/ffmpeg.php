@@ -47,9 +47,10 @@ return [
     // That covers the measured 4K flush with about 3× margin. Under 2× contention the flush is
     // a linear projection of about 61 s, not a measurement, and 90 s covers that with about 1.5×
     // margin. A kill does not free the cap slot or the .part temp itself. The SIGKILL pass does,
-    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If the membership
-    // is unknown at TERM (/proc unreadable then, or absent at registration so no start time
-    // was recorded), the temp and its slot are held under the rule below until
+    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). A temp and its slot
+    // are held past that pass only under the rule below, which applies when the membership is
+    // unknown at TERM (/proc unreadable then, or absent at registration so no start time was
+    // recorded) or when the identity is unknown at the grace. Such a hold lasts until
     // transcode_timeout has passed since the TERM. The bound is measured from the TERM, not from
     // registration. A launch with a recorded start time, and with no membership snapshot or an
     // unknown identity at the grace, is held while its launched process is alive. An unchecked

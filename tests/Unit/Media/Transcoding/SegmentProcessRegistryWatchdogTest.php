@@ -40,6 +40,12 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
     /** @var array<string, int> temp => size reported by the probe */
     private array $sizes = [];
 
+    /** @var array<int, string> pid => `/proc/<pid>/stat` line (visible only while the pid is alive) */
+    private array $procs = [];
+
+    /** @var array<int, int> The fake TERM-time group membership: PID => start time. */
+    private array $members = [];
+
     private function registry(): SegmentProcessRegistry
     {
         $registry = new SegmentProcessRegistry(
@@ -60,8 +66,15 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
             }
             return $total;
         });
-        // A fake process table: no test reads the real /proc for its fake PIDs.
-        $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // A fake process table: a dead pid has no stat line, and a live one has the line
+        // registered for it. No test reads the real /proc for its fake PIDs.
+        $registry->setProcStatReader(fn (int $pid): ?string => ($this->alive[$pid] ?? false)
+            ? ($this->procs[$pid] ?? null)
+            : null);
+        $registry->setGroupMembersProbe(fn (array $leaders): array => $this->members);
+        $registry->setProcessSignalSender(function (int $pid, int $signal): void {
+            $this->signals[] = [$pid, $signal];
+        });
         // These scenarios were written against a 30 s stall window. The shipped default is 90 s.
         $registry->configureWatchdog(30.0, 300.0);
         $registry->setReapCallback(function (string $key): void {
@@ -72,15 +85,30 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
     }
 
     /**
-     * Register a launch that is alive, with a temp, and return the instant it started.
+     * Register a launch that is alive, with a temp, and return the instant it started. The
+     * launch is also a member of its own group, as a real `setsid` leader is.
      */
     private function launch(SegmentProcessRegistry $registry, string $key, int $pid, string $tmp): int
     {
         $this->alive[$pid] = true;
         $this->sizes[$tmp] = 0;
+        $this->procs[$pid] = self::statLine($pid, 'S', $pid * 10);
+        $this->members[$pid] = $pid * 10;
         $registry->register($key, $pid, null, $tmp);
 
         return hrtime(true);
+    }
+
+    /** A `/proc/<pid>/stat` line with the given state and start time (field 22). */
+    private static function statLine(int $pid, string $state, int $start): string
+    {
+        $fields = [
+            $state, '1', (string) $pid, (string) $pid, '0', '-1',
+            '0', '0', '0', '0', '0', '0', '0', '0', '0',
+            '20', '0', '1', '0', (string) $start,
+        ];
+
+        return $pid . ' (ffmpeg) ' . implode(' ', $fields) . ' 0 0';
     }
 
     /** @return list<int> */
@@ -208,11 +236,15 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
 
     public function testADeadLeaderKeepsTheGroupRecordThroughTheGrace(): void
     {
-        // The leader exits on TERM, but its children can still run in the group. The record
-        // must be held through the grace, so the group gets its one SIGKILL before the temp goes.
+        // The leader exits on TERM, but a child is still in its group. The record must be held
+        // through the grace. At the grace the child, which was in the TERM-time snapshot, gets
+        // the KILL. The dead leader does not, because it no longer has a matching identity.
         $registry = $this->registry();
         $tmp = '/segs/job/seg-00020.ts.part-1a2b3c4d';
         $start = $this->launch($registry, '/segs/job/seg-00020.ts', 4010, $tmp);
+        $this->alive[4011] = true;
+        $this->procs[4011] = self::statLine(4011, 'S', 40110);
+        $this->members[4011] = 40110;
 
         $registry->sweep($start + 31 * self::SEC); // stall: TERM to the group
         $this->alive[4010] = false;                // the leader dies on TERM
@@ -222,8 +254,9 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
         self::assertSame([], $this->cleaned, 'no temp is removed while the group may still be alive');
         self::assertSame([self::SIGTERM], $this->signalsFor(4010));
 
-        $registry->sweep($start + 32 * self::SEC); // past the grace: one KILL to the group
-        self::assertSame([self::SIGTERM, self::SIGKILL], $this->signalsFor(4010));
+        $registry->sweep($start + 32 * self::SEC); // past the grace: KILL to the verified child
+        self::assertSame([self::SIGKILL], $this->signalsFor(4011), 'the live child gets the SIGKILL');
+        self::assertSame([self::SIGTERM], $this->signalsFor(4010), 'the dead leader gets no KILL');
         self::assertSame(0, $registry->orphanCount(), 'the record is dropped after the SIGKILL');
         self::assertSame([$tmp], $this->cleaned);
     }

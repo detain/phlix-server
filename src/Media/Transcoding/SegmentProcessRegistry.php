@@ -59,19 +59,22 @@ use Psr\Log\NullLogger;
  * a zombie as alive and cannot tell a reused PID from the encode it launched. So on
  * Linux each PID's `/proc/<pid>/stat` start time (field 22) is recorded at
  * registration. A PID whose state is `Z`, or whose start time has changed, is dead
- * for liveness. Every signal is a GROUP signal (to `-pgid`), gated on the identity
- * of the group leader ({@see signalGroup()}):
- *  - TERM only while the leader is verified as the launched process. A zombie leader
- *    still holds its PID, so its group cannot have been reused, and it is signalled.
- *  - KILL also when the leader has gone, because the escalation follows a TERM that
- *    was sent to a verified group.
- *  - Never when the leader's PID now belongs to another process (reused), and never
- *    when `/proc` was readable at registration but is unreadable now (identity
- *    unknown). For that case the record is dropped after the grace, and one warning
- *    is logged per registry.
+ * for liveness.
+ *  - TERM is a GROUP signal (to `-pgid`), gated on the identity of the group leader
+ *    ({@see signalGroup()}). It is sent only while the leader is verified as the
+ *    launched process. A zombie leader still holds its PID, so its group cannot have
+ *    been reused. Never when the leader's PID now belongs to another process (reused),
+ *    and never when `/proc` was readable at registration but is unreadable now.
+ *  - KILL is never a group signal. At TERM time the group's members (PID => start time)
+ *    are snapshotted from `/proc`, BEFORE the signal ({@see sendTerm()}). At SIGKILL time
+ *    ({@see sigkillMembers()}) a process gets the KILL only if its recorded start time
+ *    still matches. A PID reused in the meantime is never killed, and neither is a
+ *    process that joined a reused group id. If `/proc` is unreadable at TERM time, no
+ *    KILL is sent and the record is dropped after the grace, with one warning per registry.
  * On non-Linux, or where `/proc` was unreadable at registration, no start time is
- * recorded and the group is signalled on the plain liveness probe, as before. In that
- * case a reused PID CAN be signalled. This is a documented bound, not a fix.
+ * recorded. The leader's TERM still goes out on the plain liveness probe, as before. But
+ * with no `/proc` there is no membership snapshot, so no KILL escalation is sent. That is
+ * a documented bound, not a fix.
  *
  * Shared-encode landmine guard (SV-4.2-disconnect): an on-demand encode is
  * deduplicated by its output path, so a SECOND concurrent requester piggybacks
@@ -124,13 +127,12 @@ use Psr\Log\NullLogger;
  *    wrapper. A live untracked encode older than the window therefore looks dead to a join,
  *    and a request at the cap gets 503 rather than joining it. Closing this needs the same
  *    persisted owner record as the untracked-encode bound above.
- *  - Group leader gone (accepted bound). The group is signalled while its leader is gone
- *    (see {@see signalGroup()}), because the leader can exit on TERM while its children
- *    run on. The PID of a reaped leader can be reused. A new group leader that exits and
- *    leaves children in the old group id, within the grace window, would then be hit by
- *    the KILL. Linux keeps a PID allocated while any process still names it as group id,
- *    so the reuse needs the whole group to have emptied first. This is accepted, not
- *    eliminated.
+ *  - Group leader gone. TERM is not sent to the group once the leader is gone (its identity
+ *    is no longer verified, see {@see signalGroup()}). Its children can still be running, so
+ *    they are snapshotted at TERM time and KILLed at grace if their start times still match.
+ *    Linux does not reallocate a PID while any process still names it as its group id, so a
+ *    group id cannot be reused while a member of the old group is alive. The start-time check
+ *    covers the rest of the window.
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -138,11 +140,13 @@ use Psr\Log\NullLogger;
  * `finally`). {@see registeredKeyCount()} is exposed so leaks are observable in
  * tests, and dropping a key always tears down its group links and identity records.
  *
- * Coroutine-safety: killing waits between SIGTERM and SIGKILL using a
- * coroutine-yielding sleep when inside a Swoole coroutine (`getCid() > 0`) and a
- * short blocking sleep otherwise, so it never blocks the event loop. The signal
- * send, liveness probe, `/proc` reader, progress probe and temp cleaner are
- * injectable for tests (no real processes spawned, no real files removed).
+ * Non-blocking: {@see kill()} never waits. It sends TERM and takes one `/proc` scan of the
+ * group membership (see {@see defaultGroupMembersProbe()}, registered as blocking-IO
+ * Exception 12), then returns. The SIGKILL escalation is sent later by {@see sweep()}, which
+ * runs from the per-worker timer once the grace has elapsed, so a kill never stalls the
+ * event loop. This class contains no sleep. The signal senders, liveness probe, `/proc`
+ * readers, progress probe and temp cleaner are injectable for tests (no real processes
+ * spawned, no real files removed).
  *
  * @since SV-4.2
  */
@@ -310,9 +314,12 @@ final class SegmentProcessRegistry
      * still holds. An orphan is removed when its process is dead, after its temps
      * are cleaned. Bounded by the watchdog's own wall-clock and stall rules.
      *
+     * `members` is the group membership snapshot taken before TERM (PID => start time), or
+     * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace.
+     *
      * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
      *     tmps: array<int, string>, startedNs: int, lastToken: int, lastGrowNs: int,
-     *     termNs: int|null}>
+     *     termNs: int|null, members: array<int, int>|null}>
      */
     private array $orphans = [];
 
@@ -324,31 +331,30 @@ final class SegmentProcessRegistry
      *  - The end-of-input flush: ffmpeg writes no progress block at all while the
      *    encoder drains its lookahead. Measured at 720p `veryslow`, 1 thread, out_time
      *    froze for 4.7 s (3.44 s to 5.88 s) and the progress file gained no block for
-     *    that span. A 4K encode is about 9× the pixels, so its flush is about 42 s on
-     *    one thread, and about 84 s under 2× contention. The default thread cap is at
-     *    least 2, which halves that. 90 s covers the one-thread case under 2× contention.
-     *    The 30 s window this replaces would have killed a healthy 4K encode during its
-     *    flush.
+     *    that span. Measured at 4K (3840x2160, 6 s, `veryslow`, 1 thread, nice 19): the
+     *    last mid-encode out_time was 3.44 s, and the encode exited 30.6 s later, when
+     *    the lookahead drained. That is the 4K flush for this host, at its load of about
+     *    15. If contention doubles, the flush is about 61 s (a linear projection, not
+     *    measured). 90 s covers that with about 1.5× margin. The 30 s window this replaces
+     *    would have killed a healthy 4K encode during its flush.
      * Before the first packet, `out_time_us` is N/A and the progress file's mtime
      * carries the signal. A hung read freezes both, so it is still caught, at 90 s.
      *
-     * The 4K figures in this docblock (about 42 s, and about 84 s under 2x contention) are
-     * EXTRAPOLATED from one measured 720p flush, scaled by pixel count. They are not measured
-     * on this host. Measure a real 4K 1-thread flush on the target host before relying on
-     * the 90 s window. Scaling the window by pixel count is a follow-up, not part of this fix.
+     * The 4K figures above are measured on the dev host (64 cores, load about 15, one
+     * thread). They are for that host, not a general figure. Re-measure on a target host
+     * before relying on the 90 s window there. Scaling the window by pixel count is a
+     * follow-up, not part of this fix.
      */
     private float $stallSeconds = 90.0;
 
     /**
-     * Wall-clock cap, in seconds, for one on-demand segment encode. Measured: a 6 s
-     * 720p `veryslow` encode on one thread took 17 s on this box at load ~15. The
-     * slowest legitimate case we can expect is 4K at one thread. That figure is
-     * extrapolated, not measured: about 9× the pixels, so roughly 150 s. 300 s covers
-     * it with 2× headroom for contention. The cap only catches
-     * an encode that keeps progressing but will not finish. Stalls are handled by
-     * {@see $stallSeconds}, and the `timeout` wrapper stays the last backstop.
-     * The 300 s figure rests on the extrapolated 4K estimate above. Measure a real 4K
-     * encode on the target host before relying on this cap.
+     * Wall-clock cap, in seconds, for one on-demand segment encode. Measured on the dev host
+     * (64 cores, load about 15): a 6 s 720p `veryslow` encode on one thread took 17 s. A 6 s
+     * 4K (3840x2160) `veryslow` encode on one thread took 98.9 s wall, at nice 19. So 300 s
+     * is about 3× the measured 4K wall time. The cap only catches an encode that keeps
+     * progressing but will not finish. Stalls are handled by {@see $stallSeconds}, and the
+     * `timeout` wrapper stays the last backstop. These are figures for the dev host, not a
+     * general figure. Re-measure on a target host before relying on this cap there.
      */
     private float $maxWallSeconds = self::DEFAULT_MAX_WALL_SECONDS;
 
@@ -364,14 +370,24 @@ final class SegmentProcessRegistry
     private $progressProbe;
 
     /**
-     * Group-member probe: fn(int $pid): bool. True when a non-zombie process on this host
-     * has `$pid` as its process group id. {@see terminate()} consults it once the leader
-     * is gone, so a group whose leader exited on TERM but whose children survive is still
-     * escalated. Overridable in tests, so fake PIDs never match a real group.
+     * Group-membership probe: fn(array<int, int> $leaders): array<int, int>. Returns
+     * PID => start time for every non-zombie process on this host whose process group id
+     * is one of `$leaders`. {@see sendTerm()} calls it once per reap, BEFORE the TERM, and
+     * the SIGKILL step later checks each recorded start time. Overridable in tests, so fake
+     * PIDs never match a real group.
      *
-     * @var callable(int): bool
+     * @var callable(array<int, int>): array<int, int>
      */
-    private $groupProbe;
+    private $groupMembersProbe;
+
+    /**
+     * Per-process signal sender: fn(int $pid, int $signal): void. Sends to ONE PID (not the
+     * group), and is used only for the SIGKILL step on a group member or leader whose
+     * identity still matches. Overridable in tests, so no real signal is sent.
+     *
+     * @var callable(int, int): void
+     */
+    private $processSignalSender;
 
     /**
      * `/proc` availability probe: fn(): bool. Separates a PID that no longer exists (`/proc`
@@ -404,7 +420,8 @@ final class SegmentProcessRegistry
         $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
         $this->progressProbe = self::defaultProgressProbe();
-        $this->groupProbe = self::defaultGroupProbe();
+        $this->groupMembersProbe = self::defaultGroupMembersProbe();
+        $this->processSignalSender = self::defaultProcessSignalSender();
         $this->procMounted = self::defaultProcMounted();
     }
 
@@ -459,15 +476,26 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Override the group-member probe used once a group leader is gone. Null restores the
-     * default (a `/proc` scan for a non-zombie process whose group id is the PID). Tests
-     * pass a fake, so a fake PID never matches a real process group.
+     * Override the group-membership probe used by {@see sendTerm()}. Null restores the
+     * default (a `/proc` scan for non-zombie processes whose group id is one of the leaders).
+     * Tests pass a fake, so a fake PID never matches a real process group.
      *
-     * @param (callable(int): bool)|null $groupProbe
+     * @param (callable(array<int, int>): array<int, int>)|null $groupMembersProbe
      */
-    public function setGroupProbe(?callable $groupProbe): void
+    public function setGroupMembersProbe(?callable $groupMembersProbe): void
     {
-        $this->groupProbe = $groupProbe ?? self::defaultGroupProbe();
+        $this->groupMembersProbe = $groupMembersProbe ?? self::defaultGroupMembersProbe();
+    }
+
+    /**
+     * Override the per-process signal sender used for the SIGKILL step. Null restores the
+     * default (`posix_kill` on the PID itself, never its group). Tests pass a fake.
+     *
+     * @param (callable(int, int): void)|null $processSignalSender
+     */
+    public function setProcessSignalSender(?callable $processSignalSender): void
+    {
+        $this->processSignalSender = $processSignalSender ?? self::defaultProcessSignalSender();
     }
 
     /**
@@ -600,11 +628,13 @@ final class SegmentProcessRegistry
      * Watchdog pass over every detached segment encode this worker launched: reaps
      * the stalled ones, the ones over the wall-clock cap, and the orphans that
      * have died. It never blocks. SIGTERM is sent now, and SIGKILL is sent on a
-     * later pass once the grace period has elapsed. A reaped record is held for the whole
-     * grace, whatever its leader does, then gets one SIGKILL to its group and is dropped. Its
-     * temps are removed at that point (the SIGKILL is not waited on). A launch that was found
-     * dead before any signal has its temps removed at once. Driven by a per-worker timer and also,
-     * throttled, from the cap check in TranscodeManager.
+     * later pass once the grace period has elapsed. A reaped record (from {@see kill()},
+     * a stall or a wall-clock reap) is held for the whole grace, whatever its leader does.
+     * Then one pass sends SIGKILL to each TERM-time member whose start time still matches
+     * (see {@see sigkillMembers()}), and its temps are removed. The SIGKILL is not waited on.
+     * Nothing in the pass sleeps. A launch that was found dead before any signal has its
+     * temps removed at once. Driven by a per-worker timer and also, throttled, from the cap
+     * check in TranscodeManager.
      *
      * Rules, per launch:
      *  - dead (or a zombie, or a reused PID) → temps cleaned, entry dropped (a stalled
@@ -673,16 +703,16 @@ final class SegmentProcessRegistry
         $keep = [];
         foreach ($this->orphans as $orphan) {
             if ($orphan['termNs'] !== null) {
-                // Already sent TERM to the group. Hold the record for the whole grace window,
-                // whatever the leader's state. The leader (the `timeout` wrapper) can exit at
-                // once on TERM while its children keep running in the same group, so "leader
-                // dead" does not mean "group empty". Once the grace has elapsed, send ONE
-                // SIGKILL to the group, then drop the record. Non-blocking: a pass never waits.
+                // Already sent TERM. Hold the record for the whole grace window, whatever the
+                // leader's state. The leader (the `timeout` wrapper) can exit at once on TERM
+                // while its children keep running in the same group, so "leader dead" does not
+                // mean "group empty". Once the grace has elapsed, send SIGKILL to the verified
+                // TERM-time members, then drop the record. Non-blocking: a pass never waits.
                 if ($now - $orphan['termNs'] < $this->graceNanoseconds()) {
                     $keep[] = $orphan;
                     continue;
                 }
-                $this->sigkillGroups($orphan['pids'], $orphan['starts']);
+                $this->sigkillMembers($orphan['pids'], $orphan['starts'], $orphan['members']);
                 $this->cleanTemps($orphan['tmps']);
                 continue; // escalated and dropped
             }
@@ -706,9 +736,7 @@ final class SegmentProcessRegistry
                     'pids' => $orphan['pids'],
                 ]);
                 $orphan['termNs'] = $now;
-                foreach ($orphan['pids'] as $pid) {
-                    $this->signalGroup($pid, self::sigTerm(), $orphan['starts'][$pid] ?? null);
-                }
+                $orphan['members'] = $this->sendTerm($orphan['pids'], $orphan['starts']);
                 $signalled++;
             }
             $keep[] = $orphan;
@@ -758,6 +786,7 @@ final class SegmentProcessRegistry
             'lastToken' => $progress['lastToken'],
             'lastGrowNs' => $progress['lastGrowNs'],
             'termNs' => null,
+            'members' => null,
         ];
 
         return array_key_last($this->orphans);
@@ -776,12 +805,110 @@ final class SegmentProcessRegistry
         if ($index === null || !isset($this->orphans[$index])) {
             return 0;
         }
+        $orphan = $this->orphans[$index];
+        $this->orphans[$index]['members'] = $this->sendTerm($orphan['pids'], $orphan['starts']);
         $this->orphans[$index]['termNs'] = $now;
-        foreach ($this->orphans[$index]['pids'] as $pid) {
-            $this->signalGroup($pid, self::sigTerm(), $this->orphans[$index]['starts'][$pid] ?? null);
-        }
 
         return 1;
+    }
+
+    /**
+     * Reap a tracked launch without waiting: SIGTERM now, and the SIGKILL escalation later from
+     * {@see sweep()}. A launch with nothing left to escalate (no live member, leader dead) has
+     * its temps removed at once. Otherwise its record moves to the orphan list with its TERM
+     * time, its membership snapshot and its temps. Its temps go when sweep() drops the record.
+     *
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts
+     * @param array<int, string>   $tmps
+     */
+    private function reapTracked(string $key, array $pids, array $starts, array $tmps, int $now): void
+    {
+        $members = $this->sendTerm($pids, $starts);
+        if ($members === [] && !$this->anyAlive($pids, $starts)) {
+            $this->cleanTemps($tmps);
+
+            return;
+        }
+
+        $this->orphans[] = [
+            'key' => $key,
+            'pids' => $pids,
+            'starts' => $starts,
+            'tmps' => $tmps,
+            'startedNs' => $now,
+            'lastToken' => 0,
+            'lastGrowNs' => $now,
+            'termNs' => $now,
+            'members' => $members,
+        ];
+    }
+
+    /**
+     * Send TERM to each tracked group and take the membership snapshot the SIGKILL step will
+     * check. The snapshot is taken BEFORE the TERM, and only for a group whose leader is verified
+     * (unchecked, same, or gone). A reused leader is never snapshotted, because its group id may
+     * now belong to a new encode. Returns null when the membership is unknown, which happens
+     * when a leader's identity is unknown or `/proc` is unreadable. Null means no KILL later.
+     *
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts
+     *
+     * @return array<int, int>|null PID => start time of each group member at TERM time.
+     */
+    private function sendTerm(array $pids, array $starts): ?array
+    {
+        $verified = [];
+        $unknown = false;
+        foreach ($pids as $pid) {
+            $identity = $this->identityOf($pid, $starts[$pid] ?? null);
+            if ($identity === 'unknown') {
+                $unknown = true;
+            } elseif (in_array($identity, ['unchecked', 'same', 'gone'], true)) {
+                $verified[] = $pid;
+            }
+        }
+        $members = $unknown ? null : $this->groupMembersOf($verified);
+
+        foreach ($pids as $pid) {
+            // A zombie leader whose group has no live member has nothing left to signal. The
+            // zombie holds its PID, so the group cannot have been reused, but there is no process to TERM.
+            if ($members === [] && $this->isZombie($pid)) {
+                continue;
+            }
+            $this->signalGroup($pid, self::sigTerm(), $starts[$pid] ?? null);
+        }
+
+        return $members;
+    }
+
+    /** True when `/proc` reports the PID as a zombie (state `Z`). False when unreadable. */
+    private function isZombie(int $pid): bool
+    {
+        $raw = ($this->procStat)($pid);
+        $parsed = $raw === null ? null : self::parseProcStat($raw);
+
+        return $parsed !== null && $parsed['state'] === 'Z';
+    }
+
+    /**
+     * The membership of the verified groups, or null when `/proc` is unreadable. No verified
+     * leader means no group to snapshot, so the result is empty.
+     *
+     * @param array<int, int> $leaders
+     *
+     * @return array<int, int>|null
+     */
+    private function groupMembersOf(array $leaders): ?array
+    {
+        if ($leaders === []) {
+            return [];
+        }
+        if (!($this->procMounted)()) {
+            return null;
+        }
+
+        return ($this->groupMembersProbe)($leaders);
     }
 
     /**
@@ -887,35 +1014,24 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Send one signal to a tracked encode's process GROUP (`-pgid`), only when the group
-     * leader's identity allows it (see {@see identityOf()}):
-     *  - TERM: the leader is verified (same start time, zombie included), or unchecked
-     *    (no `/proc` at registration).
-     *  - KILL: the same, and also a leader that has gone. The escalation follows a TERM
-     *    that was sent while the leader was verified, and the leader may have exited on
-     *    that TERM while its children are still in the group.
-     * A reused leader, or an unknown identity (`/proc` unreadable now but readable at
-     * registration), is never signalled. The unknown case logs one warning per registry.
+     * Send TERM to a tracked encode's process GROUP (`-pgid`), only when the group leader's
+     * identity allows it (see {@see identityOf()}): the leader is verified (same start time,
+     * zombie included), or unchecked (no `/proc` at registration). A gone leader is not signalled,
+     * because its identity is no longer verified. A reused leader, or an unknown identity
+     * (`/proc` unreadable now but readable at registration), is never signalled. The unknown case
+     * logs one warning per registry. KILL never goes through this method: it is per process, see
+     * {@see sigkillMembers()}.
      */
     private function signalGroup(int $pid, int $signal, ?int $start): void
     {
         $identity = $this->identityOf($pid, $start);
-        $allowed = $signal === self::sigKill()
-            ? ['unchecked', 'same', 'gone']
-            : ['unchecked', 'same'];
-        if (in_array($identity, $allowed, true)) {
+        if (in_array($identity, ['unchecked', 'same'], true)) {
             ($this->signalSender)($pid, $signal);
             return;
         }
 
         if ($identity === 'unknown') {
-            if (!$this->warnedUnknownIdentity) {
-                $this->warnedUnknownIdentity = true;
-                $this->logger->warning(
-                    'SegmentProcessRegistry: /proc unreadable, process identity unknown; not signalling encode groups',
-                    ['pid' => $pid]
-                );
-            }
+            $this->warnUnknownIdentity(['pid' => $pid]);
             return;
         }
 
@@ -926,19 +1042,58 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * The SIGKILL escalation of a reaped record: one signal to each PID's group, each
-     * identity-gated by {@see signalGroup()}. Sent whatever the leader's state, because the
-     * leader may already be gone while its children run on.
+     * The SIGKILL step of a reaped record, sent once its grace has elapsed. A process gets the
+     * KILL only when its recorded start time still matches (see {@see identityOf()}). The
+     * candidates are the TERM-time group members and the leader. A member whose PID has been
+     * reused since then fails the match and is skipped, so a new process is never killed.
+     * When the snapshot is null (`/proc` was unreadable at TERM), nothing is sent.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
+     * @param array<int, int>|null $members PID => start time, from the TERM-time snapshot.
      */
-    private function sigkillGroups(array $pids, array $starts): void
+    private function sigkillMembers(array $pids, array $starts, ?array $members): void
     {
-        foreach ($pids as $pid) {
-            $this->logger->debug('SegmentProcessRegistry: SIGKILL to encode group after grace', ['pid' => $pid]);
-            $this->signalGroup($pid, self::sigKill(), $starts[$pid] ?? null);
+        if ($members === null) {
+            $this->warnUnknownIdentity(['pids' => $pids]);
+            return;
         }
+
+        $targets = $members;
+        foreach ($pids as $pid) {
+            $start = $starts[$pid] ?? null;
+            if ($start !== null) {
+                $targets[$pid] ??= $start;
+            }
+        }
+        foreach ($targets as $pid => $start) {
+            if ($this->identityOf($pid, $start) !== 'same') {
+                continue;
+            }
+            $this->logger->debug(
+                'SegmentProcessRegistry: SIGKILL to verified encode process after grace',
+                ['pid' => $pid]
+            );
+            ($this->processSignalSender)($pid, self::sigKill());
+        }
+    }
+
+    /**
+     * Log, once per registry, that `/proc` is unreadable and a process's identity cannot be checked.
+     * Nothing is signalled for that process.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function warnUnknownIdentity(array $context): void
+    {
+        if ($this->warnedUnknownIdentity) {
+            return;
+        }
+        $this->warnedUnknownIdentity = true;
+        $this->logger->warning(
+            'SegmentProcessRegistry: /proc unreadable, process identity unknown; not signalling encode processes',
+            $context
+        );
     }
 
     /**
@@ -1054,10 +1209,10 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Kill every tracked PID for a key (SIGTERM to the process group, then
-     * SIGKILL after the grace period if still alive), remove the orphaned
-     * `.part-*` temp, and drop the entry. Safe (no-op) for unknown or
-     * already-cleared keys.
+     * Kill every tracked PID for a key: SIGTERM to the process group now, and the SIGKILL
+     * escalation later from {@see sweep()} after the grace period, if the process is still
+     * alive. The call never waits. The orphaned `.part-*` temp is removed when the record is
+     * dropped, and the entry is released now. Safe (no-op) for unknown or already-cleared keys.
      *
      * @param string $key Cancel key whose encode(s) should be aborted.
      *
@@ -1129,16 +1284,11 @@ final class SegmentProcessRegistry
             'pids' => $pids,
         ]);
 
-        foreach ($pids as $pid) {
-            $this->terminate($pid, $starts[$pid] ?? null);
-        }
-
-        // SV-4.2 finding #1: a signalled encode never runs its atomic-publish
-        // `|| rm`, so remove the orphaned temp here — otherwise the cap/dedup
-        // globs count the dead encode as still in-flight. SV-4.2 re-review Low:
-        // clean ONLY this launcher's own `.part-<hex>` temp(s), never the whole
-        // `{$final}.part-*` family, so a sibling worker's live temp survives.
-        $this->cleanTemps($tmps);
+        // Non-blocking: TERM now, and the SIGKILL escalation later from sweep(). The temps are
+        // removed when the record is dropped (SV-4.2 finding #1: a signalled encode never runs
+        // its atomic-publish `|| rm`). Only this launcher's own `.part-<hex>` temp(s) are removed,
+        // never the whole `{$final}.part-*` family (SV-4.2 re-review Low).
+        $this->reapTracked($key, $pids, $starts, $tmps, (int) hrtime(true));
 
         return count($pids);
     }
@@ -1146,8 +1296,8 @@ final class SegmentProcessRegistry
     /**
      * Kill every encode registered under a cancel group (the relay
      * channel/request id) — the HTTP_CANCEL / disconnect path (SV-4.2 / X1).
-     * Each owned key is killed via {@see kill()} (group leader signalled + temp
-     * cleaned + entry dropped), EXCEPT a key whose encode a second client is
+     * Each owned key is killed via {@see kill()} (TERM now, SIGKILL later from
+     * {@see sweep()}, entry released now), EXCEPT a key whose encode a second client is
      * still piggybacked on, which {@see kill()} defers via the waiter guard
      * (SV-4.2-disconnect) so the remaining waiter is still served. Safe
      * (returns 0) for unknown groups.
@@ -1229,80 +1379,6 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Graceful-then-forced kill of a single detached encode process group,
-     * coroutine-safe. The signal sender targets the whole group (negative PID),
-     * so both the SIGTERM and the SIGKILL escalation reach the ffmpeg grandchild
-     * directly, not just the `timeout`/`sh` wrapper (SV-4.2 finding #4). Every signal
-     * is identity-gated first (see {@see signalGroup()}). The SIGKILL is sent only while the
-     * group may still hold a live process (see {@see mayHoldGroup()}).
-     *
-     * @param int      $pid   Process-group-leader id to terminate.
-     * @param int|null $start The start time recorded at registration.
-     */
-    private function terminate(int $pid, ?int $start): void
-    {
-        if ($pid <= 0) {
-            return;
-        }
-
-        // A zombie leader still holds its PID, but its group may already be empty. Nothing is
-        // sent to a zombie leader whose group has no live member. A zombie with live children
-        // is still signalled, because those children are the orphan this path exists to reap.
-        if ($this->leaderIsZombie($pid) && !($this->groupProbe)($pid)) {
-            return;
-        }
-
-        $this->signalGroup($pid, self::sigTerm(), $start);
-
-        // Bounded, coroutine-yielding wait for graceful exit. The leader exiting is NOT the
-        // end: its children may still hold the group, so the wait ends only when the group is
-        // empty (see mayHoldGroup()).
-        $deadline = hrtime(true) + $this->graceNanoseconds();
-        while (hrtime(true) < $deadline) {
-            if (!$this->mayHoldGroup($pid, $start)) {
-                return;
-            }
-            $this->cooperativeSleep(0.05);
-        }
-
-        $this->signalGroup($pid, self::sigKill(), $start);
-    }
-
-    /**
-     * Whether a tracked launch's process group may still hold a live process. True while the
-     * leader is live (see {@see isLive()}). Once the leader is gone, the group is probed for
-     * a non-zombie member, because the children can outlive a leader that exits on TERM.
-     */
-    private function mayHoldGroup(int $pid, ?int $start): bool
-    {
-        return $this->isLive($pid, $start) || ($this->groupProbe)($pid);
-    }
-
-    /** True when `/proc` reports the PID as a zombie (state `Z`). False when unreadable. */
-    private function leaderIsZombie(int $pid): bool
-    {
-        $raw = ($this->procStat)($pid);
-        $parsed = $raw === null ? null : self::parseProcStat($raw);
-
-        return $parsed !== null && $parsed['state'] === 'Z';
-    }
-
-    /**
-     * Sleep that yields to the Swoole event loop inside a coroutine and blocks
-     * (briefly) otherwise — never stalls the worker under the coroutine runtime.
-     *
-     * @param float $seconds Sleep duration.
-     */
-    private function cooperativeSleep(float $seconds): void
-    {
-        if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
-            \Swoole\Coroutine::sleep($seconds);
-            return;
-        }
-        usleep((int) ($seconds * 1_000_000));
-    }
-
-    /**
      * @return callable(int, int): void
      */
     private static function defaultSignalSender(): callable
@@ -1321,6 +1397,27 @@ final class SegmentProcessRegistry
             }
             $name = $signal === self::sigKill() ? 'KILL' : 'TERM';
             @shell_exec(sprintf('kill -%s -- -%d 2>/dev/null', $name, $pid));
+        };
+    }
+
+    /**
+     * The default per-process sender: `posix_kill` on the PID itself, never its group. Used only
+     * for the SIGKILL step on a verified member (see {@see sigkillMembers()}).
+     *
+     * @return callable(int, int): void
+     */
+    private static function defaultProcessSignalSender(): callable
+    {
+        return static function (int $pid, int $signal): void {
+            if ($pid <= 0) {
+                return;
+            }
+            if (function_exists('posix_kill')) {
+                @posix_kill($pid, $signal);
+                return;
+            }
+            $name = $signal === self::sigKill() ? 'KILL' : 'TERM';
+            @shell_exec(sprintf('kill -%s %d 2>/dev/null', $name, $pid));
         };
     }
 
@@ -1402,22 +1499,23 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * The default group-member probe: true when a non-zombie process on this host has
-     * `$pid` as its process group id. It scans `/proc`. Without `/proc` (non-Linux) it
-     * reports no member, which is the pre-existing behaviour.
+     * The default group-membership probe: PID => start time for every non-zombie process on
+     * this host whose process group id is one of the leaders. It makes one `scandir('/proc')`
+     * and one `file_get_contents()` per process, so its cost grows with the host's process
+     * count. It runs once per reap, on the request path (see {@see kill()}), and is registered
+     * as blocking-IO Exception 12. Without `/proc` (non-Linux) it returns no members.
      *
-     * @return callable(int): bool
+     * @return callable(array<int, int>): array<int, int>
      */
-    private static function defaultGroupProbe(): callable
+    private static function defaultGroupMembersProbe(): callable
     {
-        return static function (int $pid): bool {
-            if ($pid <= 0) {
-                return false;
-            }
+        return static function (array $leaders): array {
+            $members = [];
             $entries = @scandir('/proc');
-            if (!is_array($entries)) {
-                return false;
+            if (!is_array($entries) || $leaders === []) {
+                return $members;
             }
+            $wanted = array_fill_keys($leaders, true);
             foreach ($entries as $entry) {
                 if (!ctype_digit($entry)) {
                     continue;
@@ -1427,15 +1525,17 @@ final class SegmentProcessRegistry
                     continue;
                 }
                 $fields = self::fieldsAfterComm($raw);
-                if ($fields === null || ($fields[0] ?? '') === 'Z') {
+                if ($fields === null || !isset($wanted[(int) ($fields[2] ?? 0)])) {
                     continue;
                 }
-                if ((int) ($fields[2] ?? 0) === $pid) {
-                    return true;
+                $parsed = self::parseProcStat($raw);
+                if ($parsed === null || $parsed['state'] === 'Z') {
+                    continue;
                 }
+                $members[(int) $entry] = $parsed['start'];
             }
 
-            return false;
+            return $members;
         };
     }
 

@@ -105,9 +105,6 @@ final class ForkInventoryGuardTest extends TestCase
         'src/Media/SimilarityWorker.php' => ['tests/Unit/Media/SimilarityWorkerCoroutineForkTest.php'],
         'src/Media/Storage/ArtworkStorage.php' => ['tests/Unit/Media/Storage/ArtworkStorageTest.php'],
         'src/Media/Transcoding/FfmpegRunner.php' => ['tests/Unit/Media/Transcoding/FfmpegRunnerTest.php'],
-        'src/Media/Transcoding/SegmentProcessRegistry.php' => [
-            'tests/Unit/Media/Transcoding/SegmentProcessRegistryCoroutineForkTest.php',
-        ],
         'src/Media/Transcoding/TranscodeManager.php' => ['tests/Unit/Media/Transcoding/TranscodeManagerTest.php'],
         'src/Network/CoroutineSocketGuard.php' => ['tests/Unit/Network/CoroutineSocketGuardTest.php'],
         // SH-007: the four Network discovery classes delegated their coroutine

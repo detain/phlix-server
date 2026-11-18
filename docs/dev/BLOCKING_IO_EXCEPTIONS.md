@@ -464,11 +464,11 @@ approximate across workers by at most that window.
 
 | | |
 |---|---|
-| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). Also `defaultGroupProbe()`, the group-member scan on the cancel/kill path (`scandir('/proc')` and one `file_get_contents()` per process on the host), reached only while a verified encode leader is gone and its group is being waited on. |
-| Reached from | `SegmentProcessRegistry::sweep()`, driven by the per-worker 5 s timer and the request-throttled 1 s sweep in `TranscodeManager`. Each live tracked encode costs about two `/proc` reads and one progress read per sweep. |
-| Why it is sync | `/proc` is a kernel pseudo-filesystem, and a `.prog` file is local segment-cache metadata. Neither has a network path. PHP has no non-blocking file or `stat` primitive. |
-| Bound | The progress read is bounded to 8 KB (`PROGRESS_TAIL_BYTES`), whatever the encode's length. The `/proc` read is one line. Both run only for the encodes this worker tracks, and that count is capped by `server.hls.max_concurrent_segments` per worker (8 by default). On non-Linux the `/proc` reader returns null with no read. |
-| Cost | Measured below. The sweep cost is linear in this worker's live encodes, and it is below a millisecond at the default ceiling. |
+| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). Also `defaultGroupMembersProbe()`, the group-membership scan (`scandir('/proc')` and one `file_get_contents()` per process on the host, returning PID => start time for each non-zombie member of the named groups). It runs in `sendTerm()`, once per tracked leader group, before the TERM. |
+| Reached from | (a) `SegmentProcessRegistry::sweep()`, driven by the per-worker 5 s timer and the request-throttled 1 s sweep in `TranscodeManager`. Each live tracked encode costs about two `/proc` reads and one progress read per sweep. (b) **The request path.** `SegmentProcessRegistry::kill()` and `killGroup()` call `sendTerm()`, so the membership scan runs once per tracked key that is killed. The callers are the connection `onClose` in `HttpHandler` and the `HTTP_CANCEL` handler in `RelayConsumer`. A kill that finds nothing tracked returns before any scan. |
+| Why it is sync | `/proc` is a kernel pseudo-filesystem, and a `.prog` file is local segment-cache metadata. Neither has a network path. PHP has no non-blocking file or `stat` primitive. The kill path does not wait. Its only synchronous work is this one scan, and the SIGKILL step runs later from the timer. |
+| Bound | The progress read is bounded to 8 KB (`PROGRESS_TAIL_BYTES`), whatever the encode's length. The `/proc` read is one line. The membership scan is bounded by the host's process count, and it runs once per tracked key killed, not once per PID. The tracked-encode count is capped by `server.hls.max_concurrent_segments` per worker (8 by default). On non-Linux there is no `/proc`, so the membership scan returns nothing and no SIGKILL escalation is sent (TERM still is). |
+| Cost | Measured below. The sweep cost is linear in this worker's live encodes, and it is below a millisecond at the default ceiling. The kill-path scan is linear in the host's process count, and it is about 31 ms on the dev host (see below). That is the residual synchronous cost of a kill. |
 
 ### Measurement (2026-11-17, real private helpers, median of 500 calls)
 
@@ -482,10 +482,25 @@ progress probe, one temp                                     26.6 us  (p90 26.8 
 At the default ceiling of 8 encodes per worker, one sweep is about 8 × (27 + 22 +
 22) µs, or under 0.6 ms, every 1 to 5 s.
 
-The group-member scan (`defaultGroupProbe()`) is NOT measured. It reads one `stat`
-line per process on the host, so its cost grows with the process count. It runs at
-most once per 50 ms grace poll, for about 10 polls per kill, and only on the kill path
-after a leader is gone. Measure it on the target host before treating it as cheap.
+### Kill-path measurement (2026-11-17, real private helper, median of 60 calls)
+
+The membership scan (`defaultGroupMembersProbe()`, one leader, no member matched) reads
+one `stat` line per process on the host. Dev host: 64 cores, load ~15, PHP 8.3 CLI.
+
+```text
+1 402 processes on the host, one leader     median 31.5 ms   p90 32.5 ms
+```
+
+This is the one synchronous cost left on the kill path. It runs once per tracked key killed,
+on the request path. A group with a video and an audio encode therefore costs about 2 scans.
+The scan's cost is linear in the process count, so a busier host costs more per kill. The
+rate of kills is bounded by the tracked encodes, not by connections. A kill that finds nothing
+tracked does no scan. The earlier design waited up to the 0.5 s grace per PID on this path,
+and that wait is gone.
+
+Mitigation not yet built: one scan per `killGroup()` call, covering all of the group's
+leaders, with each leader's members filtered by its own group id. It would cut a 2-key kill
+from about 63 ms to about 32 ms, and it is the next step if the kill rate matters on a target host.
 
 ---
 

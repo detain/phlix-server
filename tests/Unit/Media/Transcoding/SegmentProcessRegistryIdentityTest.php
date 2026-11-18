@@ -39,6 +39,9 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
     /** When true, the fake process table reports the PID dead once it is signalled. */
     private bool $dieOnSignal = false;
 
+    /** @var array<int, int> The fake TERM-time group membership: PID => start time. */
+    private array $members = [];
+
     /**
      * A `/proc/<pid>/stat` line with the given state and start time. Field 3 is the
      * state, and field 22 is the start time, which is index 19 after the `)`.
@@ -70,8 +73,15 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
             },
         );
         $registry->setProcStatReader(fn (int $pid): ?string => $this->proc[$pid] ?? null);
-        // Fake PIDs must never match a real process group on this host.
-        $registry->setGroupProbe(static fn (int $pid): bool => false);
+        // Fake PIDs must never match a real process group on this host, and a per-process
+        // KILL must never reach a real PID. Both go through the fakes.
+        $registry->setGroupMembersProbe(fn (array $leaders): array => $this->members);
+        $registry->setProcessSignalSender(function (int $pid, int $signal): void {
+            $this->signals[] = [$pid, $signal];
+            if ($this->dieOnSignal) {
+                $this->alive[$pid] = false;
+            }
+        });
 
         return $registry;
     }
@@ -184,6 +194,44 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry->kill($key);
 
         self::assertSame([self::SIGTERM], $this->signalsFor(5004));
+    }
+
+    /**
+     * Finding 2. The group leader (6001) and two members are snapshotted at TERM time. Before
+     * the grace ends, member 6002 exits and its PID is reused by an unrelated process, with a
+     * new start time. The SIGKILL step must not reach the reused PID. It still reaches the
+     * verified leader and the unchanged member 6003. A process that is not in the TERM-time
+     * snapshot is never killed.
+     */
+    public function testAReusedGroupMemberIsNeverKilledAtTheGrace(): void
+    {
+        $key = '/segs/job/seg-00020.ts';
+        $this->proc[6001] = self::statLine(6001, 'S', 100);
+        $this->proc[6002] = self::statLine(6002, 'S', 200);
+        $this->proc[6003] = self::statLine(6003, 'S', 300);
+        $this->alive[6001] = true;
+        $this->members = [6001 => 100, 6002 => 200, 6003 => 300];
+        $registry = $this->registry();
+        $registry->register($key, 6001, null, null);
+
+        $registry->kill($key); // TERM to the group now; the KILL waits for the sweep.
+        self::assertSame([6001], array_column($this->signals, 0), 'kill() signals only the group leader');
+
+        // Member 6002 exits, and an unrelated process takes its PID.
+        $this->proc[6002] = self::statLine(6002, 'S', 999);
+        // Member 6004 joined the group after the snapshot, so nothing recorded it.
+        $this->proc[6004] = self::statLine(6004, 'S', 400);
+
+        $registry->sweep((int) hrtime(true) + self::SEC); // past the 0.5 s grace
+
+        self::assertSame([], $this->signalsFor(6002), 'a reused member PID is never KILLed');
+        self::assertSame([], $this->signalsFor(6004), 'a process outside the snapshot is never KILLed');
+        self::assertSame(
+            [self::SIGTERM, self::SIGKILL],
+            $this->signalsFor(6001),
+            'the verified leader gets TERM then KILL',
+        );
+        self::assertSame([self::SIGKILL], $this->signalsFor(6003), 'the unchanged member gets its KILL');
     }
 
     public function testWithoutAProcViewTheBehaviourIsTheUncheckedProbe(): void

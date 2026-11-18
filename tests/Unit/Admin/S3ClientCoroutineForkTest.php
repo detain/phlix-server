@@ -27,7 +27,6 @@ final class S3ClientCoroutineForkTest extends TestCase
     private function injectAsyncClient(S3Client $client, Client $fake): void
     {
         $prop = new \ReflectionProperty(S3Client::class, 'asyncClient');
-        $prop->setAccessible(true);
         $prop->setValue($client, $fake);
     }
 

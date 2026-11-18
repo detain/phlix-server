@@ -59,7 +59,6 @@ final class AdminSettingsControllerAuthGuardTest extends TestCase
         $props = [];
         foreach (['allowedKeys', 'schemaMeta', 'schemaValidators'] as $name) {
             $prop = $ref->getProperty($name);
-            $prop->setAccessible(true);
             $props[$name] = $prop;
         }
 
@@ -76,7 +75,6 @@ final class AdminSettingsControllerAuthGuardTest extends TestCase
         $validators = $props['schemaValidators']->getValue();
         if (!is_array($validators)) {
             $vm = $ref->getMethod('schemaValidators');
-            $vm->setAccessible(true);
             $validators = $vm->invoke(null);
         }
 

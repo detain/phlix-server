@@ -91,7 +91,6 @@ final class HttpHandlerServeStaticTest extends TestCase
     {
         $wr = new WorkermanRequest("GET {$path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
         $m = new \ReflectionMethod(HttpHandler::class, 'serveStatic');
-        $m->setAccessible(true);
         $result = $m->invoke($this->makeHandler(), $wr);
         self::assertTrue($result === null || $result instanceof WorkermanResponse);
 

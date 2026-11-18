@@ -50,15 +50,12 @@ final class AdminSettingsControllerTest extends TestCase
         $ref = new \ReflectionClass(AdminSettingsController::class);
 
         $keysProp = $ref->getProperty('allowedKeys');
-        $keysProp->setAccessible(true);
         $metaProp = $ref->getProperty('schemaMeta');
-        $metaProp->setAccessible(true);
         // The THIRD cache. schemaMeta() drives rendering; schemaValidators() is
         // what actually enforces minimum/maximum on PUT. Injecting only the first
         // two produced a synthetic key whose bounds were silently unenforced —
         // the request fell through to persist instead of 400ing.
         $valProp = $ref->getProperty('schemaValidators');
-        $valProp->setAccessible(true);
 
         $origKeys = $keysProp->getValue();
         $origMeta = $metaProp->getValue();
@@ -70,7 +67,6 @@ final class AdminSettingsControllerTest extends TestCase
         if (!is_array($validators)) {
             // Force population, then re-read.
             $vm = $ref->getMethod('schemaValidators');
-            $vm->setAccessible(true);
             $validators = $vm->invoke(null);
             $origVal = $valProp->getValue();
         }
@@ -403,7 +399,6 @@ final class AdminSettingsControllerTest extends TestCase
     public function testMapSchemaTypeMapsAllJsonSchemaTypesToInternalVocabulary(): void
     {
         $method = new \ReflectionMethod(AdminSettingsController::class, 'mapSchemaType');
-        $method->setAccessible(true);
 
         // [JSON-Schema type => expected internal type (null = no equivalent)]
         $expected = [

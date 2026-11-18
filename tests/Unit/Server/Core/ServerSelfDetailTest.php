@@ -171,7 +171,6 @@ final class ServerSelfDetailTest extends TestCase
     private function pathIndex(): array
     {
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($this->application());
 
         $this->assertInstanceOf(

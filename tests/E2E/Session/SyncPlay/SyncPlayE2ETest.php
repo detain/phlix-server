@@ -193,7 +193,6 @@ class SyncPlayE2ETest extends TestCase
 
         // Use reflection to call private handlePlaybackPlay
         $method = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
-        $method->setAccessible(true);
 
         // Host sends play command
         $method->invoke($this->manager, $hostConn, [
@@ -208,7 +207,6 @@ class SyncPlayE2ETest extends TestCase
 
         // Host sends pause command
         $pauseMethod = new ReflectionMethod($this->manager, 'handlePlaybackPause');
-        $pauseMethod->setAccessible(true);
         $pauseMethod->invoke($this->manager, $hostConn, [
             'position' => 5500,
             'server_time' => time(),
@@ -242,7 +240,6 @@ class SyncPlayE2ETest extends TestCase
 
         // Transfer host to member
         $transferMethod = new ReflectionMethod($this->manager, 'handleHostTransfer');
-        $transferMethod->setAccessible(true);
         $transferMethod->invoke($this->manager, $hostConn, [
             'new_host_id' => $newHostMemberId,
         ]);
@@ -369,7 +366,6 @@ class SyncPlayE2ETest extends TestCase
 
         // === Phase 4: Playback Control ===
         $playMethod = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
-        $playMethod->setAccessible(true);
         $playMethod->invoke($this->manager, $aliceConn, [
             'position' => 0,
             'server_time' => time(),
@@ -381,7 +377,6 @@ class SyncPlayE2ETest extends TestCase
 
         // Alice pauses
         $pauseMethod = new ReflectionMethod($this->manager, 'handlePlaybackPause');
-        $pauseMethod->setAccessible(true);
         $pauseMethod->invoke($this->manager, $aliceConn, [
             'position' => 5000,
             'server_time' => time(),
@@ -393,7 +388,6 @@ class SyncPlayE2ETest extends TestCase
 
         // === Phase 5: Host Transfer ===
         $transferMethod = new ReflectionMethod($this->manager, 'handleHostTransfer');
-        $transferMethod->setAccessible(true);
         $transferMethod->invoke($this->manager, $aliceConn, [
             'new_host_id' => 'bob',
         ]);
@@ -551,7 +545,6 @@ class SyncPlayE2ETest extends TestCase
 
         // Host plays at 5000ms so the sync broadcast carries a real re-anchor value.
         $playMethod = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
-        $playMethod->setAccessible(true);
         $playMethod->invoke($this->manager, $hostConn, [
             'position' => 5000,
             'server_time' => time(),
@@ -564,7 +557,6 @@ class SyncPlayE2ETest extends TestCase
 
         // The solo host requests a playback sync (requester == host == only member).
         $syncMethod = new ReflectionMethod($this->manager, 'handlePlaybackSync');
-        $syncMethod->setAccessible(true);
         $syncMethod->invoke($this->manager, $hostConn, ['member_id' => 'solo_host_user']);
 
         $syncFrames = array_values(array_filter(
@@ -611,7 +603,6 @@ class SyncPlayE2ETest extends TestCase
         $this->manager->joinGroup($groupId, 'member_user', 'Guest', null, 'conn-member');
 
         $playMethod = new ReflectionMethod($this->manager, 'handlePlaybackPlay');
-        $playMethod->setAccessible(true);
         $playMethod->invoke($this->manager, $hostConn, [
             'position' => 5000,
             'server_time' => time(),
@@ -619,7 +610,6 @@ class SyncPlayE2ETest extends TestCase
 
         // The NON-host member requests a playback sync.
         $syncMethod = new ReflectionMethod($this->manager, 'handlePlaybackSync');
-        $syncMethod->setAccessible(true);
         $syncMethod->invoke($this->manager, $memberConn, ['member_id' => 'member_user']);
 
         $memberFrames = array_values(array_filter(
@@ -761,7 +751,6 @@ class SyncPlayE2ETest extends TestCase
     private function invokeHandler(string $handler, ConnectionInterface $connection, array $payload): void
     {
         $method = new ReflectionMethod($this->manager, $handler);
-        $method->setAccessible(true);
         $method->invoke($this->manager, $connection, $payload);
     }
 

@@ -65,7 +65,6 @@ final class TraktApiRefreshSingleFlightTest extends TestCase
     private function registry(): array
     {
         $prop = new \ReflectionProperty(TraktApi::class, 'inFlightRefresh');
-        $prop->setAccessible(true);
 
         /** @var RegistryMap $store */
         $store = $prop->getValue();
@@ -77,7 +76,6 @@ final class TraktApiRefreshSingleFlightTest extends TestCase
     private function setRegistry(array $store): void
     {
         $prop = new \ReflectionProperty(TraktApi::class, 'inFlightRefresh');
-        $prop->setAccessible(true);
         $prop->setValue(null, $store);
     }
 

@@ -55,7 +55,6 @@ trait WithWorkerEventLoop
     protected function runWithWorkerEventLoop(callable $body): mixed
     {
         $status = new \ReflectionProperty(Worker::class, 'status');
-        $status->setAccessible(true);
         $original = $status->getValue(null);
 
         $status->setValue(null, Worker::STATUS_RUNNING);
@@ -74,7 +73,6 @@ trait WithWorkerEventLoop
     protected function assertWorkerEventLoopRestored(): void
     {
         $status = new \ReflectionProperty(Worker::class, 'status');
-        $status->setAccessible(true);
         self::assertSame(
             Worker::STATUS_INITIAL,
             $status->getValue(null),

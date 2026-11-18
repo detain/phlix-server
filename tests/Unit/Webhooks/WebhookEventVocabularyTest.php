@@ -71,7 +71,6 @@ final class WebhookEventVocabularyTest extends TestCase
         SsrfGuard::reset();
 
         $prop = new \ReflectionProperty(Worker::class, 'workers');
-        $prop->setAccessible(true);
         $prop->setValue(null, $this->savedWorkers);
 
         parent::tearDown();

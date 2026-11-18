@@ -87,15 +87,12 @@ final class DlnaAdminRoutesTest extends TestCase
         $router = new Router();
 
         $routerProp = $ref->getProperty('router');
-        $routerProp->setAccessible(true);
         $routerProp->setValue($app, $router);
 
         $containerProp = $ref->getProperty('container');
-        $containerProp->setAccessible(true);
         $containerProp->setValue($app, $container);
 
         $loader = $ref->getMethod('loadDlnaAdminRoutes');
-        $loader->setAccessible(true);
         $loader->invoke($app);
 
         return $router;

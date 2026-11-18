@@ -51,7 +51,6 @@ final class RelayConsumerCoroutineForkTest extends TestCase
         parent::setUp();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         /** @var array<int, Worker> $existing */
         $existing = $workers->getValue();
         $this->savedWorkers = $existing;
@@ -67,7 +66,6 @@ final class RelayConsumerCoroutineForkTest extends TestCase
         Timer::delAll();
 
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         parent::tearDown();
@@ -110,7 +108,6 @@ final class RelayConsumerCoroutineForkTest extends TestCase
     private function dispatch(RelayConsumer $consumer): ?Response
     {
         $dispatch = new \ReflectionMethod(RelayConsumer::class, 'dispatchWithDeadlineInner');
-        $dispatch->setAccessible(true);
 
         /** @var Response|null $result */
         $result = $dispatch->invoke($consumer, 42, $this->envelope());

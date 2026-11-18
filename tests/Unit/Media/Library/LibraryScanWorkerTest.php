@@ -679,7 +679,6 @@ class LibraryScanWorkerTest extends TestCase
     public function testStartReapsStaleJobsBeforeArmingTimer(): void
     {
         $workersProp = new \ReflectionProperty(Worker::class, 'workers');
-        $workersProp->setAccessible(true);
         /** @var array<int, Worker> $saved */
         $saved = $workersProp->getValue();
 
@@ -716,7 +715,6 @@ class LibraryScanWorkerTest extends TestCase
     public function testStartStillArmsTimerWhenReaperThrows(): void
     {
         $workersProp = new \ReflectionProperty(Worker::class, 'workers');
-        $workersProp->setAccessible(true);
         /** @var array<int, Worker> $saved */
         $saved = $workersProp->getValue();
 
@@ -741,7 +739,6 @@ class LibraryScanWorkerTest extends TestCase
             $worker->start(5);
 
             $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
-            $tasksProp->setAccessible(true);
             /** @var array<int, mixed> $tasks */
             $tasks = $tasksProp->getValue();
             $this->assertNotEmpty($tasks, 'poll timer should still be armed');
@@ -758,7 +755,6 @@ class LibraryScanWorkerTest extends TestCase
     public function testPollTickLogsAndSwallowsClaimFailure(): void
     {
         $workersProp = new \ReflectionProperty(Worker::class, 'workers');
-        $workersProp->setAccessible(true);
         /** @var array<int, Worker> $saved */
         $saved = $workersProp->getValue();
 
@@ -784,7 +780,6 @@ class LibraryScanWorkerTest extends TestCase
             $worker->start(5);
 
             $tasksProp = new \ReflectionProperty(Timer::class, 'tasks');
-            $tasksProp->setAccessible(true);
             /** @var array<int, mixed> $tasks */
             $tasks = $tasksProp->getValue();
             $this->assertNotEmpty($tasks);

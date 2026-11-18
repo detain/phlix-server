@@ -36,7 +36,6 @@ class WebSocketServerTest extends TestCase
     protected function tearDown(): void
     {
         $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }
@@ -322,7 +321,6 @@ class WebSocketServerTest extends TestCase
     private function workermanTimerCount(): int
     {
         $prop = new \ReflectionProperty(\Workerman\Timer::class, 'status');
-        $prop->setAccessible(true);
         /** @var array<int, bool> $status */
         $status = $prop->getValue();
 

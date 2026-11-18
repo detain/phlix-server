@@ -320,7 +320,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
-        $connect->setAccessible(true);
 
         $connect->invoke($consumer); // opens $opened[0]
         $connect->invoke($consumer); // must close $opened[0] before opening $opened[1]
@@ -369,7 +368,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
-        $connect->setAccessible(true);
 
         // Must not throw — should close prior connection and remain disconnected.
         $connect->invoke($consumer);
@@ -423,7 +421,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
-        $connect->setAccessible(true);
 
         $connect->invoke($consumer); // First: opens connection
         $this->assertCount(1, $opened);
@@ -483,11 +480,9 @@ class RelayConsumerTest extends TestCase
         // running=true so handleDisconnect() proceeds to the reconnect path
         // (mirrors a live consumer that start()ed before the socket dropped).
         $runningProp = new \ReflectionProperty(RelayConsumer::class, 'running');
-        $runningProp->setAccessible(true);
         $runningProp->setValue($consumer, true);
 
         $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
-        $connect->setAccessible(true);
 
         // Must NOT throw a TypeError from spl_object_id(null)/getStatus() in the
         // post-connect debug log.
@@ -818,7 +813,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $recv = new \ReflectionProperty(RelayConsumer::class, 'recvBuffer');
-        $recv->setAccessible(true);
         $this->assertSame('', $recv->getValue($consumer), 'the skipped frame must be CONSUMED from the buffer');
     }
 
@@ -840,7 +834,6 @@ class RelayConsumerTest extends TestCase
         $this->assertCount(0, $this->locals, 'no local connection may open behind a partial unknown frame');
 
         $recv = new \ReflectionProperty(RelayConsumer::class, 'recvBuffer');
-        $recv->setAccessible(true);
         $this->assertSame(
             $head,
             $recv->getValue($consumer),
@@ -880,7 +873,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
-        $warn->setAccessible(true);
         $warn->invoke($consumer, 'ws://hub.example.com:8802');
         $warn->invoke($consumer, 'ws://hub.example.com:8802');
         // exactly(1) above pins the once-per-process behaviour across a reconnect loop.
@@ -899,7 +891,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
-        $warn->setAccessible(true);
         $warn->invoke($consumer, 'wss://hub.example.com:8802');
     }
 
@@ -921,7 +912,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $warn = new \ReflectionMethod(RelayConsumer::class, 'warnIfPlaintextTunnel');
-        $warn->setAccessible(true);
         $warn->invoke($consumer, 'ws://hub.example.com:8802');
     }
 
@@ -2154,7 +2144,6 @@ class RelayConsumerTest extends TestCase
         $capRef = new \ReflectionClassConstant(RelayConsumer::class, 'MAX_REASSEMBLED_REQUEST_BODY');
         $cap = (int) $capRef->getValue();
         $accProp = new \ReflectionProperty(RelayConsumer::class, 'requestAccumulators');
-        $accProp->setAccessible(true);
         /** @var array<int, array{head: mixed, body: string, size: int}> $acc */
         $acc = $accProp->getValue($consumer);
         $acc[$requestId]['size'] = $cap - 10;
@@ -2318,7 +2307,6 @@ class RelayConsumerTest extends TestCase
     private function pendingAccumulatorCount(RelayConsumer $consumer): int
     {
         $prop = new \ReflectionProperty(RelayConsumer::class, 'requestAccumulators');
-        $prop->setAccessible(true);
         /** @var array<int, mixed> $acc */
         $acc = $prop->getValue($consumer);
 
@@ -2384,7 +2372,6 @@ class RelayConsumerTest extends TestCase
     private function resolveTransport(RelayConfig $config, string $wsUrl): array
     {
         $m = new \ReflectionMethod(RelayConsumer::class, 'resolveHubTransport');
-        $m->setAccessible(true);
         /** @var array{address: string, useTls: bool, context: array<string, mixed>, protocol: class-string} $result */
         $result = $m->invoke($this->bareConsumer($config), $wsUrl);
         return $result;
@@ -2690,7 +2677,6 @@ class RelayConsumerTest extends TestCase
         // An explicit allow_plaintext_tunnel ACK silences the M5 warning — it
         // must NOT be able to re-open a dial the hard gate refused.
         $refuse = new \ReflectionMethod(RelayConsumer::class, 'refusePlaintextUnderRequireTls');
-        $refuse->setAccessible(true);
 
         $consumer = new RelayConsumer(
             new RelayConfig(
@@ -2713,7 +2699,6 @@ class RelayConsumerTest extends TestCase
     public function test_require_tls_lets_wss_dial_and_stays_silent_when_off(): void
     {
         $refuse = new \ReflectionMethod(RelayConsumer::class, 'refusePlaintextUnderRequireTls');
-        $refuse->setAccessible(true);
 
         $mandated = new RelayConsumer(
             new RelayConfig(enabled: true, hubRelayWsUrl: 'wss://hub.example.com:8802', requireTls: true),
@@ -3038,7 +3023,6 @@ class RelayConsumerTest extends TestCase
     private function consumerState(RelayConsumer $consumer, string $property): mixed
     {
         $prop = new \ReflectionProperty(RelayConsumer::class, $property);
-        $prop->setAccessible(true);
 
         return $prop->getValue($consumer);
     }
@@ -3598,7 +3582,6 @@ class RelayConsumerTest extends TestCase
         );
 
         $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
-        $connect->setAccessible(true);
 
         $consumer->start(); // opens $opened[0]
         $this->assertCount(1, $opened);
@@ -3697,7 +3680,6 @@ class RelayConsumerTest extends TestCase
     private function backdateLiveness(RelayConsumer $consumer, float $seconds): void
     {
         $prop = new \ReflectionProperty(RelayConsumer::class, 'lastTunnelInboundAt');
-        $prop->setAccessible(true);
         $prop->setValue($consumer, (hrtime(true) / 1_000_000_000.0) - $seconds);
     }
 

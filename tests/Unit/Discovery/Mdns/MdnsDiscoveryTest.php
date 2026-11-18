@@ -225,7 +225,6 @@ class MdnsDiscoveryTest extends TestCase
     private function invokePrivate(MdnsDiscovery $object, string $method, array $args)
     {
         $ref = new \ReflectionMethod(MdnsDiscovery::class, $method);
-        $ref->setAccessible(true);
 
         return $ref->invokeArgs($object, $args);
     }

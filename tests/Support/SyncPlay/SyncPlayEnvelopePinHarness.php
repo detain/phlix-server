@@ -209,6 +209,25 @@ final class SyncPlayEnvelopePinHarness
                         return [];
                     }
 
+                    // perf/C 5b2e3efa: the global schedule gate reads the session's active profile on
+                    // every routed session request and fails closed (403 access.scheduled) when none
+                    // resolves. That read is intended, so the venue answers it with one active profile
+                    // per account. Each account is an enumerated pin user (pin_user, pin_host, pin_guest,
+                    // pin_stranger).
+                    if (str_contains($sql, 'FROM user_profiles p')) {
+                        $profileOwner = is_string($values[0] ?? null) ? (string) $values[0] : '';
+                        if ($profileOwner === '') {
+                            return [];
+                        }
+
+                        return [['id' => 'pin-profile-' . $profileOwner, 'user_id' => $profileOwner, 'is_active' => 1]];
+                    }
+                    // perf/C schedule gate: an account's schedule rows. None are enumerated, so no
+                    // window restricts the profile and every request is admitted by the schedule.
+                    if (str_contains($sql, 'FROM access_schedules WHERE profile_id = ?')) {
+                        return [];
+                    }
+
                     throw new \RuntimeException(sprintf(
                         "SyncPlayEnvelopePin venue: unexpected SQL reached the Connection double: %s\n"
                         . 'This venue doubles ONLY MySQL and enumerates ONLY the snapshot SELECTs plus the '
@@ -255,7 +274,6 @@ final class SyncPlayEnvelopePinHarness
     public static function seedConnectionPool(Connection $connection): void
     {
         $property = (new ReflectionClass(ConnectionPool::class))->getProperty('connections');
-        $property->setAccessible(true);
         /** @var array<string, Connection> $existing */
         $existing = $property->getValue(null) ?? [];
         $existing['mysql'] = $connection;
@@ -271,7 +289,6 @@ final class SyncPlayEnvelopePinHarness
                 continue;
             }
             $p = $ref->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue(null, $value);
         }
     }

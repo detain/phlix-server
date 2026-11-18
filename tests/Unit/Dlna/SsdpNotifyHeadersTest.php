@@ -63,7 +63,6 @@ final class SsdpNotifyHeadersTest extends TestCase
         $this->savedWorkers = Worker::getAllWorkers();
 
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         /** @var EventInterface|null $value */
         $value = $prop->getValue();
         $this->savedTimerEvent = $value;
@@ -72,11 +71,9 @@ final class SsdpNotifyHeadersTest extends TestCase
     protected function tearDown(): void
     {
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         $prop->setValue(null, $this->savedTimerEvent);
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         EffectiveConfig::reset();
@@ -302,7 +299,6 @@ final class SsdpNotifyHeadersTest extends TestCase
         );
 
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         $prop->setValue(null, $event);
 
         $this->bootstrapDlna(['enabled' => true, 'cds_enabled' => true]);
@@ -351,7 +347,6 @@ final class SsdpNotifyHeadersTest extends TestCase
         $capture = $this->attachCaptureSocket($worker);
 
         $send = new ReflectionMethod(SsdpAdvertiser::class, $method);
-        $send->setAccessible(true);
         $send->invoke($worker);
 
         $written = $this->readCapture($capture);
@@ -390,7 +385,6 @@ final class SsdpNotifyHeadersTest extends TestCase
         self::assertIsResource($capture);
 
         $socket = new ReflectionProperty(SsdpAdvertiser::class, 'socket');
-        $socket->setAccessible(true);
         $socket->setValue($worker, $capture);
 
         return $capture;

@@ -87,11 +87,9 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
         $ref = new \ReflectionObject($registry);
 
         $capProp = $ref->getProperty('capabilities');
-        $capProp->setAccessible(true);
         $capProp->setValue($registry, $capabilities);
 
         $initProp = $ref->getProperty('initialized');
-        $initProp->setAccessible(true);
         $initProp->setValue($registry, true);
 
         return $registry;
@@ -270,7 +268,6 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
     {
         // Genuine 480p transcode-rung encode contract (libx264 + rung scale/VBV).
         $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
-        $forRendition->setAccessible(true);
         /** @var array<string, mixed> $segParams */
         $segParams = $forRendition->invoke(self::bareTranscodeManagerForRendition(), [
             'is_copy' => false,
@@ -317,7 +314,6 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
         $manager = $ref->newInstanceWithoutConstructor();
 
         $prop = $ref->getProperty('encodeSettings');
-        $prop->setAccessible(true);
         $prop->setValue($manager, new \Phlix\Media\Transcoding\EncodeSettings());
 
         return $manager;

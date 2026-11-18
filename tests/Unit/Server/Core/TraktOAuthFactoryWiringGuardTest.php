@@ -174,7 +174,6 @@ final class TraktOAuthFactoryWiringGuardTest extends TestCase
     private function builtController(): TraktOAuthController
     {
         $factory = new ReflectionMethod(Application::class, 'getTraktOAuthController');
-        $factory->setAccessible(true);
         $controller = $factory->invoke($this->application());
 
         $this->assertInstanceOf(TraktOAuthController::class, $controller);
@@ -185,7 +184,6 @@ final class TraktOAuthFactoryWiringGuardTest extends TestCase
     private function privateProperty(object $object, string $name): mixed
     {
         $property = (new ReflectionObject($object))->getProperty($name);
-        $property->setAccessible(true);
 
         return $property->getValue($object);
     }

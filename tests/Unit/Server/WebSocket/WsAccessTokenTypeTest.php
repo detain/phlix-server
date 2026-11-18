@@ -41,7 +41,6 @@ final class WsAccessTokenTypeTest extends TestCase
     protected function tearDown(): void
     {
         $workers = new \ReflectionProperty(\Workerman\Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         // Un-pool (remove() also un-indexes userId/sessionId), then the singleton
         // reset guarantees no cross-test residue under random execution order.

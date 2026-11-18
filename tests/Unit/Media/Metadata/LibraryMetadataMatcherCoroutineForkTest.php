@@ -120,7 +120,6 @@ final class LibraryMetadataMatcherCoroutineForkTest extends TestCase
         [$matcher, $record] = $this->buildMatcher();
 
         $matchBatch = new \ReflectionMethod(LibraryMetadataMatcher::class, 'matchBatchConcurrently');
-        $matchBatch->setAccessible(true);
 
         $result = $this->runInCoroutine(
             fn () => $matchBatch->invoke($matcher, $this->batchOf(3), null, 'library-1')
@@ -146,7 +145,6 @@ final class LibraryMetadataMatcherCoroutineForkTest extends TestCase
         [$matcher, $record] = $this->buildMatcher();
 
         $matchBatch = new \ReflectionMethod(LibraryMetadataMatcher::class, 'matchBatchConcurrently');
-        $matchBatch->setAccessible(true);
 
         $result = $matchBatch->invoke($matcher, $this->batchOf(2), null, 'library-1');
 

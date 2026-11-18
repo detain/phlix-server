@@ -59,7 +59,6 @@ final class HttpHandlerLegacyRedirectTest extends TestCase
         $request->query = $query;
 
         $m = new \ReflectionMethod(HttpHandler::class, 'dispatch');
-        $m->setAccessible(true);
         $result = $m->invoke($this->makeHandler(), $request);
         self::assertInstanceOf(Response::class, $result);
 
@@ -190,7 +189,6 @@ final class HttpHandlerLegacyRedirectTest extends TestCase
         $request->query = ['x' => '2'];
 
         $m = new \ReflectionMethod(HttpHandler::class, 'legacyRedirect');
-        $m->setAccessible(true);
 
         /** @var Response $withQuery */
         $withQuery = $m->invoke($handler, $request, '/app/target?already=1');

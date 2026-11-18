@@ -466,12 +466,10 @@ final class MusicQueryParamRouteTest extends TestCase
             ] as $property => $value
         ) {
             $prop = $ref->getProperty($property);
-            $prop->setAccessible(true);
             $prop->setValue($app, $value);
         }
 
         $loader = $ref->getMethod('loadMusicRoutes');
-        $loader->setAccessible(true);
         $loader->invoke($app);
 
         return $router;
@@ -531,7 +529,6 @@ final class MusicQueryParamRouteTest extends TestCase
         );
 
         $build = new ReflectionMethod(RelayConsumer::class, 'buildRequest');
-        $build->setAccessible(true);
 
         /** @var Request $request */
         $request = $build->invoke($consumer, $onTheWire);

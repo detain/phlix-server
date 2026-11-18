@@ -82,7 +82,6 @@ final class BackupConfigRecursionTest extends TestCase
     private static function walk(string $dir): array
     {
         $ref = new ReflectionMethod(BackupManager::class, 'configFilesUnder');
-        $ref->setAccessible(true);
         /** @var array<string, string> $out */
         $out = $ref->invoke(null, $dir);
 
@@ -148,7 +147,6 @@ final class BackupConfigRecursionTest extends TestCase
         $tempDir = $this->tmpdir('phlix_bak_');
         $m = new BackupManager($this->createMock(Connection::class));
         $ref = new ReflectionMethod(BackupManager::class, 'backupConfigs');
-        $ref->setAccessible(true);
         $ref->invoke($m, $tempDir);
 
         self::assertFileExists($tempDir . '/config/server.php');
@@ -181,7 +179,6 @@ final class BackupConfigRecursionTest extends TestCase
 
         $m = new BackupManager($this->createMock(Connection::class));
         $ref = new ReflectionMethod(BackupManager::class, 'restoreConfigs');
-        $ref->setAccessible(true);
         $ref->invoke($m, $extractDir);
 
         self::assertSame('<?php return ["restored" => true];', file_get_contents($configDir . '/server.php'));
@@ -211,7 +208,6 @@ final class BackupConfigRecursionTest extends TestCase
 
         $m = new BackupManager($this->createMock(Connection::class));
         $ref = new ReflectionMethod(BackupManager::class, 'restoreConfigs');
-        $ref->setAccessible(true);
         $ref->invoke($m, $extractDir);
 
         // The legitimate nested entry lands inside config/ and nothing was

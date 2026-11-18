@@ -73,7 +73,6 @@ final class ContextIsolationTest extends TestCase
         $this->assertNotNull($ctor);
         $this->assertTrue($ctor->isPrivate(), 'constructor must stay private');
 
-        $ctor->setAccessible(true);
         $instance = $rc->newInstanceWithoutConstructor();
         $ctor->invoke($instance);
         // No state to observe — the constructor is a no-op by design.

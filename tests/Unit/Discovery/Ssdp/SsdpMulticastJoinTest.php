@@ -97,7 +97,6 @@ class SsdpMulticastJoinTest extends TestCase
         [$newStyle, $portC] = $this->bindEphemeral();
         $ssdp = new SsdpSocket(null, 1);
         $join = new \ReflectionMethod(SsdpSocket::class, 'joinMulticastGroup');
-        $join->setAccessible(true);
         $armCJoined = $join->invoke($ssdp, $newStyle, $ifIndex);
         $armC = $this->multicastRoundTrip($newStyle, $group, $portC, $ifIndex);
         socket_close($newStyle);
@@ -151,7 +150,6 @@ class SsdpMulticastJoinTest extends TestCase
 
         $ssdp = new SsdpSocket($logger, 1);
         $join = new \ReflectionMethod(SsdpSocket::class, 'joinMulticastGroup');
-        $join->setAccessible(true);
 
         // Failure mode 1: setsockopt returns false (nonexistent interface
         // index → ENODEV, measured). The method must say so, loudly.

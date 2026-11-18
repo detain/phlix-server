@@ -142,7 +142,6 @@ final class DbRemediationMigrationsTest extends TestCase
         self::assertIsString($sql, $basename . ' must be readable');
 
         $split = new ReflectionMethod(MigrationRunner::class, 'splitStatements');
-        $split->setAccessible(true);
 
         /** @var list<string> $statements */
         $statements = $split->invoke(null, $sql);

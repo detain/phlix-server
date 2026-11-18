@@ -54,7 +54,6 @@ final class ChapterMarkerServiceCoroutineForkTest extends TestCase
 
         $service = $this->buildService();
         $runCommand = new \ReflectionMethod(ChapterMarkerService::class, 'runCommand');
-        $runCommand->setAccessible(true);
 
         $output = $this->runInCoroutine(
             fn () => $runCommand->invoke($service, 'definitely-not-a-real-command-12345 2>/dev/null')
@@ -75,7 +74,6 @@ final class ChapterMarkerServiceCoroutineForkTest extends TestCase
 
         $service = $this->buildService();
         $runCommand = new \ReflectionMethod(ChapterMarkerService::class, 'runCommand');
-        $runCommand->setAccessible(true);
 
         $output = $this->runInCoroutine(
             fn () => $runCommand->invoke($service, "echo '{\"chapters\":[]}'")
@@ -93,7 +91,6 @@ final class ChapterMarkerServiceCoroutineForkTest extends TestCase
     {
         $service = $this->buildService();
         $runCommand = new \ReflectionMethod(ChapterMarkerService::class, 'runCommand');
-        $runCommand->setAccessible(true);
 
         $output = $runCommand->invoke($service, 'definitely-not-a-real-command-12345 2>/dev/null');
 

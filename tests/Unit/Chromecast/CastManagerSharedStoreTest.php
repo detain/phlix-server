@@ -188,7 +188,6 @@ final class CastManagerSharedStoreTest extends TestCase
         self::assertInstanceOf(CastSession::class, $session);
 
         $poll = new ReflectionMethod($session, 'pollMediaStatusOnce');
-        $poll->setAccessible(true);
 
         // Dead device → getMediaStatus() answers [] → strike (pre-Device-M1 the
         // Cast poll could never die at all).

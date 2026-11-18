@@ -61,10 +61,8 @@ final class TranscodeServicesProviderTest extends TestCase
 
         $ref = new \ReflectionObject($registry);
         $capProp = $ref->getProperty('capabilities');
-        $capProp->setAccessible(true);
         $capProp->setValue($registry, ['nvenc' => $capability]);
         $initProp = $ref->getProperty('initialized');
-        $initProp->setAccessible(true);
         $initProp->setValue($registry, true);
 
         return $registry;
@@ -173,7 +171,6 @@ final class TranscodeServicesProviderTest extends TestCase
     private function setRegistryPrivate(SegmentProcessRegistry $registry, string $prop, mixed $value): void
     {
         $p = new \ReflectionProperty(SegmentProcessRegistry::class, $prop);
-        $p->setAccessible(true);
         $p->setValue($registry, $value);
     }
 
@@ -191,9 +188,7 @@ final class TranscodeServicesProviderTest extends TestCase
         $final = '/tmp/phlix_hls/job/seg-v720p-00003.ts';
 
         $waiters = new \ReflectionProperty(TranscodeManager::class, 'segmentWaiters');
-        $waiters->setAccessible(true);
         $resv = new \ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
-        $resv->setAccessible(true);
 
         // (1) REAL waiter guard wired: a genuine piggybacker (count 2) defers a real
         //     kill through the provider-bound guard → hasOtherWaiter($final).
@@ -247,7 +242,6 @@ final class TranscodeServicesProviderTest extends TestCase
     private function readMinDiskSpaceBytes(TranscodeManager $manager): int
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'minDiskSpaceBytes');
-        $p->setAccessible(true);
         $value = $p->getValue($manager);
         $this->assertIsInt($value);
 
@@ -323,7 +317,6 @@ final class TranscodeServicesProviderTest extends TestCase
     private function readPrewarmSegments(TranscodeManager $manager): int
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'prewarmSegments');
-        $p->setAccessible(true);
         $value = $p->getValue($manager);
         $this->assertIsInt($value);
 
@@ -373,7 +366,6 @@ final class TranscodeServicesProviderTest extends TestCase
     private function readLoudnormParams(TranscodeManager $manager): ?array
     {
         $p = new \ReflectionProperty(TranscodeManager::class, 'loudnormParams');
-        $p->setAccessible(true);
         /** @var array<string, float>|null $value */
         $value = $p->getValue($manager);
 

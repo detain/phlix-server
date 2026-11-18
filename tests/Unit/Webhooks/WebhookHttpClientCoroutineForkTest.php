@@ -28,7 +28,6 @@ final class WebhookHttpClientCoroutineForkTest extends TestCase
     private function injectAsyncClient(WebhookHttpClient $client, Client $fake): void
     {
         $prop = new \ReflectionProperty(WebhookHttpClient::class, 'asyncClient');
-        $prop->setAccessible(true);
         $prop->setValue($client, $fake);
     }
 

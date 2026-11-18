@@ -53,7 +53,6 @@ final class StreamSessionHeartbeatThrottleTest extends TestCase
     private function ageMemo(StreamSessionService $service, string $sessionId, int $ageNs): void
     {
         $memo = new ReflectionProperty(StreamSessionService::class, 'lastHeartbeatNs');
-        $memo->setAccessible(true);
         /** @var array<string, int> $slots */
         $slots = $memo->getValue($service);
         $slots[$sessionId] = hrtime(true) - $ageNs;
@@ -112,7 +111,6 @@ final class StreamSessionHeartbeatThrottleTest extends TestCase
 
         // Fill the memo past its cap with slots that have all aged out.
         $memo = new ReflectionProperty(StreamSessionService::class, 'lastHeartbeatNs');
-        $memo->setAccessible(true);
         $stale = [];
         for ($i = 0; $i < 1100; $i++) {
             $stale['old-' . $i] = hrtime(true) - 60_000_000_000;

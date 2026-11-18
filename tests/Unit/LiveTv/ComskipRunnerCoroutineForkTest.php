@@ -118,7 +118,6 @@ SCRIPT);
 
         $order = [];
         $sleep = new \ReflectionMethod(ComskipRunner::class, 'nonBlockingSleep');
-        $sleep->setAccessible(true);
 
         $this->runInCoroutine(static function () use ($runner, $sleep, &$order): void {
             $chan = new \Swoole\Coroutine\Channel(2);

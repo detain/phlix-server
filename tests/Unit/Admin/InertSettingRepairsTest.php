@@ -154,7 +154,6 @@ class InertSettingRepairsTest extends TestCase
         /** @var Application $app */
         $app = $ref->newInstanceWithoutConstructor();
         $method = $ref->getMethod('applyLastfmOverrides');
-        $method->setAccessible(true);
 
         /** @var array<string, mixed> $result */
         $result = $method->invoke($app, [
@@ -181,7 +180,6 @@ class InertSettingRepairsTest extends TestCase
         /** @var Application $app */
         $app = $ref->newInstanceWithoutConstructor();
         $method = $ref->getMethod('applyLastfmOverrides');
-        $method->setAccessible(true);
 
         /** @var array<string, mixed> $result */
         $result = $method->invoke($app, ['api_key' => 'FILE_KEY'], $settings);
@@ -201,7 +199,6 @@ class InertSettingRepairsTest extends TestCase
         /** @var Application $app */
         $app = $ref->newInstanceWithoutConstructor();
         $method = $ref->getMethod('applyLastfmOverrides');
-        $method->setAccessible(true);
 
         /** @var array<string, mixed> $result */
         $result = $method->invoke($app, ['api_key' => 'FILE_KEY'], $settings);

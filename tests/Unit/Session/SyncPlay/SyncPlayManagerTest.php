@@ -308,7 +308,6 @@ class SyncPlayManagerTest extends TestCase
         // The connection->member reverse map must now resolve the NEW socket and no
         // longer the old one, else a broadcast on close of the old socket would strand.
         $connMap = new \ReflectionProperty($this->manager, 'connectionToMember');
-        $connMap->setAccessible(true);
         /** @var array<string, string> $map */
         $map = $connMap->getValue($this->manager);
         $this->assertArrayHasKey('conn-new', $map);
@@ -486,7 +485,6 @@ class SyncPlayManagerTest extends TestCase
         $pool->add($blocked);
 
         $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
-        $reflection->setAccessible(true);
         $reflection->invoke($this->manager, $groupId, Messages::TYPE_INFO, ['message' => 'hello'], []);
     }
 
@@ -542,7 +540,6 @@ class SyncPlayManagerTest extends TestCase
 
         // Invoke private broadcastToGroup via reflection
         $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
-        $reflection->setAccessible(true);
         $reflection->invoke(
             $this->manager,
             $groupId,
@@ -609,7 +606,6 @@ class SyncPlayManagerTest extends TestCase
 
         // Exclude member_2 from the broadcast
         $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
-        $reflection->setAccessible(true);
         $reflection->invoke(
             $this->manager,
             $groupId,
@@ -835,7 +831,6 @@ class SyncPlayManagerTest extends TestCase
         // A's future broadcasts must never reach u1's connection again.
         $seenBefore = count($connU1->getSentMessages());
         $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
-        $reflection->setAccessible(true);
         $reflection->invoke($this->manager, $groupA, Messages::TYPE_INFO, ['message' => 'A only'], []);
         $this->assertSame(
             $seenBefore,

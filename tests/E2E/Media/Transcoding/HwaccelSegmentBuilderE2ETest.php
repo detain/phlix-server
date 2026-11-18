@@ -628,7 +628,6 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
         $registry = HwaccelRegistry::getInstance();
         $ref = new \ReflectionObject($registry);
         $capabilities = $ref->getProperty('capabilities');
-        $capabilities->setAccessible(true);
         $capabilities->setValue($registry, [
             'software' => new HwaccelCapability(
                 vendor: 'software',
@@ -643,7 +642,6 @@ final class HwaccelSegmentBuilderE2ETest extends TestCase
             ),
         ]);
         $initialized = $ref->getProperty('initialized');
-        $initialized->setAccessible(true);
         $initialized->setValue($registry, true);
     }
 

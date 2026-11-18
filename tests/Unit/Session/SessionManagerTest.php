@@ -32,7 +32,6 @@ class SessionManagerTest extends TestCase
         // Use reflection to test the private generateUuid method
         $reflection = new \ReflectionClass($manager);
         $method = $reflection->getMethod('generateUuid');
-        $method->setAccessible(true);
 
         $uuid = $method->invoke($manager);
         /** @var string $uuid */
@@ -54,7 +53,6 @@ class SessionManagerTest extends TestCase
         $manager = new SessionManager($db);
 
         $cache = new \ReflectionProperty($manager, 'activeSessions');
-        $cache->setAccessible(true);
         $cache->setValue($manager, ['sess-cached' => ['id' => 'sess-cached', 'device_name' => 'TV']]);
 
         $db->expects($this->once())

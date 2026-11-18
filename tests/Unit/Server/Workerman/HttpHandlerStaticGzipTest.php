@@ -94,7 +94,6 @@ final class HttpHandlerStaticGzipTest extends TestCase
         $wr = new WorkermanRequest($head . "\r\n");
 
         $m = new ReflectionMethod(HttpHandler::class, 'serveStatic');
-        $m->setAccessible(true);
         /** @var ?WorkermanResponse $result */
         $result = $m->invoke($this->makeHandler(), $wr);
 
@@ -241,7 +240,6 @@ final class HttpHandlerStaticGzipTest extends TestCase
         // promise), and an encoded variant never does.
         self::assertNull($resp->getHeader('Content-Encoding'), 'over-ceiling text must NOT be encoded');
         $file = new ReflectionProperty(WorkermanResponse::class, 'file');
-        $file->setAccessible(true);
         /** @var array{file?:string}|null $fileInfo */
         $fileInfo = $file->getValue($resp);
         self::assertIsArray($fileInfo, 'the reply is still the file-backed stream');

@@ -521,7 +521,6 @@ final class PluginCatalogServiceTest extends TestCase
         $error = null;
         \Swoole\Coroutine\run(static function () use ($client, &$body, &$error): void {
             $method = new \ReflectionMethod(PluginCatalogService::class, 'asyncFetch');
-            $method->setAccessible(true);
             try {
                 $body = $method->invoke(null, $client, 'https://example.com/plugins.json', 2);
             } catch (\Throwable $e) {
@@ -553,7 +552,6 @@ final class PluginCatalogServiceTest extends TestCase
         $elapsedMs = null;
         \Swoole\Coroutine\run(static function () use ($client, &$error, &$elapsedMs): void {
             $method = new \ReflectionMethod(PluginCatalogService::class, 'asyncFetch');
-            $method->setAccessible(true);
             $start = hrtime(true);
             try {
                 $method->invoke(null, $client, 'https://example.com/plugins.json', 1);

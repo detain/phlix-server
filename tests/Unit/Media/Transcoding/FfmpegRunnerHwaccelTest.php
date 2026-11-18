@@ -44,11 +44,9 @@ final class FfmpegRunnerHwaccelTest extends TestCase
         $ref = new \ReflectionObject($registry);
 
         $capProp = $ref->getProperty('capabilities');
-        $capProp->setAccessible(true);
         $capProp->setValue($registry, $capabilities);
 
         $initProp = $ref->getProperty('initialized');
-        $initProp->setAccessible(true);
         $initProp->setValue($registry, true);
 
         return $registry;

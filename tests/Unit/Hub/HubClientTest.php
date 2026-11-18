@@ -498,7 +498,6 @@ class HubClientTest extends TestCase
     private function invokeHeartbeatTick(HubClient $client): void
     {
         $method = new \ReflectionMethod($client, 'performHeartbeatTick');
-        $method->setAccessible(true);
         $method->invoke($client);
     }
 

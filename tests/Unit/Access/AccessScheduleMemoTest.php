@@ -112,7 +112,6 @@ final class AccessScheduleMemoTest extends TestCase
         $service->isAccessAllowed('p1');
 
         $memo = new ReflectionProperty(AccessScheduleService::class, 'activeMemo');
-        $memo->setAccessible(true);
         /** @var array<string, array{at: int, schedules: list<mixed>}> $entries */
         $entries = $memo->getValue($service);
         foreach ($entries as $key => $entry) {
@@ -130,7 +129,6 @@ final class AccessScheduleMemoTest extends TestCase
         $service = new AccessScheduleService($db);
 
         $memo = new ReflectionProperty(AccessScheduleService::class, 'activeMemo');
-        $memo->setAccessible(true);
         $aged = [];
         for ($i = 0; $i < 600; $i++) {
             $aged['old-' . $i] = ['at' => hrtime(true) - 60_000_000_000, 'schedules' => []];

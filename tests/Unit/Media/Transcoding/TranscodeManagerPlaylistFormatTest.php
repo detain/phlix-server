@@ -719,7 +719,6 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
     private function build(string $method, array $args): string
     {
         $m = new ReflectionMethod(TranscodeManager::class, $method);
-        $m->setAccessible(true);
         $result = $m->invokeArgs($this->manager(), $args);
         $this->assertIsString($result);
 
@@ -733,7 +732,6 @@ final class TranscodeManagerPlaylistFormatTest extends TestCase
     private function write(string $dir, ?array $variants, ?array $audioTracks, ?string $format): void
     {
         $m = new ReflectionMethod(TranscodeManager::class, 'writeVodPlaylists');
-        $m->setAccessible(true);
         $args = [$dir, 25.0, 6, 1920, 1080, 5000000, $variants, $audioTracks];
         if ($format !== null) {
             $args[] = $format;

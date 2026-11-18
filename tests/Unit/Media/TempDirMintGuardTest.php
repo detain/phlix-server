@@ -114,7 +114,6 @@ final class TempDirMintGuardTest extends TestCase
             $reflection = new ReflectionClass($class);
             $instance = $reflection->newInstanceWithoutConstructor();
             $method = $reflection->getMethod('createDefaultLogger');
-            $method->setAccessible(true);
             $method->invoke($instance);
         }
 

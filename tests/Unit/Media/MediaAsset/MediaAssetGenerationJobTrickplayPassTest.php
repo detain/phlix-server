@@ -51,7 +51,6 @@ final class MediaAssetGenerationJobTrickplayPassTest extends TestCase
     {
         $job = new MediaAssetGenerationJob($ffmpeg, $repo, $this->createMock(Connection::class));
         $method = (new \ReflectionClass(MediaAssetGenerationJob::class))->getMethod('generateTrickplaySprites');
-        $method->setAccessible(true);
 
         /** @var bool $result */
         $result = $method->invoke($job, new MediaAssetJob('item-1', '/media/movie.mkv', 3600));

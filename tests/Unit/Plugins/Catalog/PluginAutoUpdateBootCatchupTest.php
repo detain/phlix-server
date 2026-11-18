@@ -56,7 +56,6 @@ final class PluginAutoUpdateBootCatchupTest extends TestCase
         $this->savedWorkers = Worker::getAllWorkers();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $stub = new Worker();
         $workers->setValue(null, [spl_object_id($stub) => $stub]);
 
@@ -68,7 +67,6 @@ final class PluginAutoUpdateBootCatchupTest extends TestCase
         Timer::delAll();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         parent::tearDown();
@@ -137,7 +135,6 @@ final class PluginAutoUpdateBootCatchupTest extends TestCase
         $worker->start($pollSeconds);
 
         $tasksProp = new ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 

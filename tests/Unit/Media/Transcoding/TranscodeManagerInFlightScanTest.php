@@ -69,7 +69,6 @@ final class TranscodeManagerInFlightScanTest extends TestCase
     private function scan(TranscodeManager $manager): array
     {
         $method = new ReflectionMethod(TranscodeManager::class, 'scanInFlightTemps');
-        $method->setAccessible(true);
 
         /** @var array{base: list<string>, prewarm: list<string>} $families */
         $families = $method->invoke($manager);

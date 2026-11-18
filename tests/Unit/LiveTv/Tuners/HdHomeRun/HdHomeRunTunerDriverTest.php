@@ -155,7 +155,6 @@ class HdHomeRunTunerDriverTest extends TestCase
         $driver = new HdHomeRunTunerDriver($discovery, $apiClient);
 
         $sleep = new \ReflectionMethod($driver, 'coroutineAwareSleep');
-        $sleep->setAccessible(true);
 
         $order = [];
         \Swoole\Coroutine\run(function () use (&$order, $sleep, $driver): void {

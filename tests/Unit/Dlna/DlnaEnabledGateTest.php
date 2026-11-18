@@ -81,14 +81,12 @@ final class DlnaEnabledGateTest extends TestCase
     private function seedWorkermanRuntime(): void
     {
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, [0 => new Worker()]);
     }
 
     private function restoreWorkermanRuntime(): void
     {
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
     }
 
@@ -147,9 +145,7 @@ final class DlnaEnabledGateTest extends TestCase
         $start($worker);
 
         $socketProp = new ReflectionProperty(SsdpAdvertiser::class, 'socket');
-        $socketProp->setAccessible(true);
         $timerProp = new ReflectionProperty(SsdpAdvertiser::class, 'timerId');
-        $timerProp->setAccessible(true);
 
         /** @var resource|null $socket */
         $socket = $socketProp->getValue($worker);

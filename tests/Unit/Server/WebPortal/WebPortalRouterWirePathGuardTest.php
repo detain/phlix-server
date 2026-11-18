@@ -299,7 +299,6 @@ final class WebPortalRouterWirePathGuardTest extends TestCase
     private function routeTable(WebPortalRouter $webPortalRouter): array
     {
         $property = (new ReflectionClass($webPortalRouter))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($webPortalRouter);
 
         if (!$router instanceof Router) {

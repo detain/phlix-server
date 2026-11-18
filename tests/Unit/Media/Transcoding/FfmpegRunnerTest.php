@@ -276,7 +276,6 @@ class FfmpegRunnerTest extends TestCase
     private function resetHwaccelProbed(): void
     {
         $ref = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelProbed');
-        $ref->setAccessible(true);
         $ref->setValue(null, false);
     }
 
@@ -290,7 +289,6 @@ class FfmpegRunnerTest extends TestCase
 
         // Verify the static flag is now true.
         $ref = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelProbed');
-        $ref->setAccessible(true);
         $this->assertTrue($ref->getValue(), 'hwaccelProbed must be true after first call');
 
         // Second call — must return early without re-entering the probe logic.

@@ -56,17 +56,14 @@ class ApplicationFactoryMethodsTest extends TestCase
 
         // Set the container via reflection
         $containerProp = $ref->getProperty('container');
-        $containerProp->setAccessible(true);
         $containerProp->setValue($app, $this->container);
 
         // Set the connection pool
         $connectionPoolProp = $ref->getProperty('connectionPool');
-        $connectionPoolProp->setAccessible(true);
         $connectionPoolProp->setValue($app, $this->connectionPool);
 
         // Set empty config to avoid null warnings
         $configProp = $ref->getProperty('config');
-        $configProp->setAccessible(true);
         $configProp->setValue($app, []);
 
         return $app;
@@ -119,7 +116,6 @@ class ApplicationFactoryMethodsTest extends TestCase
         // Use reflection to call the private factory method
         $ref = new \ReflectionClass(Application::class);
         $factoryMethod = $ref->getMethod('getLibraryController');
-        $factoryMethod->setAccessible(true);
 
         /** @var LibraryController $controller */
         $controller = $factoryMethod->invoke($app);
@@ -177,7 +173,6 @@ class ApplicationFactoryMethodsTest extends TestCase
 
         $ref = new \ReflectionClass(Application::class);
         $factoryMethod = $ref->getMethod('getThemeMediaController');
-        $factoryMethod->setAccessible(true);
 
         /** @var ThemeMediaController $controller */
         $controller = $factoryMethod->invoke($app);

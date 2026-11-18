@@ -50,7 +50,6 @@ final class HttpHandlerCompressionTest extends TestCase
     private function invokeCompress(HttpHandler $handler, WorkermanRequest $wr, Response $response): void
     {
         $m = new \ReflectionMethod(HttpHandler::class, 'compressResponse');
-        $m->setAccessible(true);
         $m->invoke($handler, $wr, $response);
     }
 
@@ -339,7 +338,6 @@ final class HttpHandlerCompressionTest extends TestCase
     private function invokeIsCompressible(?string $type): bool
     {
         $m = new \ReflectionMethod(HttpHandler::class, 'isCompressibleType');
-        $m->setAccessible(true);
         $result = $m->invoke(null, $type);
         self::assertIsBool($result);
 

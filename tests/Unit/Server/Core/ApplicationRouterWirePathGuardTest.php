@@ -772,7 +772,6 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
     private function routeTable(): array
     {
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($this->application());
 
         if (!$router instanceof Router) {
@@ -1242,7 +1241,6 @@ final class ApplicationRouterWirePathGuardTest extends TestCase
         );
 
         $property = (new ReflectionClass(WebPortalRouter::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($webPortalRouter);
         $this->assertInstanceOf(Router::class, $router);
 

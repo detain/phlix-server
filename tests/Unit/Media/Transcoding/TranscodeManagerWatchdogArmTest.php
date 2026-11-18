@@ -68,9 +68,7 @@ final class TranscodeManagerWatchdogArmTest extends TestCase
         $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
 
         $tick = new ReflectionMethod(TranscodeManager::class, 'watchdogTick');
-        $tick->setAccessible(true);
         $timerId = new ReflectionProperty(TranscodeManager::class, 'watchdogTimerId');
-        $timerId->setAccessible(true);
 
         $tick->invoke($manager);
         self::assertNull($timerId->getValue($manager), 'a failed arm must not latch the 0 sentinel');
@@ -95,9 +93,7 @@ final class TranscodeManagerWatchdogArmTest extends TestCase
         });
 
         $tick = new ReflectionMethod(TranscodeManager::class, 'watchdogTick');
-        $tick->setAccessible(true);
         $timerId = new ReflectionProperty(TranscodeManager::class, 'watchdogTimerId');
-        $timerId->setAccessible(true);
 
         $tick->invoke($manager);
         self::assertSame(4242, $timerId->getValue($manager), 'a successful arm stores the timer id');

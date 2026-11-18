@@ -54,7 +54,6 @@ class WebhookServiceSsrfTest extends TestCase
     {
         SsrfGuard::reset();
         $workers = new \ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
         parent::tearDown();
     }
@@ -163,7 +162,6 @@ class WebhookServiceSsrfTest extends TestCase
 
         $service = new WebhookService($db, $httpClient);
         $retry = new ReflectionMethod(WebhookService::class, 'retryDelivery');
-        $retry->setAccessible(true);
         $retry->invoke($service, 42);
 
         $update = $this->findDeliveryUpdate($writes);
@@ -197,7 +195,6 @@ class WebhookServiceSsrfTest extends TestCase
 
         $service = new WebhookService($db, $httpClient);
         $process = new ReflectionMethod(WebhookService::class, 'processDelivery');
-        $process->setAccessible(true);
         $process->invoke($service, 1, 'user.login', [], 42);
     }
 
@@ -248,7 +245,6 @@ class WebhookServiceSsrfTest extends TestCase
 
         $service = new WebhookService($db, $httpClient);
         $process = new ReflectionMethod(WebhookService::class, 'processDelivery');
-        $process->setAccessible(true);
         $process->invoke($service, 1, 'user.login', [], 42);
 
         return $this->findDeliveryUpdate($writes);

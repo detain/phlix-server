@@ -54,7 +54,6 @@ final class EncodeSettingsCommandTest extends TestCase
     private function invokeBuilder(string $method, array $params): string
     {
         $ref = new \ReflectionMethod(FfmpegRunner::class, $method);
-        $ref->setAccessible(true);
 
         $result = $ref->invoke($this->runner(), '/tmp/in.mkv', '/tmp/out.ts', 0.0, 6.0, $params);
 
@@ -147,23 +146,19 @@ final class EncodeSettingsCommandTest extends TestCase
                 continue;
             }
             $p = $registryRef->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue($registry, $value);
         }
 
         $runner = $this->runner();
 
         $registryProp = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelRegistry');
-        $registryProp->setAccessible(true);
         $registryProp->setValue($runner, $registry);
 
         // Skip the real hardware probe, which would overwrite the stub.
         $probed = new \ReflectionProperty(FfmpegRunner::class, 'hwaccelProbed');
-        $probed->setAccessible(true);
         $probed->setValue(null, true);
 
         $ref = new \ReflectionMethod(FfmpegRunner::class, 'buildHwaccelSegmentCommand');
-        $ref->setAccessible(true);
 
         $result = $ref->invoke(
             $runner,

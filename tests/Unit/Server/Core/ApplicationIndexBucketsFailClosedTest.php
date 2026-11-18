@@ -285,7 +285,6 @@ final class ApplicationIndexBucketsFailClosedTest extends TestCase
     private function indexHandler(Application $app): callable
     {
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($app);
         $this->assertInstanceOf(Router::class, $router, 'ANTI-VACUITY: production router missing');
 

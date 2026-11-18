@@ -46,7 +46,6 @@ class DeviceRegistrySsrfTest extends TestCase
     private function callFetch(DeviceRegistry $registry, string $location, string $source): ?object
     {
         $method = new \ReflectionMethod($registry, 'fetchDeviceDescription');
-        $method->setAccessible(true);
 
         /** @var object|null $result */
         $result = $method->invoke($registry, 'uuid:usn-1', 'urn:test', $location, $source, 'test/1.0');

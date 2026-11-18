@@ -281,7 +281,6 @@ PHP;
     {
         $installer = $this->installer();
         $method = new \ReflectionMethod(HttpInstaller::class, 'downloadToTemp');
-        $method->setAccessible(true);
         $this->tempLedgerBefore = $this->tempLedger();
 
         try {
@@ -321,7 +320,6 @@ PHP;
     public function testStreamFetchOptionsCarryAnExplicitTimeoutAndZeroFollowBudget(): void
     {
         $method = new \ReflectionMethod(HttpInstaller::class, 'streamFetchOptions');
-        $method->setAccessible(true);
         /** @var array<string, array<string, mixed>> $options */
         $options = $method->invoke(null);
 

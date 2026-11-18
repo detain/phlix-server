@@ -27,9 +27,7 @@ $probeDumpPath = getenv('PHLIX_S266_STATIC_DUMP');
 if (is_string($probeDumpPath) && $probeDumpPath !== '') {
     register_shutdown_function(static function () use ($probeDumpPath): void {
         $workersProperty = new ReflectionProperty(Workerman\Worker::class, 'workers');
-        $workersProperty->setAccessible(true);
         $eventProperty = new ReflectionProperty(Workerman\Timer::class, 'event');
-        $eventProperty->setAccessible(true);
         $workersValue = $workersProperty->getValue();
         $eventValue = $eventProperty->getValue();
 

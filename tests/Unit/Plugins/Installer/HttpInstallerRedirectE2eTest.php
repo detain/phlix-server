@@ -234,7 +234,6 @@ PHP;
     {
         $installer = $this->installer();
         $method = new \ReflectionMethod(HttpInstaller::class, 'downloadToTemp');
-        $method->setAccessible(true);
 
         try {
             $result = $method->invoke($installer, 'http://127.0.0.1:' . $this->serverPort . $path);

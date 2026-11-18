@@ -178,10 +178,8 @@ final class BootOverlayConsumerTest extends TestCase
 
         $ref = new \ReflectionObject($registry);
         $capProp = $ref->getProperty('capabilities');
-        $capProp->setAccessible(true);
         $capProp->setValue($registry, ['nvenc' => $capability]);
         $initProp = $ref->getProperty('initialized');
-        $initProp->setAccessible(true);
         $initProp->setValue($registry, true);
     }
 
@@ -189,7 +187,6 @@ final class BootOverlayConsumerTest extends TestCase
     {
         $ref = new \ReflectionObject($target);
         $prop = $ref->getProperty($property);
-        $prop->setAccessible(true);
         /** @var mixed $value */
         $value = $prop->getValue($target);
         $this->assertIsInt($value);
@@ -324,7 +321,6 @@ final class BootOverlayConsumerTest extends TestCase
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp/phlix_transcodes');
         $ref = new \ReflectionObject($runner);
         $method = $ref->getMethod('getTranscodeTimeout');
-        $method->setAccessible(true);
         /** @var mixed $value */
         $value = $method->invoke($runner);
         $this->assertIsInt($value);

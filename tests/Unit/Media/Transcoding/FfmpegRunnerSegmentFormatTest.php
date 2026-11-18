@@ -840,7 +840,6 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
         $ref = new \ReflectionObject($registry);
 
         $capabilities = $ref->getProperty('capabilities');
-        $capabilities->setAccessible(true);
         $capabilities->setValue($registry, [
             'nvenc' => new HwaccelCapability(
                 vendor: 'nvenc',
@@ -856,7 +855,6 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
         ]);
 
         $initialized = $ref->getProperty('initialized');
-        $initialized->setAccessible(true);
         $initialized->setValue($registry, true);
     }
 }

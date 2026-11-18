@@ -2064,7 +2064,6 @@ final class MediaItemShaperTest extends TestCase
     private function invokeNonemptyString(mixed $value): ?string
     {
         $ref = new \ReflectionMethod(MediaItemShaper::class, 'nonemptyString');
-        $ref->setAccessible(true);
         /** @var string|null */
         return $ref->invoke(null, $value);
     }

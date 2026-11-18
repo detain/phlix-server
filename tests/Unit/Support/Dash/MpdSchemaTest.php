@@ -117,7 +117,6 @@ final class MpdSchemaTest extends TestCase
         libxml_clear_errors();
 
         $drain = new ReflectionMethod(MpdSchema::class, 'drain');
-        $drain->setAccessible(true);
         /** @var list<string> $messages */
         $messages = $drain->invoke(null, 'schemaValidate() returned false');
 

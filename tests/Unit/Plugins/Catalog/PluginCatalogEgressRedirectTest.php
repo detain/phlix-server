@@ -241,7 +241,6 @@ PHP;
     private function invokePrivateStatic(string $method, mixed ...$args): mixed
     {
         $reflection = new ReflectionMethod(PluginCatalogService::class, $method);
-        $reflection->setAccessible(true);
 
         return $reflection->invoke(null, ...$args);
     }
@@ -411,7 +410,6 @@ PHP;
     private function invokePrivateStaticAsync(Client $client, string $url): mixed
     {
         $reflection = new ReflectionMethod(PluginCatalogService::class, 'asyncFetch');
-        $reflection->setAccessible(true);
 
         return $reflection->invoke(null, $client, $url, 10);
     }

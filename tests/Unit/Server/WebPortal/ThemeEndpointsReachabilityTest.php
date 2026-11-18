@@ -225,7 +225,6 @@ final class ThemeEndpointsReachabilityTest extends TestCase
     private function routeTable(WebPortalRouter $webPortalRouter): array
     {
         $property = (new ReflectionClass($webPortalRouter))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($webPortalRouter);
         $this->assertInstanceOf(Router::class, $router);
 
@@ -540,7 +539,6 @@ final class ThemeEndpointsReachabilityTest extends TestCase
     private function readPrivate(object $target, string $property): mixed
     {
         $prop = (new ReflectionClass($target))->getProperty($property);
-        $prop->setAccessible(true);
 
         return $prop->getValue($target);
     }

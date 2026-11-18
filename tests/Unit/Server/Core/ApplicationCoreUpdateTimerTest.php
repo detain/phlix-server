@@ -62,7 +62,6 @@ final class ApplicationCoreUpdateTimerTest extends TestCase
         $this->savedWorkers = Worker::getAllWorkers();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $stub = new Worker();
         $workers->setValue(null, [spl_object_id($stub) => $stub]);
 
@@ -74,7 +73,6 @@ final class ApplicationCoreUpdateTimerTest extends TestCase
         Timer::delAll();
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         foreach (glob($this->tempDir . '/config/*') ?: [] as $file) {
@@ -124,7 +122,6 @@ final class ApplicationCoreUpdateTimerTest extends TestCase
 
         foreach (['config' => $config, 'connectionPool' => $pool, 'container' => $container] as $prop => $value) {
             $p = $ref->getProperty($prop);
-            $p->setAccessible(true);
             $p->setValue($app, $value);
         }
 
@@ -175,7 +172,6 @@ final class ApplicationCoreUpdateTimerTest extends TestCase
     private function scheduledTasks(): array
     {
         $tasksProp = new ReflectionProperty(Timer::class, 'tasks');
-        $tasksProp->setAccessible(true);
         /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
         $tasks = $tasksProp->getValue();
 

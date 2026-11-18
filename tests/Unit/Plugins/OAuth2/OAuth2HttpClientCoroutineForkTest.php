@@ -29,7 +29,6 @@ final class OAuth2HttpClientCoroutineForkTest extends TestCase
     private function injectAsyncClient(OAuth2HttpClient $client, Client $fake): void
     {
         $prop = new \ReflectionProperty(OAuth2HttpClient::class, 'asyncClient');
-        $prop->setAccessible(true);
         $prop->setValue($client, $fake);
     }
 

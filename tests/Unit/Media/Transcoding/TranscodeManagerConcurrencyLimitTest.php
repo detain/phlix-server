@@ -69,7 +69,6 @@ final class TranscodeManagerConcurrencyLimitTest extends TestCase
     private function ceilingOf(TranscodeManager $manager): int
     {
         $prop = new ReflectionProperty(TranscodeManager::class, 'maxConcurrentTranscodes');
-        $prop->setAccessible(true);
 
         /** @var int $value */
         $value = $prop->getValue($manager);

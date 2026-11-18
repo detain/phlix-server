@@ -340,7 +340,6 @@ final class ComposedRouteInventoryTest extends TestCase
         $application = new Application($container, $config, $pool);
 
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($application);
 
         $this->assertInstanceOf(

@@ -315,7 +315,6 @@ final class PreRouterFastPathsMediaStreamTest extends TestCase
     public function testStreamMimeForMapsAudioExtensions(string $file, string $expected): void
     {
         $m = new ReflectionMethod(PreRouterFastPaths::class, 'streamMimeFor');
-        $m->setAccessible(true);
         self::assertSame($expected, $m->invoke(null, $file));
     }
 

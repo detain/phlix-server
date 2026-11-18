@@ -29,7 +29,6 @@ final class MetadataHttpClientCoroutineForkTest extends TestCase
     private function injectAsyncClient(MetadataHttpClient $client, Client $fake): void
     {
         $prop = new \ReflectionProperty(MetadataHttpClient::class, 'asyncClient');
-        $prop->setAccessible(true);
         $prop->setValue($client, $fake);
     }
 

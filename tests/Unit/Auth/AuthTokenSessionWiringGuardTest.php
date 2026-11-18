@@ -71,7 +71,6 @@ final class AuthTokenSessionWiringGuardTest extends TestCase
         $this->assertInstanceOf(AuthManager::class, $authManager);
 
         $reflected = (new ReflectionClass(AuthManager::class))->getProperty('tokenSessions');
-        $reflected->setAccessible(true);
         $store = $reflected->getValue($authManager);
 
         $this->assertNotNull(
@@ -97,7 +96,6 @@ final class AuthTokenSessionWiringGuardTest extends TestCase
         $this->assertInstanceOf(TokenSessionRepository::class, $store);
 
         $reflected = (new ReflectionClass(TokenSessionRepository::class))->getProperty('db');
-        $reflected->setAccessible(true);
 
         $this->assertNotNull(
             $reflected->getValue($store),
@@ -114,7 +112,6 @@ final class AuthTokenSessionWiringGuardTest extends TestCase
     {
         $authManager = $this->container()->get(AuthManager::class);
         $reflected = (new ReflectionClass(AuthManager::class))->getProperty('tokenSessions');
-        $reflected->setAccessible(true);
 
         $this->assertSame(
             $this->container()->get(TokenSessionRepository::class),

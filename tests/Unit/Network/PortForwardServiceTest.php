@@ -318,7 +318,6 @@ class PortForwardServiceTest extends TestCase
             $this->tmpDir
         );
         $m = new \ReflectionMethod($service, 'persistConfig');
-        $m->setAccessible(true);
         $this->assertFalse($m->invoke($service, ['enabled' => true]));
         @unlink($this->tmpDir . '/config');
 

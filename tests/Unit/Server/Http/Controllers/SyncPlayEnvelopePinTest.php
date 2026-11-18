@@ -786,7 +786,6 @@ final class SyncPlayEnvelopePinTest extends TestCase
     private function productionRouter(): Router
     {
         $property = (new ReflectionClass(Application::class))->getProperty('router');
-        $property->setAccessible(true);
         $router = $property->getValue($this->application);
         $this->assertInstanceOf(
             Router::class,

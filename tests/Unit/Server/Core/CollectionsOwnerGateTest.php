@@ -854,6 +854,16 @@ final class CollectionsOwnerGateTest extends TestCase
     private function application(CollectionManager $manager, UserRepository $users): Application
     {
         $connection = $this->createMock(Connection::class);
+        // Every session request now runs the global schedule gate (perf/C 5b2e3efa), which reads the
+        // account's active profile and fails closed with 403 access.scheduled when none resolves.
+        // This file pins ownership, not schedules, so the double answers the profile read with an
+        // unrestricted active profile (no schedule rows, so every window is open). The 404 and 403
+        // expectations below are unchanged.
+        $connection->method('query')->willReturnCallback(
+            static fn (string $sql): array => str_contains($sql, 'FROM user_profiles p')
+                ? [['id' => 'profile-owner-gate', 'user_id' => 'owner-gate', 'is_active' => 1]]
+                : []
+        );
         $pool = $this->createMock(ConnectionPool::class);
         $pool->method('getPooledConnection')->willReturn($connection);
 
@@ -942,15 +952,12 @@ final class CollectionsOwnerGateTest extends TestCase
         $router = new Router();
 
         $routerProp = $ref->getProperty('router');
-        $routerProp->setAccessible(true);
         $routerProp->setValue($app, $router);
 
         $containerProp = $ref->getProperty('container');
-        $containerProp->setAccessible(true);
         $containerProp->setValue($app, $container);
 
         $loader = $ref->getMethod('loadCollectionRoutes');
-        $loader->setAccessible(true);
         $loader->invoke($app);
 
         return $router;

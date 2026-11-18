@@ -111,9 +111,7 @@ class CastApiClientTest extends TestCase
         // Use reflection to verify private properties
         $reflection = new \ReflectionClass($client);
         $hostProperty = $reflection->getProperty('deviceHost');
-        $hostProperty->setAccessible(true);
         $portProperty = $reflection->getProperty('devicePort');
-        $portProperty->setAccessible(true);
 
         $this->assertEquals('192.168.1.50', $hostProperty->getValue($client));
         $this->assertEquals(8444, $portProperty->getValue($client));

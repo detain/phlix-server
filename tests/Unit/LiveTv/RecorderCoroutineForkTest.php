@@ -86,7 +86,6 @@ final class RecorderCoroutineForkTest extends TestCase
         $recorder = $this->buildRecorder();
 
         $terminate = new \ReflectionMethod(Recorder::class, 'terminateRecording');
-        $terminate->setAccessible(true);
 
         $ticks = 0;
         $done = false;
@@ -126,7 +125,6 @@ final class RecorderCoroutineForkTest extends TestCase
         $recorder = $this->buildRecorder();
 
         $terminate = new \ReflectionMethod(Recorder::class, 'terminateRecording');
-        $terminate->setAccessible(true);
 
         try {
             $start = hrtime(true);

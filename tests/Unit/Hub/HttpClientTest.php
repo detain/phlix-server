@@ -239,7 +239,6 @@ class HttpClientTest extends TestCase
     {
         $client = new HttpClient('https://hub.example.com');
         $m = new \ReflectionMethod($client, 'requestCurl');
-        $m->setAccessible(true);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('cURL error');

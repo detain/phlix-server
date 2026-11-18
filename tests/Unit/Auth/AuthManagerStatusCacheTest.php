@@ -224,7 +224,6 @@ final class AuthManagerStatusCacheTest extends TestCase
         $this->assertGreaterThan(0, $max);
 
         $getCachedAuthState = new ReflectionMethod(AuthManager::class, 'getCachedAuthState');
-        $getCachedAuthState->setAccessible(true);
 
         // Fill exactly to the bound (user-0 .. user-(max-1)) — no eviction yet.
         for ($i = 0; $i < $max; $i++) {
@@ -232,7 +231,6 @@ final class AuthManagerStatusCacheTest extends TestCase
         }
 
         $cacheProp = new ReflectionProperty(AuthManager::class, 'userStatusCache');
-        $cacheProp->setAccessible(true);
         $cacheAtBound = $cacheProp->getValue($manager);
         $this->assertCount($max, is_array($cacheAtBound) ? $cacheAtBound : [], 'at the bound, nothing evicted yet');
 
@@ -317,7 +315,6 @@ final class AuthManagerStatusCacheTest extends TestCase
         $ttl = is_int($ttlConst) ? $ttlConst : 5_000_000_000;
 
         $cacheProp = new ReflectionProperty(AuthManager::class, 'userStatusCache');
-        $cacheProp->setAccessible(true);
 
         /** @var array<string, array{status: string, cachedAt: int}> $cache */
         $cache = $cacheProp->getValue($manager);

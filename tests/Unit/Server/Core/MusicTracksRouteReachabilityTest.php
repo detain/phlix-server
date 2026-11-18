@@ -144,12 +144,10 @@ final class MusicTracksRouteReachabilityTest extends TestCase
             ] as $property => $value
         ) {
             $prop = $ref->getProperty($property);
-            $prop->setAccessible(true);
             $prop->setValue($app, $value);
         }
 
         $loader = $ref->getMethod('loadMusicRoutes');
-        $loader->setAccessible(true);
         $loader->invoke($app);
 
         return $router;

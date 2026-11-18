@@ -293,7 +293,6 @@ class DlnaServerTest extends TestCase
     public function testParseSoapBodyReturnsEmptyForUnknownAction(): void
     {
         $method = new \ReflectionMethod(DlnaServer::class, 'parseSoapBody');
-        $method->setAccessible(true);
 
         $body = '<u:Frobnicate xmlns:u="urn:x">'
             . '<InstanceID>0</InstanceID></u:Frobnicate>';
@@ -309,7 +308,6 @@ class DlnaServerTest extends TestCase
     public function testParseSoapBodyReturnsEmptyWhenActionElementMissing(): void
     {
         $method = new \ReflectionMethod(DlnaServer::class, 'parseSoapBody');
-        $method->setAccessible(true);
 
         // A well-formed envelope that contains NO <Browse> element at all.
         $body = '<?xml version="1.0"?>'

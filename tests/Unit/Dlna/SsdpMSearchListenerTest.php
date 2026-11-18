@@ -117,7 +117,6 @@ final class SsdpMSearchListenerTest extends TestCase
         $this->setTimerEvent($this->savedTimerEvent);
 
         $workers = new ReflectionProperty(Worker::class, 'workers');
-        $workers->setAccessible(true);
         $workers->setValue(null, $this->savedWorkers);
 
         EffectiveConfig::reset();
@@ -315,7 +314,6 @@ final class SsdpMSearchListenerTest extends TestCase
         $connection->method('getRemoteIp')->willReturn('127.0.0.1');
 
         $handle = new ReflectionMethod(SsdpAdvertiser::class, 'handleSearch');
-        $handle->setAccessible(true);
         $handle->invoke($worker, $connection, $this->search(SsdpSearchResponder::ST_ROOT_DEVICE, '3'));
 
         self::assertCount(1, $recorded, 'An MX search must arm exactly one timer.');
@@ -358,7 +356,6 @@ final class SsdpMSearchListenerTest extends TestCase
         $connection->method('getRemoteIp')->willReturn('127.0.0.1');
 
         $handle = new ReflectionMethod(SsdpAdvertiser::class, 'handleSearch');
-        $handle->setAccessible(true);
 
         $flood = SsdpAdvertiser::MAX_PENDING_REPLIES * 3;
         for ($i = 0; $i < $flood; $i++) {
@@ -366,7 +363,6 @@ final class SsdpMSearchListenerTest extends TestCase
         }
 
         $pending = new ReflectionProperty(SsdpAdvertiser::class, 'pendingReplyTimers');
-        $pending->setAccessible(true);
         /** @var array<int, true> $set */
         $set = $pending->getValue($worker);
 
@@ -544,7 +540,6 @@ final class SsdpMSearchListenerTest extends TestCase
         $worker->listen(false);
 
         $join = new ReflectionMethod(SsdpAdvertiser::class, 'joinMulticastGroup');
-        $join->setAccessible(true);
         $join->invoke($worker, $ifIndex);
 
         $mainSocket = $worker->getMainSocket();
@@ -645,7 +640,6 @@ final class SsdpMSearchListenerTest extends TestCase
         $select->run();
 
         $pending = new ReflectionProperty(SsdpAdvertiser::class, 'pendingReplyTimers');
-        $pending->setAccessible(true);
         /** @var array<int, true> $pendingNow */
         $pendingNow = $pending->getValue($worker);
         $this->lastPendingAfterLoop = $pendingNow;
@@ -820,14 +814,12 @@ final class SsdpMSearchListenerTest extends TestCase
     private function setPrivate(SsdpAdvertiser $worker, string $property, mixed $value): void
     {
         $prop = new ReflectionProperty(SsdpAdvertiser::class, $property);
-        $prop->setAccessible(true);
         $prop->setValue($worker, $value);
     }
 
     private function timerEvent(): ?EventInterface
     {
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         /** @var EventInterface|null $value */
         $value = $prop->getValue();
 
@@ -837,7 +829,6 @@ final class SsdpMSearchListenerTest extends TestCase
     private function setTimerEvent(?EventInterface $event): void
     {
         $prop = new ReflectionProperty(Timer::class, 'event');
-        $prop->setAccessible(true);
         $prop->setValue(null, $event);
     }
 }

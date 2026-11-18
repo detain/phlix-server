@@ -50,7 +50,6 @@ final class PhlixMySQLConnectionTest extends TestCase
         $class = PhlixMySQLConnection::class;
         foreach ($expectedProperties as $name => $expectedType) {
             $prop = new ReflectionProperty($class, $name);
-            $prop->setAccessible(true);
 
             $type = $prop->getType();
             $this->assertInstanceOf(\ReflectionNamedType::class, $type);
@@ -335,7 +334,6 @@ final class PhlixMySQLConnectionTest extends TestCase
                     return;
                 }
                 $prop = new ReflectionProperty(parent::class, 'pdo');
-                $prop->setAccessible(true);
                 $prop->setValue($this, $pdo);
             }
         };
@@ -1497,7 +1495,6 @@ final class PhlixMySQLConnectionTest extends TestCase
             public function __construct(\PDO $pdo)
             {
                 $prop = new ReflectionProperty(parent::class, 'pdo');
-                $prop->setAccessible(true);
                 $prop->setValue($this, $pdo);
             }
         };
@@ -1507,7 +1504,6 @@ final class PhlixMySQLConnectionTest extends TestCase
     private static function transLockId(PhlixMySQLConnection $conn): int
     {
         $prop = new ReflectionProperty(PhlixMySQLConnection::class, 'transLock');
-        $prop->setAccessible(true);
         $lock = $prop->getValue($conn);
 
         return is_object($lock) ? spl_object_id($lock) : 0;
@@ -1517,7 +1513,6 @@ final class PhlixMySQLConnectionTest extends TestCase
     private static function transLockHolder(PhlixMySQLConnection $conn): int
     {
         $prop = new ReflectionProperty(PhlixMySQLConnection::class, 'transLockHolder');
-        $prop->setAccessible(true);
         $holder = $prop->getValue($conn);
 
         return is_int($holder) ? $holder : -2;
@@ -1527,7 +1522,6 @@ final class PhlixMySQLConnectionTest extends TestCase
     private static function transLockTokens(PhlixMySQLConnection $conn): int
     {
         $prop = new ReflectionProperty(PhlixMySQLConnection::class, 'transLock');
-        $prop->setAccessible(true);
         $lock = $prop->getValue($conn);
 
         return $lock instanceof \Swoole\Coroutine\Channel ? $lock->length() : -1;
@@ -1606,7 +1600,6 @@ final class PhlixMySQLConnectionTest extends TestCase
                 // Skipping parent::__construct() keeps $this->pdo null, so we
                 // inject the in-memory PDO via reflection.
                 $pdoProp = new \ReflectionProperty(parent::class, 'pdo');
-                $pdoProp->setAccessible(true);
                 $pdoProp->setValue($this, $pdo);
             }
             public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)

@@ -22,7 +22,6 @@ final class EnvConfigTest extends TestCase
         'PHLIX_WMIN34_INT',
         'PHLIX_WMIN34_TEXT',
         'PHLIX_WMIN34_NULL',
-        'PHLIX_WMIN34_RPT',
     ];
 
     protected function tearDown(): void
@@ -64,40 +63,21 @@ final class EnvConfigTest extends TestCase
         self::assertSame(42, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
     }
 
-    public function testIntegerUsesTheDefaultForAPartlyNumericValue(): void
+    public function test_integer_casts_like_the_old_site_for_non_numeric_input(): void
     {
-        // Was `(int)`-cast to 12 before; a value that is not a whole number now falls
-        // back to the default instead of being read as a prefix.
         putenv('PHLIX_WMIN34_INT=12x');
 
-        self::assertSame(8, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
-        self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
-    }
-
-    public function testIntegerNeverTurnsANonNumericValueIntoZero(): void
-    {
-        putenv('PHLIX_WMIN34_INT=abc');
-
-        self::assertSame(2, EnvConfig::integer('PHLIX_WMIN34_INT', 2), 'a non-numeric value is not 0');
-        self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
-    }
-
-    public function testIntegerAcceptsAPaddedOrNegativeWholeNumber(): void
-    {
-        putenv('PHLIX_WMIN34_INT= 42 ');
-        self::assertSame(42, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
-
-        putenv('PHLIX_WMIN34_INT=-3');
-        self::assertSame(-3, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
+        self::assertSame(12, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
     }
 
     /**
-     * Upgrade rule: systemd EnvironmentFile and docker env_file do not strip inline comments, so
-     * `PHLIX_X=0 # off` must read 0 as the old `(int)` cast did, not fall back to the default.
+     * Pins the integer parser to the `(int)` cast for inputs an operator might set. Changing
+     * one of these changes what the knob does on upgrade (for example `auto` and `off` read as
+     * 0, which a cap treats as off, and `8G` reads as 8). Values were checked against master.
      *
-     * @dataProvider inlineCommentProvider
+     * @dataProvider castedIntegerProvider
      */
-    public function testIntegerReadsTheWholeIntegerBeforeAnInlineComment(string $raw, int $expected): void
+    public function testIntegerReadsTheValueTheIntCastReads(string $raw, int $expected): void
     {
         putenv('PHLIX_WMIN34_INT=' . $raw);
 
@@ -105,66 +85,25 @@ final class EnvConfigTest extends TestCase
     }
 
     /** @return iterable<string, array{string, int}> */
-    public static function inlineCommentProvider(): iterable
+    public static function castedIntegerProvider(): iterable
     {
-        yield 'zero then comment (prewarm off)' => ['0 # off', 0];
-        yield 'three then comment' => ['3 # three segments', 3];
-        yield 'tab before comment' => ["0\t#off", 0];
-        yield 'no space before comment' => ['8#note', 8];
-        yield 'padded then comment' => ['  12   # padded  ', 12];
-    }
-
-    /**
-     * Upgrade rule (b): every whole-integer value the old `(int)` cast read keeps the SAME
-     * integer. Each case is asserted against the literal `(int)` cast of the same string.
-     *
-     * @dataProvider preservedWholeIntegerProvider
-     */
-    public function testIntegerPreservesTheValueTheOldCastRead(string $raw): void
-    {
-        putenv('PHLIX_WMIN34_INT=' . $raw);
-
-        self::assertSame((int) $raw, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
-    }
-
-    /** @return iterable<string, array{string}> */
-    public static function preservedWholeIntegerProvider(): iterable
-    {
-        yield 'zero' => ['0'];
-        yield 'double zero' => ['00'];
-        yield 'leading zero is decimal' => ['010'];
-        yield 'explicit plus' => ['+5'];
-        yield 'negative zero' => ['-0'];
-        yield 'padded' => [' 42 '];
-        yield 'tab padded' => ["\t7\n"];
-        yield 'overflow saturates like the old cast' => ['99999999999999999999'];
-    }
-
-    /**
-     * Upgrade rule (c): a value that is not an integer must not be read as a prefix (`8G` was 8
-     * bytes) or as 0 (`auto` disabled a cap). It uses the default and is recorded as invalid.
-     *
-     * @dataProvider nonIntegerProvider
-     */
-    public function testIntegerUsesTheDefaultForAValueThatIsNotAnInteger(string $raw): void
-    {
-        putenv('PHLIX_WMIN34_INT=' . $raw);
-
-        self::assertSame(8, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
-        self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
-    }
-
-    /** @return iterable<string, array{string}> */
-    public static function nonIntegerProvider(): iterable
-    {
-        yield 'auto' => ['auto'];
-        yield 'size suffix' => ['8G'];
-        yield 'exponent' => ['1e3'];
-        yield 'fraction' => ['1.5'];
-        yield 'hex' => ['0x1A'];
-        yield 'comment only' => ['# off'];
-        yield 'two numbers' => ['12 13'];
-        yield 'whitespace only' => ['   '];
+        yield 'auto is 0' => ['auto', 0];
+        yield 'off is 0' => ['off', 0];
+        yield 'size suffix reads the number' => ['8G', 8];
+        yield 'exponent' => ['1e3', 1000];
+        yield 'fraction' => ['1.5', 1];
+        yield 'hex is 0' => ['0x1A', 0];
+        yield 'doubled sign is 0' => ['+-5', 0];
+        yield 'space after sign is 0' => ['+ 5', 0];
+        yield 'leading dot is 0' => ['.5', 0];
+        yield 'true is 0' => ['true', 0];
+        yield 'two numbers' => ['5 6', 5];
+        yield 'underscore separator' => ['1_000', 1];
+        yield 'trailing non-breaking space' => ["5\u{00A0}", 5];
+        yield 'leading zero is decimal' => ['010', 10];
+        yield 'zero then comment' => ['0 # off', 0];
+        yield 'three then comment' => ['3 # three', 3];
+        yield 'overflow saturates' => ['99999999999999999999', PHP_INT_MAX];
     }
 
     // ---- text() ----------------------------------------------------------
@@ -241,34 +180,5 @@ final class EnvConfigTest extends TestCase
 
         self::assertGreaterThanOrEqual(1, $first);
         self::assertSame($first, EnvConfig::availableCpuCount());
-    }
-
-    // ---- reportInvalidIntegers() -----------------------------------------
-
-    /**
-     * A non-integer knob is reported once per process with its name, and a second report
-     * in the same process does not repeat it.
-     */
-    public function testReportLogsANonIntegerKnobOnceAndNotAgain(): void
-    {
-        putenv('PHLIX_WMIN34_RPT=auto');
-        self::assertSame(5, EnvConfig::integer('PHLIX_WMIN34_RPT', 5));
-
-        $logger = new class extends \Psr\Log\AbstractLogger {
-            /** @var list<string> */
-            public array $envs = [];
-
-            public function log($level, \Stringable|string $message, array $context = []): void
-            {
-                if ($level === 'warning' && isset($context['env'])) {
-                    $this->envs[] = (string) $context['env'];
-                }
-            }
-        };
-
-        EnvConfig::reportInvalidIntegers($logger);
-        EnvConfig::reportInvalidIntegers($logger);
-
-        self::assertSame(1, count(array_keys($logger->envs, 'PHLIX_WMIN34_RPT', true)));
     }
 }

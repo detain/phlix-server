@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Common\Env;
 
-use Psr\Log\LoggerInterface;
-
 /**
  * The env-read idiom for config defaults, in one place.
  *
@@ -28,84 +26,16 @@ use Psr\Log\LoggerInterface;
 final class EnvConfig
 {
     /**
-     * Names of integer knobs whose env value was set but is not an integer. Each such knob
-     * falls back to its default. Keyed by name, so it holds at most one entry per knob (the
-     * knob names are fixed config literals, so the map is bounded). This class never logs
-     * itself: the config files load before the logger is initialised. Read the list with
-     * {@see invalidIntegerNames()} once a logger exists.
-     *
-     * @var array<string, true>
-     */
-    private static array $invalidIntegers = [];
-
-    /**
-     * Names already reported through {@see reportInvalidIntegers()} in this process.
-     *
-     * @var array<string, true>
-     */
-    private static array $reportedIntegers = [];
-
-    /**
-     * A whole integer, optionally signed, with optional surrounding whitespace, optionally
-     * followed by a `#` comment. The comment form exists because systemd EnvironmentFile and
-     * docker env_file do not strip inline comments, so `PHLIX_X=0 # off` must still read 0,
-     * exactly as the old `(int)` cast read it. Group 1 is the integer token.
-     */
-    private const INTEGER_PATTERN = '/^\s*([+-]?\d+)(?:\s*#.*)?\s*$/s';
-
-    /**
-     * Read an integer knob. Unset or empty gives $default. A whole integer gives that value,
-     * with `"0"` an explicit 0, and `"010"` 10 and `"+5"` 5 as the old `(int)` cast read
-     * them. The value may be followed by whitespace and a `#` comment, which reads the
-     * integer before the comment. Anything else, such as `"auto"`, `"8G"`, `"1e3"` or
-     * `"12x"`, gives $default and records the name for {@see invalidIntegerNames()}. A
-     * non-integer is never cast to a prefix, and never to 0, which would disable a cap.
+     * Read an integer knob: unset/empty → $default, otherwise the value
+     * cast the way `(int) getenv(...)` casts it (`"12x"` → 12 — the old
+     * sites' behavior, preserved).
      */
     public static function integer(string $name, int $default): int
     {
         $raw = getenv($name);
-        if ($raw === false || $raw === '') {
-            return $default;
-        }
 
-        if (preg_match(self::INTEGER_PATTERN, $raw, $matches) === 1) {
-            return (int) $matches[1];
-        }
-
-        self::$invalidIntegers[$name] = true;
-
-        return $default;
+        return $raw === false || $raw === '' ? $default : (int) $raw;
     }
-
-    /**
-     * The env names read by {@see integer()} whose value was not an integer.
-     *
-     * @return list<string>
-     */
-    public static function invalidIntegerNames(): array
-    {
-        return array_keys(self::$invalidIntegers);
-    }
-
-    /**
-     * Log one warning per non-integer integer knob, at most once per process. Call it where
-     * a logger exists, after the container is built in each worker. Workers are separate
-     * processes, so each worker logs its own copy of the warning, once.
-     */
-    public static function reportInvalidIntegers(LoggerInterface $logger): void
-    {
-        foreach (array_keys(self::$invalidIntegers) as $name) {
-            if (isset(self::$reportedIntegers[$name])) {
-                continue;
-            }
-            self::$reportedIntegers[$name] = true;
-            $logger->warning(
-                'Ignoring a non-integer env value; the default applies',
-                ['env' => $name]
-            );
-        }
-    }
-
 
     /**
      * Read a string knob: unset/empty → $default, otherwise the raw value —

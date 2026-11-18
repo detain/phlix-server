@@ -88,8 +88,9 @@ return [
      * many concurrent software encodes of 4K-class sources, where the decoder's
      * auto-sized pool is expected to contend. Measure on your own host before enabling
      * it. A positive value bounds the decoder's frame-thread pool; 0 or a negative
-     * value disables the flag. A non-numeric env value logs a warning and uses the
-     * default. Env override: PHLIX_SEGMENT_DECODE_THREADS.
+     * value disables the flag. The env value is read by EnvConfig::integer like every
+     * other integer knob, so a non-numeric value reads as its (int) cast (`abc` is 0,
+     * which is off; `4x` is 4). Env override: PHLIX_SEGMENT_DECODE_THREADS.
      */
     'segment_decode_threads' => EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0),
 

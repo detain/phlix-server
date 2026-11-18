@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Common\Env\EnvConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
@@ -138,17 +137,15 @@ final class FfmpegRunnerDecodeThreadsTest extends TestCase
         self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
     }
 
-    public function testNonNumericEnvValueUsesTheDefaultAndIsNotTakenAsZero(): void
+    public function testNonNumericEnvValueReadsLikeEveryOtherIntegerKnob(): void
     {
-        // "abc" must not silently become 0 and disable a configured cap: the default
-        // (off) applies and the knob is recorded for the warning the provider emits.
+        // The knob uses EnvConfig::integer, master's (int)-cast parser: "abc" is 0, which
+        // is off (the default), and "4x" reads as 4, the same as PHLIX_SEGMENT_ENCODE_THREADS.
         putenv(self::ENV . '=abc');
         self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
-        self::assertContains(self::ENV, EnvConfig::invalidIntegerNames());
 
-        // A non-numeric value must not fall back to a cap either: default is off.
         putenv(self::ENV . '=4x');
-        self::assertNull($this->inputThreads($this->build($this->runner(), $this->softwareRung())));
+        self::assertSame('4', $this->inputThreads($this->build($this->runner(), $this->softwareRung())));
     }
 
     public function testWiredValueBeatsTheEnvironment(): void

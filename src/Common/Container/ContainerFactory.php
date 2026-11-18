@@ -28,9 +28,6 @@ use Phlix\Common\Container\Providers\SessionServicesProvider;
 use Phlix\Common\Container\Providers\ThemingServicesProvider;
 use Phlix\Common\Container\Providers\TranscodeServicesProvider;
 use Phlix\Common\Container\Providers\WebPortalServicesProvider;
-use Phlix\Common\Env\EnvConfig;
-use Phlix\Common\Logger\LoggerFactory;
-use Phlix\Common\Logger\LogChannels;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -108,16 +105,7 @@ final class ContainerFactory
             $provider->register($builder, $appConfig);
         }
 
-        $container = $builder->build();
-
-        // EnvConfig never logs (config loads before the logger exists). Each worker builds its
-        // container once from onWorkerStart, so this is where that worker reports its own
-        // non-integer integer env values, once per process.
-        if (EnvConfig::invalidIntegerNames() !== []) {
-            EnvConfig::reportInvalidIntegers(LoggerFactory::get(LogChannels::APPLICATION));
-        }
-
-        return $container;
+        return $builder->build();
     }
 
     /**

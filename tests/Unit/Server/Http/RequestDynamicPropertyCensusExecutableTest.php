@@ -1249,7 +1249,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +1 2115→2116 (perf/C relay-identity wiring): HubServicesProviderRelayConsumerWiringTest, the
     // container-level pin that the production RelayConsumer receives the RelayIdentityResolver.
     // Measured from the phpunit red at 2116; no production file was added.
-    private const EXPECTED_PHP_FILES = 2116;
+    // 2116→2139 (the merge of perf/A, perf/B, perf/C and perf/D onto master, HEAD b1870af9):
+    // the merged tree's PHP file count, measured from the phpunit red at 2139 (no per-file breakdown kept here).
+    private const EXPECTED_PHP_FILES = 2139;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1771,7 +1773,9 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +3 1270→1273 (perf/C relay token gate test): RelayConsumerTest's mapped-principal case seeds
     // `$use->method`, `$use->path` and `$use->query` on a Request, to check the minted token on use.
     // Measured from the phpunit red ("1273 is identical to 1270").
-    private const EXPECTED_DECLARED_WRITES = 1273;
+    // 1273→1274 (the merge of perf/A, perf/B, perf/C and perf/D onto master, HEAD b1870af9):
+    // the merged tree's declared-member write count, measured from the phpunit red ("1274").
+    private const EXPECTED_DECLARED_WRITES = 1274;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

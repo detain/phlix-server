@@ -181,10 +181,11 @@ final class SignedUrlTest extends TestCase
         self::assertFalse(SignedUrl::isValidProfileId("\n"));
 
         $signer = new SignedUrl(self::SECRET);
-        $url = $signer->mint('/media/abc/stream', 3600, 1000, 'p1');
-        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $sig = $signer->signature('/media/abc/stream', 1000, 'p1');
 
-        self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, "p1\n"));
+        // Control: the same token verifies for its real profile id.
+        self::assertTrue($signer->verify('/media/abc/stream', '1000', $sig, 999, 'p1'));
+        self::assertFalse($signer->verify('/media/abc/stream', '1000', $sig, 999, "p1\n"));
 
         $this->expectException(\InvalidArgumentException::class);
         $signer->mint('/media/abc/stream', 3600, 1000, "p1\n");

@@ -24,8 +24,8 @@ use Phlix\Server\Http\Response;
  *
  * Every artefact is streamed from disk with {@see Response::withFile()}, so a
  * multi-hundred-KB archive is never buffered into worker memory. Each response
- * carries an `ETag` (inode, size, mtime and ctime, as TranscodeFileServer does)
- * and a `Last-Modified`, and a request whose `If-None-Match` or
+ * carries an `ETag`, a hash of the file's inode, size, mtime and ctime (see
+ * {@see self::etagFor()}), and a `Last-Modified`, and a request whose `If-None-Match` or
  * `If-Modified-Since` already matches is answered `304` with no body. The
  * cache lifetime is unchanged.
  *
@@ -59,23 +59,61 @@ class TrickplayController
     private string $baseUrl;
 
     /**
+     * Each configured root's canonical path, keyed by the configured spelling.
+     *
+     * Application::getTrickplayController() builds a new controller on every call, so the
+     * root's realpath() would otherwise run once per request. The map holds one entry per
+     * distinct configured root (one, in practice), so it is bounded by configuration and
+     * not by traffic. An entry is added only after a successful realpath().
+     *
+     * @var array<string, string>
+     */
+    private static array $resolvedRoots = [];
+
+    /**
      * Creates a new TrickplayController instance.
      *
-     * The root is canonicalised once here with realpath(), because artefact paths are
-     * resolved with realpath() and checked against it. A configured root that is a
-     * symlink would otherwise fail every containment check. A root that does not exist
-     * yet keeps its configured spelling. If that spelling goes through a symlink, its
-     * artefacts stay unreachable (fail closed) until the controller is rebuilt.
+     * The root is canonicalised with realpath(), because artefact paths are resolved with
+     * realpath() and checked against it. A configured root that is a symlink would
+     * otherwise fail every containment check. The result is memoised per process, keyed
+     * by the configured spelling, so a request does not repeat the syscall.
+     *
+     * A root that does not exist yet keeps its configured spelling and is resolved again
+     * at the next construction, until it exists. Once a root has resolved, a later change
+     * to what its symlink points at is not seen until the process restarts. Artefacts under
+     * the new target then fail the containment check and are served as 404 (fail closed).
      *
      * @param string $trickplayDir Base directory for trickplay files
      * @param string $baseUrl Base URL for trickplay endpoints
      */
     public function __construct(string $trickplayDir, string $baseUrl)
     {
-        $configured = rtrim($trickplayDir, '/');
-        $real = realpath($configured);
-        $this->trickplayDir = $real !== false ? rtrim($real, '/') : $configured;
+        $this->trickplayDir = self::resolveRoot(rtrim($trickplayDir, '/'));
         $this->baseUrl = rtrim($baseUrl, '/');
+    }
+
+    /**
+     * Returns the canonical form of a configured trickplay root, memoised per process.
+     *
+     * @param string $configured The configured root, without a trailing slash.
+     *
+     * @return string The realpath, or the configured spelling when the root does not exist yet.
+     */
+    private static function resolveRoot(string $configured): string
+    {
+        if (isset(self::$resolvedRoots[$configured])) {
+            return self::$resolvedRoots[$configured];
+        }
+
+        $real = realpath($configured);
+        if ($real === false) {
+            return $configured;
+        }
+
+        $resolved = rtrim($real, '/');
+        self::$resolvedRoots[$configured] = $resolved;
+
+        return $resolved;
     }
 
     /**
@@ -338,6 +376,16 @@ class TrickplayController
      * mtime and ctime (see {@see self::etagFor()}) and Last-Modified is the mtime. A request whose conditional
      * headers already match is answered `304` carrying the validators and no
      * body. Otherwise the file is streamed with {@see Response::withFile()}.
+     *
+     * Residual race, not closed here: {@see Response::withFile()} takes a path and the
+     * worker opens it later, when the response is sent. A publish between the `stat()` and
+     * that open sends the newer file under the older validator. The newer file is always a
+     * whole generation, because publishes are renames of verified temporaries. A client
+     * that caches the pair then holds bytes at least as new as its tag. Its next conditional
+     * request computes the newer validator, which does not match the old one, so it gets a
+     * fresh `200`. The reverse, an old body under a new validator, cannot happen, because
+     * the stat comes first. Closing the window would need the response to stream from the
+     * handle that was stat'd, which withFile() does not offer.
      *
      * @param Request $request         The incoming request, for its conditional headers.
      * @param string  $path            Real path of the file to serve.

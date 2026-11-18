@@ -184,6 +184,33 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
     }
 
+    public function testExitZeroWithAnErrorReportFailsThePassAndPublishesNothing(): void
+    {
+        // A truncated Matroska input: every frame count is complete (the scripted
+        // ffmpeg writes them all), exit is 0, but ffmpeg printed "File ended
+        // prematurely". The sprite would carry black cells over the missing tail.
+        $runner = $this->scripted(6000.0);
+        $runner->ffmpegMessage = '[matroska,webm @ 0x0] File ended prematurely';
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
+    }
+
+    public function testACleanRunWithEmptyOutputStillPublishes(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result);
+        $this->assertFileExists($this->dir . '/out/sprite.jpg');
+        $this->assertFileExists($this->dir . '/out/timeline.json');
+    }
+
     public function testShortBifWithExitZeroStillFailsThePass(): void
     {
         // A silent early end of input can exit 0 with too few frames; the count

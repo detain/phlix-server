@@ -3345,6 +3345,17 @@ class FfmpegRunner
             return null;
         }
 
+        // Exit 0 is not proof of a complete read. A truncated Matroska input still
+        // exits 0 and prints "File ended prematurely", and its sprite then carries
+        // black cells over the missing tail. The command runs at `-loglevel error`,
+        // so any output at all is an error report.
+        if (self::reportedFfmpegError($outputLines)) {
+            $this->logger->warning('Trickplay pass failed: ffmpeg reported an error (source truncated or corrupt?)', $context);
+            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+
+            return null;
+        }
+
         if ($spritePath !== null && (!is_file($spritePath) || filesize($spritePath) === 0)) {
             $this->logger->warning('Trickplay sprite generation failed', $context);
             $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
@@ -3547,6 +3558,26 @@ class FfmpegRunner
                 @unlink($framePath);
             }
         }
+    }
+
+    /**
+     * Whether a trickplay pass's captured output reports an error.
+     *
+     * The pass runs at `-loglevel error` with stderr merged into the output, so a
+     * clean run prints nothing. Any non-blank line is an error report, for example
+     * "File ended prematurely" or "Invalid data found when processing input".
+     *
+     * @param list<string> $outputLines Captured output lines.
+     */
+    private static function reportedFfmpegError(array $outputLines): bool
+    {
+        foreach ($outputLines as $line) {
+            if (trim($line) !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

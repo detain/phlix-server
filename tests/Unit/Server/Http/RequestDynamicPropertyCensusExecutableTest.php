@@ -151,13 +151,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     private const TARGET_CLASS = 'Phlix\\Server\\Http\\Request';
 
     /**
-     * The 19 declared public members of Request (mirrors RequestDynamicPropertyGuardTest).
+     * The 20 declared public members of Request (mirrors RequestDynamicPropertyGuardTest).
      * `relayUnmapped` joined with the S301 relay fix: the relay consumer marks an unmapped principal.
+     * `gatedProfileId` joined with the perf/C gate fix: the schedule gate publishes the profile it tested.
      */
     private const DECLARED_MEMBERS = [
         'method', 'path', 'queryString', 'headers', 'query', 'body', 'rawBody',
         'files', 'remoteIp', 'remotePort', 'protocol', 'bearerToken', 'cookies',
-        'userId', 'profileId', 'tokenSessionId', 'relayUnmapped', 'hubUser', 'pathParams',
+        'userId', 'profileId', 'tokenSessionId', 'relayUnmapped', 'gatedProfileId', 'hubUser', 'pathParams',
     ];
 
     /**
@@ -1402,7 +1403,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // the 18 net reads. The read sites on the branch are the gate, the artwork and avatar fast
     // paths, the quick-connect mint, and the new and updated tests. Only the census number is
     // pinned, and the undeclared-read test guards the declared-member licence.
-    private const EXPECTED_DECLARED_READS = 507;
+    // +5 507→512 (perf/C gate-profile fix): TranscodeController::start() and status() each read
+    // `$request->gatedProfileId`, and three reads of it in ApplicationScheduleGateTest. Measured from
+    // the phpunit red at 512.
+    private const EXPECTED_DECLARED_READS = 512;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1758,7 +1762,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // tests/Support/Browser/s295-head-body-server.php). Measured from the phpunit red at 1264.
     // +3 1264→1267 (perf/C relayUnmapped fix): the relay consumer's write, plus one write each
     // in RelayImageDispatchTest and ApplicationScheduleGateTest, now that relayUnmapped is declared.
-    private const EXPECTED_DECLARED_WRITES = 1267;
+    // +3 1267→1270 (perf/C gate-profile fix): Application::scheduleGateFor() publishes the tested
+    // profile as `$request->gatedProfileId = …`, plus two writes in ApplicationScheduleGateTest (a
+    // `relayUnmapped` seed and a `query` seed on the relayed-token case). Measured from the phpunit red.
+    private const EXPECTED_DECLARED_WRITES = 1270;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

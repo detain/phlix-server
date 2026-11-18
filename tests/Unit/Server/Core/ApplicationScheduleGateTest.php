@@ -7,8 +7,12 @@ namespace Phlix\Tests\Unit\Server\Core;
 use DateTimeImmutable;
 use Phlix\Access\AccessScheduleService;
 use Phlix\Auth\SignedUrl;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserProfileManager;
+use Phlix\Hub\RelayIdentityResolver;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Core\Application;
+use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -462,5 +466,90 @@ final class ApplicationScheduleGateTest extends TestCase
         $request->query[SignedUrl::PROFILE_PARAM] = 'p1';
 
         self::assertNull(Application::scheduleGateFor($request, $schedule));
+    }
+
+    public function test_the_gate_publishes_the_profile_it_tested_on_the_request(): void
+    {
+        // A profile-less session is tested on the account's active profile. The gate passes it,
+        // publishes that profile on the request, and restores RequestContext afterwards.
+        $schedule = $this->schedule([], ['id' => 'p1']);
+        $request = $this->request('GET', '/api/v1/media/m1', 'u1', null);
+
+        self::assertNull(Application::scheduleGateFor($request, $schedule));
+        self::assertSame('p1', $request->gatedProfileId);
+        self::assertNull(RequestContext::getProfileId(), 'RequestContext is restored once the gate returns');
+    }
+
+    public function test_an_unmapped_relayed_principal_publishes_no_gated_profile(): void
+    {
+        $schedule = $this->schedule([], null);
+        $request = $this->request('GET', '/api/v1/media/m1', 'hub-relay', null);
+        $request->relayUnmapped = true;
+
+        self::assertNull(Application::scheduleGateFor($request, $schedule));
+        self::assertNull($request->gatedProfileId);
+    }
+
+    /**
+     * The relayed chain end to end: the hub UUID resolves through RelayIdentityResolver to a
+     * server user, the gate tests that account's active profile, and the route mints its stream
+     * token. The token must carry the profile the gate tested, and that profile's schedule must be
+     * checked again when the token is used.
+     */
+    public function test_a_relayed_mapped_principal_mints_its_stream_token_bound_to_its_resolved_profile(): void
+    {
+        $identities = $this->createMock(UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')
+            ->with(RelayIdentityResolver::PROVIDER_FAMILY, '', 'hub-user-42')
+            ->willReturn(['user_id' => 'u1']);
+        $serverUserId = (new RelayIdentityResolver($identities))->resolve('hub-user-42');
+        self::assertSame('u1', $serverUserId);
+
+        // A mapped principal as RelayConsumer::buildRequest() leaves it: the server user id, no
+        // profile on the request, and not marked relayUnmapped.
+        $request = $this->request('GET', '/api/v1/transcode/media-1', $serverUserId, null);
+
+        // p1's window covers tomorrow only, so it is not in effect now. The gate passes the request
+        // and tests it against p1.
+        $tomorrow = [[
+            'id' => 2,
+            'profile_id' => 'p1',
+            'name' => 'Tomorrow',
+            'start_time' => '00:00:00',
+            'end_time' => '23:59:59',
+            'days_of_week' => self::dayAbbrev(new DateTimeImmutable('+1 day')),
+            'is_active' => 1,
+        ]];
+        self::assertNull(Application::scheduleGateFor($request, $this->schedule($tomorrow, ['id' => 'p1'])));
+        self::assertSame('p1', $request->gatedProfileId);
+
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'running',
+            'master_url' => '/hls/job-7/master.m3u8',
+            'hls_url' => '/hls/job-7/master.m3u8',
+            'dash_url' => null,
+            'reused' => false,
+            'subtitles' => [],
+        ]);
+        $manager->method('getJobVariants')->willReturn(null);
+
+        $response = (new TranscodeController($manager))->start($request, ['id' => 'media-1']);
+        self::assertSame(200, $response->statusCode);
+        $body = $this->decodedBody($response);
+        self::assertIsString($body['master_url']);
+        parse_str((string) parse_url($body['master_url'], PHP_URL_QUERY), $query);
+        self::assertSame('p1', $query[SignedUrl::PROFILE_PARAM] ?? null, 'the token is bound to the tested profile');
+
+        // On use, the URL arrives with no session and its pid is checked against p1's schedule.
+        // p1 in its window (tomorrow's is not in effect now) is allowed; once it is locked, the same
+        // URL is refused.
+        $use = $this->request('GET', '/hls/job-7/master.m3u8');
+        $use->query = $query;
+        self::assertNull($this->schedule($tomorrow, null)->denyForSignedRequest($use));
+        $refused = $this->schedule($this->lockedOutP1(), null)->denyForSignedRequest($use);
+        self::assertNotNull($refused);
+        self::assertSame(403, $refused->statusCode);
     }
 }

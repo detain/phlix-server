@@ -2686,6 +2686,8 @@ class Application
      *    no server account, so no profile or schedule exists for it, and it passes as
      *    master did. A mapped relayed principal and every local session are refused.
      *    RequestContext is published for the middleware's duration and restored afterwards.
+     *    A request that passes has the profile the middleware tested published as
+     *    {@see \Phlix\Server\Http\Request::$gatedProfileId} before that restore.
      *  - A request with no userId passes through unchanged, unless it carries a profile
      *    binding (`pid`) whose signature verifies: then that profile's window applies.
      *    An unverified binding is not trusted here; the route's own gate refuses it.
@@ -2714,7 +2716,14 @@ class Application
         RequestContext::setUserId($userId);
         RequestContext::setProfileId($request->profileId);
         try {
-            return $schedule($request);
+            $refusal = $schedule($request);
+            if ($refusal === null) {
+                // Publish the profile the schedule middleware tested, before the restore below
+                // clears it. A route binds its signed URLs to it (Request::$gatedProfileId).
+                $request->gatedProfileId = RequestContext::getProfileId();
+            }
+
+            return $refusal;
         } finally {
             RequestContext::setUserId($previousUserId);
             RequestContext::setProfileId($previousProfileId);

@@ -163,6 +163,25 @@ class Request
     public bool $relayUnmapped = false;
 
     /**
+     * The profile the global access-schedule gate tested this session against, set only when
+     * the gate passed the request. It is the session's own profile, or for a profile-less
+     * session the account's active profile. Null when the gate did not run for the request or
+     * the gate resolved no profile (an unmapped relayed principal, or the profile-create route).
+     *
+     * A route that mints a signed URL for the session binds the URL to this profile, so the
+     * URL is checked against the same schedule on each later use. The controller reads it
+     * because {@see \Phlix\Server\Http\RequestContext::getProfileId()} is restored once the gate
+     * returns, so it is null by the time a route runs.
+     *
+     * ⚠ **Never assign this from request input.** Only
+     * {@see \Phlix\Server\Core\Application::scheduleGateFor()} sets it, from the profile the
+     * schedule middleware resolved.
+     *
+     * @var string|null
+     */
+    public ?string $gatedProfileId = null;
+
+    /**
      * @var \Phlix\Hub\HubUserClaims|null Hub user claims slot for hub-authenticated
      *      requests. RESERVED: declared part of the Request shape (pinned by the
      *      dynamic-property census), currently unwritten — the dead-wired

@@ -141,13 +141,14 @@ class TranscodeController
         // request. The token is prefix-scoped to the per-job directory, so it
         // authorises every variant playlist and segment too.
         $signer = SignedUrl::fromEnv();
-        // Bound to the session's profile: the segment gate applies its schedule (see
-        // SignedUrl::mint()). An unbound token is minted for a session without one.
-        // LATENT (perf/C round-6 finding 3): a relayed request has a null profile id here, so
-        // the token is unbound. This depends on the relay identity wiring (owner decision,
-        // HubServicesProvider), and is not fixed here.
+        // Bound to the profile the schedule gate tested for this session (see
+        // Request::$gatedProfileId), falling back to RequestContext. A relayed principal's
+        // RequestContext profile is restored to null before this route runs, so the gate's value
+        // is the one that binds it. The segment gate re-checks that profile's schedule on each use
+        // (see SignedUrl::mint()). The token is unbound only when neither names a profile.
+        $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
-            ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
+            ? $signer->mint($url, null, null, $profileId)
             : $url;
 
         // Advertise the playable quality ladder so clients can build a picker
@@ -245,13 +246,10 @@ class TranscodeController
 
         // Signed, prefix-scoped streaming URLs (see start()).
         $signer = SignedUrl::fromEnv();
-        // Bound to the session's profile: the segment gate applies its schedule (see
-        // SignedUrl::mint()). An unbound token is minted for a session without one.
-        // LATENT (perf/C round-6 finding 3): a relayed request has a null profile id here, so
-        // the token is unbound. This depends on the relay identity wiring (owner decision,
-        // HubServicesProvider), and is not fixed here.
+        // Bound exactly as start() binds its URLs (see Request::$gatedProfileId).
+        $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
-            ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
+            ? $signer->mint($url, null, null, $profileId)
             : $url;
 
         // Same quality-ladder advertisement as start() (D6): null for a legacy job,

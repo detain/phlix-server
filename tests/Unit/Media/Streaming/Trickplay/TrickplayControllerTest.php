@@ -120,6 +120,29 @@ class TrickplayControllerTest extends TestCase
         $this->assertNull($controller->resolveBifPath('../../etc'));
     }
 
+    public function testAJobLinkedToASiblingThatOnlySharesTheRootsPrefixIsRefused(): void
+    {
+        // "<root>-sibling" begins with the trickplay root's string, so a real path
+        // inside it passes a bare prefix check. The separator makes it outside.
+        $sibling = $this->tempDir . '-sibling';
+        mkdir($sibling, 0755, true);
+        file_put_contents($sibling . '/thumbs.bif', $this->sampleBif());
+        $link = $this->tempDir . '/trickplay/job-link';
+        symlink($sibling, $link);
+
+        try {
+            $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+
+            $this->assertNull($controller->resolveBifPath('job-link'));
+            $this->assertFalse($controller->hasBif('job-link'));
+            $response = $controller->getBif(new Request(), ['jobId' => 'job-link']);
+            $this->assertSame(404, $response->statusCode);
+        } finally {
+            unlink($link);
+            $this->removeDirectory($sibling);
+        }
+    }
+
     public function testGetBifHandlerServesTheArchive(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);

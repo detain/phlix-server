@@ -141,9 +141,11 @@ class TrickplayController
             return false;
         }
 
-        $path = $this->getBifPath($jobId);
+        // Same containment check as the handler, so a URL is advertised only for an
+        // archive the handler will actually serve.
+        $path = $this->resolveBifPath($jobId);
 
-        return is_file($path) && filesize($path) > 0;
+        return $path !== null && filesize($path) > 0;
     }
 
     /**
@@ -310,8 +312,11 @@ class TrickplayController
             return null;
         }
 
+        // The trailing separator is part of the check. Without it a real path inside
+        // "<root>-sibling" string-starts with "<root>" and passes, so a job directory
+        // linked to a sibling of the trickplay root would be served.
         $realPath = realpath($this->getJobDir($jobId) . '/' . $fileName);
-        if ($realPath === false || !str_starts_with($realPath, $this->trickplayDir)) {
+        if ($realPath === false || !str_starts_with($realPath, $this->trickplayDir . '/')) {
             return null;
         }
 

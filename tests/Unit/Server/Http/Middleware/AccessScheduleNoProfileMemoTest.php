@@ -18,8 +18,12 @@ use Workerman\MySQL\Connection;
  *
  * Relayed traffic with no profile id used to read the account profile on every request
  * just to reach the same 403. The verdict is now memoised per user, bounded, and only
- * for the refusal: a found profile is never memoised, and a schedule lookup still runs
- * on every request that has one.
+ * for the refusal: on the global gate a found profile is never memoised, and a schedule
+ * lookup still runs on every request that has one.
+ *
+ * The relayed artwork and avatar path ({@see AccessScheduleMiddleware::denyForSession()})
+ * is the one exception: it memoises the FOUND profile for the same TTL, bounded, and only
+ * for a session with no profile id of its own.
  */
 final class AccessScheduleNoProfileMemoTest extends TestCase
 {
@@ -186,5 +190,82 @@ final class AccessScheduleNoProfileMemoTest extends TestCase
         $memo = $this->memoOf($middleware);
         self::assertArrayHasKey('fresh', $memo);
         self::assertCount(1, $memo, 'every aged-out entry must be pruned');
+    }
+
+    /**
+     * The found-profile memo map ({@see AccessScheduleMiddleware::denyForSession()}) on the instance.
+     *
+     * @return array<string, array{at: int|float, profileId: string}>
+     */
+    private function foundMemoOf(AccessScheduleMiddleware $middleware): array
+    {
+        $property = new ReflectionProperty(AccessScheduleMiddleware::class, 'foundProfileMemo');
+
+        /** @var array<string, array{at: int|float, profileId: string}> $memo */
+        $memo = $property->getValue($middleware);
+
+        return $memo;
+    }
+
+    public function test_a_relayed_session_reads_its_account_profile_once_per_ttl(): void
+    {
+        // A relayed poster grid carries no profile id. Every poster used to read the account
+        // profile again; the found profile is now memoised for the TTL on this path.
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->expects(self::once())->method('getActiveProfile')->with('u1')->willReturn(['id' => 'p1']);
+
+        $middleware = new AccessScheduleMiddleware($this->emptySchedules(), $profiles);
+
+        for ($i = 0; $i < 3; $i++) {
+            self::assertNull($middleware->denyForSession(new Request(), 'u1', null));
+        }
+    }
+
+    public function test_an_expired_found_profile_is_read_again(): void
+    {
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->expects(self::exactly(2))->method('getActiveProfile')->with('u1')->willReturn(['id' => 'p1']);
+
+        $middleware = new AccessScheduleMiddleware($this->emptySchedules(), $profiles);
+        $middleware->denyForSession(new Request(), 'u1', null);
+
+        // Age the memoised profile past the 30 s TTL, then the account profile is read again.
+        $memo = $this->foundMemoOf($middleware);
+        self::assertArrayHasKey('u1', $memo);
+        $memo['u1']['at'] = hrtime(true) - 31_000_000_000;
+        $property = new ReflectionProperty(AccessScheduleMiddleware::class, 'foundProfileMemo');
+        $property->setValue($middleware, $memo);
+
+        $middleware->denyForSession(new Request(), 'u1', null);
+    }
+
+    public function test_a_session_that_carries_its_own_profile_never_reads_the_account_profile(): void
+    {
+        // A local bearer always carries its profile, so the account profile is never read and
+        // nothing is memoised for it.
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->expects(self::never())->method('getActiveProfile');
+
+        $middleware = new AccessScheduleMiddleware($this->emptySchedules(), $profiles);
+
+        self::assertNull($middleware->denyForSession(new Request(), 'u1', 'p1'));
+        self::assertSame([], $this->foundMemoOf($middleware));
+    }
+
+    public function test_the_found_profile_memo_is_bounded(): void
+    {
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('getActiveProfile')->willReturn(['id' => 'p1']);
+
+        $middleware = new AccessScheduleMiddleware($this->emptySchedules(), $profiles);
+
+        // More distinct relayed accounts than the bound: the map resets rather than growing.
+        for ($i = 0; $i < 600; $i++) {
+            $middleware->denyForSession(new Request(), 'user-' . $i, null);
+        }
+
+        $size = count($this->foundMemoOf($middleware));
+        self::assertGreaterThan(0, $size);
+        self::assertLessThanOrEqual(512, $size);
     }
 }

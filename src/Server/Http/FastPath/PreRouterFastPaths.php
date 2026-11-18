@@ -398,9 +398,10 @@ final class PreRouterFastPaths
      * creates one when missing). The only exception is a profile lookup that fails outright,
      * which that method logs and degrades to null. A null profile here is therefore a
      * RELAYED request, which the relay consumer stamps with a userId and never a profileId.
-     * For that case the account's active profile is tested, and an account with no resolvable
-     * profile is refused with the gate's 403. So the bytes and the JSON routes agree for every
-     * session.
+     * For that case the account's active profile is tested, memoised for the 30 s schedule TTL
+     * (see {@see AccessScheduleMiddleware::denyForSession()}) so a grid of posters costs one
+     * profile read. An account with no resolvable profile is refused with the gate's 403. So
+     * the bytes and the JSON routes agree for every session.
      *
      * A request with no session is tested only on the `pid` its signed URL has just verified
      * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). With no `pid` it is not refused

@@ -142,6 +142,23 @@ class Request
     public ?string $tokenSessionId = null;
 
     /**
+     * True when the hub relay authenticated this request as a principal the server holds no
+     * linkage for (a hub user UUID with no `user_identities` row, or the `hub-relay` fallback).
+     *
+     * Such a principal has no server account, so it has no profile and no access schedule can
+     * apply to it. The schedule gate and the artwork and avatar fast paths therefore do not refuse
+     * it for lacking a profile, which matches the behaviour before the S301 identity mapping. A
+     * principal the server DOES map to an account, and every local session, leave this false and
+     * keep the fail-closed no-profile refusal.
+     *
+     * ⚠ **Never assign this from request input.** Only {@see \Phlix\Hub\RelayConsumer::buildRequest()},
+     * which reads the tunnel envelope, sets it, after the identity mapping has run and found no row.
+     *
+     * @var bool
+     */
+    public bool $relayUnmapped = false;
+
+    /**
      * @var \Phlix\Hub\HubUserClaims|null Hub user claims slot for hub-authenticated
      *      requests. RESERVED: declared part of the Request shape (pinned by the
      *      dynamic-property census), currently unwritten — the dead-wired

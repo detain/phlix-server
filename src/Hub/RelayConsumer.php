@@ -2184,15 +2184,20 @@ final class RelayConsumer
         // verified hub JWT; see AccountLinkController::linkHub()). A mapped
         // principal becomes the real server user, so the parental RatingGate,
         // per-profile stream limits and per-user lookups all resolve. An
-        // unmapped principal keeps its hub UUID (auth presence + log
-        // attribution only — the rating gate stays a strict no-op for it,
-        // which is the honest state, and checkStreamLimit()'s
-        // profile_not_found names it). A client-supplied PROFILE identity
-        // never crosses the tunnel and is never read here — pinned by the
-        // re-derived S247 crossing test.
+        // unmapped principal keeps its hub UUID for auth presence and log
+        // attribution. It has no server account, so no profile, access
+        // schedule or rating gate applies to it. {@see Request::$relayUnmapped}
+        // tells the schedule gate and the artwork fast paths to pass it, as
+        // master did. Direct-play streams still refuse it through
+        // checkStreamLimit()'s profile_not_found. A client-supplied PROFILE
+        // identity never crosses the tunnel and is never read here — pinned by
+        // the re-derived S247 crossing test.
         $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
         $serverUserId = $this->resolveRelayIdentity($envelope, $relayUser);
         $request->userId = $serverUserId ?? ($relayUser !== '' ? $relayUser : 'hub-relay');
+        // Marked only when the mapping ran and found no row. A REFUSED mapping (an unexpected
+        // trust marker) keeps the fail-closed no-profile refusal, because its identity is not trusted.
+        $request->relayUnmapped = $serverUserId === null && $this->unexpectedRelayMarkers($envelope) === [];
 
         // Client IP comes from the relay session, never from the producer-
         // suppliable x-forwarded-for header (now stripped): an untrusted relay
@@ -2225,6 +2230,31 @@ final class RelayConsumer
     }
 
     /**
+     * The `x-phlix-relay*` trust markers on the envelope other than the two known ones
+     * (`x-phlix-relay` and `x-phlix-relay-user`). Any such marker refuses the identity mapping.
+     *
+     * @param RelayHttpRequest $envelope The raw relay envelope.
+     *
+     * @return list<string> The lower-cased names of the unexpected markers; empty when there are none.
+     */
+    private function unexpectedRelayMarkers(RelayHttpRequest $envelope): array
+    {
+        $unexpected = [];
+        foreach ($envelope->headers as $name => $_value) {
+            $lower = strtolower((string) $name);
+            if (
+                str_starts_with($lower, 'x-phlix-relay')
+                && $lower !== 'x-phlix-relay'
+                && $lower !== 'x-phlix-relay-user'
+            ) {
+                $unexpected[] = $lower;
+            }
+        }
+
+        return $unexpected;
+    }
+
+    /**
      * Resolve the authenticated relay principal to a server user id (S301).
      *
      * The mapping is applied ONLY when the envelope carries exactly the two
@@ -2244,17 +2274,7 @@ final class RelayConsumer
      */
     private function resolveRelayIdentity(RelayHttpRequest $envelope, string $relayUser): ?string
     {
-        $unexpected = [];
-        foreach ($envelope->headers as $name => $_value) {
-            $lower = strtolower((string) $name);
-            if (
-                str_starts_with($lower, 'x-phlix-relay')
-                && $lower !== 'x-phlix-relay'
-                && $lower !== 'x-phlix-relay-user'
-            ) {
-                $unexpected[] = $lower;
-            }
-        }
+        $unexpected = $this->unexpectedRelayMarkers($envelope);
 
         if ($unexpected !== []) {
             $this->logger->warning('RelayConsumer: unexpected relay trust marker refused the identity mapping', [

@@ -339,12 +339,19 @@ final class AccessScheduleMiddleware
     }
 
     /**
-     * Whether a request may proceed with no resolvable profile: exactly the profile-create
-     * route ({@see self::NO_PROFILE_CREATE_METHOD} and {@see self::NO_PROFILE_CREATE_PATH}).
+     * Whether a request may proceed with no resolvable profile: the profile-create route
+     * ({@see self::NO_PROFILE_CREATE_METHOD} and {@see self::NO_PROFILE_CREATE_PATH}), or an
+     * unmapped relayed principal ({@see Request::$relayUnmapped}). The second has no server
+     * account, so there is no profile and no schedule to test, and it passes as master did.
+     * A mapped relayed principal and every local session are still refused with no profile.
      * Exposed so the gate and its tests share one definition.
      */
     public static function allowsWithoutProfile(Request $request): bool
     {
+        if ($request->relayUnmapped) {
+            return true;
+        }
+
         return $request->method === self::NO_PROFILE_CREATE_METHOD
             && $request->path === self::NO_PROFILE_CREATE_PATH;
     }

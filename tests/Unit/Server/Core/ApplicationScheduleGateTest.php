@@ -177,6 +177,31 @@ final class ApplicationScheduleGateTest extends TestCase
         self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
     }
 
+    public function test_an_unmapped_relayed_principal_with_no_profile_passes_the_gate(): void
+    {
+        // A hub principal with no server linkage has no account, so no profile and no schedule
+        // exist for it. It passes as master did, rather than failing closed on the missing profile.
+        $schedule = $this->schedule([], null);
+
+        $request = $this->request('GET', '/api/v1/media/m1', 'hub-relay', null);
+        $request->relayUnmapped = true;
+
+        self::assertNull(Application::scheduleGateFor($request, $schedule));
+    }
+
+    public function test_a_mapped_relayed_principal_with_no_profile_still_fails_closed(): void
+    {
+        // The same relayed request for a principal that IS mapped to an account with no profile
+        // is refused: the account exists, so the no-profile rule applies to it as to a local session.
+        $schedule = $this->schedule([], null);
+
+        $response = Application::scheduleGateFor($this->request('GET', '/api/v1/media/m1', 'u1', null), $schedule);
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
+    }
+
     public function test_a_session_with_no_profile_claim_falls_back_to_the_account_profile(): void
     {
         // A token with no profile claim is checked against the account's active profile,

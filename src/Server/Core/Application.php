@@ -2681,8 +2681,11 @@ class Application
      *
      *  - A session request (`userId` set by RequestAuthenticator, with its `profileId`)
      *    is checked against that profile. When the profile cannot be resolved the
-     *    middleware fails closed (the AccessScheduled 403). RequestContext is
-     *    published for the middleware's duration and restored afterwards.
+     *    middleware fails closed (the AccessScheduled 403), EXCEPT for an unmapped
+     *    relayed principal ({@see \Phlix\Server\Http\Request::$relayUnmapped}): it has
+     *    no server account, so no profile or schedule exists for it, and it passes as
+     *    master did. A mapped relayed principal and every local session are refused.
+     *    RequestContext is published for the middleware's duration and restored afterwards.
      *  - A request with no userId passes through unchanged, unless it carries a profile
      *    binding (`pid`) whose signature verifies: then that profile's window applies.
      *    An unverified binding is not trusted here; the route's own gate refuses it.

@@ -1370,6 +1370,71 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * Drive one tunnelled frame through the consumer and return the Request the dispatcher received.
+     *
+     * @param array<string, string> $headers  The envelope headers.
+     * @param string|null           $mappedTo The server user the principal maps to, or null when unmapped.
+     */
+    private function captureRelayedRequest(array $headers, ?string $mappedTo): \Phlix\Server\Http\Request
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')
+            ->willReturn($mappedTo === null ? null : ['user_id' => $mappedTo]);
+
+        $consumer = $this->createConsumer(null, $dispatcher, null, new RelayIdentityResolver($identities));
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/api/v1/libraries', '', $headers, '');
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000002, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+
+        return $captured;
+    }
+
+    /**
+     * An unmapped hub principal (no linkage row) keeps its hub UUID and is marked relayUnmapped, so
+     * the schedule gate passes it as master did. It has no server account to test a schedule on.
+     */
+    public function test_an_unmapped_relay_principal_is_marked_relay_unmapped(): void
+    {
+        $captured = $this->captureRelayedRequest(['X-Phlix-Relay-User' => 'user-42'], null);
+
+        $this->assertSame('user-42', $captured->userId);
+        $this->assertTrue($captured->relayUnmapped, 'an unlinked principal is the unmapped case');
+    }
+
+    public function test_a_mapped_relay_principal_is_not_marked_relay_unmapped(): void
+    {
+        $captured = $this->captureRelayedRequest(['X-Phlix-Relay-User' => 'user-42'], 'server-user-9');
+
+        $this->assertSame('server-user-9', $captured->userId);
+        $this->assertFalse($captured->relayUnmapped, 'a linked principal keeps the fail-closed no-profile rule');
+    }
+
+    /**
+     * A refused mapping (an unknown trust marker) grants no server identity, and it is not trusted as
+     * unmapped either: the request keeps the fail-closed no-profile refusal.
+     */
+    public function test_a_refused_mapping_is_not_marked_relay_unmapped(): void
+    {
+        $captured = $this->captureRelayedRequest(
+            ['X-Phlix-Relay-User' => 'user-42', 'X-Phlix-Relay-Profile' => 'p-1'],
+            'server-user-9',
+        );
+
+        $this->assertSame('user-42', $captured->userId, 'the refused mapping keeps the raw principal');
+        $this->assertFalse($captured->relayUnmapped, 'a refused mapping is not the unmapped exemption');
+    }
+
+    /**
      * RED ON A PROFILE IDENTITY STARTING TO CROSS (the S247 pin, re-derived):
      * the tunnel carries ONLY the authenticated relay principal. A profile
      * marker smuggled into the envelope is not just ignored — it REFUSES the

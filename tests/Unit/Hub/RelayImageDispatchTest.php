@@ -191,19 +191,15 @@ final class RelayImageDispatchTest extends TestCase
         self::assertSame($this->posterBytes, $response->materializeFileWindow()->body);
     }
 
-    /**
-     * A relayed avatar request for an UNMAPPED principal (a hub user with no server profile) is
-     * refused, not served. The avatar route applies the session's schedule window, and a relayed
-     * session with no profile is tested on the account's active profile. This principal has none,
-     * so it gets the same fail-closed 403 a relayed poster gets. A relayed session whose account
-     * has a profile is served; the fast path's own tests pin that.
-     */
-    public function testARelayedAvatarRequestForAnUnmappedPrincipalIsRefused(): void
+    /** A relayed avatar request returns the avatar's actual bytes. */
+    public function testARelayedAvatarRequestReturnsTheAvatarBytes(): void
     {
         $response = $this->dispatch($this->relayedRequest('/api/v1/users/user-1/avatar'));
 
-        self::assertSame(403, $response->statusCode);
-        self::assertNull($response->filePath, 'no avatar bytes for a principal with no profile');
+        self::assertSame(200, $response->statusCode);
+        self::assertSame('image/jpeg', $response->headers['Content-Type'] ?? null);
+        self::assertSame($this->avatarDir . '/user-1.jpg', $response->filePath);
+        self::assertSame($this->avatarBytes, $response->materializeFileWindow()->body);
     }
 
     // -----------------------------------------------------------------
@@ -445,11 +441,16 @@ final class RelayImageDispatchTest extends TestCase
             ->dispatch($request);
     }
 
-    /** What RelayConsumer::buildRequest() produces for a tunnelled frame. */
+    /**
+     * What RelayConsumer::buildRequest() produces for a tunnelled frame with no linked server user.
+     * The `hub-relay` principal maps to no `user_identities` row, so the consumer marks it
+     * relayUnmapped, which the schedule gate and the artwork fast paths read.
+     */
     private function relayedRequest(string $path, array $query = []): Request
     {
         $request = $this->anonymousRequest($path, $query);
         $request->userId = 'hub-relay';
+        $request->relayUnmapped = true;
 
         return $request;
     }

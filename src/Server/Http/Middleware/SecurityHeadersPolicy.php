@@ -46,9 +46,11 @@ use Phlix\Admin\SettingsRepository;
  * directions. Tightening lags too: moving frame options from SAMEORIGIN to DENY, or
  * raising the HSTS max-age, takes up to 60 s to reach each worker, and until then
  * that worker keeps sending the looser value. Loosening lags the same way. The memo
- * holds the RESOLVED (coerced) value, and a failed read still resolves to the
- * shipped floor, so no read path yields a value weaker than the floor. What the
- * memo does not give is an immediate change.
+ * holds the RESOLVED (coerced) value. A failed read never yields a value weaker than
+ * the shipped default: it resolves to that default. This is not a claim that no
+ * value can be weaker. An operator can set a deliberate relaxation, such as HSTS
+ * max-age 0 or frame options NONE, and the store then returns it. What the memo does
+ * not give is an immediate change.
  *
  * The key is that the memo holds the RESOLVED (coerced) value, so a memoised
  * read and a cold read are byte-identical; null store, unreadable store and
@@ -75,8 +77,8 @@ use Phlix\Admin\SettingsRepository;
  *
  * Null store, unreadable store, out-of-band value: every failure returns the
  * shipped constant (the byte-identical pre-key value). A settings outage must
- * never WEAKEN a security header — the shipped values are the floor; the keys
- * exist to let operators go stricter (DENY) or make scoped, informed
+ * never WEAKEN a security header: a failed read resolves to the shipped default. The
+ * keys exist to let operators go stricter (DENY) or make scoped, informed
  * relaxations, not to let an outage silently downgrade anyone.
  *
  * @package Phlix\Server\Http\Middleware

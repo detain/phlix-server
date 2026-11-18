@@ -551,12 +551,15 @@ final class UserRowWireRedactionTest extends TestCase
 
     public function test_quick_connect_token_response_ships_no_credential_columns(): void
     {
+        // A stored approval is bound to a concrete profile the account owns (fe057bd4 refuses one with
+        // no profile). The ownership check returns that id, and the mint uses it.
         $pair = new QuickConnectPair(
             'ACDFGH',
             's',
             QuickConnectPair::STATE_APPROVED,
             'user-42',
             time() + 300,
+            'p-1',
         );
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
@@ -564,11 +567,14 @@ final class UserRowWireRedactionTest extends TestCase
         $repo = $this->createMock(UserRepository::class);
         $repo->method('findById')->willReturn(self::rawRow('user-42'));
 
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('resolveProfileIdForUser')->with('user-42', 'p-1')->willReturn('p-1');
+
         $request = new Request();
         $request->body = ['secret' => 's'];
         $request->remoteIp = '203.0.113.9';
 
-        $controller = new QuickConnectController($this->manager($repo), $store, null, serverUrl: '');
+        $controller = new QuickConnectController($this->manager($repo, null, $profiles), $store, null, serverUrl: '');
         $response = $controller->token($request, ['code' => 'ACDFGH']);
 
         /** @var array{user: array<string, mixed>} $body */
@@ -582,6 +588,9 @@ final class UserRowWireRedactionTest extends TestCase
         $profiles = $this->createMock(UserProfileManager::class);
         $profiles->method('findById')->willReturn(['id' => 'p-2', 'user_id' => 'user-42']);
         $profiles->method('switchProfile')->with('user-42', 'p-2')->willReturn(true);
+        // The switch mints only a profile the account owns (item I), so the auth manager needs the
+        // ownership resolver that production always wires. Without it the mint refuses.
+        $profiles->method('resolveProfileIdForUser')->with('user-42', 'p-2')->willReturn('p-2');
 
         $policyRepo = $this->createMock(UserRepository::class);
         $policyRepo->method('findAdminById')->willReturn(null);
@@ -592,7 +601,7 @@ final class UserRowWireRedactionTest extends TestCase
         $controller = new ProfilesController(
             $profiles,
             new ProfileAccessPolicy($profiles, $policyRepo),
-            $this->manager($repo),
+            $this->manager($repo, null, $profiles),
             $this->createMock(AvatarStorage::class),
             $this->createMock(RateLimiterInterface::class),
         );
@@ -654,8 +663,11 @@ final class UserRowWireRedactionTest extends TestCase
         ]);
     }
 
-    private function manager(UserRepository $repo, ?ProviderManager $providerManager = null): AuthManager
-    {
+    private function manager(
+        UserRepository $repo,
+        ?ProviderManager $providerManager = null,
+        ?UserProfileManager $profiles = null,
+    ): AuthManager {
         return new AuthManager(
             $repo,
             new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800),
@@ -664,6 +676,7 @@ final class UserRowWireRedactionTest extends TestCase
             null,
             null,
             $providerManager,
+            profileManager: $profiles,
         );
     }
 

@@ -21,12 +21,11 @@ use Psr\Log\NullLogger;
  * `StreamProbeBackfill::ensureVideoCodecFor()` — the NARROW trigger the media
  * DETAIL endpoint uses. It probes only when the item's video codec is genuinely
  * unknown (≥1 `video` row, none carrying a codec), because detail is hit on
- * every item view and the broad pre-071 trigger matches 79,218 of the production
- * library's 116,325 items — mostly music tracks on sshfs shares.
+ * every item view and a broader audio/subtitle trigger would match 79,218 of the
+ * production library's 116,325 items — mostly music tracks on sshfs shares.
  *
- * {@see StreamProbeBackfillTest} covers `ensureFor()` (the playback-info
- * trigger); the probe/persist/stamp behaviour is shared code, so only the
- * trigger differences are pinned here.
+ * {@see StreamProbeBackfillTest} covers the probe/persist/stamp behaviour, which
+ * this trigger shares; only the trigger rules are pinned here.
  */
 class StreamProbeBackfillVideoCodecTest extends TestCase
 {
@@ -103,10 +102,8 @@ class StreamProbeBackfillVideoCodecTest extends TestCase
     }
 
     /**
-     * The narrow trigger deliberately IGNORES looksFullyProbed(): a `video` row
-     * with no codec is direct evidence the stored set is wrong, so a subtitle row
-     * (or a second audio row) must not veto the repair the way it does for
-     * ensureFor()'s pre-071 trigger.
+     * A `video` row with no codec is direct evidence the stored set is wrong, so a
+     * subtitle row (or a second audio row) must not veto the repair.
      */
     public function testSubtitleRowDoesNotVetoTheVideoCodecRepair(): void
     {
@@ -254,7 +251,7 @@ class StreamProbeBackfillVideoCodecTest extends TestCase
 
     /**
      * A missing file on disk is NOT stamped, so the one-shot probe still happens
-     * once the share is back — same degrade contract as ensureFor().
+     * once the share is back.
      */
     public function testMissingFileSkipsTheProbeWithoutStamping(): void
     {

@@ -22,7 +22,7 @@ use Workerman\MySQL\Connection;
 /**
  * The TWO stream-replacement call sites, end to end against a transaction-aware
  * connection double: the lazy probe backfill
- * ({@see StreamProbeBackfill::ensureFor()} / `ensureVideoCodecFor()`) and the
+ * ({@see StreamProbeBackfill::ensureVideoCodecFor()}) and the
  * scanner ({@see MediaScanner::persistStreams()}, reached through the public
  * `backfillItemSourceMetadata()`).
  *
@@ -124,9 +124,9 @@ class StreamReplacementAtomicityTest extends TestCase
         $repo = new ItemRepository($db);
         $backfill = new StreamProbeBackfill($repo, $this->recordingProbe($db), new NullLogger());
 
-        $result = $backfill->ensureFor(
+        $result = $backfill->ensureVideoCodecFor(
             ['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => null],
-            [['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => 'h264'],
+            [['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => null],
              ['id' => 'old-a', 'stream_type' => 'audio', 'stream_index' => 1, 'codec' => 'ac3']]
         );
 
@@ -158,8 +158,8 @@ class StreamReplacementAtomicityTest extends TestCase
      * ALSO criterion 4: for a TRANSIENT failure the item is left UNSTAMPED. The
      * rollback is what makes this load-bearing — it guarantees the item still
      * holds exactly the rows that triggered the repair, so stamping
-     * `streams_probed_at` here would make it permanently unrepairable (both entry
-     * points skip a stamped item, and no rescan or backfill CLI rebuilds these
+     * `streams_probed_at` here would make it permanently unrepairable (the detail
+     * trigger skips a stamped item, and no rescan or backfill CLI rebuilds these
      * rows). Contrast BOTH
      * {@see testProbeFailureStillStampsSoABrokenFileCannotHotLoop()} and
      * {@see testBackfillDeterministicInsertFailureIsStampedToBoundTheProbe()}.
@@ -184,7 +184,7 @@ class StreamReplacementAtomicityTest extends TestCase
         $path = $this->makeTempFile();
 
         $stored = [
-            ['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => 'h264'],
+            ['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => null],
             ['id' => 'old-a', 'stream_type' => 'audio', 'stream_index' => 1, 'codec' => 'ac3'],
         ];
 
@@ -193,7 +193,7 @@ class StreamReplacementAtomicityTest extends TestCase
             $this->recordingProbe($db),
             new NullLogger()
         );
-        $result = $backfill->ensureFor(
+        $result = $backfill->ensureVideoCodecFor(
             ['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => null],
             $stored
         );
@@ -242,7 +242,7 @@ class StreamReplacementAtomicityTest extends TestCase
         $path = $this->makeTempFile();
 
         $stored = [
-            ['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => 'h264'],
+            ['id' => 'old-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => null],
             ['id' => 'old-a', 'stream_type' => 'audio', 'stream_index' => 1, 'codec' => 'ac3'],
         ];
 
@@ -251,7 +251,7 @@ class StreamReplacementAtomicityTest extends TestCase
             $this->recordingProbe($db),
             new NullLogger()
         );
-        $result = $backfill->ensureFor(
+        $result = $backfill->ensureVideoCodecFor(
             ['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => null],
             $stored
         );

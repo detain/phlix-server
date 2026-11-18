@@ -17,20 +17,23 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 
 /**
- * Lazily backfills an EXISTING media item's full `media_streams` set the first
- * time its playback info is requested.
+ * Lazily backfills a missing VIDEO codec on an EXISTING media item the first
+ * time its detail is requested ({@see ensureVideoCodecFor()}).
  *
  * Items scanned before migration 071 carry at most one video + one audio row
  * and no subtitle rows, so the playback-info track menus (see
- * {@see StreamTrackShaper}) would show a single audio track and zero subtitles
- * regardless of the file's real contents — until a manual rescan. Both
- * playback-info dispatch paths
- * ({@see \Phlix\Server\Http\Controllers\MediaItemController::getPlaybackInfo()}
- * and {@see \Phlix\Server\WebPortal\WebPortalRouter::getPlaybackInfo()}) call
- * {@see ensureFor()} instead, which runs ONE blocking ffprobe (~1s, acceptable
- * once per item) when the stored rows look unprobed, replaces them with the
- * full set derived by {@see MediaScanner::summarizeProbe()} (the exact
- * scan-time logic, so the two paths never drift), and re-reads.
+ * {@see StreamTrackShaper}) show a single audio track and zero subtitles until
+ * the item is rescanned.
+ *
+ * Item C: playback info does NOT call this class. Both playback-info dispatch
+ * paths ({@see \Phlix\Server\Http\Controllers\MediaItemController::getPlaybackInfo()}
+ * and {@see \Phlix\Server\WebPortal\WebPortalRouter::getPlaybackInfo()}) serve the
+ * stored `media_streams` rows and never fork ffprobe inside the request.
+ * Consequently, legacy AUDIO and SUBTITLE gaps have NO automated repair path:
+ * a rescan is the only repair. {@see ensureVideoCodecFor()} repairs only a missing
+ * video codec. A queued stream-backfill job covering audio and subtitle gaps is
+ * an OWNER DECISION that is still pending; do not add an inline probe in its
+ * place. A legacy item keeps `streams_probed_at` NULL, so it stays repairable by rescan.
  *
  * Guards — the probe runs AT MOST ONCE per item, with exactly ONE deliberate
  * (and self-limiting) exception, the TRANSIENT write failure below:
@@ -53,8 +56,6 @@ use Psr\Log\LoggerInterface;
  *   transient condition clears. See {@see probeAndReplace()} and
  *   {@see isTransientWriteFailure()} for the classification and for the
  *   trade-off this makes.
- * - Rows that already look fully probed (any subtitle row, or 2+ audio rows)
- *   are trusted without probing.
  * - A missing file on disk skips the probe without stamping, so the item is
  *   retried once the file re-appears (e.g. a temporarily unmounted share).
  * - No usable {@see FfmpegRunner} (config/ffmpeg.php missing or unreadable)
@@ -62,9 +63,8 @@ use Psr\Log\LoggerInterface;
  *   cannot permanently mask every item it touched.
  *
  * The media DETAIL endpoint ({@see \Phlix\Server\WebPortal\WebPortalRouter::getMediaItem()})
- * uses the DELIBERATELY NARROWER {@see ensureVideoCodecFor()} instead — see the
- * blast-radius note there for why {@see ensureFor()}'s audio/subtitle trigger
- * must never be armed on that path.
+ * uses {@see ensureVideoCodecFor()} and only that. See its blast-radius note for why
+ * no broader (audio/subtitle) trigger may be armed on that path.
  *
  * @since 0.74.0
  */
@@ -123,60 +123,21 @@ class StreamProbeBackfill
     }
 
     /**
-     * Returns the item's stream rows, probing + persisting the full set first
-     * when they look unprobed. Fully guarded: any failure degrades to the
-     * given `$streams` unchanged, so playback info always renders.
-     *
-     * @param array<string, mixed>             $item    Hydrated media_items row
-     *                                                  (`id`, `path`, `streams_probed_at`).
-     * @param array<int, array<string, mixed>> $streams The item's currently stored
-     *                                                  `media_streams` rows.
-     *
-     * @return array<int, array<string, mixed>> Fresh rows after a successful
-     *         backfill, otherwise `$streams` unchanged.
-     */
-    public function ensureFor(array $item, array $streams): array
-    {
-        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
-        if ($itemId === '') {
-            return $streams;
-        }
-
-        // Probed-marker guard: stamped once per item on success, on probe
-        // failure and on a DETERMINISTIC write failure, so the blocking probe
-        // does not run again — even for files that genuinely have one audio
-        // track and no subtitles. A TRANSIENT write failure deliberately leaves
-        // the item unstamped, so that ONE case is retried on the next request
-        // until the transient condition clears (see probeAndReplace()).
-        if (!empty($item['streams_probed_at'])) {
-            return $streams;
-        }
-
-        // Rows already carrying a subtitle track or a second audio track can
-        // only have come from a full-set probe — trust them without probing.
-        if (self::looksFullyProbed($streams)) {
-            return $streams;
-        }
-
-        return $this->probeAndReplace($itemId, $item, $streams);
-    }
-
-    /**
-     * Detail-endpoint variant: probes ONLY when the item's VIDEO codec is
+     * Detail-endpoint trigger: probes ONLY when the item's VIDEO codec is
      * genuinely unknown, i.e. it has at least one `video` row and NOT ONE of
      * them carries a codec. Otherwise `$streams` is returned untouched with ZERO
      * I/O — no `stat()`, no probe, no write.
      *
-     * WHY A SEPARATE, NARROWER TRIGGER (measured on the production library,
+     * WHY ONLY A VIDEO-CODEC TRIGGER (measured on the production library,
      * 116,325 items, media on sshfs-mounted shares):
-     * - `streams_probed_at IS NULL` on 79,218 items, and EVERY ONE of them also
-     *   matches {@see ensureFor()}'s ≤1-audio-row/no-subtitle-row shape
-     *   (61,130 `track`, 11,596 `album`, 4,679 `artist`, 1,378 `season`,
+     * - `streams_probed_at IS NULL` on 79,218 items. Almost all of them are
+     *   audio-only or container rows with at most one audio row and no subtitle
+     *   rows (61,130 `track`, 11,596 `album`, 4,679 `artist`, 1,378 `season`,
      *   434 `series`, 1 `movie`). Detail is hit on every item view — far more
-     *   often than playback-info — so calling {@see ensureFor()} here would arm
-     *   79,218 one-shot blocking ffprobes on the busiest read path, each one
-     *   stalling the whole single-threaded Workerman worker for the duration of
-     *   an sshfs read. That is an incident, not a slow endpoint.
+     *   often than playback-info — so an audio/subtitle trigger on this path
+     *   would arm 79,218 one-shot blocking ffprobes on the busiest read path,
+     *   each one stalling the whole single-threaded Workerman worker for the
+     *   duration of an sshfs read. That is an incident, not a slow endpoint.
      * - This trigger instead matches 0 items on that same library: every item
      *   there with a `video` row has at least one carrying a codec (including
      *   the 14 items that ALSO hold a codec-less junk `video` row, and the single
@@ -192,9 +153,8 @@ class StreamProbeBackfill
      * `codec` is non-empty wins, junk rows skipped), so server and player never
      * disagree about which items are affected.
      *
-     * Unlike {@see ensureFor()} this does NOT consult {@see looksFullyProbed()}:
-     * a `video` row with no codec is direct evidence the stored set is wrong, so
-     * a subtitle row or a second audio row must not veto the repair. The
+     * A `video` row with no codec is direct evidence the stored set is wrong, so
+     * a subtitle row or a second audio row does not veto the repair. The
      * `streams_probed_at` marker guard still applies, so the probe runs at most
      * once per item here too — the sole exception being an item whose stream
      * WRITE failed transiently, which is left unstamped on purpose so the repair
@@ -222,10 +182,9 @@ class StreamProbeBackfill
             return $streams;
         }
 
-        // Probed-marker guard: shared with ensureFor(), so a playback-info probe
-        // also settles this path. One blocking probe per item — except while a
-        // TRANSIENT write failure keeps the item deliberately unstamped and
-        // therefore retryable (see probeAndReplace()).
+        // Probed-marker guard: the detail trigger's only one-shot guard. One blocking probe per item — except while a
+        // TRANSIENT write failure keeps the item deliberately unstamped and therefore retryable (see
+        // probeAndReplace()).
         if (!empty($item['streams_probed_at'])) {
             return $streams;
         }
@@ -234,9 +193,9 @@ class StreamProbeBackfill
     }
 
     /**
-     * Runs the one-shot probe and replaces the item's stored rows. Shared by
-     * {@see ensureFor()} and {@see ensureVideoCodecFor()} so the two triggers
-     * can differ while the probe/persist/stamp/degrade behaviour cannot.
+     * Runs the one-shot probe and replaces the item's stored rows. Called by
+     * {@see ensureVideoCodecFor()}; kept separate so the trigger and the
+     * probe/persist/stamp/degrade behaviour stay independent.
      *
      * Callers MUST have applied the `streams_probed_at` guard already.
      *
@@ -320,8 +279,8 @@ class StreamProbeBackfill
      * left holding EXACTLY the rows that triggered the repair and every guard
      * that led here evaluates the same way on the next request. Therefore:
      * - Stamping unconditionally (what master did) makes a repairable item
-     *   permanently unrepairable: a stamped item is skipped by BOTH entry points
-     *   forever ({@see ensureFor()} / {@see ensureVideoCodecFor()}) and nothing
+     *   permanently unrepairable: a stamped item is skipped by the detail trigger
+     *   forever ({@see ensureVideoCodecFor()}) and nothing
      *   else rebuilds these rows — a rescan short-circuits in
      *   {@see MediaScanner::backfillItemSourceMetadata()} once duration +
      *   `source` are populated, and `scripts/backfill-streams.php` reselects only
@@ -329,7 +288,7 @@ class StreamProbeBackfill
      * - Never stamping makes a DETERMINISTIC failure re-run the ~1s blocking
      *   ffprobe on EVERY request, forever. On this stack that is a production
      *   stall, not a slow endpoint: `start.php` runs 14 resident single-threaded
-     *   Workerman workers, media lives on sshfs shares, and `ensureFor()` has
+     *   Workerman workers, media lives on sshfs shares, and the detail trigger has
      *   79,218 unstamped candidate items on the measured library.
      *
      * So the failure is classified ({@see isTransientWriteFailure()}):
@@ -486,31 +445,6 @@ class StreamProbeBackfill
         }
 
         return ['', 0];
-    }
-
-    /**
-     * Whether stored rows can only have come from a full-set probe: any
-     * subtitle row, or two or more audio rows (the pre-071 scanner wrote at
-     * most one audio row and never subtitles).
-     *
-     * @param array<int, array<string, mixed>> $streams Stored `media_streams` rows.
-     */
-    private static function looksFullyProbed(array $streams): bool
-    {
-        $audio = 0;
-        foreach ($streams as $stream) {
-            if (!is_array($stream)) {
-                continue;
-            }
-            $type = $stream['stream_type'] ?? null;
-            if ($type === 'subtitle') {
-                return true;
-            }
-            if ($type === 'audio' && ++$audio >= 2) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

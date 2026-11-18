@@ -19,13 +19,12 @@ use Psr\Log\NullLogger;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
- * Lazy playback-info stream backfill (migration 071): pre-071 items get ONE
- * blocking ffprobe on their first playback-info request; the
- * `streams_probed_at` marker (stamped on success AND on PROBE failure)
- * guarantees the probe never runs twice — including for files that genuinely
- * have one audio track and no subtitles. A failed stream WRITE is the one
- * failure that is NOT stamped: it rolls back, so the item still needs the
- * repair.
+ * Lazy stream backfill on the DETAIL path (migration 071): an item whose stored
+ * video codec is missing gets ONE blocking ffprobe via
+ * {@see StreamProbeBackfill::ensureVideoCodecFor()}; the `streams_probed_at`
+ * marker (stamped on success AND on PROBE failure) guarantees the probe never
+ * runs twice. A failed stream WRITE is the one failure that is NOT stamped: it
+ * rolls back, so the item still needs the repair. Playback info does not probe.
  */
 class StreamProbeBackfillTest extends TestCase
 {
@@ -69,15 +68,15 @@ class StreamProbeBackfillTest extends TestCase
     }
 
     /**
-     * The single pre-071 shape that triggers the backfill: one audio row and
-     * no subtitle rows.
+     * The stored shape that triggers the detail-path backfill: a video row whose
+     * codec is missing.
      *
      * @return list<array<string, mixed>>
      */
-    private function legacyStreams(): array
+    private function codecLessStreams(): array
     {
         return [
-            ['id' => 's-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => 'h264'],
+            ['id' => 's-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => null],
             ['id' => 's-a', 'stream_type' => 'audio', 'stream_index' => 1, 'codec' => 'aac'],
         ];
     }
@@ -107,7 +106,7 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->once())->method('getItemStreams')->with('movie-1')->willReturn($fresh);
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $result = $backfill->ensureFor($item, $this->legacyStreams());
+        $result = $backfill->ensureVideoCodecFor($item, $this->codecLessStreams());
 
         $this->assertSame($fresh, $result, 'returns the re-read rows after persisting');
         // The full set flowed through: 1 video + 2 audio + 1 subtitle, with
@@ -136,40 +135,19 @@ class StreamProbeBackfillTest extends TestCase
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
 
         // First playback-info request: unprobed → probes + stamps the marker.
-        $backfill->ensureFor(['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => null], $this->legacyStreams());
+        $backfill->ensureVideoCodecFor(
+            ['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => null],
+            $this->codecLessStreams(),
+        );
 
         // Second request re-reads the item, which now carries the marker —
         // even though its rows would still "look" legacy, no probe runs.
-        $stored = $this->legacyStreams();
-        $result = $backfill->ensureFor(
+        $stored = $this->codecLessStreams();
+        $result = $backfill->ensureVideoCodecFor(
             ['id' => 'movie-1', 'path' => $path, 'streams_probed_at' => '2026-07-10 12:00:00'],
             $stored
         );
         $this->assertSame($stored, $result, 'marked item is served its stored rows untouched');
-    }
-
-    public function testFullyProbedLookingRowsAreTrustedWithoutProbing(): void
-    {
-        $ffmpeg = $this->createMock(FfmpegRunner::class);
-        $ffmpeg->expects($this->never())->method('probe');
-        $repo = $this->createMock(ItemRepository::class);
-        $repo->expects($this->never())->method('markStreamsProbed');
-
-        $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-
-        // Any subtitle row → trusted.
-        $withSubs = [['stream_type' => 'video'], ['stream_type' => 'subtitle']];
-        $this->assertSame(
-            $withSubs,
-            $backfill->ensureFor(['id' => 'm1', 'path' => $this->makeTempFile(), 'streams_probed_at' => null], $withSubs)
-        );
-
-        // Two audio rows → trusted.
-        $twoAudio = [['stream_type' => 'audio'], ['stream_type' => 'audio']];
-        $this->assertSame(
-            $twoAudio,
-            $backfill->ensureFor(['id' => 'm2', 'path' => $this->makeTempFile(), 'streams_probed_at' => null], $twoAudio)
-        );
     }
 
     public function testProbeFailureMarksProbedAndDegradesToStoredRows(): void
@@ -188,9 +166,9 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->once())->method('markStreamsProbed')->with('movie-1');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
     }
 
     public function testProbeThrowingMarksProbedAndDegradesToStoredRows(): void
@@ -205,16 +183,16 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->once())->method('markStreamsProbed')->with('movie-1');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
     }
 
     /**
      * A rolled-back stream write that CAN succeed later must NOT stamp the
      * marker. `replaceStreams()` rolls back, so the item is left holding exactly
-     * the rows that triggered the repair; stamping would then have both entry
-     * points skip it forever, and nothing else rebuilds these rows (a rescan
+     * the rows that triggered the repair; stamping would then have the detail
+     * trigger skip it forever, and nothing else rebuilds these rows (a rescan
      * short-circuits once duration + `source` are populated, and
      * `scripts/backfill-streams.php` reselects only items with zero rows or a
      * NULL stream_index). So the item must stay eligible for a later retry.
@@ -256,9 +234,9 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->never())->method('getItemStreams');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored), 'degrades to the stored rows');
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored), 'degrades to the stored rows');
     }
 
     /**
@@ -312,8 +290,8 @@ class StreamProbeBackfillTest extends TestCase
      * rollback restored exactly the rows that triggered the repair — so every
      * single request for the item re-runs the ~1s BLOCKING ffprobe, forever,
      * inside one of 14 resident single-threaded Workerman workers.
-     * `ensureFor()` has 79,218 unstamped candidates on the measured library, so
-     * that is a production stall rather than a slow endpoint.
+     * the detail trigger has 79,218 unstamped candidates on the measured library,
+     * so that is a production stall rather than a slow endpoint.
      *
      * Six shapes again, including the three that pin the chosen default: an
      * UNRECOGNISED failure is treated as deterministic (master's behaviour —
@@ -341,9 +319,9 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->never())->method('getItemStreams');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored), 'still degrades to the stored rows');
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored), 'still degrades to the stored rows');
     }
 
     /**
@@ -499,10 +477,10 @@ class StreamProbeBackfillTest extends TestCase
             });
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
         for ($request = 0; $request < 2; $request++) {
-            $backfill->ensureFor(
+            $backfill->ensureVideoCodecFor(
                 ['id' => 'movie-1', 'path' => $path,
                  'streams_probed_at' => $stamped ? '2026-07-28 09:00:00' : null],
                 $stored
@@ -539,10 +517,10 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->never())->method('markStreamsProbed');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
         for ($request = 0; $request < 2; $request++) {
-            $backfill->ensureFor(
+            $backfill->ensureVideoCodecFor(
                 ['id' => 'movie-1', 'path' => $path,
                  'streams_probed_at' => null],
                 $stored
@@ -583,8 +561,8 @@ class StreamProbeBackfillTest extends TestCase
         (new \ReflectionProperty(StreamProbeBackfill::class, 'ffmpegResolved'))->setValue($backfill, true);
         (new \ReflectionProperty(StreamProbeBackfill::class, 'ffmpeg'))->setValue($backfill, null);
 
-        $stored = $this->legacyStreams();
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored), 'degrades to the stored rows');
+        $stored = $this->codecLessStreams();
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored), 'degrades to the stored rows');
         // The narrow detail-endpoint trigger shares probeAndReplace(), so it degrades identically.
         $codecLess = [['id' => 's-v', 'stream_type' => 'video', 'stream_index' => 0, 'codec' => null]];
         $this->assertSame($codecLess, $backfill->ensureVideoCodecFor($item, $codecLess));
@@ -600,10 +578,10 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->never())->method('markStreamsProbed');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
         $item = ['id' => 'movie-1', 'path' => '/nonexistent/movie.mkv', 'streams_probed_at' => null];
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
     }
 
     public function testEmptyProbedStreamSetKeepsStoredRowsButStillMarks(): void
@@ -623,9 +601,9 @@ class StreamProbeBackfillTest extends TestCase
         $repo->expects($this->once())->method('markStreamsProbed')->with('movie-1');
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
     }
 
     public function testItemWithoutIdIsServedUnchanged(): void
@@ -635,9 +613,9 @@ class StreamProbeBackfillTest extends TestCase
         $repo = $this->createMock(ItemRepository::class);
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor([], $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor([], $stored));
     }
 
     public function testMarkerWriteFailureInsideCatchIsSwallowed(): void
@@ -653,8 +631,8 @@ class StreamProbeBackfillTest extends TestCase
         $repo->method('markStreamsProbed')->willThrowException(new \RuntimeException('no such column'));
 
         $backfill = new StreamProbeBackfill($repo, $ffmpeg, new NullLogger());
-        $stored = $this->legacyStreams();
+        $stored = $this->codecLessStreams();
 
-        $this->assertSame($stored, $backfill->ensureFor($item, $stored));
+        $this->assertSame($stored, $backfill->ensureVideoCodecFor($item, $stored));
     }
 }

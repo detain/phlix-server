@@ -158,10 +158,12 @@ class WebPortalRouter
     private ?MusicLibraryService $musicLibraryService;
 
     /**
-     * @var StreamProbeBackfill|null Lazy one-shot stream backfill for pre-071
-     *      items (see getPlaybackInfo()) and for items whose video codec is
-     *      unknown (see getMediaItem()); built on first use when not injected
-     *      (the optional ctor arg is a test seam)
+     * @var StreamProbeBackfill|null Lazy one-shot stream backfill, used only by
+     *      getMediaItem() for items whose video codec is unknown (via
+     *      ensureVideoCodecFor(), which covers only the video codec); built on
+     *      first use when not injected (the optional ctor arg is a test seam).
+     *      getPlaybackInfo() does not probe: it serves the stored media_streams
+     *      rows, and legacy audio and subtitle gaps are repaired only by a rescan.
      */
     private ?StreamProbeBackfill $streamBackfill;
 
@@ -759,11 +761,11 @@ class WebPortalRouter
         // Backfill deliberately runs AFTER the parental gate above: an
         // unauthorised caller must never be able to make this endpoint fork an
         // ffprobe (an over-cap deep-link is a 404 with zero disk I/O). It is also
-        // the NARROW ensureVideoCodecFor() — NOT the ensureFor() the playback-info
-        // handler uses. Detail is hit on every item view and 79,218 of the
-        // library's 116,325 items match ensureFor()'s pre-071 audio/subtitle
-        // trigger (mostly music tracks on sshfs shares), so arming that trigger
-        // here would turn the first browse after a deploy into an ffprobe storm
+        // the NARROW ensureVideoCodecFor() and nothing broader. Playback info does
+        // not probe at all (Item C). Detail is hit on every item view and a broader
+        // audio/subtitle trigger would match 79,218 of the library's 116,325 items
+        // (mostly music tracks on sshfs shares), so arming that trigger here would
+        // turn the first browse after a deploy into an ffprobe storm
         // inside the single-threaded worker. The narrow trigger fires only when
         // the item's VIDEO codec is genuinely unknown — the one thing this
         // response is authoritative for, since the player reads direct-play vs
@@ -1552,7 +1554,8 @@ class WebPortalRouter
      *
      * Returns playback information including available media sources
      * and direct play capabilities. This is used by the player
-     * to initialize playback.
+     * to initialize playback. It serves the stored media_streams rows and never probes;
+     * legacy audio and subtitle gaps are repaired only by a rescan.
      *
      * @param Request $request The HTTP request; the parental filter is resolved
      *        from it and, for SV-3.3, the optional `X-Phlix-Client-Capabilities`
@@ -1605,15 +1608,12 @@ class WebPortalRouter
         // P3B: audio + subtitle track metadata from media_streams for the
         // player's selection menus. Shaped by the shared StreamTrackShaper so
         // this portal path and MediaItemController::getPlaybackInfo() (the
-        // other dispatch path) emit byte-identical shapes. The lazy backfill
-        // runs a ONE-SHOT ffprobe for pre-071 items (≤1 audio row, no subtitle
-        // rows) so existing libraries expose their full track set without a
-        // rescan.
+        // other dispatch path) emit byte-identical shapes.
+        //
+        // Item C: STORED rows only, no inline ffprobe. This matches
+        // MediaItemController::getPlaybackInfo(), which made the same change.
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
-        $streams = $this->streamBackfill()->ensureFor(
-            $item,
-            $this->itemRepository->getItemStreams($itemId)
-        );
+        $streams = $this->itemRepository->getItemStreams($itemId);
         $audioTracks = StreamTrackShaper::audioTracks($streams);
         $subtitleTracks = StreamTrackShaper::subtitleTracks($streams, $itemId);
 
@@ -1687,14 +1687,16 @@ class WebPortalRouter
 
     /**
      * Returns the lazy stream backfill, building it on first use when none was
-     * injected (mirrors MediaItemController::streamBackfill() so both dispatch
-     * paths behave identically). Used by {@see getPlaybackInfo()} (broad pre-071
-     * trigger) and {@see getMediaItem()} (narrow video-codec trigger).
+     * injected. Used only by {@see getMediaItem()}, through
+     * the narrow video-codec trigger {@see StreamProbeBackfill::ensureVideoCodecFor()}.
+     * {@see getPlaybackInfo()} does not call it: that path serves the stored
+     * media_streams rows and never probes, so legacy audio and subtitle gaps are
+     * repaired only by a rescan.
      *
      * Deliberately NOT resolved from the DI container: `WebPortalServicesProvider`
      * passes `null` here, and this accessor is what production has run on since
-     * the backfill shipped, so the detail path inherits the EXACT construction the
-     * playback-info path is already proven on. Constructing it is also free — the
+     * the backfill shipped, so the detail path keeps the EXACT construction that
+     * production has already run. Constructing it is also free — the
      * FfmpegRunner (and its config/ffmpeg.php include) is built only when a probe
      * actually happens, which for the narrow trigger is ~never.
      */

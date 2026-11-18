@@ -2877,18 +2877,16 @@ class MediaScanner
      * mid-sequence and yields invalid UTF-8. MySQL rejects that row outright
      * with error 1366 ("Incorrect string value: '\xC3'").
      *
-     * That single bad row costs the item most of its stream set, because both
-     * write paths delete before they re-insert and neither is transactional:
+     * That single bad row costs the item most of its stream set, because the
+     * scanner's write path deletes before it re-inserts and is not transactional:
      *
-     *  - {@see StreamProbeBackfill::ensureFor()} calls `deleteStreamsByItem()`
-     *    and then `addStream()` per row; its `catch (\Throwable)` stamps
-     *    `markStreamsProbed()` unconditionally — it does not inspect the error.
-     *    The probed-marker guard at the top of that method then means the item
-     *    is never re-probed, so it keeps whatever partial set survived the throw,
-     *    permanently.
      *  - {@see persistStreams()} deletes first too. It does NOT stamp on failure,
      *    so the item stays repairable, but it is left with a partial set until
      *    something rescans it.
+     *  - {@see StreamProbeBackfill::ensureVideoCodecFor()} is the lazy-backfill
+     *    counterpart. It writes its replacement through
+     *    `ItemRepository::replaceStreams()`, one transaction, so a rejected row
+     *    leaves the previously stored set intact instead of a partial one.
      *
      * Note the asymmetry that let this through: `media_items` writes are cleaned
      * by `ItemRepository::toValidUtf8()`, but `ItemRepository::addStream()` binds

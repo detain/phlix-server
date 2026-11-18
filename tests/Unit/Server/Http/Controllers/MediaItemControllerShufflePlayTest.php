@@ -279,7 +279,6 @@ class MediaItemControllerShufflePlayTest extends TestCase
             new TrickplayController('/tmp/trickplay', ''),
             new ChapterMarkerService($db),
             null,
-            null,
             $music
         );
     }

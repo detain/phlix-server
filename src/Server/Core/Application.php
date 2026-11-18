@@ -4325,7 +4325,6 @@ class Application
             $gaplessManager,
             $trickplayController,
             $chapterMarkerService,
-            null,
             $ratingGate,
             $musicLibrary
         );

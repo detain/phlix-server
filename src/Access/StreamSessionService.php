@@ -86,6 +86,40 @@ final class StreamSessionService
     private array $lastHeartbeatNs = [];
 
     /**
+     * Upper bound on the registration memo ({@see self::$registeredNs}). Past this
+     * size the least-recently-used entry (registration or memo hit) is evicted, so the
+     * memo can never grow without bound. An evicted entry only costs one existence SELECT.
+     */
+    private const REGISTRATION_MEMO_MAX_ENTRIES = 4096;
+
+    /**
+     * Per-process registration memo (Item A): stream session id => the profile it
+     * was registered for and the `hrtime(true)` of the last successful registration
+     * or heartbeat refresh this process observed for it.
+     *
+     * A call that hits this memo inside {@see self::HEARTBEAT_THROTTLE_NS} returns
+     * true without the existence SELECT, because the row is known to have been
+     * refreshed inside the heartbeat window. Keyed by session id (the profile id is
+     * checked on lookup) so {@see releaseStream()} can clear an entry without
+     * knowing the profile, which keeps an in-process release from being masked.
+     *
+     * Accepted trade-off: a row deleted by ANOTHER worker's stale sweep (or by an
+     * out-of-process release) may go uncounted for at most one heartbeat window
+     * (15 s) on this process. The stale sweep only removes rows that have missed
+     * heartbeats for 60 s, so a streaming session is not swept while it is active.
+     *
+     * @var array<string, array{profileId: string, ns: float|int}>
+     */
+    private array $registeredNs = [];
+
+    /**
+     * The injected monotonic clock, normalised to a Closure in the constructor (null in
+     * production). PHP does not allow `callable` as a property type, so the constructor
+     * accepts `?callable` and stores it here as `?\Closure`.
+     */
+    private readonly ?\Closure $clock;
+
+    /**
      * Create a new StreamSessionService instance.
      *
      * @param Connection $db Database connection for accessing stream session data.
@@ -129,11 +163,29 @@ final class StreamSessionService
      *        and a direct `new` in `Application::getStreamLimitController()`'s
      *        no-container fallback — and both pass this explicitly. Wiring only
      *        one would make the setting apply on some requests and not others.
+     * @param callable|null           $clock    Monotonic nanosecond clock for the registration
+     *        memo and the heartbeat throttle. Null (production) uses hrtime(true); tests inject a
+     *        fake clock to exercise the {@see self::HEARTBEAT_THROTTLE_NS} window. Typed `?callable`
+     *        (a builtin) so PHP-DI autowiring falls back to this default instead of trying to
+     *        resolve a class named Closure.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly ?SettingsRepository $settings = null,
+        ?callable $clock = null,
     ) {
+        $this->clock = $clock === null ? null : \Closure::fromCallable($clock);
+    }
+
+    /**
+     * The monotonic clock the memo and the heartbeat throttle read: the injected seam when one
+     * was given, otherwise `hrtime(true)`.
+     *
+     * @return float|int Nanoseconds from an arbitrary, monotonic origin.
+     */
+    private function nowNs(): float|int
+    {
+        return $this->clock !== null ? (int) ($this->clock)() : hrtime(true);
     }
 
     /**
@@ -185,6 +237,14 @@ final class StreamSessionService
      * Checks if the profile's concurrent stream limit would be exceeded.
      * If a stream record already exists for the same session_id, it returns true (idempotent).
      *
+     * Item A — registration memo: when this process successfully registered or
+     * refreshed the same (profileId, sessionId) inside {@see self::HEARTBEAT_THROTTLE_NS}
+     * (the same window the heartbeat throttle uses), the row is known to be fresh and
+     * this returns true WITHOUT the existence SELECT. Otherwise the existing path runs
+     * unchanged. Accepted trade-off: a row deleted by another worker's stale sweep may
+     * go uncounted for at most one heartbeat window. An in-process
+     * {@see self::releaseStream()} clears the memo entry immediately.
+     *
      * @param string $profileId  The profile ID (UUID) to register the stream for.
      * @param string $deviceId   The device identifier.
      * @param string $sessionId The streaming session identifier.
@@ -194,6 +254,22 @@ final class StreamSessionService
      */
     public function registerStream(string $profileId, string $deviceId, string $sessionId): bool
     {
+        // Item A: a memo hit inside the heartbeat window skips the existence SELECT.
+        // The heartbeat still goes through throttledHeartbeat(), which performs no
+        // DB work while its own slot is inside the window.
+        $memo = $this->registeredNs[$sessionId] ?? null;
+        if (
+            $memo !== null
+            && $memo['profileId'] === $profileId
+            && $this->nowNs() - $memo['ns'] < self::HEARTBEAT_THROTTLE_NS
+        ) {
+            // Re-inserted on every hit (not only when the heartbeat advanced) so the
+            // entry moves to the back of the eviction order: eviction is least-recently-used.
+            $refreshedNs = $this->throttledHeartbeat($sessionId);
+            $this->rememberRegistration($profileId, $sessionId, max($refreshedNs, $memo['ns']));
+            return true;
+        }
+
         // Check if stream already exists for this session (idempotent)
         /** @var array<array<string, mixed>> $existingRows */
         $existingRows = $this->db->query(
@@ -204,7 +280,8 @@ final class StreamSessionService
         if (is_array($existingRows) && count($existingRows) > 0) {
             // Stream already registered: refresh its heartbeat, at most once per
             // HEARTBEAT_THROTTLE_NS per session (#6a).
-            $this->throttledHeartbeat($sessionId);
+            $refreshedNs = $this->throttledHeartbeat($sessionId);
+            $this->rememberRegistration($profileId, $sessionId, $refreshedNs);
             return true;
         }
 
@@ -230,7 +307,33 @@ final class StreamSessionService
             [$profileId, $deviceId, $sessionId, 'direct'],
         );
 
+        $this->rememberRegistration($profileId, $sessionId, $this->nowNs());
+
         return true;
+    }
+
+    /**
+     * Record a successful registration/refresh in the Item A memo, bounded by
+     * {@see self::REGISTRATION_MEMO_MAX_ENTRIES}. Each call re-inserts the key, and a
+     * memo hit also calls it, so the oldest entry evicted is the least-recently-used
+     * one (by registration or hit), not merely the earliest write.
+     *
+     * @param string    $profileId The profile the session belongs to.
+     * @param string    $sessionId The streaming session identifier.
+     * @param float|int $ns        The `hrtime(true)` at which the row was last refreshed.
+     */
+    private function rememberRegistration(string $profileId, string $sessionId, float|int $ns): void
+    {
+        unset($this->registeredNs[$sessionId]);
+        $this->registeredNs[$sessionId] = ['profileId' => $profileId, 'ns' => $ns];
+
+        while (count($this->registeredNs) > self::REGISTRATION_MEMO_MAX_ENTRIES) {
+            $oldest = array_key_first($this->registeredNs);
+            if ($oldest === null) {
+                break;
+            }
+            unset($this->registeredNs[$oldest]);
+        }
     }
 
     /**
@@ -257,13 +360,17 @@ final class StreamSessionService
      * round trip it is meant to save, and the 60 s stale sweep leaves ample margin.
      *
      * @param string $sessionId The streaming session identifier.
+     *
+     * @return float|int The `hrtime(true)` of the heartbeat that is known to have
+     *                   refreshed the row (this call's write, or the earlier write
+     *                   still inside the window). Feeds the Item A registration memo.
      */
-    private function throttledHeartbeat(string $sessionId): void
+    private function throttledHeartbeat(string $sessionId): float|int
     {
-        $now = hrtime(true);
+        $now = $this->nowNs();
         $last = $this->lastHeartbeatNs[$sessionId] ?? null;
         if ($last !== null && $now - $last < self::HEARTBEAT_THROTTLE_NS) {
-            return;
+            return $last;
         }
 
         $this->heartbeat($sessionId);
@@ -279,6 +386,8 @@ final class StreamSessionService
                 $this->lastHeartbeatNs = [];
             }
         }
+
+        return $now;
     }
 
     /**
@@ -290,6 +399,15 @@ final class StreamSessionService
      * streaming path has none, so there it relies on the one-shot timer's
      * self-clear plus the 60s {@see cleanupStaleStreams()} sweep instead.
      *
+     * Registration-memo scope: the memo ({@see self::$registeredNs}) is per INSTANCE,
+     * not per process. This method clears only the memo of the instance it is called
+     * on. A second instance in the same process (for example the no-container fallback
+     * built in Application::getStreamLimitController()) has its own memo, so a release
+     * made through it does not clear the worker instance's entry. That worker can then
+     * skip the existence SELECT for at most one heartbeat window (15 s) and report a
+     * released session as still registered. Use one shared instance per worker so the
+     * memo is cleared in every path that releases a stream.
+     *
      * @param string $sessionId The streaming session identifier.
      *
      * @return void
@@ -298,6 +416,8 @@ final class StreamSessionService
     {
         $this->cancelHeartbeatTimer($sessionId);
         unset($this->lastHeartbeatNs[$sessionId]);
+        // Item A: an in-process release must never be masked by the registration memo.
+        unset($this->registeredNs[$sessionId]);
 
         $this->db->query(
             'DELETE FROM active_streams WHERE session_id = ?',

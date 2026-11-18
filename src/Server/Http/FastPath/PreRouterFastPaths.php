@@ -28,6 +28,7 @@ use Throwable;
 
 use function filesize;
 use function hash;
+use function hrtime;
 use function in_array;
 use function is_file;
 use function is_readable;
@@ -121,6 +122,38 @@ final class PreRouterFastPaths
     private const STREAM_PATTERN = '#^/media/(?P<id>[^/]+)/stream$#';
 
     /**
+     * Lifetime, in nanoseconds, of a memoised direct-play ALLOW verdict (Item B).
+     *
+     * A seek or probe issues hundreds of Range requests for the same file; without
+     * this memo each one re-ran findById() (SELECT * plus JSON decode) and the
+     * profile_tags SELECTs. Accepted lag: this memo sits on top of RatingGate's own
+     * 30 s filter memo, so a change to a profile's rating cap, the item's rating,
+     * its tag block, or its stored path can take up to ~40 s to reach direct play
+     * (10 s here plus up to 30 s in RatingGate). The short TTL keeps that stacked
+     * window small; the 30 s bound is RatingGate's, not this memo's.
+     */
+    private const STREAM_ACCESS_TTL_NS = 10_000_000_000;
+
+    /** Upper bound on {@see self::$streamAccessMemo}; the oldest entry is evicted past it. */
+    private const STREAM_ACCESS_MEMO_MAX_ENTRIES = 2048;
+
+    /**
+     * Per-process memo of direct-play ALLOW verdicts (Item B): key
+     * `mediaItemId\0effectiveProfileId\0userId` => resolved file path and the
+     * `hrtime(true)` it was verified at. Only ALLOW verdicts are stored (see
+     * {@see self::serveMediaStream()}); the schedule gate is NOT memoised here.
+     *
+     * @var array<string, array{path: string, ns: float|int}>
+     */
+    private array $streamAccessMemo = [];
+
+    /**
+     * The injected monotonic clock for the Item B memo, normalised to a Closure by the
+     * constructor (null in production, where {@see self::nowNs()} uses hrtime(true)).
+     */
+    private readonly ?\Closure $clock;
+
+    /**
      * The device bucket a bound (signed) stream with no device name is counted under
      * (see {@see self::registerDirectPlaySlot()}). A client that sends this exact value as
      * its X-Device-ID shares the bucket. That only changes which count it lands in, never
@@ -139,12 +172,17 @@ final class PreRouterFastPaths
      *                                            unchanged; a null container on an actual
      *                                            stream request is a loud failure, never
      *                                            a silent 404.
+     * @param callable|null           $clock    Monotonic nanosecond clock for the Item B
+     *                                            memo. Null (production) uses hrtime(true);
+     *                                            tests inject a fake clock to exercise expiry.
      */
     public function __construct(
         private readonly ArtworkStorage $artworkStorage,
         private readonly AvatarStorage $avatarStorage,
         private readonly ?ContainerInterface $container = null,
+        ?callable $clock = null,
     ) {
+        $this->clock = $clock === null ? null : \Closure::fromCallable($clock);
     }
 
     /**
@@ -477,6 +515,16 @@ final class PreRouterFastPaths
      * memory. HTTP `Range` requests are honoured (206 + `Content-Range`) so the
      * browser can seek; an unsatisfiable range yields 416.
      *
+     * Item B: the resolved file path and the ALLOW verdict (rating gate, tag filter
+     * via findById) are memoised per (item, effective profile, user) for
+     * {@see self::STREAM_ACCESS_TTL_NS} (10 s). Accepted lag, stacked: this memo sits
+     * on top of RatingGate's 30 s filter memo, so a profile rating-cap tightening, an
+     * item rating change, a tag-block change or a stored-path change can take up to
+     * ~40 s to take effect for direct play. Denials and misses are never memoised, and a
+     * stream with no resolvable profile is never memoised. The file is still stat'd on
+     * every request, and the access schedule and stream-limit checks above run on every
+     * request and are not memoised.
+     *
      * @param Request $request The request to match and serve.
      *
      * @return Response|null Null when this is not a media-stream request.
@@ -507,12 +555,19 @@ final class PreRouterFastPaths
 
         $userId = $request->userId;
 
+        // The profile this stream runs as, resolved ONCE and shared by the stream-slot check,
+        // the rating gate and the Item B memo key. A session uses the profile the request
+        // context carries, else the account's active profile; a signed URL uses the profile its
+        // verified token is bound to (`pid`). Null when no profile resolves.
+        $streamProfileId = null;
+
         // P5-S3: Enforce per-profile concurrent stream limits (direct-play path).
         // StreamLimitMiddleware can't be applied as router middleware here because
         // this route bypasses the router to use the event-loop file streaming
         // (essential for multi-GB videos). The check is inlined instead.
         if ($userId !== null && $userId !== '') {
-            $streamLimitResponse = $this->checkStreamLimit($request, $userId);
+            $streamProfileId = $this->sessionStreamProfileId($userId);
+            $streamLimitResponse = $this->checkStreamLimit($request, $userId, $streamProfileId);
             if ($streamLimitResponse !== null) {
                 return $streamLimitResponse;
             }
@@ -524,6 +579,7 @@ final class PreRouterFastPaths
             // check and is bounded only by its expiry (SignedUrl::DEFAULT_TTL).
             $signedProfileId = $request->queryString(SignedUrl::PROFILE_PARAM);
             if ($signedProfileId !== null && $signedProfileId !== '') {
+                $streamProfileId = $signedProfileId;
                 $streamLimitResponse = $this->checkSignedStreamLimit($request, $signedProfileId);
                 if ($streamLimitResponse !== null) {
                     return $streamLimitResponse;
@@ -531,30 +587,56 @@ final class PreRouterFastPaths
             }
         }
 
-        /** @var ItemRepository $repo */
-        $repo = $this->container()->get(ItemRepository::class);
-        $item = $repo->findById($m['id']);
+        // Item B: a fresh ALLOW verdict and resolved path for this (item, effective
+        // profile, user) skips findById() (its SELECT and the profile_tags SELECTs)
+        // and the rating evaluation. The file itself is still stat'd on every request.
+        // The key uses the profile resolved above, the same one the stream-slot check and
+        // the rating gate evaluate. With none resolved, nothing is memoised.
+        $accessKey = $streamProfileId === null
+            ? null
+            : $m['id'] . "\0" . $streamProfileId . "\0" . ($userId ?? '');
+        $path = $accessKey === null ? '' : ($this->memoisedStreamPath($accessKey) ?? '');
+        if ($path === '') {
+            /** @var ItemRepository $repo */
+            $repo = $this->container()->get(ItemRepository::class);
+            $item = $repo->findById($m['id']);
 
-        // Parental-control ACCESS gate (Finding 1). For an authenticated session
-        // (userId set) whose ACTIVE profile is capped, deny an over-cap item (by
-        // EFFECTIVE rating — own content_rating, else the inherited series
-        // rating) with the SAME 404 used for "not found" below, so existence is
-        // never confirmed and no bytes are served. Signed-URL access (userId
-        // null) is governed by the signed URL itself — and the mint paths
-        // (detail/download) are already gated — so it is intentionally not
-        // re-checked here. Owner / no-profile / un-capped → null filter → no-op.
-        if ($userId !== null && $userId !== '' && is_array($item)) {
-            $gate = $this->ratingGate();
-            $filter = $gate?->resolveFilterForUser($userId);
-            if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
-                return (new Response())
-                    ->status(404)
-                    ->header('Content-Type', 'text/plain; charset=utf-8')
-                    ->text('Media not found');
+            // Only a resolved item whose access check actually ran may be memoised.
+            $cacheable = $accessKey !== null && is_array($item);
+
+            // Parental-control ACCESS gate (Finding 1). For an authenticated session
+            // (userId set) whose ACTIVE profile is capped, deny an over-cap item (by
+            // EFFECTIVE rating — own content_rating, else the inherited series
+            // rating) with the SAME 404 used for "not found" below, so existence is
+            // never confirmed and no bytes are served. Signed-URL access (userId
+            // null) is governed by the signed URL itself — and the mint paths
+            // (detail/download) are already gated — so it is intentionally not
+            // re-checked here. Owner / no-profile / un-capped → null filter → no-op.
+            if ($userId !== null && $userId !== '' && is_array($item)) {
+                $gate = $this->ratingGate();
+                if ($gate === null) {
+                    // An unavailable gate runs ungated for this request only; it is
+                    // never memoised, so it cannot extend that fail-open window.
+                    $cacheable = false;
+                }
+                // The resolved profile is passed explicitly so RatingGate's own memo is keyed by
+                // the same profile (its default key reads the context profile, which may be unset).
+                $filter = $gate?->resolveFilterForUser($userId, $streamProfileId);
+                if ($filter !== null && $gate !== null && !$gate->isAllowed($item, $filter)) {
+                    // Denials are never memoised: a denied request re-checks every time.
+                    return (new Response())
+                        ->status(404)
+                        ->header('Content-Type', 'text/plain; charset=utf-8')
+                        ->text('Media not found');
+                }
+            }
+
+            $path = is_array($item) && is_string($item['path'] ?? null) ? $item['path'] : '';
+            if ($accessKey !== null && $cacheable && $path !== '') {
+                $this->rememberStreamPath($accessKey, $path);
             }
         }
 
-        $path = is_array($item) && is_string($item['path'] ?? null) ? $item['path'] : '';
         if ($path === '' || !is_file($path) || !is_readable($path)) {
             return (new Response())
                 ->status(404)
@@ -625,6 +707,61 @@ final class PreRouterFastPaths
     }
 
     /**
+     * The memoised resolved path for a direct-play ALLOW verdict, or null on a miss
+     * or once the entry is older than {@see self::STREAM_ACCESS_TTL_NS}.
+     *
+     * @param string $key The memo key built by {@see self::serveMediaStream()}.
+     *
+     * @return string|null The cached file path, or null when the verdict must be re-checked.
+     */
+    private function memoisedStreamPath(string $key): ?string
+    {
+        $hit = $this->streamAccessMemo[$key] ?? null;
+        if ($hit === null) {
+            return null;
+        }
+
+        if ($this->nowNs() - $hit['ns'] >= self::STREAM_ACCESS_TTL_NS) {
+            unset($this->streamAccessMemo[$key]);
+            return null;
+        }
+
+        return $hit['path'];
+    }
+
+    /**
+     * Record a verified direct-play ALLOW verdict, evicting the oldest entry past
+     * {@see self::STREAM_ACCESS_MEMO_MAX_ENTRIES}.
+     *
+     * @param string $key  The memo key built by {@see self::serveMediaStream()}.
+     * @param string $path The resolved file path the verdict covers.
+     */
+    private function rememberStreamPath(string $key, string $path): void
+    {
+        unset($this->streamAccessMemo[$key]);
+        $this->streamAccessMemo[$key] = ['path' => $path, 'ns' => $this->nowNs()];
+
+        while (count($this->streamAccessMemo) > self::STREAM_ACCESS_MEMO_MAX_ENTRIES) {
+            $oldest = array_key_first($this->streamAccessMemo);
+            if ($oldest === null) {
+                break;
+            }
+            unset($this->streamAccessMemo[$oldest]);
+        }
+    }
+
+    /**
+     * The monotonic clock the Item B memo reads: the injected seam when one was given,
+     * otherwise `hrtime(true)`.
+     *
+     * @return int Nanoseconds from an arbitrary, monotonic origin.
+     */
+    private function nowNs(): int
+    {
+        return $this->clock !== null ? (int) ($this->clock)() : (int) hrtime(true);
+    }
+
+    /**
      * Apply the profile's access-schedule window to a direct-play request (#13a).
      *
      * This path is served before {@see \Phlix\Server\Core\Application::dispatch()}, so the
@@ -675,34 +812,22 @@ final class PreRouterFastPaths
      * UNMAPPED relayed principal is — a hub UUID with no server-side user row)
      * is denied with a named 403, never silently streamed untracked.
      *
-     * @param Request $request The request being served.
-     * @param string  $userId  The authenticated user's ID.
+     * @param Request     $request   The request being served.
+     * @param string      $userId    The authenticated user's ID.
+     * @param string|null $profileId The session's resolved profile (see
+     *                               {@see self::sessionStreamProfileId()}); null when
+     *                               none resolves.
      *
      * @return Response|null 403 with the named denial on the profile_not_found
      *                       branch, 429 on limit exceeded; null to continue
      *                       serving.
      */
-    private function checkStreamLimit(Request $request, string $userId): ?Response
+    private function checkStreamLimit(Request $request, string $userId, ?string $profileId): ?Response
     {
-        // S80: prefer the profile THIS SESSION is running as. This direct-play
-        // path bypasses the router entirely, so it never sees StreamLimitMiddleware
-        // and has to make the same choice for itself.
-        $profileId = RequestContext::getProfileId();
-
-        if ($profileId === null || $profileId === '') {
-            /** @var UserProfileManager $profileManager */
-            $profileManager = $this->container()->get(UserProfileManager::class);
-            $profile = $profileManager->getActiveProfile($userId);
-            if ($profile === null) {
-                // No profile — fail closed (deny) rather than letting an unprofiled
-                // user through without stream tracking.
-                return $this->profileNotFoundResponse();
-            }
-
-            $profileId = $this->resolveStreamProfileId($profile);
-            if ($profileId === null) {
-                return $this->profileNotFoundResponse();
-            }
+        // No resolvable profile: fail closed (deny) rather than letting an unprofiled
+        // user through without stream tracking.
+        if ($profileId === null) {
+            return $this->profileNotFoundResponse();
         }
 
         // Access-schedule window (#13a). This endpoint is served before
@@ -718,6 +843,30 @@ final class PreRouterFastPaths
         }
 
         return $this->registerDirectPlaySlot($request, $profileId, false);
+    }
+
+    /**
+     * The profile a session's direct-play request runs as (S80): the profile the verified
+     * request context carries, else the account's active profile. This is the value
+     * {@see checkStreamLimit()}, the rating gate and the Item B memo key all share, so they
+     * can never disagree about which profile a request is for.
+     *
+     * @param string $userId The verified account id (non-empty).
+     *
+     * @return string|null The profile id, or null when none resolves.
+     */
+    private function sessionStreamProfileId(string $userId): ?string
+    {
+        $profileId = RequestContext::getProfileId();
+        if ($profileId !== null && $profileId !== '') {
+            return $profileId;
+        }
+
+        /** @var UserProfileManager $profileManager */
+        $profileManager = $this->container()->get(UserProfileManager::class);
+        $profile = $profileManager->getActiveProfile($userId);
+
+        return $profile === null ? null : $this->resolveStreamProfileId($profile);
     }
 
     /**

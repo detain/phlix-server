@@ -115,7 +115,6 @@ class MediaItemControllerParentalTest extends TestCase
             $gapless,
             new TrickplayController('/tmp/trickplay', ''),
             new ChapterMarkerService($this->createMock(Connection::class)),
-            null,
             $gate,
             $music
         );
@@ -501,7 +500,6 @@ class MediaItemControllerParentalTest extends TestCase
             $this->createMock(GaplessPlaybackManager::class),
             new TrickplayController('/tmp/trickplay', ''),
             new ChapterMarkerService($markerDb),
-            null,
             $gate,
             null
         );

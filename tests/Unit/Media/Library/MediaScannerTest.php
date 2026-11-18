@@ -1575,8 +1575,9 @@ class MediaScannerTest extends TestCase
      * no toValidUtf8() guard (unlike the media_items writes), so that rejection
      * reaches MySQL. Both write paths delete the item's existing rows before
      * re-inserting and neither is transactional, so one bad tag costs the item
-     * most of its stream set — and StreamProbeBackfill::ensureFor()'s catch
-     * stamps markStreamsProbed() unconditionally, which makes its probed-marker
+     * most of its stream set — and the probe backfill's outer catch (before its
+     * write-failure classification existed) stamped markStreamsProbed()
+     * unconditionally, which makes its probed-marker
      * guard skip that item forever.
      *
      * Each case asserts the guard is real (the byte-wise cut genuinely IS

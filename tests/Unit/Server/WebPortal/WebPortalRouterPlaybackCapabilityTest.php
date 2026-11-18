@@ -45,7 +45,9 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
             'path' => '/nonexistent/movie.mkv',
             'content_rating' => null,
             'metadata_json' => '{}',
-            // Stamped so the lazy StreamProbeBackfill never runs a blocking probe.
+            // Playback info serves the STORED media_streams rows (getItemStreams below)
+            // and never probes or backfills in the request (Item C), so this marker is
+            // not what keeps a probe off; the rows are shaped exactly as stored.
             'streams_probed_at' => '2026-01-01 00:00:00',
         ]);
         $repo->method('getItemStreams')->willReturn($audioStreams);
@@ -255,5 +257,57 @@ class WebPortalRouterPlaybackCapabilityTest extends TestCase
         );
 
         $this->assertFalse($this->directPlayOf($resp));
+    }
+
+    /**
+     * Item C guard: playback info serves the STORED rows and never probes or writes inside the
+     * request. The item is UNPROBED (streams_probed_at null) and backed by a real file, which is
+     * the case an inline probe would act on. WebPortalRouter takes no probe collaborator, so the
+     * seam is the repository: any replacement of the stored rows, any per-row insert, or the
+     * probed-marker stamp that a reintroduced probe would perform fails the mock.
+     */
+    public function testUnprobedItemIsServedFromStoredRowsWithNoProbeOrWrite(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'phlix-pb-');
+        self::assertIsString($path);
+        file_put_contents($path, 'not a real media file');
+
+        try {
+            $repo = $this->createMock(ItemRepository::class);
+            $repo->method('findById')->willReturn([
+                'id' => 'm1',
+                'name' => 'Movie',
+                'type' => 'movie',
+                'path' => $path,
+                'content_rating' => null,
+                'metadata_json' => '{}',
+                'streams_probed_at' => null,
+            ]);
+            // A stored video row with a NULL codec is what ensureVideoCodecFor() acts on:
+            // videoCodecMissing() is false when no video row exists, so an audio-only
+            // fixture would short-circuit before any probe and hide an inline backfill.
+            $repo->method('getItemStreams')->willReturn([
+                [
+                    'id' => 'v1',
+                    'stream_type' => 'video',
+                    'stream_index' => 0,
+                    'codec' => null,
+                ],
+                ...$this->singleAudio('eac3'),
+            ]);
+            $repo->expects($this->never())->method('replaceStreams');
+            $repo->expects($this->never())->method('addStream');
+            $repo->expects($this->never())->method('markStreamsProbed');
+
+            $resp = $this->router($repo)->getPlaybackInfo(
+                $this->requestWithCaps('{"eac3": false}'),
+                ['id' => 'm1']
+            );
+
+            // The stored eac3 row is judged as stored: the client cannot decode it.
+            $this->assertFalse($this->directPlayOf($resp));
+        } finally {
+            @unlink($path);
+        }
     }
 }

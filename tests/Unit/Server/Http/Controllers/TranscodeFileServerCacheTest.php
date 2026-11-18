@@ -207,6 +207,54 @@ final class TranscodeFileServerCacheTest extends TestCase
         self::assertNotSame($oldEtag, $resp->headers['ETag']);
     }
 
+    public function test_an_in_place_same_size_rewrite_changes_the_etag(): void
+    {
+        // The HLS muxer and TranscodeManager write playlists in place, with no rename. The
+        // inode, size, mtime and ctime can all stay the same inside one second, so a
+        // stat-based validator cannot see this rewrite. The ETag is a digest of the bytes.
+        $path = $this->jobDir . '/vod.m3u8';
+        $oldEtag = $this->serve('vod.m3u8')->headers['ETag'];
+
+        clearstatcache(true, $path);
+        $before = stat($path);
+        self::assertIsArray($before);
+
+        $replacement = str_replace('seg-1.m4s', 'seg-2.m4s', self::VOD_PLAYLIST);
+        self::assertSame(strlen(self::VOD_PLAYLIST), strlen($replacement));
+        file_put_contents($path, $replacement);
+
+        clearstatcache(true, $path);
+        $after = stat($path);
+        self::assertIsArray($after);
+        self::assertSame($before['ino'], $after['ino'], 'the rewrite must be in place, not a new inode');
+        self::assertSame($before['size'], $after['size'], 'the rewrite must keep the byte length');
+
+        $resp = $this->serve('vod.m3u8', ['If-None-Match' => $oldEtag]);
+
+        self::assertSame(200, $resp->statusCode, 'the old validator must not match the in-place rewrite');
+        self::assertNotSame($oldEtag, $resp->headers['ETag']);
+    }
+
+    public function test_an_oversize_finished_playlist_falls_back_to_a_stat_etag_and_still_revalidates(): void
+    {
+        // Over the 1 MiB digest cap the whole file is not read, so the validator is the
+        // stat-based one. A finished playlist is still served with an ETag and still 304s.
+        $big = "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n"
+            . str_repeat("#EXTINF:6.0,\nseg.m4s\n", 60000)
+            . "#EXT-X-ENDLIST\n";
+        self::assertGreaterThan(1048576, strlen($big));
+        file_put_contents($this->jobDir . '/big.m3u8', $big);
+
+        $resp = $this->serve('big.m3u8');
+
+        self::assertSame(200, $resp->statusCode);
+        self::assertSame('private, max-age=60', $resp->headers['Cache-Control']);
+        self::assertMatchesRegularExpression('/^"[0-9a-f]{32}"$/', $resp->headers['ETag']);
+
+        $revalidated = $this->serve('big.m3u8', ['If-None-Match' => $resp->headers['ETag']]);
+        self::assertSame(304, $revalidated->statusCode);
+    }
+
     public function test_a_segment_still_answers_304_to_a_matching_if_modified_since(): void
     {
         // The date check is kept for immutable segments: only playlists were carved out.

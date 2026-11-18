@@ -45,6 +45,13 @@ trait TranscodeFileServer
     private const ENDLIST_PROBE_BYTES = 512;
 
     /**
+     * Largest finished playlist whose whole content is digested for its ETag (item 6).
+     * A VOD playlist is one line per segment, so a few tens of KB; 1 MiB is far above any
+     * real one and keeps the blocking read bounded. Above it, the ETag is stat-based.
+     */
+    private const PLAYLIST_DIGEST_MAX_BYTES = 1048576;
+
+    /**
      * Serves a single file from a transcode job directory.
      *
      * The file is streamed via {@see Response::withFile()} (event-loop file sender)
@@ -129,9 +136,11 @@ trait TranscodeFileServer
         $mtime = filemtime($path);
         $lastModified = $mtime !== false ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : null;
         $stat = stat($path);
-        $etag = $completeVod && $stat !== false
-            ? self::etagFor((int) $stat['ino'], $fileSize, (int) $stat['mtime'], (int) $stat['ctime'])
-            : null;
+        $etag = null;
+        if ($completeVod && $stat !== false) {
+            $etag = self::contentEtagFor($path, $fileSize)
+                ?? self::etagFor((int) $stat['ino'], $fileSize, (int) $stat['mtime'], (int) $stat['ctime']);
+        }
 
         // Conditional GET: immutable segments carry a year-long max-age, so a
         // revalidating client/cache can be answered 304 without re-sending the body.
@@ -245,12 +254,46 @@ trait TranscodeFileServer
     }
 
     /**
-     * The validator for a finished VOD playlist: a digest of its inode, size, mtime
-     * and ctime, so it changes whenever the bytes can have changed (#13c).
+     * The validator for a finished VOD playlist, digested from its CONTENT (item 6, #13c).
+     *
+     * A stat-based validator cannot see a rewrite. The playlist is written in place, with
+     * no temp-and-rename, so a finished playlist rewritten at the same byte length within
+     * the same second keeps its inode, size, mtime and ctime, and with them its ETag. A
+     * digest of the bytes changes whenever the bytes do.
+     *
+     * Bounded: the read is capped at PLAYLIST_DIGEST_MAX_BYTES + 1, so a file that grows
+     * past the cap is never read whole. A playlist over the cap, or one that cannot be
+     * read, returns null and the caller falls back to {@see self::etagFor()}. Documented
+     * residual: an in-place, same-length, same-second rewrite of a playlist over 1 MiB is
+     * not detected by its ETag. A real VOD playlist is a few tens of KB, one line per segment.
+     *
+     * @param string $path The playlist's resolved absolute path.
+     * @param int    $size The size of the file as stat'ed, bytes.
+     *
+     * @return string|null The quoted digest, or null to use the stat-based validator.
+     */
+    private static function contentEtagFor(string $path, int $size): ?string
+    {
+        if ($size <= 0 || $size > self::PLAYLIST_DIGEST_MAX_BYTES) {
+            return null;
+        }
+
+        $bytes = @file_get_contents($path, false, null, 0, self::PLAYLIST_DIGEST_MAX_BYTES + 1);
+        if (!is_string($bytes) || strlen($bytes) > self::PLAYLIST_DIGEST_MAX_BYTES) {
+            return null;
+        }
+
+        return '"' . md5($bytes) . '"';
+    }
+
+    /**
+     * The stat-based validator for a finished VOD playlist that is too large to digest:
+     * a digest of its inode, size, mtime and ctime (#13c).
      *
      * mtime and ctime have one-second resolution, so a same-size rewrite within the
      * same second keeps both. An atomic replace (write to a new file, rename over
-     * the old) gets a new inode, which is what makes the validator change then.
+     * the old) gets a new inode, which is what makes this validator change then. Used
+     * only as the fallback of {@see self::contentEtagFor()}.
      *
      * @param int $inode Inode number.
      * @param int $size  File size, bytes.
@@ -297,10 +340,12 @@ trait TranscodeFileServer
      * never treated as complete.
      *
      * I/O: one read of at most {@see self::ENDLIST_PROBE_BYTES} bytes from the
-     * playlist, on the request path, and only for an `.m3u8` request. It is a small
-     * local read of the same class as the stat calls this method already sits beside,
-     * but it is a blocking read: see docs/dev/BLOCKING_IO_EXCEPTIONS.md, which the
-     * owner has to decide on before it is accepted for a network-mounted transcode dir.
+     * playlist, on the request path, and only for an `.m3u8` request. A finished
+     * playlist then takes one more bounded read for its content ETag
+     * ({@see self::contentEtagFor()}, at most PLAYLIST_DIGEST_MAX_BYTES). Both are
+     * blocking reads: see docs/dev/BLOCKING_IO_EXCEPTIONS.md, sites (b) and (c), which
+     * the owner has to decide on before they are accepted for a network-mounted
+     * transcode dir.
      *
      * @param string $path The playlist's resolved absolute path.
      * @param string $file The requested filename (extension decides the check).

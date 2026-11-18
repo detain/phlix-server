@@ -146,6 +146,16 @@ final class RatingGate
      * control on that route — must say so by calling
      * {@see resolveFilterForSignedRequest()} instead.
      *
+     * ⚠ Staleness bound, with no same-process clear. The result is memoised per
+     * (user, profile) for {@see self::FILTER_MEMO_TTL_NS} (30 s). Unlike the schedule
+     * memo, this one is NOT cleared by the writes that change a cap (profile rating
+     * settings, the active profile, an admin flag). Each HTTP worker is its own
+     * process with its own memo, and a write can be served by any of them, so
+     * clearing the memo in the process that handled a write would not close the
+     * window on the others. A tightened cap therefore takes up to 30 s to apply on
+     * each worker, and a loosened cap takes as long to reopen. That is the documented
+     * bound.
+     *
      * @param string $userId The authenticated account id ('' if none).
      *
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null

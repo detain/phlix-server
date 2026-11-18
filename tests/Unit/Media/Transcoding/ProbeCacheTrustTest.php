@@ -254,4 +254,167 @@ final class ProbeCacheTrustTest extends TestCase
         self::assertSame(0, $cache->prune());
         self::assertCount(3, glob($dir . '/*.json') ?: []);
     }
+
+    /**
+     * Finding 3(a): a relative path has no absolute ancestor chain (dirname() stops at "."), so
+     * it is refused and logged once, and nothing is created under the working directory. The
+     * constructor path refuses writes for the same reason.
+     */
+    public function testARelativeDirectoryPathIsRefusedAndLoggedOnce(): void
+    {
+        $name = 'phlix-relative-' . bin2hex(random_bytes(6));
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning') {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+
+        self::assertNull(ProbeCache::createIfSecure($name, ProbeCache::MAX_ENTRIES, $logger));
+        self::assertDirectoryDoesNotExist(getcwd() . '/' . $name);
+        self::assertCount(1, $logger->warnings);
+        self::assertStringContainsString('absolute', $logger->warnings[0]);
+
+        $cache = new ProbeCache($name);
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertDirectoryDoesNotExist(getcwd() . '/' . $name);
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
+    }
+
+    /**
+     * Finding 3(c): a trailing slash makes lstat follow the link, which would skip the
+     * symlink refusal. The slash is dropped first, so the symlink is still refused.
+     */
+    public function testATrailingSlashOnASymlinkStillDisablesTheCache(): void
+    {
+        $target = $this->root . '/slash-target';
+        mkdir($target, 0700);
+        $link = $this->root . '/slash-link';
+        symlink($target, $link);
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning') {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+
+        self::assertNull(ProbeCache::createIfSecure($link . '/', ProbeCache::MAX_ENTRIES, $logger));
+        self::assertStringContainsString('symlink', $logger->warnings[0] ?? '');
+    }
+
+    /** Finding 3(b): a symlinked ancestor whose target is group-writable is refused. */
+    public function testASymlinkedAncestorWhoseTargetIsGroupWritableIsRefused(): void
+    {
+        $target = $this->root . '/gw-target';
+        mkdir($target, 0700);
+        chmod($target, 0770);
+        $link = $this->root . '/gw-link';
+        symlink($target, $link);
+
+        self::assertNull(ProbeCache::createIfSecure($link . '/cache'));
+        self::assertDirectoryDoesNotExist($target . '/cache', 'nothing is created through the link');
+    }
+
+    /**
+     * Finding 3(b): the walk follows a symlinked ancestor to its target and checks the target's
+     * own parents, so a group-writable parent of the target is refused as well.
+     */
+    public function testASymlinkedAncestorWhoseTargetsParentIsGroupWritableIsRefused(): void
+    {
+        $shared = $this->root . '/shared-parent';
+        mkdir($shared, 0700);
+        chmod($shared, 0770);
+        $target = $shared . '/target';
+        mkdir($target, 0700);
+        $link = $this->root . '/to-shared';
+        symlink($target, $link);
+
+        self::assertNull(ProbeCache::createIfSecure($link . '/cache'));
+        self::assertDirectoryDoesNotExist($target . '/cache', 'nothing is created under the shared parent');
+    }
+
+    /**
+     * Finding 4: a directory removed while the worker runs is a miss, logged as removed and not
+     * as replaced. The next write recreates it, runs the location check again, and records the
+     * new identity, so the cache keeps working.
+     */
+    public function testARemovedDirectoryIsRecreatedAndTrustedAgain(): void
+    {
+        $dir = $this->root . '/removed';
+        mkdir($dir, 0700);
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning') {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+
+        $this->removeTree($dir);
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'a removed directory is a miss');
+
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertDirectoryExists($dir);
+        self::assertSame(0700, fileperms($dir) & 0777, 'recreated private');
+        self::assertNotNull($cache->read('/media/b.mkv', 1, 1, 7, 9), 'the recreated directory is used');
+        $cache->write('/media/c.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNotNull($cache->read('/media/c.mkv', 1, 1, 7, 9), 'and it stays trusted');
+
+        $replaced = array_filter($logger->warnings, static fn (string $m): bool => str_contains($m, 'replaced'));
+        $removed = array_filter($logger->warnings, static fn (string $m): bool => str_contains($m, 'removed'));
+        self::assertCount(0, $replaced, 'a removal is not reported as a replacement');
+        self::assertCount(1, $removed, 'the recreation is reported once, as a removal');
+    }
+
+    /**
+     * Finding 4: when a removed directory's location is no longer trusted (its parent became
+     * group-writable), the recreation is refused, nothing is created, and the refusal is logged once.
+     */
+    public function testARemovedDirectoryWhoseLocationIsNoLongerTrustedStaysOff(): void
+    {
+        $parent = $this->root . '/loc';
+        mkdir($parent, 0700);
+        $dir = $parent . '/cache';
+        mkdir($dir, 0700);
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning') {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+
+        $this->removeTree($dir);
+        chmod($parent, 0770);
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+
+        self::assertDirectoryDoesNotExist($dir, 'nothing is recreated under an untrusted location');
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
+        self::assertCount(1, $logger->warnings, 'the refusal is logged once');
+        self::assertStringContainsString('sticky bit', $logger->warnings[0] ?? '');
+    }
 }

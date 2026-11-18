@@ -27,16 +27,23 @@ use Workerman\Timer;
  *    realpath, size, mtime, ctime and inode, and a read is a hit only when all five
  *    still match. ctime and inode are there because mtime is whole seconds: a
  *    same-size rewrite within one second, or a replace-by-rename, is a miss.
- *  - Trust: the directory is used only when all of these hold. It is a real directory
- *    (not a symlink). It is owned by the effective uid, which is the identity that
- *    writes the entries. It has no group or other write bit. Each ancestor directory,
- *    walked up to /, is not writable by group or other unless it has the sticky bit.
- *    That chain is checked once, by {@see createIfSecure()}, at container build. Every
- *    read and write re-checks the directory itself with one lstat, and compares its
- *    device and inode with the pair recorded at build. A directory that was replaced
- *    or widened is refused, and the cache is switched off for the rest of the process
- *    with one warning. A failed check disables the disk cache and the caller probes as
- *    it always did.
+ *  - Trust: the directory is used only when all of these hold. The configured path is
+ *    absolute, and its trailing slashes are dropped before the lstat, so a symlink is
+ *    never followed because of a slash. The directory is a real directory, not a
+ *    symlink. It is owned by the effective uid, which is the identity that writes the
+ *    entries, and it has no group or other write bit. The realpath() of the directory,
+ *    and each ancestor of that realpath up to /, is not writable by group or other unless
+ *    it has the sticky bit. So a symlinked ancestor is judged by where it points, and
+ *    every level of its target is checked as well. That location check runs once, by
+ *    {@see createIfSecure()}, at container build. Every read and write re-checks the
+ *    directory itself with one lstat, and compares its device and inode with the pair
+ *    recorded at build. A directory that was replaced or widened is refused, and the
+ *    cache is switched off for the rest of the process with one warning. A failed check
+ *    disables the disk cache and the caller probes as it always did.
+ *  - Removal: a directory removed while the worker runs is a miss, logged as missing and
+ *    not as replaced. The next write recreates it and runs the whole location check
+ *    again, including the ancestor walk, before it records the new device and inode. A
+ *    recreated location that fails the check switches the cache off with one warning.
  *  - Residual race: PHP has no openat(2), no directory file descriptors and no
  *    O_NOFOLLOW for directories, so the lstat and the later fopen or rename are two path
  *    lookups. A directory swapped inside that window (microseconds) is not closed. The
@@ -103,6 +110,12 @@ final class ProbeCache
     private const S_IFDIR = 0040000;
     private const S_ISVTX = 01000;
 
+    /** The trust reason while the directory does not exist. It is a removal, not a replacement. */
+    private const MISSING = 'directory is missing';
+
+    /** The configured directory, without trailing slashes. Set by the constructor. */
+    private readonly string $directory;
+
     /** The uid the directory must be owned by, resolved once per instance; null = untrusted. */
     private ?int $expectedUid;
 
@@ -117,11 +130,14 @@ final class ProbeCache
      */
     private ?array $identity = null;
 
-    /** True once the directory's identity changed. The cache stays off for this process. */
-    private bool $replaced = false;
+    /**
+     * Why the cache is switched off for this process, or null while it is usable. Set once by
+     * {@see latch()} and never cleared, so the refusal is logged once.
+     */
+    private ?string $latched = null;
 
     /**
-     * @param string               $directory   Cache directory (created on first write, mode 0700).
+     * @param string               $directory   Absolute cache directory (created on first write, mode 0700).
      * @param int                  $maxEntries  Entry cap that {@see prune()} enforces.
      * @param LoggerInterface|null $logger      Receives debug notes for skipped writes.
      * @param int|null             $expectedUid Owner the directory must have. Null = the
@@ -129,21 +145,23 @@ final class ProbeCache
      *                                          identity that writes the entries. Injectable for tests.
      */
     public function __construct(
-        private readonly string $directory,
+        string $directory,
         private readonly int $maxEntries = self::MAX_ENTRIES,
         private readonly ?LoggerInterface $logger = null,
         ?int $expectedUid = null,
     ) {
+        $this->directory = rtrim($directory, '/');
         $this->expectedUid = $expectedUid ?? (function_exists('posix_geteuid') ? posix_geteuid() : null);
     }
 
     /**
      * Build the cache only when its directory passes the trust check. Called once per
      * worker by the container, never per probe. Returns null when the disk cache must be
-     * disabled, and logs one warning with the reason. The reasons: an ancestor is writable
-     * by group or other without the sticky bit; the path is a symlink or not a directory;
-     * it is not owned by the effective uid; it has a group or other write bit; or the posix
-     * extension is missing, so ownership cannot be checked.
+     * disabled, and logs one warning with the reason. The reasons: the path is relative or is
+     * the filesystem root; the path cannot be resolved; the directory, or an ancestor of its
+     * realpath, is writable by group or other without the sticky bit; the path is a symlink or
+     * not a directory; it is not owned by the effective uid; it has a group or other write bit;
+     * or the posix extension is missing, so ownership cannot be checked.
      */
     public static function createIfSecure(
         string $directory,
@@ -152,23 +170,24 @@ final class ProbeCache
         ?int $expectedUid = null,
     ): ?self {
         try {
-            $unsafeAncestor = self::unsafeAncestorOf($directory);
-            if ($unsafeAncestor !== null) {
-                $logger?->warning(
-                    'ffprobe disk cache disabled: an ancestor directory is writable by group or other '
-                    . 'without the sticky bit',
-                    ['directory' => $directory, 'ancestor' => $unsafeAncestor]
-                );
+            $normalized = rtrim($directory, '/');
+            // The location check runs before anything is created: the nearest existing level is
+            // resolved and checked, so the missing levels that mkdir creates sit under a checked path.
+            $reason = str_starts_with($directory, '/') && $normalized !== ''
+                ? self::chainFailure($normalized)
+                : 'the directory path must be absolute and not the filesystem root';
+            if ($reason !== null) {
+                $logger?->warning('ffprobe disk cache disabled: ' . $reason, ['directory' => $directory]);
                 return null;
             }
-            if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+            if (!is_dir($normalized) && !@mkdir($normalized, 0700, true) && !is_dir($normalized)) {
                 $logger?->warning(
                     'ffprobe disk cache disabled: directory is not creatable',
                     ['directory' => $directory]
                 );
                 return null;
             }
-            $cache = new self($directory, $maxEntries, $logger, $expectedUid);
+            $cache = new self($normalized, $maxEntries, $logger, $expectedUid);
             // Establishes the identity (device and inode) that every later check compares against.
             $reason = $cache->trustFailure();
             if ($reason !== null) {
@@ -269,11 +288,10 @@ final class ProbeCache
     public function write(string $realPath, int $size, int $mtime, int $ctime, int $inode, array $probe): void
     {
         try {
-            if (!is_dir($this->directory) && !@mkdir($this->directory, 0700, true) && !is_dir($this->directory)) {
-                $this->skip('probe cache directory is not creatable');
-                return;
-            }
             $reason = $this->trustFailure();
+            if ($reason === self::MISSING) {
+                $reason = $this->recreate();
+            }
             if ($reason !== null) {
                 $this->skip('probe cache directory is not trusted: ' . $reason);
                 return;
@@ -464,16 +482,21 @@ final class ProbeCache
 
     /**
      * Null when the directory passes every check. Otherwise the reason it does not, which the
-     * caller logs or skips on. The checks: a real directory (lstat, so a symlink is refused),
-     * owned by the expected uid, no group or other write bit, and the same device and inode
-     * as when trust was first established. An instance built without {@see createIfSecure()}
-     * records its identity at its first check. A changed identity switches the cache off for
-     * this process and logs one warning.
+     * caller logs or skips on. A missing directory returns {@see self::MISSING}, which the
+     * caller treats as a removal. The checks, in order: the path is absolute and is not the
+     * filesystem root; the posix extension is loaded; the path exists (lstat, so a symlink is
+     * seen as itself); the device and inode are those recorded when trust was first established
+     * (a changed pair latches the cache off); it is a real directory; it is owned by the
+     * expected uid; and it has no group or other write bit. An instance built without
+     * {@see createIfSecure()} records its identity at its first check.
      */
     private function trustFailure(): ?string
     {
-        if ($this->replaced) {
-            return 'directory was replaced after the trust check';
+        if ($this->latched !== null) {
+            return $this->latched;
+        }
+        if ($this->directory === '' || $this->directory[0] !== '/') {
+            return 'the directory path must be absolute and not the filesystem root';
         }
         if ($this->expectedUid === null) {
             return 'the posix extension is not loaded, so the owner cannot be checked';
@@ -483,20 +506,14 @@ final class ProbeCache
         clearstatcache(true, $this->directory);
         $st = @lstat($this->directory);
         if ($st === false) {
-            return 'directory does not exist';
+            return self::MISSING;
         }
         // The identity comparison runs before the type, owner and mode checks, so a swapped
         // path is always reported as a replacement, even when the new one would also fail.
         if ($this->identity === null) {
             $this->identity = ['dev' => $st['dev'], 'ino' => $st['ino']];
         } elseif ($st['dev'] !== $this->identity['dev'] || $st['ino'] !== $this->identity['ino']) {
-            $this->replaced = true;
-            $this->logger?->warning(
-                'ffprobe disk cache disabled: directory was replaced after the trust check',
-                ['directory' => $this->directory]
-            );
-
-            return 'directory was replaced after the trust check';
+            return $this->latch('directory was replaced after the trust check');
         }
         if (($st['mode'] & self::S_IFMT) !== self::S_IFDIR) {
             return 'path is a symlink or not a directory';
@@ -512,21 +529,60 @@ final class ProbeCache
     }
 
     /**
-     * The first ancestor of $directory, walking up to /, that is writable by group or other
-     * without the sticky bit, or null when none is. An ancestor is checked with stat(), so a
-     * symlinked ancestor is judged by its target. A missing ancestor is skipped, because the
-     * cache creates the missing levels itself, private, with mkdir(0700, recursive).
+     * Null when the location of $directory is trusted, otherwise the reason it is not. The
+     * nearest existing level of the path is resolved with realpath(). That level, and each
+     * ancestor of it up to /, must not be writable by group or other without the sticky bit.
+     * The levels below it do not exist yet, so mkdir creates them private, under a level that
+     * was just checked. Resolving first is what judges a symlinked ancestor by its target, and
+     * checks the target's own parents too.
      */
-    private static function unsafeAncestorOf(string $directory): ?string
+    private static function chainFailure(string $directory): ?string
     {
-        $current = dirname($directory);
+        $existing = self::nearestExisting($directory);
+        $real = $existing === null ? false : realpath($existing);
+        if ($real === false) {
+            return 'the directory path cannot be resolved';
+        }
+        $unsafe = self::unsafeAncestorOf($real);
+        if ($unsafe !== null) {
+            return 'a directory on the path is writable by group or other without the sticky bit: ' . $unsafe;
+        }
+
+        return null;
+    }
+
+    /**
+     * The deepest existing level of $path, found with lstat, or null when none exists.
+     */
+    private static function nearestExisting(string $path): ?string
+    {
+        $current = $path;
+        while (@lstat($current) === false) {
+            $parent = dirname($current);
+            if ($parent === $current) {
+                return null;
+            }
+            $current = $parent;
+        }
+
+        return $current;
+    }
+
+    /**
+     * The first directory, starting at $real (an absolute, resolved path) and walking up to /,
+     * that is writable by group or other without the sticky bit, or null when none is. A level
+     * that cannot be stat'ed is treated as unsafe, so an unknown level is never trusted.
+     */
+    private static function unsafeAncestorOf(string $real): ?string
+    {
+        $current = $real;
         while (true) {
+            clearstatcache(true, $current);
             $st = @stat($current);
-            if (
-                $st !== false
-                && ($st['mode'] & 0022) !== 0
-                && ($st['mode'] & self::S_ISVTX) === 0
-            ) {
+            if ($st === false) {
+                return $current;
+            }
+            if (($st['mode'] & 0022) !== 0 && ($st['mode'] & self::S_ISVTX) === 0) {
                 return $current;
             }
             $parent = dirname($current);
@@ -535,6 +591,53 @@ final class ProbeCache
             }
             $current = $parent;
         }
+    }
+
+    /**
+     * Rebuilds a directory that was removed while the worker ran. The location is checked again
+     * in full, with {@see chainFailure()}, before the directory is created private (0700). Its
+     * device and inode are then recorded afresh, and the normal check runs on the new directory.
+     * A location that the check refuses, or a new directory that fails the check, switches the
+     * cache off with one warning. A failed mkdir is only a skip, so the next write tries again.
+     *
+     * @return string|null The refusal reason, or null when the directory is back and trusted.
+     */
+    private function recreate(): ?string
+    {
+        $wasTrusted = $this->identity !== null;
+        $reason = self::chainFailure($this->directory);
+        if ($reason !== null) {
+            return $this->latch($reason);
+        }
+        if (!@mkdir($this->directory, 0700, true) && !is_dir($this->directory)) {
+            return 'directory is missing and could not be recreated';
+        }
+        $this->identity = null;
+        $reason = $this->trustFailure();
+        if ($reason !== null) {
+            return $this->latch($reason);
+        }
+        if ($wasTrusted) {
+            $this->logger?->warning(
+                'ffprobe disk cache directory was removed while the worker ran; '
+                . 'it was recreated and checked again',
+                ['directory' => $this->directory]
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Switches the cache off for the rest of this process and logs the reason once. Later
+     * calls return the same reason without logging it again.
+     */
+    private function latch(string $reason): string
+    {
+        $this->latched = $reason;
+        $this->logger?->warning('ffprobe disk cache disabled: ' . $reason, ['directory' => $this->directory]);
+
+        return $reason;
     }
 
     /** Absolute path of the entry for a realpath. */

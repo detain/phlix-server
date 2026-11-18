@@ -107,14 +107,18 @@ return [
      * interval, because all workers share the directory. A directory that cannot be
      * created or written is a cache miss, never a request failure.
      *
-     * Trust: the cache is used only when the check passes. The directory must be a real
-     * directory (not a symlink), owned by the effective uid of the Phlix process, with no
-     * group or other write bit. No ancestor up to / may be writable by group or other
-     * unless it has the sticky bit. The check runs once per worker at build. Each read and
-     * write re-checks the directory and its device and inode, and a replaced directory
-     * disables the cache for that process. Another local user could otherwise plant probe
-     * results that drive copy/transcode decisions. A failed check disables the disk cache
-     * (one warning per worker), and the server probes as before.
+     * Trust: the cache is used only when the check passes. The path must be absolute (a
+     * relative path disables the cache). The directory must be a real directory, not a
+     * symlink, owned by the effective uid of the Phlix process, with no group or other write
+     * bit. The realpath of the directory, and each ancestor of it up to /, must not be
+     * writable by group or other unless it has the sticky bit, so a symlinked ancestor is
+     * judged by its target too. The location check runs once per worker at build. Each read
+     * and write re-checks the directory and its device and inode. A directory that was
+     * removed while the worker ran is recreated, and the whole location check runs again
+     * before it is used. A replaced directory disables the cache for that process. Another
+     * local user could otherwise plant probe results that drive copy/transcode decisions. A
+     * failed check disables the disk cache (one warning per worker), and the server probes as
+     * before.
      *
      * Residual race: PHP has no openat(2), so a directory swapped in the microseconds
      * between the check and the open or rename is not closed. The device-and-inode check

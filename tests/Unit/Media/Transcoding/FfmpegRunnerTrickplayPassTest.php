@@ -321,6 +321,137 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
     }
 
     /** @return list<string> Temporary names left in $dir. */
+    public function testASpriteCountThatIsNotWholeRowsIsRefusedBeforeAnyDecode(): void
+    {
+        // 61 cells would be 11 rows of 6, with 5 cells the sampler never fills. The pass
+        // must refuse it before ffmpeg starts, not publish a sheet with black cells.
+        $runner = $this->scripted(6000.0);
+
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 61, 0, 320));
+        $this->assertSame([], $runner->commands, 'A refused count must not start ffmpeg.');
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+    }
+
+    public function testASpriteCountOfWholeRowsIsAccepted(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $this->assertNotNull($result);
+        $this->assertCount(60, json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true));
+    }
+
+    public function testAFailedRenameOfTheTimelineRestoresEveryPreviousArtefact(): void
+    {
+        // Rename-based publish, no link(): the timeline temporary's rename onto its final
+        // name fails after the sprite was already swapped. Both previous files must come
+        // back byte for byte, and no previous-copy name may be left behind.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $runner = $this->scripted(6000.0);
+        $runner->failRenameFrom = $this->dir . '/out/.tmp-timeline.json';
+
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
+
+        $this->assertSame('OLD-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertSame('OLD-TIMELINE', file_get_contents($this->dir . '/out/timeline.json'));
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.gen');
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testAFailedStampRenameLeavesThePreviousPairUntouched(): void
+    {
+        // The stamp is published first. When its rename fails, nothing after it may run,
+        // so the previous sprite and timeline stay exactly as they were.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $runner = $this->scripted(6000.0);
+        $runner->failRenameFrom = $this->dir . '/out/.tmp-sprite.gen';
+
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
+
+        $this->assertSame('OLD-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertSame('OLD-TIMELINE', file_get_contents($this->dir . '/out/timeline.json'));
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testEverySampleAndTheSpriteStampCarryTheResultGeneration(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNotNull($result);
+        $generation = $result['generation'];
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $generation);
+        $this->assertSame($generation, file_get_contents($this->dir . '/out/sprite.gen'));
+        $timeline = json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true);
+        $this->assertCount(60, $timeline);
+        foreach ($timeline as $entry) {
+            $this->assertSame($generation, $entry['generation']);
+        }
+    }
+
+    public function testTwoPassesNeverShareAGeneration(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $first = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/a', 60, 0, 320);
+        $second = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/b', 60, 0, 320);
+
+        $this->assertNotNull($first);
+        $this->assertNotNull($second);
+        $this->assertNotSame($first['generation'], $second['generation']);
+    }
+
+    public function testTheTimelineUsesTheSamplersRoundedInterval(): void
+    {
+        // 6001 s / 60 is 100.01666... s. The fps filter is given it to three decimals, 100.017,
+        // so the timeline labels must use that same value, not the unrounded quotient.
+        $runner = $this->scripted(6001.0);
+
+        $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $timeline = json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true);
+        $this->assertStringContainsString('fps=1/100.017', $runner->commands[0]);
+        $this->assertEqualsWithDelta(0.5 * 100.017, $timeline[0]['time'], 1e-9);
+        $this->assertEqualsWithDelta(59.5 * 100.017, $timeline[59]['time'], 1e-9);
+    }
+
+    public function testTheSpriteWrapperAndTheBifWrapperSkipWhenTheItemLockIsHeld(): void
+    {
+        // A pass that does not hold the item lock could sweep another pass's files. Both
+        // entry points that have no caller holding the lock must take it themselves, and
+        // skip without waiting when another pass has it.
+        mkdir($this->dir . '/out', 0755, true);
+        $held = TrickplayArtefacts::tryLock($this->dir . '/out');
+        $this->assertNotNull($held);
+        $runner = $this->scripted(6000.0);
+
+        try {
+            $this->assertNull($runner->generateTrickplaySprites('/in.mkv', $this->dir . '/out', 60));
+            $this->assertNull($runner->generateBifFrames('/in.mkv', $this->dir . '/out', 60, 320));
+        } finally {
+            TrickplayArtefacts::unlock($held);
+        }
+
+        $this->assertSame([], $runner->commands, 'A held lock must stop both wrappers before ffmpeg starts.');
+    }
+
+    public function testTheSpriteWrapperReleasesTheLockWhenItsPassEnds(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $this->assertNotNull($runner->generateTrickplaySprites('/in.mkv', $this->dir . '/out', 60));
+
+        $again = TrickplayArtefacts::tryLock($this->dir . '/out');
+        $this->assertNotNull($again, 'The wrapper must release the lock when it returns.');
+        TrickplayArtefacts::unlock($again);
+    }
+
     private function temporariesIn(string $dir): array
     {
         $names = [];

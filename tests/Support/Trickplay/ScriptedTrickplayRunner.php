@@ -39,6 +39,21 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
     /** Whether the launch throws after writing its outputs. */
     public bool $throwOnRun = false;
 
+    /**
+     * Source path whose rename fails, or null for none. Only renames FROM this path fail, so
+     * the rollback renames that restore a previous copy still succeed.
+     */
+    public ?string $failRenameFrom = null;
+
+    protected function renameTrickplayPath(string $from, string $to): bool
+    {
+        if ($this->failRenameFrom !== null && $from === $this->failRenameFrom) {
+            return false;
+        }
+
+        return parent::renameTrickplayPath($from, $to);
+    }
+
     /** Path to replace with a symlink to /dev/full during the run, or null for none. */
     public ?string $devFullLinkAt = null;
 

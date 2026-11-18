@@ -393,15 +393,16 @@ final class PreRouterFastPaths
      * with one difference: the account's found profile is memoised for the 30 s schedule TTL.
      * A session with its own profile is tested on that profile, on both routes.
      *
-     * A session with no profile id is a RELAYED principal (the relay consumer stamps a userId and
-     * never a profileId). {@see \Phlix\Auth\AuthManager::validateAccessToken()} refuses a local bearer
-     * whose claimed profile the account no longer owns, or whose claim lookup fails outright, so
-     * neither reaches this path. A local bearer with no claim resolves to the account default (the
-     * resolver creates one when missing). For a
-     * session with no profile id, the account's active profile is tested, through the memo, so a
-     * grid of posters costs one profile read. An account with no resolvable profile is refused with
-     * the gate's 403, unless it is an unmapped relayed principal
-     * ({@see AccessScheduleMiddleware::allowsWithoutProfile()}).
+     * A session with no profile id is one of two things. It is either a RELAYED principal, where the relay consumer
+     * stamps a userId and never a profileId, or a LOCAL claimless bearer whose default-profile lookup failed.
+     * {@see \Phlix\Auth\AuthManager::resolveProfileForUser()} returns null for a claimless token when no profile
+     * resolver is wired or when the default-profile lookup throws, and validateAccessToken() passes that null through.
+     * A claimless local bearer whose lookup succeeds resolves to the account's default profile, which the resolver
+     * creates when the account has none. A claimed bearer whose claim is unowned, whose lookup fails, or that has no
+     * resolver wired to verify it is refused upstream in validateAccessToken(), so it never reaches this path.
+     * For a session with no profile id, the account's active profile is tested, through the memo, so a grid of posters
+     * costs one profile read. An account with no resolvable profile is refused with the gate's 403, unless it is an
+     * unmapped relayed principal ({@see AccessScheduleMiddleware::allowsWithoutProfile()}).
      *
      * The bytes and JSON routes agree on every verdict except that lag. A profile switch or delete
      * reaches this path up to 30 s after it reaches the JSON routes, for a session with no profile

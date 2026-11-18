@@ -368,8 +368,10 @@ class FfmpegRunner
      * file each call runs ffprobe again, with or without the disk cache. A stamp is racy when its mtime
      * or ctime is at most {@see ProbeCache::RACY_WINDOW_SECONDS} older than now, or is ahead of now by
      * no more than {@see ProbeCache::MAX_FUTURE_SKEW_SECONDS}. A stamp further ahead than that is not
-     * racy and is memoized and persisted as an old one is. So a racy file costs one ffprobe launch per
-     * call until the clock passes its stamp plus the window, at most one day plus the window. Callers
+     * racy when it is probed, and is memoized and persisted as an old one is. So a racy file costs one
+     * ffprobe launch per call until the clock passes its stamp plus the window. For a stamp that was
+     * beyond the cap when probed, the racy span starts at stamp minus one day, so it is not bounded from
+     * the probe time (see Exception 11). Callers
      * on the segment path call this one or more times per segment build; see Exception 11 in
      * docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
      *
@@ -389,7 +391,7 @@ class FfmpegRunner
         // Racy-stat guard: a file whose mtime or ctime is at most ProbeCache::RACY_WINDOW_SECONDS older than now,
         // or is ahead of now by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS, can be rewritten in place without
         // changing its stamp, so this probe's result is neither persisted nor memoized, and the next call runs
-        // ffprobe again. A stamp further ahead than the cap is not racy (see ProbeCache::isRacy()).
+        // ffprobe again. A stamp further ahead than the cap is not racy when it is probed (see ProbeCache::isRacy()).
         // The racy decision is made once, before either lookup, and reused for the store below. A racy stamp
         // is answered by neither cache, not even one written while the stamp was non-racy, so every probe of a
         // racy file runs ffprobe (the policy in the docblock above and in Exception 11).

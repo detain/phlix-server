@@ -31,8 +31,8 @@ use Workerman\Timer;
  *    ctime is at most RACY_WINDOW_SECONDS older than the wall clock at probe time, or is ahead of it
  *    by no more than MAX_FUTURE_SKEW_SECONDS, the result is neither persisted nor kept in the
  *    in-process memo, so the next probe runs ffprobe again. A stamp further ahead than that cap is
- *    not racy, and its result is persisted and memoized like an old one. So a racy file is re-probed
- *    on every {@see FfmpegRunner::probe()} call, with or without this cache, until the clock passes
+ *    not racy when it is probed, and its result is persisted and memoized like an old one. So a racy
+ *    file is re-probed on every {@see FfmpegRunner::probe()} call, with or without this cache, until the clock passes
  *    its stamp plus RACY_WINDOW_SECONDS. For a stamp within the cap when probed, that is at most
  *    MAX_FUTURE_SKEW_SECONDS + RACY_WINDOW_SECONDS (86 402 s) after the probe. A stamp beyond the cap when
  *    probed becomes racy at its stamp minus MAX_FUTURE_SKEW_SECONDS, so its window is not bounded from the
@@ -121,8 +121,10 @@ final class ProbeCache
 
     /**
      * Largest distance, in whole seconds, that a file timestamp may lie ahead of the wall clock and
-     * still be racy. A stamp further ahead than this is not racy: it is persisted and memoized like an
-     * old stamp, so it costs no repeat probe.
+     * still be racy. A stamp further ahead than this is not racy when it is probed: it is persisted and
+     * memoized like an old stamp, so the probe at the time it is first read costs one launch. It becomes
+     * racy again from stamp minus this value, and each call then costs one launch until stamp plus
+     * RACY_WINDOW_SECONDS.
      *
      * The racy rule exists for a same-second rewrite. Such a rewrite leaves the stored stamp unchanged
      * only when the writer's clock reads the stored second, so the writer's clock must be about as far
@@ -130,7 +132,9 @@ final class ProbeCache
      * a day ahead. An explicit utime restore changes ctime to the restore time, and the ctime term of
      * {@see isRacy()} guards that. So for a stamp far past any plausible skew, the racy rule costs one
      * ffprobe per probe call and protects nothing. One day is well beyond the skew of an NFS or SMB
-     * server, and it bounds how long a stamp can stay racy: at most this value plus RACY_WINDOW_SECONDS.
+     * server, and its racy span is at most this value plus RACY_WINDOW_SECONDS long. For a stamp beyond the
+     * cap, that span starts at stamp minus this value, not at the probe time (see Exception 11 in
+     * docs/dev/BLOCKING_IO_EXCEPTIONS.md).
      * The residual risk of this cap is in the class docblock.
      */
     public const MAX_FUTURE_SKEW_SECONDS = 86400;
@@ -296,7 +300,7 @@ final class ProbeCache
      * when its age lies in the inclusive band from -MAX_FUTURE_SKEW_SECONDS to RACY_WINDOW_SECONDS.
      * So a stamp is racy when it is no more than RACY_WINDOW_SECONDS older than $now, or when it is
      * ahead of $now by no more than MAX_FUTURE_SKEW_SECONDS. A stamp further ahead than the cap is not
-     * racy. A racy stamp can be
+     * racy at the given $now. A racy stamp can be
      * rewritten in place without changing its size, mtime, ctime or inode, so its probe result must
      * not be stored or memoized, and each probe of it runs ffprobe again. The cap and its residual
      * risk are described in the class docblock. The caller passes time(): this compares wall-clock

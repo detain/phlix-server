@@ -388,7 +388,7 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
      * MPEG-TS branch must not get one: its temp grows continuously, and its
      * byte-identical pinned string has no progress file.
      */
-    public function test_fmp4_video_command_writes_a_progress_file_beside_the_temp(): void
+    public function testFmp4VideoCommandWritesAProgressFileBesideTheTemp(): void
     {
         $tmp = self::OUT_M4S . '.part-deadbeef';
 

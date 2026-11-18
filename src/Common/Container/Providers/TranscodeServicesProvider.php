@@ -240,7 +240,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // only reaches the `configured_job_ceiling_inert` log line, so an
                     // admin-saved `ffmpeg.max_concurrent_transcodes` changes nothing and
                     // the read that fed it was dead. The real ceiling is
-                    // `server.hls.max_concurrent_segments`. The constructor args are POSITIONAL, so threading the SV-1.9
+                    // `server.hls.max_concurrent_segments`.
+                    //
+                    // The constructor args are POSITIONAL, so threading the SV-1.9
                     // ENOSPC threshold (position 13) requires passing position 12
                     // ($segmentMaxWaitMs) too. It has never been surfaced in config,
                     // so pass null explicitly to preserve its existing default

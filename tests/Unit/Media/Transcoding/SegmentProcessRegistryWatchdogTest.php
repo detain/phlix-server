@@ -81,6 +81,7 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
         return hrtime(true);
     }
 
+    /** @return list<int> */
     private function signalsFor(int $pid): array
     {
         return array_values(array_map(

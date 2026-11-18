@@ -71,6 +71,7 @@ final class SegmentProcessRegistryProgressTest extends TestCase
         return $registry;
     }
 
+    /** @return list<int> */
     private function signalsFor(int $pid): array
     {
         return array_values(array_map(

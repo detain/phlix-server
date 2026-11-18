@@ -43,7 +43,10 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
      */
     private static function statLine(int $pid, string $state, int $start, string $comm = 'ffmpeg seg'): string
     {
-        $fields = [$state, '1', '1', '1', '0', '-1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '20', '0', '1', '0', (string) $start, '0', '0'];
+        $fields = [
+            $state, '1', '1', '1', '0', '-1', '0', '0', '0', '0', '0',
+            '0', '0', '0', '0', '20', '0', '1', '0', (string) $start, '0', '0',
+        ];
 
         return $pid . ' (' . $comm . ') ' . implode(' ', $fields);
     }
@@ -69,6 +72,7 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         return $registry;
     }
 
+    /** @return list<int> */
     private function signalsFor(int $pid): array
     {
         return array_values(array_map(

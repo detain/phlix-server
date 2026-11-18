@@ -144,29 +144,11 @@ final class AccessScheduleMiddleware
             // No session profile (a token minted before S80, or an account with no
             // resolvable profile). Fall back to the account-wide active profile,
             // which is exactly the pre-S80 behaviour.
-            $readAt = hrtime(true);
-            if ($this->noProfileMemoHit($userId, $readAt)) {
+            $accountProfileId = $this->accountProfileId($userId, hrtime(true));
+            if ($accountProfileId === null) {
                 return $this->noProfileVerdict($request);
             }
-
-            $profile = $this->profileManager->getActiveProfile($userId);
-            if ($profile === null) {
-                // P5: No profile exists for an authenticated user — fail closed (deny
-                // access) rather than allowing an unprofiled user through. The user
-                // should set up a profile before access schedules apply. The verdict is
-                // memoised for the TTL, so repeat requests do not re-read the profile.
-                $this->rememberNoProfile($userId, $readAt);
-
-                return $this->noProfileVerdict($request);
-            }
-
-            // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
-            // a profile ID, fail closed (deny access) rather than silently allowing
-            // unauthenticated or unprofiled users through the schedule check.
-            $profileId = $this->resolveProfileId($profile);
-            if ($profileId === null) {
-                return $this->noProfileVerdict($request);
-            }
+            $profileId = $accountProfileId;
         }
 
         // Check if access is allowed
@@ -179,6 +161,69 @@ final class AccessScheduleMiddleware
         RequestContext::setProfileId($profileId);
 
         return null;
+    }
+
+    /**
+     * The schedule verdict for a resolved session whose identity is held on the request
+     * itself, not in {@see RequestContext}. The fast paths that run before
+     * {@see \Phlix\Server\Core\Application::dispatch()} (artwork) use this, so they resolve
+     * the profile exactly as {@see __invoke()} does:
+     *
+     *   - a session with its own profile is tested on that profile;
+     *   - a profile-less session (a token minted before S80) is tested on the account's
+     *     active profile, through the same bounded no-profile memo;
+     *   - an account with no resolvable profile is refused with the same 403 the gate gives.
+     *
+     * @param Request     $request   The authorised request, used for the profile-create exemption.
+     * @param string      $userId    The session's account (non-empty).
+     * @param string|null $profileId The session's own profile, or null when it has none.
+     *
+     * @return Response|null The AccessScheduled 403, or null when access is allowed.
+     */
+    public function denyForSession(Request $request, string $userId, ?string $profileId): ?Response
+    {
+        if ($profileId !== null && $profileId !== '') {
+            return $this->denyForProfile($profileId);
+        }
+
+        $accountProfileId = $this->accountProfileId($userId, hrtime(true));
+        if ($accountProfileId === null) {
+            return $this->noProfileVerdict($request);
+        }
+
+        return $this->denyForProfile($accountProfileId);
+    }
+
+    /**
+     * The account's active profile id, as the gate resolves it for a session with no
+     * profile of its own, or null when the account has none. The refusal (null) is
+     * memoised for the TTL; a found profile is never memoised, so a switch takes effect on
+     * the next request.
+     *
+     * @param string    $userId The account whose active profile is read.
+     * @param int|float $readAt The hrtime captured before any read, for the no-profile memo.
+     */
+    private function accountProfileId(string $userId, int|float $readAt): ?string
+    {
+        if ($this->noProfileMemoHit($userId, $readAt)) {
+            return null;
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            // P5: No profile exists for an authenticated user — fail closed (deny
+            // access) rather than allowing an unprofiled user through. The user
+            // should set up a profile before access schedules apply. The verdict is
+            // memoised for the TTL, so repeat requests do not re-read the profile.
+            $this->rememberNoProfile($userId, $readAt);
+
+            return null;
+        }
+
+        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+        // a profile ID, fail closed (deny access) rather than silently allowing
+        // unauthenticated or unprofiled users through the schedule check.
+        return $this->resolveProfileId($profile);
     }
 
     /**

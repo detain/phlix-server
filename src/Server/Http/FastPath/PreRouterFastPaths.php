@@ -371,24 +371,34 @@ final class PreRouterFastPaths
     }
 
     /**
-     * The window test for an artwork request whose profile is known: the session's own
-     * profile, or, for a signed-URL request, the `pid` that the signature has just verified
-     * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). A request with no profile to
-     * test is not refused here. That matches the direct-play path, which tests only a bound
-     * profile.
+     * The schedule window test for an authorised artwork request.
+     *
+     * A resolved session (a non-empty userId) is tested through
+     * {@see AccessScheduleMiddleware::denyForSession()}, which is the same resolution the
+     * global gate runs. A session with its own profile is tested on that profile. A
+     * profile-less session (a token minted before S80) is tested on the account's active
+     * profile, and an account with no resolvable profile is refused with the gate's 403. So
+     * the artwork bytes and the JSON routes agree for every bearer session.
+     *
+     * A request with no session is tested only on the `pid` its signed URL has just verified
+     * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). With no `pid` it is not refused
+     * here; the signed URL's expiry is the only bound on that case, as the signed-URL design
+     * states.
      *
      * @param Request $request The authorised artwork request.
      *
-     * @return Response|null The AccessScheduled 403 when the profile's window is open now, else null.
+     * @return Response|null The AccessScheduled 403 when the window refuses the request now, else null.
      */
     private function artworkScheduleDenial(Request $request): ?Response
     {
         if ($request->userId !== null && $request->userId !== '') {
-            $profileId = $request->profileId;
-        } else {
-            $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+            /** @var AccessScheduleMiddleware $middleware */
+            $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+            return $middleware->denyForSession($request, $request->userId, $request->profileId);
         }
 
+        $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
         if ($profileId === null || $profileId === '') {
             return null;
         }

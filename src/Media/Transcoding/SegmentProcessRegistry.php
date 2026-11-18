@@ -138,11 +138,11 @@ use Psr\Log\NullLogger;
  *    and its group is not snapshotted. Its launch's temp and cap slot are held after the grace
  *    while that group still exists (see {@see heldPids()}), up to the hold bound after
  *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a launch with
- *    a recorded start time is released at the grace once it has been KILLed or is dead, unless
- *    its identity is unknown at the grace, in which case it is held while alive, up to the bound.
- *  - Launch with a recorded start time. A launch whose identity is unknown at the grace (`/proc`
- *    unreadable, or its stat line malformed) is held while its launched process is alive, up to
- *    the bound (see {@see heldPids()}).
+ *    a recorded start time is released at the grace once it has been KILLed or is dead, unless it has
+ *    no membership snapshot or its identity is unknown at the grace, in which case it is held while its
+ *    launched process is alive, up to the bound.
+ *  - A launch with a recorded start time is held while its launched process is alive, when it has no
+ *    membership snapshot or its identity is unknown at the grace, up to the bound (see {@see heldPids()}).
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -503,7 +503,7 @@ final class SegmentProcessRegistry
      * with its start time still matching, where /proc/<pid>/stat can be read and parsed). An unchecked
      * launch (no start time) is held while its process group is alive, not while its PID is alive.
      * The bound is measured from the TERM. The container passes `ffmpeg.transcode_timeout`. A
-     * non-positive value keeps the shipped default, so the hold is always finite.
+     * non-positive value keeps the current value, so the hold is always finite.
      *
      * @param float $seconds Hold bound in seconds.
      */
@@ -976,8 +976,9 @@ final class SegmentProcessRegistry
      * unknown (`/proc` unreadable now, or the stat line malformed), or no leader is verified and at
      * least one is unchecked (no start time was recorded, as on a host without `/proc`), so there is
      * no group to snapshot.
-     * Null means no KILL later. The record is held, up to the hold bound after the TERM (see
-     * {@see sweep()} and {@see heldPids()}). A launch with a recorded start time, and with no
+     * Null means no KILL later. The record is held only while heldPids() finds a launch still held,
+     * up to the hold bound after the TERM (see {@see sweep()} and {@see heldPids()}). A launch with a
+     * recorded start time, and with no
      * membership snapshot or an unknown identity at the grace, is held while its launched process is
      * alive (isLive: not a zombie, with its start time still matching, where /proc/<pid>/stat can be
      * read and parsed). An unchecked launch (no start time) is held while its process group is alive,

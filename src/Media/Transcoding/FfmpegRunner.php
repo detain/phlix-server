@@ -134,6 +134,13 @@ class FfmpegRunner
     private const PROBE_MEMO_LIMIT = 512;
 
     /**
+     * Largest value the software-decode cap (`segment_decode_threads` / PHLIX_SEGMENT_DECODE_THREADS)
+     * reaches ffmpeg with. A larger value is clamped to this where it is read, so an absurd knob cannot
+     * become `-threads PHP_INT_MAX`. The encode cap has no such bound and is not changed by this.
+     */
+    public const MAX_SEGMENT_DECODE_THREADS = 64;
+
+    /**
      * Optional persisted probe cache shared across workers (perf #11), or null for
      * the memo-only behaviour. Wired by the container; see {@see setProbeCache()}.
      */
@@ -278,7 +285,11 @@ class FfmpegRunner
      */
     private function resolveSegmentDecodeThreads(): int
     {
-        return $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0);
+        $threads = $this->segmentDecodeThreads ?? EnvConfig::integer('PHLIX_SEGMENT_DECODE_THREADS', 0);
+
+        // Clamped where it is read, so neither the wired value nor the env value can exceed the documented
+        // maximum. A value of 0 or below is untouched and still drops the flag.
+        return min($threads, self::MAX_SEGMENT_DECODE_THREADS);
     }
 
     /**

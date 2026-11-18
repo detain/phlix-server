@@ -156,4 +156,42 @@ final class FfmpegRunnerDecodeThreadsTest extends TestCase
 
         self::assertSame('1', $this->inputThreads($this->build($runner, $this->softwareRung())));
     }
+
+    /**
+     * Item 8: the decode cap is clamped where it is read, on both entry points. A wired PHP_INT_MAX and an
+     * env value past the int range both reach ffmpeg as the documented maximum, never as a huge count.
+     */
+    public function testAHugeDecodeCapIsClampedOnBothEntryPoints(): void
+    {
+        $max = (string) FfmpegRunner::MAX_SEGMENT_DECODE_THREADS;
+
+        $wired = $this->runner();
+        $wired->setSegmentDecodeThreads(PHP_INT_MAX);
+        self::assertSame($max, $this->inputThreads($this->build($wired, $this->softwareRung())), 'wired value');
+
+        putenv(self::ENV . '=99999999999999999999');
+        self::assertSame($max, $this->inputThreads($this->build($this->runner(), $this->softwareRung())), 'env value');
+    }
+
+    /**
+     * Item 8: the clamp is only an upper bound. The maximum itself and values below it are unchanged, and a
+     * value of 0 or below still drops the flag, as before.
+     */
+    public function testTheClampLeavesValuesAtOrBelowTheMaximumAlone(): void
+    {
+        $runner = $this->runner();
+
+        $runner->setSegmentDecodeThreads(FfmpegRunner::MAX_SEGMENT_DECODE_THREADS);
+        self::assertSame(
+            (string) FfmpegRunner::MAX_SEGMENT_DECODE_THREADS,
+            $this->inputThreads($this->build($runner, $this->softwareRung())),
+            'the maximum is not reduced'
+        );
+
+        $runner->setSegmentDecodeThreads(FfmpegRunner::MAX_SEGMENT_DECODE_THREADS - 1);
+        self::assertSame('63', $this->inputThreads($this->build($runner, $this->softwareRung())));
+
+        $runner->setSegmentDecodeThreads(-5);
+        self::assertNull($this->inputThreads($this->build($runner, $this->softwareRung())), 'negative still disables');
+    }
 }

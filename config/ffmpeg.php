@@ -88,7 +88,10 @@ return [
      * many concurrent software encodes of 4K-class sources, where the decoder's
      * auto-sized pool is expected to contend. Measure on your own host before enabling
      * it. A positive value bounds the decoder's frame-thread pool; 0 or a negative
-     * value disables the flag. The env value is read by EnvConfig::integer like every
+     * value disables the flag. A value above 64 is clamped to 64 where it is read
+     * (FfmpegRunner::MAX_SEGMENT_DECODE_THREADS), so an absurd value cannot reach ffmpeg as
+     * `-threads` with a huge count. The encode cap above is not clamped by this. The env value
+     * is read by EnvConfig::integer like every
      * other integer knob, so a non-numeric value reads as its (int) cast (`abc` is 0,
      * which is off; `4x` is 4). Env override: PHLIX_SEGMENT_DECODE_THREADS.
      */

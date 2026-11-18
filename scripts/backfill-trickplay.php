@@ -9,18 +9,23 @@ declare(strict_types=1);
  * Candidates are time-based items (video/movie/episode) that have chapters.
  * The database path columns are not used to decide anything: an item can have
  * a sprite and still lack its BIF, and only the disk can say which artefacts
- * exist. An item whose three artefacts are all on disk is skipped with no
- * decode (its database paths are filled in if they are missing). Anything else
- * is generated in ONE ffmpeg pass that produces the sprite, timeline and BIF.
+ * exist. An item whose three artefacts are all on disk, from one generation, is
+ * skipped with no decode (its database paths are filled in if they are missing).
+ * Anything else is generated in ONE ffmpeg pass that produces the sprite, timeline
+ * and BIF.
  *
  * Re-running is safe: complete items are skipped, and a half-finished item is
  * regenerated rather than trusted. Sprite generation is read-only and never
  * modifies the source file.
  *
  * Each item is generated under its .trickplay.lock (non-blocking), so the in-app
- * media-asset worker and this script never write the same item at once. An item
- * whose generation failed gets generation-failed.json in its directory and is
- * skipped by later runs; delete that file to retry the item.
+ * media-asset worker and this script never write the same item at once. The lock
+ * is released on every path, including when generation or the logger throws.
+ *
+ * An item whose generation failed gets generation-failed.json in its directory and
+ * is skipped by later runs; delete that file to retry the item. When only the BIF
+ * could not be written, the sprite and timeline stay published and bif-failed.json
+ * is recorded. That marker does not skip the item: the next run regenerates it.
  *
  * Usage:
  *   php scripts/backfill-trickplay.php                    # all libraries
@@ -140,6 +145,7 @@ foreach ($rows as $row) {
     // paths when the row has lost them.
     if (TrickplayArtefacts::isComplete($itemDir)) {
         TrickplayArtefacts::clearFailedMarker($itemDir);
+        TrickplayArtefacts::clearBifFailedMarker($itemDir);
         $rowHasPaths = is_string($row['trickplay_sprite_path'] ?? null)
             && is_string($row['trickplay_timeline_path'] ?? null);
         if (!$rowHasPaths) {
@@ -162,7 +168,8 @@ foreach ($rows as $row) {
     }
 
     // An item whose earlier generation failed is not decoded again on every run.
-    // The marker records why; deleting it makes the item eligible again.
+    // The marker records why; deleting it makes the item eligible again. A BIF-only
+    // failure (bif-failed.json) does not reach this check: that item is regenerated.
     if (TrickplayArtefacts::hasFailedMarker($itemDir)) {
         echo "  skip: {$path} (an earlier generation failed; delete "
             . $itemDir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME . " to retry)\n";
@@ -179,7 +186,7 @@ foreach ($rows as $row) {
 
     // One pass per item at a time: the in-app media-asset worker writes the same
     // directory. A held lock means the other pass is producing this item, so skip
-    // it without waiting. The lock is released on every path below.
+    // it without waiting.
     $lock = TrickplayArtefacts::tryLock($itemDir);
     if ($lock === null) {
         echo "  skip: {$path} (another trickplay pass holds this item)\n";
@@ -188,8 +195,11 @@ foreach ($rows as $row) {
     }
     $attempted++;
 
-    // An exception from probe or generation must not end the run: the item's lock is
-    // released, the failure is logged, and the next item runs.
+    // Generation runs under the lock. A throw is captured here and handled after the
+    // lock is released, so the logger (which can also throw) never runs while the
+    // item is held and never ends the run.
+    $thrown = null;
+    $result = null;
     try {
         $probe = $ffmpeg->probe($path);
         $rawDuration = $probe['format']['duration'] ?? null;
@@ -204,62 +214,83 @@ foreach ($rows as $row) {
             ['item_id' => $itemId]
         );
     } catch (\Throwable $e) {
-        echo "  FAIL: {$path} (trickplay generation threw: {$e->getMessage()})\n";
-        LoggerFactory::get(LogChannels::TRANSCODING)->error('Trickplay backfill item threw; continuing', [
-            'item_id' => $itemId,
-            'video' => $path,
-            'exception' => $e->getMessage(),
-        ]);
-        TrickplayArtefacts::unlock($lock);
-        $failed++;
-        continue;
+        $thrown = $e;
     }
 
-    if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
-        echo "  FAIL: {$path} (trickplay generation failed; marked, see the ffmpeg log)\n";
-        TrickplayArtefacts::markFailed($itemDir, 'trickplay pass produced no sprite or timeline');
-        TrickplayArtefacts::unlock($lock);
+    if ($thrown !== null) {
+        // Count and release the lock first, then log. The logger may throw; the
+        // counter and the lock must already be settled when it does.
         $failed++;
-        continue;
-    }
-
-    $frames = $result['bif_frames'];
-
-    try {
-        $repo->updateMarkers($itemId, [
-            'trickplay_sprite_path' => $result['sprite'],
-            'trickplay_timeline_path' => $result['timeline'],
-        ]);
-    } catch (\Throwable $e) {
-        foreach ($frames as $frame) {
-            @unlink($frame);
+        TrickplayArtefacts::unlock($lock);
+        echo "  FAIL: {$path} (trickplay generation threw: {$thrown->getMessage()})\n";
+        try {
+            LoggerFactory::get(LogChannels::TRANSCODING)->error('Trickplay backfill item threw; continuing', [
+                'item_id' => $itemId,
+                'video' => $path,
+                'exception' => $thrown->getMessage(),
+            ]);
+        } catch (\Throwable $logError) {
+            echo "  warn: logger failed for {$path} ({$logError->getMessage()})\n";
         }
-        echo "  FAIL: {$path} (store failed: {$e->getMessage()})\n";
-        TrickplayArtefacts::unlock($lock);
-        $failed++;
         continue;
     }
 
-    // Best-effort, like the job: a BIF failure must not undo the sprite.
-    $bifWritten = false;
+    // Everything from here runs under the lock. The finally releases it on every path
+    // below, including an unexpected error, before the next item starts.
     try {
-        $bifWritten = TrickplayArtefacts::writeBif($frames, $result['bif_interval_ms'], $itemDir);
-    } catch (\Throwable $e) {
-        echo "  warn: {$path} (BIF not written: {$e->getMessage()})\n";
+        if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
+            echo "  FAIL: {$path} (trickplay generation failed; marked, see the ffmpeg log)\n";
+            TrickplayArtefacts::markFailed($itemDir, 'trickplay pass produced no sprite or timeline');
+            $failed++;
+            continue;
+        }
+
+        $frames = $result['bif_frames'];
+
+        try {
+            $repo->updateMarkers($itemId, [
+                'trickplay_sprite_path' => $result['sprite'],
+                'trickplay_timeline_path' => $result['timeline'],
+            ]);
+        } catch (\Throwable $e) {
+            foreach ($frames as $frame) {
+                @unlink($frame);
+            }
+            echo "  FAIL: {$path} (store failed: {$e->getMessage()})\n";
+            $failed++;
+            continue;
+        }
+
+        // Best-effort, like the job: a BIF failure must not undo the sprite.
+        $bifWritten = false;
+        try {
+            $bifWritten = TrickplayArtefacts::writeBif(
+                $frames,
+                $result['bif_interval_ms'],
+                $itemDir,
+                $result['generation']
+            );
+        } catch (\Throwable $e) {
+            echo "  warn: {$path} (BIF not written: {$e->getMessage()})\n";
+        } finally {
+            foreach ($frames as $frame) {
+                @unlink($frame);
+            }
+        }
+
+        if ($bifWritten) {
+            TrickplayArtefacts::clearBifFailedMarker($itemDir);
+        } else {
+            // The sprite and timeline stay published. Only the BIF failure is recorded,
+            // under its own marker, which does not skip the item. isComplete() needs the
+            // BIF, so the next run regenerates the item and tries the BIF again.
+            TrickplayArtefacts::markBifFailed($itemDir, 'BIF not written; sprite and timeline are published');
+        }
+        $updated++;
+        echo '  ok:   ' . $path . ($bifWritten ? '' : ' (no BIF)') . "\n";
     } finally {
-        foreach ($frames as $frame) {
-            @unlink($frame);
-        }
+        TrickplayArtefacts::unlock($lock);
     }
-
-    if (!$bifWritten) {
-        // The sprite and timeline are published, but the item is not complete. Mark it
-        // so the next run does not decode it again for a BIF that cannot be written.
-        TrickplayArtefacts::markFailed($itemDir, 'BIF not written; sprite and timeline are published');
-    }
-    TrickplayArtefacts::unlock($lock);
-    $updated++;
-    echo '  ok:   ' . $path . ($bifWritten ? '' : ' (no BIF)') . "\n";
 }
 
 echo str_repeat('-', 60) . "\n";

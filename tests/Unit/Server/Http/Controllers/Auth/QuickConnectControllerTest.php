@@ -263,14 +263,16 @@ final class QuickConnectControllerTest extends TestCase
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->expects(self::once())->method('buildAuthResponse')->with('user-1', null)->willReturn([
-            'access_token' => 'AT',
-            'refresh_token' => 'RT',
-            'profile_id' => 'P1',
-            'token_type' => 'Bearer',
-            'expires_in' => 3600,
-            'user' => ['id' => 'user-1'],
-        ]);
+        $authManager->expects(self::once())->method('buildAuthResponse')
+            ->with('user-1', null, null, null, null, false)
+            ->willReturn([
+                'access_token' => 'AT',
+                'refresh_token' => 'RT',
+                'profile_id' => 'P1',
+                'token_type' => 'Bearer',
+                'expires_in' => 3600,
+                'user' => ['id' => 'user-1'],
+            ]);
         $controller = $this->controller(pairs: $store, authManager: $authManager, serverUrl: 'https://media.example.com');
 
         $body = $this->jsonBody($controller->token($this->request(body: ['secret' => 's']), ['code' => 'ACDFGH']));
@@ -301,10 +303,14 @@ final class QuickConnectControllerTest extends TestCase
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
         $authManager = $this->createMock(AuthManager::class);
-        // The mint must be for P. A call with only the user id (the account default, D)
-        // is the regression this pins.
-        $authManager->expects(self::once())->method('buildAuthResponse')
+        // The ownership check verifies P and returns it. The mint must be for P, passed as
+        // already verified, so it is not re-resolved. A call with only the user id (the account
+        // default, D) is the regression this pins.
+        $authManager->expects(self::once())->method('requireOwnedProfile')
             ->with('user-1', 'profile-P')
+            ->willReturn('profile-P');
+        $authManager->expects(self::once())->method('buildAuthResponse')
+            ->with('user-1', 'profile-P', null, null, null, true)
             ->willReturn([
                 'access_token' => 'AT', 'refresh_token' => 'RT', 'profile_id' => 'profile-P',
                 'token_type' => 'Bearer', 'expires_in' => 3600, 'user' => [],

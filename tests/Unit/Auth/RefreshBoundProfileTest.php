@@ -272,4 +272,76 @@ final class RefreshBoundProfileTest extends TestCase
         self::assertIsArray($info);
         self::assertSame(self::DEFAULT, $info['profile_id'], 'a pre-S80 access token keeps the account default');
     }
+
+    /**
+     * Finding 3. The refresh verifies the bound profile once and mints exactly that id. The mint does
+     * not look the profile up a second time, so there is no second read for a removal to land in.
+     */
+    public function testARefreshMintsTheProfileItVerifiedWithoutResolvingItAgain(): void
+    {
+        $jwt = $this->jwt();
+
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->expects(self::once())->method('resolveProfileIdForUser')
+            ->with(self::USER, self::BOUND)
+            ->willReturn(self::BOUND);
+
+        $response = $this->manager($jwt, $profiles)->refreshToken($this->boundRefreshToken($jwt));
+
+        self::assertSame(self::BOUND, $response['profile_id']);
+    }
+
+    /**
+     * Finding 3, the race itself. The profile is owned at the check and removed before the mint. The
+     * mint still carries the verified id. Re-resolving it would find the removal and degrade to the
+     * default, so this test fails on the earlier code.
+     */
+    public function testAProfileRemovedBetweenTheCheckAndTheMintStillMintsTheVerifiedProfile(): void
+    {
+        $jwt = $this->jwt();
+
+        $checks = 0;
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('resolveProfileIdForUser')->willReturnCallback(
+            function (string $userId, ?string $requested = null) use (&$checks): string {
+                $checks++;
+                if ($checks === 1) {
+                    return self::BOUND;
+                }
+
+                // Removed after the ownership check.
+                throw ProfileNotOwnedException::forRequestedProfile($userId, (string) $requested);
+            }
+        );
+
+        $response = $this->manager($jwt, $profiles)->refreshToken($this->boundRefreshToken($jwt));
+
+        self::assertSame(
+            self::BOUND,
+            $response['profile_id'],
+            'the verified profile is minted, never the default from a second, failing lookup'
+        );
+    }
+
+    /**
+     * The seam itself. A verified id is minted as-is with no lookup. An unverified one still goes
+     * through the default-resolution path, so every other caller keeps its behaviour.
+     */
+    public function testBuildAuthResponseMintsAVerifiedIdAsIsAndStillResolvesAnUnverifiedOne(): void
+    {
+        $jwt = $this->jwt();
+
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->expects(self::once())->method('resolveProfileIdForUser')
+            ->with(self::USER, null)
+            ->willReturn(self::DEFAULT);
+
+        $manager = $this->manager($jwt, $profiles);
+
+        $verified = $manager->buildAuthResponse(self::USER, self::BOUND, null, null, null, true);
+        self::assertSame(self::BOUND, $verified['profile_id'], 'a verified id is minted without a lookup');
+
+        $unverified = $manager->buildAuthResponse(self::USER);
+        self::assertSame(self::DEFAULT, $unverified['profile_id'], 'an unverified call still resolves the default');
+    }
 }

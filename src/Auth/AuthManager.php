@@ -1651,9 +1651,9 @@ class AuthManager
         // than as the ownership refusal it really is. Refused here, the grant is never touched.
         // It still runs before the grace memo, so a refusal is never re-delivered from memory.
         $boundProfileId = JwtHandler::profileIdClaim($payload);
-        if ($boundProfileId !== null) {
-            $this->refuseUnownedRefreshProfile($userId, $boundProfileId);
-        }
+        $verifiedProfileId = $boundProfileId !== null
+            ? $this->refuseUnownedRefreshProfile($userId, $boundProfileId)
+            : null;
 
         // CP-029 / D-1a: family + grant adjudication for every token the store
         // KNOWS (one carrying a `sid` claim). These are AUTHORIZATION
@@ -1689,10 +1689,14 @@ class AuthManager
             }
         }
 
+        // The profile the ownership check just verified is minted as-is (finding 3). Re-resolving
+        // it inside buildAuthResponse would degrade a profile removed in the gap to the account
+        // default. A refresh with no profile claim (pre-S80) still resolves the default there.
         $response = $this->buildAuthResponse(
             $userId,
-            JwtHandler::profileIdClaim($payload),
-            $sessionId
+            $verifiedProfileId,
+            $sessionId,
+            profileIsVerified: $verifiedProfileId !== null,
         );
 
         if ($jti !== '') {
@@ -2116,12 +2120,15 @@ class AuthManager
      * @param string $userId    The account being refreshed.
      * @param string $profileId The profile the refresh token is bound to.
      *
+     * @return string The profile id, verified as owned by the account. The re-mint uses this
+     *                value as-is, so a profile removed after this check cannot degrade the mint.
+     *
      * @throws \InvalidArgumentException When the profile is no longer owned.
      */
-    private function refuseUnownedRefreshProfile(string $userId, string $profileId): void
+    private function refuseUnownedRefreshProfile(string $userId, string $profileId): string
     {
         try {
-            $this->requireOwnedProfile($userId, $profileId);
+            return $this->requireOwnedProfile($userId, $profileId);
         } catch (ProfileNotOwnedException) {
             $this->auditLogger->logFailedAuth('profile_not_owned', [
                 'user_id' => $userId,
@@ -2230,6 +2237,11 @@ class AuthManager
      *                               that know the client type); null when unknown.
      * @param string|null $deviceName Display metadata for a NEW family; untrusted
      *                               client text, column-length-capped, never parsed.
+     * @param bool        $profileIsVerified True only when the caller has ALREADY verified `$profileId`
+     *                               as owned by `$userId` (refresh, quick-connect redemption). That id is
+     *                               then minted as-is and not re-resolved, so a profile removed in the gap
+     *                               cannot degrade to the account default. False (the default) keeps the
+     *                               default-resolution path for every other caller.
      *
      * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
      *     user: array<string, mixed>|null, profile_id: string|null}
@@ -2250,7 +2262,8 @@ class AuthManager
         ?string $profileId = null,
         ?string $familyHint = null,
         ?string $deviceType = null,
-        ?string $deviceName = null
+        ?string $deviceName = null,
+        bool $profileIsVerified = false,
     ): array {
         // SRV-M18 (review server__pm): the flag is an ACCOUNT HOLD, not a
         // password-leg quirk — the admin reset flow stamps it precisely
@@ -2271,7 +2284,13 @@ class AuthManager
             'auth_response',
         );
 
-        $resolvedProfileId = $this->resolveProfileForUser($userId, $profileId);
+        // A caller that has already proven ownership (a refresh, a quick-connect redemption) passes
+        // the id with $profileIsVerified, and it is minted as-is. Re-resolving here would let a
+        // profile removed between that check and this mint degrade to the account default (finding 3).
+        // A caller that has not verified keeps the default-resolution path.
+        $resolvedProfileId = $profileIsVerified && $profileId !== null && $profileId !== ''
+            ? $profileId
+            : $this->resolveProfileForUser($userId, $profileId);
 
         // Both tokens carry the claim. If only the access token did, the first
         // refresh an hour later would silently drop the device back to the

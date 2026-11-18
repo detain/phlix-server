@@ -353,16 +353,23 @@ final class QuickConnectController
         // profile on every request, so the TV's session cannot outlive its window on another
         // profile. The profile is verified as owned here, and refused when it is not. It is
         // never degraded to the default, which is what buildAuthResponse() would do.
+        // The id this check verifies is the one minted: it is passed on as already verified, so the
+        // mint does not re-resolve it and degrade a profile removed in the gap to the account default.
+        $verifiedProfileId = null;
         if ($pair->profileId !== null) {
             try {
-                $this->authManager->requireOwnedProfile($pair->userId, $pair->profileId);
+                $verifiedProfileId = $this->authManager->requireOwnedProfile($pair->userId, $pair->profileId);
             } catch (ProfileNotOwnedException) {
                 return $this->profileNoLongerOwned();
             }
         }
 
         try {
-            $auth = $this->authManager->buildAuthResponse($pair->userId, $pair->profileId);
+            $auth = $this->authManager->buildAuthResponse(
+                $pair->userId,
+                $verifiedProfileId,
+                profileIsVerified: $verifiedProfileId !== null,
+            );
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17: the APPROVING account is held, so the mint seam refuses —
             // the TV gets the contracts-registered distinct 403, never a bare

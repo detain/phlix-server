@@ -3400,7 +3400,7 @@ class FfmpegRunner
 
         if (
             $timelineTemp !== null
-            && !$this->writeTrickplayTimeline($timelineTemp, $spriteCount, $spriteOffset, $spriteInterval)
+            && !$this->writeTrickplayTimeline($timelineTemp, $spriteCount, $spriteInterval)
         ) {
             $this->logger->warning('Trickplay timeline could not be written; pass discarded', $context);
             $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
@@ -3522,7 +3522,9 @@ class FfmpegRunner
 
     /**
      * Writes the sprite timeline: each entry maps a thumbnail index to its pixel
-     * offset within the sheet and the video timestamp it represents.
+     * offset within the sheet and the start time of the interval it represents
+     * (`i * interval`). That is the same labelling the BIF uses, so the two
+     * artefacts agree on every frame's timestamp.
      *
      * The `tile` filter lays a thumbnail's top-left corner at
      * `margin + index * (size + padding)` — the margin is an outer border
@@ -3533,7 +3535,7 @@ class FfmpegRunner
      * put column 5 at 815, so every preview after the first column was
      * showing a slice of the wrong thumbnails.
      */
-    private function writeTrickplayTimeline(string $timelinePath, int $count, float $offset, float $interval): bool
+    private function writeTrickplayTimeline(string $timelinePath, int $count, float $interval): bool
     {
         $cols = self::TRICKPLAY_SPRITE_COLUMNS;
         $thumbW = self::TRICKPLAY_THUMB_WIDTH;
@@ -3547,7 +3549,10 @@ class FfmpegRunner
             $col = $i % $cols;
             $x = $margin + $col * ($thumbW + $padding);
             $y = $margin + $row * ($thumbH + $padding);
-            $time = $offset + $i * $interval;
+            // Labelled at the START of the interval it covers, as a BIF frame is
+            // (frame i is shown at i * multiplier). The thumbnail itself is sampled at
+            // the midpoint of that interval, so the label is not the sample instant.
+            $time = $i * $interval;
             $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
         }
 

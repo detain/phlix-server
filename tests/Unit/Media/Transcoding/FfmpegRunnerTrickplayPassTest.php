@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
+use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\TestCase;
 
@@ -119,12 +121,46 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $timeline = json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true);
         $this->assertIsArray($timeline);
         $this->assertCount(60, $timeline);
-        // Thumbnail 0 is the midpoint of the first interval, not the t=0 slate.
-        $this->assertEquals(50.0, $timeline[0]['time']);
+        // Thumbnail i is labelled at the start of its interval, i * 100 s, which is
+        // the BIF's labelling. It is still SAMPLED at the midpoint (50 s for cell 0),
+        // so cell 0 is not the t=0 slate.
+        $this->assertEqualsWithDelta(0.0, $timeline[0]['time'], 1e-9);
+        $this->assertEqualsWithDelta(100.0, $timeline[1]['time'], 1e-9);
         $this->assertSame(['x' => 2, 'y' => 2], ['x' => $timeline[0]['x'], 'y' => $timeline[0]['y']]);
         // Column 5 starts at margin + 5 * (160 + 1) = 807; row 1 at margin + 91 = 93.
         $this->assertSame(['x' => 807, 'y' => 2], ['x' => $timeline[5]['x'], 'y' => $timeline[5]['y']]);
         $this->assertSame(['x' => 2, 'y' => 93], ['x' => $timeline[6]['x'], 'y' => $timeline[6]['y']]);
+    }
+
+    public function testTheBifAndTheSpriteTimelineLabelFramesTheSameWay(): void
+    {
+        // Duration 6000 s: sprite cells every 100 s, BIF frames every 10 s. Both
+        // artefacts must label frame i at i * its interval (the start of the interval),
+        // so a scrub position reads the same frame in either.
+        $runner = $this->scripted(6000.0);
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+        $this->assertNotNull($result);
+
+        $timeline = json_decode((string) file_get_contents($this->dir . '/out/timeline.json'), true);
+        $this->assertIsArray($timeline);
+        $this->assertEqualsWithDelta(0.0, $timeline[0]['time'], 1e-9);
+        $this->assertEqualsWithDelta(100.0, $timeline[1]['time'], 1e-9, 'sprite cell 1 starts at 1 x 100 s');
+
+        $bifPath = TrickplayArtefacts::writeBif($result['bif_frames'], $result['bif_interval_ms'], $this->dir . '/out')
+            ? $this->dir . '/out/' . BifWriter::FILENAME
+            : null;
+        $this->assertNotNull($bifPath);
+        $bif = (string) file_get_contents($bifPath);
+        /** @var array{1: int} $multiplier */
+        $multiplier = unpack('V', substr($bif, 16, 4));
+        $this->assertSame(10000, $multiplier[1], 'BIF multiplier is the 10 s interval in ms');
+        /** @var array{1: int} $entry1 */
+        $entry1 = unpack('V', substr($bif, 64 + 8, 4));
+        $this->assertSame(1, $entry1[1], 'BIF frame 1 carries timestamp 1 multiplier unit, i.e. 10 s');
+        // Frame 1 of each artefact is labelled 1 x its own interval: 10 s for the BIF
+        // (1 x 10000 ms) and 100 s for the sprite (1 x 100 s).
+        $this->assertSame(10.0, $multiplier[1] / 1000.0);
+        $this->assertEqualsWithDelta(100.0, $timeline[1]['time'], 1e-9);
     }
 
     public function testBifFramesAreReturnedInCaptureOrderWithTheirInterval(): void

@@ -45,11 +45,23 @@ use Psr\Log\NullLogger;
  * owner. A DEAD one has its temp cleaned right away. Genuine abandonment kills
  * promptly via the cancel path.
  *
- * Watchdog (stall and wall-clock): {@see sweep()} reaps a live encode whose temp
- * family has not grown for {@see configureWatchdog()}'s stall window, or that
- * exceeds its wall-clock cap. Both are far tighter than the `timeout` wrapper.
- * A reaped encode's slot and `.part` temp are released once the process is dead.
- * The sweep is non-blocking: SIGTERM now, SIGKILL on a later sweep.
+ * Watchdog (stall and wall-clock): {@see sweep()} reaps a live encode whose
+ * progress has not advanced for {@see configureWatchdog()}'s stall window, or that
+ * exceeds its wall-clock cap. The progress signal is the encode's `-progress` file
+ * for a CMAF encode (`out_time_us`, or that file's mtime while `out_time` is still
+ * N/A), and the temp family's byte size for an MPEG-TS encode, whose temp grows
+ * continuously. A CMAF encode writes its fragment only at the end, so its temp
+ * family does not grow during the encode, and byte size is not a usable signal for
+ * it. A reaped encode's slot and `.part` temp are released once the process is
+ * dead. The sweep is non-blocking: SIGTERM now, SIGKILL on a later sweep.
+ *
+ * PID identity (Linux): the liveness probe is `posix_kill($pid, 0)`, which reports
+ * a zombie as alive and cannot tell a reused PID from the encode it launched. So on
+ * Linux each PID's `/proc/<pid>/stat` start time (field 22) is recorded at
+ * registration. A PID whose state is `Z`, or whose start time has changed, is
+ * dead, and no signal is sent to a PID whose identity no longer matches. Where
+ * `/proc` is unavailable (non-Linux) the check is skipped and the behaviour is the
+ * plain liveness probe, as before.
  *
  * Shared-encode landmine guard (SV-4.2-disconnect): an on-demand encode is
  * deduplicated by its output path, so a SECOND concurrent requester piggybacks
@@ -73,22 +85,46 @@ use Psr\Log\NullLogger;
  * guard, is what closes the shared-encode dedup gap; the guard only narrows the
  * live-piggybacker 404 window.
  *
+ * Known per-worker bounds (documented, not fixed here):
+ *  - Untracked encodes. An encode launched before this worker's last restart or
+ *    deploy is not in this registry. No stall or wall-clock reap applies to it, so
+ *    it holds a cap slot until the `timeout` wrapper (`ffmpeg.transcode_timeout`,
+ *    7200 s by default) fires. Startup does not adopt or reap such temps. Doing so
+ *    needs the PID and its start time, and neither is persisted. Reaping by temp age
+ *    alone could kill a sibling worker's live encode, so no cheap safe path exists.
+ *  - Waiters are per worker. {@see \Phlix\Media\Transcoding\TranscodeManager::hasOtherWaiter()}
+ *    counts only the waiters in this worker. If a launcher is cancelled in worker A
+ *    while a piggybacker in worker B waits on the same segment, the guard cannot see
+ *    B, and the shared encode is killed, so B gets a 404. Closing that gap needs a
+ *    cross-worker waiter marker in the shared segment tree (for example a
+ *    `{final}.waiter-<pid>-<nonce>` created on join, removed in `finally`, and
+ *    bounded by a TTL), consulted by hasOtherWaiter through a glob.
+ *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
  * {@see kill()} or {@see killGroup()} its key (the transcode path does so in a
  * `finally`). {@see registeredKeyCount()} is exposed so leaks are observable in
- * tests, and dropping a key always tears down its group links.
+ * tests, and dropping a key always tears down its group links and identity records.
  *
  * Coroutine-safety: killing waits between SIGTERM and SIGKILL using a
  * coroutine-yielding sleep when inside a Swoole coroutine (`getCid() > 0`) and a
  * short blocking sleep otherwise, so it never blocks the event loop. The signal
- * send, liveness probe, and temp cleaner are injectable for tests (no real
- * processes spawned, no real files removed).
+ * send, liveness probe, `/proc` reader, progress probe and temp cleaner are
+ * injectable for tests (no real processes spawned, no real files removed).
  *
  * @since SV-4.2
  */
 final class SegmentProcessRegistry
 {
+    /** Tail of a progress file read per probe. A progress block is ~0.3 KB. */
+    private const PROGRESS_TAIL_BYTES = 8192;
+
+    /**
+     * The shipped wall-clock cap in seconds (see {@see $maxWallSeconds}). Public so
+     * the manager can bound a temp join without holding a registry instance.
+     */
+    public const DEFAULT_MAX_WALL_SECONDS = 300.0;
+
     /**
      * Cancel key (segment path) => list of tracked OS process-group-leader PIDs.
      *
@@ -122,6 +158,14 @@ final class SegmentProcessRegistry
      */
     private array $tmpsByKey = [];
 
+    /**
+     * Cancel key => (PID => /proc start time, or null when /proc was unreadable at
+     * registration). Read before any signal, so a reused PID is never signalled.
+     *
+     * @var array<string, array<int, int|null>>
+     */
+    private array $starts = [];
+
     private LoggerInterface $logger;
 
     /**
@@ -135,11 +179,20 @@ final class SegmentProcessRegistry
 
     /**
      * Liveness probe: fn(int $pid): bool. Defaults to posix_kill($pid, 0) /
-     * /proc probe against the group-leader PID. Overridable in tests.
+     * /proc probe against the group-leader PID. Overridable in tests. A zombie
+     * reports alive here, so {@see isLive()} also checks `/proc`.
      *
      * @var callable(int): bool
      */
     private $isAlive;
+
+    /**
+     * `/proc/<pid>/stat` reader: fn(int $pid): ?string (null = unreadable). Defaults
+     * to reading the real file (null on non-Linux). Overridable in tests.
+     *
+     * @var callable(int): (string|null)
+     */
+    private $procStat;
 
     /**
      * Temp cleaner: fn(string $tmp): void. Removes the ONE specific
@@ -209,11 +262,11 @@ final class SegmentProcessRegistry
 
     /**
      * Per-key progress of a TRACKED launch (cancel key => progress), read by the
-     * watchdog in {@see sweep()}. `startedNs` is the registration instant, `lastSize`
-     * the total bytes of the encode's temp family last observed, and `lastGrowNs`
-     * the last instant that size grew. All monotonic (hrtime). Dropped with the key.
+     * watchdog in {@see sweep()}. `startedNs` is the registration instant, `lastToken`
+     * the progress token last observed (see {@see observeProgress()}), and `lastGrowNs`
+     * the last instant that token changed. All monotonic (hrtime). Dropped with the key.
      *
-     * @var array<string, array{startedNs: int, lastSize: int, lastGrowNs: int}>
+     * @var array<string, array{startedNs: int, lastToken: int, lastGrowNs: int}>
      */
     private array $progress = [];
 
@@ -225,33 +278,43 @@ final class SegmentProcessRegistry
      * still holds. An orphan is removed when its process is dead, after its temps
      * are cleaned. Bounded by the watchdog's own wall-clock and stall rules.
      *
-     * @var list<array{key: string, pids: array<int, int>, tmps: array<int, string>,
-     *     startedNs: int, lastSize: int, lastGrowNs: int, termNs: int|null}>
+     * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
+     *     tmps: array<int, string>, startedNs: int, lastToken: int, lastGrowNs: int,
+     *     termNs: int|null}>
      */
     private array $orphans = [];
 
     /**
-     * Seconds without the encode's temp growing before it is declared stalled and
-     * killed. Segments are 6 s of content and a healthy libx264 encode writes output
-     * several times a second once started. 30 s is 5× the segment length, so a
-     * healthy encode never trips it, and it is the same order as a hung sshfs read.
+     * Seconds without the encode's progress advancing before it is declared stalled
+     * and killed. A healthy CMAF encode advances `out_time_us` about every second
+     * (measured: 0.2–2 s steps on 360p and 720p `veryslow`, 1 thread), and its
+     * progress file is rewritten every 0.5 s. During the pre-first-packet lookahead
+     * `out_time_us` is N/A, and the file's mtime carries the signal. 30 s is therefore
+     * 15–60× the healthy cadence. It is also the order of a hung sshfs read, which is
+     * the failure this rule exists for.
      */
     private float $stallSeconds = 30.0;
 
     /**
-     * Wall-clock cap, in seconds, for one on-demand segment encode. A 6 s segment
-     * finishes in seconds, so 120 s is 20× realtime for one segment. Far below the
-     * 7200 s `timeout` wrapper, which only fires as the last backstop.
+     * Wall-clock cap, in seconds, for one on-demand segment encode. Measured: a 6 s
+     * 720p `veryslow` encode on one thread took 17 s on this box at load ~15. The
+     * slowest legitimate case is 4K at one thread, about 9× the pixels, so roughly
+     * 150 s. 300 s covers that with 2× headroom for contention. The cap only catches
+     * an encode that keeps progressing but will not finish. Stalls are handled by
+     * {@see $stallSeconds}, and the `timeout` wrapper stays the last backstop.
      */
-    private float $maxWallSeconds = 120.0;
+    private float $maxWallSeconds = self::DEFAULT_MAX_WALL_SECONDS;
 
     /**
-     * Total bytes of an encode's temp family: fn(array<int, string> $tmps): int.
-     * Defaults to summing each temp and its CMAF siblings. Overridable in tests.
+     * Progress token of a tracked launch: fn(array<int, string> $tmps): int. Defaults
+     * to the CMAF progress signal per temp (`out_time_us`, or the progress file's mtime
+     * while out_time is N/A), falling back to the byte total of the temp family for an
+     * MPEG-TS temp that has no progress file. Overridable in tests. Growth means the
+     * token CHANGED, which is the same test for both signals.
      *
      * @var callable(array<int, string>): int
      */
-    private $sizeProbe;
+    private $progressProbe;
 
     /**
      * @param callable(int, int): void|null $signalSender
@@ -268,9 +331,10 @@ final class SegmentProcessRegistry
         $this->logger = $logger ?? new NullLogger();
         $this->signalSender = $signalSender ?? self::defaultSignalSender();
         $this->isAlive = $isAlive ?? self::defaultLivenessProbe();
+        $this->procStat = self::defaultProcStatReader();
         $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
-        $this->sizeProbe = self::defaultSizeProbe();
+        $this->progressProbe = self::defaultProgressProbe();
     }
 
     /**
@@ -278,7 +342,7 @@ final class SegmentProcessRegistry
      * detached segment encode. Non-positive values keep the shipped default, so a
      * bad config can never turn the watchdog off or make it kill everything.
      *
-     * @param float $stallSeconds   Seconds without temp growth before a live encode is killed.
+     * @param float $stallSeconds   Seconds without progress before a live encode is killed.
      * @param float $maxWallSeconds Wall-clock cap for one encode, in seconds.
      */
     public function configureWatchdog(float $stallSeconds, float $maxWallSeconds): void
@@ -292,14 +356,35 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Override the temp-family size probe used by the watchdog. Null restores the
-     * default (sum of each temp and its CMAF siblings). Exists for tests.
-     *
-     * @param (callable(array<int, string>): int)|null $sizeProbe
+     * The wall-clock cap in seconds. The manager uses it to bound how long a
+     * temp can be joined as live (see {@see \Phlix\Media\Transcoding\TranscodeManager}).
      */
-    public function setSizeProbe(?callable $sizeProbe): void
+    public function maxWallSeconds(): float
     {
-        $this->sizeProbe = $sizeProbe ?? self::defaultSizeProbe();
+        return $this->maxWallSeconds;
+    }
+
+    /**
+     * Override the progress probe used by the watchdog. Null restores the default
+     * (CMAF progress file, or the byte total of an MPEG-TS temp family). Exists for tests.
+     *
+     * @param (callable(array<int, string>): int)|null $progressProbe
+     */
+    public function setProgressProbe(?callable $progressProbe): void
+    {
+        $this->progressProbe = $progressProbe ?? self::defaultProgressProbe();
+    }
+
+    /**
+     * Override the `/proc/<pid>/stat` reader used for PID identity and zombie checks.
+     * Null restores the default (the real file; null on non-Linux). Exists for tests,
+     * which pass a fake process table.
+     *
+     * @param (callable(int): (string|null))|null $procStat
+     */
+    public function setProcStatReader(?callable $procStat): void
+    {
+        $this->procStat = $procStat ?? self::defaultProcStatReader();
     }
 
     /**
@@ -353,6 +438,8 @@ final class SegmentProcessRegistry
             return;
         }
         $this->pids[$key][] = $pid;
+        // PID identity, read now while the launch is this process (see class docblock).
+        $this->starts[$key][$pid] = $this->startTimeOf($pid);
 
         if ($tmp !== null && $tmp !== '') {
             $this->tmpsByKey[$key][] = $tmp;
@@ -360,7 +447,7 @@ final class SegmentProcessRegistry
 
         // The watchdog's clock starts at the first registration for this key.
         $now = (int) hrtime(true);
-        $this->progress[$key] ??= ['startedNs' => $now, 'lastSize' => 0, 'lastGrowNs' => $now];
+        $this->progress[$key] ??= ['startedNs' => $now, 'lastToken' => 0, 'lastGrowNs' => $now];
 
         if ($group !== null && $group !== '' && !isset($this->groupOfKey[$key])) {
             $this->keysByGroup[$group][] = $key;
@@ -392,17 +479,9 @@ final class SegmentProcessRegistry
      */
     public function releaseAfterWaitTimeout(string $key): void
     {
-        $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
-        $anyAlive = false;
-        foreach ($pids as $pid) {
-            if (($this->isAlive)($pid)) {
-                $anyAlive = true;
-                break;
-            }
-        }
 
-        if ($anyAlive) {
+        if ($this->anyAlive($this->pids[$key] ?? [], $this->startsFor($key))) {
             // A poll timing out is not abandonment, so the encode is not killed here.
             // But forgetting a LIVE encode would leave it with no owner: nothing could
             // kill a stalled one until the 7200 s wrapper. Hand it to the watchdog
@@ -432,10 +511,10 @@ final class SegmentProcessRegistry
      * throttled, from the cap check in TranscodeManager.
      *
      * Rules, per launch:
-     *  - dead → temps cleaned, entry dropped (a stalled encode's slot and .part are
-     *    freed here);
+     *  - dead (or a zombie, or a reused PID) → temps cleaned, entry dropped (a stalled
+     *    encode's slot and .part are freed here);
      *  - alive and past the wall-clock cap → reaped;
-     *  - alive and the temp family has not grown for {@see configureWatchdog()}'s
+     *  - alive and the progress token has not changed for {@see configureWatchdog()}'s
      *    stall window → reaped. Only applies when a temp was registered, so a launch
      *    we cannot observe is never killed for silence.
      * A reaped TRACKED launch also has its dedup reservation invalidated through the
@@ -455,7 +534,7 @@ final class SegmentProcessRegistry
             if ($pids === []) {
                 continue;
             }
-            if (!$this->anyAlive($pids)) {
+            if (!$this->anyAlive($pids, $this->startsFor($key))) {
                 $tmps = $this->tmpsByKey[$key] ?? [];
                 $this->drop($key);
                 $this->cleanTemps($tmps);
@@ -467,12 +546,12 @@ final class SegmentProcessRegistry
                 continue;
             }
             $tmps = $this->tmpsByKey[$key] ?? [];
-            $lastSize = $progress['lastSize'];
+            $lastToken = $progress['lastToken'];
             $lastGrowNs = $progress['lastGrowNs'];
-            $this->observeGrowth($tmps, $lastSize, $lastGrowNs, $now);
+            $this->observeProgress($tmps, $lastToken, $lastGrowNs, $now);
             $this->progress[$key] = [
                 'startedNs' => $progress['startedNs'],
-                'lastSize' => $lastSize,
+                'lastToken' => $lastToken,
                 'lastGrowNs' => $lastGrowNs,
             ];
 
@@ -497,7 +576,7 @@ final class SegmentProcessRegistry
 
         $keep = [];
         foreach ($this->orphans as $orphan) {
-            if (!$this->anyAlive($orphan['pids'])) {
+            if (!$this->anyAlive($orphan['pids'], $orphan['starts'])) {
                 $this->cleanTemps($orphan['tmps']);
                 continue; // dead → gone
             }
@@ -507,8 +586,9 @@ final class SegmentProcessRegistry
                 // Non-blocking, so a pass never waits here.
                 if ($now - $orphan['termNs'] >= (int) ($this->gracePeriodSeconds * 1_000_000_000)) {
                     foreach ($orphan['pids'] as $pid) {
-                        if (($this->isAlive)($pid)) {
-                            ($this->signalSender)($pid, self::sigKill());
+                        $start = $orphan['starts'][$pid] ?? null;
+                        if ($this->isLive($pid, $start)) {
+                            $this->signalPid($pid, self::sigKill(), $start);
                         }
                     }
                 }
@@ -516,10 +596,10 @@ final class SegmentProcessRegistry
                 continue;
             }
 
-            $lastSize = $orphan['lastSize'];
+            $lastToken = $orphan['lastToken'];
             $lastGrowNs = $orphan['lastGrowNs'];
-            $this->observeGrowth($orphan['tmps'], $lastSize, $lastGrowNs, $now);
-            $orphan['lastSize'] = $lastSize;
+            $this->observeProgress($orphan['tmps'], $lastToken, $lastGrowNs, $now);
+            $orphan['lastToken'] = $lastToken;
             $orphan['lastGrowNs'] = $lastGrowNs;
 
             $reason = $this->watchdogReason($orphan['startedNs'], $lastGrowNs, $orphan['tmps'] !== [], $now);
@@ -531,7 +611,7 @@ final class SegmentProcessRegistry
                 ]);
                 $orphan['termNs'] = $now;
                 foreach ($orphan['pids'] as $pid) {
-                    ($this->signalSender)($pid, self::sigTerm());
+                    $this->signalPid($pid, self::sigTerm(), $orphan['starts'][$pid] ?? null);
                 }
                 $signalled++;
             }
@@ -552,10 +632,10 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Move a TRACKED launch to the watchdog's ownership: its pids, temps and progress
-     * leave the keyed maps (freeing the key for a fresh launch) and become one orphan
-     * record. The group link is torn down by drop(), so a later killGroup() no longer
-     * reaches it, which matches the wait-timeout release it replaces.
+     * Move a TRACKED launch to the watchdog's ownership: its pids, temps, identity and
+     * progress leave the keyed maps (freeing the key for a fresh launch) and become one
+     * orphan record. The group link is torn down by drop(), so a later killGroup() no
+     * longer reaches it, which matches the wait-timeout release it replaces.
      *
      * @param string $key Tracked cancel key.
      *
@@ -566,6 +646,7 @@ final class SegmentProcessRegistry
         $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
         $progress = $this->progress[$key] ?? null;
+        $starts = $this->startsFor($key);
         $this->drop($key);
 
         if ($pids === [] || $progress === null) {
@@ -575,9 +656,10 @@ final class SegmentProcessRegistry
         $this->orphans[] = [
             'key' => $key,
             'pids' => $pids,
+            'starts' => $starts,
             'tmps' => $tmps,
             'startedNs' => $progress['startedNs'],
-            'lastSize' => $progress['lastSize'],
+            'lastToken' => $progress['lastToken'],
             'lastGrowNs' => $progress['lastGrowNs'],
             'termNs' => null,
         ];
@@ -600,26 +682,28 @@ final class SegmentProcessRegistry
         }
         $this->orphans[$index]['termNs'] = $now;
         foreach ($this->orphans[$index]['pids'] as $pid) {
-            ($this->signalSender)($pid, self::sigTerm());
+            $this->signalPid($pid, self::sigTerm(), $this->orphans[$index]['starts'][$pid] ?? null);
         }
 
         return 1;
     }
 
     /**
-     * Fold the temp family's current size into the progress pair. A size increase
-     * refreshes the last-growth instant.
+     * Fold the current progress token into the watchdog pair. Growth means the token
+     * CHANGED. Every component is non-decreasing (bytes, out_time, mtime), so a change
+     * is progress. A change from the mtime fallback to out_time is also taken as
+     * progress, which is harmless.
      *
      * @param array<int, string> $tmps
      */
-    private function observeGrowth(array $tmps, int &$lastSize, int &$lastGrowNs, int $now): void
+    private function observeProgress(array $tmps, int &$lastToken, int &$lastGrowNs, int $now): void
     {
         if ($tmps === []) {
             return;
         }
-        $size = ($this->sizeProbe)($tmps);
-        if ($size > $lastSize) {
-            $lastSize = $size;
+        $token = ($this->progressProbe)($tmps);
+        if ($token !== $lastToken) {
+            $lastToken = $token;
             $lastGrowNs = $now;
         }
     }
@@ -642,12 +726,13 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * @param array<int, int> $pids
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts PID => recorded start time.
      */
-    private function anyAlive(array $pids): bool
+    private function anyAlive(array $pids, array $starts = []): bool
     {
         foreach ($pids as $pid) {
-            if (($this->isAlive)($pid)) {
+            if ($this->isLive($pid, $starts[$pid] ?? null)) {
                 return true;
             }
         }
@@ -656,20 +741,104 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Default temp-family size: each temp plus its CMAF siblings (`{tmp}.i`,
-     * `{tmp}.s0`, `{tmp}.m3u8`), matched by the same unique hex as the temp itself,
-     * never a `{final}.part-*` family glob.
+     * The liveness verdict for one tracked PID. The injected probe says the PID exists.
+     * On Linux, `/proc` then rules out a zombie (state `Z`, which posix_kill still calls
+     * alive) and a reused PID (a start time other than the recorded one). With no
+     * `/proc` view the probe alone decides, which is the pre-existing behaviour.
+     */
+    private function isLive(int $pid, ?int $start): bool
+    {
+        if (!($this->isAlive)($pid)) {
+            return false;
+        }
+        $raw = ($this->procStat)($pid);
+        if ($raw === null) {
+            return true;
+        }
+        $parsed = self::parseProcStat($raw);
+        if ($parsed === null) {
+            return true;
+        }
+        if ($parsed['state'] === 'Z') {
+            return false;
+        }
+
+        return $start === null || $parsed['start'] === $start;
+    }
+
+    /**
+     * The recorded start time of a key's PIDs (PID => start, or null where unknown).
+     *
+     * @return array<int, int|null>
+     */
+    private function startsFor(string $key): array
+    {
+        return $this->starts[$key] ?? [];
+    }
+
+    /**
+     * The `/proc/<pid>/stat` start time (field 22), or null when unreadable.
+     */
+    private function startTimeOf(int $pid): ?int
+    {
+        $raw = ($this->procStat)($pid);
+        if ($raw === null) {
+            return null;
+        }
+        $parsed = self::parseProcStat($raw);
+
+        return $parsed === null ? null : $parsed['start'];
+    }
+
+    /**
+     * Send one signal to a tracked PID, only after confirming it is still the process
+     * that was launched: the same start time, and not a zombie. A PID that fails the
+     * check is not signalled. When no start time was recorded (no `/proc` at
+     * registration), this is the pre-existing unchecked signal.
+     */
+    private function signalPid(int $pid, int $signal, ?int $start): void
+    {
+        if ($start !== null) {
+            $raw = ($this->procStat)($pid);
+            $parsed = $raw === null ? null : self::parseProcStat($raw);
+            if ($parsed === null || $parsed['state'] === 'Z' || $parsed['start'] !== $start) {
+                $this->logger->debug(
+                    'SegmentProcessRegistry: pid is no longer the launched encode; not signalling',
+                    ['pid' => $pid]
+                );
+                return;
+            }
+        }
+        ($this->signalSender)($pid, $signal);
+    }
+
+    /**
+     * The default progress token for the temp family of one launch: the CMAF progress
+     * signal for each temp that has a progress file, otherwise the byte total of that
+     * temp's family (an MPEG-TS temp, which grows continuously).
+     *
+     * The stat cache is cleared first. Otherwise a repeat stat of the same path would
+     * answer from its first read, and a progress file that grew between two sweeps would
+     * look frozen.
      *
      * @return callable(array<int, string>): int
      */
-    private static function defaultSizeProbe(): callable
+    private static function defaultProgressProbe(): callable
     {
         return static function (array $tmps): int {
+            clearstatcache();
             $total = 0;
             foreach ($tmps as $tmp) {
                 if ($tmp === '') {
                     continue;
                 }
+                $signal = self::progressSignal($tmp);
+                if ($signal !== null) {
+                    $total += $signal;
+                    continue;
+                }
+                // No progress file: an MPEG-TS temp. Sum the temp and its siblings by
+                // the same escaped stem, never a `{final}.part-*` family glob.
                 $escaped = addcslashes($tmp, '*?[]\\');
                 foreach (glob($escaped . '*') ?: [] as $file) {
                     $size = @filesize($file);
@@ -680,6 +849,47 @@ final class SegmentProcessRegistry
             }
             return $total;
         };
+    }
+
+    /**
+     * The CMAF progress signal for one temp: `out_time_us` from its `-progress` file,
+     * or the file's mtime (microseconds) while out_time is N/A. Null when the temp has
+     * no progress file (an MPEG-TS temp).
+     */
+    private static function progressSignal(string $tmp): ?int
+    {
+        $progressFile = $tmp . FfmpegRunner::FMP4_PROGRESS_TMP_SUFFIX;
+        $mtime = @filemtime($progressFile);
+        if ($mtime === false) {
+            return null;
+        }
+
+        return self::lastOutTimeMicros($progressFile) ?? $mtime * 1_000_000;
+    }
+
+    /**
+     * The last `out_time_us` value in the tail of a progress file, or null when none
+     * is numeric yet (ffmpeg writes N/A until the first packet). Only the last
+     * {@see PROGRESS_TAIL_BYTES} are read, so the cost is bounded regardless of how
+     * long the encode has run.
+     */
+    private static function lastOutTimeMicros(string $progressFile): ?int
+    {
+        $handle = @fopen($progressFile, 'rb');
+        if ($handle === false) {
+            return null;
+        }
+        $stat = fstat($handle);
+        $size = is_array($stat) ? $stat['size'] : 0;
+        $from = $size > self::PROGRESS_TAIL_BYTES ? $size - self::PROGRESS_TAIL_BYTES : 0;
+        $tail = fseek($handle, $from) === 0 ? stream_get_contents($handle) : false;
+        fclose($handle);
+
+        if (!is_string($tail) || preg_match_all('/out_time_us=(\d+)/', $tail, $matches) < 1) {
+            return null;
+        }
+
+        return (int) end($matches[1]);
     }
 
     /**
@@ -734,6 +944,7 @@ final class SegmentProcessRegistry
 
         $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
+        $starts = $this->startsFor($key);
         $this->drop($key);
         if ($pids === []) {
             return 0;
@@ -758,7 +969,7 @@ final class SegmentProcessRegistry
         ]);
 
         foreach ($pids as $pid) {
-            $this->terminate($pid);
+            $this->terminate($pid, $starts[$pid] ?? null);
         }
 
         // SV-4.2 finding #1: a signalled encode never runs its atomic-publish
@@ -831,13 +1042,13 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Remove a key's PID entry and tear down its group links (no signalling).
+     * Remove a key's PID entry, its identity records and its group links (no signalling).
      *
      * @param string $key Cancel key to drop.
      */
     private function drop(string $key): void
     {
-        unset($this->pids[$key], $this->tmpsByKey[$key], $this->progress[$key]);
+        unset($this->pids[$key], $this->tmpsByKey[$key], $this->progress[$key], $this->starts[$key]);
 
         $group = $this->groupOfKey[$key] ?? null;
         unset($this->groupOfKey[$key]);
@@ -860,29 +1071,31 @@ final class SegmentProcessRegistry
      * Graceful-then-forced kill of a single detached encode process group,
      * coroutine-safe. The signal sender targets the whole group (negative PID),
      * so both the SIGTERM and the SIGKILL escalation reach the ffmpeg grandchild
-     * directly, not just the `timeout`/`sh` wrapper (SV-4.2 finding #4).
+     * directly, not just the `timeout`/`sh` wrapper (SV-4.2 finding #4). Every signal
+     * is identity-checked first (see {@see signalPid()}).
      *
-     * @param int $pid Process-group-leader id to terminate.
+     * @param int      $pid   Process-group-leader id to terminate.
+     * @param int|null $start The start time recorded at registration.
      */
-    private function terminate(int $pid): void
+    private function terminate(int $pid, ?int $start): void
     {
         if ($pid <= 0) {
             return;
         }
 
-        ($this->signalSender)($pid, self::sigTerm());
+        $this->signalPid($pid, self::sigTerm(), $start);
 
         // Bounded, coroutine-yielding wait for graceful exit.
         $deadline = hrtime(true) + (int) ($this->gracePeriodSeconds * 1_000_000_000);
         while (hrtime(true) < $deadline) {
-            if (!($this->isAlive)($pid)) {
+            if (!$this->isLive($pid, $start)) {
                 return;
             }
             $this->cooperativeSleep(0.05);
         }
 
-        if (($this->isAlive)($pid)) {
-            ($this->signalSender)($pid, self::sigKill());
+        if ($this->isLive($pid, $start)) {
+            $this->signalPid($pid, self::sigKill(), $start);
         }
     }
 
@@ -940,6 +1153,53 @@ final class SegmentProcessRegistry
     }
 
     /**
+     * @return callable(int): (string|null)
+     */
+    private static function defaultProcStatReader(): callable
+    {
+        return static function (int $pid): ?string {
+            if ($pid <= 0) {
+                return null;
+            }
+            $path = '/proc/' . $pid . '/stat';
+            if (!is_readable($path)) {
+                return null; // non-Linux, or the process is gone
+            }
+            $raw = @file_get_contents($path);
+
+            return is_string($raw) ? $raw : null;
+        };
+    }
+
+    /**
+     * Parse one `/proc/<pid>/stat` line: the process state and its start time.
+     *
+     * The command name (field 2) is in parentheses and may itself hold spaces and
+     * parentheses, so the fields are read from after the LAST `)`. The state is field 3
+     * (index 0 there), and the start time is field 22 (index 19).
+     *
+     * @return array{state: string, start: int}|null Null when the line is malformed.
+     */
+    public static function parseProcStat(string $stat): ?array
+    {
+        $close = strrpos($stat, ')');
+        if ($close === false) {
+            return null;
+        }
+        $fields = preg_split('/\s+/', trim(substr($stat, $close + 1)), -1, PREG_SPLIT_NO_EMPTY);
+        if ($fields === false || count($fields) < 20) {
+            return null;
+        }
+        $state = $fields[0];
+        $start = $fields[19];
+        if (strlen($state) !== 1 || !ctype_digit($start)) {
+            return null;
+        }
+
+        return ['state' => $state, 'start' => (int) $start];
+    }
+
+    /**
      * Remove the specific launcher temp path(s) recorded for a killed / dead
      * encode via the injectable {@see $tempCleaner}. Only the exact
      * `.part-<hex>` paths THIS launcher created are removed — never a
@@ -977,14 +1237,15 @@ final class SegmentProcessRegistry
             }
             // S56: a CMAF encode writes three auxiliary temps BESIDE its
             // `.part-<hex>` marker — `<tmp>.i` (init), `<tmp>.s0` (fragment) and
-            // `<tmp>.m3u8` (throwaway playlist). A signalled encode never runs its
-            // own cleanup, so without this they outlive the job until the LRU
-            // sweep removes the whole directory. `{$tmp}.*` is still keyed on THIS
-            // launcher's unique hex — it is not a `{$final}.part-*` family glob —
-            // so a concurrent sibling worker's live temps are untouched, which is
-            // the SV-4.2 re-review invariant above. On the MPEG-TS path no such
-            // sibling exists and the glob returns nothing.
-            $siblings = glob($tmp . '.*');
+            // `<tmp>.m3u8` (throwaway playlist) — and, since the progress watchdog, a
+            // `<tmp>.prog` progress file. A signalled encode never runs its own cleanup,
+            // so without this they outlive the job until the LRU sweep removes the whole
+            // directory. `{$tmp}.*` is still keyed on THIS launcher's unique hex — it is
+            // not a `{$final}.part-*` family glob — so a concurrent sibling worker's live
+            // temps are untouched, which is the SV-4.2 re-review invariant above. The stem
+            // is escaped exactly as the progress probe escapes it. On the MPEG-TS path no
+            // such sibling exists and the glob returns nothing.
+            $siblings = glob(addcslashes($tmp, '*?[]\\') . '.*');
             if (is_array($siblings)) {
                 foreach ($siblings as $sibling) {
                     @unlink($sibling);

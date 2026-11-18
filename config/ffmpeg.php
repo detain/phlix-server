@@ -39,13 +39,15 @@ return [
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
     // Watchdog for detached on-demand SEGMENT encodes (SegmentProcessRegistry::sweep()).
-    // A segment is 6 s of content, so a healthy encode writes output several times a
-    // second. Killing one whose temp has not grown for 30 s (5× the segment length, the
-    // order of a hung sshfs read) frees its cap slot and its .part temp. The 120 s wall
-    // cap is 20× realtime for one segment. Both are far below transcode_timeout, which
-    // remains the last backstop. Non-positive values fall back to the registry defaults.
+    // A segment is 6 s of content. A healthy CMAF encode advances its progress
+    // (out_time_us) about once a second, so an encode with no progress for 30 s (the
+    // order of a hung sshfs read) is killed. That frees its cap slot and its .part temp.
+    // The 300 s wall cap allows one 6 s segment up to 50× slower than realtime (0.02×
+    // realtime). It is sized for a 4K one-thread veryslow encode on a contended box.
+    // Both bounds are far below transcode_timeout, which remains the last backstop.
+    // Non-positive values fall back to the registry defaults.
     'segment_stall_seconds' => 30,
-    'segment_max_wall_seconds' => 120,
+    'segment_max_wall_seconds' => 300,
 
     /**
      * playback-lag wave C: thread cap for the SOFTWARE libx264 segment encoder

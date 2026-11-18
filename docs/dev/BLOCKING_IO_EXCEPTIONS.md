@@ -430,6 +430,36 @@ changes.
 
 ---
 
+## Exception 11 — per-launch segment-tree scan (local directory metadata, `TranscodeManager`)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/TranscodeManager.php::scanInFlightTemps()` — one `glob()` of `{segmentDir}/*` for the job directories, one `filemtime()` per job directory, and one `glob()` of each job directory that is recent enough to hold a live temp. The per-temp `filemtime()`/`unlink()` in `purgeDeadInFlightTemps()` and the one-directory `glob()` in `liveEncodeExistsFor()` are the same class of call. |
+| Reached from | The on-demand HLS segment path, on every **launch decision** (`countInFlightSegmentEncodes()` in `produceSegment()` / `produceAudioSegment()`, `countInFlightPrewarmEncodes()` in the prewarm budget), and `reconcileInFlightSegments()` at most once per 1 s. Runs on an HTTP worker, one of the 14. |
+| Why it is sync | The scan reads local segment-cache metadata only. It has no network I/O. PHP has no non-blocking directory-listing or `stat` primitive, so the scan cannot be made async without a worker pool. The live count is deliberately real-time, not cached, because the global ceiling is enforced per worker and a cached count lets the fleet overshoot it (see the `countInFlightSegmentEncodes()` docblock). |
+| Bound | There is no timeout, because local metadata has none. The work is bounded instead. (1) One `filemtime()` per job directory. (2) A job directory older than the temp death bound (`ffmpeg.transcode_timeout` + 300 s) is **skipped** without a glob, because no temp inside it can be younger than that bound. (3) The purge stands down entirely when the wrapper timeout is 0, so the scan does no more work than a full-tree glob would. |
+| Cost | Scales with the number of job directories (one stat each) plus the files of the **recent** directories only. The shipped default cache holds 8 GiB, so the job count is the operator's to bound. Measured below. |
+
+### Measurement (2026-11-17, synthetic tree, the real private method)
+
+Driven by reflection on `TranscodeManager::scanInFlightTemps()` with the shipped
+`transcode_timeout` (7200 s), on a dev host (64 cores, load ~16, PHP 8.3.6 CLI). The
+tree holds 400 job directories with 40 segment files each. Median of 25 calls:
+
+```text
+400 job dirs, all old (mtime 1 day ago), 5 with a live temp   median 3.6 ms  p90 3.7 ms
+400 job dirs, all recent (live temp each), 16 000 files       median 36.7 ms p90 37.0 ms
+```
+
+A launch decision costs one scan, and reconcile adds at most one per second. So at
+about 400 job directories that were all active inside the death bound (the second row,
+a rare shape), each launch decision costs about 37 ms of one worker. Extrapolated linearly (not measured), 1 000
+recent job directories would cost about 90 ms per launch decision. That is the point
+at which the scan should be cached for a short window per worker. That would make the cap bound
+approximate across workers by at most that window.
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

@@ -630,7 +630,7 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
             static fn (array $record): bool => $record['level'] === 'warning'
                 && str_contains($record['message'], 'could not restore a file')
         );
-        $this->assertCount(1, $restoreWarnings, 'The rollback must stop after the first refused restore.');
+        $this->assertCount(1, $restoreWarnings, 'Exactly one restore warning is logged for the refused sprite.jpg restore.');
 
         $stampRestores = array_filter(
             $runner->renames,

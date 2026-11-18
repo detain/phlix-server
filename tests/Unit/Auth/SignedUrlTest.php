@@ -172,6 +172,24 @@ final class SignedUrlTest extends TestCase
         self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, 'p1 '));
     }
 
+    public function testAProfileIdWithATrailingNewlineIsRejected(): void
+    {
+        // PCRE's `$` matches before a trailing newline, so a `$`-anchored check accepted
+        // "p1\n". The id must be refused by the predicate, by mint and by verify.
+        self::assertTrue(SignedUrl::isValidProfileId('p1'));
+        self::assertFalse(SignedUrl::isValidProfileId("p1\n"));
+        self::assertFalse(SignedUrl::isValidProfileId("\n"));
+
+        $signer = new SignedUrl(self::SECRET);
+        $url = $signer->mint('/media/abc/stream', 3600, 1000, 'p1');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, "p1\n"));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $signer->mint('/media/abc/stream', 3600, 1000, "p1\n");
+    }
+
     public function testVerifyRejectsExpiredToken(): void
     {
         $signer = new SignedUrl(self::SECRET);

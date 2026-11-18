@@ -190,7 +190,8 @@ final class SignedUrl
      */
     public static function isValidProfileId(string $profileId): bool
     {
-        return preg_match('/^[A-Za-z0-9-]{1,64}$/', $profileId) === 1;
+        // \z, not $: PCRE's $ also matches before a trailing newline, so "p1\n" would pass.
+        return preg_match('/^[A-Za-z0-9-]{1,64}\z/', $profileId) === 1;
     }
 
     /**

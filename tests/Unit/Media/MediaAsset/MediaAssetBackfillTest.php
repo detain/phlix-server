@@ -8,6 +8,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\MediaAsset\MediaAssetBackfill;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use PHPUnit\Framework\TestCase;
 
@@ -120,13 +121,23 @@ final class MediaAssetBackfillTest extends TestCase
         return is_array($files) ? count($files) : 0;
     }
 
-    /** Write both artefacts for an item, i.e. mark it genuinely complete. */
+    /**
+     * Writes the three artefacts for an item, i.e. marks it genuinely complete:
+     * a sprite, a 60-entry timeline and a whole two-frame BIF. The backfill
+     * skips an item only when all three pass TrickplayArtefacts::isComplete().
+     */
     private function writeArtefacts(string $itemId): void
     {
         $dir = $this->transcodeDir . '/trickplay/' . $itemId;
         mkdir($dir, 0755, true);
-        file_put_contents($dir . '/' . FfmpegRunner::SPRITE_FILENAME, 'sprite');
-        file_put_contents($dir . '/' . BifWriter::FILENAME, 'bif');
+        $jpeg = "\xFF\xD8\xFF\xD9";
+        file_put_contents($dir . '/' . FfmpegRunner::SPRITE_FILENAME, $jpeg);
+        $timeline = [];
+        for ($i = 0; $i < TrickplayArtefacts::SPRITE_COUNT; $i++) {
+            $timeline[] = ['time' => $i * 2.0, 'x' => 2, 'y' => 2];
+        }
+        file_put_contents($dir . '/' . FfmpegRunner::TIMELINE_FILENAME, json_encode($timeline, JSON_THROW_ON_ERROR));
+        file_put_contents($dir . '/' . BifWriter::FILENAME, BifWriter::build([$jpeg, $jpeg], 10000));
     }
 
     public function testEligibleItemsAreEnqueuedAndTheQueueHoldsOneFileEach(): void
@@ -236,6 +247,28 @@ final class MediaAssetBackfillTest extends TestCase
             ->reenqueueLibrary('lib-1');
 
         $this->assertSame(1, $result->enqueued, 'sprite without BIF is incomplete, so it must be retried');
+        $this->assertSame(0, $result->alreadyComplete);
+    }
+
+    /**
+     * A sprite and a BIF with no timeline is not complete. The old "done" test
+     * accepted it, so the CLI skipped items the job would still regenerate.
+     */
+    public function testAnItemWithASpriteAndBifButNoTimelineIsReEnqueued(): void
+    {
+        $rows = [$this->itemOnDisk('item-a', 'a.mkv')];
+        $store = new MediaAssetJobStore($this->queueDir);
+
+        $dir = $this->transcodeDir . '/trickplay/item-a';
+        mkdir($dir, 0755, true);
+        $jpeg = "\xFF\xD8\xFF\xD9";
+        file_put_contents($dir . '/' . FfmpegRunner::SPRITE_FILENAME, $jpeg);
+        file_put_contents($dir . '/' . BifWriter::FILENAME, BifWriter::build([$jpeg, $jpeg], 10000));
+
+        $result = $this->makeBackfill($this->repositoryReturning($rows), $store)
+            ->reenqueueLibrary('lib-1');
+
+        $this->assertSame(1, $result->enqueued, 'a timeline-less item is incomplete, so it must be retried');
         $this->assertSame(0, $result->alreadyComplete);
     }
 

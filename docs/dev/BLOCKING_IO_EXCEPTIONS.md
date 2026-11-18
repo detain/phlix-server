@@ -536,10 +536,52 @@ from about 63 ms to about 32 ms, and it is the next step if the kill rate matter
 | Bound | Entry: `ProbeCache::MAX_ENTRY_BYTES` = 65536. `read()` checks `filesize` before it reads, and `write()` checks the encoded length before it writes a byte. Directory: prune runs only while the `.json` count is above `MAX_ENTRIES` = 10000, and then evicts down to 9000. A directory at or below 10000 entries has no `.json` entry evicted (stale temp files are still removed). Prune pass: at most `PRUNE_SCAN_LIMIT` = 20000 readdir names are read, and each `.json` or `.tmp` name among them costs one `filemtime`. Above that count, eviction sees only those names, in readdir order. It is therefore not a global oldest-first, and it converges over successive ticks. At most `PRUNE_DELETE_LIMIT` = 1000 unlinks. The first failed unlink, of a stale temp or of an entry, ends the pass at once: no further eviction and no rescan. One pass runs per `PRUNE_INTERVAL_SECONDS` = 300 across all workers, because a worker takes the lock file and skips while its mtime is within half an interval. Tests: a payload over the bound is refused (`ProbeCacheTest::testAnEntryOverTheSizeBoundIsNotStored`). With 1100 entries at cap 10, one pass unlinks exactly 1000 files (`ProbeCacheTest::testOnePruneIsBoundedToTheDeleteLimit`). A directory at exactly the cap prunes nothing. In-process memo (`FfmpegRunner::PROBE_MEMO_LIMIT` = 512): this is a count of entries, not bytes. A memo entry has no byte bound, because the 64 KiB bound covers disk entries only. Location check: `trustFailure()` is one `lstat` per call. `createIfSecure()` and `recreate()` (build, and a removed directory only) do the `nearestExisting()` `lstat` per level of the path, one `realpath()`, and one `stat` per level of that realpath. All of it is bounded by the path depth. The adoption check (a changed device or inode, once per change) does the same walk. `probeFileStamp()` does one `realpath()` and one `stat` per call, bounded by the path depth too. |
 | Default | Off. `config/ffmpeg.php` sets `probe_cache_dir` to empty unless `PHLIX_PROBE_CACHE_DIR` is a non-empty absolute path. With it unset, no `ProbeCache` is built, so none of this entry runs: no `read`, no `write`, no `mkdir` and no prune timer. The in-process memo is the only cache. It is opt-in because ffprobe tags are personal metadata that the cache writes to disk, even at mode 0600, and a first scan can write up to about 655 MB in the worst case (10000 entries of 64 KiB each). The memo-only path loses only cold-start speed for a non-racy file: each worker probes it once after a start. A racy stamp is the exception, and it costs the same with the cache off as on: `FfmpegRunner::probe()` re-probes it on every call, because a racy result is never memoized (see Cost). The racy-stat guard (`ProbeCache::isRacy()`) is in-process comparison only and adds no I/O. |
 | Cost | Measured once on this host, as a one-off benchmark that no test reproduces (ext4, warm page cache, 300 iterations): 60 187-byte entry, write average 237 µs (create, chmod, write, rename), read average 122 µs. Prune of 10 000 entries down to a cap of 9 000: 80 ms wall (this measures a non-default cap; under the default cap of 10 000, a 10 000-entry directory prunes nothing). The prune runs once per 300 s for the whole server, because one worker takes the lock and the others skip, so the worst case is about 80 ms of one worker every 5 minutes. Stale `.tmp` files (older than `STALE_TMP_SECONDS` = 600 s) are unlinked on every pass, whether or not the directory is over the cap. Every pass calls `filemtime` on each `.json` name it reads, up to `PRUNE_SCAN_LIMIT`, whether or not the directory is over the cap, because the ages are needed to choose what to evict. Only the unlinks are gated: `.json` entries are unlinked only while the count is over the cap. Racy stamps (`ProbeCache::isRacy()`: a mtime or ctime at most `RACY_WINDOW_SECONDS` = 2 s older than now, or ahead of now by no more than `MAX_FUTURE_SKEW_SECONDS` = 86 400 s) are never persisted and never memoized, so `FfmpegRunner::probe()` runs ffprobe on every call for such a file, and that call makes no disk-cache `read()` at all (neither the memo nor the disk entry answers a racy stamp). This is the same with the disk cache on or off. A stamp further ahead than the cap is not racy when it is probed: it is persisted and memoized like an old one, so that probe costs one launch, as any file does. That probe does not bound the cost, because the stamp becomes racy later. The racy test runs again on every call, so a stamp that was beyond the cap when probed is racy from `stamp - MAX_FUTURE_SKEW_SECONDS` onward, and each `probe()` call from then until the clock passes `stamp + RACY_WINDOW_SECONDS` runs one ffprobe launch (a process fork, not in this entry's I/O). That window can open at any offset after the probe, because it is set by the stamp, not by the probe time. Example: a stamp two days ahead (172 800 s), probed at t0, is racy from t0 + 86 400 s to t0 + 172 802 s, so each `probe()` call in that span launches ffprobe. For a stamp within the cap when probed, each `probe()` call runs one ffprobe launch until the clock passes the stamp plus `RACY_WINDOW_SECONDS`, at most 86 402 s (`MAX_FUTURE_SKEW_SECONDS` + `RACY_WINDOW_SECONDS`) after the probe. A stamp in the past stops being racy 3 s after it is written, so only a stamp ahead of the clock carries this cost. Per segment build, the software path (`FfmpegRunner::buildSegmentCommand()`) costs: an SDR source with `require_hdr_tone_map` unset, one launch (from `needsToneMapping()`); an HDR source with it unset, two launches (`needsToneMapping()`, then `getToneMappingProfile()`); with it set and a threaded `tone_map_filter` present, none; with it set and no threaded filter, one (`getToneMappingProfile()`). The hwaccel path (`FfmpegRunner::assembleHwaccelSegmentCommand()`) costs one launch for an SDR source with the flag unset, and for an HDR source with the flag unset it costs two launches only when the encoder is not HDR-capable (on an HDR-capable encoder the `needsToneMapping()` launch is the only one). With the flag set it costs none when the threaded filter is present, and one without it. `AbrLadder` builds a separate `seg-v{V}` segment set for each rendition, so each per-segment count above is repeated for every rendition in the ladder. Example: a 2-hour film at 6 s per segment has about 1 200 segments per rendition. One pass that builds all of them inside the window costs about 1 200 launches per rendition for an SDR source, and about 2 400 for an HDR source on the software path with the flag unset. The time bound is the racy window above, and the per-segment cost is paid only while that window lasts: at most 86 402 s after the probe for a stamp within the cap when probed, and from `stamp - MAX_FUTURE_SKEW_SECONDS` to `stamp + RACY_WINDOW_SECONDS` for a stamp beyond it. |
->
 ---
 
-## Not on this list
+## Exception 14 — trickplay local metadata reads (`TrickplayController`, `TrickplayArtefacts`)
+
+Local filesystem metadata under the trickplay root, on two paths.
+
+**Request path (`TrickplayController.php`).** `hasBif()` calls `filesize()` (line
+194) and runs on the item-detail request path (`MediaItemController.php:612`).
+`resolveArtefact()` calls `realpath()` (line 364), and `serveArtefact()` calls
+`stat()` (line 418). The constructor's `realpath()` (line 108, in `resolveRoot()`)
+runs once per process per configured root, memoised, so it is not a per-request
+call.
+
+**Background path (`TrickplayArtefacts.php`).** `isComplete()` reads
+`timeline.json` whole (`timelineGeneration()`, line 140), two stamp files
+(`readStamp()`, line 192) and the BIF header and terminator (`bifIsWhole()`, line
+231). It is not reached from any request. The only callers are:
+
+- `LibraryScanWorker::start()` installs `Timer::add()` (`LibraryScanWorker.php:504`),
+  which calls `runOnce()` once per tick.
+- For a `media_assets` job, `runOnce()` calls `MediaAssetBackfill::reenqueueLibrary()`
+  (`LibraryScanWorker.php:312`).
+- `reenqueueLibrary()` pages the library in pages of 500 (`MediaAssetBackfill.php:128`,
+  `PAGE_SIZE = 500`) and calls `hasArtefacts()` for each item (line 147), which calls
+  `isComplete()` (line 221).
+- The backfill script calls `isComplete()` as well, from the CLI.
+
+Bound. Per request: a fixed number of metadata calls, with no loop over items. Per
+item in the background path: a timeline read (60 entries, about 4 KB now that each
+entry carries its generation), two small stamp reads, a 72-byte BIF read and one
+`stat()`. The per-item loop is bounded by the library's item count and has no cap per
+tick. A single `reenqueueLibrary()` call walks the whole library inside one tick, so
+the event loop is held for the length of that walk, and each item does blocking reads.
+Measured before the generation stamps, on a warm local cache: realpath, stat and
+filesize together about 10 µs; a timeline read and decode about 54 µs. Those figures
+were not re-measured after the stamps.
+
+**No timeout is enforced.** A stalled network mount under `transcode_dir` would
+block the worker for as long as the kernel waits. The bound above assumes a
+local disk. This entry records the calls. It does not claim the register's rule
+(an enforced timeout) is met; the owner decides whether to keep the local-disk
+assumption or move these calls off the event loop.
+
+---
+
+>## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not
 measured. Exceptions 1 and 2 were both wrong in their own source comments

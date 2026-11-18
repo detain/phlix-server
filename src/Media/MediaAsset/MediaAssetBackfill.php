@@ -12,7 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\MediaAsset;
 
 use Phlix\Media\Library\ItemRepository;
-use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -196,9 +196,12 @@ class MediaAssetBackfill
     /**
      * Whether an item's trickplay artefacts are ALL present already.
      *
-     * Both the sprite and the BIF must exist. Requiring both (rather than either)
-     * means a run interrupted between the two — which is exactly the state a
-     * crashed worker leaves — is retried instead of being recorded as done.
+     * The sprite, the timeline and the BIF must all be whole and carry the same generation
+     * stamp. The check is {@see TrickplayArtefacts::isComplete()}: the sprite is non-empty,
+     * the timeline parses to the full grid, the BIF's index terminator matches its size, and
+     * the stamps agree. Requiring all of it means a run interrupted part way, which is the
+     * state a crashed worker leaves, is retried instead of being recorded as done. Artefacts
+     * written before stamps existed are accepted when whole (see isComplete()).
      *
      * The directory is the PRODUCER's:
      * `FfmpegRunner::getTranscodeDir() . '/trickplay/' . $itemId`, matching
@@ -213,8 +216,9 @@ class MediaAssetBackfill
     {
         $dir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
 
-        return is_file($dir . '/' . FfmpegRunner::SPRITE_FILENAME)
-            && is_file($dir . '/' . BifWriter::FILENAME);
+        // The same completeness rule the trickplay job and the backfill script use,
+        // so this skip never disagrees with them about what "done" means.
+        return TrickplayArtefacts::isComplete($dir);
     }
 
     /**

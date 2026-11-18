@@ -44,14 +44,66 @@ final class BifWriterTest extends TestCase
     /** @var list<string> Temporary files to clean up. */
     private array $tempFiles = [];
 
+    /** @var list<string> Temporary directories to clean up. */
+    private array $tempDirs = [];
+
     protected function tearDown(): void
     {
         foreach ($this->tempFiles as $file) {
-            if (is_file($file)) {
+            if (is_file($file) || is_link($file)) {
                 unlink($file);
             }
         }
         $this->tempFiles = [];
+        foreach ($this->tempDirs as $dir) {
+            $this->removeTree($dir);
+        }
+        $this->tempDirs = [];
+    }
+
+    private function removeTree(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (array_diff(scandir($dir) ?: [], ['.', '..']) as $entry) {
+            $path = $dir . '/' . $entry;
+            if (is_dir($path) && !is_link($path)) {
+                $this->removeTree($path);
+            } else {
+                unlink($path);
+            }
+        }
+        rmdir($dir);
+    }
+
+    /** A fresh empty directory for one test, removed in tearDown(). */
+    private function newDir(): string
+    {
+        $dir = sys_get_temp_dir() . '/bifwriter_atomic_' . getmypid() . '_' . bin2hex(random_bytes(4));
+        mkdir($dir, 0755, true);
+        $this->tempDirs[] = $dir;
+
+        return $dir;
+    }
+
+    /**
+     * Writes the given frames to files in $dir and returns their paths.
+     *
+     * @param list<string> $frames
+     *
+     * @return list<string>
+     */
+    private function frameFiles(string $dir, array $frames): array
+    {
+        $paths = [];
+        foreach ($frames as $i => $frame) {
+            $path = $dir . "/frame_{$i}.jpg";
+            file_put_contents($path, $frame);
+            $paths[] = $path;
+        }
+
+        return $paths;
     }
 
     /**
@@ -247,6 +299,92 @@ final class BifWriterTest extends TestCase
             10000,
             sys_get_temp_dir() . '/bifwriter_never_written.bif'
         );
+    }
+
+    public function testSuccessfulWriteLeavesNoTemporaryBehind(): void
+    {
+        $dir = $this->newDir();
+        $paths = $this->frameFiles($dir, $this->frames(3));
+
+        BifWriter::writeFromFiles($paths, 10000, $dir . '/' . BifWriter::FILENAME);
+
+        $this->assertFileExists($dir . '/' . BifWriter::FILENAME);
+        $this->assertSame([], $this->temporaries($dir));
+    }
+
+    public function testADiskFullWriteFailsAndLeavesNeitherArchiveNorTemporary(): void
+    {
+        if (!file_exists('/dev/full')) {
+            $this->markTestSkipped('/dev/full is needed to force a real ENOSPC on write.');
+        }
+        $dir = $this->newDir();
+        $paths = $this->frameFiles($dir, $this->frames(3));
+        // Every write to the temporary goes to /dev/full, which fails with ENOSPC,
+        // the way a full disk does. The old in-place writer returned normally here.
+        symlink('/dev/full', $dir . '/.tmp-' . BifWriter::FILENAME);
+
+        try {
+            BifWriter::writeFromFiles($paths, 10000, $dir . '/' . BifWriter::FILENAME);
+            $this->fail('A failed write must throw, not return a byte count.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('short write', $e->getMessage());
+        }
+
+        $this->assertFileDoesNotExist($dir . '/' . BifWriter::FILENAME);
+        $this->assertFalse(is_link($dir . '/.tmp-' . BifWriter::FILENAME), 'The temporary must be removed on failure.');
+    }
+
+    public function testAFailedBuildKeepsThePreviousArchiveUntouched(): void
+    {
+        $dir = $this->newDir();
+        $final = $dir . '/' . BifWriter::FILENAME;
+        BifWriter::writeFromFiles($this->frameFiles($dir, $this->frames(3)), 10000, $final);
+        $before = (string) file_get_contents($final);
+
+        // A non-JPEG frame is refused before anything is written.
+        $bad = $dir . '/bad.jpg';
+        file_put_contents($bad, 'not a jpeg');
+        try {
+            BifWriter::writeFromFiles([$bad, $bad], 10000, $final);
+            $this->fail('A non-JPEG frame must be refused.');
+        } catch (InvalidArgumentException) {
+            // expected
+        }
+
+        $this->assertSame($before, file_get_contents($final));
+        $this->assertSame([], $this->temporaries($dir));
+    }
+
+    public function testAFailedPublishRemovesTheTemporary(): void
+    {
+        $dir = $this->newDir();
+        $paths = $this->frameFiles($dir, $this->frames(2));
+        // A non-empty directory where the archive should go: the rename must fail.
+        $blocked = $dir . '/' . BifWriter::FILENAME;
+        mkdir($blocked);
+        file_put_contents($blocked . '/keep', 'x');
+
+        try {
+            BifWriter::writeFromFiles($paths, 10000, $blocked);
+            $this->fail('A failed publish must throw.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('cannot publish', $e->getMessage());
+        }
+
+        $this->assertSame([], $this->temporaries($dir));
+    }
+
+    /** Names in $dir that are the writer's temporaries (and nothing else). */
+    private function temporaries(string $dir): array
+    {
+        $names = [];
+        foreach (array_diff(scandir($dir) ?: [], ['.', '..']) as $name) {
+            if (str_starts_with($name, '.tmp-')) {
+                $names[] = $name;
+            }
+        }
+
+        return $names;
     }
 
     // ------------------------------------------------------------ controls ---

@@ -16,6 +16,7 @@ use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
 use Phlix\Media\Streaming\Trickplay\BifWriter;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -34,30 +35,13 @@ use Workerman\MySQL\Connection;
 class MediaAssetGenerationJob
 {
     /**
-     * Default number of trickplay sprites.
+     * Chapters extracted per ffmpeg process.
      *
-     * 60 thumbnails at 160x90 laid out by {@see FfmpegRunner} as **6 columns by
-     * 10 rows** — the `10x6` this comment used to claim was the transpose, and
-     * `config/trickplay.php`'s `grid_columns: 8` / `grid_rows: 4` belonged to the
-     * deleted second implementation and never described anything that ran.
+     * The batch opens the media file once per timestamp, so one process's input
+     * count, open file handles and memory grow with the batch. 20 keeps a
+     * 200-chapter title to ten processes without an unbounded command line.
      */
-    private const DEFAULT_TRICKPLAY_COUNT = 60;
-
-    /** Seconds between BIF frames that the frame count is derived from. */
-    private const BIF_TARGET_INTERVAL_SECONDS = 10;
-
-    /**
-     * Hard cap on BIF frames.
-     *
-     * The archive embeds every frame, so its size is linear in this number and
-     * it is downloaded whole by the device before scrubbing works. 600 frames at
-     * ~12 KB is roughly 7 MB; past a 100-minute runtime the effective interval
-     * stretches rather than the file growing without bound.
-     */
-    private const BIF_MAX_FRAMES = 600;
-
-    /** BIF frame width in pixels — Roku's recommended HD trickplay width. */
-    private const BIF_FRAME_WIDTH = 320;
+    private const CHAPTER_THUMB_BATCH_SIZE = 20;
 
     /**
      * File name of the BIF archive inside a media item's trickplay directory.
@@ -144,6 +128,20 @@ class MediaAssetGenerationJob
     }
 
     /**
+     * Reads the chapter list from the container (ffprobe `-show_chapters`).
+     *
+     * A seam, so the batch path can be exercised without a media file. The
+     * {@see ChapterMarkerService} this job uses is the Media one
+     * (`Phlix\Media\Markers`), not the LiveTv recording one.
+     *
+     * @return array<int, \Phlix\Media\Markers\ChapterMarker>
+     */
+    protected function extractChapters(string $path): array
+    {
+        return (new ChapterMarkerService($this->ffmpeg))->extractFromFile($path);
+    }
+
+    /**
      * Generate per-chapter thumbnail images and store chapter markers.
      *
      * @param MediaAssetJob $job
@@ -164,8 +162,7 @@ class MediaAssetGenerationJob
         }
 
         try {
-            $chapterService = new ChapterMarkerService($this->ffmpeg);
-            $chapters = $chapterService->extractFromFile($path);
+            $chapters = $this->extractChapters($path);
 
             if (empty($chapters)) {
                 return false;
@@ -180,12 +177,34 @@ class MediaAssetGenerationJob
             $mediaMarkerService = new MarkerService($this->db);
             $anySuccess = false;
 
-            foreach ($chapters as $index => $chapter) {
-                $thumbPath = $chapterDir . '/' . $index . '.jpg';
-                $startSeconds = $chapter->start_seconds;
+            // One ffmpeg process per batch of chapters, not one per chapter. Each
+            // process pays its own start-up, probe and open cost, which dominated a
+            // long chapter list. Batch frames are renamed to their chapter index.
+            foreach (array_chunk($chapters, self::CHAPTER_THUMB_BATCH_SIZE, true) as $batch) {
+                $timestamps = [];
+                foreach ($batch as $chapter) {
+                    $timestamps[] = $chapter->start_seconds;
+                }
 
-                $success = $this->ffmpeg->generateThumbnail($path, $thumbPath, $startSeconds);
-                if ($success) {
+                for ($position = 0; $position < count($batch); $position++) {
+                    @unlink($chapterDir . '/' . FfmpegRunner::batchFrameFileName($position));
+                }
+                $this->ffmpeg->generateThumbnailBatch($path, $timestamps, $chapterDir);
+
+                // Judge each chapter by the frame file it produced, not by the
+                // batch's exit code: a batch with one unreachable timestamp still
+                // writes the others, and the exit code does not say which.
+                $position = 0;
+                foreach ($batch as $index => $chapter) {
+                    $frame = $chapterDir . '/' . FfmpegRunner::batchFrameFileName($position++);
+                    $thumbPath = $chapterDir . '/' . $index . '.jpg';
+                    $startSeconds = $chapter->start_seconds;
+
+                    if (!is_file($frame) || filesize($frame) === 0 || !rename($frame, $thumbPath)) {
+                        @unlink($frame);
+                        continue;
+                    }
+
                     $mediaMarkerService->upsert(
                         $itemId,
                         MarkerType::Chapter,
@@ -247,28 +266,58 @@ class MediaAssetGenerationJob
             return true;
         }
 
+        $lock = null;
         try {
             $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
             if (!is_dir($spriteDir)) {
                 @mkdir($spriteDir, 0755, true);
             }
 
-            $result = $this->ffmpeg->generateTrickplaySprites($path, $spriteDir, self::DEFAULT_TRICKPLAY_COUNT);
+            // One pass per item at a time: the backfill script writes the same
+            // directory. Skip without waiting if it holds the lock; its pass produces
+            // the same artefacts.
+            $lock = TrickplayArtefacts::tryLock($spriteDir);
+            if ($lock === null) {
+                $this->logger->info('MediaAssetGenerationJob: trickplay skipped, another pass holds the item', [
+                    'item_id' => $itemId,
+                ]);
 
-            if ($result === null) {
+                return true;
+            }
+
+            // ONE ffmpeg pass produces the sprite, its timeline and the BIF frames.
+            // The sprite and the BIF used to be two passes, each decoding the whole
+            // file. See FfmpegRunner::generateTrickplayArtefacts().
+            $result = $this->ffmpeg->generateTrickplayArtefacts(
+                $path,
+                $spriteDir,
+                TrickplayArtefacts::SPRITE_COUNT,
+                TrickplayArtefacts::bifFrameCount($job->duration),
+                TrickplayArtefacts::BIF_FRAME_WIDTH,
+                ['item_id' => $itemId]
+            );
+
+            if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
                 return false;
             }
 
-            [$spritePath, $timelinePath] = $result;
-            $this->itemRepo->updateMarkers($itemId, [
-                'trickplay_sprite_path' => $spritePath,
-                'trickplay_timeline_path' => $timelinePath,
-            ]);
+            $frames = $result['bif_frames'];
+            try {
+                $this->itemRepo->updateMarkers($itemId, [
+                    'trickplay_sprite_path' => $result['sprite'],
+                    'trickplay_timeline_path' => $result['timeline'],
+                ]);
 
-            // Best-effort, and deliberately NOT folded into this method's return
-            // value: the sprite sheet is what the web player needs, and losing
-            // the BIF must not mark the whole asset job failed.
-            $this->generateTrickplayBif($job, $spriteDir);
+                // Best-effort, and deliberately NOT folded into this method's return
+                // value: the sprite sheet is what the web player needs, and losing
+                // the BIF must not mark the whole asset job failed.
+                $this->writeTrickplayBif($job, $frames, $result['bif_interval_ms'], $spriteDir, $result['generation']);
+            } finally {
+                // The per-frame JPEGs are an intermediate; only the archive is served.
+                foreach ($frames as $frame) {
+                    @unlink($frame);
+                }
+            }
 
             return true;
         } catch (\Throwable $e) {
@@ -278,11 +327,14 @@ class MediaAssetGenerationJob
             ]);
 
             return false;
+        } finally {
+            TrickplayArtefacts::unlock($lock);
         }
     }
 
     /**
-     * Write the Roku BIF archive next to the sprite sheet.
+     * Write the Roku BIF archive next to the sprite sheet from frames the
+     * combined pass already extracted.
      *
      * Runs here, in the background media-asset worker, rather than on demand:
      * the HTTP side is a resident Workerman event loop, and shelling ffmpeg
@@ -290,36 +342,35 @@ class MediaAssetGenerationJob
      * other connection in the worker for the length of a full decode pass.
      * Pre-generating means the first scrub costs one static file read.
      *
-     * @param MediaAssetJob $job       The job being processed.
-     * @param string        $spriteDir The item's trickplay directory.
+     * The caller owns the frame files and deletes them; this method only
+     * builds the archive from them.
+     *
+     * @param MediaAssetJob  $job        The job being processed.
+     * @param list<string>   $frames     BIF frame JPEGs in capture order (empty when the BIF branch failed).
+     * @param int            $intervalMs Milliseconds between consecutive frames.
+     * @param string         $spriteDir  The item's trickplay directory.
+     * @param string         $generation The pass's generation token, which stamps the BIF.
      *
      * @return bool True if `thumbs.bif` was written.
      */
-    private function generateTrickplayBif(MediaAssetJob $job, string $spriteDir): bool
-    {
-        $frames = [];
-
+    private function writeTrickplayBif(
+        MediaAssetJob $job,
+        array $frames,
+        int $intervalMs,
+        string $spriteDir,
+        string $generation
+    ): bool {
         try {
-            $count = self::DEFAULT_TRICKPLAY_COUNT;
-            if ($job->duration > 0) {
-                $count = (int) ceil($job->duration / self::BIF_TARGET_INTERVAL_SECONDS);
-                $count = max(2, min(self::BIF_MAX_FRAMES, $count));
-            }
+            if (!TrickplayArtefacts::writeBif($frames, $intervalMs, $spriteDir, $generation)) {
+                // Recorded so the backfill's bif-failed.json skip reflects this failure, not a
+                // stale one from an earlier backfill run.
+                TrickplayArtefacts::markBifFailed($spriteDir, 'in-app job: BIF not written');
 
-            $extracted = $this->ffmpeg->generateBifFrames(
-                $job->path,
-                $spriteDir,
-                $count,
-                self::BIF_FRAME_WIDTH
-            );
-
-            if ($extracted === null) {
                 return false;
             }
 
-            [$frames, $intervalMs] = $extracted;
-
-            BifWriter::writeFromFiles($frames, $intervalMs, $spriteDir . '/' . self::BIF_FILENAME);
+            // A BIF written now replaces any failure an earlier run recorded.
+            TrickplayArtefacts::clearBifFailedMarker($spriteDir);
 
             $this->logger->info('MediaAssetGenerationJob: BIF written', [
                 'item_id' => $job->itemId,
@@ -329,17 +380,13 @@ class MediaAssetGenerationJob
 
             return true;
         } catch (\Throwable $e) {
+            TrickplayArtefacts::markBifFailed($spriteDir, 'in-app job: BIF generation threw');
             $this->logger->warning('MediaAssetGenerationJob: BIF generation failed', [
                 'item_id' => $job->itemId,
                 'error' => $e->getMessage(),
             ]);
 
             return false;
-        } finally {
-            // The per-frame JPEGs are an intermediate; only the archive is served.
-            foreach ($frames as $frame) {
-                @unlink($frame);
-            }
         }
     }
 }

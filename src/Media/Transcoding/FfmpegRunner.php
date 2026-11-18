@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding;
 
 use Phlix\Common\Env\EnvConfig;
+use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
@@ -684,13 +685,36 @@ class FfmpegRunner
         ) {
             /** @var array{code?: int, signal?: int, output?: string} $result */
             $result = \Swoole\Coroutine\System::exec($cmd);
-            $exitCode = (int) ($result['code'] ?? 1);
+            $exitCode = self::exitCodeFromSystemExec($result);
             $output = (isset($result['output']) && $result['output'] !== '') ? explode("\n", $result['output']) : [];
             return $exitCode === 0;
         }
 
         exec($cmd, $output, $exitCode);
         return $exitCode === 0;
+    }
+
+    /**
+     * Reduces a Swoole `System::exec()` result to one exit code, counting a signal kill as failure.
+     *
+     * A process killed by a signal can come back with `code` 0 and a non-zero `signal`.
+     * Reading the code alone would let a killed pass count as a clean exit. A non-zero
+     * signal therefore always gives a non-zero result: the reported code when it is already
+     * non-zero, else 128 + the signal number, the shell's convention for a signal death.
+     *
+     * @param array{code?: int, signal?: int, output?: string} $result The array System::exec() returned.
+     *
+     * @return int 0 only for a clean exit with no signal.
+     */
+    public static function exitCodeFromSystemExec(array $result): int
+    {
+        $code = (int) ($result['code'] ?? 1);
+        $signal = abs((int) ($result['signal'] ?? 0));
+        if ($signal !== 0) {
+            return $code !== 0 ? $code : 128 + $signal;
+        }
+
+        return $code;
     }
 
     /**
@@ -1413,7 +1437,7 @@ class FfmpegRunner
         $inputArgs = '';
         $outputArgs = '';
         foreach ($timestamps as $index => $timestamp) {
-            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            $framePath = $outputDir . '/' . self::batchFrameFileName($index);
 
             // Input-side seek: `-ss` before its own `-i` re-open of the same
             // file performs a fast demuxer-level seek instead of decoding
@@ -1425,20 +1449,43 @@ class FfmpegRunner
             // strictness flag leads the group (output options bind to the
             // filename that follows; placing it before -map keeps every
             // contiguous `-map … -vframes 1 …` shape pin intact).
+            // `-q:v 2` is the same JPEG quality {@see buildThumbnailCommand()} uses for a
+            // single frame. Without it the batch wrote frames about a third smaller than
+            // the one-process-per-chapter path it replaced.
             $outputArgs .= sprintf(
-                ' %s -map %d:v:0 -vframes 1 %s',
+                ' -q:v 2 %s -map %d:v:0 -vframes 1 %s',
                 self::MJPEG_STRICTNESS_ARGS,
                 $index,
                 escapeshellarg($framePath)
             );
         }
 
+        // Same background limits as the trickplay pass. A batch runs up to 20 inputs
+        // in one process, and without a thread cap each decoder takes automatic
+        // threads on the media-asset worker, competing with live playback.
         return sprintf(
-            '%s -y -hide_banner -loglevel error%s%s',
+            'nice -n %d %s -y -hide_banner -loglevel error -threads %d%s%s',
+            self::TRICKPLAY_NICE_LEVEL,
             escapeshellarg($this->ffmpegPath),
+            self::TRICKPLAY_DECODE_THREADS,
             $inputArgs,
             $outputArgs
         );
+    }
+
+    /**
+     * File name {@see generateThumbnailBatch()} writes for the frame at a position.
+     *
+     * Public so a caller that renames the frames into their own names (the
+     * chapter-thumbnail job does) reads the same spelling the batch writes.
+     *
+     * @param int $index Position of the timestamp in the batch, from 0.
+     *
+     * @return string `frame_NNNNN.jpg`
+     */
+    public static function batchFrameFileName(int $index): string
+    {
+        return 'frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
     }
 
     /**
@@ -1490,7 +1537,7 @@ class FfmpegRunner
         }
 
         foreach (array_keys($timestamps) as $index) {
-            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            $framePath = $outputDir . '/' . self::batchFrameFileName($index);
             if (is_file($framePath) && filesize($framePath) > 0) {
                 return true;
             }
@@ -3335,6 +3382,26 @@ class FfmpegRunner
     /** File name of the trickplay timeline written beside {@see self::SPRITE_FILENAME}. */
     public const TIMELINE_FILENAME = 'timeline.json';
 
+    /**
+     * Generation stamp written beside the sprite. It holds the pass's generation token and
+     * must equal the `generation` field of every timeline entry and the BIF's stamp, or the
+     * item is incomplete. See {@see TrickplayArtefacts::isComplete()}.
+     */
+    public const SPRITE_GENERATION_FILENAME = 'sprite.gen';
+
+    /**
+     * Prefix of the temporary name a trickplay artefact is written under before it
+     * is renamed onto its final name. The temporary sits in the same directory, so
+     * the rename is atomic, and a reader never sees a partly written file.
+     */
+    public const TEMP_FILE_PREFIX = '.tmp-';
+
+    /**
+     * Name, under {@see self::TEMP_FILE_PREFIX}, of the framemd5 file a trickplay pass
+     * writes so the sprite's slot count can be read back. It is deleted on every path.
+     */
+    private const SLOT_COUNT_FILENAME = 'slots.framemd5';
+
     /** Sprite-sheet columns; rows are derived from the requested thumb count. */
     private const TRICKPLAY_SPRITE_COLUMNS = 6;
 
@@ -3349,6 +3416,24 @@ class FfmpegRunner
 
     /** Gap the `tile` filter leaves between adjacent thumbnails, in pixels. */
     private const TRICKPLAY_PADDING = 1;
+
+    /**
+     * Decoder thread cap for a trickplay pass.
+     *
+     * Measured on the sample file (1080p H.264, 30 s window, `-f null`): the
+     * single-pass CPU cost is about the same at 2, 4 or auto threads (about
+     * 0.23 CPU-s per second of video), but wall time falls from about 0.13 to
+     * 0.08 real-s per second of video between 2 and 4 threads. 4 keeps a
+     * feature-length title near the wall time the old two passes took while
+     * still capping the burst well below a 12-core host.
+     */
+    private const TRICKPLAY_DECODE_THREADS = 4;
+
+    /**
+     * `nice` level for a trickplay pass. Trickplay is background work on the
+     * media-asset worker, so it must yield to live transcodes and playback.
+     */
+    private const TRICKPLAY_NICE_LEVEL = 19;
 
     /**
      * Formats a positive, finite seconds value for use inside an FFmpeg filter
@@ -3379,7 +3464,8 @@ class FfmpegRunner
      *
      * Produces a 6-column sprite sheet grid (default 60 thumbs = 6x10) at 160x90
      * each, plus a JSON timeline mapping each thumbnail index to its (x, y)
-     * position within the sprite and the video timestamp it represents.
+     * position within the sprite and the video timestamp it represents. A thin
+     * wrapper over {@see generateTrickplayArtefacts()} with no BIF branch.
      *
      * @param string $videoPath  Source video file path.
      * @param string $outputDir  Directory to write sprite.jpg and timeline.json.
@@ -3392,6 +3478,114 @@ class FfmpegRunner
      */
     public function generateTrickplaySprites(string $videoPath, string $outputDir, int $count = 60): ?array
     {
+        // This entry point has no caller that holds the item lock, so it takes it here. A
+        // held lock means another pass is writing this directory: skip without waiting.
+        $lock = TrickplayArtefacts::tryLock($outputDir);
+        if ($lock === null) {
+            $this->logger->info('Trickplay sprite pass skipped: another pass holds the item', [
+                'output_dir' => $outputDir,
+            ]);
+
+            return null;
+        }
+
+        try {
+            $result = $this->generateTrickplayArtefacts($videoPath, $outputDir, $count, 0);
+        } finally {
+            TrickplayArtefacts::unlock($lock);
+        }
+        if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
+            return null;
+        }
+
+        return [$result['sprite'], $result['timeline']];
+    }
+
+    /**
+     * Produces the sprite sheet, its timeline and the Roku BIF frames in ONE FFmpeg pass.
+     *
+     * The sprite and the BIF used to be two commands, and each decoded the whole
+     * file: the `fps` sampler sits after the decoder, so nothing can skip the
+     * frames it will discard. Both outputs now hang off a single decode. The
+     * input is split once and each branch keeps its own `trim` + `fps` sampler,
+     * because the two grids differ (the sprite samples `duration / 60`, the BIF
+     * samples `duration / bifCount`). The decoder is NOT switched to keyframe-only
+     * (`-skip_frame nokey`): that snaps every sample to the nearest keyframe, which
+     * for a 9.5 s GOP is a mean 1.6 s / max 5.1 s timing error on the BIF grid, and
+     * it would misalign the scrub preview with the timestamps the player shows.
+     *
+     * One input seek is shared, so it sits at the earliest sample offset. Each
+     * branch trims to its own offset and then shifts its clock by that offset
+     * (`setpts=PTS-<t>/TB`), so its `fps` grid is anchored on the same instant the
+     * two-pass code anchored it on. Resetting the clock to the first kept frame
+     * (`setpts=PTS-STARTPTS`) moves the grid by up to one frame, which changed
+     * which frame some samples picked; it is therefore not used. Verified
+     * byte-identical against the two-pass output on a local clip.
+     *
+     * The pass runs under `nice -n 19` with a decoder thread cap, because it is
+     * background work on the media-asset worker.
+     *
+     * @param string $videoPath Source video file path.
+     * @param string $outputDir Directory for sprite.jpg, timeline.json and bifframe_NNNNN.jpg.
+     * @param int    $spriteCount Sprite thumbnails (0 = no sprite branch).
+     * @param int    $bifCount    BIF frames (0 = no BIF branch; otherwise >= 2).
+     * @param int    $bifWidth    BIF frame width in pixels; height follows the aspect ratio.
+     *
+     * @param array<string, mixed> $logContext Extra fields for the failure log (e.g. item_id).
+     *
+     * @return array{
+     *     sprite: string|null,
+     *     timeline: string|null,
+     *     bif_frames: list<string>,
+     *     bif_interval_ms: int,
+     *     generation: string
+     * }|null
+     *         Null when the probe fails, the request is invalid, ffmpeg exits
+     *         non-zero, or any requested artefact is incomplete (sprite missing,
+     *         or fewer BIF frames than `$bifCount`). A null result publishes
+     *         nothing: everything the pass wrote is removed. The caller owns any
+     *         returned BIF frame files. `generation` is the token this pass stamped
+     *         into the sprite and timeline; the caller passes it to
+     *         {@see TrickplayArtefacts::writeBif()} so the BIF carries the same stamp.
+     *
+     * The caller must hold the item's `.trickplay.lock` for the whole pass, including the
+     * BIF write that follows it. The pass sweeps the directory's temporaries, so a second
+     * pass running beside it would delete the first pass's files. The two entry points that
+     * have no such caller, generateTrickplaySprites() and generateBifFrames(), take the lock
+     * themselves.
+     *
+     * @since 0.103.0
+     */
+    public function generateTrickplayArtefacts(
+        string $videoPath,
+        string $outputDir,
+        int $spriteCount = 60,
+        int $bifCount = 0,
+        int $bifWidth = 320,
+        array $logContext = []
+    ): ?array {
+        $wantSprite = $spriteCount > 0;
+        $wantBif = $bifCount > 0;
+        if (!$wantSprite && !$wantBif) {
+            return null;
+        }
+        if ($wantBif && ($bifCount < 2 || $bifWidth < 2)) {
+            return null;
+        }
+
+        // The sprite is a grid of whole rows. A count that is not a multiple of the
+        // column count leaves cells the sampler never fills: with 61 the sheet has 66
+        // cells and 5 of them are black, and the slot count (61 slots) still matches.
+        // Refuse it here rather than publish a sheet with black cells.
+        if ($wantSprite && $spriteCount % self::TRICKPLAY_SPRITE_COLUMNS !== 0) {
+            $this->logger->warning('Trickplay pass refused: sprite count is not a whole number of grid rows', [
+                'sprite_count' => $spriteCount,
+                'columns' => self::TRICKPLAY_SPRITE_COLUMNS,
+            ]);
+
+            return null;
+        }
+
         $probe = $this->probe($videoPath);
         if (!is_array($probe)) {
             return null;
@@ -3412,28 +3606,43 @@ class FfmpegRunner
             return null;
         }
 
-        if ($count < 1) {
-            return null;
-        }
-
-        $interval = $duration / $count;
-        $cols = self::TRICKPLAY_SPRITE_COLUMNS;
-        $rows = (int) ceil($count / $cols);
-        $thumbW = self::TRICKPLAY_THUMB_WIDTH;
-        $thumbH = self::TRICKPLAY_THUMB_HEIGHT;
-        $margin = self::TRICKPLAY_MARGIN;
-        $padding = self::TRICKPLAY_PADDING;
-
         // Sample the MIDPOINT OF EACH INTERVAL rather than its start. That keeps
         // the original intent — thumbnail 0 is not the black slate at t=0 — while
         // still covering the whole file. The previous `-ss (duration / 2)` seeked
         // to the middle of the VIDEO, so the sheet only ever showed its second
         // half at twice the labelled time and the bottom rows came out empty.
-        $offset = $interval / 2.0;
+        $spriteInterval = $wantSprite ? $duration / $spriteCount : 0.0;
+        $spriteOffset = $spriteInterval / 2.0;
+        $bifInterval = $wantBif ? $duration / $bifCount : 0.0;
+        $bifOffset = $bifInterval / 2.0;
 
-        $intervalArg = self::filterSeconds($interval);
-        $offsetArg = self::filterSeconds($offset);
-        if ($intervalArg === null || $offsetArg === null) {
+        // Each grid is anchored on its offset AS WRITTEN into the command (3 dp), so
+        // the shared seek and every branch's trim are computed from those same
+        // rounded values. The sample instants then match the two-pass code exactly.
+        $spriteOriginArg = $wantSprite ? self::filterSeconds($spriteOffset) : null;
+        $bifOriginArg = $wantBif ? self::filterSeconds($bifOffset) : null;
+        $origins = [];
+        if ($spriteOriginArg !== null) {
+            $origins[] = (float) $spriteOriginArg;
+        }
+        if ($bifOriginArg !== null) {
+            $origins[] = (float) $bifOriginArg;
+        }
+        $seek = $origins === [] ? 0.0 : min($origins);
+        $seekArg = $origins === [] ? null : self::filterSeconds($seek);
+
+        $spriteIntervalArg = $wantSprite ? self::filterSeconds($spriteInterval) : null;
+        $spriteTrimArg = $spriteOriginArg === null
+            ? null
+            : self::filterOffset(max(0.0, (float) $spriteOriginArg - $seek));
+        $bifIntervalArg = $wantBif ? self::filterSeconds($bifInterval) : null;
+        $bifTrimArg = $bifOriginArg === null
+            ? null
+            : self::filterOffset(max(0.0, (float) $bifOriginArg - $seek));
+
+        $spriteUsable = !$wantSprite || ($spriteIntervalArg !== null && $spriteTrimArg !== null);
+        $bifUsable = !$wantBif || ($bifIntervalArg !== null && $bifTrimArg !== null);
+        if ($seekArg === null || !$spriteUsable || !$bifUsable) {
             return null;
         }
 
@@ -3443,101 +3652,689 @@ class FfmpegRunner
             }
         }
 
-        $spritePath = $outputDir . '/' . self::SPRITE_FILENAME;
-        $timelinePath = $outputDir . '/' . self::TIMELINE_FILENAME;
+        $spritePath = $wantSprite ? $outputDir . '/' . self::SPRITE_FILENAME : null;
+        $timelinePath = $wantSprite ? $outputDir . '/' . self::TIMELINE_FILENAME : null;
+        $bifPattern = $wantBif ? $outputDir . '/bifframe_%05d.jpg' : null;
+
+        // The sprite and timeline are written under temporary names and renamed
+        // onto the final names only after the whole pass has been checked. The
+        // sprite temporary keeps its .jpg extension, which selects the image muxer.
+        $tempPrefix = $outputDir . '/' . self::TEMP_FILE_PREFIX;
+        $spriteTemp = $spritePath === null ? null : $tempPrefix . self::SPRITE_FILENAME;
+        $timelineTemp = $timelinePath === null ? null : $tempPrefix . self::TIMELINE_FILENAME;
+
+        // One token per pass. The sprite stamp, every timeline entry and the BIF stamp carry
+        // it, so a crash that leaves a new sprite beside an old timeline (or the reverse) is
+        // detected by isComplete() instead of being accepted as a pair. The token is random,
+        // so two passes never share one.
+        $generation = bin2hex(random_bytes(8));
+        $spriteGenPath = $spritePath === null ? null : $outputDir . '/' . self::SPRITE_GENERATION_FILENAME;
+        $spriteGenTemp = $spriteGenPath === null ? null : $tempPrefix . self::SPRITE_GENERATION_FILENAME;
+
+        $cols = self::TRICKPLAY_SPRITE_COLUMNS;
+        $thumbW = self::TRICKPLAY_THUMB_WIDTH;
+        $thumbH = self::TRICKPLAY_THUMB_HEIGHT;
+        $margin = self::TRICKPLAY_MARGIN;
+        $padding = self::TRICKPLAY_PADDING;
 
         // `tile`'s layout option is an IMAGE SIZE — `6x10`, not `6:10`. Written
         // with a colon it is parsed positionally as layout="6", which ffmpeg
         // rejects with "Unable to parse option value \"6\" as image size" and
         // the whole filtergraph fails, so NO sprite was ever produced.
-        // Interpolated bare, not via escapeshellarg(): the value sits inside the
-        // double-quoted -vf argument, where the single quotes escapeshellarg()
-        // adds would reach ffmpeg verbatim (`fps=1/'2'`). filterSeconds() has
-        // already restricted it to digits and one dot.
-        $vfFilter = sprintf(
-            'fps=1/%s,scale=%d:%d,tile=%dx%d:margin=%d:padding=%d',
-            $intervalArg,
-            $thumbW,
-            $thumbH,
-            $cols,
-            $rows,
-            $margin,
-            $padding
+        // Interpolated bare, not via escapeshellarg(): the values sit inside the
+        // double-quoted -filter_complex argument, where the single quotes
+        // escapeshellarg() adds would reach ffmpeg verbatim. filterSeconds() and
+        // filterOffset() have already restricted them to digits and one dot.
+        // `eof_action=pass` on both `fps` samplers. Measured with ffmpeg 6.1.1 on a
+        // 120 s MKV and a 120 s MP4: `round` and `pass` gave the same 60 slots and
+        // identical per-frame checksums of the sampled frames (framemd5). On a 118 s
+        // MKV whose video ends early, both gave 59 slots, and the slot-count check
+        // rejects that pass. The 59-of-60 result that first motivated `pass` was not
+        // reproduced in that re-measurement, so the option is kept as the explicit
+        // end-of-input behaviour, not as a claimed fix.
+        $spriteChain = null;
+        if ($wantSprite) {
+            $spriteChain = sprintf(
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,'
+                . 'scale=%d:%d,tile=%dx%d:margin=%d:padding=%d[sprite]',
+                $spriteTrimArg,
+                $spriteTrimArg,
+                $spriteIntervalArg,
+                $thumbW,
+                $thumbH,
+                $cols,
+                (int) ceil($spriteCount / $cols),
+                $margin,
+                $padding
+            );
+        }
+        // The slot counter is the sprite's own sampler, written out as one framemd5 line
+        // per slot. A pass that ends before the last sample leaves fewer slots than
+        // cells, and `tile` then fills the missing cells black with exit 0. The count is
+        // what catches that; the sprite bytes cannot show it.
+        $slotChain = null;
+        if ($wantSprite) {
+            $slotChain = sprintf(
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=16:9[slots]',
+                $spriteTrimArg,
+                $spriteTrimArg,
+                $spriteIntervalArg
+            );
+        }
+        $bifChain = null;
+        if ($wantBif) {
+            $bifChain = sprintf(
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=%d:-2[bif]',
+                $bifTrimArg,
+                $bifTrimArg,
+                $bifIntervalArg,
+                $bifWidth
+            );
+        }
+
+        // One decode, fanned out: the input is split once, and each branch reads its own
+        // labelled copy. A single branch needs no split.
+        $branches = array_filter(
+            ['sprite' => $spriteChain, 'slots' => $slotChain, 'bif' => $bifChain],
+            static fn (?string $chain): bool => $chain !== null
         );
-        $cmd = $this->buildTrickplaySpriteCommand($videoPath, $spritePath, $vfFilter, $offsetArg);
+        if (count($branches) === 1) {
+            $graph = '[0:v]' . (string) reset($branches);
+        } else {
+            $inputs = '';
+            $parts = [];
+            foreach ($branches as $name => $chain) {
+                $inputs .= '[in_' . $name . ']';
+                $parts[] = '[in_' . $name . ']' . $chain;
+            }
+            $graph = '[0:v]split=' . count($branches) . $inputs . ';' . implode(';', $parts);
+        }
+
+        $slotsTemp = $spriteTemp === null ? null : $tempPrefix . self::SLOT_COUNT_FILENAME;
+        $cmd = $this->buildTrickplayArtefactsCommand(
+            $videoPath,
+            (string) $seekArg,
+            $graph,
+            $spriteTemp,
+            $bifPattern,
+            $bifCount,
+            $slotsTemp
+        );
+
+        // Nothing a previous pass left may count towards this one. A crash leaves temporaries
+        // and BIF frames behind, and an exit-0 run that writes nothing would otherwise
+        // publish them. Callers hold the item's trickplay lock for the whole pass, so no
+        // other pass is writing the directory while this one clears it.
+        $this->clearStaleTrickplayFiles($outputDir, $bifPattern, $bifCount);
 
         $outputLines = [];
         $exitCode = 0;
-        $this->runCoroutineAwareCommand($cmd, $outputLines, $exitCode);
-        if ($exitCode !== 0 || !is_file($spritePath)) {
-            $output = implode("\n", $outputLines);
-            $this->logger->warning('Trickplay sprite generation failed', [
-                'video' => $videoPath,
-                'output' => $output,
-            ]);
+        $slotCount = null;
+        try {
+            $this->runTrickplayCommand($cmd, $outputLines, $exitCode);
+            $slotCount = $slotsTemp === null ? null : self::countFramemd5Frames($slotsTemp);
+        } catch (\Throwable $e) {
+            // A launch that throws part way leaves partial temporaries; discard them too.
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+            throw $e;
+        } finally {
+            // The slot file is only a measurement. It is removed on every path, including
+            // a thrown run, so it never outlives the pass.
+            if ($slotsTemp !== null) {
+                self::removeTrickplayFile($slotsTemp);
+            }
+        }
+
+        // The pass is all-or-nothing. A non-zero exit, a sprite that is missing, or
+        // a BIF with fewer frames than requested fails the whole pass and removes
+        // everything it wrote. The exit code alone is not enough: a BIF cut short by
+        // a mid-pass output error still leaves a complete-looking sprite, and the
+        // BIF count is the only thing that shows the shortfall.
+        $context = $logContext + [
+            'video' => $videoPath,
+            'exit_code' => $exitCode,
+            'output' => implode("\n", $outputLines),
+        ];
+
+        if ($exitCode !== 0) {
+            $this->logger->warning('Trickplay pass failed: ffmpeg exited non-zero', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
             return null;
         }
 
-        // Build timeline JSON: each entry maps thumbnail index to pixel offset
-        // within the sprite sheet and the corresponding video timestamp.
-        //
-        // The `tile` filter lays a thumbnail's top-left corner at
-        // `margin + index * (size + padding)` — the margin is an outer border
-        // applied ONCE, not per cell. Measured against a real sheet: 6 columns of
-        // 160 px with margin 2 / padding 1 is 6*160 + 5*1 + 2*2 = 969 px wide,
-        // and column 5 begins at 2 + 5*161 = 807. The previous
-        // `index * (size + margin + padding)` drifted by `margin` per step and
-        // put column 5 at 815, so every preview after the first column was
-        // showing a slice of the wrong thumbnails.
+        // Exit 0 is not proof of a complete read. A truncated Matroska input still
+        // exits 0 and prints "File ended prematurely", and its sprite then carries
+        // black cells over the missing tail. The command runs at `-loglevel error`,
+        // so any output at all is an error report.
+        if (self::reportedFfmpegError($outputLines)) {
+            $this->logger->warning('Trickplay pass failed: ffmpeg reported an error', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+            return null;
+        }
+
+        // A sprite whose sampler produced fewer slots than cells is a clip that ended
+        // early: its last cells would be black. Each slot is one sample, so the count
+        // must be exact. A missing count (no file) is treated as a mismatch.
+        if ($spriteTemp !== null && $slotCount !== $spriteCount) {
+            $this->logger->warning('Trickplay sprite has the wrong number of cells; pass discarded', $context + [
+                'slot_count' => $slotCount,
+                'expected_slots' => $spriteCount,
+            ]);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+            return null;
+        }
+
+        if ($spriteTemp !== null && (!is_file($spriteTemp) || filesize($spriteTemp) === 0)) {
+            $this->logger->warning('Trickplay sprite generation failed', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+            return null;
+        }
+
+        $frames = [];
+        $intervalMs = 0;
+        if ($bifPattern !== null) {
+            $frames = $this->collectBifFrames($bifPattern, $bifCount);
+            // The same rounded seconds value the sampler's fps filter was given, so the
+            // archive's labels and the frames' real spacing cannot disagree.
+            $intervalMs = (int) round((float) $bifIntervalArg * 1000.0);
+            if (count($frames) !== $bifCount || $intervalMs < 1) {
+                $this->logger->warning('Trickplay BIF frames incomplete; pass discarded', $context + [
+                    'expected_frames' => $bifCount,
+                    'frames' => count($frames),
+                    'interval_ms' => $intervalMs,
+                ]);
+                $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+                return null;
+            }
+        }
+
+        // The timeline is labelled with the sampler's rounded interval (the same value the fps
+        // filter received), not the unrounded quotient, so the labels cannot drift from the grid.
+        if ($timelineTemp !== null && $spriteGenTemp !== null) {
+            $timelineWritten = $this->writeTrickplayTimeline(
+                $timelineTemp,
+                $spriteCount,
+                (float) $spriteIntervalArg,
+                $generation
+            );
+            $stamped = $timelineWritten && self::writeWholeFile($spriteGenTemp, $generation);
+            if (!$stamped) {
+                $this->logger->warning('Trickplay timeline could not be written; pass discarded', $context);
+                $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+                return null;
+            }
+        }
+
+        // The stamp is published first and the timeline last. The timeline is the commit point:
+        // a crash before it leaves a stamp that differs from the old timeline, so the pair is
+        // incomplete rather than accepted.
+        $published = $this->publishTrickplayFiles([
+            [$spriteGenTemp, $spriteGenPath],
+            [$spriteTemp, $spritePath],
+            [$timelineTemp, $timelinePath],
+        ]);
+        if (!$published) {
+            $this->logger->warning('Trickplay artefacts could not be published; pass discarded', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount, $spriteGenTemp);
+
+            return null;
+        }
+
+        return [
+            'sprite' => $spritePath,
+            'timeline' => $timelinePath,
+            'bif_frames' => $frames,
+            'bif_interval_ms' => $intervalMs,
+            'generation' => $generation,
+        ];
+    }
+
+    /**
+     * Builds the single FFmpeg command line for a trickplay pass.
+     *
+     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
+     * command SHAPE is testable without a real binary. There is exactly one `-i`:
+     * the decode happens once and `-filter_complex` fans it out. Each image output
+     * is an mjpeg output and therefore carries {@see self::MJPEG_STRICTNESS_ARGS}.
+     * The process runs under `nice` at {@see self::TRICKPLAY_NICE_LEVEL} with the
+     * decoder capped at {@see self::TRICKPLAY_DECODE_THREADS} threads.
+     *
+     * @param string      $videoPath  Source video path.
+     * @param string      $seekArg    Pre-built bare-decimal input seek (filterSeconds()-restricted).
+     * @param string      $filterGraph Complete `-filter_complex` graph, whose outputs are labelled
+     *                                `[sprite]` and/or `[bif]`.
+     * @param string|null $spritePath Absolute destination sheet path, or null to omit the sprite output.
+     * @param string|null $bifPattern printf-style BIF frame pattern (…/bifframe_%05d.jpg), or null.
+     * @param int         $bifCount   BIF frame cap for the `[bif]` output.
+     * @param string|null $slotsPath  Absolute framemd5 path for the `[slots]` output, or null to omit it.
+     *
+     * @return string The fully built, shell-escaped FFmpeg command line.
+     *
+     * @since 0.103.0
+     */
+    public function buildTrickplayArtefactsCommand(
+        string $videoPath,
+        string $seekArg,
+        string $filterGraph,
+        ?string $spritePath,
+        ?string $bifPattern,
+        int $bifCount,
+        ?string $slotsPath = null
+    ): string {
+        $outputs = '';
+        if ($spritePath !== null) {
+            $outputs .= sprintf(
+                ' -map "[sprite]" -frames:v 1 %s %s',
+                self::MJPEG_STRICTNESS_ARGS,
+                escapeshellarg($spritePath)
+            );
+        }
+        if ($slotsPath !== null) {
+            $outputs .= sprintf(' -map "[slots]" -f framemd5 %s', escapeshellarg($slotsPath));
+        }
+        if ($bifPattern !== null) {
+            $outputs .= sprintf(
+                ' -map "[bif]" -frames:v %d -qscale:v 4 %s %s',
+                $bifCount,
+                self::MJPEG_STRICTNESS_ARGS,
+                escapeshellarg($bifPattern)
+            );
+        }
+
+        return sprintf(
+            'nice -n %d %s -y -hide_banner -loglevel error -threads %d -ss %s -i %s '
+            . '-filter_complex "%s"%s 2>&1',
+            self::TRICKPLAY_NICE_LEVEL,
+            escapeshellarg($this->ffmpegPath),
+            self::TRICKPLAY_DECODE_THREADS,
+            escapeshellarg($seekArg),
+            escapeshellarg($videoPath),
+            $filterGraph,
+            $outputs
+        );
+    }
+
+    /**
+     * Executes one trickplay pass.
+     *
+     * Kept as its own protected seam so a test can capture the built command and
+     * stand in for ffmpeg, which is what makes the pass's orchestration (gating,
+     * timeline, BIF cleanup) unit-testable without a binary.
+     *
+     * @param string       $cmd      Fully built command line.
+     * @param list<string> &$output  Captured output lines.
+     * @param int          &$exitCode Process exit code.
+     */
+    protected function runTrickplayCommand(string $cmd, array &$output, int &$exitCode): void
+    {
+        $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
+    }
+
+    /**
+     * Formats a non-negative seconds offset for a filter argument.
+     *
+     * Unlike {@see filterSeconds()} this accepts zero, which is the correct value
+     * for a branch that starts at the shared seek point.
+     *
+     * @param float $value Seconds, >= 0.
+     *
+     * @return string|null A bare decimal literal, or null if $value is unusable.
+     */
+    private static function filterOffset(float $value): ?string
+    {
+        if (!\is_finite($value) || $value < 0.0) {
+            return null;
+        }
+
+        $formatted = self::seconds($value);
+
+        return \preg_match('/^[0-9]+(\.[0-9]{1,3})?$/', $formatted) === 1 ? $formatted : null;
+    }
+
+    /**
+     * Writes the sprite timeline: each entry maps a thumbnail index to its pixel
+     * offset within the sheet and the time of the instant the thumbnail was sampled
+     * at, the midpoint of its interval (`(i + 0.5) * interval`). The BIF labels its
+     * frames at the interval start instead, so the two artefacts differ by half an
+     * interval.
+     *
+     * The `tile` filter lays a thumbnail's top-left corner at
+     * `margin + index * (size + padding)` — the margin is an outer border
+     * applied ONCE, not per cell. Measured against a real sheet: 6 columns of
+     * 160 px with margin 2 / padding 1 is 6*160 + 5*1 + 2*2 = 969 px wide,
+     * and column 5 begins at 2 + 5*161 = 807. The previous
+     * `index * (size + margin + padding)` drifted by `margin` per step and
+     * put column 5 at 815, so every preview after the first column was
+     * showing a slice of the wrong thumbnails.
+     *
+     * Each entry also carries the pass's `generation` token, which ties the timeline to the
+     * sprite stamp and the BIF stamp of the same pass (see {@see TrickplayArtefacts::isComplete()}).
+     */
+    private function writeTrickplayTimeline(string $timelinePath, int $count, float $interval, string $generation): bool
+    {
+        $cols = self::TRICKPLAY_SPRITE_COLUMNS;
+        $thumbW = self::TRICKPLAY_THUMB_WIDTH;
+        $thumbH = self::TRICKPLAY_THUMB_HEIGHT;
+        $margin = self::TRICKPLAY_MARGIN;
+        $padding = self::TRICKPLAY_PADDING;
+
         $timeline = [];
         for ($i = 0; $i < $count; $i++) {
             $row = (int) floor($i / $cols);
             $col = $i % $cols;
             $x = $margin + $col * ($thumbW + $padding);
             $y = $margin + $row * ($thumbH + $padding);
-            $time = $offset + $i * $interval;
-            $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
+            // Labelled at the MIDPOINT of the interval it covers: the sampler's offset is
+            // interval / 2, so this is the instant the thumbnail is taken at. The BIF
+            // labels its frames at the interval start (i * multiplier); that is unchanged.
+            $time = ($i + 0.5) * $interval;
+            // The generation stamp of the pass that wrote this entry. isComplete() requires
+            // every entry to carry the same value as the sprite stamp and the BIF stamp.
+            $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y, 'generation' => $generation];
         }
 
-        $json = json_encode($timeline, JSON_THROW_ON_ERROR);
-        file_put_contents($timelinePath, $json);
-
-        return [$spritePath, $timelinePath];
+        return self::writeWholeFile($timelinePath, json_encode($timeline, JSON_THROW_ON_ERROR));
     }
 
     /**
-     * Builds the FFmpeg command line for one trickplay sprite sheet.
-     *
-     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
-     * command SHAPE is testable without a real binary. The sheet is an mjpeg
-     * output and therefore carries {@see self::MJPEG_STRICTNESS_ARGS} like every
-     * other image2 output this class builds.
-     *
-     * @param string $videoPath Source video path.
-     * @param string $spritePath Absolute destination sheet path.
-     * @param string $vfFilter  Pre-built `fps/…,tile=…` filter string (filterSeconds()-restricted).
-     * @param string $offsetArg Pre-built bare-decimal seek offset (filterSeconds()-restricted).
-     *
-     * @return string The fully built, shell-escaped FFmpeg command line.
-     *
-     * @since SV-0.9 Extracted from generateTrickplaySprites(); gains MJPEG_STRICTNESS_ARGS
+     * Writes a whole string to a file, true only when every byte was written.
      */
-    public function buildTrickplaySpriteCommand(
-        string $videoPath,
-        string $spritePath,
-        string $vfFilter,
-        string $offsetArg
-    ): string {
-        return sprintf(
-            '%s -y -hide_banner -loglevel error -ss %s -i %s '
-            . '-vf "%s" -frames:v 1 %s %s 2>&1',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($offsetArg),
-            escapeshellarg($videoPath),
-            $vfFilter,
-            self::MJPEG_STRICTNESS_ARGS,
-            escapeshellarg($spritePath)
-        );
+    private static function writeWholeFile(string $path, string $contents): bool
+    {
+        $bytes = @file_put_contents($path, $contents);
+
+        return $bytes === strlen($contents);
+    }
+
+    /**
+     * Returns the BIF frame paths that exist, in capture order, stopping at the first gap.
+     *
+     * ffmpeg's image2 muxer numbers from 1. Stopping at the first gap means a short
+     * tail (rounding, or a file that ends early) yields the frames that DO exist
+     * rather than a hole in the middle of the index.
+     *
+     * @return list<string>
+     */
+    private function collectBifFrames(string $pattern, int $count): array
+    {
+        $paths = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $framePath = sprintf($pattern, $i);
+            if (!is_file($framePath) || filesize($framePath) === 0) {
+                break;
+            }
+            $paths[] = $framePath;
+        }
+
+        return $paths;
+    }
+
+    /**
+     * Deletes every BIF frame a pass may have left behind, gap or no gap.
+     */
+    private function removeBifFrames(string $pattern, int $count): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            $framePath = sprintf($pattern, $i);
+            if (is_file($framePath)) {
+                @unlink($framePath);
+            }
+        }
+    }
+
+    /**
+     * Deletes what an earlier pass left in an item directory: every temporary and
+     * every BIF frame, including frames numbered past this pass's count from a larger
+     * earlier run. Published artefacts under their final names are not touched.
+     *
+     * The directory sweep covers the pass's own frame range too; {@see removeBifFrames()}
+     * is kept for that range so it is still cleared if the listing fails.
+     */
+    private function clearStaleTrickplayFiles(string $outputDir, ?string $bifPattern, int $bifCount): void
+    {
+        $names = scandir($outputDir);
+        foreach ($names === false ? [] : $names as $name) {
+            if (str_starts_with($name, self::TEMP_FILE_PREFIX) || str_starts_with($name, 'bifframe_')) {
+                self::removeTrickplayFile($outputDir . '/' . $name);
+            }
+        }
+
+        if ($bifPattern !== null) {
+            $this->removeBifFrames($bifPattern, $bifCount);
+        }
+    }
+
+    /**
+     * Whether a trickplay pass's captured output reports an error.
+     *
+     * The pass runs at `-loglevel error` with stderr merged into the output, so a
+     * clean run prints nothing. Any non-blank line is an error report, for example
+     * "File ended prematurely" or "Invalid data found when processing input".
+     *
+     * @param list<string> $outputLines Captured output lines.
+     */
+    private static function reportedFfmpegError(array $outputLines): bool
+    {
+        foreach ($outputLines as $line) {
+            if (trim($line) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Counts the frames a framemd5 file lists: one line per frame, after `#` headers.
+     *
+     * @return int|null The frame count, or null when the file is missing or unreadable.
+     */
+    private static function countFramemd5Frames(string $path): ?int
+    {
+        $lines = is_file($path) ? @file($path, FILE_IGNORE_NEW_LINES) : false;
+        if ($lines === false) {
+            return null;
+        }
+
+        $frames = 0;
+        foreach ($lines as $line) {
+            if ($line !== '' && $line[0] !== '#') {
+                $frames++;
+            }
+        }
+
+        return $frames;
+    }
+
+    /**
+     * Deletes one file or symlink if it exists. Most callers are cleanup and ignore the result;
+     * the rollback checks it.
+     *
+     * @return bool True when no file or symlink remains at the path.
+     */
+    private static function removeTrickplayFile(string $path): bool
+    {
+        if (!is_file($path) && !is_link($path)) {
+            return true;
+        }
+
+        return @unlink($path);
+    }
+
+    /**
+     * Removes the temporary artefacts and BIF frames of a failed trickplay pass.
+     *
+     * The final names are never touched here: a failed pass leaves the previous
+     * complete artefacts (if any) in place, and nothing it wrote is published.
+     *
+     * @param string|null $spriteTemp   Sprite temporary, or null.
+     * @param string|null $timelineTemp Timeline temporary, or null.
+     */
+    private function discardTrickplayPass(
+        ?string $spriteTemp,
+        ?string $timelineTemp,
+        ?string $bifPattern,
+        int $bifCount,
+        ?string $spriteGenTemp = null
+    ): void {
+        foreach ([$spriteTemp, $timelineTemp, $spriteGenTemp] as $path) {
+            if ($path !== null && (is_file($path) || is_link($path))) {
+                @unlink($path);
+            }
+        }
+        if ($bifPattern !== null) {
+            $this->removeBifFrames($bifPattern, $bifCount);
+        }
+    }
+
+    /**
+     * Publishes the verified temporaries onto their final names, all or nothing.
+     *
+     * Each pair is [temporary, final], applied in order; a null pair is skipped. An
+     * existing final keeps its old bytes under a previous-copy name, made as a hard link
+     * (or a plain copy where links are not supported), and the temporary is then renamed
+     * over the final name in one rename(). rename() replaces an existing target atomically
+     * on the same filesystem, which the generation stamps already rely on. So the final name
+     * is never absent during a publish: a reader sees the old whole file or the new whole
+     * file, never "not found" and never a partial one.
+     *
+     * If any step fails, the replacements already made are undone, newest first: each
+     * previous copy is renamed back over the new file, or the new file is removed when
+     * there was no previous one. That removal is the only time a final name is absent. It
+     * happens only when a later pair of the same pass fails and the name had no previous
+     * copy, so the name was absent before the pass too. An item that was complete before the
+     * pass keeps its complete artefacts. The previous copies are deleted once everything is
+     * in place.
+     *
+     * A rollback puts old bytes back under a name whose validators a reader may already
+     * have taken from the new file. {@see TrickplayController::serveArtefact()} documents
+     * that residual window.
+     *
+     * A restore can also fail: its rename or removal is refused. The rollback then stops at
+     * that name and logs a warning naming the file. It stops rather than carrying on, so the
+     * stamp, which is published first and therefore restored last, still holds the new pass's
+     * token. The timeline is published last, so a failed publish never renames it and it still
+     * holds the old token. The two disagree, and isComplete() reports the item as torn until it
+     * is regenerated. The name that failed keeps its new bytes, and its previous copy stays
+     * under the previous-copy name until the next pass sweeps it. Serving is unchanged: the
+     * controller still serves whichever files exist (see TrickplayArtefacts::isComplete()).
+     *
+     * @param list<array{string|null, string|null}> $pairs [temporary, final] in publish order.
+     *
+     * @return bool True when every artefact is published; false with the previous state restored.
+     */
+    private function publishTrickplayFiles(array $pairs): bool
+    {
+        $replaced = [];
+        foreach ($pairs as [$temp, $final]) {
+            if ($temp === null || $final === null) {
+                continue;
+            }
+
+            $previous = null;
+            if (is_file($final)) {
+                $previous = dirname($final) . '/' . self::TEMP_FILE_PREFIX . 'previous-' . basename($final);
+                self::removeTrickplayFile($previous);
+                if (!$this->keepPreviousCopy($final, $previous)) {
+                    $this->restoreTrickplayFiles($replaced);
+
+                    return false;
+                }
+            }
+
+            if (!$this->renameTrickplayPath($temp, $final)) {
+                // The final name still holds its previous bytes, so only the extra name goes.
+                if ($previous !== null) {
+                    self::removeTrickplayFile($previous);
+                }
+                $this->restoreTrickplayFiles($replaced);
+
+                return false;
+            }
+            $replaced[] = [$final, $previous];
+        }
+
+        foreach ($replaced as [, $previous]) {
+            if ($previous !== null) {
+                self::removeTrickplayFile($previous);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Gives an existing final a second name for its current bytes, so a rollback can restore them.
+     *
+     * A hard link costs no I/O and leaves the final name where it is. Where links are not
+     * supported the bytes are copied instead. Either way the final name itself is not touched.
+     *
+     * @param string $final    The published name that holds the old bytes.
+     * @param string $previous The previous-copy name to create.
+     *
+     * @return bool True when the previous copy exists.
+     */
+    private function keepPreviousCopy(string $final, string $previous): bool
+    {
+        if ($this->linkTrickplayPath($final, $previous) || @copy($final, $previous)) {
+            return true;
+        }
+        self::removeTrickplayFile($previous);
+
+        return false;
+    }
+
+    /**
+     * Gives a path a second name as a hard link. Keeping the previous copy goes through this seam
+     * so a test can refuse the link and check the copy fallback. Production behaviour is plain link().
+     *
+     * @return bool True when the link was made.
+     */
+    protected function linkTrickplayPath(string $target, string $link): bool
+    {
+        return @link($target, $link);
+    }
+
+    /**
+     * Renames one path onto another. Publishing goes through this seam so a test can make
+     * one rename fail and check the rollback. Production behaviour is plain rename().
+     *
+     * @return bool True when the rename succeeded.
+     */
+    protected function renameTrickplayPath(string $from, string $to): bool
+    {
+        return @rename($from, $to);
+    }
+
+    /**
+     * Undoes the replacements of a publish that failed part way, newest first.
+     *
+     * Stops at the first restore that is refused and logs a warning naming the file; see
+     * {@see publishTrickplayFiles()} for what that leaves torn.
+     *
+     * @param list<array{string, string|null}> $replaced Pairs of [final path, previous copy or null].
+     */
+    private function restoreTrickplayFiles(array $replaced): void
+    {
+        foreach (array_reverse($replaced) as [$final, $previous]) {
+            $restored = $previous !== null
+                ? $this->renameTrickplayPath($previous, $final)
+                : self::removeTrickplayFile($final);
+            if (!$restored) {
+                $this->logger->warning('Trickplay rollback could not restore a file; item left torn', [
+                    'file' => $final,
+                    'previous' => $previous,
+                ]);
+
+                return;
+            }
+        }
     }
 
     /**
@@ -3546,14 +4343,12 @@ class FfmpegRunner
      * A BIF is a container of whole JPEG files, so the frames cannot be carved
      * out of `sprite.jpg`: that sheet is 160x90 per cell (half Roku's smallest
      * recommended trickplay size) and re-encoding an already-compressed tile
-     * would compound the loss. This runs its own extraction pass at Roku's
-     * recommended width instead, and — like the sprite pass — samples the
-     * midpoint of each interval so frame 0 is not the opening black slate.
+     * would compound the loss. The frames are sampled at Roku's recommended width
+     * and, like the sprite, at the midpoint of each interval.
      *
-     * Deliberately NOT folded into {@see generateTrickplaySprites()} as a second
-     * filtergraph output: a BIF failure must not also cost the caller the sprite
-     * the web player needs. The price is one extra decode pass, which is paid in
-     * the background media-asset worker, never on an HTTP request.
+     * A thin wrapper over {@see generateTrickplayArtefacts()} with no sprite
+     * branch. Production calls the combined pass so the two outputs share one
+     * decode; this entry point is kept for callers that want the BIF alone.
      *
      * The caller owns the returned files and is expected to delete them once the
      * archive is written.
@@ -3579,123 +4374,26 @@ class FfmpegRunner
             return null;
         }
 
-        $probe = $this->probe($videoPath);
-        if (!is_array($probe)) {
-            return null;
-        }
-
-        $format = $probe['format'] ?? null;
-        if (!is_array($format)) {
-            return null;
-        }
-
-        $rawDuration = $format['duration'] ?? null;
-        if (!is_numeric($rawDuration)) {
-            return null;
-        }
-
-        $duration = (float) $rawDuration;
-        $interval = $duration / $count;
-        $intervalArg = self::filterSeconds($interval);
-        $offsetArg = self::filterSeconds($interval / 2.0);
-        if ($intervalArg === null || $offsetArg === null) {
-            return null;
-        }
-
-        $intervalMs = (int) round($interval * 1000.0);
-        if ($intervalMs < 1) {
-            return null;
-        }
-
-        if (!is_dir($outputDir)) {
-            if (!mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
-                return null;
-            }
-        }
-
-        $pattern = $outputDir . '/bifframe_%05d.jpg';
-
-        $cmd = $this->buildBifFramesCommand($videoPath, $pattern, $offsetArg, $intervalArg, $width, $count);
-
-        $outputLines = [];
-        $exitCode = 0;
-        $this->runCoroutineAwareCommand($cmd, $outputLines, $exitCode);
-
-        // ffmpeg's image2 muxer numbers from 1. Walk the sequence and stop at the
-        // first gap, so a short tail (rounding, or a file that ends early) yields
-        // the frames that DO exist rather than a hole in the middle of the index.
-        $paths = [];
-        for ($i = 1; $i <= $count; $i++) {
-            $framePath = sprintf($pattern, $i);
-            if (!is_file($framePath) || filesize($framePath) === 0) {
-                break;
-            }
-            $paths[] = $framePath;
-        }
-
-        if ($exitCode !== 0 && $paths === []) {
-            $this->logger->warning('BIF frame extraction failed', [
-                'video' => $videoPath,
-                'output' => implode("\n", $outputLines),
+        // Same as generateTrickplaySprites(): no caller holds the item lock, so this takes it.
+        $lock = TrickplayArtefacts::tryLock($outputDir);
+        if ($lock === null) {
+            $this->logger->info('Trickplay BIF pass skipped: another pass holds the item', [
+                'output_dir' => $outputDir,
             ]);
 
             return null;
         }
 
-        if (count($paths) < 2) {
-            $this->logger->warning('BIF frame extraction produced too few frames', [
-                'video' => $videoPath,
-                'frames' => count($paths),
-            ]);
-            foreach ($paths as $stale) {
-                @unlink($stale);
-            }
-
+        try {
+            $result = $this->generateTrickplayArtefacts($videoPath, $outputDir, 0, $count, $width);
+        } finally {
+            TrickplayArtefacts::unlock($lock);
+        }
+        if ($result === null || $result['bif_frames'] === []) {
             return null;
         }
 
-        return [$paths, $intervalMs];
-    }
-
-    /**
-     * Builds the FFmpeg command line for one Roku BIF frame-extraction pass.
-     *
-     * Public builder (the {@see buildThumbnailBatchCommand()} grammar) so the
-     * command SHAPE is testable without a real binary. The frames are mjpeg
-     * outputs and therefore carry {@see self::MJPEG_STRICTNESS_ARGS} like every
-     * other image2 output this class builds.
-     *
-     * @param string $videoPath   Source video path.
-     * @param string $pattern     `printf` frame-pattern (…/bifframe_%05d.jpg).
-     * @param string $offsetArg   Pre-built bare-decimal seek offset (filterSeconds()-restricted).
-     * @param string $intervalArg Pre-built bare-decimal frame interval (filterSeconds()-restricted).
-     * @param int    $width       Frame width in pixels.
-     * @param int    $count       Frame count cap.
-     *
-     * @return string The fully built, shell-escaped FFmpeg command line.
-     *
-     * @since SV-0.9 Extracted from generateBifFrames(); gains MJPEG_STRICTNESS_ARGS
-     */
-    public function buildBifFramesCommand(
-        string $videoPath,
-        string $pattern,
-        string $offsetArg,
-        string $intervalArg,
-        int $width,
-        int $count
-    ): string {
-        return sprintf(
-            '%s -y -hide_banner -loglevel error -ss %s -i %s '
-            . '-vf "fps=1/%s,scale=%d:-2" -frames:v %d -qscale:v 4 %s %s 2>&1',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($offsetArg),
-            escapeshellarg($videoPath),
-            $intervalArg,
-            $width,
-            $count,
-            self::MJPEG_STRICTNESS_ARGS,
-            escapeshellarg($pattern)
-        );
+        return [$result['bif_frames'], $result['bif_interval_ms']];
     }
 
     /**

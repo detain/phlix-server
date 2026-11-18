@@ -41,6 +41,16 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
     }
 
+    public function testBatchCommandIsNicedAndCapsItsDecoderThreadsLikeTheTrickplayPass(): void
+    {
+        // A batch runs up to 20 inputs in one process. It must take the same
+        // background limits as the trickplay pass, not automatic threads at normal
+        // priority on the media-asset worker.
+        $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [30, 90], '/out');
+
+        $this->assertStringStartsWith("nice -n 19 '/usr/bin/ffmpeg' -y -hide_banner -loglevel error -threads 4 ", $cmd);
+    }
+
     public function testBuildThumbnailBatchCommandPairsEachSeekWithItsOwnInput(): void
     {
         $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [30, 90, 150], '/out');
@@ -157,6 +167,17 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
         $this->assertGreaterThan($lastInputPos, $flagPos);
     }
 
+    public function testEveryBatchOutputGroupAsksForTheSingleThumbnailJpegQuality(): void
+    {
+        $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [0, 30, 60], '/out');
+
+        // The same `-q:v 2` buildThumbnailCommand() uses. Without it a batch frame is a
+        // visibly lower-quality image than the one-process-per-chapter path it replaced
+        // (measured: about a third smaller on the same frame).
+        $this->assertSame(3, substr_count($cmd, ' -q:v 2 '));
+        $this->assertSame(3, substr_count($cmd, '-q:v 2 -strict unofficial -map'));
+    }
+
     public function testSingleThumbnailCommandCarriesTheMjpegStrictnessFlag(): void
     {
         $cmd = $this->runner()->buildThumbnailCommand('/in.mkv', '/out/thumb.jpg', 30);
@@ -168,22 +189,26 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
         );
     }
 
-    public function testTrickplaySpriteCommandCarriesTheMjpegStrictnessFlag(): void
+    public function testTrickplayArtefactsCommandCarriesTheMjpegStrictnessFlagOnEveryImageOutput(): void
     {
-        $vf = 'fps=1/0.083,scale=160:90,tile=6x10:margin=2:padding=1';
-        $cmd = $this->runner()->buildTrickplaySpriteCommand('/in.mkv', '/out/sprite.jpg', $vf, '0.042');
+        // The single trickplay pass has two image outputs (sprite sheet and BIF
+        // frames). Each is an mjpeg output and must carry the flag directly
+        // before its own path, and only there.
+        $graph = '[0:v]split=2[in_sprite][in_bif];'
+            . '[in_sprite]trim=start=0,setpts=PTS-STARTPTS,fps=1/0.083,scale=160:90,tile=6x10:margin=2:padding=1[sprite];'
+            . '[in_bif]trim=start=0.042,setpts=PTS-STARTPTS,fps=1/0.083,scale=320:-2[bif]';
+        $cmd = $this->runner()->buildTrickplayArtefactsCommand(
+            '/in.mkv',
+            '0.042',
+            $graph,
+            '/out/sprite.jpg',
+            '/out/bif_%05d.jpg',
+            60
+        );
 
-        // Sheet is an mjpeg output: flag sits between -frames:v 1 and the path.
         $this->assertStringContainsString("-frames:v 1 -strict unofficial '/out/sprite.jpg'", $cmd);
-        $this->assertSame(1, substr_count($cmd, '-strict unofficial'));
-    }
-
-    public function testBifFramesCommandCarriesTheMjpegStrictnessFlag(): void
-    {
-        $cmd = $this->runner()->buildBifFramesCommand('/in.mkv', '/out/bif_%05d.jpg', '0.042', '0.083', 320, 60);
-
         $this->assertStringContainsString("-qscale:v 4 -strict unofficial '/out/bif_%05d.jpg'", $cmd);
-        $this->assertSame(1, substr_count($cmd, '-strict unofficial'));
+        $this->assertSame(2, substr_count($cmd, '-strict unofficial'));
     }
 
     public function testSegmentAndAudioCommandsNeverCarryTheStrictnessFlag(): void

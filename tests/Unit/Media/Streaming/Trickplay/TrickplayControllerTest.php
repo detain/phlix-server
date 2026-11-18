@@ -66,24 +66,26 @@ class TrickplayControllerTest extends TestCase
         );
     }
 
-    public function testGetBifContentReturnsNullWhenNotFound(): void
+    public function testResolveBifPathIsNullWhenNotFound(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
-        $this->assertNull($controller->getBifContent('nonexistent-job'));
+        $this->assertNull($controller->resolveBifPath('nonexistent-job'));
     }
 
-    public function testGetBifContentReturnsTheRawArchiveBytes(): void
+    public function testResolveBifPathPointsAtTheRawArchiveBytes(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
         $bif = $this->sampleBif();
         file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', $bif);
 
-        $content = $controller->getBifContent('job-123');
+        $path = $controller->resolveBifPath('job-123');
 
+        $this->assertSame(realpath($this->tempDir . '/trickplay/job-123/thumbs.bif'), $path);
+        $content = file_get_contents((string) $path);
         $this->assertSame($bif, $content);
-        // Pin the identity of what was served, not just its length: a handler
-        // that returned some other file of the same size would pass a strlen
+        // Pin the identity of what is served, not just its length: a handler
+        // that pointed at some other file of the same size would pass a strlen
         // check. The magic is the cheapest unambiguous discriminator.
         $this->assertSame(BifWriter::MAGIC, substr((string) $content, 0, 8));
     }
@@ -115,7 +117,55 @@ class TrickplayControllerTest extends TestCase
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
         $this->assertFalse($controller->hasBif('../../etc'));
-        $this->assertNull($controller->getBifContent('../../etc'));
+        $this->assertNull($controller->resolveBifPath('../../etc'));
+    }
+
+    public function testAJobLinkedToASiblingThatOnlySharesTheRootsPrefixIsRefused(): void
+    {
+        // "<root>-sibling" begins with the trickplay root's string, so a real path
+        // inside it passes a bare prefix check. The separator makes it outside.
+        $sibling = $this->tempDir . '-sibling';
+        mkdir($sibling, 0755, true);
+        file_put_contents($sibling . '/thumbs.bif', $this->sampleBif());
+        $link = $this->tempDir . '/trickplay/job-link';
+        symlink($sibling, $link);
+
+        try {
+            $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+
+            $this->assertNull($controller->resolveBifPath('job-link'));
+            $this->assertFalse($controller->hasBif('job-link'));
+            $response = $controller->getBif(new Request(), ['jobId' => 'job-link']);
+            $this->assertSame(404, $response->statusCode);
+        } finally {
+            unlink($link);
+            $this->removeDirectory($sibling);
+        }
+    }
+
+    public function testAConfiguredRootThatIsASymlinkStillServesItsArtefacts(): void
+    {
+        // The configured root is a symlink to the real directory. Artefacts resolve to
+        // real paths, so the root must be canonical too, or every artefact would fail
+        // the containment check and 404.
+        $real = $this->tempDir . '-real';
+        mkdir($real . '/trickplay/job-123', 0755, true);
+        $bif = $this->sampleBif();
+        file_put_contents($real . '/trickplay/job-123/thumbs.bif', $bif);
+        $link = $this->tempDir . '-root-link';
+        symlink($real, $link);
+
+        try {
+            $controller = new TrickplayController($link, $this->baseUrl);
+
+            $this->assertTrue($controller->hasBif('job-123'));
+            $response = $controller->getBif(new Request(), ['jobId' => 'job-123'])->materializeFileWindow();
+            $this->assertSame(200, $response->statusCode);
+            $this->assertSame($bif, $response->body);
+        } finally {
+            unlink($link);
+            $this->removeDirectory($real);
+        }
     }
 
     public function testGetBifHandlerServesTheArchive(): void
@@ -124,9 +174,11 @@ class TrickplayControllerTest extends TestCase
         $bif = $this->sampleBif();
         file_put_contents($this->tempDir . '/trickplay/job-123/thumbs.bif', $bif);
 
+        // The archive is streamed from disk, so the buffered body is empty until
+        // the window is materialized (which is what a test needs to inspect it).
         $response = $controller->getBif(new Request(), [
             'jobId' => 'job-123',
-        ]);
+        ])->materializeFileWindow();
 
         $this->assertSame(200, $response->statusCode);
         $this->assertSame($bif, $response->body);
@@ -152,24 +204,42 @@ class TrickplayControllerTest extends TestCase
         $this->assertEquals($this->tempDir . '/trickplay/job-123', $jobDir);
     }
 
-    public function testGetSpriteContentReturnsContentWhenExists(): void
+    public function testResolveSpritePathFindsTheSprite(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
         $jpegData = "\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xD9";
         file_put_contents($this->tempDir . '/trickplay/job-123/sprite.jpg', $jpegData);
 
-        $this->assertSame($jpegData, $controller->getSpriteContent('job-123'));
+        $this->assertSame(
+            realpath($this->tempDir . '/trickplay/job-123/sprite.jpg'),
+            $controller->resolveSpritePath('job-123')
+        );
     }
 
-    public function testGetTimelineContentReturnsContentWhenExists(): void
+    public function testResolveSpritePathFallsBackToAPngSheet(): void
+    {
+        $controller = new TrickplayController($this->tempDir, $this->baseUrl);
+        file_put_contents($this->tempDir . '/trickplay/job-123/sprite.png', 'png');
+
+        $this->assertSame(
+            realpath($this->tempDir . '/trickplay/job-123/sprite.png'),
+            $controller->resolveSpritePath('job-123')
+        );
+    }
+
+    public function testResolveTimelinePathFindsTheTimeline(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);
 
         $json = '[{"time":1,"x":2,"y":2}]';
         file_put_contents($this->tempDir . '/trickplay/job-123/timeline.json', $json);
 
-        $this->assertSame($json, $controller->getTimelineContent('job-123'));
+        $this->assertSame(
+            realpath($this->tempDir . '/trickplay/job-123/timeline.json'),
+            $controller->resolveTimelinePath('job-123')
+        );
+        $this->assertNull($controller->resolveTimelinePath('nonexistent-job'));
     }
 
     public function testDeletedHandlersAreGoneRatherThanLeftAsDeadRoutesTargets(): void

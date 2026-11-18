@@ -1652,6 +1652,17 @@ class AuthManager
             $this->adjudicateRefreshFamily($userId, $sessionId, $jti);
         }
 
+        // The family's bound profile. The `profile_id` claim rides in the refresh token and is
+        // re-carried on every rotation, so the claim IS the family's pid. A refresh re-mints
+        // for that profile or refuses. It must never re-derive the account default, which is
+        // what resolveProfileForUser() does for a stale claim on the access path. Otherwise a
+        // bearer bound to a profile that was since removed would refresh into the default.
+        // This runs before the grace memo, so a refusal is never re-delivered from memory.
+        $boundProfileId = JwtHandler::profileIdClaim($payload);
+        if ($boundProfileId !== null) {
+            $this->refuseUnownedRefreshProfile($userId, $boundProfileId);
+        }
+
         // S80: carry the session's profile across the re-mint. Without this a
         // device that switched to a child profile would silently revert to the
         // account default the first time its access token expired.
@@ -2004,6 +2015,57 @@ class AuthManager
             ]);
 
             return null;
+        }
+    }
+
+    /**
+     * Prove that the account owns a profile id, or throw. The strict counterpart of
+     * {@see self::resolveProfileForUser()}: it never degrades to the account default. A
+     * caller that must bind to one specific profile (a refresh, a quick-connect redemption)
+     * uses this and refuses on the exception rather than falling back.
+     *
+     * With no profile resolver wired there is no way to prove ownership, so the call refuses.
+     *
+     * @param string $userId    The authenticated account.
+     * @param string $profileId The profile the caller means to bind to (non-empty).
+     *
+     * @return string The same profile id, now verified as owned by `$userId`.
+     *
+     * @throws ProfileNotOwnedException When the account does not own the profile, or no
+     *                                  resolver is wired to verify it.
+     *
+     * @since S80 (refresh and quick-connect bind the stored profile strictly)
+     */
+    public function requireOwnedProfile(string $userId, string $profileId): string
+    {
+        if ($this->profileManager === null) {
+            throw ProfileNotOwnedException::forRequestedProfile($userId, $profileId);
+        }
+
+        return $this->profileManager->resolveProfileIdForUser($userId, $profileId);
+    }
+
+    /**
+     * Refuse a refresh whose bound profile the account no longer owns. Audits the refusal and
+     * throws the same \InvalidArgumentException the other refresh refusals use, which the auth
+     * controller maps to a 401.
+     *
+     * @param string $userId    The account being refreshed.
+     * @param string $profileId The profile the refresh token is bound to.
+     *
+     * @throws \InvalidArgumentException When the profile is no longer owned.
+     */
+    private function refuseUnownedRefreshProfile(string $userId, string $profileId): void
+    {
+        try {
+            $this->requireOwnedProfile($userId, $profileId);
+        } catch (ProfileNotOwnedException) {
+            $this->auditLogger->logFailedAuth('profile_not_owned', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+            ]);
+
+            throw new \InvalidArgumentException('Refresh token profile is no longer available');
         }
     }
 

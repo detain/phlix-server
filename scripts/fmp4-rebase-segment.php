@@ -55,26 +55,21 @@ if (!is_string($segmentPath) || !is_string($initPath) || !is_string($rawStart)) 
 }
 
 // Exit 2 (bad input) is decided here, before any file is read, for: a non-numeric value, a
-// non-finite value such as "1e999" (is_numeric() accepts it, and it casts to INF), a negative
-// value, and a finite value above 2^32-1 seconds (about 136 years).
-//
-// The upper bound is a sanity cap, not the real limit. The rebaser writes the start into a
-// 32-bit version-0 tfdt/sidx field, so the largest start that fits is 0xFFFFFFFF / timescale
-// seconds. That is timescale-dependent: about 47,721 s at 90000, 349,525 s at 12288, and
-// 4,294,967 s at 1000. Those starts are refused by the rebaser (RangeException), which this
-// script maps to exit 2 below. 2^32-1 is that field's ceiling at timescale 1, so no start above
-// it fits any version-0 box at any timescale.
-$maxStartSeconds = 4294967295.0;
+// non-finite value such as "1e999" (is_numeric() accepts it, and it casts to INF), and a negative
+// value. There is deliberately no upper bound here. A start past the 32-bit range of a version-0
+// tfdt/sidx field is NOT refused: the rebaser rewrites that box to version 1 (64-bit fields) and
+// grows it. The only starts refused are those the rebaser cannot represent at all (the scaled
+// ticks outside the signed 64-bit range, or a 64-bit field that would overflow), which it reports
+// as RangeException and this script maps to exit 2 below.
 $startSeconds = is_numeric($rawStart) ? (float) $rawStart : NAN;
 if (
     !is_numeric($rawStart)
     || !is_finite($startSeconds)
     || $startSeconds < 0.0
-    || $startSeconds > $maxStartSeconds
 ) {
     fwrite(
         STDERR,
-        "fmp4-rebase-segment: startSeconds must be a finite number from 0 to {$maxStartSeconds}, got '{$rawStart}'\n"
+        "fmp4-rebase-segment: startSeconds must be a finite, non-negative number, got '{$rawStart}'\n"
     );
     exit(2);
 }
@@ -82,9 +77,9 @@ if (
 try {
     Fmp4SegmentRebaser::rebase($segmentPath, $initPath, $startSeconds);
 } catch (\RangeException $e) {
-    // The start is valid but cannot be represented in this fragment's box version. Nothing was
-    // written. Exit 2 keeps it in the same class as bad input: the caller must not retry with the
-    // same start.
+    // The start is valid but cannot be represented, or a box growth cannot be adjusted safely.
+    // Nothing was written. Exit 2 keeps it in the same class as bad input: the caller must not
+    // retry with the same start.
     fwrite(STDERR, 'fmp4-rebase-segment: start not representable: ' . $e->getMessage() . "\n");
     exit(2);
 } catch (\Throwable $e) {

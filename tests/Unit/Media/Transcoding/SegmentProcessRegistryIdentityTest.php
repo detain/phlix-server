@@ -278,6 +278,42 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
     }
 
     /**
+     * Finding 1 of round 5. Every leader is unchecked: no `/proc` at registration (no start time)
+     * and none at TERM. The leader is still alive after TERM. The TERM-time snapshot is then
+     * unknown, not empty, so the record is held through the grace and until the hold bound. It keeps
+     * its temp and its cap slot. An empty snapshot would drop it one sweep after the grace, while
+     * ffmpeg still writes to an unlinked temp. Nothing is KILLed, since no group was snapshotted.
+     */
+    public function testAnAllUncheckedRecordWithALivePidIsHeldUntilTheBound(): void
+    {
+        $key = '/segs/job/seg-00018.ts';
+        $this->alive[7101] = true;
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => false); // no `/proc` at all
+        $registry->register($key, 7101, null, '/segs/job/seg-00018.ts.part-ffff6666');
+        $registry->configureWatchdog(30.0, 1.0);
+        $registry->configureUnverifiedHold(10.0);
+
+        $start = hrtime(true);
+        $registry->sweep($start + 2 * self::SEC); // stalled: TERM goes out (the identity is unchecked)
+        self::assertSame([self::SIGTERM], $this->signalsFor(7101), 'an unchecked leader is still signalled with TERM');
+        self::assertSame(1, $registry->orphanCount(), 'the reaped record is held as an orphan');
+
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace, PID still alive
+        self::assertSame(1, $registry->orphanCount(), 'a live all-unchecked record is held past the grace');
+        self::assertSame([], $this->cleaned, 'its temp is kept while the process may still run');
+
+        $registry->sweep($start + 13 * self::SEC); // 11 s after TERM, past the 10 s hold
+        self::assertSame(0, $registry->orphanCount(), 'the record is dropped once the hold bound passes');
+        self::assertSame(['/segs/job/seg-00018.ts.part-ffff6666'], $this->cleaned);
+        self::assertSame(
+            [self::SIGTERM],
+            $this->signalsFor(7101),
+            'no KILL is sent, since the membership was never snapshotted',
+        );
+    }
+
+    /**
      * Findings 2 and 5. `/proc` was readable at registration, so the start time is recorded. It
      * is unreadable at signal time, so the identity is unknown. Nothing may be signalled. The
      * record is held through the grace window. Its PID is still alive, so the record keeps

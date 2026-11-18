@@ -47,8 +47,9 @@ return [
     // That covers the measured 4K flush with about 3× margin. Under 2× contention the flush is
     // a linear projection of about 61 s, not a measurement, and 90 s covers that with about 1.5×
     // margin. A kill does not free the cap slot or the .part temp itself. The SIGKILL pass does,
-    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If /proc was
-    // unreadable at TERM, the temp and its slot are held until the process is dead or
+    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If the membership
+    // is unknown at TERM (/proc unreadable then, or absent at registration so no start time
+    // was recorded), the temp and its slot are held until the process is dead or
     // transcode_timeout passes. The 300 s wall cap is about 3× the measured 4K wall time.
     // Both bounds are far below transcode_timeout, which remains the last backstop.
     // Non-positive values fall back to the registry defaults.

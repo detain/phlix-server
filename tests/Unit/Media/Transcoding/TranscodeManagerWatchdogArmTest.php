@@ -78,4 +78,33 @@ final class TranscodeManagerWatchdogArmTest extends TestCase
         $tick->invoke($manager);
         self::assertNull($timerId->getValue($manager), 'the next tick retries, and still fails outside Workerman');
     }
+
+    /**
+     * Finding 4(b). The success path, through the timer-add seam. A successful add stores the id,
+     * and the next tick arms no second timer.
+     */
+    public function testASuccessfulTimerArmStoresTheIdAndNeverArmsASecondTimer(): void
+    {
+        $manager = $this->manager();
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $armed = [];
+        $manager->setWatchdogTimerAdd(static function (float $seconds, callable $callback) use (&$armed): int {
+            $armed[] = $seconds;
+
+            return 4242;
+        });
+
+        $tick = new ReflectionMethod(TranscodeManager::class, 'watchdogTick');
+        $tick->setAccessible(true);
+        $timerId = new ReflectionProperty(TranscodeManager::class, 'watchdogTimerId');
+        $timerId->setAccessible(true);
+
+        $tick->invoke($manager);
+        self::assertSame(4242, $timerId->getValue($manager), 'a successful arm stores the timer id');
+        self::assertCount(1, $armed, 'one timer is armed');
+
+        $tick->invoke($manager);
+        self::assertSame(4242, $timerId->getValue($manager), 'the stored id is kept');
+        self::assertCount(1, $armed, 'the next tick arms no second timer');
+    }
 }

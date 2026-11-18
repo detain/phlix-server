@@ -281,6 +281,14 @@ class TranscodeManager
     /** Workerman timer id of this worker's encode watchdog; null until armed (retried while unarmed). */
     private ?int $watchdogTimerId = null;
 
+    /**
+     * Test seam for the watchdog's timer add (see {@see setWatchdogTimerAdd()}). Untyped because
+     * `callable` cannot be a property type. Null means Workerman's `Timer::add`.
+     *
+     * @var (callable(int, callable): (int|false))|null
+     */
+    private $watchdogTimerAdd = null;
+
     /** Monotonic ms of the last request-driven watchdog sweep (throttled). */
     private ?int $lastWatchdogSweepMs = null;
 
@@ -2774,6 +2782,17 @@ class TranscodeManager
     }
 
     /**
+     * Inject the timer-add the watchdog arms through (tests use it to exercise the success path
+     * outside Workerman). Null restores Workerman's `Timer::add`.
+     *
+     * @param (callable(int, callable): (int|false))|null $timerAdd Receives the period and the tick callback.
+     */
+    public function setWatchdogTimerAdd(?callable $timerAdd): void
+    {
+        $this->watchdogTimerAdd = $timerAdd;
+    }
+
+    /**
      * Run before every launch decision: arm the per-worker watchdog timer once, and
      * run a throttled sweep so slots held by stalled or over-age encodes are freed
      * even when no timer tick has fired yet. Cheap when there is nothing to reap.
@@ -2811,8 +2830,9 @@ class TranscodeManager
 
         $registry = $this->segmentRegistry;
         $logger = $this->logger;
+        $timerAdd = $this->watchdogTimerAdd ?? [\Workerman\Timer::class, 'add'];
         try {
-            $this->watchdogTimerId = (int) \Workerman\Timer::add(
+            $this->watchdogTimerId = (int) $timerAdd(
                 self::ENCODE_WATCHDOG_TICK_SECONDS,
                 static function () use ($registry, $logger): void {
                     try {

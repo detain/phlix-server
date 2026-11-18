@@ -661,7 +661,8 @@ final class SegmentProcessRegistry
      * later pass once the grace period has elapsed. A reaped record (from {@see kill()},
      * a stall or a wall-clock reap) is held for the whole grace, whatever its leader does.
      * Then one pass sends SIGKILL to each TERM-time member whose start time still matches
-     * (see {@see sigkillMembers()}), and its temps are removed. The SIGKILL is not waited on.
+     * (see {@see sigkillMembers()}), and its temps are removed unless the record is held (see
+     * the grace branch). The SIGKILL is not waited on.
      * Nothing in the pass sleeps. A launch that was found dead before any signal has its
      * temps removed at once. Driven by a per-worker timer and also, throttled, from the cap
      * check in TranscodeManager.
@@ -855,9 +856,10 @@ final class SegmentProcessRegistry
 
     /**
      * Reap a tracked launch without waiting: SIGTERM now, and the SIGKILL escalation later from
-     * {@see sweep()}. A launch with nothing left to escalate (no live member, leader dead) has
-     * its temps removed at once. Otherwise its record moves to the orphan list with its TERM
-     * time, its membership snapshot and its temps. Its temps go when sweep() drops the record.
+     * {@see sweep()}. A launch with nothing left to escalate (leader dead, and no member in the
+     * snapshot, or an unknown snapshot that sweep() would drop once the leader is dead) has its
+     * temps removed at once. Otherwise its record moves to the orphan list with its TERM time, its
+     * membership snapshot and its temps. Its temps go when sweep() drops the record.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
@@ -866,7 +868,7 @@ final class SegmentProcessRegistry
     private function reapTracked(string $key, array $pids, array $starts, array $tmps, int $now): void
     {
         $members = $this->sendTerm($pids, $starts);
-        if ($members === [] && !$this->anyAlive($pids, $starts)) {
+        if (($members === [] || $members === null) && !$this->anyAlive($pids, $starts)) {
             $this->cleanTemps($tmps);
 
             return;
@@ -891,8 +893,11 @@ final class SegmentProcessRegistry
      * (same, or gone). An unchecked leader (no start time was recorded) is still signalled with
      * TERM, but it gets no snapshot: its PID may since have been reused as a group leader by an
      * unrelated process, so nothing in its group can be KILLed later. A reused leader is never
-     * snapshotted either. Returns null when the membership is unknown, which happens when a
-     * leader's identity is unknown or `/proc` is unreadable. Null means no KILL later.
+     * snapshotted either. Returns null when the membership is unknown: a leader's identity is
+     * unknown (`/proc` unreadable now), or no leader is verified and at least one is unchecked
+     * (no start time was recorded, as on a host without `/proc`), so there is no group to snapshot.
+     * Null means no KILL later, and the record is held while its PID is alive (see {@see sweep()}).
+     * An empty array means no member was found, which is different from unknown.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
@@ -903,15 +908,20 @@ final class SegmentProcessRegistry
     {
         $verified = [];
         $unknown = false;
+        $unchecked = false;
         foreach ($pids as $pid) {
             $identity = $this->identityOf($pid, $starts[$pid] ?? null);
             if ($identity === 'unknown') {
                 $unknown = true;
+            } elseif ($identity === 'unchecked') {
+                $unchecked = true;
             } elseif (in_array($identity, ['same', 'gone'], true)) {
                 $verified[] = $pid;
             }
         }
-        $members = $unknown ? null : $this->groupMembersOf($verified);
+        // groupMembersOf([]) returns [] without reading /proc, so an all-unchecked record would
+        // otherwise look like "a group with no members" and be dropped after the grace.
+        $members = ($unknown || ($verified === [] && $unchecked)) ? null : $this->groupMembersOf($verified);
 
         foreach ($pids as $pid) {
             // A zombie leader whose group has no live member has nothing left to signal. The

@@ -105,8 +105,18 @@ final class SignedUrlMiddleware
         }
 
         // 2) Signed URL token.
+        // A profile-bound token carries `pid`; the verifier folds it into the HMAC.
+        // The schedule for that profile is enforced by the global schedule gate,
+        // which runs before this middleware (see Application::scheduleGateFor()).
         $signer = $this->signer ?? SignedUrl::fromEnv();
-        if ($signer->verify($request->path, $request->queryString('exp'), $request->queryString('sig'))) {
+        $verified = $signer->verify(
+            $request->path,
+            $request->queryString('exp'),
+            $request->queryString('sig'),
+            null,
+            $request->queryString(SignedUrl::PROFILE_PARAM),
+        );
+        if ($verified) {
             return null;
         }
 

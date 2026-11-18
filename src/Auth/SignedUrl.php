@@ -55,6 +55,12 @@ final class SignedUrl
      */
     private const VERSION = 'phlix-signed-url-v1';
 
+    /**
+     * Query parameter that carries the profile a token is bound to. Present only on
+     * tokens minted for a profile; its value is covered by the HMAC.
+     */
+    public const PROFILE_PARAM = 'pid';
+
     /** Process-wide instance built from the environment by {@see self::fromEnv()}. */
     private static ?self $shared = null;
 
@@ -155,15 +161,36 @@ final class SignedUrl
      * Deterministic (no clock read) so it is trivially testable and so the
      * verifier can recompute it exactly.
      *
-     * @param string $path Request path (no query string).
-     * @param int    $exp  Absolute expiry as a Unix timestamp (seconds).
+     * When a profile id is given, it is folded into the signed message as an extra
+     * line, so a token minted for one profile cannot be replayed under another
+     * `pid`, or with `pid` removed. Without one the message is byte-identical to the
+     * pre-profile scheme, so tokens minted before the field existed still verify.
+     *
+     * @param string      $path      Request path (no query string).
+     * @param int         $exp       Absolute expiry as a Unix timestamp (seconds).
+     * @param string|null $profileId Profile the token is bound to, or null for none.
      */
-    public function signature(string $path, int $exp): string
+    public function signature(string $path, int $exp, ?string $profileId = null): string
     {
         $message = self::VERSION . "\n" . $this->canonicalResource($path) . "\n" . $exp;
+        if ($profileId !== null) {
+            $message .= "\n" . self::PROFILE_PARAM . '=' . $profileId;
+        }
         $raw = hash_hmac('sha256', $message, $this->secret, true);
 
         return self::base64UrlEncode($raw);
+    }
+
+    /**
+     * True when a profile id is safe to fold into a signed token: the same
+     * character set as a profile UUID, so it can never carry a newline or any other
+     * byte that could make two different messages collide.
+     *
+     * @param string $profileId Candidate profile id.
+     */
+    public static function isValidProfileId(string $profileId): bool
+    {
+        return preg_match('/^[A-Za-z0-9-]{1,64}$/', $profileId) === 1;
     }
 
     /**
@@ -172,14 +199,27 @@ final class SignedUrl
      * Preserves any existing query string (e.g. a photo thumbnail's `w`/`h`),
      * appending with `&` when one is present and `?` otherwise.
      *
-     * @param string   $path Path to sign, optionally already carrying a query string.
-     * @param int|null $ttl  Lifetime in seconds; defaults to the configured TTL.
-     * @param int|null $now  Override "now" (Unix seconds) — test seam; defaults to time().
+     * @param string   $path      Path to sign, optionally already carrying a query string.
+     * @param int|null $ttl       Lifetime in seconds; defaults to the configured TTL.
+     * @param int|null $now       Override "now" (Unix seconds) — test seam; defaults to time().
+     * @param string|null $profileId Profile to bind the token to (a `pid` parameter
+     *                            is appended and signed). Null mints an unbound token.
      *
-     * @return string The path with `exp`/`sig` query parameters appended.
+     * @return string The path with `exp`/`sig` (and, when bound, `pid`) query
+     *                parameters appended.
+     *
+     * @throws \InvalidArgumentException When a profile id is given that is not a
+     *                                   safe UUID-shaped token: an unbound token is
+     *                                   never minted in its place.
      */
-    public function mint(string $path, ?int $ttl = null, ?int $now = null): string
+    public function mint(string $path, ?int $ttl = null, ?int $now = null, ?string $profileId = null): string
     {
+        // '' is the codebase's "no profile" spelling (see RequestContext readers).
+        $profileId = $profileId === '' ? null : $profileId;
+        if ($profileId !== null && !self::isValidProfileId($profileId)) {
+            throw new \InvalidArgumentException('Signed URL profile id is not a safe token.');
+        }
+
         $now ??= time();
         $ttl = ($ttl !== null && $ttl > 0) ? $ttl : $this->defaultTtl;
         $exp = $now + $ttl;
@@ -188,8 +228,11 @@ final class SignedUrl
         // only the path (the signature must match the query-less Request::$path
         // the verifier recomputes against).
         [$pathOnly, $existingQuery] = array_pad(explode('?', $path, 2), 2, '');
-        $sig = $this->signature($pathOnly, $exp);
+        $sig = $this->signature($pathOnly, $exp, $profileId);
         $query = ($existingQuery !== '' ? $existingQuery . '&' : '') . 'exp=' . $exp . '&sig=' . $sig;
+        if ($profileId !== null) {
+            $query .= '&' . self::PROFILE_PARAM . '=' . $profileId;
+        }
 
         return $pathOnly . '?' . $query;
     }
@@ -324,14 +367,24 @@ final class SignedUrl
      * HMAC (constant-time {@see hash_equals()}), and has not expired. A null/blank
      * or non-numeric component fails closed.
      *
-     * @param string      $path Request path (no query string).
-     * @param string|null $exp  The `exp` query parameter (Unix seconds, as a string).
-     * @param string|null $sig  The `sig` query parameter (base64url HMAC).
-     * @param int|null    $now  Override "now" (Unix seconds) — test seam; defaults to time().
+     * The caller passes the request's `pid` query value (or null when absent). A
+     * token minted with a profile only verifies when the same `pid` is supplied, and
+     * a token minted without one only verifies when it is absent: stripping or
+     * swapping `pid` changes the signed message, so neither can be used to escape a
+     * profile binding.
+     *
+     * @param string      $path      Request path (no query string).
+     * @param string|null $exp       The `exp` query parameter (Unix seconds, as a string).
+     * @param string|null $sig       The `sig` query parameter (base64url HMAC).
+     * @param int|null    $now       Override "now" (Unix seconds) — test seam; defaults to time().
+     * @param string|null $profileId The `pid` query parameter, or null when absent.
      */
-    public function verify(string $path, ?string $exp, ?string $sig, ?int $now = null): bool
+    public function verify(string $path, ?string $exp, ?string $sig, ?int $now = null, ?string $profileId = null): bool
     {
         if ($sig === null || $sig === '' || $exp === null || !ctype_digit($exp)) {
+            return false;
+        }
+        if ($profileId !== null && !self::isValidProfileId($profileId)) {
             return false;
         }
 
@@ -341,7 +394,7 @@ final class SignedUrl
             return false;
         }
 
-        return hash_equals($this->signature($path, $expInt), $sig);
+        return hash_equals($this->signature($path, $expInt, $profileId), $sig);
     }
 
     /**

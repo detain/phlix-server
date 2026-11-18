@@ -99,8 +99,16 @@ final class ArtworkByteResponder
         $signer = SignedUrl::fromEnv();
         $exp = $request->query['exp'] ?? null;
         $sig = $request->query['sig'] ?? null;
+        $pid = $request->query[SignedUrl::PROFILE_PARAM] ?? null;
 
-        if ($signer->verify($signedResource, is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
+        $verified = $signer->verify(
+            $signedResource,
+            is_string($exp) ? $exp : null,
+            is_string($sig) ? $sig : null,
+            null,
+            is_string($pid) ? $pid : null,
+        );
+        if ($verified) {
             return null;
         }
 

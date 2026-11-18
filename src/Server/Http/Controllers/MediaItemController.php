@@ -247,7 +247,14 @@ class MediaItemController
         // Mint a signed direct-play URL (the <video src> can't attach a Bearer
         // header and /media/{id}/stream is gated). Mirrors WebPortalRouter.
         if ($itemId !== '') {
-            $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
+            // Bound to the session's profile, so the direct-play path applies that
+            // profile's schedule and stream cap to this URL (see SignedUrl::mint()).
+            $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint(
+                '/media/' . $itemId . '/stream',
+                null,
+                null,
+                \Phlix\Server\Http\RequestContext::getProfileId(),
+            );
         }
 
         return (new Response())->json(['item' => $shaped]);
@@ -811,7 +818,12 @@ class MediaItemController
         $filename = basename($path);
 
         return (new Response())->json([
-            'url' => \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $params['id'] . '/stream'),
+            'url' => \Phlix\Auth\SignedUrl::fromEnv()->mint(
+                '/media/' . $params['id'] . '/stream',
+                null,
+                null,
+                \Phlix\Server\Http\RequestContext::getProfileId(),
+            ),
             'filename' => $filename,
             'size' => $fileSize,
             'content_type' => 'application/octet-stream',

@@ -109,6 +109,69 @@ final class SignedUrlTest extends TestCase
         $this->assertTrue($signer->verify('/media/abc/stream', (string) $q['exp'], (string) $q['sig'], 1500));
     }
 
+    public function testLegacyTokenMessageIsByteIdenticalToThePreProfileScheme(): void
+    {
+        // Tokens minted before `pid` existed must still verify, so the unbound message
+        // is pinned to the exact pre-profile formula.
+        $expected = rtrim(strtr(base64_encode(hash_hmac(
+            'sha256',
+            'phlix-signed-url-v1' . "\n" . '/media/abc/stream' . "\n" . 1000,
+            self::SECRET,
+            true,
+        )), '+/', '-_'), '=');
+
+        self::assertSame($expected, (new SignedUrl(self::SECRET))->signature('/media/abc/stream', 1000));
+    }
+
+    public function testBoundTokenCarriesPidAndVerifiesOnlyWithTheSameProfile(): void
+    {
+        $signer = new SignedUrl(self::SECRET);
+        $url = $signer->mint('/media/abc/stream', 3600, 1000, 'p-1');
+
+        self::assertStringContainsString('&pid=p-1', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $exp = $query['exp'];
+        $sig = $query['sig'];
+
+        self::assertTrue($signer->verify('/media/abc/stream', $exp, $sig, 1000, 'p-1'));
+        self::assertFalse($signer->verify('/media/abc/stream', $exp, $sig, 1000), 'stripping pid must fail');
+        self::assertFalse($signer->verify('/media/abc/stream', $exp, $sig, 1000, 'p-2'), 'swapping pid must fail');
+    }
+
+    public function testLegacyTokenDoesNotVerifyOnceAProfileIsAdded(): void
+    {
+        $signer = new SignedUrl(self::SECRET);
+        $url = $signer->mint('/media/abc/stream', 3600, 1000);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        self::assertTrue($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000));
+        self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, 'p-1'));
+    }
+
+    public function testMintWithAnEmptyProfileMintsAnUnboundToken(): void
+    {
+        $url = (new SignedUrl(self::SECRET))->mint('/media/abc/stream', 3600, 1000, '');
+
+        self::assertStringNotContainsString('pid=', $url);
+    }
+
+    public function testMintRejectsAnUnsafeProfileIdRatherThanMintingUnbound(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        (new SignedUrl(self::SECRET))->mint('/media/abc/stream', 3600, 1000, "p1\nx");
+    }
+
+    public function testVerifyFailsClosedOnAnUnsafeProfileId(): void
+    {
+        $signer = new SignedUrl(self::SECRET);
+        $url = $signer->mint('/media/abc/stream', 3600, 1000, 'p1');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, ''));
+        self::assertFalse($signer->verify('/media/abc/stream', $query['exp'], $query['sig'], 1000, 'p1 '));
+    }
+
     public function testVerifyRejectsExpiredToken(): void
     {
         $signer = new SignedUrl(self::SECRET);

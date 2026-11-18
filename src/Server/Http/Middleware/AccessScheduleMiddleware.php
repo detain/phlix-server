@@ -126,16 +126,36 @@ final class AccessScheduleMiddleware
         }
 
         // Check if access is allowed
-        if (!$this->accessScheduleService->isAccessAllowed($profileId)) {
-            return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                'message' => self::WINDOW_MESSAGE,
-            ]);
+        $denied = $this->denyForProfile($profileId);
+        if ($denied !== null) {
+            return $denied;
         }
 
         // Store profileId in context for downstream use
         RequestContext::setProfileId($profileId);
 
         return null;
+    }
+
+    /**
+     * The window test for a profile whose id is already known, with no reliance on
+     * {@see RequestContext}: the 403 when the profile's schedule is active now, else
+     * null. Used by the direct-play fast path and the signed-URL gate, which hold
+     * the profile id directly.
+     *
+     * @param string $profileId The profile to test (non-empty).
+     *
+     * @return Response|null The AccessScheduled 403, or null when access is allowed.
+     */
+    public function denyForProfile(string $profileId): ?Response
+    {
+        if ($this->accessScheduleService->isAccessAllowed($profileId)) {
+            return null;
+        }
+
+        return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
+            'message' => self::WINDOW_MESSAGE,
+        ]);
     }
 
     /**

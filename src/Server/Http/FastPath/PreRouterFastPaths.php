@@ -428,13 +428,23 @@ final class PreRouterFastPaths
         // StreamLimitMiddleware can't be applied as router middleware here because
         // this route bypasses the router to use the event-loop file streaming
         // (essential for multi-GB videos). The check is inlined instead.
-        // Signed-URL access (userId null) skips the stream limit — the signed URL
-        // itself is the access control; stream limits only apply to authenticated
-        // sessions where we have a profileId to enforce against.
         if ($userId !== null && $userId !== '') {
             $streamLimitResponse = $this->checkStreamLimit($request, $userId);
             if ($streamLimitResponse !== null) {
                 return $streamLimitResponse;
+            }
+        } else {
+            // Signed-URL access (userId null). A token minted for a profile carries
+            // `pid`, which rejectUnlessSigned() has just verified against the HMAC, so
+            // that profile's schedule and stream slot apply here exactly as they do for
+            // a session. A legacy token minted before `pid` existed has no profile to
+            // check and is bounded only by its expiry (SignedUrl::DEFAULT_TTL).
+            $signedProfileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+            if ($signedProfileId !== null && $signedProfileId !== '') {
+                $streamLimitResponse = $this->checkSignedStreamLimit($request, $signedProfileId);
+                if ($streamLimitResponse !== null) {
+                    return $streamLimitResponse;
+                }
             }
         }
 
@@ -624,6 +634,44 @@ final class PreRouterFastPaths
             return $scheduleResponse;
         }
 
+        return $this->registerDirectPlaySlot($request, $profileId);
+    }
+
+    /**
+     * The signed-URL twin of {@see checkStreamLimit()}: the same schedule window and
+     * the same stream slot, for a token bound to a profile by its `pid`. The profile id
+     * comes from the verified token, not from a session, so there is no userId and no
+     * profile lookup. The schedule is tested before any slot is taken.
+     *
+     * @param Request $request   The request being served (already signature-verified).
+     * @param string  $profileId The profile the token is bound to (non-empty).
+     *
+     * @return Response|null The 403 schedule refusal, the 429 limit refusal, or null.
+     */
+    private function checkSignedStreamLimit(Request $request, string $profileId): ?Response
+    {
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+        $scheduleResponse = $middleware->denyForProfile($profileId);
+        if ($scheduleResponse !== null) {
+            return $scheduleResponse;
+        }
+
+        return $this->registerDirectPlaySlot($request, $profileId);
+    }
+
+    /**
+     * Take (or refresh) this stream's concurrent-stream slot for a profile, and arm its
+     * heartbeat. Shared by the session and the signed-URL paths so both count against
+     * one per-profile cap. Returns null without a slot when the request names no device.
+     *
+     * @param Request $request   The request being served.
+     * @param string  $profileId The profile the stream runs as (non-empty).
+     *
+     * @return Response|null 429 when the profile is at its cap, else null.
+     */
+    private function registerDirectPlaySlot(Request $request, string $profileId): ?Response
+    {
         $deviceId = $this->getStreamDeviceId($request);
         if ($deviceId === null) {
             // With no device name at all (no X-Device-ID header AND no

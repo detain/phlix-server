@@ -141,7 +141,11 @@ class TranscodeController
         // request. The token is prefix-scoped to the per-job directory, so it
         // authorises every variant playlist and segment too.
         $signer = SignedUrl::fromEnv();
-        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+        // Bound to the session's profile: the segment gate applies its schedule (see
+        // SignedUrl::mint()). An unbound token is minted for a session without one.
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
+            ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
+            : $url;
 
         // Advertise the playable quality ladder so clients can build a picker
         // (D6). Null for a legacy `variants IS NULL` job (explicit key so a client
@@ -238,7 +242,11 @@ class TranscodeController
 
         // Signed, prefix-scoped streaming URLs (see start()).
         $signer = SignedUrl::fromEnv();
-        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+        // Bound to the session's profile: the segment gate applies its schedule (see
+        // SignedUrl::mint()). An unbound token is minted for a session without one.
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
+            ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
+            : $url;
 
         // Same quality-ladder advertisement as start() (D6): null for a legacy job,
         // else each variant's own media playlist url signed like master_url.

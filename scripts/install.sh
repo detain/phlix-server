@@ -552,6 +552,28 @@ phlix_ensure_env_key() {
 	info "Backfilled missing $key into $file"
 }
 
+# Force `KEY=VALUE` to the given value, replacing any existing line for KEY.
+# Unlike phlix_ensure_env_key (which preserves an operator's non-empty value),
+# this is for tuning the installer owns: a re-run of --update must land the
+# installer's value even when an older install pinned a lower one.
+#
+# Usage: phlix_set_env_key <env_file> <KEY> <VALUE> [comment]
+# Returns 0 and prints an info line when it changes the file; 0 silently when
+# the exact line is already present.
+phlix_set_env_key() {
+	local file="$1" key="$2" value="$3" comment="${4:-}"
+	[ -f "$file" ] || return 0
+	if grep -qxF "${key}=${value}" "$file" 2>/dev/null; then
+		return 0
+	fi
+	sed -i "/^${key}=/d" "$file"
+	{
+		[ -n "$comment" ] && printf '# %s\n' "$comment"
+		printf '%s=%s\n' "$key" "$value"
+	} >>"$file"
+	info "Set $key=$value in $file"
+}
+
 # ---------------------------------------------------------------------------
 # Swoole + php-uv (compiled from source)
 #
@@ -2029,6 +2051,11 @@ LimitNOFILE=1048576\\
 	# cache starts surviving PrivateTmp restarts from the next boot.
 	phlix_ensure_env_key "$ENV_FILE" PHLIX_SEGMENT_DIR "$SEGMENT_DIR" \
 		"Persistent HLS segment cache dir — survives restarts (PrivateTmp wipes the temp default). Unusable values abort boot."
+	# Per-encode thread ceiling for software segment encodes (8 measured faster than
+	# 4 for one 1080p segment on the 12-core hub). Forced on every --update so an
+	# older pinned value cannot silently keep the encode slower than the code default.
+	phlix_set_env_key "$ENV_FILE" PHLIX_SEGMENT_ENCODE_THREADS 8 \
+		"Software segment encode thread ceiling (default 8; override per host)."
 
 	# 4f-B. Backfill the DB_* keys config/database.php actually reads. Older
 	# installs wrote ONLY DB_PASSWORD + the PHLIX_DATABASE_* aliases (which the

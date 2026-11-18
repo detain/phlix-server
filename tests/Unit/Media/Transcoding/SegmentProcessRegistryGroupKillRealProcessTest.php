@@ -22,8 +22,6 @@ use PHPUnit\Framework\TestCase;
  * temp cleaner is a recorder, so no real file is touched. Time budget: the wall cap is 5 s on
  * the injected clock (no real wait), plus a 0.3 s grace and a few 20 ms polls, so the real
  * time is about 1 s. The test is skipped when /proc or setsid is unavailable.
- *
- * @coversNothing
  */
 final class SegmentProcessRegistryGroupKillRealProcessTest extends TestCase
 {

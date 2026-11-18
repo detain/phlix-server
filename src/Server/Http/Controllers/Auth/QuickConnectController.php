@@ -351,25 +351,14 @@ final class QuickConnectController
 
         // Bind to the profile the APPROVING session ran as. The schedule gate checks that
         // profile on every request, so the TV's session cannot outlive its window on another
-        // profile. The profile is verified as owned here, and refused when it is not. It is
-        // never degraded to the default, which is what buildAuthResponse() would do.
-        // The id this check verifies is the one minted: it is passed on as already verified, so the
-        // mint does not re-resolve it and degrade a profile removed in the gap to the account default.
-        $verifiedProfileId = null;
-        if ($pair->profileId !== null) {
-            try {
-                $verifiedProfileId = $this->authManager->requireOwnedProfile($pair->userId, $pair->profileId);
-            } catch (ProfileNotOwnedException) {
-                return $this->profileNoLongerOwned();
-            }
-        }
-
+        // profile. The mint verifies the profile as owned and refuses when it is not, and it mints
+        // the id it verified, as-is. It is never degraded to the account default.
         try {
-            $auth = $this->authManager->buildAuthResponse(
-                $pair->userId,
-                $verifiedProfileId,
-                profileIsVerified: $verifiedProfileId !== null,
-            );
+            $auth = $pair->profileId !== null
+                ? $this->authManager->buildAuthResponseForOwnedProfile($pair->userId, $pair->profileId)
+                : $this->authManager->buildAuthResponse($pair->userId);
+        } catch (ProfileNotOwnedException) {
+            return $this->profileNoLongerOwned();
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17: the APPROVING account is held, so the mint seam refuses —
             // the TV gets the contracts-registered distinct 403, never a bare

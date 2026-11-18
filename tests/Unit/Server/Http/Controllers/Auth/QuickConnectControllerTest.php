@@ -264,7 +264,7 @@ final class QuickConnectControllerTest extends TestCase
 
         $authManager = $this->createMock(AuthManager::class);
         $authManager->expects(self::once())->method('buildAuthResponse')
-            ->with('user-1', null, null, null, null, false)
+            ->with('user-1')
             ->willReturn([
                 'access_token' => 'AT',
                 'refresh_token' => 'RT',
@@ -303,14 +303,10 @@ final class QuickConnectControllerTest extends TestCase
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
         $authManager = $this->createMock(AuthManager::class);
-        // The ownership check verifies P and returns it. The mint must be for P, passed as
-        // already verified, so it is not re-resolved. A call with only the user id (the account
-        // default, D) is the regression this pins.
-        $authManager->expects(self::once())->method('requireOwnedProfile')
+        // The mint is for P, through the owned-profile seam: that seam verifies P and mints it as-is.
+        // A call with only the user id (the account default, D) is the regression this pins.
+        $authManager->expects(self::once())->method('buildAuthResponseForOwnedProfile')
             ->with('user-1', 'profile-P')
-            ->willReturn('profile-P');
-        $authManager->expects(self::once())->method('buildAuthResponse')
-            ->with('user-1', 'profile-P', null, null, null, true)
             ->willReturn([
                 'access_token' => 'AT', 'refresh_token' => 'RT', 'profile_id' => 'profile-P',
                 'token_type' => 'Bearer', 'expires_in' => 3600, 'user' => [],
@@ -339,7 +335,7 @@ final class QuickConnectControllerTest extends TestCase
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->expects(self::once())->method('requireOwnedProfile')
+        $authManager->expects(self::once())->method('buildAuthResponseForOwnedProfile')
             ->with('user-1', 'profile-gone')
             ->willThrowException(ProfileNotOwnedException::forRequestedProfile('user-1', 'profile-gone'));
         $authManager->expects(self::never())->method('buildAuthResponse');

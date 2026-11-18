@@ -389,19 +389,23 @@ final class PreRouterFastPaths
      * The schedule window test for an authorised artwork or avatar request.
      *
      * A resolved session (a non-empty userId) is tested through
-     * {@see AccessScheduleMiddleware::denyForSession()}, which is the same resolution the
-     * global gate runs. A session with its own profile is tested on that profile.
+     * {@see AccessScheduleMiddleware::denyForSession()}, which is the global gate's resolution
+     * with one difference: the account's found profile is memoised for the 30 s schedule TTL.
+     * A session with its own profile is tested on that profile, on both routes.
      *
-     * A session with no profile of its own is NOT a pre-S80 bearer. Every local bearer is
-     * resolved to a profile by {@see \Phlix\Auth\AuthManager::validateAccessToken()}: the
-     * token's claim if the account still owns it, else the account default (the resolver
-     * creates one when missing). The only exception is a profile lookup that fails outright,
-     * which that method logs and degrades to null. A null profile here is therefore a
-     * RELAYED request, which the relay consumer stamps with a userId and never a profileId.
-     * For that case the account's active profile is tested, memoised for the 30 s schedule TTL
-     * (see {@see AccessScheduleMiddleware::denyForSession()}) so a grid of posters costs one
-     * profile read. An account with no resolvable profile is refused with the gate's 403. So
-     * the bytes and the JSON routes agree for every session.
+     * A session with no profile id is a RELAYED principal (the relay consumer stamps a userId and
+     * never a profileId), or a local bearer whose claim lookup failed outright.
+     * {@see \Phlix\Auth\AuthManager::validateAccessToken()} resolves every other local bearer to a
+     * profile: the token's claim if the account still owns it, else the account default (the
+     * resolver creates one when missing). A failed lookup yields null, never the default. For a
+     * session with no profile id, the account's active profile is tested, through the memo, so a
+     * grid of posters costs one profile read. An account with no resolvable profile is refused with
+     * the gate's 403, unless it is an unmapped relayed principal
+     * ({@see AccessScheduleMiddleware::allowsWithoutProfile()}).
+     *
+     * The bytes and JSON routes agree on every verdict except that lag. A profile switch or delete
+     * reaches this path up to 30 s after it reaches the JSON routes, for a session with no profile
+     * id. That is the accepted cost of the artwork grid (see {@see AccessScheduleMiddleware::$foundProfileMemo}).
      *
      * A request with no session is tested only on the `pid` its signed URL has just verified
      * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). With no `pid` it is not refused

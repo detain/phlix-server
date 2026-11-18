@@ -100,9 +100,11 @@ final class AccessScheduleMiddleware
      * with the profile id and the hrtime it was read at. Relayed artwork and avatar requests
      * carry no profile, so each poster in a grid would otherwise read the account profile once.
      * Held for the same 30 s TTL as the schedule rows, so a switch takes up to 30 s to apply to
-     * these requests. Written only by {@see denyForSession()}, never by the global gate, and
-     * local bearers never reach it (they always carry their own profile id). Bounded like the
-     * no-profile memo.
+     * these requests on the bytes path. Written only by {@see denyForSession()}, never by the
+     * global gate, which reads the account profile fresh on every request. A local bearer reaches
+     * this path with no profile id only when its claim lookup failed outright: validateAccessToken()
+     * then yields a null profile, never the account default, and the bytes path tests the account's
+     * active profile through this memo, with the same 30 s lag. Bounded like the no-profile memo.
      *
      * @var array<string, array{at: int|float, profileId: string}>
      */
@@ -180,16 +182,19 @@ final class AccessScheduleMiddleware
      * The schedule verdict for a resolved session whose identity is held on the request
      * itself, not in {@see RequestContext}. The fast paths that run before
      * {@see \Phlix\Server\Core\Application::dispatch()} (artwork) use this, so they resolve
-     * the profile exactly as {@see __invoke()} does:
+     * the profile as {@see __invoke()} does, with one difference below:
      *
      *   - a session with its own profile is tested on that profile;
-     *   - a profile-less session (a token minted before S80) is tested on the account's
-     *     active profile, through the same bounded no-profile memo;
-     *   - an account with no resolvable profile is refused with the same 403 the gate gives.
+     *   - a profile-less session (a relayed principal, or a local bearer whose claim lookup
+     *     failed outright) is tested on the account's active profile, through the same bounded
+     *     no-profile memo;
+     *   - an account with no resolvable profile is refused with the same 403 the gate gives,
+     *     unless the request is an unmapped relayed principal (see {@see self::allowsWithoutProfile()}).
      *
-     * The found profile is memoised for the TTL (see {@see $foundProfileMemo}), so a relayed
-     * request grid does not read the account profile once per image. The window is still
-     * tested fresh on every call.
+     * The found account profile is memoised for the TTL (see {@see $foundProfileMemo}), so a
+     * relayed request grid does not read the account profile once per image. The global gate
+     * does not memoise it. So a switch or a delete reaches these bytes up to 30 s later than the
+     * JSON routes. The window is still tested fresh on every call.
      *
      * @param Request     $request   The authorised request, used for the profile-create exemption.
      * @param string      $userId    The session's account (non-empty).

@@ -234,6 +234,103 @@ final class RefreshBoundProfileTest extends TestCase
     }
 
     /**
+     * Finding G. A replay of a token already rotated OUTSIDE the grace window is reuse, even when its
+     * bound profile has since been removed. The ownership refusal used to answer first, with no reuse
+     * check, so the family stayed live. Now the replay revokes that one family, audited as
+     * refresh_token_reuse, and the grant is not consumed again.
+     */
+    public function testAReusedRefreshForAProfileTheAccountNoLongerOwnsRevokesTheFamily(): void
+    {
+        [$token, $jti, $family] = $this->consumedFamilyToken();
+        $this->owned = [self::DEFAULT];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturn([
+            'jti' => $jti,
+            'sessionId' => $family,
+            'sessionStatus' => 'active',
+            'consumed' => true,
+            'withinGrace' => false,
+        ]);
+        $store->expects(self::once())->method('revokeSession')->with($family, 'refresh_token_reuse');
+        $store->expects(self::never())->method('markGrantConsumed');
+
+        $reasons = [];
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason) use (&$reasons): void {
+                $reasons[] = $reason;
+            }
+        );
+
+        $manager = $this->manager($this->jwt(), null, $store, $audit);
+
+        try {
+            $manager->refreshToken($token);
+            self::fail('a reused, refused refresh must not mint');
+        } catch (\InvalidArgumentException) {
+            // expected: the family is revoked and the refresh refused
+        }
+
+        self::assertSame(['refresh_token_reuse'], $reasons, 'the replay is audited as reuse, not as the ownership refusal');
+    }
+
+    /**
+     * Finding G, the benign side. A consumed presentation INSIDE the grace window for a removed profile
+     * is the ownership refusal only: nothing is revoked, as the adjudication's grace rule says.
+     */
+    public function testAReplayInsideTheGraceWindowForAProfileTheAccountNoLongerOwnsIsNotRevoked(): void
+    {
+        [$token, $jti, $family] = $this->consumedFamilyToken();
+        $this->owned = [self::DEFAULT];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturn([
+            'jti' => $jti,
+            'sessionId' => $family,
+            'sessionStatus' => 'active',
+            'consumed' => true,
+            'withinGrace' => true,
+        ]);
+        $store->expects(self::never())->method('revokeSession');
+
+        $reasons = [];
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason) use (&$reasons): void {
+                $reasons[] = $reason;
+            }
+        );
+
+        try {
+            $this->manager($this->jwt(), null, $store, $audit)->refreshToken($token);
+            self::fail('a refused refresh must not mint');
+        } catch (\InvalidArgumentException) {
+            // expected: the ownership refusal
+        }
+
+        self::assertSame(['profile_not_owned'], $reasons);
+    }
+
+    /**
+     * A family-carrying refresh token bound to the BOUND profile, with its jti and family id.
+     *
+     * @return array{0: string, 1: string, 2: string}
+     */
+    private function consumedFamilyToken(): array
+    {
+        $jwt = $this->jwt();
+        $family = 'f' . str_repeat('e', 35);
+        $token = $jwt->createRefreshToken(self::USER, [
+            JwtHandler::CLAIM_PROFILE_ID => self::BOUND,
+            JwtHandler::CLAIM_SESSION_ID => $family,
+        ]);
+        $jti = (string) (($jwt->validateToken($token)['jti'] ?? ''));
+
+        return [$token, $jti, $family];
+    }
+
+    /**
      * The access leg (finding 2). A profile claim the account no longer owns refuses the
      * access token. It must not run as the default for the token's whole lifetime.
      */
@@ -271,6 +368,39 @@ final class RefreshBoundProfileTest extends TestCase
 
         self::assertIsArray($info);
         self::assertSame(self::DEFAULT, $info['profile_id'], 'a pre-S80 access token keeps the account default');
+    }
+
+    /**
+     * A claim lookup that fails outright must not resolve to the account default. The first lookup
+     * throws (the DB is down). The previous code then retried the same claim lookup, and the retry
+     * found the claim unowned and fell back to the default. Now the failed lookup yields no profile.
+     */
+    public function testAFailedClaimLookupNeverResolvesToTheAccountDefault(): void
+    {
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken(self::USER, [JwtHandler::CLAIM_PROFILE_ID => self::BOUND]);
+
+        $claimLookups = 0;
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('resolveProfileIdForUser')->willReturnCallback(
+            function (string $userId, ?string $requested = null) use (&$claimLookups): string {
+                if ($requested === null || $requested === '') {
+                    return self::DEFAULT;
+                }
+                $claimLookups++;
+                if ($claimLookups === 1) {
+                    throw new \RuntimeException('database unavailable');
+                }
+
+                // A retry would find the claim no longer owned.
+                throw ProfileNotOwnedException::forRequestedProfile($userId, $requested);
+            }
+        );
+
+        $info = $this->manager($jwt, $profiles)->validateAccessToken($token);
+
+        self::assertIsArray($info, 'an outage must not lock the user out of the token');
+        self::assertNull($info['profile_id'], 'a failed lookup yields no profile, never the account default');
     }
 
     /**
@@ -324,24 +454,45 @@ final class RefreshBoundProfileTest extends TestCase
     }
 
     /**
-     * The seam itself. A verified id is minted as-is with no lookup. An unverified one still goes
-     * through the default-resolution path, so every other caller keeps its behaviour.
+     * The seam itself. buildAuthResponseForOwnedProfile() verifies the id once and mints it as-is.
+     * buildAuthResponse() keeps the default-resolution path for every other caller. The public
+     * verified flag is gone (it was a bool any caller could pass as true), so only the method that
+     * verifies can take the verified path.
      */
-    public function testBuildAuthResponseMintsAVerifiedIdAsIsAndStillResolvesAnUnverifiedOne(): void
+    public function testBuildAuthResponseForOwnedProfileVerifiesOnceAndMintsAsIs(): void
     {
         $jwt = $this->jwt();
 
+        $lookups = [];
         $profiles = $this->createMock(UserProfileManager::class);
-        $profiles->expects(self::once())->method('resolveProfileIdForUser')
-            ->with(self::USER, null)
-            ->willReturn(self::DEFAULT);
+        $profiles->method('resolveProfileIdForUser')->willReturnCallback(
+            function (string $userId, ?string $requested = null) use (&$lookups): string {
+                $lookups[] = $requested;
+
+                return $requested ?? self::DEFAULT;
+            }
+        );
 
         $manager = $this->manager($jwt, $profiles);
 
-        $verified = $manager->buildAuthResponse(self::USER, self::BOUND, null, null, null, true);
-        self::assertSame(self::BOUND, $verified['profile_id'], 'a verified id is minted without a lookup');
+        $verified = $manager->buildAuthResponseForOwnedProfile(self::USER, self::BOUND);
+        self::assertSame(self::BOUND, $verified['profile_id'], 'the verified id is minted as-is');
+        self::assertSame([self::BOUND], $lookups, 'the owned-profile mint verifies once and never re-resolves');
 
+        $lookups = [];
         $unverified = $manager->buildAuthResponse(self::USER);
         self::assertSame(self::DEFAULT, $unverified['profile_id'], 'an unverified call still resolves the default');
+        self::assertSame([null], $lookups, 'the default-resolution path is unchanged for other callers');
+    }
+
+    /**
+     * The owned-profile mint never degrades a profile the account no longer owns to the default.
+     */
+    public function testBuildAuthResponseForOwnedProfileRefusesAProfileTheAccountNoLongerOwns(): void
+    {
+        $this->owned = [self::DEFAULT];
+
+        $this->expectException(ProfileNotOwnedException::class);
+        $this->manager($this->jwt())->buildAuthResponseForOwnedProfile(self::USER, self::BOUND);
     }
 }

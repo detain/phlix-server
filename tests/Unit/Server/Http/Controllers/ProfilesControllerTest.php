@@ -392,7 +392,7 @@ final class ProfilesControllerTest extends TestCase
             'user' => ['id' => 'user-1'],
         ];
         $this->auth->expects($this->once())
-            ->method('buildAuthResponse')
+            ->method('buildAuthResponseForOwnedProfile')
             ->with('user-1', 'p-2')
             ->willReturn($envelope);
 

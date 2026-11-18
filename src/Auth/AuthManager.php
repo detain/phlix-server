@@ -1651,9 +1651,10 @@ class AuthManager
         // retry after the grace window was audited as 'refresh_token_reuse' (family revoked) rather
         // than as the ownership refusal it really is. Refused here, the grant is never touched.
         // It still runs before the grace memo, so a refusal is never re-delivered from memory.
+        $sessionId = JwtHandler::sessionIdClaim($payload);
         $boundProfileId = JwtHandler::profileIdClaim($payload);
         $verifiedProfileId = $boundProfileId !== null
-            ? $this->refuseUnownedRefreshProfile($userId, $boundProfileId)
+            ? $this->refuseUnownedRefreshProfile($userId, $boundProfileId, $sessionId, $jti)
             : null;
 
         // CP-029 / D-1a: family + grant adjudication for every token the store
@@ -1664,7 +1665,6 @@ class AuthManager
         // memory. A refresh token with NO `sid` predates the store (or was
         // minted by an unwired manager) and is adjudicated by the watermark
         // alone, unchanged — the zero-breakage arm.
-        $sessionId = JwtHandler::sessionIdClaim($payload);
         if ($sessionId !== null) {
             $this->adjudicateRefreshFamily($userId, $sessionId, $jti);
         }
@@ -1693,11 +1693,13 @@ class AuthManager
         // The profile the ownership check just verified is minted as-is (finding 3). Re-resolving
         // it inside buildAuthResponse would degrade a profile removed in the gap to the account
         // default. A refresh with no profile claim (pre-S80) still resolves the default there.
-        $response = $this->buildAuthResponse(
+        $response = $this->mintAuthResponse(
             $userId,
             $verifiedProfileId,
+            $verifiedProfileId !== null,
             $sessionId,
-            profileIsVerified: $verifiedProfileId !== null,
+            null,
+            null,
         );
 
         if ($jti !== '') {
@@ -1834,13 +1836,7 @@ class AuthManager
             // and ONLY that family: every other device's `sid` keeps its
             // living grants. This is the capability the stateless design
             // could not have.
-            $this->tokenSessions->revokeSession($sessionId, 'refresh_token_reuse');
-            $this->auditLogger->logFailedAuth('refresh_token_reuse', [
-                'user_id' => $userId,
-                'context' => 'refresh',
-                'session_id' => $sessionId,
-                'jti' => $jti,
-            ]);
+            $this->revokeReusedFamily($this->tokenSessions, $userId, $sessionId, $jti);
             throw new \InvalidArgumentException('Token has been revoked');
         }
 
@@ -1953,8 +1949,10 @@ class AuthManager
         // schedule. The refresh path refuses for the same reason
         // (refuseUnownedRefreshProfile()). A token with NO claim (pre-S80) keeps the
         // account default. A profile lookup that fails outright (the DB is unavailable)
-        // still degrades through resolveProfileForUser(), so an outage does not lock
-        // users out.
+        // yields a null profile, never the account default, so an outage does not lock
+        // users out and does not run the token as the default. That lookup is not
+        // retried through resolveProfileForUser(): the retry re-ran the same claim
+        // lookup, and an unowned claim there fell back to the default.
         $claimedProfileId = JwtHandler::profileIdClaim($payload);
         if ($claimedProfileId === null || $this->profileManager === null) {
             $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
@@ -1967,8 +1965,12 @@ class AuthManager
                 ]);
 
                 return null;
-            } catch (\Throwable) {
-                $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Could not verify the access token profile claim; no profile for this request', [
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+                $profileId = null;
             }
         }
 
@@ -2118,19 +2120,38 @@ class AuthManager
      * throws the same \InvalidArgumentException the other refresh refusals use, which the auth
      * controller maps to a 401.
      *
-     * @param string $userId    The account being refreshed.
-     * @param string $profileId The profile the refresh token is bound to.
+     * A replay of a token that was already rotated OUTSIDE the grace window is reuse, whatever the
+     * profile says. The ownership refusal runs before adjudication, so it would otherwise refuse the
+     * replay without the reuse check, and the family would stay live. So on this refusal the grant is
+     * read (never consumed), and a reuse verdict revokes the family before the refusal is thrown. A
+     * non-consumed presentation still gets the ownership refusal alone.
+     *
+     * @param string      $userId    The account being refreshed.
+     * @param string      $profileId The profile the refresh token is bound to.
+     * @param string|null $sessionId The family id from the `sid` claim, or null when the token has none.
+     * @param string      $jti       The presented refresh token's jti ('' = absent).
      *
      * @return string The profile id, verified as owned by the account. The re-mint uses this
      *                value as-is, so a profile removed after this check cannot degrade the mint.
      *
-     * @throws \InvalidArgumentException When the profile is no longer owned.
+     * @throws \InvalidArgumentException When the profile is no longer owned, or the presentation is reuse.
      */
-    private function refuseUnownedRefreshProfile(string $userId, string $profileId): string
-    {
+    private function refuseUnownedRefreshProfile(
+        string $userId,
+        string $profileId,
+        ?string $sessionId,
+        string $jti,
+    ): string {
         try {
             return $this->requireOwnedProfile($userId, $profileId);
         } catch (ProfileNotOwnedException) {
+            $store = $this->tokenSessions;
+            if ($store !== null && $sessionId !== null && $this->isReusedOutsideGrace($store, $sessionId, $jti)) {
+                $this->revokeReusedFamily($store, $userId, $sessionId, $jti);
+
+                throw new \InvalidArgumentException('Token has been revoked');
+            }
+
             $this->auditLogger->logFailedAuth('profile_not_owned', [
                 'user_id' => $userId,
                 'context' => 'refresh',
@@ -2138,6 +2159,50 @@ class AuthManager
 
             throw new \InvalidArgumentException('Refresh token profile is no longer available');
         }
+    }
+
+    /**
+     * Read-only: does this presentation reuse a rotated token outside the grace window? The same
+     * test {@see self::adjudicateRefreshFamily()} applies to a consumed grant, without consuming it.
+     * A family that is already not active is not revoked again, as the adjudication table says.
+     *
+     * @param TokenSessionRepository $store     The session-family store.
+     * @param string                 $sessionId The family id from the `sid` claim.
+     * @param string                 $jti       The presented refresh token's jti ('' = absent).
+     */
+    private function isReusedOutsideGrace(TokenSessionRepository $store, string $sessionId, string $jti): bool
+    {
+        if ($jti === '') {
+            return false;
+        }
+
+        $grant = $store->findGrant($jti, self::ROTATION_GRACE_SECONDS);
+
+        return $grant !== null
+            && ($grant['sessionStatus'] ?? '') === 'active'
+            && ($grant['sessionId'] ?? '') === $sessionId
+            && ($grant['consumed'] ?? false) === true
+            && ($grant['withinGrace'] ?? false) !== true;
+    }
+
+    /**
+     * Revoke ONE family for a reuse verdict and audit it. Shared by the adjudication and the
+     * ownership refusal, so the reuse arm is written once.
+     *
+     * @param TokenSessionRepository $store     The session-family store.
+     * @param string                 $userId    Token subject.
+     * @param string                 $sessionId The family to revoke (this session id only).
+     * @param string                 $jti       The presented refresh token's jti.
+     */
+    private function revokeReusedFamily(TokenSessionRepository $store, string $userId, string $sessionId, string $jti): void
+    {
+        $store->revokeSession($sessionId, 'refresh_token_reuse');
+        $this->auditLogger->logFailedAuth('refresh_token_reuse', [
+            'user_id' => $userId,
+            'context' => 'refresh',
+            'session_id' => $sessionId,
+            'jti' => $jti,
+        ]);
     }
 
     /**
@@ -2238,12 +2303,6 @@ class AuthManager
      *                               that know the client type); null when unknown.
      * @param string|null $deviceName Display metadata for a NEW family; untrusted
      *                               client text, column-length-capped, never parsed.
-     * @param bool        $profileIsVerified True only when the caller has ALREADY verified `$profileId`
-     *                               as owned by `$userId` (refresh, quick-connect redemption). That id is
-     *                               then minted as-is and not re-resolved, so a profile removed in the gap
-     *                               cannot degrade to the account default. False (the default) keeps the
-     *                               default-resolution path for every other caller.
-     *
      * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
      *     user: array<string, mixed>|null, profile_id: string|null}
      *
@@ -2264,7 +2323,58 @@ class AuthManager
         ?string $familyHint = null,
         ?string $deviceType = null,
         ?string $deviceName = null,
-        bool $profileIsVerified = false,
+    ): array {
+        return $this->mintAuthResponse($userId, $profileId, false, $familyHint, $deviceType, $deviceName);
+    }
+
+    /**
+     * Mint an access + refresh token pair for a profile the caller must PROVE the account owns.
+     *
+     * The ownership check runs first, through {@see self::requireOwnedProfile()}, and the id it returns
+     * is the one minted, as-is. A profile removed between a caller's own check and this mint is refused
+     * here. It is never degraded to the account default. This is the only public way to mint a named
+     * profile without the default-resolution path, so a caller cannot skip the verification.
+     *
+     * @param string      $userId    The authenticated account.
+     * @param string      $profileId The profile the session should run as (non-empty).
+     * @param string|null $familyHint The existing family a rotation stays inside (see {@see self::buildAuthResponse()}).
+     * @param string|null $deviceType Display metadata for a NEW family.
+     * @param string|null $deviceName Display metadata for a NEW family.
+     *
+     * @return array<string, mixed> The same envelope as {@see self::buildAuthResponse()}.
+     *
+     * @throws ProfileNotOwnedException When the account does not own `$profileId`.
+     * @throws PasswordChangeRequiredException When the account carries the must_change_password hold.
+     */
+    public function buildAuthResponseForOwnedProfile(
+        string $userId,
+        string $profileId,
+        ?string $familyHint = null,
+        ?string $deviceType = null,
+        ?string $deviceName = null,
+    ): array {
+        $verifiedProfileId = $this->requireOwnedProfile($userId, $profileId);
+
+        return $this->mintAuthResponse($userId, $verifiedProfileId, true, $familyHint, $deviceType, $deviceName);
+    }
+
+    /**
+     * The one mint seam behind {@see self::buildAuthResponse()} and {@see self::buildAuthResponseForOwnedProfile()}.
+     * Private, so `$profileIsVerified` can only be true when the public method that verified the id called it.
+     *
+     * @param string|null $profileId         The profile to mint, verified when `$profileIsVerified` is true.
+     * @param bool        $profileIsVerified True only after requireOwnedProfile() verified `$profileId`. That id is
+     *                                       minted as-is and not re-resolved. False resolves through the default path.
+     *
+     * @return array<string, mixed>
+     */
+    private function mintAuthResponse(
+        string $userId,
+        ?string $profileId,
+        bool $profileIsVerified,
+        ?string $familyHint,
+        ?string $deviceType,
+        ?string $deviceName,
     ): array {
         // SRV-M18 (review server__pm): the flag is an ACCOUNT HOLD, not a
         // password-leg quirk — the admin reset flow stamps it precisely
@@ -2285,10 +2395,9 @@ class AuthManager
             'auth_response',
         );
 
-        // A caller that has already proven ownership (a refresh, a quick-connect redemption) passes
-        // the id with $profileIsVerified, and it is minted as-is. Re-resolving here would let a
-        // profile removed between that check and this mint degrade to the account default (finding 3).
-        // A caller that has not verified keeps the default-resolution path.
+        // A verified id (buildAuthResponseForOwnedProfile(), the refresh) is minted as-is. Re-resolving
+        // it here would let a profile removed between the check and this mint degrade to the account
+        // default (finding 3). An unverified caller keeps the default-resolution path.
         $resolvedProfileId = $profileIsVerified && $profileId !== null && $profileId !== ''
             ? $profileId
             : $this->resolveProfileForUser($userId, $profileId);

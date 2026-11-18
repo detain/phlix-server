@@ -125,6 +125,37 @@ final class TrickplayArtefactsTest extends TestCase
         $this->assertFalse(TrickplayArtefacts::isComplete($this->dir), 'An unparseable timeline is not complete.');
     }
 
+    public function testAFailureMarkerIsSetReadAndCleared(): void
+    {
+        $this->assertFalse(TrickplayArtefacts::hasFailedMarker($this->dir));
+
+        TrickplayArtefacts::markFailed($this->dir, 'BIF not written');
+        $this->assertTrue(TrickplayArtefacts::hasFailedMarker($this->dir));
+        $record = json_decode((string) file_get_contents($this->dir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME), true);
+        $this->assertIsArray($record);
+        $this->assertSame('BIF not written', $record['reason']);
+
+        TrickplayArtefacts::clearFailedMarker($this->dir);
+        $this->assertFalse(TrickplayArtefacts::hasFailedMarker($this->dir));
+        // Clearing an absent marker is a no-op, not an error.
+        TrickplayArtefacts::clearFailedMarker($this->dir);
+    }
+
+    public function testTheItemLockIsExclusiveAndCanBeReleased(): void
+    {
+        $first = TrickplayArtefacts::tryLock($this->dir);
+        $this->assertNotNull($first);
+
+        // A second acquisition on the same item is refused without waiting. This
+        // is the same arbitration two processes get.
+        $this->assertNull(TrickplayArtefacts::tryLock($this->dir));
+
+        TrickplayArtefacts::unlock($first);
+        $second = TrickplayArtefacts::tryLock($this->dir);
+        $this->assertNotNull($second, 'Once released, the item can be locked again.');
+        TrickplayArtefacts::unlock($second);
+    }
+
     public function testWriteBifNeedsAtLeastTwoFrames(): void
     {
         $frame = $this->dir . '/bifframe_00001.jpg';

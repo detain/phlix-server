@@ -194,6 +194,53 @@ final class TrickplayArtefacts
     public const LOCK_FILENAME = '.trickplay.lock';
 
     /**
+     * Name of the file that records a backfill generation that failed.
+     *
+     * The backfill reads it before it spends a decode on the item. Without it, an
+     * item whose BIF can never be written is re-decoded on every run for nothing.
+     * Deleting the file makes the item eligible again.
+     */
+    public const FAILED_MARKER_FILENAME = 'generation-failed.json';
+
+    /**
+     * Records that generation for an item failed, with the reason and the time (UTC).
+     *
+     * @param string $dir    The item's trickplay directory (created if missing).
+     * @param string $reason Short human-readable reason, for the operator.
+     */
+    public static function markFailed(string $dir, string $reason): void
+    {
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $json = json_encode(['failed_at' => gmdate('c'), 'reason' => $reason], JSON_THROW_ON_ERROR);
+        @file_put_contents($dir . '/' . self::FAILED_MARKER_FILENAME, $json);
+    }
+
+    /**
+     * Whether an earlier generation for the item recorded a failure.
+     *
+     * @param string $dir The item's trickplay directory.
+     */
+    public static function hasFailedMarker(string $dir): bool
+    {
+        return is_file($dir . '/' . self::FAILED_MARKER_FILENAME);
+    }
+
+    /**
+     * Removes a failure marker, if present (for example once the item is complete).
+     *
+     * @param string $dir The item's trickplay directory.
+     */
+    public static function clearFailedMarker(string $dir): void
+    {
+        $path = $dir . '/' . self::FAILED_MARKER_FILENAME;
+        if (is_file($path)) {
+            @unlink($path);
+        }
+    }
+
+    /**
      * Takes an item's pass lock without waiting.
      *
      * The media-asset job and the backfill script write an item's artefacts into

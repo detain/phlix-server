@@ -17,6 +17,11 @@ declare(strict_types=1);
  * regenerated rather than trusted. Sprite generation is read-only and never
  * modifies the source file.
  *
+ * Each item is generated under its .trickplay.lock (non-blocking), so the in-app
+ * media-asset worker and this script never write the same item at once. An item
+ * whose generation failed gets generation-failed.json in its directory and is
+ * skipped by later runs; delete that file to retry the item.
+ *
  * Usage:
  *   php scripts/backfill-trickplay.php                    # all libraries
  *   php scripts/backfill-trickplay.php --library=<id>   # scope to one library
@@ -132,6 +137,7 @@ foreach ($rows as $row) {
     // Already complete on disk: never decode it again. Only restore the database
     // paths when the row has lost them.
     if (TrickplayArtefacts::isComplete($itemDir)) {
+        TrickplayArtefacts::clearFailedMarker($itemDir);
         $rowHasPaths = is_string($row['trickplay_sprite_path'] ?? null)
             && is_string($row['trickplay_timeline_path'] ?? null);
         if (!$rowHasPaths) {
@@ -149,6 +155,15 @@ foreach ($rows as $row) {
         } else {
             echo "  skip: {$path} (artefacts already on disk)\n";
         }
+        $skipped++;
+        continue;
+    }
+
+    // An item whose earlier generation failed is not decoded again on every run.
+    // The marker records why; deleting it makes the item eligible again.
+    if (TrickplayArtefacts::hasFailedMarker($itemDir)) {
+        echo "  skip: {$path} (an earlier generation failed; delete "
+            . $itemDir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME . " to retry)\n";
         $skipped++;
         continue;
     }
@@ -184,7 +199,8 @@ foreach ($rows as $row) {
         ['item_id' => $itemId]
     );
     if ($result === null || $result['sprite'] === null || $result['timeline'] === null) {
-        echo "  FAIL: {$path} (trickplay generation failed)\n";
+        echo "  FAIL: {$path} (trickplay generation failed; marked, see the ffmpeg log)\n";
+        TrickplayArtefacts::markFailed($itemDir, 'trickplay pass produced no sprite or timeline');
         TrickplayArtefacts::unlock($lock);
         $failed++;
         continue;
@@ -219,6 +235,11 @@ foreach ($rows as $row) {
         }
     }
 
+    if (!$bifWritten) {
+        // The sprite and timeline are published, but the item is not complete. Mark it
+        // so the next run does not decode it again for a BIF that cannot be written.
+        TrickplayArtefacts::markFailed($itemDir, 'BIF not written; sprite and timeline are published');
+    }
     TrickplayArtefacts::unlock($lock);
     $updated++;
     echo '  ok:   ' . $path . ($bifWritten ? '' : ' (no BIF)') . "\n";

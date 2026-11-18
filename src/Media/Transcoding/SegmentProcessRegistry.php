@@ -133,6 +133,11 @@ use Psr\Log\NullLogger;
  *    Linux does not reallocate a PID while any process still names it as its group id, so a
  *    group id cannot be reused while a member of the old group is alive. The start-time check
  *    covers the rest of the window.
+ *  - Unchecked leader in a mixed record. An unchecked leader (no start time, for example one that
+ *    exited between shell_exec() and register()) gets TERM and no KILL, and its group is not
+ *    snapshotted. The record is held after the grace while that group still exists (see
+ *    {@see uncheckedGroupAlive()}), up to the hold bound after the TERM. Its group's members keep
+ *    their temp and their cap slot until then, and they are never KILLed.
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -322,7 +327,8 @@ final class SegmentProcessRegistry
      * `members` is the group membership snapshot taken before TERM (PID => start time), or
      * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace. A
      * null record keeps its temps and its cap count while a PID is still alive, up to
-     * {@see $unverifiedHoldSeconds} after TERM.
+     * {@see $unverifiedHoldSeconds} after TERM. A record with a snapshot and an unchecked leader
+     * keeps them while that leader's group still exists, up to the same bound.
      *
      * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
      *     tmps: array<int, string>, startedNs: int, lastToken: int, lastGrowNs: int,
@@ -389,6 +395,17 @@ final class SegmentProcessRegistry
     private $groupMembersProbe;
 
     /**
+     * Group-alive probe: fn(int $pid): bool. True while any process still carries `$pid` as its
+     * process group id (`kill(-pid, 0)`). It is asked only about an UNCHECKED leader of a record that
+     * has a membership snapshot (see {@see uncheckedGroupAlive()}): such a group's members were never
+     * snapshotted, so nothing in it can be KILLed, but they still hold the temp and the cap slot.
+     * Overridable in tests, so no real process group is probed. Its default is false when posix is absent.
+     *
+     * @var callable(int): bool
+     */
+    private $groupAliveProbe;
+
+    /**
      * Per-process signal sender: fn(int $pid, int $signal): void. Sends to ONE PID (not the
      * group), and is used only for the SIGKILL step on a group member or leader whose
      * identity still matches. Overridable in tests, so no real signal is sent.
@@ -410,9 +427,11 @@ final class SegmentProcessRegistry
     private bool $warnedUnknownIdentity = false;
 
     /**
-     * Seconds after its TERM that an orphan with an unknown membership snapshot is held while
-     * its process is still alive (see {@see sweep()}). The container sets it from
-     * `ffmpeg.transcode_timeout`. The default is the shipped value, so the hold is always finite.
+     * Seconds after its TERM that an orphan is held while something it cannot KILL may still run
+     * (see {@see sweep()} and {@see unverifiedHeld()}): an unknown membership snapshot while a PID
+     * is alive, or an unchecked leader's group. The container sets it from `ffmpeg.transcode_timeout`,
+     * and it is measured from the TERM, not from registration. The default is the shipped value, so
+     * the hold is always finite.
      */
     private float $unverifiedHoldSeconds = self::DEFAULT_UNVERIFIED_HOLD_SECONDS;
 
@@ -436,6 +455,7 @@ final class SegmentProcessRegistry
         $this->gracePeriodSeconds = $gracePeriodSeconds;
         $this->progressProbe = self::defaultProgressProbe();
         $this->groupMembersProbe = self::defaultGroupMembersProbe();
+        $this->groupAliveProbe = self::defaultGroupAliveProbe();
         $this->processSignalSender = self::defaultProcessSignalSender();
         $this->procMounted = self::defaultProcMounted();
     }
@@ -459,8 +479,9 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Set how long an orphan whose TERM-time membership snapshot is unknown is held after its TERM,
-     * while its process is still alive (see {@see sweep()}). The container passes
+     * Set how long an orphan is held after its TERM while something it cannot KILL may still run
+     * (see {@see sweep()}): an unknown TERM-time membership snapshot while a PID is alive, or an
+     * unchecked leader's group. The bound is measured from the TERM. The container passes
      * `ffmpeg.transcode_timeout`. A non-positive value keeps the shipped default, so the hold is
      * always finite.
      *
@@ -515,6 +536,17 @@ final class SegmentProcessRegistry
     public function setGroupMembersProbe(?callable $groupMembersProbe): void
     {
         $this->groupMembersProbe = $groupMembersProbe ?? self::defaultGroupMembersProbe();
+    }
+
+    /**
+     * Override the group-alive probe used for an unchecked leader's group (see {@see $groupAliveProbe}).
+     * Null restores the default (`posix_kill(-pid, 0)`, or false without posix). Tests pass a fake.
+     *
+     * @param (callable(int): bool)|null $groupAliveProbe
+     */
+    public function setGroupAliveProbe(?callable $groupAliveProbe): void
+    {
+        $this->groupAliveProbe = $groupAliveProbe ?? self::defaultGroupAliveProbe();
     }
 
     /**
@@ -745,13 +777,12 @@ final class SegmentProcessRegistry
                 }
                 $this->sigkillMembers($orphan['pids'], $orphan['starts'], $orphan['members']);
                 if (
-                    $orphan['members'] === null
-                    && $this->anyAlive($orphan['pids'], $orphan['starts'])
-                    && $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
+                    $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
+                    && $this->unverifiedHeld($orphan['pids'], $orphan['starts'], $orphan['members'])
                 ) {
-                    // No membership snapshot, so nothing can be KILLed. The encode is still
-                    // running, so keep the record: its temp (and the cap slot it counts) stays
-                    // until the process is verified dead or the hold bound passes.
+                    // Something this record cannot KILL may still run: no snapshot at all, or an
+                    // unchecked leader's group. Keep the record, so its temp (and the cap slot it
+                    // counts) stays until that is verified gone or the hold bound passes.
                     $keep[] = $orphan;
                     continue;
                 }
@@ -856,10 +887,11 @@ final class SegmentProcessRegistry
 
     /**
      * Reap a tracked launch without waiting: SIGTERM now, and the SIGKILL escalation later from
-     * {@see sweep()}. A launch with nothing left to escalate (leader dead, and no member in the
-     * snapshot, or an unknown snapshot that sweep() would drop once the leader is dead) has its
-     * temps removed at once. Otherwise its record moves to the orphan list with its TERM time, its
-     * membership snapshot and its temps. Its temps go when sweep() drops the record.
+     * {@see sweep()}. A launch with nothing left to escalate (leader dead, no member in the
+     * snapshot, no unchecked group still alive, or an unknown snapshot that sweep() would drop once
+     * the leader is dead) has its temps removed at once. Otherwise its record moves to the orphan
+     * list with its TERM time, its membership snapshot and its temps. Its temps go when sweep()
+     * drops the record.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
@@ -868,7 +900,8 @@ final class SegmentProcessRegistry
     private function reapTracked(string $key, array $pids, array $starts, array $tmps, int $now): void
     {
         $members = $this->sendTerm($pids, $starts);
-        if (($members === [] || $members === null) && !$this->anyAlive($pids, $starts)) {
+        $heldByUncheckedGroup = $members !== null && $this->uncheckedGroupAlive($pids, $starts);
+        if (($members === [] || $members === null) && !$this->anyAlive($pids, $starts) && !$heldByUncheckedGroup) {
             $this->cleanTemps($tmps);
 
             return;
@@ -896,7 +929,11 @@ final class SegmentProcessRegistry
      * snapshotted either. Returns null when the membership is unknown: a leader's identity is
      * unknown (`/proc` unreadable now), or no leader is verified and at least one is unchecked
      * (no start time was recorded, as on a host without `/proc`), so there is no group to snapshot.
-     * Null means no KILL later, and the record is held while its PID is alive (see {@see sweep()}).
+     * Null means no KILL later. The record is held while any of its PIDs is alive, up to the hold
+     * bound after the TERM (see {@see sweep()}). A MIXED record (a verified leader with a snapshot,
+     * and an unchecked leader) is different. The unchecked leader's group gets TERM and no KILL, and
+     * its members are not in the snapshot, so they are never KILLed. The record is held after the
+     * grace while that group still exists, up to the same bound (see {@see unverifiedHeld()}).
      * An empty array means no member was found, which is different from unknown.
      *
      * @param array<int, int>      $pids
@@ -962,6 +999,50 @@ final class SegmentProcessRegistry
         }
 
         return ($this->groupMembersProbe)($leaders);
+    }
+
+    /**
+     * Whether a TERMed record must still be held once its grace has elapsed, because something it
+     * cannot KILL may still be running:
+     *  - no membership snapshot (null): held while any PID is alive (the all-unchecked and unknown
+     *    cases, as before);
+     *  - a snapshot with an unchecked leader: held while that leader's group still exists. The
+     *    group's members were never snapshotted, so no KILL reaches them, but they still hold the
+     *    temp and the cap slot;
+     *  - a snapshot with only verified leaders: not held (the members were KILLed at the grace).
+     *
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts
+     * @param array<int, int>|null $members
+     */
+    private function unverifiedHeld(array $pids, array $starts, ?array $members): bool
+    {
+        if ($members === null) {
+            return $this->anyAlive($pids, $starts);
+        }
+
+        return $this->uncheckedGroupAlive($pids, $starts);
+    }
+
+    /**
+     * True when an UNCHECKED leader (no start time was recorded) still has a live process group.
+     * Such a leader was never verified, so its group is never snapshotted and never KILLed. Its
+     * group can still hold a child that keeps the temp and the cap slot. The probe is
+     * `kill(-pid, 0)`, which also sees unreaped zombies. The hold it drives is bounded, so
+     * a zombie or a reused group id costs a held slot for at most the hold bound.
+     *
+     * @param array<int, int>      $pids
+     * @param array<int, int|null> $starts
+     */
+    private function uncheckedGroupAlive(array $pids, array $starts): bool
+    {
+        foreach ($pids as $pid) {
+            if (($starts[$pid] ?? null) === null && ($this->groupAliveProbe)($pid)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1561,8 +1642,12 @@ final class SegmentProcessRegistry
      * The default group-membership probe: PID => start time for every non-zombie process on
      * this host whose process group id is one of the leaders. It makes one `scandir('/proc')`
      * and one `file_get_contents()` per process, so its cost grows with the host's process
-     * count. It runs once per reap, on the request path (see {@see kill()}), and is registered
-     * as blocking-IO Exception 12. Without `/proc` (non-Linux) it returns no members.
+     * count. It runs once per reap, from {@see sendTerm()}. Two callers reach it. On the
+     * request path, {@see kill()} and {@see killGroup()} reap through {@see reapTracked()}. In
+     * {@see sweep()}, a stall or wall-clock reap (via {@see signalOrphanForStall()}) and an orphan's
+     * TERM both call it. sweep() also runs on the request thread (the throttled sweep in
+     * `watchdogTick()`), so the scan is not confined to the kill path. It is registered as
+     * blocking-IO Exception 12. Without `/proc` (non-Linux) it returns no members.
      *
      * @return callable(array<int, int>): array<int, int>
      */
@@ -1595,6 +1680,24 @@ final class SegmentProcessRegistry
             }
 
             return $members;
+        };
+    }
+
+    /**
+     * The default group-alive probe: true while any process still has `$pid` as its process group
+     * id (`posix_kill(-pid, 0)`). Without posix it returns false, so an unchecked group does not hold
+     * a record, and the record is dropped after the grace, as before this probe existed.
+     *
+     * @return callable(int): bool
+     */
+    private static function defaultGroupAliveProbe(): callable
+    {
+        return static function (int $pid): bool {
+            if ($pid <= 0 || !function_exists('posix_kill')) {
+                return false;
+            }
+
+            return @posix_kill(-$pid, 0);
         };
     }
 

@@ -50,7 +50,9 @@ return [
     // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If the membership
     // is unknown at TERM (/proc unreadable then, or absent at registration so no start time
     // was recorded), the temp and its slot are held until the process is dead or
-    // transcode_timeout passes. The 300 s wall cap is about 3× the measured 4K wall time.
+    // transcode_timeout has passed since the TERM. The bound is measured from the TERM, not from
+    // registration. A mixed launch (a verified leader and an unchecked one) is held the same way
+    // while the unchecked leader's group still exists. The 300 s wall cap is about 3× the measured 4K wall time.
     // Both bounds are far below transcode_timeout, which remains the last backstop.
     // Non-positive values fall back to the registry defaults.
     'segment_stall_seconds' => 90,

@@ -42,6 +42,9 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
     /** @var array<int, int> The fake TERM-time group membership: PID => start time. */
     private array $members = [];
 
+    /** @var array<int, bool> pid => whether its process group still exists, as the fake reports it */
+    private array $groupAlive = [];
+
     /**
      * A `/proc/<pid>/stat` line with the given state and start time. Field 3 is the
      * state, and field 22 is the start time, which is index 19 after the `)`.
@@ -76,6 +79,7 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         // Fake PIDs must never match a real process group on this host, and a per-process
         // KILL must never reach a real PID. Both go through the fakes.
         $registry->setGroupMembersProbe(fn (array $leaders): array => $this->members);
+        $registry->setGroupAliveProbe(fn (int $pid): bool => $this->groupAlive[$pid] ?? false);
         $registry->setProcessSignalSender(function (int $pid, int $signal): void {
             $this->signals[] = [$pid, $signal];
             if ($this->dieOnSignal) {
@@ -455,5 +459,117 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         } finally {
             proc_close($process); // reaps the zombie
         }
+    }
+
+    /**
+     * Round-5 finding 2, option (a). A MIXED record: leader A is verified (its start time still
+     * matches), and leader B is unchecked (no start time, as when B exits between shell_exec() and
+     * register()). B gets TERM and no KILL, and its group is not snapshotted. Its children survive
+     * the TERM, so the record must be held after the grace while B's group still exists, and dropped
+     * once that group is gone. A's group is KILLed at the grace as before, and B never is.
+     */
+    public function testAMixedRecordIsHeldWhileAnUncheckedGroupStillExists(): void
+    {
+        $key = '/segs/job/seg-00019.ts';
+        $tmp = '/segs/job/seg-00019.ts.part-aaaa1111';
+        $this->proc[7201] = self::statLine(7201, 'S', 100);
+        $this->alive[7201] = true;
+        $this->alive[7202] = false; // B's leader has exited; its children do not
+        $this->members = [7201 => 100];
+        $this->groupAlive[7202] = true;
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => true);
+        $registry->register($key, 7201, null, $tmp);
+        $registry->register($key, 7202, null, null); // no `/proc` entry, so unchecked
+
+        $start = (int) hrtime(true);
+        $registry->kill($key);
+        self::assertSame([self::SIGTERM], $this->signalsFor(7202), 'the unchecked leader gets TERM');
+
+        $registry->sweep($start + self::SEC); // past the 0.5 s grace
+        self::assertSame(
+            [self::SIGTERM, self::SIGKILL],
+            $this->signalsFor(7201),
+            'the verified group is KILLed at grace',
+        );
+        self::assertSame([self::SIGTERM], $this->signalsFor(7202), 'the unchecked group never gets a KILL');
+        self::assertSame(1, $registry->orphanCount(), 'held while the unchecked group still exists');
+        self::assertSame([], $this->cleaned, 'its temp and cap slot are kept while that group lives');
+
+        $registry->sweep($start + 2 * self::SEC);
+        self::assertSame(1, $registry->orphanCount(), 'still held on a later pass');
+        self::assertSame([self::SIGTERM], $this->signalsFor(7202), 'still no KILL to the unchecked group');
+
+        $this->groupAlive[7202] = false; // its children have exited
+        $registry->sweep($start + 3 * self::SEC);
+        self::assertSame(0, $registry->orphanCount(), 'dropped once the unchecked group is gone');
+        self::assertSame([$tmp], $this->cleaned);
+    }
+
+    /**
+     * The same mixed record as above, but the unchecked group never dies. The hold is the same bound
+     * as the unknown-membership hold, measured from the TERM, so the record is dropped past it.
+     */
+    public function testAMixedRecordIsDroppedAtTheHoldBoundWhenTheUncheckedGroupSurvives(): void
+    {
+        $key = '/segs/job/seg-00020.ts';
+        $tmp = '/segs/job/seg-00020.ts.part-bbbb2222';
+        $this->proc[7211] = self::statLine(7211, 'S', 111);
+        $this->alive[7211] = true;
+        $this->alive[7212] = false;
+        $this->members = [7211 => 111];
+        $this->groupAlive[7212] = true; // never dies
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => true);
+        $registry->configureUnverifiedHold(10.0);
+        $registry->register($key, 7211, null, $tmp);
+        $registry->register($key, 7212, null, null);
+
+        $start = (int) hrtime(true);
+        $registry->kill($key);
+        $registry->sweep($start + 2 * self::SEC);
+        self::assertSame(1, $registry->orphanCount(), 'held inside the hold bound');
+        self::assertSame([], $this->cleaned);
+
+        $registry->sweep($start + 11 * self::SEC); // 11 s after the TERM, past the 10 s bound
+        self::assertSame(0, $registry->orphanCount(), 'dropped once the hold bound passes');
+        self::assertSame([$tmp], $this->cleaned);
+        self::assertSame(
+            [self::SIGTERM],
+            $this->signalsFor(7212),
+            'the unchecked group is never KILLed, even at the bound',
+        );
+    }
+
+    /**
+     * The immediate clean in kill() must not fire while an unchecked group is alive. Here the verified
+     * leader is gone and has no members, and the unchecked leader's group still exists. The launch is
+     * therefore not cleaned at once, but held as an orphan until the group is gone.
+     */
+    public function testAGoneVerifiedLeaderDoesNotCleanTheTempWhileAnUncheckedGroupLives(): void
+    {
+        $key = '/segs/job/seg-00021.ts';
+        $tmp = '/segs/job/seg-00021.ts.part-cccc3333';
+        $this->proc[7221] = self::statLine(7221, 'S', 121);
+        $this->alive[7221] = false; // verified leader is gone
+        $this->alive[7222] = false;  // unchecked leader is gone too; its group is not
+        $this->groupAlive[7222] = true;
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => true);
+        $registry->register($key, 7221, null, $tmp);
+        $registry->register($key, 7222, null, null);
+        unset($this->proc[7221]); // the verified leader's /proc entry is now gone
+
+        $registry->kill($key);
+
+        self::assertSame([], $this->cleaned, 'the temp is not removed while the unchecked group lives');
+        self::assertSame(1, $registry->orphanCount(), 'the launch is held as an orphan');
+        self::assertSame([self::SIGTERM], $this->signalsFor(7222), 'the unchecked leader gets TERM');
+        self::assertSame([], $this->signalsFor(7221), 'a gone verified leader is never signalled');
+
+        $this->groupAlive[7222] = false;
+        $registry->sweep((int) hrtime(true) + self::SEC);
+        self::assertSame(0, $registry->orphanCount());
+        self::assertSame([$tmp], $this->cleaned);
     }
 }

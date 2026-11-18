@@ -19,7 +19,9 @@ use Phlix\Hub\HubClient;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\SyncPlayController;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
@@ -114,13 +116,15 @@ class Application
         // was removed rather than left inert — see ThemeSourceRegistry for
         // the replacement, a validated token-map capability registry.
 
-        // Register AccessScheduleMiddleware from container if available
-        // Runs after auth to enforce time-based access restrictions
+        // Register the global access-schedule gate from the container if available.
+        // It runs before routing, on the identity the request already carries
+        // (userId/profileId, set by RequestAuthenticator), not on RequestContext:
+        // route-level AuthMiddleware has not run yet at this point. See scheduleGateFor().
         if ($container->has(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class)) {
             /** @var \Phlix\Server\Http\Middleware\AccessScheduleMiddleware */
             $accessScheduleMiddleware = $container->get(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class);
             $this->middleware(function (Request $request, callable $next) use ($accessScheduleMiddleware): Response {
-                $result = $accessScheduleMiddleware($request);
+                $result = self::scheduleGateFor($request, $accessScheduleMiddleware);
                 if ($result !== null) {
                     // S295: a global middleware short-circuit returns BEFORE
                     // Router::markHeadOnly() runs, so a HEAD refused here used to
@@ -2665,6 +2669,77 @@ class Application
     {
         $this->middleware[] = $middleware;
         return $this;
+    }
+
+    /**
+     * The global access-schedule gate: runs before routing, for every request that
+     * reaches {@see self::dispatch()}.
+     *
+     * It reads the identity the request already carries, never {@see RequestContext}.
+     * Route-level AuthMiddleware has not run yet at this point, so a gate built on
+     * RequestContext checked nothing for routed requests (the finding this replaces).
+     *
+     *  - A session request (`userId` set by RequestAuthenticator, with its `profileId`)
+     *    is checked against that profile. When the profile cannot be resolved the
+     *    middleware fails closed (the AccessScheduled 403). RequestContext is
+     *    published for the middleware's duration and restored afterwards.
+     *  - A request with no userId passes through unchanged, unless it carries a profile
+     *    binding (`pid`) whose signature verifies: then that profile's window applies.
+     *    An unverified binding is not trusted here; the route's own gate refuses it.
+     *
+     * Exempt (never refused here, see {@see self::isScheduleExempt()}) so that a
+     * schedule-locked session can still sign in and out and load the app to see why.
+     *
+     * @param Request                  $request  The incoming request.
+     * @param AccessScheduleMiddleware $schedule The schedule middleware instance.
+     *
+     * @return Response|null The 403 refusal, or null to continue routing.
+     */
+    public static function scheduleGateFor(Request $request, AccessScheduleMiddleware $schedule): ?Response
+    {
+        if (self::isScheduleExempt($request)) {
+            return null;
+        }
+
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return $schedule->denyForSignedRequest($request);
+        }
+
+        $previousUserId = RequestContext::getUserId();
+        $previousProfileId = RequestContext::getProfileId();
+        RequestContext::setUserId($userId);
+        RequestContext::setProfileId($request->profileId);
+        try {
+            return $schedule($request);
+        } finally {
+            RequestContext::setUserId($previousUserId);
+            RequestContext::setProfileId($previousProfileId);
+        }
+    }
+
+    /**
+     * Requests the global schedule gate never refuses.
+     *
+     *  - The session lifecycle: `/auth/*` and `/api/v1/auth/*` (sign-in, refresh, sign-out,
+     *    the session list). A schedule-locked profile must still be able to end its session
+     *    and sign in again; streaming and content routes stay gated.
+     *  - The liveness probe `/health`.
+     *  - The SPA shell: GET and HEAD of `/` and `/app...`. The shell is HTML that renders
+     *    the lock message; the API calls it makes are gated.
+     *
+     * @param Request $request The incoming request.
+     */
+    public static function isScheduleExempt(Request $request): bool
+    {
+        $path = $request->path;
+        if ($path === '/health' || str_starts_with($path, '/auth/') || str_starts_with($path, '/api/v1/auth/')) {
+            return true;
+        }
+
+        $readOnly = $request->method === 'GET' || $request->method === 'HEAD';
+
+        return $readOnly && ($path === '/' || $path === '/app' || str_starts_with($path, '/app/'));
     }
 
     /**

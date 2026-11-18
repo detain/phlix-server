@@ -544,14 +544,14 @@ final class PreRouterFastPaths
     /**
      * Apply the profile's access-schedule window to a direct-play request (#13a).
      *
-     * The router's global {@see AccessScheduleMiddleware} reads the request identity
-     * from {@see RequestContext}, which only the route-level AuthMiddleware publishes.
-     * This path has no route middleware, so it publishes the identity the transport
-     * already verified (the verified account, and the profile this stream resolved to,
-     * which is the same profile {@see checkStreamLimit()} counts against) and then runs
-     * the SAME middleware instance. The check and its 403 shape are therefore shared
-     * with the router, not copied. A container failure propagates rather than
-     * streaming unchecked.
+     * This path is served before {@see \Phlix\Server\Core\Application::dispatch()}, so the
+     * global schedule gate ({@see \Phlix\Server\Core\Application::scheduleGateFor()}) never
+     * runs for it. The fast path therefore runs the SAME middleware instance itself:
+     * it publishes the identity the transport already verified (the verified account, and
+     * the profile this stream resolved to, which is the same profile
+     * {@see checkStreamLimit()} counts against) into RequestContext for the call and
+     * restores it afterwards. The check and its 403 shape are shared with the router, not
+     * copied. A container failure propagates rather than streaming unchecked.
      *
      * @param Request $request   The request being served.
      * @param string  $userId    The verified account id (non-empty).
@@ -622,10 +622,10 @@ final class PreRouterFastPaths
             }
         }
 
-        // Access-schedule window (#13a). The router runs AccessScheduleMiddleware as a
-        // global middleware for every routed request; this endpoint is in no route
-        // table, so without this check a schedule-restricted profile could stream
-        // direct play outside its allowed hours. It runs here, after the profile is
+        // Access-schedule window (#13a). This endpoint is served before
+        // Application::dispatch(), so the global schedule gate never runs for it; without
+        // this check a schedule-restricted profile could stream direct play outside its
+        // allowed hours. It runs here, after the profile is
         // resolved (a session with no profile keeps its named profile.not_found
         // refusal) and before any stream is registered, so a refused request never
         // takes a concurrent-stream slot.

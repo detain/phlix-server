@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Middleware;
 
 use Phlix\Access\AccessScheduleService;
+use Phlix\Auth\SignedUrl;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -24,6 +25,13 @@ use Phlix\Server\Http\Response;
  * authentication (userId set in RequestContext), it retrieves the
  * active profile and checks whether access is currently permitted based
  * on the profile's scheduled access windows.
+ *
+ * The identity is read from RequestContext. The global gate
+ * ({@see \Phlix\Server\Core\Application::scheduleGateFor()}) publishes the
+ * request's own userId and profileId there before calling this, because the
+ * route-level AuthMiddleware has not run when the global gate runs. Direct-play
+ * and signed-URL paths call {@see self::denyForProfile()} and
+ * {@see self::denyForSignedRequest()} directly.
  *
  * Access is DENIED when:
  * - An active schedule exists for the profile AND
@@ -156,6 +164,39 @@ final class AccessScheduleMiddleware
         return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
             'message' => self::WINDOW_MESSAGE,
         ]);
+    }
+
+    /**
+     * The window test for a request with no session identity whose signed URL is
+     * bound to a profile (`pid`). The binding is trusted only once its signature
+     * verifies over the request path, `exp` and `pid`: a stripped, swapped or forged
+     * `pid` is not trusted, and the request passes this gate (the route's own
+     * signed-URL check then refuses it). A legacy token with no `pid` passes, and is
+     * bounded only by its expiry.
+     *
+     * @param Request $request The request with no userId.
+     *
+     * @return Response|null The AccessScheduled 403, or null to continue.
+     */
+    public function denyForSignedRequest(Request $request): ?Response
+    {
+        $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+        if ($profileId === null || $profileId === '') {
+            return null;
+        }
+
+        $verified = SignedUrl::fromEnv()->verify(
+            $request->path,
+            $request->queryString('exp'),
+            $request->queryString('sig'),
+            null,
+            $profileId,
+        );
+        if (!$verified) {
+            return null;
+        }
+
+        return $this->denyForProfile($profileId);
     }
 
     /**

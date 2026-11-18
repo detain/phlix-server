@@ -13,11 +13,13 @@ use PHPUnit\Framework\TestCase;
  * real registry, must not be reaped by the stall rule.
  *
  * The encode is a 720p `veryslow` one-thread segment of a generated test pattern. It
- * takes about 17 s on the dev host. The stall window is set to 10 s, tighter than
- * production (90 s). The encode writes no bytes to its temp family until the end, so
- * the old byte-size signal sees 10 s of silence and reaps it. The progress file keeps
- * the encode alive. The longest healthy freeze measured on this encode is the 4.7 s
- * end-of-input flush, so 10 s leaves room. Skipped when ffmpeg is not installed.
+ * takes about 15-17 s on the dev host. The stall window is 30 s. That is a generous
+ * margin over the measured 4.7 s end-of-input flush, so a host slowed about 6x still
+ * never reaches it, and a healthy encode is never reaped by the stall rule. The window
+ * is not tuned to this encode's length. At 30 s the window is longer than the encode,
+ * so this test does not, by itself, prove that the progress file beats the byte-size
+ * probe. That discrimination is covered by SegmentProcessRegistryProgressTest. Skipped
+ * when ffmpeg or ffprobe is not installed.
  */
 final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
 {
@@ -48,6 +50,21 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         return $path === '' ? null : $path;
     }
 
+    /**
+     * The ffprobe beside the configured ffmpeg, else the one on PATH. Null when neither
+     * exists, so the test skips instead of assuming /usr/bin.
+     */
+    private function ffprobePath(string $ffmpeg): ?string
+    {
+        $beside = dirname($ffmpeg) . '/ffprobe';
+        if (is_file($beside) && is_executable($beside)) {
+            return $beside;
+        }
+        $path = trim((string) shell_exec('command -v ffprobe 2>/dev/null'));
+
+        return $path === '' ? null : $path;
+    }
+
     public function testARealCmafEncodeIsNotReapedByTheStallRule(): void
     {
         $ffmpeg = $this->ffmpegPath();
@@ -71,10 +88,16 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
             self::markTestSkipped('could not generate the test pattern');
         }
 
-        $runner = new FfmpegRunner($ffmpeg, '/usr/bin/ffprobe', $this->dir);
+        $ffprobe = $this->ffprobePath($ffmpeg);
+        if ($ffprobe === null) {
+            self::markTestSkipped('ffprobe is not installed');
+        }
+
+        $runner = new FfmpegRunner($ffmpeg, $ffprobe, $this->dir);
         $runner->setSegmentEncodeThreads(1);
         $registry = new SegmentProcessRegistry();
-        $registry->configureWatchdog(10.0, 120.0);
+        // 30 s stall window (the measured 4.7 s flush x about 6 for a loaded host), 120 s wall cap.
+        $registry->configureWatchdog(30.0, 120.0);
         $runner->setSegmentProcessRegistry($registry);
 
         $final = $this->dir . '/seg-v720p-00000.m4s';

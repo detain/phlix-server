@@ -150,11 +150,14 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     /** The class whose roots the census walks. */
     private const TARGET_CLASS = 'Phlix\\Server\\Http\\Request';
 
-    /** The 18 declared public members of Request (mirrors RequestDynamicPropertyGuardTest). */
+    /**
+     * The 19 declared public members of Request (mirrors RequestDynamicPropertyGuardTest).
+     * `relayUnmapped` joined with the S301 relay fix: the relay consumer marks an unmapped principal.
+     */
     private const DECLARED_MEMBERS = [
         'method', 'path', 'queryString', 'headers', 'query', 'body', 'rawBody',
         'files', 'remoteIp', 'remotePort', 'protocol', 'bearerToken', 'cookies',
-        'userId', 'profileId', 'tokenSessionId', 'hubUser', 'pathParams',
+        'userId', 'profileId', 'tokenSessionId', 'relayUnmapped', 'hubUser', 'pathParams',
     ];
 
     /**
@@ -1236,7 +1239,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // 2099 measured from the CI phpunit red (undeclared-read leg still green).
     // +7 2099→2106 (minors round): HeaderMap.php plus its test and the minors'
     // test files land; 2106 measured from the phpunit red.
-    private const EXPECTED_PHP_FILES = 2106;
+    // +9 2106→2115 (perf/C round 5): the branch's nine new first-party test files
+    // (AccessScheduleMemoTest, StreamSessionHeartbeatThrottleTest,
+    // QuickConnectApprovalProfileTest, RefreshBoundProfileTest, RatingGateFilterMemoTest,
+    // ApplicationScheduleGateTest, TranscodeFileServerCacheTest,
+    // PreRouterFastPathsAccessScheduleTest, AccessScheduleNoProfileMemoTest). Measured from the
+    // phpunit red at 2115 on the branch tip; no production file was added.
+    private const EXPECTED_PHP_FILES = 2115;
 
     /**
      * Census number 2 — dynamic-free property READS on Request roots, all on
@@ -1384,7 +1393,11 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +7 481→488 (fix-program tail): seven more reads, all on declared members;
     // 488 measured from the CI phpunit red; the undeclared-read leg still guards.
     // +1 488→489 (minors round): one more read on a declared member; measured.
-    private const EXPECTED_DECLARED_READS = 489;
+    // +18 489→507 (perf/C round 5): the branch's net declared-member reads on Request roots,
+    // measured from the phpunit red at 507 on the branch tip. Attributed in the commit message
+    // (src/ reads on the gate, the artwork and avatar fast paths, the quick-connect mint, and the
+    // rest in the new and updated tests).
+    private const EXPECTED_DECLARED_READS = 507;
 
     /**
      * Census number 5 — property WRITES (name directly assigned) on Request
@@ -1734,7 +1747,13 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // RequestAuthenticator.php); the controller legs only READ it. Measured
     // from the phpunit red (1231), not predicted.
     // +7 1231→1238 (minors round): measured from the phpunit red, declared members.
-    private const EXPECTED_DECLARED_WRITES = 1238;
+    // +26 1238→1264 (perf/C round 5): the branch's declared-member writes, all in test and
+    // fixture files (ApplicationScheduleGateTest, PreRouterFastPathsAccessScheduleTest,
+    // PreRouterFastPathsArtworkTest, QuickConnectControllerTest, TranscodeFileServerCacheTest,
+    // tests/Support/Browser/s295-head-body-server.php). Measured from the phpunit red at 1264.
+    // +3 1264→1267 (perf/C relayUnmapped fix): the relay consumer's write, plus one write each
+    // in RelayImageDispatchTest and ApplicationScheduleGateTest, now that relayUnmapped is declared.
+    private const EXPECTED_DECLARED_WRITES = 1267;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

@@ -2376,7 +2376,8 @@ class AuthManager
      * @param bool        $profileIsVerified True only after requireOwnedProfile() verified `$profileId`. That id is
      *                                       minted as-is and not re-resolved. False resolves through the default path.
      *
-     * @return array<string, mixed>
+     * @return array{access_token: string, refresh_token: string, token_type: string, expires_in: int,
+     *     user: array<string, mixed>|null, profile_id: string|null}
      */
     private function mintAuthResponse(
         string $userId,

@@ -78,8 +78,10 @@ final class StreamSessionService
 
     /**
      * `hrtime(true)` of the last heartbeat UPDATE this process issued per session.
+     * (`hrtime(true)` is `int` on 64-bit builds and `float` on 32-bit ones, hence the union —
+     * the same convention as StatsCollector's `logged_at_ns`.)
      *
-     * @var array<string, int>
+     * @var array<string, float|int>
      */
     private array $lastHeartbeatNs = [];
 

@@ -127,8 +127,9 @@ return [
      * judged by its target too. The location check runs once per worker at build. Each read
      * and write re-checks the directory and its device and inode. A directory that was
      * removed while the worker ran is recreated, and the whole location check runs again
-     * before it is used. A replaced directory disables the cache for that process. Another
-     * local user could otherwise plant probe results that drive copy/transcode decisions. A
+     * before it is used. A replaced directory is adopted only if it passes the same checks; one that
+     * fails them disables the cache for the process. Another local user could otherwise plant probe
+     * results that drive copy/transcode decisions. A
      * failed check disables the disk cache (one warning per worker), and the server probes as
      * before.
      *

@@ -663,4 +663,53 @@ final class ProbeCacheTrustTest extends TestCase
         self::assertDirectoryExists($dir);
         self::assertNotNull($cache->read('/media/e.mkv', 1, 1, 7, 9));
     }
+
+    /**
+     * Finding 2: a recreate that succeeds re-arms the warn-once latch. The first outage (the parent is not
+     * writable, so mkdir fails) warns once. A later recovery recreates the directory. A second outage must
+     * warn again, not log at debug only, so a later permanent failure stays visible for the life of the worker.
+     * The backoff window is expired through its monotonic-clock field, so the test does not wait.
+     */
+    public function testASecondOutageAfterARecoveryWarnsOnceAgain(): void
+    {
+        $parent = $this->root . '/rearm';
+        mkdir($parent, 0700);
+        $dir = $parent . '/cache';
+        mkdir($dir, 0700);
+        $logger = new ProbeCacheRecordingLogger();
+        $cache = ProbeCache::createIfSecure($dir, ProbeCache::MAX_ENTRIES, $logger);
+        self::assertInstanceOf(ProbeCache::class, $cache);
+        $until = new \ReflectionProperty(ProbeCache::class, 'recreateBackoffUntil');
+        $failedRecreates = static fn (ProbeCacheRecordingLogger $l): array => array_values(array_filter(
+            $l->messages('warning'),
+            static fn (string $m): bool => str_contains($m, 'could not be recreated'),
+        ));
+
+        try {
+            // First outage: the parent is not writable, so the recreate fails and warns once.
+            $this->removeTree($dir);
+            chmod($parent, 0500);
+            $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertCount(1, $failedRecreates($logger), 'the first outage warns once');
+
+            // Recovery: the parent is writable again and the window expires, so the recreate succeeds.
+            chmod($parent, 0700);
+            $until->setValue($cache, 0);
+            $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertDirectoryExists($dir, 'the recovery recreates the directory');
+            self::assertNotNull($cache->read('/media/b.mkv', 1, 1, 7, 9), 'and it is used again');
+
+            // Second outage: the directory is removed again and the parent is not writable again.
+            $this->removeTree($dir);
+            chmod($parent, 0500);
+            $cache->write('/media/c.mkv', 1, 1, 7, 9, $this->sampleProbe());
+            self::assertCount(
+                2,
+                $failedRecreates($logger),
+                'the second outage warns again, because the recovery re-armed the warning'
+            );
+        } finally {
+            chmod($parent, 0700);
+        }
+    }
 }

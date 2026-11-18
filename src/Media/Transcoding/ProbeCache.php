@@ -32,10 +32,18 @@ use Workerman\Timer;
  *    ahead of it at all, the result is neither persisted nor kept in the in-process memo, so the
  *    next probe runs ffprobe again. A future timestamp is racy however far ahead it is, so a
  *    server clock that runs ahead of this host (NFS, SMB) keeps its files re-probed until the
- *    clock passes them. A rewrite after that window cannot leave the stamp unchanged: the mtime
- *    has moved on, so it is a miss. The residue is a filesystem whose timestamps are coarser than
- *    one second (its window would need widening), or a wall clock that moves backwards after the
- *    probe, so that a rewrite lands on the stored second.
+ *    clock passes them. The cost of that rule is paid on every probe, not once. For a file whose
+ *    stamp is far ahead (bad metadata, or a clock hours ahead), each {@see FfmpegRunner::probe()}
+ *    call runs ffprobe until the clock passes the stamp. FfmpegRunner calls probe() once per HLS
+ *    segment build for an SDR file without a threaded tone-map filter, so a 2-hour film with such a
+ *    stamp costs about 1,200 ffprobe launches (7200 s at 6 s per segment). A cap on the future
+ *    distance was considered and not used. A cap reopens the same-second rewrite risk for a file
+ *    written recently on a mount whose clock runs ahead by more than the cap, and no bound on that
+ *    skew is set in the code or config. A rewrite after that window cannot leave the stamp unchanged:
+ *    the mtime has moved on, so it is a miss. The residue is a filesystem whose timestamps are 4 seconds
+ *    or coarser. A non-racy stamp is at least RACY_WINDOW_SECONDS + 1 (3) seconds old when it is probed,
+ *    so a later rewrite keeps the stamp only if the granularity is above 3 seconds. The other residue is
+ *    a wall clock that moves backwards after the probe, so that a rewrite lands on the stored second.
  *    The guard also assumes that ctime is not refreshed on every stat. A mount whose ctime tracks
  *    the wall clock on every stat makes every file racy. Each probe then runs ffprobe, and nothing
  *    is memoized or persisted. The result stays correct, so this costs only the cache. Nothing
@@ -136,7 +144,8 @@ final class ProbeCache
 
     /**
      * Seconds a failed recreate of a removed directory waits before it is tried again. The first
-     * failed attempt of an instance logs one warning. Later failed attempts log at debug only.
+     * failed attempt logs one warning. Later failed attempts log at debug only, until a recreate
+     * succeeds and re-arms the warning.
      */
     public const RECREATE_BACKOFF_SECONDS = 60;
 
@@ -181,8 +190,9 @@ final class ProbeCache
     private ?int $recreateBackoffUntil = null;
 
     /**
-     * True once a failed recreate has logged its warning. Later failed recreates of this instance log at
-     * debug, so a permanently failing mkdir does not log a line every backoff window.
+     * True once a failed recreate has logged its warning. Later failed recreates log at debug, so a
+     * permanently failing mkdir does not log a line every backoff window. A successful recreate clears
+     * it, so the next outage warns once again.
      */
     private bool $recreateWarned = false;
 
@@ -266,8 +276,10 @@ final class ProbeCache
      * or is ahead of $now at all. A future timestamp is racy however far ahead it is, because of clock
      * skew on a network mount: such a file's stamp is set by a clock that runs ahead of this host.
      * Such a file can be rewritten in place without changing its size, mtime, ctime or inode, so its
-     * probe result must not be stored. The caller passes time(): this compares wall-clock file
-     * timestamps, which the hrtime() rule for elapsed intervals does not cover.
+     * probe result must not be stored. A racy stamp is never memoized either, so each probe of it runs
+     * ffprobe again (see the class docblock for the per-segment cost of a far-future stamp). The caller
+     * passes time(): this compares wall-clock file timestamps, which the hrtime() rule for elapsed
+     * intervals does not cover.
      */
     public static function isRacy(int $mtime, int $ctime, int $now): bool
     {
@@ -746,8 +758,8 @@ final class ProbeCache
      * device and inode are then recorded afresh, and the normal check runs on the new directory.
      * A location that the check refuses, or a new directory that fails the check, switches the
      * cache off with one warning. A failed mkdir is a skip, and the next recreate is held back for
-     * {@see self::RECREATE_BACKOFF_SECONDS}. The first failed mkdir of this instance logs one warning;
-     * later failed attempts log at debug.
+     * {@see self::RECREATE_BACKOFF_SECONDS}. The first failed mkdir logs one warning, and later failed
+     * attempts log at debug, until a recreate succeeds. A success re-arms the warning for the next outage.
      *
      * @return string|null The refusal reason, or null when the directory is back and trusted.
      */
@@ -782,6 +794,7 @@ final class ProbeCache
             return 'directory is missing and could not be recreated';
         }
         $this->recreateBackoffUntil = null;
+        $this->recreateWarned = false;
         $this->identity = null;
         $reason = $this->trustFailure();
         if ($reason !== null) {

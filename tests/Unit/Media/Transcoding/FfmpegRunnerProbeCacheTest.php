@@ -290,9 +290,13 @@ SH;
 
     /**
      * Finding 5: a same-size rewrite within the same second as the probe. The file is probed with the clock
-     * pinned to its mtime. It is then rewritten at the same size, and its mtime is restored to the probed value,
-     * so only the bytes differ. The second probe must run ffprobe again and return the new output, not a stale
-     * entry.
+     * pinned to its mtime, so the stamp is racy. It is then rewritten at the same size, and its mtime is put back
+     * to the probed value. ctime is not restored: file_put_contents and touch both set it to the wall clock, so it
+     * changes only if the wall clock has moved on. The racy guard is therefore what keeps this result out of the
+     * cache, not the stamp. The not-persisted assertion at the end is the one that catches guard removal: without
+     * the guard the first result is stored and that assertion fails. The run-count assertion may fail before it,
+     * if the stamp still matches the stored entry. The second probe must run ffprobe again and return the new
+     * output, not a stale entry.
      */
     public function testASameSizeRewriteWithinTheSameSecondIsReprobed(): void
     {

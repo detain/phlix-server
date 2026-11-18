@@ -364,6 +364,11 @@ class FfmpegRunner
      *     format: array<string, mixed>
      * }|null Probe results or null if probing fails
      *
+     * A racy stamp (see {@see ProbeCache::isRacy()}) is neither memoized nor persisted, so for that
+     * file each call runs ffprobe again. A far-future mtime keeps a file racy until the clock passes
+     * it. Callers on the segment path, which call this once per segment build, pay one ffprobe launch
+     * per segment for such a file.
+     *
      * @example
      * ```php
      * $info = $runner->probe('/path/to/video.mkv');
@@ -373,7 +378,8 @@ class FfmpegRunner
     public function probe(string $inputPath): ?array
     {
         // Memoize by path + size + mtime so at most one probe per file per worker
-        // lifetime. The size/mtime guard handles a file that changes on disk (e.g.
+        // lifetime, except a racy stamp (below), which is re-probed on every call.
+        // The size/mtime guard handles a file that changes on disk (e.g.
         // after a re-encode). A failed probe is memoized as null but is retried.
         $stamp = $this->probeFileStamp($inputPath);
         // Racy-stat guard: a file whose mtime or ctime is at most ProbeCache::RACY_WINDOW_SECONDS older than now,
@@ -2120,8 +2126,11 @@ class FfmpegRunner
             } elseif ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
                 // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned
                 // items where the filter string was not threaded. Re-derive from
-                // the input; probe() is memoised by path+mtime, so this is at most
-                // one ffprobe per file per worker lifetime.
+                // the input. probe() is memoised by path+stamp, so this is at most
+                // one ffprobe per file per worker lifetime, except for a racy stamp
+                // (a mtime or ctime within ProbeCache::RACY_WINDOW_SECONDS of now, or
+                // ahead of it), which is not memoised: then every segment build runs
+                // one ffprobe until the clock passes the stamp.
                 $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
                 if ($toneMapFilter !== null && $toneMapFilter !== '') {
                     $filters[] = $toneMapFilter;
@@ -2538,10 +2547,12 @@ class FfmpegRunner
             $filters[] = $threadedToneMapFilter;
         } else {
             // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned items
-            // where the filter string was not threaded. Re-derive from the input;
-            // probe() is memoised by path+mtime, so this is at most one ffprobe per
-            // file per worker lifetime. HDR-capable hardware encoders pass HDR
-            // through directly, so they only tone-map when the job-level
+            // where the filter string was not threaded. Re-derive from the input.
+            // probe() is memoised by path+stamp, so this is at most one ffprobe per
+            // file per worker lifetime, except a racy stamp (see ProbeCache::isRacy()):
+            // then each call runs one ffprobe until the clock passes the stamp.
+            // HDR-capable hardware encoders pass HDR through directly, so they
+            // only tone-map when the job-level
             // require_hdr_tone_map flag forces it.
             $needsToneMap = $require_hdr_tone_map || (
                 $this->needsToneMapping($inputPath)

@@ -13,6 +13,7 @@ namespace Phlix\Tests\Unit\Auth;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProfileNotOwnedException;
+use Phlix\Auth\TokenSessionRepository;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
@@ -49,17 +50,12 @@ final class RefreshBoundProfileTest extends TestCase
         return new JwtHandler('test-secret-key-12345', 'HS256', 3600, 604800);
     }
 
-    private function manager(JwtHandler $jwt): AuthManager
+    /**
+     * A profile manager whose ownership is the test's `$owned` list: the claimed id is
+     * returned when owned, the default otherwise, and a removed id throws.
+     */
+    private function ownedProfiles(): UserProfileManager
     {
-        $repo = $this->createMock(UserRepository::class);
-        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
-        $repo->method('findById')->willReturn([
-            'id' => self::USER,
-            'username' => 'nina',
-            'status' => 'active',
-        ]);
-        $repo->method('mustChangePassword')->willReturn(false);
-
         $profiles = $this->createMock(UserProfileManager::class);
         $profiles->method('resolveProfileIdForUser')->willReturnCallback(
             function (string $userId, ?string $requested = null): string {
@@ -74,13 +70,32 @@ final class RefreshBoundProfileTest extends TestCase
             }
         );
 
+        return $profiles;
+    }
+
+    private function manager(
+        JwtHandler $jwt,
+        ?UserProfileManager $profiles = null,
+        ?TokenSessionRepository $tokenSessions = null,
+        ?AuditLogger $audit = null,
+    ): AuthManager {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('getAuthState')->willReturn(['status' => 'active', 'tokensNotValidAfter' => 0]);
+        $repo->method('findById')->willReturn([
+            'id' => self::USER,
+            'username' => 'nina',
+            'status' => 'active',
+        ]);
+        $repo->method('mustChangePassword')->willReturn(false);
+
         // No log handlers attached, so the refresh path writes no file.
         return new AuthManager(
             $repo,
             $jwt,
-            $this->createMock(AuditLogger::class),
+            $audit ?? $this->createMock(AuditLogger::class),
             new StructuredLogger('test', ['handlers' => []]),
-            profileManager: $profiles,
+            profileManager: $profiles ?? $this->ownedProfiles(),
+            tokenSessions: $tokenSessions,
         );
     }
 
@@ -144,5 +159,45 @@ final class RefreshBoundProfileTest extends TestCase
             $response['profile_id'],
             'a token with no profile claim predates binding and keeps the account default'
         );
+    }
+
+    /**
+     * The access leg (finding 2). A profile claim the account no longer owns refuses the
+     * access token. It must not run as the default for the token's whole lifetime.
+     */
+    public function testAnAccessTokenBoundToAProfileTheAccountNoLongerOwnsIsRefused(): void
+    {
+        $jwt = $this->jwt();
+        $manager = $this->manager($jwt);
+        $token = $jwt->createAccessToken(self::USER, [JwtHandler::CLAIM_PROFILE_ID => self::BOUND]);
+
+        $this->owned = [self::DEFAULT];
+
+        self::assertNull(
+            $manager->validateAccessToken($token),
+            'a stale profile claim refuses the token, it does not degrade to the default'
+        );
+    }
+
+    public function testAnAccessTokenBoundToAnOwnedProfileKeepsIt(): void
+    {
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken(self::USER, [JwtHandler::CLAIM_PROFILE_ID => self::BOUND]);
+
+        $info = $this->manager($jwt)->validateAccessToken($token);
+
+        self::assertIsArray($info);
+        self::assertSame(self::BOUND, $info['profile_id']);
+    }
+
+    public function testAnAccessTokenWithNoProfileClaimStillResolvesTheDefault(): void
+    {
+        $jwt = $this->jwt();
+        $token = $jwt->createAccessToken(self::USER);
+
+        $info = $this->manager($jwt)->validateAccessToken($token);
+
+        self::assertIsArray($info);
+        self::assertSame(self::DEFAULT, $info['profile_id'], 'a pre-S80 access token keeps the account default');
     }
 }

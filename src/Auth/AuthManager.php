@@ -1931,22 +1931,42 @@ class AuthManager
             }
         }
 
-        // S80: the profile the token was minted for, resolved through the owner
-        // check on every request. Returning the RAW claim here would hand the rest
-        // of the stack a profile the account may no longer own — a token stays
-        // valid for an hour after a profile is deleted or reassigned, so "signed"
-        // is not "current". resolveProfileForUser() re-derives ownership and
-        // degrades a stale claim to the account default rather than refusing the
-        // whole request, which would lock a user out of their own account until
-        // their token expired.
+        // S80: the profile the token was minted for, verified against the account on
+        // every request. Returning the RAW claim here would hand the rest of the stack a
+        // profile the account may no longer own, since a token stays valid for an hour
+        // after a profile is deleted or reassigned.
+        //
+        // A claim the account no longer owns REFUSES the token (null, the same 401 as
+        // every other refusal in this method). It must not degrade to the account
+        // default: the access token would then run as the default profile for the rest
+        // of its lifetime, so a locked child profile would be governed by the default's
+        // schedule. The refresh path refuses for the same reason
+        // (refuseUnownedRefreshProfile()). A token with NO claim (pre-S80) keeps the
+        // account default. A profile lookup that fails outright (the DB is unavailable)
+        // still degrades through resolveProfileForUser(), so an outage does not lock
+        // users out.
+        $claimedProfileId = JwtHandler::profileIdClaim($payload);
+        if ($claimedProfileId === null || $this->profileManager === null) {
+            $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
+        } else {
+            try {
+                $profileId = $this->profileManager->resolveProfileIdForUser($userId, $claimedProfileId);
+            } catch (ProfileNotOwnedException) {
+                $this->logger->info('Access token profile claim no longer owned; refusing the token', [
+                    'user_id' => $userId,
+                ]);
+
+                return null;
+            } catch (\Throwable) {
+                $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
+            }
+        }
+
         return [
             'user_id' => $payload['sub'],
             'expires_at' => $payload['exp'],
             'session_id' => $sessionId,
-            'profile_id' => $this->resolveProfileForUser(
-                $userId,
-                JwtHandler::profileIdClaim($payload)
-            ),
+            'profile_id' => $profileId,
         ];
     }
 
@@ -1964,7 +1984,11 @@ class AuthManager
      *     that.
      *   - A **stale** claim DEGRADES to the account's default profile rather than
      *     raising. Refusing would lock the user out of their own account for up to
-     *     an hour with no way to recover but waiting for expiry.
+     *     an hour with no way to recover but waiting for expiry. The access path is
+     *     the exception: {@see self::validateAccessToken()} refuses the token instead,
+     *     so a locked profile cannot fall back to the default's schedule for the
+     *     token's whole lifetime. This degrade rule still holds for the callers of
+     *     {@see self::buildAuthResponse()}.
      *   - A caller-supplied `profile_id` from a body, query string or path is
      *     never routed through here — that path keeps
      *     {@see ProfileNotOwnedException}'s hard refusal, because there it IS

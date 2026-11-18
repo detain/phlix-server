@@ -1024,6 +1024,12 @@ class FfmpegRunner
      * extract group could mask a FAILED primary command and still touch
      * `.complete`.)
      *
+     * Launch path (perf #10): the shell line goes through {@see runShellCapture()}, which
+     * is coroutine-aware inside a Swoole coroutine and a blocking shell_exec() outside
+     * one. This method is reached from the HTTP request path (TranscodeController →
+     * ensureHlsJob(), when subtitle extraction is queued), so keep it inside a coroutine
+     * there. Never replace the launch with a plain blocking call on that path.
+     *
      * @param string             $command      The full primary FFmpeg command to run.
      * @param string             $outDir       Directory for the log and completion markers.
      * @param array<int, string> $trailingCmds Commands to run after a SUCCESSFUL primary
@@ -1045,7 +1051,11 @@ class FfmpegRunner
             'timeout_secs' => $timeoutSecs,
         ]);
 
-        $pid = shell_exec($full);
+        // perf #10: the same coroutine-aware launch as the segment encode (see
+        // launchDetachedSegment()). The line only forks and every output stream is
+        // redirected, so this returns at the fork inside a coroutine, and it is no
+        // longer a blocking shell_exec() on the HTTP request path.
+        $pid = $this->runShellCapture($full);
         if (!is_string($pid)) {
             $this->logger->error('Failed to launch detached transcode');
             return 0;
@@ -2822,6 +2832,14 @@ class FfmpegRunner
      * run unbounded, and the spawned PID is registered under `$cancelKey` so the
      * poll loop / a cancel hook can kill it early. Without a wired registry the
      * `timeout` wrapper alone still bounds the encode.
+     *
+     * Launch path (perf #10): the shell line goes through {@see runShellCapture()}, the
+     * coroutine-aware helper {@see startDetached()} also uses. Inside a coroutine the
+     * fork yields to the event loop. Outside one it is a blocking shell_exec(), which is
+     * acceptable only for CLI and tests. The line is `nohup setsid … >> log 2>&1 & echo $!`,
+     * so stdout and stderr go to the segment log: the background encode does not hold the
+     * captured pipe, and the call returns at the fork. Keep the on-demand path in a
+     * coroutine; {@see startDetached()} must stay off the request path as well.
      *
      * @param string      $encode      The complete FFmpeg command writing to `$tmp`.
      * @param string      $tmp         The `.part-*` temp path the command writes.

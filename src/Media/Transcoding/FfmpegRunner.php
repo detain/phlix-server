@@ -592,13 +592,14 @@ class FfmpegRunner
      * uses {@see \Swoole\Coroutine\System::exec()}, which yields to the event loop
      * until the command exits; outside one (CLI scanners, unit tests) it falls back
      * to a blocking `shell_exec()`, which is correct where there is no event loop
-     * to stall. Both paths run the line via `/bin/sh -c`.
+     * to stall. Both paths run the line via `/bin/sh -c`. It is protected only so a test double can
+     * stand in for the launch; no production code overrides it.
      *
      * @param string $cmd Fully built, shell-escaped command line.
      *
      * @return string|null Captured stdout, or null when execution failed.
      */
-    private function runShellCapture(string $cmd): ?string
+    protected function runShellCapture(string $cmd): ?string
     {
         if (
             extension_loaded('swoole')
@@ -1125,8 +1126,10 @@ class FfmpegRunner
         // launchDetachedSegment()). The line only forks and every output stream is
         // redirected, so this returns at the fork inside a coroutine, and it is no
         // longer a blocking shell_exec() on the HTTP request path.
+        // An empty or whitespace-only result is a failed launch, the same as launchDetachedSegment():
+        // the line always echoes the pid of the fork, so no output means the launch did not happen.
         $pid = $this->runShellCapture($full);
-        if (!is_string($pid)) {
+        if (!is_string($pid) || trim($pid) === '') {
             $this->logger->error('Failed to launch detached transcode');
             return 0;
         }

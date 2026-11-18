@@ -130,4 +130,43 @@ final class FfmpegRunnerDetachedLaunchTest extends TestCase
         self::assertGreaterThan(0, $pid, 'coroutine launch returns the spawned pid');
         self::assertTrue($this->waitForFile($outFile, 15.0), 'detached encode published the segment');
     }
+
+    /**
+     * Item 5: startDetached() treats an empty or whitespace-only launch result as a failed launch, with
+     * the same log line and a zero pid, as launchDetachedSegment() does. The real shell always echoes the
+     * fork's pid, so the shell output is stubbed at runShellCapture(). A real pid still comes back.
+     */
+    public function testAnEmptyDetachedLaunchOutputIsAFailedLaunchAndIsLogged(): void
+    {
+        $logger = new ProbeCacheRecordingLogger();
+        $runner = new class ('/usr/bin/ffmpeg', '/usr/bin/ffprobe', $this->dir, $logger) extends FfmpegRunner {
+            /** The stubbed shell output: a string, or null for a shell that failed to run. */
+            public ?string $output = null;
+
+            protected function runShellCapture(string $cmd): ?string
+            {
+                return $this->output;
+            }
+        };
+
+        $runner->output = '';
+        self::assertSame(0, $runner->startDetached('true', $this->dir), 'empty output is a failed launch');
+
+        $runner->output = "  \n";
+        self::assertSame(0, $runner->startDetached('true', $this->dir), 'whitespace-only output is a failed launch');
+
+        $runner->output = null;
+        self::assertSame(0, $runner->startDetached('true', $this->dir), 'a shell that did not run is a failed launch');
+
+        $line = 'Failed to launch detached transcode';
+        self::assertSame(
+            [$line, $line, $line],
+            $logger->messages('error'),
+            'each failed launch logs the same line as launchDetachedSegment()'
+        );
+
+        $runner->output = "4242\n";
+        self::assertSame(4242, $runner->startDetached('true', $this->dir), 'a real pid is returned');
+        self::assertCount(3, $logger->messages('error'), 'a real launch logs no error');
+    }
 }

@@ -49,10 +49,14 @@ return [
     // margin. A kill does not free the cap slot or the .part temp itself. The SIGKILL pass does,
     // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). If the membership
     // is unknown at TERM (/proc unreadable then, or absent at registration so no start time
-    // was recorded), the temp and its slot are held until the process is dead or
+    // was recorded), the temp and its slot are held under the rule below until
     // transcode_timeout has passed since the TERM. The bound is measured from the TERM, not from
-    // registration. A mixed launch (a verified leader and an unchecked one) is held the same way
-    // while the unchecked leader's group still exists. The 300 s wall cap is about 3× the measured 4K wall time.
+    // registration. A launch with a recorded start time, and with no membership snapshot or an
+    // unknown identity at the grace, is held while its launched process is alive. An unchecked
+    // launch (no start time) is held while its process group is alive, not while its PID is alive.
+    // In a mixed record, a launch with a recorded start time is released at the grace once it has
+    // been KILLed or is dead, unless it has no snapshot or its identity is unknown at the grace.
+    // The 300 s wall cap is about 3× the measured 4K wall time.
     // Both bounds are far below transcode_timeout, which remains the last backstop.
     // Non-positive values fall back to the registry defaults.
     'segment_stall_seconds' => 90,

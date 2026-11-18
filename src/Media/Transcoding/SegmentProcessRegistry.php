@@ -978,14 +978,13 @@ final class SegmentProcessRegistry
      * no group to snapshot.
      * Null means no KILL later. The record is held only while heldPids() finds a launch still held,
      * up to the hold bound after the TERM (see {@see sweep()} and {@see heldPids()}). A launch with a
-     * recorded start time, and with no
-     * membership snapshot or an unknown identity at the grace, is held while its launched process is
-     * alive (isLive: not a zombie, with its start time still matching, where /proc/<pid>/stat can be
-     * read and parsed). An unchecked launch (no start time) is held while its process group is alive,
-     * not while its PID is alive. A MIXED record (a verified leader with a snapshot, and an unchecked
-     * leader) is different. The unchecked leader's group gets TERM and no KILL, and its members are not
-     * in the snapshot, so they are never KILLed. Its temp is held after the grace while that group still
-     * exists, up to the same bound (see {@see heldPids()}).
+     * recorded start time, and with no membership snapshot or an unknown identity at the grace, is
+     * held while its launched process is alive (isLive: not a zombie, with its start time still
+     * matching, where /proc/<pid>/stat can be read and parsed). An unchecked launch (no start time) is
+     * held while its process group is alive, not while its PID is alive. A MIXED record (a verified
+     * leader with a snapshot, and an unchecked leader) is different. The unchecked leader's group gets
+     * TERM and no KILL, and its members are not in the snapshot, so they are never KILLed. Its temp is
+     * held after the grace while that group still exists, up to the same bound (see {@see heldPids()}).
      * An empty array means no member was found, which is different from unknown.
      *
      * @param array<int, int>      $pids

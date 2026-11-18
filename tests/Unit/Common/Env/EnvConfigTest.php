@@ -63,7 +63,7 @@ final class EnvConfigTest extends TestCase
         self::assertSame(42, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
     }
 
-    public function test_integer_uses_the_default_for_a_partly_numeric_value(): void
+    public function testIntegerUsesTheDefaultForAPartlyNumericValue(): void
     {
         // Was `(int)`-cast to 12 before; a value that is not a whole number now falls
         // back to the default instead of being read as a prefix.
@@ -73,7 +73,7 @@ final class EnvConfigTest extends TestCase
         self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
     }
 
-    public function test_integer_never_turns_a_non_numeric_value_into_zero(): void
+    public function testIntegerNeverTurnsANonNumericValueIntoZero(): void
     {
         putenv('PHLIX_WMIN34_INT=abc');
 
@@ -81,7 +81,7 @@ final class EnvConfigTest extends TestCase
         self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
     }
 
-    public function test_integer_accepts_a_padded_or_negative_whole_number(): void
+    public function testIntegerAcceptsAPaddedOrNegativeWholeNumber(): void
     {
         putenv('PHLIX_WMIN34_INT= 42 ');
         self::assertSame(42, EnvConfig::integer('PHLIX_WMIN34_INT', 8));

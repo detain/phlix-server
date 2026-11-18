@@ -324,6 +324,14 @@ final class PreRouterFastPaths
             return $unauthorized;
         }
 
+        // This fast path runs before Application::dispatch(), so the global schedule gate
+        // never sees the request. Apply the profile's window here, as the direct-play path
+        // does, so a schedule-locked profile is refused the same way the gate refuses it.
+        $scheduleDenial = $this->artworkScheduleDenial($request);
+        if ($scheduleDenial !== null) {
+            return $scheduleDenial;
+        }
+
         // S73: resize-then-cache on a miss. A stored variant answers directly;
         // otherwise the stored `original.jpg` is resized to exactly the ONE
         // requested, already-validated width and atomically cached. The pass
@@ -360,6 +368,35 @@ final class PreRouterFastPaths
     private function rejectUnlessSigned(Request $request, string $signedResource): ?Response
     {
         return ArtworkByteResponder::rejectUnlessSigned($request, $signedResource);
+    }
+
+    /**
+     * The window test for an artwork request whose profile is known: the session's own
+     * profile, or, for a signed-URL request, the `pid` that the signature has just verified
+     * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). A request with no profile to
+     * test is not refused here. That matches the direct-play path, which tests only a bound
+     * profile.
+     *
+     * @param Request $request The authorised artwork request.
+     *
+     * @return Response|null The AccessScheduled 403 when the profile's window is open now, else null.
+     */
+    private function artworkScheduleDenial(Request $request): ?Response
+    {
+        if ($request->userId !== null && $request->userId !== '') {
+            $profileId = $request->profileId;
+        } else {
+            $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+        }
+
+        if ($profileId === null || $profileId === '') {
+            return null;
+        }
+
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+        return $middleware->denyForProfile($profileId);
     }
 
     /**

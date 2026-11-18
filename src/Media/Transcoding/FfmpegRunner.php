@@ -3299,12 +3299,13 @@ class FfmpegRunner
         // double-quoted -filter_complex argument, where the single quotes
         // escapeshellarg() adds would reach ffmpeg verbatim. filterSeconds() and
         // filterOffset() have already restricted them to digits and one dot.
-        // `eof_action=pass` on both `fps` samplers: with the default `round`, a
-        // Matroska input whose last frame sits a fraction early loses its final
-        // grid slot (measured on a 120 s clip: 59 of 60 sprite cells, 11 of 12 BIF
-        // frames, exit 0), and the sprite's last cell comes out black. `pass`
-        // emits every slot; the byte content of the slots that MP4 already
-        // produced is unchanged (identical PTS list, checked).
+        // `eof_action=pass` on both `fps` samplers. Measured with ffmpeg 6.1.1 on a
+        // 120 s MKV and a 120 s MP4: `round` and `pass` gave the same 60 slots and
+        // identical per-frame checksums of the sampled frames (framemd5). On a 118 s
+        // MKV whose video ends early, both gave 59 slots, and the slot-count check
+        // rejects that pass. The 59-of-60 result that first motivated `pass` was not
+        // reproduced in that re-measurement, so the option is kept as the explicit
+        // end-of-input behaviour, not as a claimed fix.
         $spriteChain = null;
         if ($wantSprite) {
             $spriteChain = sprintf(

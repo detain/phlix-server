@@ -181,14 +181,24 @@ trait TranscodeFileServer
         // the Range is then IGNORED entirely — even an unsatisfiable one
         // answers the full 200, never a 416 — and never spliced into changed
         // bytes. Absent/empty If-Range keeps the historical behavior exactly.
+        // RFC 7233 §3.2 allows an entity-tag as well as an HTTP-date. An entity-tag
+        // is compared strongly: a weak tag never matches, and a file with no ETag
+        // (a live playlist or a segment) cannot match one.
         $ifRange = $request->getHeader('If-Range');
         $rangeStale = false;
         if (is_string($ifRange) && $ifRange !== '') {
-            $rangeMtime = filemtime($path);
-            $rangeValidator = $rangeMtime === false
-                ? null
-                : gmdate('D, d M Y H:i:s', $rangeMtime) . ' GMT';
-            $rangeStale = $rangeValidator === null || trim($ifRange) !== $rangeValidator;
+            $ifRangeValue = trim($ifRange);
+            if (str_starts_with($ifRangeValue, '"') || str_starts_with($ifRangeValue, 'W/')) {
+                $rangeStale = $etag === null
+                    || str_starts_with($ifRangeValue, 'W/')
+                    || $ifRangeValue !== $etag;
+            } else {
+                $rangeMtime = filemtime($path);
+                $rangeValidator = $rangeMtime === false
+                    ? null
+                    : gmdate('D, d M Y H:i:s', $rangeMtime) . ' GMT';
+                $rangeStale = $rangeValidator === null || $ifRangeValue !== $rangeValidator;
+            }
         }
 
         // Single byte-range (either `bytes=A-B`/`bytes=A-` or a suffix `bytes=-N`,

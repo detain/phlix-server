@@ -219,4 +219,42 @@ final class TranscodeFileServerCacheTest extends TestCase
         self::assertNull($resp->filePath);
     }
 
+    public function test_if_range_with_the_current_etag_honours_the_range(): void
+    {
+        $etag = $this->serve('vod.m3u8')->headers['ETag'];
+
+        $resp = $this->serve('vod.m3u8', ['Range' => 'bytes=0-3', 'If-Range' => $etag]);
+
+        self::assertSame(206, $resp->statusCode);
+        self::assertSame($this->jobDir . '/vod.m3u8', $resp->filePath);
+    }
+
+    public function test_if_range_with_a_stale_etag_returns_the_whole_playlist(): void
+    {
+        $resp = $this->serve('vod.m3u8', [
+            'Range' => 'bytes=0-3',
+            'If-Range' => '"0000000000000000000000000000dead"',
+        ]);
+
+        self::assertSame(200, $resp->statusCode, 'a stale If-Range ignores the Range entirely');
+        self::assertSame($this->jobDir . '/vod.m3u8', $resp->filePath);
+    }
+
+    public function test_a_weak_if_range_etag_never_matches(): void
+    {
+        // RFC 7233 §3.2: If-Range uses the strong comparison, so a weak tag is stale.
+        $etag = $this->serve('vod.m3u8')->headers['ETag'];
+
+        $resp = $this->serve('vod.m3u8', ['Range' => 'bytes=0-3', 'If-Range' => 'W/' . $etag]);
+
+        self::assertSame(200, $resp->statusCode);
+    }
+
+    public function test_an_if_range_etag_on_a_file_with_no_etag_is_stale(): void
+    {
+        // A live playlist has no validator, so no entity-tag If-Range can match it.
+        $resp = $this->serve('live.m3u8', ['Range' => 'bytes=0-3', 'If-Range' => '"anything"']);
+
+        self::assertSame(200, $resp->statusCode);
+    }
 }

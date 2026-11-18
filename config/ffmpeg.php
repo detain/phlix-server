@@ -84,17 +84,23 @@ return [
      * lands predictably inside its own wall-time budget. Setting 0 (or a
      * negative) disables the flag entirely and restores x264's auto-sizing.
      *
-     * Default: floor(cores / 3), floored at 2 — thirds because the measured
-     * prod mix runs roughly one decode pool + one encode pool + headroom per
-     * active encode; the 2 floor keeps even a 1–2 core box from serializing
-     * x264 into a single-thread stall. Env override:
-     * PHLIX_SEGMENT_ENCODE_THREADS (the `"0"`-survives rule, M-SERVER-34 —
+     * This value is the budget CEILING for one segment encode. TranscodeManager sets
+     * `encode_threads` on every launch to min(ceiling, max(2, cpus / in-flight encodes)), so a
+     * lone encode on a 4-core host runs 4 threads, and each encode in a crowd gets a smaller
+     * share, never more than the ceiling. A caller may also pass `encode_threads` in the
+     * segment params for one launch (see FfmpegRunner::buildSegmentCommand()); that value is
+     * clamped to 1..64 and is not capped by this ceiling. When no per-launch value is supplied,
+     * FfmpegRunner uses this configured value, or its own default of 8 when nothing is wired
+     * (hand-built runners and tests). A lone encode runs faster with more threads: measured on
+     * hub.phlix, one 6 s 1080p segment with yuv420p took 6.3 s at 4 threads, 4.1 s at 8 and
+     * 3.6 s at 12.
+     *
+     * Default: a fixed 8 on every host, regardless of core count. The literal 8 here must match
+     * FfmpegRunner::DEFAULT_SEGMENT_ENCODE_THREADS; a test asserts that they are equal. Env
+     * override: PHLIX_SEGMENT_ENCODE_THREADS (the `"0"`-survives rule, M-SERVER-34 —
      * this is why the helper is EnvConfig::integer and not `getenv() ?: `).
      */
-    'segment_encode_threads' => EnvConfig::integer(
-        'PHLIX_SEGMENT_ENCODE_THREADS',
-        max(2, intdiv(EnvConfig::availableCpuCount(), 3))
-    ),
+    'segment_encode_threads' => EnvConfig::integer('PHLIX_SEGMENT_ENCODE_THREADS', 8),
 
     /**
      * perf #5: thread cap for the SOFTWARE decoder of a software segment encode.

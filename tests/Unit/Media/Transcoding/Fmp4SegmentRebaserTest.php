@@ -223,9 +223,38 @@ final class Fmp4SegmentRebaserTest extends TestCase
     {
         $segment = self::moof(self::traf(1, self::tfdt(0, 0xFFFFFFF0)));
 
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(\RangeException::class);
         $this->expectExceptionMessageMatches('/overflows its 32-bit field/');
         $this->rebased($segment, [1 => 12288], 6.0);
+    }
+
+    /**
+     * The version-0 limit is the start alone: 0xFFFFFFFF / timescale seconds. At 90000 that is
+     * 47,721.86 s; the last whole second that fits is 47,721 (4,294,890,000 ticks), and 47,722
+     * (4,294,980,000 ticks) does not. A segment past it must refuse, not wrap.
+     */
+    public function test_a_version_0_start_at_the_90000_boundary_fits_only_up_to_47721_seconds(): void
+    {
+        $segment = self::moof(self::traf(1, self::tfdt(0, 0)));
+
+        $this->assertSame([4294890000], $this->tfdtValues($this->rebased($segment, [1 => 90000], 47721.0)));
+
+        $this->expectException(\RangeException::class);
+        $this->rebased(self::moof(self::traf(1, self::tfdt(0, 0))), [1 => 90000], 47722.0);
+    }
+
+    /**
+     * At 12288 the last whole second that fits a version-0 field is 349,525 (4,294,963,200 ticks);
+     * 349,526 (4,294,975,488 ticks) is past 0xFFFFFFFF.
+     */
+    public function test_a_version_0_start_at_the_12288_boundary_fits_only_up_to_349525_seconds(): void
+    {
+        $segment = self::moof(self::traf(1, self::tfdt(0, 0)));
+
+        $this->assertSame([4294963200], $this->tfdtValues($this->rebased($segment, [1 => 12288], 349525.0)));
+
+        $this->expectException(\RangeException::class);
+        $this->rebased(self::moof(self::traf(1, self::tfdt(0, 0))), [1 => 12288], 349526.0);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -359,6 +388,137 @@ final class Fmp4SegmentRebaserTest extends TestCase
         $this->tempFiles[] = $path;
 
         return $path;
+    }
+
+    /**
+     * Calls the private ticks() directly. The value it returns is the byte arithmetic's
+     * delta, so both the normal and the refused cases are pinned here.
+     */
+    private static function ticks(float $startSeconds, int $timescale): int
+    {
+        $method = new \ReflectionMethod(Fmp4SegmentRebaser::class, 'ticks');
+        /** @var int $ticks */
+        $ticks = $method->invoke(null, $startSeconds, $timescale);
+
+        return $ticks;
+    }
+
+    public function test_ticks_of_a_normal_offset_is_unchanged(): void
+    {
+        $this->assertSame(6 * 90000, self::ticks(6.0, 90000));
+        // 6.5 s × 12288 = 79872, the same whole-tick case as above.
+        $this->assertSame(79872, self::ticks(6.5, 12288));
+    }
+
+    /**
+     * 1e30 s × 90000 is finite but far past PHP_INT_MAX. An (int) cast would return 0 or a
+     * wrapped value, and the segment would publish with no shift at all, so it must throw.
+     */
+    public function test_ticks_rejects_an_offset_beyond_the_int_range(): void
+    {
+        $this->expectException(\RangeException::class);
+        $this->expectExceptionMessageMatches('/out of range/');
+        self::ticks(1.0e30, 90000);
+    }
+
+    public function test_ticks_rejects_an_infinite_offset(): void
+    {
+        $this->expectException(\RangeException::class);
+        $this->expectExceptionMessageMatches('/out of range/');
+        self::ticks(INF, 90000);
+    }
+
+    /**
+     * The largest double below 2^63 is exact and casts to an int; 2^63 itself would wrap.
+     */
+    public function test_ticks_accepts_the_largest_representable_value_below_2_to_the_63(): void
+    {
+        $this->assertSame(PHP_INT_MAX - 1023, self::ticks((float) (PHP_INT_MAX - 1023), 1));
+    }
+
+    public function test_ticks_rejects_2_to_the_63_exactly(): void
+    {
+        $this->expectException(\RangeException::class);
+        self::ticks((float) PHP_INT_MAX, 1);
+    }
+
+    public function test_ticks_accepts_negative_2_to_the_63_exactly(): void
+    {
+        $this->assertSame(PHP_INT_MIN, self::ticks((float) PHP_INT_MIN, 1));
+    }
+
+    public function test_ticks_rejects_a_negative_value_past_the_int_range(): void
+    {
+        $this->expectException(\RangeException::class);
+        self::ticks(-1.0e19, 1);
+    }
+
+    public function test_a_huge_start_leaves_the_box_bytes_unchanged(): void
+    {
+        $segment = self::moof(self::traf(1, self::tfdt(1, 0)));
+        $before = $segment;
+
+        $caught = null;
+        try {
+            Fmp4SegmentRebaser::rebaseBytes($segment, [1 => self::VIDEO_TIMESCALE], 1.0e30);
+        } catch (\RangeException $e) {
+            $caught = $e;
+        }
+
+        self::assertInstanceOf(\RangeException::class, $caught);
+        self::assertStringContainsString('out of range', $caught->getMessage());
+        self::assertSame($before, $segment);
+    }
+
+    public function test_a_version_0_sidx_overflowing_its_32_bit_field_is_rejected(): void
+    {
+        $segment = self::sidx(0, 1, self::VIDEO_TIMESCALE, 0xFFFFFFF0)
+            . self::moof(self::traf(1, self::tfdt(1, 0)));
+
+        $this->expectException(\RangeException::class);
+        $this->expectExceptionMessageMatches('/sidx earliest_presentation_time overflows its 32-bit field/');
+        $this->rebased($segment, [1 => self::VIDEO_TIMESCALE], 6.0);
+    }
+
+    public function test_a_version_1_timestamp_overflowing_the_unsigned_64_bit_field_is_rejected(): void
+    {
+        // 0xFFFFFFFFFFFFFFF0 + 0x20 = 2^64 + 0x10, past the unsigned field. The bytes must survive.
+        $segment = self::moof(self::traf(1, self::tfdt(1, -16)));
+        $before = $segment;
+
+        $caught = null;
+        try {
+            Fmp4SegmentRebaser::rebaseBytes($segment, [1 => 1], 32.0);
+        } catch (\RangeException $e) {
+            $caught = $e;
+        }
+
+        self::assertInstanceOf(\RangeException::class, $caught);
+        self::assertStringContainsString('64-bit timestamp overflows', $caught->getMessage());
+        self::assertSame($before, $segment);
+    }
+
+    public function test_a_version_1_timestamp_that_stays_in_the_unsigned_range_is_rebased(): void
+    {
+        // 0xFFFFFFFFFFFFFFF0 + 0x0F = 0xFFFFFFFFFFFFFFFF, the largest value the field holds.
+        $segment = self::moof(self::traf(1, self::tfdt(1, -16)));
+
+        $written = Fmp4SegmentRebaser::rebaseBytes($segment, [1 => 1], 15.0);
+
+        self::assertSame(1, $written);
+        self::assertSame([-1], $this->tfdtValues($segment));
+    }
+
+    public function test_a_version_1_timestamp_past_the_signed_range_but_below_2_to_the_64_is_rebased(): void
+    {
+        // PHP_INT_MAX - 10 + 73728 = 2^63 + 73717. It is past PHP_INT_MAX (signed overflow) yet
+        // in range for the unsigned field, so it must be written, as its negative bit pattern.
+        $segment = self::moof(self::traf(1, self::tfdt(1, PHP_INT_MAX - 10)));
+
+        $written = Fmp4SegmentRebaser::rebaseBytes($segment, [1 => self::VIDEO_TIMESCALE], 6.0);
+
+        self::assertSame(1, $written);
+        self::assertSame([PHP_INT_MIN + 73717], $this->tfdtValues($segment));
     }
 
     protected function tearDown(): void

@@ -45,6 +45,19 @@ class FfmpegRunner
     private const TIMEOUT_KILL_GRACE_SECONDS = 10;
 
     /**
+     * Wall-clock limit (seconds) for one ffprobe run in {@see probe()}, enforced with
+     * `timeout -k <PROBE_KILL_GRACE_SECONDS> <PROBE_TIMEOUT_SECONDS>`. A probe that
+     * overruns is killed and reads as a failed probe (null), the same as an unreadable
+     * file. It never raises. The run is bounded to about 12 s (10 s plus the 2 s KILL grace), so a
+     * wedged ffprobe cannot hold a worker indefinitely; on the non-Swoole shell_exec path that bound
+     * is a blocking wait of up to about 12 s.
+     */
+    private const PROBE_TIMEOUT_SECONDS = 10;
+
+    /** Grace (seconds) between `timeout`'s TERM and its KILL for the probe. */
+    private const PROBE_KILL_GRACE_SECONDS = 2;
+
+    /**
      * `-hls_time` for the fMP4 branch. The on-demand encode already bounds its
      * own window with `-ss`/`-t`, so the HLS muxer must NEVER cut a second
      * segment out of it — a value far above any conceivable segment length is
@@ -154,6 +167,25 @@ class FfmpegRunner
      * become `-threads PHP_INT_MAX`. The encode cap has no such bound and is not changed by this.
      */
     public const MAX_SEGMENT_DECODE_THREADS = 64;
+
+    /**
+     * FfmpegRunner's own default libx264 `-threads` count for a software segment encode. It applies
+     * only when a launch supplies no `encode_threads` value and no configured `segment_encode_threads`
+     * is wired, which is the case for hand-built runners (tests, scripts).
+     *
+     * In production the configured `segment_encode_threads` is the budget CEILING, not this default.
+     * TranscodeManager sets `encode_threads` on every launch to min(ceiling, max(2, cpus / in-flight
+     * encodes)), so the live per-launch count can be lower than 8 (a lone encode on a 4-core host runs
+     * 4 threads). config/ffmpeg.php cannot import this class, so its literal `8` is kept in step with
+     * this constant by a test (FfmpegRunnerEncodeThreadsTest).
+     *
+     * A launch may override it with the `encode_threads` segment param; that override is clamped to
+     * 1..64. Measured on hub.phlix, one 6 s 1080p segment with yuv420p took 6.3 s at 4 threads, 4.1 s
+     * at 8 and 3.6 s at 12.
+     *
+     * @since playback-lag wave C
+     */
+    public const DEFAULT_SEGMENT_ENCODE_THREADS = 8;
 
     /**
      * Optional persisted probe cache shared across workers (perf #11), or null for
@@ -289,8 +321,29 @@ class FfmpegRunner
     {
         return $this->segmentEncodeThreads ?? EnvConfig::integer(
             'PHLIX_SEGMENT_ENCODE_THREADS',
-            self::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount())
+            self::DEFAULT_SEGMENT_ENCODE_THREADS
         );
+    }
+
+    /**
+     * Resolve the libx264 `-threads` value for ONE launch (the output-side encode cap).
+     *
+     * A positive `encode_threads` segment param sets the thread count for this launch only,
+     * clamped to 1..64. TranscodeManager sets it to the per-launch budget, which is at most the
+     * configured ceiling. An absent key, or a value of 0 or below, uses the configured value from
+     * {@see resolveSegmentEncodeThreads()} as before. A configured value of 0 or below still drops
+     * the flag, because the caller only chooses a value when it is positive.
+     *
+     * @param array<string, mixed> $params Segment params (see {@see buildSegmentCommand()}).
+     */
+    private function resolveLaunchEncodeThreads(array $params): int
+    {
+        $override = self::paramInt($params, 'encode_threads');
+        if ($override === null || $override <= 0) {
+            return $this->resolveSegmentEncodeThreads();
+        }
+
+        return min(max($override, 1), 64);
     }
 
     /**
@@ -305,19 +358,6 @@ class FfmpegRunner
         // Clamped where it is read, so neither the wired value nor the env value can exceed the documented
         // maximum. A value of 0 or below is untouched and still drops the flag.
         return min($threads, self::MAX_SEGMENT_DECODE_THREADS);
-    }
-
-    /**
-     * Pure default math: floor(cores / 3) with a floor of 2 — thirds because
-     * the measured prod mix runs roughly one decoder pool + one x264 pool +
-     * headroom per active encode; the 2 floor keeps a 1–2 core box from
-     * serializing x264 into a single-thread stall.
-     *
-     * @since playback-lag wave C
-     */
-    public static function defaultSegmentEncodeThreads(int $cpuCount): int
-    {
-        return max(2, intdiv($cpuCount, 3));
     }
 
     /**
@@ -388,6 +428,10 @@ class FfmpegRunner
      * beyond the cap when probed, the racy span starts at stamp minus one day, so it is not bounded from
      * the probe time (see Exception 13). Callers on the segment path call this one or more times per
      * segment build; see Exception 13 in docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
+     * The 10 s probe cap can also return null for a legitimately slow cold NFS or SMB probe; that null
+     * is not memoized as a hit, so the next call retries it. The timeout value is deliberately unchanged.
+     * A missing coreutils `timeout` binary makes probe() read as null, so deployments need
+     * coreutils (the segment launcher already requires it); there is no fallback.
      *
      * @example
      * ```php
@@ -438,8 +482,14 @@ class FfmpegRunner
             }
         }
 
+        // Bounded by `timeout`, the same wrapper the segment launcher uses. A kill leaves
+        // stdout empty or partial, which parseProbeOutput() turns into null (the failed-probe
+        // result). A null is stored in the memo, but isset() treats a stored null as a miss,
+        // so the next call runs ffprobe again.
         $cmd = sprintf(
-            '%s -v quiet -print_format json -show_format -show_streams %s 2>/dev/null',
+            'timeout -k %d %d %s -v quiet -print_format json -show_format -show_streams %s 2>/dev/null',
+            self::PROBE_KILL_GRACE_SECONDS,
+            self::PROBE_TIMEOUT_SECONDS,
             escapeshellarg($this->ffprobePath),
             escapeshellarg($inputPath)
         );
@@ -2086,6 +2136,10 @@ class FfmpegRunner
      *                                         `width`/`height` (downscale),
      *                                         `audio_codec` (`aac`/…/`copy`),
      *                                         `audio_bitrate`, `audio_channels`,
+     *                                         `encode_threads` (optional int; a positive
+     *                                         value sets the libx264 `-threads` for this
+     *                                         launch only, clamped to 1..64; absent or
+     *                                         <= 0 uses `segment_encode_threads`),
      *                                         `subtitle_burn_in` (SV-1.6; optional
      *                                         `['path' => string, 'format' => ?string,
      *                                         'style' => ?array]` — see
@@ -2161,7 +2215,7 @@ class FfmpegRunner
             // (nothing to cap), the audio builders, libx265 rungs, and every
             // hw-accel builder (GPU venues are not the starved ones).
             if ($videoCodec === 'libx264') {
-                $encodeThreads = $this->resolveSegmentEncodeThreads();
+                $encodeThreads = $this->resolveLaunchEncodeThreads($params);
                 if ($encodeThreads > 0) {
                     $cmd .= ' -threads ' . $encodeThreads;
                 }

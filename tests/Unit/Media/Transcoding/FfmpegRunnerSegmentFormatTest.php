@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
-use Phlix\Common\Env\EnvConfig;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -33,12 +32,22 @@ use PHPUnit\Framework\TestCase;
  *
  * ## Wave C (`-threads` cap) and these literals (2026-11-06)
  *
- * The playback-lag wave C added `-threads N` to the software libx264 branch,
- * with N defaulting to `max(2, floor(cores/3))` — machine-dependent. The
- * byte-identity pair tests below therefore pin the cap OFF (0) on the runner,
- * so they keep proving the pre-C argv literally (the zero path emits no
- * `-threads` at all — byte-for-byte the old string). The cap's own shape is
- * pinned separately with an explicit `setSegmentEncodeThreads(4)`.
+ * The playback-lag wave C added `-threads N` to the software libx264 branch.
+ * N is the configured `segment_encode_threads` value. Its default is a ceiling of
+ * 8 (`config/ffmpeg.php`, `FfmpegRunner::DEFAULT_SEGMENT_ENCODE_THREADS`), and the
+ * `PHLIX_SEGMENT_ENCODE_THREADS` environment variable overrides it. The ceiling
+ * does not depend on the host's CPU count. The per-launch value is chosen by the
+ * caller: TranscodeManager passes `encode_threads` = min($ceiling, max(2, intdiv($cpus,
+ * max(1, $concurrent)))) on each launch, where `$concurrent` is the number of in-flight
+ * encodes. The floor of 2 applies before the ceiling, so a ceiling of 1 still yields 1.
+ * The ceiling is the runner's configured `segment_encode_threads` (`config/ffmpeg.php`,
+ * default 8, env `PHLIX_SEGMENT_ENCODE_THREADS`). A configured ceiling of 0 or less leaves
+ * encode_threads unset (TranscodeManager::segmentEncodeThreadsFor() returns null), so the
+ * runner's own flag rule applies: a runner wired with that value drops `-threads`. An
+ * unwired runner falls back to its own default, 8 (or the env value). The byte-identity pair
+ * tests below therefore pin the cap OFF (0) on the runner, so they keep proving the pre-C argv literally
+ * (the zero path emits no `-threads` at all — byte-for-byte the old string). The
+ * cap's own shape is pinned separately with an explicit `setSegmentEncodeThreads(4)`.
  */
 final class FfmpegRunnerSegmentFormatTest extends TestCase
 {
@@ -302,22 +311,12 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
     }
 
     /**
-     * The default follows the machine's core count through the pure math —
-     * `max(2, floor(cores/3))` — pinning BOTH the helper values and that an
-     * unpinned runner on THIS box emits exactly that number.
+     * An unpinned runner (no configured value, no per-launch `encode_threads`) emits the runner's
+     * own default thread count, FfmpegRunner::DEFAULT_SEGMENT_ENCODE_THREADS. The constant's value
+     * is asserted in FfmpegRunnerEncodeThreadsTest; this test asserts only the emitted flag.
      */
-    public function test_the_wave_c_default_follows_the_machine_core_count(): void
+    public function test_the_wave_c_default_is_emitted_as_the_runner_constant(): void
     {
-        $this->assertSame(4, FfmpegRunner::defaultSegmentEncodeThreads(12));
-        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(6));
-        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(3));
-        $this->assertSame(2, FfmpegRunner::defaultSegmentEncodeThreads(1));
-        $this->assertSame(3, FfmpegRunner::defaultSegmentEncodeThreads(9));
-        $this->assertSame(21, FfmpegRunner::defaultSegmentEncodeThreads(63));
-
-        $expected = FfmpegRunner::defaultSegmentEncodeThreads(EnvConfig::availableCpuCount());
-        $this->assertGreaterThan(0, $expected);
-
         $cmd = $this->runner()->buildSegmentCommand(
             '/media/in.mkv',
             self::OUT_TS,
@@ -325,7 +324,7 @@ final class FfmpegRunnerSegmentFormatTest extends TestCase
             6.0,
             $this->videoParams()
         );
-        $this->assertStringContainsString(' -threads ' . $expected . ' ', $cmd);
+        $this->assertStringContainsString(' -threads ' . FfmpegRunner::DEFAULT_SEGMENT_ENCODE_THREADS . ' ', $cmd);
     }
 
     /**

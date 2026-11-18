@@ -73,9 +73,13 @@ final class Fmp4SegmentRebaser
      * @return int Number of timestamp fields rewritten. Zero is never a success:
      *             a well-formed fragment always has at least one `tfdt`.
      *
-     * @throws \RuntimeException When either file is unreadable, malformed, has no
-     *                           rewritable timestamp, or when the rebased value
-     *                           will not fit the field width ffmpeg chose.
+     * @throws \RangeException   When the start cannot be represented in the field width the
+     *                           fragment uses (see {@see self::ticks()} and the 32-bit version-0
+     *                           checks), or when a 64-bit version-1 field would overflow (the
+     *                           rebased sum exceeds 2^64 - 1, see {@see self::addUint64()}).
+     *                           Nothing is written. The CLI maps this to exit 2.
+     * @throws \RuntimeException For any other failure: unreadable, malformed or truncated files,
+     *                           or no rewritable timestamp. The CLI maps this to exit 1.
      */
     public static function rebase(string $segmentPath, string $initPath, float $startSeconds): int
     {
@@ -96,11 +100,16 @@ final class Fmp4SegmentRebaser
      * reference and reports how many fields changed. Split out so the byte
      * arithmetic is unit-testable without touching the filesystem.
      *
+     * Note: `$segment` is rewritten field by field as the walk proceeds, so it may be left
+     * partly rewritten when this method throws. Use {@see self::rebase()}, which writes nothing
+     * to disk on failure.
+     *
      * @param string             $segment      Raw fragment bytes, rewritten in place.
      * @param array<int, int>    $timescales   `track_ID => media timescale`.
      * @param float              $startSeconds Timeline offset to add.
      *
-     * @throws \RuntimeException On a malformed fragment or an unrepresentable value.
+     * @throws \RangeException   When the start does not fit the field width (see {@see self::rebase()}).
+     * @throws \RuntimeException On a malformed fragment.
      */
     public static function rebaseBytes(string &$segment, array $timescales, float $startSeconds): int
     {
@@ -199,9 +208,17 @@ final class Fmp4SegmentRebaser
         $delta = self::ticks($startSeconds, $timescale);
 
         if ($version === 0) {
-            self::writeUint32($segment, $field, self::uint32($segment, $field) + $delta);
+            $value = self::uint32($segment, $field) + $delta;
+            if ($value > 0xFFFFFFFF) {
+                // Same rule as the tfdt path: a version-0 field is 32 bits and is never widened
+                // or wrapped. The start alone limits to 0xFFFFFFFF / timescale seconds.
+                throw new \RangeException(
+                    'fmp4 rebase: rebased sidx earliest_presentation_time overflows its 32-bit field'
+                );
+            }
+            self::writeUint32($segment, $field, $value);
         } else {
-            self::writeUint64($segment, $field, self::uint64($segment, $field) + $delta);
+            self::writeUint64($segment, $field, self::addUint64(self::uint64($segment, $field), $delta));
         }
 
         return 1;
@@ -252,13 +269,15 @@ final class Fmp4SegmentRebaser
             if ($version === 0) {
                 $value = self::uint32($segment, $field) + $delta;
                 if ($value > 0xFFFFFFFF) {
-                    // A 32-bit tfdt cannot be widened without moving every byte
-                    // after it, so fail the publish rather than silently wrap.
-                    throw new \RuntimeException('fmp4 rebase: rebased tfdt overflows its 32-bit field');
+                    // A version-0 tfdt is 32 bits. Widening it means moving every byte after it
+                    // (a version-1 rewrite, not done here), so refuse rather than wrap. At timescale
+                    // T the start alone must stay within 0xFFFFFFFF / T seconds (about 47,721 s at
+                    // 90000, 349,525 s at 12288), and the existing tfdt value counts against that too.
+                    throw new \RangeException('fmp4 rebase: rebased tfdt overflows its 32-bit field');
                 }
                 self::writeUint32($segment, $field, $value);
             } else {
-                self::writeUint64($segment, $field, self::uint64($segment, $field) + $delta);
+                self::writeUint64($segment, $field, self::addUint64(self::uint64($segment, $field), $delta));
             }
             $rewritten++;
         }
@@ -268,10 +287,63 @@ final class Fmp4SegmentRebaser
 
     /**
      * Converts a timeline offset in seconds to whole ticks of `$timescale`.
+     *
+     * An (int) cast of a float is only meaningful inside the int range. INF and NaN cast to 0,
+     * and a finite value outside [-2^63, 2^63) wraps modulo 2^64 (PHP 7+) to an unrelated,
+     * possibly negative, shift. Both are refused here, so the only values returned are those
+     * the cast keeps exact.
+     *
+     * @throws \RangeException When the scaled value is not finite or lies outside the int range.
      */
     private static function ticks(float $startSeconds, int $timescale): int
     {
-        return (int) round($startSeconds * $timescale);
+        $ticks = round($startSeconds * $timescale);
+        if (!is_finite($ticks) || $ticks >= (float) PHP_INT_MAX || $ticks < (float) PHP_INT_MIN) {
+            throw new \RangeException(
+                "fmp4 rebase: start offset {$startSeconds}s is out of range for timescale {$timescale}"
+            );
+        }
+
+        return (int) $ticks;
+    }
+
+    /**
+     * `$base + $delta` for an UNSIGNED 64-bit field. `$base` is the field's bit pattern as read
+     * by uint64(), so a value at or above 2^63 arrives as a negative int. The sum is therefore
+     * computed on 32-bit halves: the carry out of the low half is explicit, and the overflow
+     * test is the unsigned one (the sum must not exceed 2^64 - 1). Signed-int overflow is not
+     * the criterion, so a field past PHP_INT_MAX that stays below 2^64 is rebased correctly.
+     *
+     * @param int $delta Whole ticks to add; never negative (the start offset is non-negative).
+     *
+     * @throws \RangeException          When the sum exceeds 2^64 - 1.
+     * @throws \InvalidArgumentException When the delta is negative (a programmer error).
+     */
+    private static function addUint64(int $base, int $delta): int
+    {
+        if ($delta < 0) {
+            throw new \InvalidArgumentException('fmp4 rebase: negative 64-bit timestamp delta');
+        }
+
+        // `>>` is arithmetic on a negative $base, so the high half is masked. $delta < 2^63, so its
+        // high half is non-negative.
+        $baseHigh = ($base >> 32) & 0xFFFFFFFF;
+        $baseLow = $base & 0xFFFFFFFF;
+        $deltaHigh = $delta >> 32;
+        $deltaLow = $delta & 0xFFFFFFFF;
+
+        $low = $baseLow + $deltaLow;
+        $carry = $low >> 32;
+        $low &= 0xFFFFFFFF;
+
+        $high = $baseHigh + $deltaHigh + $carry;
+        if ($high > 0xFFFFFFFF) {
+            throw new \RangeException('fmp4 rebase: rebased 64-bit timestamp overflows its field');
+        }
+
+        // `<<` on a 64-bit int wraps at the bit level and never becomes a float; the result is the
+        // field's bit pattern, which pack('J') writes back unchanged.
+        return ($high << 32) | $low;
     }
 
     /**

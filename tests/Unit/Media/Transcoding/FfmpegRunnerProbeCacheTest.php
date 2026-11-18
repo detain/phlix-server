@@ -368,4 +368,89 @@ SH;
         self::assertSame(1280, $second['streams'][0]['width'] ?? null, 'the new output is returned, not a stale entry');
         self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'the racy results are not persisted');
     }
+
+    /**
+     * A fake ffprobe whose reported width is whatever the file at $widthFile holds, so a test can change what
+     * ffprobe reports without changing the media file's stamp. It still appends one line to the counter per real run.
+     */
+    private function widthControlledFfprobe(string $widthFile): string
+    {
+        $script = $this->dir . '/fake-ffprobe-width';
+        $body = <<<'SH'
+#!/bin/sh
+echo run >> COUNTER
+width=$(cat WIDTHFILE)
+printf '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":%s,"height":1080}],' "$width"
+printf '"format":{"duration":"12.000000","format_name":"matroska,webm"}}\n'
+SH;
+        file_put_contents(
+            $script,
+            str_replace(
+                ['COUNTER', 'WIDTHFILE'],
+                [escapeshellarg($this->counter), escapeshellarg($widthFile)],
+                $body
+            ) . "\n"
+        );
+        chmod($script, 0755);
+
+        return $script;
+    }
+
+    /**
+     * Racy transition (MEDIUM finding). The media file is stamped two days ahead of t0, which is past the
+     * MAX_FUTURE_SKEW_SECONDS cap, so at t0 it is not racy: the probe runs once, is memoized and is persisted.
+     * The stamp does not change afterwards. One day on, the clock is exactly MAX_FUTURE_SKEW_SECONDS behind the
+     * stamp, so the stamp is racy. The racy probe must run ffprobe again and return the new result, and it must
+     * not be answered from the same runner's memo or from a fresh runner's disk entry over the same directory.
+     * The clock is 60 s ahead of the real time, so the ctime (the real touch time) is an ordinary old stamp and
+     * only the mtime decides the racy state.
+     */
+    public function testAStampThatBecomesRacyIsNotServedFromTheMemoOrTheDisk(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $widthFile = $this->dir . '/width';
+        file_put_contents($widthFile, '1920');
+        $ffprobe = $this->widthControlledFfprobe($widthFile);
+
+        $t0 = time() + 60;
+        touch($this->media, $t0 + 2 * ProbeCache::MAX_FUTURE_SKEW_SECONDS);
+        clearstatcache();
+
+        $now = $t0;
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', $ffprobe, $this->dir);
+        $runner->setProbeCache(new ProbeCache($cacheDir));
+        $runner->setWallClock(static function () use (&$now): int {
+            return $now;
+        });
+
+        // At t0 the stamp is not racy: probed once, memoized and persisted.
+        $first = $runner->probe($this->media);
+        self::assertSame(1, $this->probeRuns(), 'non-racy: ffprobe runs once');
+        self::assertSame(1920, $first['streams'][0]['width'] ?? null);
+        self::assertCount(1, glob($cacheDir . '/*.json') ?: [], 'non-racy: the result is persisted');
+
+        $runner->probe($this->media);
+        self::assertSame(1, $this->probeRuns(), 'non-racy: the same runner is served from the memo');
+
+        $this->runnerAt($cacheDir, $t0, $ffprobe)->probe($this->media);
+        self::assertSame(1, $this->probeRuns(), 'non-racy: a fresh worker is served from the disk cache');
+
+        // What ffprobe reports now differs, and the stamp is unchanged. One day on, the stamp is racy.
+        file_put_contents($widthFile, '1280');
+        $now = $t0 + ProbeCache::MAX_FUTURE_SKEW_SECONDS;
+
+        $racy = $runner->probe($this->media);
+        self::assertSame(2, $this->probeRuns(), 'racy: the memo entry is not used, so ffprobe runs again');
+        self::assertSame(1280, $racy['streams'][0]['width'] ?? null, 'racy: the new ffprobe result is returned');
+
+        $fresh = $this->runnerAt($cacheDir, $now, $ffprobe)->probe($this->media);
+        self::assertSame(3, $this->probeRuns(), 'racy: a fresh worker does not read the disk entry, so ffprobe runs');
+        self::assertSame(1280, $fresh['streams'][0]['width'] ?? null, 'racy: the fresh worker gets the new result');
+        self::assertCount(1, glob($cacheDir . '/*.json') ?: [], 'racy: nothing is stored, the old entry remains');
+
+        // The non-racy memo entry was kept, not cleared: when the stamp is non-racy again, the memo answers.
+        $now = $t0;
+        $runner->probe($this->media);
+        self::assertSame(3, $this->probeRuns(), 'back at t0 the kept memo entry answers without ffprobe');
+    }
 }

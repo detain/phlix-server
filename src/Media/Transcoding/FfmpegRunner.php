@@ -390,6 +390,9 @@ class FfmpegRunner
         // or is ahead of now by no more than ProbeCache::MAX_FUTURE_SKEW_SECONDS, can be rewritten in place without
         // changing its stamp, so this probe's result is neither persisted nor memoized, and the next call runs
         // ffprobe again. A stamp further ahead than the cap is not racy (see ProbeCache::isRacy()).
+        // The racy decision is made once, before either lookup, and reused for the store below. A racy stamp
+        // is answered by neither cache, not even one written while the stamp was non-racy, so every probe of a
+        // racy file runs ffprobe (the policy in the docblock above and in Exception 11).
         $racy = $stamp !== null && ProbeCache::isRacy($stamp['mtime'], $stamp['ctime'], $this->probeClock());
         $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [
             $stamp['mtime'],
@@ -397,13 +400,15 @@ class FfmpegRunner
             $stamp['ctime'],
             $stamp['inode'],
         ]));
-        if (isset($this->probeMemo[$cacheKey])) {
+        // A non-racy stamp keeps its memo entry (it is not cleared here), so a later non-racy probe still hits it.
+        if (!$racy && isset($this->probeMemo[$cacheKey])) {
             return $this->probeMemo[$cacheKey];
         }
 
         // perf #11: a persisted result for this exact file (realpath, size, mtime, ctime
         // and inode) skips the ffprobe run, and it is shared with every other worker.
-        if ($stamp !== null && $this->probeCache !== null) {
+        // Only a non-racy stamp reads the disk cache; a racy one always runs ffprobe.
+        if (!$racy && $stamp !== null && $this->probeCache !== null) {
             $persisted = $this->probeCache->read(
                 $stamp['realpath'],
                 $stamp['size'],

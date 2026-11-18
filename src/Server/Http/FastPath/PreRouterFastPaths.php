@@ -18,6 +18,7 @@ use Phlix\Media\Library\RatingGate;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\Controllers\ByteRangeParser;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Middleware\StreamLimitMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -120,6 +121,14 @@ final class PreRouterFastPaths
     private const STREAM_PATTERN = '#^/media/(?P<id>[^/]+)/stream$#';
 
     /**
+     * The device bucket a bound (signed) stream with no device name is counted under
+     * (see {@see self::registerDirectPlaySlot()}). A client that sends this exact value as
+     * its X-Device-ID shares the bucket. That only changes which count it lands in, never
+     * whether the cap applies, so no bypass follows from it.
+     */
+    private const UNIDENTIFIED_DEVICE_ID = 'unidentified-device';
+
+    /**
      * @param ArtworkStorage      $artworkStorage Poster/variant store on local disk.
      * @param AvatarStorage       $avatarStorage  User avatar store on local disk.
      * @param ContainerInterface|null $container  Container for the stream path's
@@ -199,6 +208,12 @@ final class PreRouterFastPaths
      * user) OR a valid signed-URL token (so `<img src="...">` works without an
      * Authorization header).
      *
+     * A resolved session is also held to its profile's schedule window, as the artwork
+     * path holds it. This route runs before the global gate, so the window is tested
+     * here. A signed request carries no session and is served as before: avatar URLs are
+     * minted without a profile binding ({@see AvatarStorage}), so there is no window to
+     * test on that path.
+     *
      * @param Request $request The request to match and serve.
      *
      * @return Response|null Null when this is not an avatar request.
@@ -222,6 +237,15 @@ final class PreRouterFastPaths
         $unauthorized = $this->rejectUnlessSigned($request, $request->path);
         if ($unauthorized !== null) {
             return $unauthorized;
+        }
+
+        // A session (not a signed URL) is held to its profile's window before any bytes
+        // are read, the same denial the artwork bytes get.
+        if ($request->userId !== null && $request->userId !== '') {
+            $scheduleDenial = $this->scheduleDenial($request);
+            if ($scheduleDenial !== null) {
+                return $scheduleDenial;
+            }
         }
 
         $avatarPath = $this->avatarStorage->path($targetUserId);
@@ -315,6 +339,14 @@ final class PreRouterFastPaths
             return $unauthorized;
         }
 
+        // This fast path runs before Application::dispatch(), so the global schedule gate
+        // never sees the request. Apply the profile's window here, as the direct-play path
+        // does, so a schedule-locked profile is refused the same way the gate refuses it.
+        $scheduleDenial = $this->scheduleDenial($request);
+        if ($scheduleDenial !== null) {
+            return $scheduleDenial;
+        }
+
         // S73: resize-then-cache on a miss. A stored variant answers directly;
         // otherwise the stored `original.jpg` is resized to exactly the ONE
         // requested, already-validated width and atomically cached. The pass
@@ -351,6 +383,58 @@ final class PreRouterFastPaths
     private function rejectUnlessSigned(Request $request, string $signedResource): ?Response
     {
         return ArtworkByteResponder::rejectUnlessSigned($request, $signedResource);
+    }
+
+    /**
+     * The schedule window test for an authorised artwork or avatar request.
+     *
+     * A resolved session (a non-empty userId) is tested through
+     * {@see AccessScheduleMiddleware::denyForSession()}, which is the global gate's resolution
+     * with one difference: the account's found profile is memoised for the 30 s schedule TTL.
+     * A session with its own profile is tested on that profile, on both routes.
+     *
+     * A session with no profile id is one of two things. It is either a RELAYED principal, where the relay consumer
+     * stamps a userId and never a profileId, or a LOCAL claimless bearer whose default-profile lookup failed.
+     * {@see \Phlix\Auth\AuthManager::resolveProfileForUser()} returns null for a claimless token when no profile
+     * resolver is wired or when the default-profile lookup throws, and validateAccessToken() passes that null through.
+     * A claimless local bearer whose lookup succeeds resolves to the account's default profile, which the resolver
+     * creates when the account has none. A claimed bearer whose claim is unowned, whose lookup fails, or that has no
+     * resolver wired to verify it is refused upstream in validateAccessToken(), so it never reaches this path.
+     * For a session with no profile id, the account's active profile is tested, through the memo, so a grid of posters
+     * costs one profile read. An account with no resolvable profile is refused with the gate's 403, unless it is an
+     * unmapped relayed principal ({@see AccessScheduleMiddleware::allowsWithoutProfile()}).
+     *
+     * The bytes and JSON routes agree on every verdict except that lag. A profile switch or delete
+     * reaches this path up to 30 s after it reaches the JSON routes, for a session with no profile
+     * id. That is the accepted cost of the artwork grid (see {@see AccessScheduleMiddleware::$foundProfileMemo}).
+     *
+     * A request with no session is tested only on the `pid` its signed URL has just verified
+     * (see {@see ArtworkByteResponder::rejectUnlessSigned()}). With no `pid` it is not refused
+     * here; the signed URL's expiry is the only bound on that case, as the signed-URL design
+     * states.
+     *
+     * @param Request $request The authorised artwork or avatar request.
+     *
+     * @return Response|null The AccessScheduled 403 when the window refuses the request now, else null.
+     */
+    private function scheduleDenial(Request $request): ?Response
+    {
+        if ($request->userId !== null && $request->userId !== '') {
+            /** @var AccessScheduleMiddleware $middleware */
+            $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+            return $middleware->denyForSession($request, $request->userId, $request->profileId);
+        }
+
+        $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+        if ($profileId === null || $profileId === '') {
+            return null;
+        }
+
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+        return $middleware->denyForProfile($profileId);
     }
 
     /**
@@ -427,13 +511,23 @@ final class PreRouterFastPaths
         // StreamLimitMiddleware can't be applied as router middleware here because
         // this route bypasses the router to use the event-loop file streaming
         // (essential for multi-GB videos). The check is inlined instead.
-        // Signed-URL access (userId null) skips the stream limit — the signed URL
-        // itself is the access control; stream limits only apply to authenticated
-        // sessions where we have a profileId to enforce against.
         if ($userId !== null && $userId !== '') {
             $streamLimitResponse = $this->checkStreamLimit($request, $userId);
             if ($streamLimitResponse !== null) {
                 return $streamLimitResponse;
+            }
+        } else {
+            // Signed-URL access (userId null). A token minted for a profile carries
+            // `pid`, which rejectUnlessSigned() has just verified against the HMAC, so
+            // that profile's schedule and stream slot apply here exactly as they do for
+            // a session. A legacy token minted before `pid` existed has no profile to
+            // check and is bounded only by its expiry (SignedUrl::DEFAULT_TTL).
+            $signedProfileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+            if ($signedProfileId !== null && $signedProfileId !== '') {
+                $streamLimitResponse = $this->checkSignedStreamLimit($request, $signedProfileId);
+                if ($streamLimitResponse !== null) {
+                    return $streamLimitResponse;
+                }
             }
         }
 
@@ -531,6 +625,44 @@ final class PreRouterFastPaths
     }
 
     /**
+     * Apply the profile's access-schedule window to a direct-play request (#13a).
+     *
+     * This path is served before {@see \Phlix\Server\Core\Application::dispatch()}, so the
+     * global schedule gate ({@see \Phlix\Server\Core\Application::scheduleGateFor()}) never
+     * runs for it. The fast path therefore runs the SAME middleware instance itself:
+     * it publishes the identity the transport already verified (the verified account, and
+     * the profile this stream resolved to, which is the same profile
+     * {@see checkStreamLimit()} counts against) into RequestContext for the call and
+     * restores it afterwards. The check and its 403 shape are shared with the router, not
+     * copied. A container failure propagates rather than streaming unchecked.
+     *
+     * @param Request $request   The request being served.
+     * @param string  $userId    The verified account id (non-empty).
+     * @param string  $profileId The profile this stream runs as (non-empty).
+     *
+     * @return Response|null The 403 schedule refusal, or null to continue.
+     */
+    private function accessScheduleDenial(Request $request, string $userId, string $profileId): ?Response
+    {
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+
+        // The middleware reads and (on success) writes RequestContext. Put back
+        // exactly what was there before, so this fast path leaves no identity behind
+        // for the rest of the coroutine (or, under the test runner, the next case).
+        $previousUserId = RequestContext::getUserId();
+        $previousProfileId = RequestContext::getProfileId();
+        RequestContext::setUserId($userId);
+        RequestContext::setProfileId($profileId);
+        try {
+            return $middleware($request);
+        } finally {
+            RequestContext::setUserId($previousUserId);
+            RequestContext::setProfileId($previousProfileId);
+        }
+    }
+
+    /**
      * Enforce per-profile concurrent stream limits for direct-play requests
      * (S301, moved verbatim from {@see \Phlix\Server\Workerman\HttpHandler}).
      *
@@ -573,13 +705,74 @@ final class PreRouterFastPaths
             }
         }
 
+        // Access-schedule window (#13a). This endpoint is served before
+        // Application::dispatch(), so the global schedule gate never runs for it; without
+        // this check a schedule-restricted profile could stream direct play outside its
+        // allowed hours. It runs here, after the profile is
+        // resolved (a session with no profile keeps its named profile.not_found
+        // refusal) and before any stream is registered, so a refused request never
+        // takes a concurrent-stream slot.
+        $scheduleResponse = $this->accessScheduleDenial($request, $userId, $profileId);
+        if ($scheduleResponse !== null) {
+            return $scheduleResponse;
+        }
+
+        return $this->registerDirectPlaySlot($request, $profileId, false);
+    }
+
+    /**
+     * The signed-URL twin of {@see checkStreamLimit()}: the same schedule window and
+     * the same stream slot, for a token bound to a profile by its `pid`. The profile id
+     * comes from the verified token, not from a session, so there is no userId and no
+     * profile lookup. The schedule is tested before any slot is taken.
+     *
+     * @param Request $request   The request being served (already signature-verified).
+     * @param string  $profileId The profile the token is bound to (non-empty).
+     *
+     * @return Response|null The 403 schedule refusal, the 429 limit refusal, or null.
+     */
+    private function checkSignedStreamLimit(Request $request, string $profileId): ?Response
+    {
+        /** @var AccessScheduleMiddleware $middleware */
+        $middleware = $this->container()->get(AccessScheduleMiddleware::class);
+        $scheduleResponse = $middleware->denyForProfile($profileId);
+        if ($scheduleResponse !== null) {
+            return $scheduleResponse;
+        }
+
+        return $this->registerDirectPlaySlot($request, $profileId, true);
+    }
+
+    /**
+     * Take (or refresh) this stream's concurrent-stream slot for a profile, and arm its
+     * heartbeat. Shared by the session and the signed-URL paths so both count against
+     * one per-profile cap.
+     *
+     * A request with no device name at all (no X-Device-ID and no User-Agent) differs by
+     * path. A session request keeps the documented pass-through of StreamLimitMiddleware:
+     * no slot. A bound (signed) request is COUNTED under one shared unidentified-device
+     * bucket for its profile. No documented client sends neither header, so the
+     * pass-through was not needed by one, and the bound token is the only proof of access
+     * here, so it must not skip the cap. All device-less bound streams of a profile then
+     * occupy one slot, which bounds them rather than letting them bypass the cap.
+     *
+     * @param Request $request        The request being served.
+     * @param string  $profileId      The profile the stream runs as (non-empty).
+     * @param bool    $countDeviceless True for a bound (signed) request: count a request with
+     *                                no device name under the unidentified-device bucket.
+     *
+     * @return Response|null 429 when the profile is at its cap, else null.
+     */
+    private function registerDirectPlaySlot(Request $request, string $profileId, bool $countDeviceless): ?Response
+    {
         $deviceId = $this->getStreamDeviceId($request);
         if ($deviceId === null) {
-            // With no device name at all (no X-Device-ID header AND no
-            // User-Agent) there is nothing stable to key even a synthetic
-            // bucket on — the SAME documented pass-through as
-            // StreamLimitMiddleware. Real traffic always carries a UA.
-            return null;
+            if (!$countDeviceless) {
+                // Session path: the SAME documented pass-through as StreamLimitMiddleware.
+                // Real traffic always carries a UA.
+                return null;
+            }
+            $deviceId = self::UNIDENTIFIED_DEVICE_ID;
         }
 
         // M-3 twin (pre-fix this line skipped enforcement on a missing

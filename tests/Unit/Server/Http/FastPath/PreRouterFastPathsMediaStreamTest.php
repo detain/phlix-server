@@ -67,11 +67,21 @@ final class PreRouterFastPathsMediaStreamTest extends TestCase
 
         $gate = new RatingGate($repo, $profiles, $users);
 
+        // #13a: the stream path now applies the access schedule. These cases test
+        // the stream itself, so the schedule is an empty one (no windows).
+        $noSchedule = $this->createMock(\Workerman\MySQL\Connection::class);
+        $noSchedule->method('query')->willReturn([]);
+        $unscheduled = new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($noSchedule),
+            $profiles,
+        );
+
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
             static fn (string $class): object => match ($class) {
                 RatingGate::class         => $gate,
                 UserProfileManager::class => $profiles,
+                \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class => $unscheduled,
                 default                   => $repo,
             },
         );

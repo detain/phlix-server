@@ -141,7 +141,19 @@ class TranscodeController
         // request. The token is prefix-scoped to the per-job directory, so it
         // authorises every variant playlist and segment too.
         $signer = SignedUrl::fromEnv();
-        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+        // Bound to the profile the schedule gate tested for this session (see
+        // Request::$gatedProfileId), falling back to RequestContext. A relayed principal's
+        // RequestContext profile is restored to null before this route runs, so the gate's value
+        // is the one that binds it. On a later segment request with no session identity (signed-URL
+        // use only), the global gate checks the token's pid against that profile's schedule
+        // (AccessScheduleMiddleware::denyForSignedRequest()). A request that carries a session (Bearer,
+        // cookie, or relayed x-phlix-relay-user) is checked against its session profile, or the account's
+        // active profile when the session has none, and the token's pid is not consulted. The token is
+        // unbound only when neither names a profile (see SignedUrl::mint()).
+        $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
+            ? $signer->mint($url, null, null, $profileId)
+            : $url;
 
         // Advertise the playable quality ladder so clients can build a picker
         // (D6). Null for a legacy `variants IS NULL` job (explicit key so a client
@@ -238,7 +250,11 @@ class TranscodeController
 
         // Signed, prefix-scoped streaming URLs (see start()).
         $signer = SignedUrl::fromEnv();
-        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+        // Bound exactly as start() binds its URLs (see Request::$gatedProfileId).
+        $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
+            ? $signer->mint($url, null, null, $profileId)
+            : $url;
 
         // Same quality-ladder advertisement as start() (D6): null for a legacy job,
         // else each variant's own media playlist url signed like master_url.

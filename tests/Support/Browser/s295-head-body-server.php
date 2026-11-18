@@ -25,11 +25,12 @@
  *
  * NOT REAL, deliberately: the database (one JSON row replayed by
  * {@see \Phlix\Tests\Support\Browser\StubScheduleConnection} — a PHPUnit mock
- * cannot cross `proc_open()`), and the authentication context. The middleware's
- * only gate is `RequestContext::hasUserId()`; production publishes that value
- * via `RequestAuthenticator`/`AuthMiddleware`. This harness sets the same
- * per-request context keys directly, because the S295 seam is the middleware's
- * REFUSAL, not the auth that precedes it (auth behaviour has its own tests).
+ * cannot cross `proc_open()`), and the authentication context. The global gate
+ * ({@see \Phlix\Server\Core\Application::scheduleGateFor()}) reads the request's own
+ * `userId`/`profileId`, which production sets in `RequestAuthenticator::authenticate()`.
+ * This harness sets the same two request fields directly, because the S295 seam is
+ * the middleware's REFUSAL, not the auth that precedes it (auth behaviour has its
+ * own tests).
  *
  * ## Usage
  *
@@ -210,9 +211,10 @@ $worker->onMessage = static function (
 
     $request = Request::fromWorkerman($wr, $connection);
 
-    // Simulate the authenticated-request precondition the schedule gate tests:
-    // production publishes these via RequestAuthenticator/AuthMiddleware.
-    RequestContext::setUserId('user-1');
+    // Simulate the authenticated-request precondition the schedule gate reads: the
+    // request's own identity, as RequestAuthenticator::authenticate() publishes it.
+    $request->userId = 'user-1';
+    $request->profileId = $state['profileId'];
     RequestContext::setProfileId($state['profileId']);
 
     $response = $application->dispatch($request);

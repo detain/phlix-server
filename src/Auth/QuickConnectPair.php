@@ -34,6 +34,18 @@ namespace Phlix\Auth;
  * - `userId` — set only once a real authenticated session approved the pairing;
  *              this is the identity the token endpoint later mints for.
  * - `expiresAt` — unix second after which the row is dead to every read.
+ * - `profileId` — the profile the APPROVING session was running as, resolved and
+ *              stored at APPROVE time (never at redemption). The token endpoint
+ *              binds the minted session to this profile, not to the account default,
+ *              so a TV paired from an open profile P cannot end up holding a session
+ *              on an unscheduled default profile D. It is refused at redemption when
+ *              the account no longer owns it; it is never degraded to the default.
+ *              Null means the approval stored no profile. That is refused, except
+ *              for `legacyNoProfileField` below.
+ * - `legacyNoProfileField` — true only for a pairing whose stored blob has NO
+ *              `profile_id` key at all, i.e. one approved before the profile field
+ *              existed. Only this shape redeems onto the account default, and that is
+ *              the documented bound on the fallback. A stored null is not legacy.
  *
  * @package Phlix\Auth
  * @since 1.2.3
@@ -55,6 +67,8 @@ final class QuickConnectPair
         public readonly string $state,
         public readonly ?string $userId,
         public readonly int $expiresAt,
+        public readonly ?string $profileId = null,
+        public readonly bool $legacyNoProfileField = false,
     ) {
     }
 

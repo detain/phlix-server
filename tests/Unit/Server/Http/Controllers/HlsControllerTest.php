@@ -128,7 +128,8 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
-        $this->assertSame('public, max-age=31536000', $res->headers['Cache-Control']);
+        // #13c: segments are access-controlled bytes, so they are private (never public).
+        $this->assertSame('private, max-age=31536000', $res->headers['Cache-Control']);
         $this->assertSame('SEGMENTBYTES', $this->bodyOf($res));
     }
 
@@ -824,7 +825,8 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
-        $this->assertSame('public, max-age=31536000', $res->headers['Cache-Control']);
+        // #13c: segments are access-controlled bytes, so they are private (never public).
+        $this->assertSame('private, max-age=31536000', $res->headers['Cache-Control']);
         $this->assertSame('FMP4BYTES', $this->bodyOf($res));
     }
 

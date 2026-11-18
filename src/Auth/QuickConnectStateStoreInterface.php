@@ -61,9 +61,13 @@ interface QuickConnectStateStoreInterface
     /**
      * Secret-gated pending → approved transition under a row lock.
      *
+     * @param string      $userId    The approving session's account (the identity to mint for).
+     * @param string|null $profileId The approving session's profile (the profile to bind the
+     *                               minted session to); null when the request carried none.
+     *
      * @return string One of RESULT_APPROVED / RESULT_UNKNOWN / RESULT_BAD_SECRET / RESULT_NOT_READY.
      */
-    public function approve(string $code, string $secret, string $userId): string;
+    public function approve(string $code, string $secret, string $userId, ?string $profileId = null): string;
 
     /**
      * One-shot redemption of an APPROVED pairing: verify secret, delete row,

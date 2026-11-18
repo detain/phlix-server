@@ -95,11 +95,21 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
             $streams = new StreamSessionService($db);
         }
 
+        // #13a: the stream path applies the access schedule; this case tests the
+        // stream limit, so the schedule has no windows.
+        $noSchedule = $this->createMock(\Workerman\MySQL\Connection::class);
+        $noSchedule->method('query')->willReturn([]);
+        $unscheduled = new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($noSchedule),
+            $profiles,
+        );
+
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
             static fn (string $class): object => match ($class) {
                 RatingGate::class => $gate,
                 UserProfileManager::class => $profiles,
+                \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class => $unscheduled,
                 // $streams stays null exactly when registerOk is null, i.e. the
                 // scenario never reaches the service — now enforced loudly
                 // instead of relying on the script (Psalm: object is non-nullable).
@@ -220,11 +230,19 @@ final class PreRouterFastPathsStreamLimitTest extends TestCase
 
         $gate = new RatingGate($repo, $profiles, $users);
 
+        $noSchedule = $this->createMock(\Workerman\MySQL\Connection::class);
+        $noSchedule->method('query')->willReturn([]);
+        $unscheduled = new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($noSchedule),
+            $profiles,
+        );
+
         $container = $this->createMock(ContainerInterface::class);
         $container->method('get')->willReturnCallback(
             static fn (string $class): object => match ($class) {
                 RatingGate::class         => $gate,
                 UserProfileManager::class => $profiles,
+                \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class => $unscheduled,
                 default                   => $repo,
             },
         );

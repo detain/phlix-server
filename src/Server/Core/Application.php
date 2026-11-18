@@ -19,7 +19,9 @@ use Phlix\Hub\HubClient;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\SyncPlayController;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
@@ -114,13 +116,15 @@ class Application
         // was removed rather than left inert — see ThemeSourceRegistry for
         // the replacement, a validated token-map capability registry.
 
-        // Register AccessScheduleMiddleware from container if available
-        // Runs after auth to enforce time-based access restrictions
+        // Register the global access-schedule gate from the container if available.
+        // It runs before routing, on the identity the request already carries
+        // (userId/profileId, set by RequestAuthenticator), not on RequestContext:
+        // route-level AuthMiddleware has not run yet at this point. See scheduleGateFor().
         if ($container->has(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class)) {
             /** @var \Phlix\Server\Http\Middleware\AccessScheduleMiddleware */
             $accessScheduleMiddleware = $container->get(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class);
             $this->middleware(function (Request $request, callable $next) use ($accessScheduleMiddleware): Response {
-                $result = $accessScheduleMiddleware($request);
+                $result = self::scheduleGateFor($request, $accessScheduleMiddleware);
                 if ($result !== null) {
                     // S295: a global middleware short-circuit returns BEFORE
                     // Router::markHeadOnly() runs, so a HEAD refused here used to
@@ -2666,6 +2670,131 @@ class Application
         $this->middleware[] = $middleware;
         return $this;
     }
+
+    /**
+     * The global access-schedule gate: runs before routing, for every request that
+     * reaches {@see self::dispatch()}.
+     *
+     * It reads the identity the request already carries, never {@see RequestContext}.
+     * Route-level AuthMiddleware has not run yet at this point, so a gate built on
+     * RequestContext checked nothing for routed requests (the finding this replaces).
+     *
+     *  - A session request (`userId` set by RequestAuthenticator, with its `profileId`)
+     *    is checked against that profile. When the profile cannot be resolved the
+     *    middleware fails closed (the AccessScheduled 403), EXCEPT for an unmapped
+     *    relayed principal ({@see \Phlix\Server\Http\Request::$relayUnmapped}): it has
+     *    no server account, so no profile or schedule exists for it, and it passes as
+     *    master did. A mapped relayed principal carries no profile either, since the relay
+     *    consumer sets none. The middleware tests it on its account's active profile, as it
+     *    does a local session with no profile claim, and refuses it only when that account has
+     *    no resolvable profile. The relay fork in start.php passes the resolver, so this is the
+     *    production path for a linked hub user.
+     *    RequestContext is published for the middleware's duration and restored afterwards.
+     *    A request that passes has the profile the middleware tested published as
+     *    {@see \Phlix\Server\Http\Request::$gatedProfileId} before that restore.
+     *  - A request with no userId passes through unchanged, unless it carries a profile
+     *    binding (`pid`) whose signature verifies: then that profile's window applies.
+     *    An unverified binding is not trusted here; the route's own gate refuses it.
+     *
+     * Exempt (never refused here, see {@see self::isScheduleExempt()}) so that a
+     * schedule-locked session can still sign in and out and load the app to see why.
+     *
+     * @param Request                  $request  The incoming request.
+     * @param AccessScheduleMiddleware $schedule The schedule middleware instance.
+     *
+     * @return Response|null The 403 refusal, or null to continue routing.
+     */
+    public static function scheduleGateFor(Request $request, AccessScheduleMiddleware $schedule): ?Response
+    {
+        if (self::isScheduleExempt($request)) {
+            return null;
+        }
+
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return $schedule->denyForSignedRequest($request);
+        }
+
+        $previousUserId = RequestContext::getUserId();
+        $previousProfileId = RequestContext::getProfileId();
+        RequestContext::setUserId($userId);
+        RequestContext::setProfileId($request->profileId);
+        try {
+            $refusal = $schedule($request);
+            if ($refusal === null) {
+                // Publish the profile the schedule middleware tested, before the restore below
+                // clears it. A route binds its signed URLs to it (Request::$gatedProfileId).
+                $request->gatedProfileId = RequestContext::getProfileId();
+            }
+
+            return $refusal;
+        } finally {
+            RequestContext::setUserId($previousUserId);
+            RequestContext::setProfileId($previousProfileId);
+        }
+    }
+
+    /**
+     * Requests the global schedule gate never refuses.
+     *
+     * The list is EXACT: method and path are compared as whole strings, with no prefix
+     * matching. `/auth`, `/authorize`, `/apps`, `/health/`, `POST /app` and every
+     * other `/api/v1/auth/*` route not named here (quick-connect approve, passkey
+     * registration, identity link and unlink, register, OIDC/GitHub callbacks) are gated.
+     * Those routes either mint a session or mutate a credential that later mints one, so
+     * a schedule-locked session must not reach them.
+     *
+     *  - The session lifecycle, JSON and browser-form: `POST /api/v1/auth/login`,
+     *    `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`,
+     *    `GET /api/v1/auth/sessions`, `DELETE /api/v1/auth/sessions/{id}` (one segment),
+     *    and `POST /auth/login`, `POST /auth/refresh`, `GET|POST /auth/logout`. A
+     *    schedule-locked profile must still be able to end its session and sign in again.
+     *  - The liveness probe `GET|HEAD /health`.
+     *  - The SPA shell: `GET|HEAD /` and `GET|HEAD /app`, plus `/app/...` deep links.
+     *    The `/app/` subtree is a prefix on purpose, with its trailing slash, so `/apps`
+     *    does not match. No route is registered under it, and the shell HTML renders the
+     *    lock message; the API calls it makes are gated. Static bundles under
+     *    `/assets/app/` are served before dispatch and never reach this gate.
+     *
+     * @param Request $request The incoming request.
+     */
+    public static function isScheduleExempt(Request $request): bool
+    {
+        $method = $request->method;
+        $path = $request->path;
+
+        if ($method === 'DELETE') {
+            // Session revoke: exactly one non-empty segment after `/api/v1/auth/sessions/`.
+            return preg_match('#\A/api/v1/auth/sessions/[^/]+\z#', $path) === 1;
+        }
+
+        if ($method === 'GET' || $method === 'HEAD') {
+            return in_array($path, self::SCHEDULE_EXEMPT_READ_PATHS, true)
+                || str_starts_with($path, '/app/');
+        }
+
+        return $method === 'POST' && in_array($path, self::SCHEDULE_EXEMPT_POST_PATHS, true);
+    }
+
+    /** GET and HEAD paths the schedule gate never refuses (see {@see self::isScheduleExempt()}). */
+    private const SCHEDULE_EXEMPT_READ_PATHS = [
+        '/',
+        '/app',
+        '/health',
+        '/api/v1/auth/me',
+        '/api/v1/auth/sessions',
+        '/auth/logout',
+    ];
+
+    /** POST paths the schedule gate never refuses (see {@see self::isScheduleExempt()}). */
+    private const SCHEDULE_EXEMPT_POST_PATHS = [
+        '/api/v1/auth/login',
+        '/api/v1/auth/refresh',
+        '/api/v1/auth/logout',
+        '/auth/login',
+        '/auth/refresh',
+        '/auth/logout',
+    ];
 
     /**
      * Flag a GLOBAL middleware short-circuit reply head-only on a `HEAD`.

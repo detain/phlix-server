@@ -33,16 +33,29 @@ use Phlix\Admin\SettingsRepository;
  * Class (a) LIVE: `SecurityHeaders::decorate()` runs per request inside
  * `HttpHandler::__invoke()`. Both values resolve through
  * {@see SettingsRepository::getEffective()} — but ONE live DB point-SELECT
- * per key per second, not per response (playback-lag cure C3, INV-A P6):
- * an in-process memo mirrors the phlix-hub `MaintenanceGate` idiom
- * (`MEMO_TTL_SECONDS = 1`, strict-`<` expiry, injectable clock for tests).
- * An admin edit therefore applies to a response within one second —
- * per-decision-bounded staleness BY DESIGN, the same trade the de573d6e
- * resident-worker law contemplates: the bound is the promise, the store is
- * never skipped. The key is that the memo holds the RESOLVED (coerced)
- * value, so a memoised read and a cold read are byte-identical; null store,
- * unreadable store and out-of-band rows all resolve exactly as before.
- * `restart: false` stays the truth for both keys, one second at a time.
+ * per key per {@see self::MEMO_TTL_SECONDS} per worker process, not per
+ * response (playback-lag cure C3, INV-A P6): an in-process memo mirrors the
+ * phlix-hub `MaintenanceGate` idiom (strict-`<` expiry, injectable clock for
+ * tests). The TTL was 1 s; it is 60 s (#7) because the memo sat on every
+ * response — segments and direct play included — and re-read the two keys
+ * about once a second per worker.
+ *
+ * ⚠ Propagation delay: an admin edit to HSTS or frame options reaches a worker's
+ * responses within {@see self::MEMO_TTL_SECONDS} seconds (up to 60 s, per worker
+ * process), not immediately. That is the documented bound, and it applies in both
+ * directions. Tightening lags too: moving frame options from SAMEORIGIN to DENY, or
+ * raising the HSTS max-age, takes up to 60 s to reach each worker, and until then
+ * that worker keeps sending the looser value. Loosening lags the same way. The memo
+ * holds the RESOLVED (coerced) value. A failed read never yields a value weaker than
+ * the shipped default: it resolves to that default. This is not a claim that no
+ * value can be weaker. An operator can set a deliberate relaxation, such as HSTS
+ * max-age 0 or frame options NONE, and the store then returns it. What the memo does
+ * not give is an immediate change.
+ *
+ * The key is that the memo holds the RESOLVED (coerced) value, so a memoised
+ * read and a cold read are byte-identical; null store, unreadable store and
+ * out-of-band rows all resolve exactly as before. `restart: false` stays the
+ * truth for both keys, one memo window at a time.
  *
  * ## What is DELIBERATELY not exposed
  *
@@ -64,8 +77,8 @@ use Phlix\Admin\SettingsRepository;
  *
  * Null store, unreadable store, out-of-band value: every failure returns the
  * shipped constant (the byte-identical pre-key value). A settings outage must
- * never WEAKEN a security header — the shipped values are the floor; the keys
- * exist to let operators go stricter (DENY) or make scoped, informed
+ * never WEAKEN a security header: a failed read resolves to the shipped default. The
+ * keys exist to let operators go stricter (DENY) or make scoped, informed
  * relaxations, not to let an outage silently downgrade anyone.
  *
  * @package Phlix\Server\Http\Middleware
@@ -109,12 +122,13 @@ final class SecurityHeadersPolicy
     public const FRAME_OPTIONS = ['DENY', 'SAMEORIGIN', 'NONE'];
 
     /**
-     * Memo TTL in seconds for the live settings read — the phlix-hub
-     * MaintenanceGate bound. Law-pinned by
-     * SecurityHeadersPolicyTest::test_the_memo_bound_is_the_one_second_constant;
+     * Memo TTL in seconds for the live settings read (#7: 1 s → 60 s). It bounds
+     * how long an admin HSTS / frame-options edit takes to reach a worker's
+     * responses. Law-pinned by
+     * SecurityHeadersPolicyTest::test_the_memo_bound_is_the_sixty_second_constant;
      * rotating it is a deliberate act through that pin.
      */
-    private const MEMO_TTL_SECONDS = 1;
+    private const MEMO_TTL_SECONDS = 60;
 
     /** @var array{value:int, expiresAt:int}|null HSTS resolved-value memo. */
     private ?array $hstsMemo = null;
@@ -130,8 +144,8 @@ final class SecurityHeadersPolicy
      *        autowiring, so any binding that needs the settings honoured must
      *        name this parameter explicitly (see CoreServicesProvider).
      * @param callable():int|null     $clock    Injectable second clock for the
-     *        one-second memo (tests pin it; production uses time()). NULL is
-     *        the production shape — also skipped by PHP-DI autowiring.
+     *        memo window (tests pin it; production uses the monotonic clock).
+     *        NULL is the production shape — also skipped by PHP-DI autowiring.
      */
     public function __construct(
         private readonly ?SettingsRepository $settings = null,
@@ -235,7 +249,10 @@ final class SecurityHeadersPolicy
     }
 
     /**
-     * Current second per the injected clock (production: time()).
+     * Current second per the injected clock. Production uses the MONOTONIC clock
+     * (`hrtime`), not `time()`: the memo measures an elapsed interval, and the repo
+     * rule is that an elapsed interval never follows the wall clock (NTP steps or a
+     * DST change would otherwise shorten or stretch the window).
      */
     private function now(): int
     {
@@ -246,7 +263,7 @@ final class SecurityHeadersPolicy
             return $tick;
         }
 
-        return time();
+        return intdiv(hrtime(true), 1_000_000_000);
     }
 
     /**

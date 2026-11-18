@@ -155,15 +155,17 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
 
     public function test_quick_connect_token_on_held_approver_answers_403(): void
     {
-        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-held', time() + 300);
+        // The approval carries a concrete profile, so the redemption reaches the mint seam.
+        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-held', time() + 300, 'profile-held');
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->expects(self::once())
             ->method('consumeApproved')
             ->with('ACDFGH', 's')
             ->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
+        // The approval names a profile, so the redemption mints through the owned-profile seam.
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->method('buildAuthResponse')
+        $authManager->method('buildAuthResponseForOwnedProfile')
             ->willThrowException(new PasswordChangeRequiredException());
 
         $controller = new QuickConnectController($authManager, $store);
@@ -194,8 +196,9 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
         $userRepo->method('findAdminById')->willReturn(null);
 
+        // The switch mints through the owned-profile seam (item I); the hold refuses that mint.
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->method('buildAuthResponse')
+        $authManager->method('buildAuthResponseForOwnedProfile')
             ->willThrowException(new PasswordChangeRequiredException());
 
         $controller = new ProfilesController(

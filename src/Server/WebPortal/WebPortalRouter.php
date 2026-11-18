@@ -791,7 +791,12 @@ class WebPortalRouter
             $hasProfile = $this->profileManager !== null
                 && $this->resolveProfileId($request, $userId) !== null;
             if ($hasProfile) {
-                $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
+                $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint(
+                    '/media/' . $itemId . '/stream',
+                    null,
+                    null,
+                    \Phlix\Server\Http\RequestContext::getProfileId(),
+                );
             }
         }
 

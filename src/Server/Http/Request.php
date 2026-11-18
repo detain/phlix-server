@@ -142,6 +142,54 @@ class Request
     public ?string $tokenSessionId = null;
 
     /**
+     * True when the hub relay authenticated this request as a principal the server holds no
+     * linkage for. The rule, as {@see \Phlix\Hub\RelayConsumer::buildRequest()} sets it: the
+     * request carries a non-empty `x-phlix-relay-user` header AND no hub link row (no
+     * `user_identities` row maps it), and no unexpected relay trust marker refused the mapping.
+     * An absent header is not an unmapped principal. It is the `hub-relay` fallback, which has
+     * no identity and keeps the fail-closed no-profile refusal.
+     *
+     * Such a principal has no server account, so it has no profile and no access schedule can
+     * apply to it. The schedule gate and the artwork and avatar fast paths therefore do not refuse
+     * it for lacking a profile, which matches the behaviour before the S301 identity mapping. A
+     * principal the server maps to an account leaves this false. In production the relay fork
+     * passes the resolver, so a linked hub user runs as its server user: its schedule is tested on
+     * the account's active profile, as for a local session with no profile claim. It is refused
+     * only when that account has no resolvable profile.
+     *
+     * ⚠ **Never assign this from request input.** Only {@see \Phlix\Hub\RelayConsumer::buildRequest()},
+     * which reads the tunnel envelope, sets it, after the identity mapping has run and found no row.
+     *
+     * @var bool
+     */
+    public bool $relayUnmapped = false;
+
+    /**
+     * The profile the global access-schedule gate tested this session against, set only when
+     * the gate passed the request. It is the session's own profile, or for a profile-less
+     * session the account's active profile. Null when the gate did not run for the request or
+     * the gate resolved no profile (an unmapped relayed principal, or the profile-create route).
+     *
+     * A route that mints a signed URL for the session binds the URL to this profile. The token's
+     * `pid` is checked against that profile's schedule only on a later request with no session
+     * identity (signed-URL-only use). That check is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::denyForSignedRequest()}.
+     * A later request that carries a session (Bearer, cookie, or relayed x-phlix-relay-user) is
+     * checked against its session profile, or the account's active profile when the session has none,
+     * and the token's `pid` is not consulted. The
+     * controller reads this value because {@see \Phlix\Server\Http\RequestContext::getProfileId()}
+     * is restored once the gate returns. For a relayed principal that restored value is null when
+     * the route runs, so reading it there would mint an unbound token.
+     *
+     * ⚠ **Never assign this from request input.** Only
+     * {@see \Phlix\Server\Core\Application::scheduleGateFor()} sets it, from the profile the
+     * schedule middleware resolved.
+     *
+     * @var string|null
+     */
+    public ?string $gatedProfileId = null;
+
+    /**
      * @var \Phlix\Hub\HubUserClaims|null Hub user claims slot for hub-authenticated
      *      requests. RESERVED: declared part of the Request shape (pinned by the
      *      dynamic-property census), currently unwritten — the dead-wired

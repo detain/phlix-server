@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Middleware;
 
 use Phlix\Access\AccessScheduleService;
+use Phlix\Auth\SignedUrl;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -24,6 +25,13 @@ use Phlix\Server\Http\Response;
  * authentication (userId set in RequestContext), it retrieves the
  * active profile and checks whether access is currently permitted based
  * on the profile's scheduled access windows.
+ *
+ * The identity is read from RequestContext. The global gate
+ * ({@see \Phlix\Server\Core\Application::scheduleGateFor()}) publishes the
+ * request's own userId and profileId there before calling this, because the
+ * route-level AuthMiddleware has not run when the global gate runs. Direct-play
+ * and signed-URL paths call {@see self::denyForProfile()} and
+ * {@see self::denyForSignedRequest()} directly.
  *
  * Access is DENIED when:
  * - An active schedule exists for the profile AND
@@ -54,6 +62,53 @@ final class AccessScheduleMiddleware
         . ' An adult needs to set one up before this device can stream.';
 
     private const WINDOW_MESSAGE = "This profile can't be used right now. Allowed hours are set by your account.";
+
+    /**
+     * The one request a session with NO resolvable profile may make. Creating a profile
+     * does not use one, and the "set one up" remedy is unreachable without it. Matched
+     * exactly on method and path. It is honoured only on the no-profile branch, so a
+     * session that is bound to a profile, or whose account has one, is still gated.
+     */
+    public const NO_PROFILE_CREATE_METHOD = 'POST';
+
+    public const NO_PROFILE_CREATE_PATH = '/api/v1/profiles';
+
+    /**
+     * Staleness bound, in nanoseconds, for a memoised no-profile verdict. Equal to the
+     * schedule memo's TTL in {@see AccessScheduleService}. Relayed traffic with no
+     * profile id otherwise costs one account-profile read per request, all to reach the
+     * same 403.
+     */
+    private const NO_PROFILE_MEMO_TTL_NS = 30_000_000_000;
+
+    /** Upper bound on the no-profile memo; aged-out entries are pruned past it. */
+    private const NO_PROFILE_MEMO_MAX_ENTRIES = 512;
+
+    /**
+     * User ids whose account had no resolvable active profile, each with the hrtime the
+     * verdict was read at. Only the refusal is memoised, never a profile. This object
+     * writes no profiles, so nothing in this process can clear it early: a profile
+     * created for the user is therefore refused for at most the TTL. That is fail-closed
+     * and bounded, which is the trade made here.
+     *
+     * @var array<string, int|float>
+     */
+    private array $noProfileMemo = [];
+
+    /**
+     * User ids whose account's active profile was found by {@see denyForSession()}, each
+     * with the profile id and the hrtime it was read at. Relayed artwork and avatar requests
+     * carry no profile, so each poster in a grid would otherwise read the account profile once.
+     * Held for the same 30 s TTL as the schedule rows, so a switch takes up to 30 s to apply to
+     * these requests on the bytes path. Written only by {@see denyForSession()}, never by the
+     * global gate, which reads the account profile fresh on every request. (Finding 2, perf/C
+     * round 6: validateAccessToken() refuses a bearer whose claim lookup failed outright, with the
+     * same null as an unowned claim, so that failure never reaches this path as a null profile id
+     * that would test the account-active profile.) Bounded like the no-profile memo.
+     *
+     * @var array<string, array{at: int|float, profileId: string}>
+     */
+    private array $foundProfileMemo = [];
 
     /**
      * Create a new AccessScheduleMiddleware instance.
@@ -104,38 +159,268 @@ final class AccessScheduleMiddleware
             // No session profile (a token minted before S80, or an account with no
             // resolvable profile). Fall back to the account-wide active profile,
             // which is exactly the pre-S80 behaviour.
-            $profile = $this->profileManager->getActiveProfile($userId);
-            if ($profile === null) {
-                // P5: No profile exists for an authenticated user — fail closed (deny
-                // access) rather than allowing an unprofiled user through. The user
-                // should set up a profile before access schedules apply.
-                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => self::NO_PROFILE_MESSAGE,
-                ]);
+            $accountProfileId = $this->accountProfileId($userId, hrtime(true));
+            if ($accountProfileId === null) {
+                return $this->noProfileVerdict($request);
             }
-
-            // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
-            // a profile ID, fail closed (deny access) rather than silently allowing
-            // unauthenticated or unprofiled users through the schedule check.
-            $profileId = $this->resolveProfileId($profile);
-            if ($profileId === null) {
-                return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                    'message' => self::NO_PROFILE_MESSAGE,
-                ]);
-            }
+            $profileId = $accountProfileId;
         }
 
         // Check if access is allowed
-        if (!$this->accessScheduleService->isAccessAllowed($profileId)) {
-            return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
-                'message' => self::WINDOW_MESSAGE,
-            ]);
+        $denied = $this->denyForProfile($profileId);
+        if ($denied !== null) {
+            return $denied;
         }
 
         // Store profileId in context for downstream use
         RequestContext::setProfileId($profileId);
 
         return null;
+    }
+
+    /**
+     * The schedule verdict for a resolved session whose identity is held on the request
+     * itself, not in {@see RequestContext}. The fast paths that run before
+     * {@see \Phlix\Server\Core\Application::dispatch()} (artwork) use this, so they resolve
+     * the profile as {@see __invoke()} does, with one difference below:
+     *
+     *   - a session with its own profile is tested on that profile;
+     *   - a profile-less session (a relayed principal) is tested on the account's active profile,
+     *     through the same bounded no-profile memo. A local bearer whose claim lookup fails is refused
+     *     upstream, in validateAccessToken(), so it does not arrive here;
+     *   - an account with no resolvable profile is refused with the same 403 the gate gives,
+     *     unless the request is an unmapped relayed principal (see {@see self::allowsWithoutProfile()}).
+     *
+     * The found account profile is memoised for the TTL (see {@see $foundProfileMemo}), so a
+     * relayed request grid does not read the account profile once per image. The global gate
+     * does not memoise it. So a switch or a delete reaches these bytes up to 30 s later than the
+     * JSON routes. The window is still tested fresh on every call.
+     *
+     * @param Request     $request   The authorised request, used for the profile-create exemption.
+     * @param string      $userId    The session's account (non-empty).
+     * @param string|null $profileId The session's own profile, or null when it has none.
+     *
+     * @return Response|null The AccessScheduled 403, or null when access is allowed.
+     */
+    public function denyForSession(Request $request, string $userId, ?string $profileId): ?Response
+    {
+        if ($profileId !== null && $profileId !== '') {
+            return $this->denyForProfile($profileId);
+        }
+
+        $accountProfileId = $this->accountProfileId($userId, hrtime(true), true);
+        if ($accountProfileId === null) {
+            return $this->noProfileVerdict($request);
+        }
+
+        return $this->denyForProfile($accountProfileId);
+    }
+
+    /**
+     * The account's active profile id, as the gate resolves it for a session with no
+     * profile of its own, or null when the account has none. The refusal (null) is
+     * memoised for the TTL.
+     *
+     * The global gate ({@see __invoke()}) never memoises a found profile, so a switch takes
+     * effect on its next request. The relayed artwork and avatar path ({@see denyForSession()})
+     * passes `$memoiseFound`, and accepts up to the TTL of switch lag for that path only.
+     *
+     * @param string    $userId        The account whose active profile is read.
+     * @param int|float $readAt        The hrtime captured before any read, for the memos.
+     * @param bool      $memoiseFound  True to memoise a found profile for the TTL.
+     */
+    private function accountProfileId(string $userId, int|float $readAt, bool $memoiseFound = false): ?string
+    {
+        if ($this->noProfileMemoHit($userId, $readAt)) {
+            return null;
+        }
+
+        if ($memoiseFound) {
+            $hit = $this->foundProfileMemo[$userId] ?? null;
+            if ($hit !== null && $readAt - $hit['at'] < self::NO_PROFILE_MEMO_TTL_NS) {
+                return $hit['profileId'];
+            }
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            // P5: No profile exists for an authenticated user — fail closed (deny
+            // access) rather than allowing an unprofiled user through. The user
+            // should set up a profile before access schedules apply. The verdict is
+            // memoised for the TTL, so repeat requests do not re-read the profile.
+            $this->rememberNoProfile($userId, $readAt);
+
+            return null;
+        }
+
+        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+        // a profile ID, fail closed (deny access) rather than silently allowing
+        // unauthenticated or unprofiled users through the schedule check.
+        $profileId = $this->resolveProfileId($profile);
+        if ($memoiseFound && $profileId !== null) {
+            $this->rememberFoundProfile($userId, $profileId, $readAt);
+        }
+
+        return $profileId;
+    }
+
+    /**
+     * Memoise a profile id found for a profile-less session. Bounded like the no-profile memo:
+     * aged-out entries are pruned first, and the map resets if it is still over the bound.
+     *
+     * @param string    $userId    The account whose active profile was found.
+     * @param string    $profileId The profile id it resolved to.
+     * @param int|float $readAt    The hrtime captured before the profile read.
+     */
+    private function rememberFoundProfile(string $userId, string $profileId, int|float $readAt): void
+    {
+        $this->foundProfileMemo[$userId] = ['at' => $readAt, 'profileId' => $profileId];
+        if (count($this->foundProfileMemo) <= self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            return;
+        }
+
+        foreach ($this->foundProfileMemo as $id => $entry) {
+            if ($readAt - $entry['at'] >= self::NO_PROFILE_MEMO_TTL_NS) {
+                unset($this->foundProfileMemo[$id]);
+            }
+        }
+        if (count($this->foundProfileMemo) > self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            $this->foundProfileMemo = [];
+        }
+    }
+
+    /**
+     * The window test for a profile whose id is already known, with no reliance on
+     * {@see RequestContext}: the 403 when the profile's schedule is active now, else
+     * null. Used by the direct-play fast path and the signed-URL gate, which hold
+     * the profile id directly.
+     *
+     * @param string $profileId The profile to test (non-empty).
+     *
+     * @return Response|null The AccessScheduled 403, or null when access is allowed.
+     */
+    public function denyForProfile(string $profileId): ?Response
+    {
+        if ($this->accessScheduleService->isAccessAllowed($profileId)) {
+            return null;
+        }
+
+        return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
+            'message' => self::WINDOW_MESSAGE,
+        ]);
+    }
+
+    /**
+     * The window test for a request with no session identity whose signed URL is
+     * bound to a profile (`pid`). The binding is trusted only once its signature
+     * verifies over the request path, `exp` and `pid`: a stripped, swapped or forged
+     * `pid` is not trusted, and the request passes this gate (the route's own
+     * signed-URL check then refuses it). A legacy token with no `pid` passes, and is
+     * bounded only by its expiry.
+     *
+     * @param Request $request The request with no userId.
+     *
+     * @return Response|null The AccessScheduled 403, or null to continue.
+     */
+    public function denyForSignedRequest(Request $request): ?Response
+    {
+        $profileId = $request->queryString(SignedUrl::PROFILE_PARAM);
+        if ($profileId === null || $profileId === '') {
+            return null;
+        }
+
+        $verified = SignedUrl::fromEnv()->verify(
+            $request->path,
+            $request->queryString('exp'),
+            $request->queryString('sig'),
+            null,
+            $profileId,
+        );
+        if (!$verified) {
+            return null;
+        }
+
+        return $this->denyForProfile($profileId);
+    }
+
+    /**
+     * Whether a request may proceed with no resolvable profile: the profile-create route
+     * ({@see self::NO_PROFILE_CREATE_METHOD} and {@see self::NO_PROFILE_CREATE_PATH}), or an
+     * unmapped relayed principal ({@see Request::$relayUnmapped}). The second has no server
+     * account, so there is no profile and no schedule to test, and it passes as master did.
+     * A mapped relayed principal and every local session are still refused with no profile.
+     * Exposed so the gate and its tests share one definition.
+     */
+    public static function allowsWithoutProfile(Request $request): bool
+    {
+        if ($request->relayUnmapped) {
+            return true;
+        }
+
+        return $request->method === self::NO_PROFILE_CREATE_METHOD
+            && $request->path === self::NO_PROFILE_CREATE_PATH;
+    }
+
+    /**
+     * The verdict for a request whose account has no resolvable profile: null (continue)
+     * for the profile-create route, otherwise the refusal. Every no-profile branch routes
+     * through here, so the memoised and the fresh paths cannot disagree.
+     */
+    private function noProfileVerdict(Request $request): ?Response
+    {
+        if (self::allowsWithoutProfile($request)) {
+            return null;
+        }
+
+        return $this->noProfileRefusal();
+    }
+
+    /**
+     * The 403 for a request whose account has no resolvable profile. One builder, so the
+     * fresh and the memoised refusals are byte-identical.
+     */
+    private function noProfileRefusal(): Response
+    {
+        return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
+            'message' => self::NO_PROFILE_MESSAGE,
+        ]);
+    }
+
+    /**
+     * True when this user's no-profile verdict was read less than the TTL ago.
+     *
+     * @param string    $userId The account whose verdict is looked up.
+     * @param int|float $now    The current hrtime.
+     */
+    private function noProfileMemoHit(string $userId, int|float $now): bool
+    {
+        $readAt = $this->noProfileMemo[$userId] ?? null;
+
+        return $readAt !== null && $now - $readAt < self::NO_PROFILE_MEMO_TTL_NS;
+    }
+
+    /**
+     * Memoise a no-profile verdict. Past the entry bound, aged-out entries are pruned
+     * first; if the map is still over the bound it is reset, so memory stays bounded.
+     *
+     * @param string    $userId The account that has no resolvable profile.
+     * @param int|float $readAt The hrtime captured before the profile read.
+     */
+    private function rememberNoProfile(string $userId, int|float $readAt): void
+    {
+        $this->noProfileMemo[$userId] = $readAt;
+        if (count($this->noProfileMemo) <= self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            return;
+        }
+
+        foreach ($this->noProfileMemo as $id => $at) {
+            if ($readAt - $at >= self::NO_PROFILE_MEMO_TTL_NS) {
+                unset($this->noProfileMemo[$id]);
+            }
+        }
+        if (count($this->noProfileMemo) > self::NO_PROFILE_MEMO_MAX_ENTRIES) {
+            $this->noProfileMemo = [];
+        }
     }
 
     /**

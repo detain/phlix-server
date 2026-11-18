@@ -25,6 +25,36 @@ use Workerman\MySQL\Connection;
 final class AccessScheduleService
 {
     /**
+     * Staleness bound, in nanoseconds, for a profile's memoised schedule rows (#6c).
+     *
+     * Only the ROWS are memoised. The time-of-day test in
+     * {@see AccessSchedule::isActiveAt()} still runs on every call, so a window
+     * opening or closing takes effect at its exact boundary. A schedule written by
+     * another process reaches this one within 30 s. Writes made by THIS instance
+     * clear the memo at once (see {@see self::forgetMemo()}).
+     */
+    private const SCHEDULE_MEMO_TTL_NS = 30_000_000_000;
+
+    /** Upper bound on the schedule memo; aged-out entries are pruned past it. */
+    private const SCHEDULE_MEMO_MAX_ENTRIES = 512;
+
+    /**
+     * The active schedule rows per profile id, with the hrtime they were read at.
+     *
+     * @var array<string, array{at: int|float, schedules: list<AccessSchedule>}>
+     */
+    private array $activeMemo = [];
+
+    /**
+     * Bumped by every {@see self::forgetMemo()} call. A read captures it before the
+     * query and stores its result only if it is unchanged afterwards: the query
+     * yields to the event loop, so a write made here during it would otherwise be
+     * overwritten by rows read before that write (the pre-write rows would then
+     * stand for up to the full TTL).
+     */
+    private int $memoGeneration = 0;
+
+    /**
      * Create a new AccessScheduleService instance.
      *
      * @param Connection $db Database connection for accessing schedule data.
@@ -48,29 +78,76 @@ final class AccessScheduleService
     {
         $now = new DateTime();
 
-        // Get all active schedules for this profile
-        /** @var array<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'SELECT * FROM access_schedules WHERE profile_id = ? AND is_active = TRUE',
-            [$profileId],
-        );
-
-        if (!is_array($rows) || $rows === []) {
-            return null;
-        }
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-
-            $schedule = AccessSchedule::fromRow($row);
+        // The rows are memoised (#6c); the window test below is evaluated fresh.
+        foreach ($this->activeSchedulesFor($profileId) as $schedule) {
             if ($schedule->isActiveAt($now)) {
                 return $schedule;
             }
         }
 
         return null;
+    }
+
+    /**
+     * The profile's active schedule rows, memoised for SCHEDULE_MEMO_TTL_NS.
+     *
+     * @return list<AccessSchedule>
+     */
+    private function activeSchedulesFor(string $profileId): array
+    {
+        $readAt = hrtime(true);
+        $hit = $this->activeMemo[$profileId] ?? null;
+        if ($hit !== null && $readAt - $hit['at'] < self::SCHEDULE_MEMO_TTL_NS) {
+            return $hit['schedules'];
+        }
+
+        // Captured before the query: a write that clears the memo while the query
+        // is in flight bumps the generation, and its pre-write rows are not stored.
+        $generation = $this->memoGeneration;
+
+        /** @var array<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT * FROM access_schedules WHERE profile_id = ? AND is_active = TRUE',
+            [$profileId],
+        );
+
+        $schedules = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (is_array($row)) {
+                    $schedules[] = AccessSchedule::fromRow($row);
+                }
+            }
+        }
+
+        if ($generation !== $this->memoGeneration) {
+            return $schedules;
+        }
+
+        $this->activeMemo[$profileId] = ['at' => $readAt, 'schedules' => $schedules];
+        if (count($this->activeMemo) > self::SCHEDULE_MEMO_MAX_ENTRIES) {
+            foreach ($this->activeMemo as $id => $entry) {
+                if ($readAt - $entry['at'] >= self::SCHEDULE_MEMO_TTL_NS) {
+                    unset($this->activeMemo[$id]);
+                }
+            }
+            if (count($this->activeMemo) > self::SCHEDULE_MEMO_MAX_ENTRIES) {
+                $this->activeMemo = [];
+            }
+        }
+
+        return $schedules;
+    }
+
+    /**
+     * Drop every memoised schedule row. Called by this instance's writes, so an
+     * admin edit made here is visible to the very next access check. Also bumps
+     * the generation so a read still in flight does not store pre-write rows.
+     */
+    private function forgetMemo(): void
+    {
+        $this->activeMemo = [];
+        $this->memoGeneration++;
     }
 
     /**
@@ -172,6 +249,7 @@ final class AccessScheduleService
             . ' VALUES (?, ?, ?, ?, ?, ?)',
             [$profileId, $name, $startTime, $endTime, $daysOfWeekStr, $isActive],
         );
+        $this->forgetMemo();
 
         /** @var int */
         return (int) $this->db->lastInsertId();
@@ -235,6 +313,7 @@ final class AccessScheduleService
             'UPDATE access_schedules SET ' . implode(', ', $sets) . ' WHERE id = ?',
             $values,
         );
+        $this->forgetMemo();
 
         // L-7 (security audit 2026-09-29): `return $result !== false` was dead
         // code — Workerman's query() never returns false (failures THROW), so
@@ -265,6 +344,7 @@ final class AccessScheduleService
             'DELETE FROM access_schedules WHERE id = ?',
             [$scheduleId],
         );
+        $this->forgetMemo();
 
         // Mirrors StreamSessionService::deleteStreamLimit's S131 narrowing
         // (`is_int($result) ? $result : 0`): DELETE's rowcount IS the answer,

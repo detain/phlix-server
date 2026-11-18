@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Access;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
 /**
@@ -52,6 +54,34 @@ final class StreamSessionService
      * @var array<string, int>
      */
     private array $heartbeatTimerIds = [];
+
+    /**
+     * Minimum spacing, in nanoseconds, between two request-path heartbeat UPDATEs
+     * for the same session from this process (#6a).
+     *
+     * Every segment request of an active stream used to write `last_heartbeat_at`.
+     * Staleness bound: the DB timestamp can lag the most recent request by up to
+     * this interval (15 s). The stale sweep in {@see cleanupStaleStreams()} removes
+     * a row only after 60 s without a heartbeat, so a streaming session is never
+     * swept while it is still being requested. Each worker process keeps its own
+     * memo, so a session served by N processes writes at most N times per interval.
+     */
+    private const HEARTBEAT_THROTTLE_NS = 15_000_000_000;
+
+    /**
+     * Upper bound on the throttle memo. Entries are pruned once they age past
+     * {@see self::HEARTBEAT_THROTTLE_NS}; past this size the memo is simply reset,
+     * which costs at most one extra UPDATE per session. The memo can never grow
+     * without bound.
+     */
+    private const HEARTBEAT_MEMO_MAX_ENTRIES = 1024;
+
+    /**
+     * `hrtime(true)` of the last heartbeat UPDATE this process issued per session.
+     *
+     * @var array<string, int>
+     */
+    private array $lastHeartbeatNs = [];
 
     /**
      * Create a new StreamSessionService instance.
@@ -124,9 +154,15 @@ final class StreamSessionService
         try {
             /** @var mixed $configured */
             $configured = $this->settings->getEffective(self::DEFAULT_STREAMS_SETTING_KEY);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // A settings-store failure must not silently lift the concurrency
-            // cap, and must not drop it to zero and block all playback.
+            // cap, and must not drop it to zero and block all playback. It is
+            // logged (the fallback is the shipped default, so the failure would
+            // otherwise be invisible).
+            LoggerFactory::get(LogChannels::STREAMING)->warning(
+                'stream limit: default concurrent-stream setting unreadable; using the shipped default',
+                ['error' => $e->getMessage()],
+            );
             return self::DEFAULT_CONCURRENT_STREAMS;
         }
 
@@ -135,6 +171,8 @@ final class StreamSessionService
             is_string($configured) && is_numeric($configured) => (int) $configured,
             default => self::DEFAULT_CONCURRENT_STREAMS,
         };
+        // Note: a configured non-numeric value falls back silently to the default (the
+        // documented shipped allowance); only a settings-store FAILURE is logged above.
 
         return max(self::MIN_CONCURRENT_STREAMS, min(self::MAX_CONCURRENT_STREAMS, $value));
     }
@@ -162,8 +200,9 @@ final class StreamSessionService
         );
 
         if (is_array($existingRows) && count($existingRows) > 0) {
-            // Stream already registered, refresh heartbeat
-            $this->heartbeat($sessionId);
+            // Stream already registered: refresh its heartbeat, at most once per
+            // HEARTBEAT_THROTTLE_NS per session (#6a).
+            $this->throttledHeartbeat($sessionId);
             return true;
         }
 
@@ -208,6 +247,39 @@ final class StreamSessionService
     }
 
     /**
+     * The request-path heartbeat: writes `last_heartbeat_at` at most once per
+     * {@see self::HEARTBEAT_THROTTLE_NS} per session in this process (#6a).
+     *
+     * An in-process memo, not a conditional UPDATE: a conditional
+     * `WHERE last_heartbeat_at < NOW() - INTERVAL 15 SECOND` would still cost the
+     * round trip it is meant to save, and the 60 s stale sweep leaves ample margin.
+     *
+     * @param string $sessionId The streaming session identifier.
+     */
+    private function throttledHeartbeat(string $sessionId): void
+    {
+        $now = hrtime(true);
+        $last = $this->lastHeartbeatNs[$sessionId] ?? null;
+        if ($last !== null && $now - $last < self::HEARTBEAT_THROTTLE_NS) {
+            return;
+        }
+
+        $this->heartbeat($sessionId);
+        $this->lastHeartbeatNs[$sessionId] = $now;
+
+        if (count($this->lastHeartbeatNs) > self::HEARTBEAT_MEMO_MAX_ENTRIES) {
+            foreach ($this->lastHeartbeatNs as $id => $at) {
+                if ($now - $at >= self::HEARTBEAT_THROTTLE_NS) {
+                    unset($this->lastHeartbeatNs[$id]);
+                }
+            }
+            if (count($this->lastHeartbeatNs) > self::HEARTBEAT_MEMO_MAX_ENTRIES) {
+                $this->lastHeartbeatNs = [];
+            }
+        }
+    }
+
+    /**
      * Release (remove) a stream session.
      *
      * Also tears down any pending heartbeat timer for the session so no timer
@@ -223,6 +295,7 @@ final class StreamSessionService
     public function releaseStream(string $sessionId): void
     {
         $this->cancelHeartbeatTimer($sessionId);
+        unset($this->lastHeartbeatNs[$sessionId]);
 
         $this->db->query(
             'DELETE FROM active_streams WHERE session_id = ?',

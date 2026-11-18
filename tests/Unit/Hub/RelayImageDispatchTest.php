@@ -441,11 +441,16 @@ final class RelayImageDispatchTest extends TestCase
             ->dispatch($request);
     }
 
-    /** What RelayConsumer::buildRequest() produces for a tunnelled frame. */
+    /**
+     * What RelayConsumer::buildRequest() produces for a tunnelled frame with no linked server user.
+     * The `hub-relay` principal maps to no `user_identities` row, so the consumer marks it
+     * relayUnmapped, which the schedule gate and the artwork fast paths read.
+     */
     private function relayedRequest(string $path, array $query = []): Request
     {
         $request = $this->anonymousRequest($path, $query);
         $request->userId = 'hub-relay';
+        $request->relayUnmapped = true;
 
         return $request;
     }

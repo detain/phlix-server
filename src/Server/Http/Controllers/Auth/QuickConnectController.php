@@ -13,6 +13,7 @@ namespace Phlix\Server\Http\Controllers\Auth;
 
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\PasswordChangeRequiredException;
+use Phlix\Auth\ProfileNotOwnedException;
 use Phlix\Auth\QuickConnectPair;
 use Phlix\Auth\QuickConnectStateStore;
 use Phlix\Auth\QuickConnectStateStoreInterface;
@@ -263,7 +264,21 @@ final class QuickConnectController
             ]);
         }
 
-        $result = $this->pairs->approve($code, $secret, $userId);
+        // Resolve the CONCRETE profile now, at approve time: the one the approving session's
+        // schedule gate checked (its own pid, or the account's active profile for a session
+        // with no claim). Storing that id, never null, means a later switch of the active
+        // profile cannot move the TV to another profile. A session with no profile at all is
+        // refused, rather than storing a pairing that would resolve to the default on redemption.
+        try {
+            $profileId = $this->authManager->approvalProfileId($userId, $request->profileId);
+        } catch (ProfileNotOwnedException) {
+            $profileId = null;
+        }
+        if ($profileId === null) {
+            return $this->noProfileToApprove();
+        }
+
+        $result = $this->pairs->approve($code, $secret, $userId, $profileId);
         if ($result === QuickConnectStateStore::RESULT_APPROVED) {
             return (new Response())->json(['state' => QuickConnectPair::STATE_APPROVED]);
         }
@@ -326,8 +341,24 @@ final class QuickConnectController
             return $this->pairingNotFound();
         }
 
+        // A stored null is an approval that carried no profile. It is refused, never resolved to
+        // the account default at redemption. The one exception is a pairing whose blob has no
+        // profile field at all, from before the field existed. That shape redeems on the default,
+        // and it is the documented bound on the fallback.
+        if ($pair->profileId === null && !$pair->legacyNoProfileField) {
+            return $this->pairingWithoutProfile();
+        }
+
+        // Bind to the profile the APPROVING session ran as. The schedule gate checks that
+        // profile on every request, so the TV's session cannot outlive its window on another
+        // profile. The mint verifies the profile as owned and refuses when it is not, and it mints
+        // the id it verified, as-is. It is never degraded to the account default.
         try {
-            $auth = $this->authManager->buildAuthResponse($pair->userId);
+            $auth = $pair->profileId !== null
+                ? $this->authManager->buildAuthResponseForOwnedProfile($pair->userId, $pair->profileId)
+                : $this->authManager->buildAuthResponse($pair->userId);
+        } catch (ProfileNotOwnedException) {
+            return $this->profileNoLongerOwned();
         } catch (PasswordChangeRequiredException $e) {
             // SRV-M17: the APPROVING account is held, so the mint seam refuses —
             // the TV gets the contracts-registered distinct 403, never a bare
@@ -509,6 +540,42 @@ final class QuickConnectController
         return (new Response())->status(404)->json([
             'error' => 'Pairing not found',
             'code' => 'pairing_not_found',
+        ]);
+    }
+
+    /**
+     * The 403 for an approval whose session has no profile to pair under. It names the
+     * remedy, and uses the same error shape as the schedule gate's own no-profile refusal.
+     */
+    private function noProfileToApprove(): Response
+    {
+        return (new Response())->error(403, 'access.scheduled', 'AccessScheduled', [
+            'message' => 'No member profile is active on this session. Set up a profile on this'
+                . ' device, then approve the pairing again.',
+        ]);
+    }
+
+    /**
+     * The 403 for a redemption whose stored approval named no profile. The pairing is spent, so
+     * the member approves again.
+     */
+    private function pairingWithoutProfile(): Response
+    {
+        return (new Response())->status(403)->json([
+            'error' => 'This pairing was approved without a profile. Approve it again from a session with a profile.',
+            'code' => 'profile.not_found',
+        ]);
+    }
+
+    /**
+     * The 403 for a redemption whose bound profile the account no longer owns. The token is
+     * refused and never falls back to the account default.
+     */
+    private function profileNoLongerOwned(): Response
+    {
+        return (new Response())->status(403)->json([
+            'error' => 'The profile this pairing was approved for is no longer available. Approve the pairing again.',
+            'code' => 'profile.not_found',
         ]);
     }
 

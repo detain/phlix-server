@@ -79,6 +79,26 @@ final class RatingGate
     public const NO_USER_RATING = '__phlix_no_user__';
 
     /**
+     * Staleness bound, in nanoseconds, for a memoised {@see resolveFilterForUser()}
+     * result (#6b). A cap, admin flag or active-profile change reaches this worker's
+     * requests within 30 s; the cost is one `users` + one profile-cap lookup per
+     * (user, profile) per window instead of per request.
+     */
+    private const FILTER_MEMO_TTL_NS = 30_000_000_000;
+
+    /** Upper bound on the filter memo; aged-out entries are pruned past it. */
+    private const FILTER_MEMO_MAX_ENTRIES = 512;
+
+    /**
+     * Resolved filter per "userId\0profileId" key, with the hrtime it was resolved
+     * at. The value may be null (the owner, or an un-capped profile), which is cached
+     * as deliberately as a cap is.
+     *
+     * @var array<string, array{at: int, filter: array{allowedRatings: list<string>, allowUnrated: bool}|null}>
+     */
+    private array $filterMemo = [];
+
+    /**
      * The cap that allows NOTHING — the representation of "there is no
      * identified user" (S235), as distinct from `null` ("no gating applies").
      *
@@ -126,6 +146,16 @@ final class RatingGate
      * control on that route — must say so by calling
      * {@see resolveFilterForSignedRequest()} instead.
      *
+     * ⚠ Staleness bound, with no same-process clear. The result is memoised per
+     * (user, profile) for {@see self::FILTER_MEMO_TTL_NS} (30 s). Unlike the schedule
+     * memo, this one is NOT cleared by the writes that change a cap (profile rating
+     * settings, the active profile, an admin flag). Each HTTP worker is its own
+     * process with its own memo, and a write can be served by any of them, so
+     * clearing the memo in the process that handled a write would not close the
+     * window on the others. A tightened cap therefore takes up to 30 s to apply on
+     * each worker, and a loosened cap takes as long to reopen. That is the documented
+     * bound.
+     *
      * @param string $userId The authenticated account id ('' if none).
      *
      * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
@@ -136,6 +166,38 @@ final class RatingGate
             return self::denyAll();
         }
 
+        // S81: a switched session rides a non-default profile; the rating cap
+        // must follow the SESSION's profile, not the account-wide active one.
+        // RequestContext carries the verified profile_id claim (S80) on every
+        // request path; outside a request (CLI, tests) it is null and the
+        // account-wide active profile applies exactly as before. A profile id
+        // that is not owned resolves to null inside getActiveRatingFilter(),
+        // so an unverifiable claim can never widen the filter.
+        $profileId ??= RequestContext::getProfileId();
+
+        // #6b: memoised per (user, effective profile) for FILTER_MEMO_TTL_NS. The key
+        // is the EFFECTIVE profile, so a switched session never reads another
+        // profile's cap.
+        $key = $userId . "\0" . ($profileId ?? '');
+        $now = hrtime(true);
+        $hit = $this->filterMemo[$key] ?? null;
+        if ($hit !== null && $now - $hit['at'] < self::FILTER_MEMO_TTL_NS) {
+            return $hit['filter'];
+        }
+
+        $filter = $this->resolveFilterUncached($userId, $profileId);
+        $this->rememberFilter($key, $now, $filter);
+
+        return $filter;
+    }
+
+    /**
+     * The uncached resolution: admin shortcut, then the profile's cap.
+     *
+     * @return array{allowedRatings: list<string>, allowUnrated: bool}|null
+     */
+    private function resolveFilterUncached(string $userId, ?string $profileId): ?array
+    {
         // Account owner / admin: never gated, regardless of the active profile.
         if ($this->users !== null) {
             $user = $this->users->findById($userId);
@@ -150,16 +212,32 @@ final class RatingGate
             }
         }
 
-        // S81: a switched session rides a non-default profile; the rating cap
-        // must follow the SESSION's profile, not the account-wide active one.
-        // RequestContext carries the verified profile_id claim (S80) on every
-        // request path; outside a request (CLI, tests) it is null and the
-        // account-wide active profile applies exactly as before. A profile id
-        // that is not owned resolves to null inside getActiveRatingFilter(),
-        // so an unverifiable claim can never widen the filter.
-        $profileId ??= RequestContext::getProfileId();
-
         return $this->profiles->getActiveRatingFilter($userId, $profileId);
+    }
+
+    /**
+     * Store one memo entry, pruning aged-out entries once the memo passes its cap.
+     * Past the cap with every entry still live, the memo is reset: at worst one
+     * extra lookup per (user, profile).
+     *
+     * @param array{allowedRatings: list<string>, allowUnrated: bool}|null $filter
+     */
+    private function rememberFilter(string $key, int $now, ?array $filter): void
+    {
+        $this->filterMemo[$key] = ['at' => $now, 'filter' => $filter];
+
+        if (count($this->filterMemo) <= self::FILTER_MEMO_MAX_ENTRIES) {
+            return;
+        }
+
+        foreach ($this->filterMemo as $memoKey => $entry) {
+            if ($now - $entry['at'] >= self::FILTER_MEMO_TTL_NS) {
+                unset($this->filterMemo[$memoKey]);
+            }
+        }
+        if (count($this->filterMemo) > self::FILTER_MEMO_MAX_ENTRIES) {
+            $this->filterMemo = [];
+        }
     }
 
     /**

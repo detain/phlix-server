@@ -94,9 +94,14 @@ final class RequestAuthenticator
         // notably the pre-router fast paths and the direct-play
         // `/media/{id}/stream` route — never reach a middleware group at all.
         //
-        // `$auth['profile_id']` has already been ownership-checked by
-        // {@see \Phlix\Auth\AuthManager::resolveProfileForUser()}; it is not the
-        // raw claim.
+        // `$auth['profile_id']` has already been ownership-checked.
+        // validateAccessToken() resolves the claim through
+        // UserProfileManager::resolveProfileIdForUser() and refuses the token when the
+        // account no longer owns the claimed profile. It is not the raw claim.
+        // A claimed bearer whose claim is unowned, whose lookup fails, or that has no resolver wired
+        // is refused, and the request stays unauthenticated.
+        // A claimless bearer is accepted with a null profile id if no resolver is wired or its
+        // default-profile lookup fails. It is then tested on the account's active profile by the schedule gate.
         $profileId = $auth['profile_id'] ?? null;
         $request->profileId = is_string($profileId) && $profileId !== '' ? $profileId : null;
 

@@ -13,6 +13,7 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserIdentityRepository;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\StructuredLogger;
@@ -225,18 +226,26 @@ final class HubServicesProvider implements ServiceProviderInterface
                 static fn (): RelayStateStore => new RelayStateStore($configDir)
             ),
 
+            // S301 hub-principal → server-user resolver, shared by the relay consumer below and by
+            // HubTokenController. Its only dependency is the user_identities repository, which the
+            // AuthServicesProvider binds, so there is no cycle back into the hub graph.
+            RelayIdentityResolver::class => autowire()
+                ->constructorParameter('identities', get(UserIdentityRepository::class)),
+
             RelayConsumer::class => factory(
                 static function (ContainerInterface $c): RelayConsumer {
                     $config = $c->get(RelayConfig::class);
                     $hubClient = $c->get(HubClient::class);
                     $logger = $c->get('logger.hub');
                     $stateStore = $c->get(RelayStateStore::class);
+                    $identityResolver = $c->get(RelayIdentityResolver::class);
 
                     if (
                         !$config instanceof RelayConfig
                         || !$hubClient instanceof HubClient
                         || !$logger instanceof StructuredLogger
                         || !$stateStore instanceof RelayStateStore
+                        || !$identityResolver instanceof RelayIdentityResolver
                     ) {
                         throw new \RuntimeException('RelayConsumer dependencies misconfigured');
                     }
@@ -257,6 +266,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                         null,
                         null,
                         $stateStore,
+                        // Without the resolver every relayed principal is unmapped, so a linked
+                        // hub user would skip its access schedule. The fork in start.php passes it
+                        // too, and this factory must not drift from that.
+                        $identityResolver,
                     );
                 }
             ),

@@ -811,7 +811,12 @@ class MusicController
         $trackId = $this->toString($track['media_item_id'] ?? '');
         $streamUrl = null;
         if ($trackId !== '') {
-            $streamUrl = SignedUrl::fromEnv()->mint('/media/' . $trackId . '/stream');
+            $streamUrl = SignedUrl::fromEnv()->mint(
+                '/media/' . $trackId . '/stream',
+                null,
+                null,
+                \Phlix\Server\Http\RequestContext::getProfileId(),
+            );
         }
 
         $artist = $this->toStringOrNull($track['artist_name'] ?? null);

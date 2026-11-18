@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\FastPath;
 
+use DateTimeImmutable;
+use Phlix\Access\AccessScheduleService;
 use Phlix\Auth\SignedUrl;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Server\Http\FastPath\PreRouterFastPaths;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
@@ -82,7 +88,9 @@ final class PreRouterFastPathsArtworkTest extends TestCase
         $storage = $this->createMock(ArtworkStorage::class);
         $storage->method('variantPath')->willReturn($variantPath);
 
-        return new PreRouterFastPaths($storage, $this->createMock(AvatarStorage::class));
+        // A session in these tests has no profile of its own; the account's active profile is
+        // open, so the session resolves through the gate and is served.
+        return $this->fastPathsWithSchedule($storage, [], ['id' => 'p-open']);
     }
 
     /**
@@ -277,7 +285,185 @@ final class PreRouterFastPathsArtworkTest extends TestCase
             }
         );
 
-        return new PreRouterFastPaths($storage, $this->createMock(AvatarStorage::class));
+        // Sessions here have no profile of their own; the account's active profile is open.
+        return $this->fastPathsWithSchedule($storage, [], ['id' => 'p-open']);
+    }
+
+    /**
+     * Fast-path artwork with the real AccessScheduleMiddleware in the container, over a
+     * scripted connection that answers each schedule statement for the profile it binds.
+     *
+     * @param list<array<string, mixed>> $scheduleRows  access_schedules rows the DB holds.
+     * @param array<string, mixed>|null  $activeProfile The account's active profile, which a
+     *                                                  profile-less session resolves to; null
+     *                                                  when the account has none.
+     */
+    private function makeScheduledFastPaths(
+        ?string $variantPath,
+        array $scheduleRows,
+        ?array $activeProfile = null,
+    ): PreRouterFastPaths {
+        $storage = $this->createMock(ArtworkStorage::class);
+        $storage->method('variantPath')->willReturn($variantPath);
+
+        return $this->fastPathsWithSchedule($storage, $scheduleRows, $activeProfile);
+    }
+
+    /**
+     * Wire fast-path artwork over `$storage` with the real AccessScheduleMiddleware in its
+     * container. Every session-bearing request now reaches the container, so the helper
+     * tests that serve a session go through here rather than a container-less instance.
+     *
+     * @param list<array<string, mixed>> $scheduleRows  access_schedules rows the DB holds.
+     * @param array<string, mixed>|null  $activeProfile The account's active profile, or null.
+     */
+    private function fastPathsWithSchedule(
+        ArtworkStorage $storage,
+        array $scheduleRows,
+        ?array $activeProfile,
+    ): PreRouterFastPaths {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, mixed $params = null) use ($scheduleRows): mixed {
+                if (str_starts_with($sql, 'SELECT * FROM access_schedules')) {
+                    $profileId = is_array($params) ? ($params[0] ?? null) : null;
+
+                    return array_values(array_filter(
+                        $scheduleRows,
+                        static fn (array $row): bool => $row['profile_id'] === $profileId,
+                    ));
+                }
+
+                return 1;
+            }
+        );
+
+        $profiles = $this->createMock(UserProfileManager::class);
+        $profiles->method('getActiveProfile')->willReturn($activeProfile);
+        $schedule = new AccessScheduleMiddleware(new AccessScheduleService($db), $profiles);
+
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('get')->willReturnCallback(
+            static fn (string $class): object => match ($class) {
+                AccessScheduleMiddleware::class => $schedule,
+                default => throw new \RuntimeException('unexpected service: ' . $class),
+            },
+        );
+
+        return new PreRouterFastPaths($storage, $this->createMock(AvatarStorage::class), $container);
+    }
+
+    /** A schedule window covering all of today for `$profileId`, so that profile is locked now. */
+    private static function lockedAllDay(string $profileId): array
+    {
+        return [[
+            'id' => 1,
+            'profile_id' => $profileId,
+            'name' => 'Bedtime',
+            'start_time' => '00:00:00',
+            'end_time' => '23:59:59',
+            'days_of_week' => strtolower(substr((new DateTimeImmutable())->format('D'), 0, 3)),
+            'is_active' => 1,
+        ]];
+    }
+
+    /** Dispatch a resolved session that runs as `$profileId` (the authenticator's publication). */
+    private function invokeAsProfile(
+        PreRouterFastPaths $fastPaths,
+        WorkermanRequest $wr,
+        string $userId,
+        string $profileId,
+    ): ?WorkermanResponse {
+        $request = Request::fromWorkerman($wr);
+        $request->userId = $userId;
+        $request->profileId = $profileId;
+
+        return $fastPaths->dispatch($request)?->toWorkermanResponse();
+    }
+
+    public function testSessionBoundToALockedProfileIsRefusedOnTheFastPathArtwork(): void
+    {
+        $fastPaths = $this->makeScheduledFastPaths($this->artworkPath, $this->lockedAllDay('p1'));
+
+        $resp = $this->invokeAsProfile($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123', 'p1');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(403, $resp->getStatusCode());
+        self::assertNull($resp->file, 'a locked profile must not receive the artwork file');
+    }
+
+    public function testSessionBoundToAnOpenProfileIsServedTheFastPathArtwork(): void
+    {
+        // The locked window belongs to p1; p2 has no schedule, so the same request is served.
+        $fastPaths = $this->makeScheduledFastPaths($this->artworkPath, $this->lockedAllDay('p1'));
+
+        $resp = $this->invokeAsProfile($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123', 'p2');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(200, $resp->getStatusCode());
+        self::assertNotNull($resp->file);
+        self::assertSame($this->artworkPath, $resp->file['file']);
+    }
+
+    public function testSignedArtworkUrlBoundToALockedProfileIsRefusedOnTheFastPath(): void
+    {
+        // The signature covers `pid`, so a verified token bound to a locked profile carries
+        // that profile's window into the artwork fast path as well.
+        $fastPaths = $this->makeScheduledFastPaths($this->artworkPath, $this->lockedAllDay('p1'));
+        $minted = SignedUrl::fromEnv()->mint('/api/v1/artwork/item-1?size=w500', null, null, 'p1');
+        $wr = new WorkermanRequest("GET {$minted} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+        $resp = $this->invokeAs($fastPaths, $wr, null);
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(403, $resp->getStatusCode());
+        self::assertNull($resp->file);
+    }
+
+    public function testProfileLessBearerSessionOnALockedAccountProfileIsRefusedOnTheFastPathArtwork(): void
+    {
+        // A pre-S80 bearer token carries no profile. The account's active profile p1 is locked
+        // now, and the JSON routes refuse this session through the gate, so the artwork must too.
+        $fastPaths = $this->makeScheduledFastPaths(
+            $this->artworkPath,
+            $this->lockedAllDay('p1'),
+            ['id' => 'p1'],
+        );
+
+        $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(403, $resp->getStatusCode());
+        self::assertNull($resp->file, 'a profile-less session on a locked active profile must not receive the artwork');
+    }
+
+    public function testProfileLessBearerSessionOnAnOpenAccountProfileIsServedTheFastPathArtwork(): void
+    {
+        // The active profile p2 has no window, so the profile-less session is served.
+        $fastPaths = $this->makeScheduledFastPaths(
+            $this->artworkPath,
+            $this->lockedAllDay('p1'),
+            ['id' => 'p2'],
+        );
+
+        $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(200, $resp->getStatusCode());
+        self::assertNotNull($resp->file);
+        self::assertSame($this->artworkPath, $resp->file['file']);
+    }
+
+    public function testProfileLessBearerSessionOnAnAccountWithNoProfileIsRefusedOnTheFastPathArtwork(): void
+    {
+        // An account with no resolvable profile is refused by the gate, so the artwork refuses too.
+        $fastPaths = $this->makeScheduledFastPaths($this->artworkPath, [], null);
+
+        $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123');
+
+        self::assertInstanceOf(WorkermanResponse::class, $resp);
+        self::assertSame(403, $resp->getStatusCode());
+        self::assertNull($resp->file);
     }
 
     /** Dispatch with an explicit resolved-session userId. */
@@ -422,8 +608,9 @@ final class PreRouterFastPathsArtworkTest extends TestCase
     public function testValidSessionServesWithoutAnySignature(): void
     {
         // A resolved (non-empty) session userId is an alternative to signed URLs:
-        // the request carries NO exp/sig yet still serves 200.
-        $fastPaths = $this->makeFastPaths($this->artworkPath);
+        // the request carries NO exp/sig yet still serves 200. The session has no profile
+        // of its own, so the account's active profile (open here) is what the window tests.
+        $fastPaths = $this->makeScheduledFastPaths($this->artworkPath, [], ['id' => 'p-open']);
 
         $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-1', 'w500'), 'user-abc-123');
 
@@ -555,7 +742,7 @@ final class PreRouterFastPathsArtworkTest extends TestCase
         $storage = $this->createMock(ArtworkStorage::class);
         $storage->method('variantPath')->willReturn(null);
         $storage->method('ensureVariant')->willReturn($this->artworkPath);
-        $fastPaths = new PreRouterFastPaths($storage, $this->createMock(AvatarStorage::class));
+        $fastPaths = $this->fastPathsWithSchedule($storage, [], ['id' => 'p-open']);
 
         $resp = $this->invokeAs($fastPaths, $this->unsignedRequest('item-lazy', 'w500'), 'user-1');
 

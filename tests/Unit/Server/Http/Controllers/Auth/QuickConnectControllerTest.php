@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Auth;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\ProfileNotOwnedException;
 use Phlix\Auth\QuickConnectPair;
 use Phlix\Auth\QuickConnectStateStore;
 use Phlix\Auth\QuickConnectStateStoreInterface;
@@ -140,7 +141,9 @@ final class QuickConnectControllerTest extends TestCase
     {
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->expects(self::once())->method('approve')
-            ->with('ACDFGH', 'the-secret', 'session-user-7')
+            // The session carries no profile claim, so the approval stores the CONCRETE active
+            // profile the gate checked, never null.
+            ->with('ACDFGH', 'the-secret', 'session-user-7', 'profile-active')
             ->willReturn(QuickConnectStateStore::RESULT_APPROVED);
         $controller = $this->controller(pairs: $store);
 
@@ -152,6 +155,62 @@ final class QuickConnectControllerTest extends TestCase
 
         self::assertSame(200, $response->statusCode);
         self::assertSame('approved', $this->jsonBody($response)['state']);
+    }
+
+    public function testApproveRecordsTheApprovingSessionsProfileNotABodyClaim(): void
+    {
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->expects(self::once())->method('approve')
+            ->with('ACDFGH', 'the-secret', 'session-user-7', 'profile-P')
+            ->willReturn(QuickConnectStateStore::RESULT_APPROVED);
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects(self::once())->method('approvalProfileId')
+            ->with('session-user-7', 'profile-P')
+            ->willReturn('profile-P');
+        $controller = $this->controller(pairs: $store, authManager: $authManager);
+
+        // The session is running as profile P (ownership-checked by the authenticator);
+        // the body tries to name a different profile, which is ignored.
+        $request = $this->request(
+            userId: 'session-user-7',
+            body: ['secret' => 'the-secret', 'profile_id' => 'profile-D'],
+        );
+        $request->profileId = 'profile-P';
+
+        self::assertSame(200, $controller->approve($request, ['code' => 'ACDFGH'])->statusCode);
+    }
+
+    public function testApproveRefusesWhenTheSessionHasNoProfileToPairUnder(): void
+    {
+        // A legacy session with no claim on an account with no active profile. Storing nothing
+        // would resolve to the default on redemption, so the approval is refused with the remedy.
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->expects(self::never())->method('approve');
+        $controller = $this->controller(pairs: $store, authManager: $this->approvingAuthManager(null));
+
+        $request = $this->request(userId: 'session-user-7', body: ['secret' => 's']);
+        $response = $controller->approve($request, ['code' => 'ACDFGH']);
+
+        self::assertSame(403, $response->statusCode);
+        $body = $this->jsonBody($response);
+        self::assertSame('access.scheduled', $body['code']);
+        self::assertStringContainsString('Set up a profile', (string) $body['message']);
+    }
+
+    public function testApproveRefusesASessionProfileTheAccountDoesNotOwn(): void
+    {
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->expects(self::never())->method('approve');
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('approvalProfileId')->willThrowException(
+            ProfileNotOwnedException::forRequestedProfile('session-user-7', 'profile-X'),
+        );
+        $controller = $this->controller(pairs: $store, authManager: $authManager);
+
+        $request = $this->request(userId: 'session-user-7', body: ['secret' => 's']);
+        $request->profileId = 'profile-X';
+
+        self::assertSame(403, $controller->approve($request, ['code' => 'ACDFGH'])->statusCode);
     }
 
     public function testApproveMapsStoreOutcomesToDistinctStatuses(): void
@@ -189,19 +248,31 @@ final class QuickConnectControllerTest extends TestCase
 
     public function testTokenRedeemsIntoCamelCaseContractWithFullSessionPayload(): void
     {
-        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-1', time() + 300);
+        // A pairing approved before the profile field existed: no profile key at all, so the
+        // documented legacy arm redeems onto the account default.
+        $pair = new QuickConnectPair(
+            'ACDFGH',
+            's',
+            QuickConnectPair::STATE_APPROVED,
+            'user-1',
+            time() + 300,
+            null,
+            true,
+        );
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
 
         $authManager = $this->createMock(AuthManager::class);
-        $authManager->expects(self::once())->method('buildAuthResponse')->with('user-1')->willReturn([
-            'access_token' => 'AT',
-            'refresh_token' => 'RT',
-            'profile_id' => 'P1',
-            'token_type' => 'Bearer',
-            'expires_in' => 3600,
-            'user' => ['id' => 'user-1'],
-        ]);
+        $authManager->expects(self::once())->method('buildAuthResponse')
+            ->with('user-1')
+            ->willReturn([
+                'access_token' => 'AT',
+                'refresh_token' => 'RT',
+                'profile_id' => 'P1',
+                'token_type' => 'Bearer',
+                'expires_in' => 3600,
+                'user' => ['id' => 'user-1'],
+            ]);
         $controller = $this->controller(pairs: $store, authManager: $authManager, serverUrl: 'https://media.example.com');
 
         $body = $this->jsonBody($controller->token($this->request(body: ['secret' => 's']), ['code' => 'ACDFGH']));
@@ -215,6 +286,83 @@ final class QuickConnectControllerTest extends TestCase
         self::assertSame(3600, $body['expiresIn']);
         self::assertSame('P1', $body['profileId']);
         self::assertSame(['id' => 'user-1'], $body['user']);
+    }
+
+    public function testTokenMintsTheSessionBoundToTheApprovingProfileNotTheAccountDefault(): void
+    {
+        // Approved from open profile P; the TV exchanges the code later.
+        $pair = new QuickConnectPair(
+            'ACDFGH',
+            's',
+            QuickConnectPair::STATE_APPROVED,
+            'user-1',
+            time() + 300,
+            'profile-P',
+        );
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
+
+        $authManager = $this->createMock(AuthManager::class);
+        // The mint is for P, through the owned-profile seam: that seam verifies P and mints it as-is.
+        // A call with only the user id (the account default, D) is the regression this pins.
+        $authManager->expects(self::once())->method('buildAuthResponseForOwnedProfile')
+            ->with('user-1', 'profile-P')
+            ->willReturn([
+                'access_token' => 'AT', 'refresh_token' => 'RT', 'profile_id' => 'profile-P',
+                'token_type' => 'Bearer', 'expires_in' => 3600, 'user' => [],
+            ]);
+        $controller = $this->controller(pairs: $store, authManager: $authManager);
+
+        $response = $controller->token($this->request(body: ['secret' => 's']), ['code' => 'ACDFGH']);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame('profile-P', $this->jsonBody($response)['profileId']);
+    }
+
+    public function testTokenRefusesAStoredProfileTheAccountNoLongerOwns(): void
+    {
+        // Approved from profile P, which was deleted before the TV redeemed. The token is refused;
+        // it must never fall back to the account default.
+        $pair = new QuickConnectPair(
+            'ACDFGH',
+            's',
+            QuickConnectPair::STATE_APPROVED,
+            'user-1',
+            time() + 300,
+            'profile-gone',
+        );
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects(self::once())->method('buildAuthResponseForOwnedProfile')
+            ->with('user-1', 'profile-gone')
+            ->willThrowException(ProfileNotOwnedException::forRequestedProfile('user-1', 'profile-gone'));
+        $authManager->expects(self::never())->method('buildAuthResponse');
+        $controller = $this->controller(pairs: $store, authManager: $authManager);
+
+        $response = $controller->token($this->request(body: ['secret' => 's']), ['code' => 'ACDFGH']);
+
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('profile.not_found', $this->jsonBody($response)['code']);
+    }
+
+    public function testTokenRefusesAnApprovalThatStoredNoProfileInsteadOfResolvingTheDefault(): void
+    {
+        // A stored null from a current-shape blob: the approval carried no profile. It must not
+        // be read as the legacy no-field shape, so it is refused and the default is never minted.
+        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-1', time() + 300);
+        $store = $this->createMock(QuickConnectStateStoreInterface::class);
+        $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects(self::never())->method('buildAuthResponse');
+        $controller = $this->controller(pairs: $store, authManager: $authManager);
+
+        $response = $controller->token($this->request(body: ['secret' => 's']), ['code' => 'ACDFGH']);
+
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('profile.not_found', $this->jsonBody($response)['code']);
     }
 
     public function testTokenCollapsesEveryNonRedemptionToTheUniform404(): void
@@ -465,7 +613,15 @@ final class QuickConnectControllerTest extends TestCase
 
     private function redeemWithUrl(string $serverUrl, ?Request $request = null): array
     {
-        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-1', time() + 300);
+        $pair = new QuickConnectPair(
+            'ACDFGH',
+            's',
+            QuickConnectPair::STATE_APPROVED,
+            'user-1',
+            time() + 300,
+            null,
+            true,
+        );
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->method('consumeApproved')->willReturn([QuickConnectStateStore::RESULT_APPROVED, $pair]);
         $authManager = $this->createMock(AuthManager::class);
@@ -493,11 +649,23 @@ final class QuickConnectControllerTest extends TestCase
         string $serverUrl = '',
     ): QuickConnectController {
         return new QuickConnectController(
-            $authManager ?? $this->createMock(AuthManager::class),
+            $authManager ?? $this->approvingAuthManager(),
             $pairs,
             $heartbeats,
             serverUrl: $serverUrl,
         );
+    }
+
+    /**
+     * An AuthManager whose approve-time resolution yields `$approvalProfile`, so an approval has
+     * a concrete profile to store. A test of the no-profile refusal passes null.
+     */
+    private function approvingAuthManager(?string $approvalProfile = 'profile-active'): AuthManager
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('approvalProfileId')->willReturn($approvalProfile);
+
+        return $authManager;
     }
 
     /**

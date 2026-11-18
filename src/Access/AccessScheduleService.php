@@ -41,9 +41,18 @@ final class AccessScheduleService
     /**
      * The active schedule rows per profile id, with the hrtime they were read at.
      *
-     * @var array<string, array{at: int, schedules: list<AccessSchedule>}>
+     * @var array<string, array{at: int|float, schedules: list<AccessSchedule>}>
      */
     private array $activeMemo = [];
+
+    /**
+     * Bumped by every {@see self::forgetMemo()} call. A read captures it before the
+     * query and stores its result only if it is unchanged afterwards: the query
+     * yields to the event loop, so a write made here during it would otherwise be
+     * overwritten by rows read before that write (the pre-write rows would then
+     * stand for up to the full TTL).
+     */
+    private int $memoGeneration = 0;
 
     /**
      * Create a new AccessScheduleService instance.
@@ -92,6 +101,10 @@ final class AccessScheduleService
             return $hit['schedules'];
         }
 
+        // Captured before the query: a write that clears the memo while the query
+        // is in flight bumps the generation, and its pre-write rows are not stored.
+        $generation = $this->memoGeneration;
+
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT * FROM access_schedules WHERE profile_id = ? AND is_active = TRUE',
@@ -105,6 +118,10 @@ final class AccessScheduleService
                     $schedules[] = AccessSchedule::fromRow($row);
                 }
             }
+        }
+
+        if ($generation !== $this->memoGeneration) {
+            return $schedules;
         }
 
         $this->activeMemo[$profileId] = ['at' => $readAt, 'schedules' => $schedules];
@@ -124,11 +141,13 @@ final class AccessScheduleService
 
     /**
      * Drop every memoised schedule row. Called by this instance's writes, so an
-     * admin edit made here is visible to the very next access check.
+     * admin edit made here is visible to the very next access check. Also bumps
+     * the generation so a read still in flight does not store pre-write rows.
      */
     private function forgetMemo(): void
     {
         $this->activeMemo = [];
+        $this->memoGeneration++;
     }
 
     /**

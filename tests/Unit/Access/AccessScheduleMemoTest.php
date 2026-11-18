@@ -72,6 +72,37 @@ final class AccessScheduleMemoTest extends TestCase
         self::assertSame(2, $reads, 'a write made here must drop the memo so the next check re-reads the rows');
     }
 
+    public function test_a_write_landing_during_a_read_is_not_overwritten_by_pre_write_rows(): void
+    {
+        // The query yields to the event loop, so a write can clear the memo while the
+        // first read is in flight. The rows that read returns predate that write; they
+        // must not be stored, or the stale lock-out would stand for the whole TTL.
+        $reads = 0;
+        $db = $this->createMock(Connection::class);
+        $service = new AccessScheduleService($db);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql) use (&$reads, $service): mixed {
+                if (str_starts_with($sql, 'SELECT * FROM access_schedules WHERE profile_id')) {
+                    $reads++;
+                    if ($reads === 1) {
+                        // An admin edit lands while the first read is still in flight.
+                        $service->deleteSchedule(7);
+
+                        return self::lockedOutTodayRow();
+                    }
+
+                    return [];
+                }
+                return 1;
+            }
+        );
+
+        self::assertFalse($service->isAccessAllowed('p1'), 'the in-flight read answers with the rows it read');
+        self::assertTrue($service->isAccessAllowed('p1'), 'the pre-write rows must not be memoised');
+
+        self::assertSame(2, $reads, 'the second check re-reads the rows instead of reusing the pre-write ones');
+    }
+
     public function test_an_expired_entry_is_read_again(): void
     {
         $db = $this->createMock(Connection::class);

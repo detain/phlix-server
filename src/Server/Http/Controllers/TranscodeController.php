@@ -144,8 +144,12 @@ class TranscodeController
         // Bound to the profile the schedule gate tested for this session (see
         // Request::$gatedProfileId), falling back to RequestContext. A relayed principal's
         // RequestContext profile is restored to null before this route runs, so the gate's value
-        // is the one that binds it. The segment gate re-checks that profile's schedule on each use
-        // (see SignedUrl::mint()). The token is unbound only when neither names a profile.
+        // is the one that binds it. On a later segment request with no session identity (signed-URL
+        // use only), the global gate checks the token's pid against that profile's schedule
+        // (AccessScheduleMiddleware::denyForSignedRequest()). A request that carries a session (Bearer,
+        // cookie, or relayed x-phlix-relay-user) is checked against its own session profile, and the
+        // token's pid is not consulted. The token is unbound only when neither names a profile
+        // (see SignedUrl::mint()).
         $profileId = $request->gatedProfileId ?? \Phlix\Server\Http\RequestContext::getProfileId();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
             ? $signer->mint($url, null, null, $profileId)

@@ -170,11 +170,15 @@ class Request
      * session the account's active profile. Null when the gate did not run for the request or
      * the gate resolved no profile (an unmapped relayed principal, or the profile-create route).
      *
-     * A route that mints a signed URL for the session binds the URL to this profile, so the
-     * URL is checked against the same schedule on each later use. The controller reads it
-     * because {@see \Phlix\Server\Http\RequestContext::getProfileId()} is restored once the gate
-     * returns. For a relayed principal that restored value is null when the route runs, so
-     * reading it there would mint an unbound token.
+     * A route that mints a signed URL for the session binds the URL to this profile. The token's
+     * `pid` is checked against that profile's schedule only on a later request with no session
+     * identity (signed-URL-only use). That check is
+     * {@see \Phlix\Server\Http\Middleware\AccessScheduleMiddleware::denyForSignedRequest()}.
+     * A later request that carries a session (Bearer, cookie, or relayed x-phlix-relay-user) is
+     * checked against its own session profile, and the token's `pid` is not consulted. The
+     * controller reads this value because {@see \Phlix\Server\Http\RequestContext::getProfileId()}
+     * is restored once the gate returns. For a relayed principal that restored value is null when
+     * the route runs, so reading it there would mint an unbound token.
      *
      * ⚠ **Never assign this from request input.** Only
      * {@see \Phlix\Server\Core\Application::scheduleGateFor()} sets it, from the profile the

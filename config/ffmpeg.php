@@ -41,12 +41,14 @@ return [
     // Watchdog for detached on-demand SEGMENT encodes (SegmentProcessRegistry::sweep()).
     // A segment is 6 s of content. A healthy CMAF encode advances its progress
     // (out_time_us) every 0.2–2 s, but it writes no progress at all during its
-    // end-of-input flush. Measured: 4.7 s at 720p veryslow on one thread. A 4K flush is
-    // about 9× that. So an encode with no progress for 90 s is killed, which covers the
-    // one-thread 4K flush under 2× contention. That frees its cap slot and its .part
-    // temp. The 300 s wall cap allows one 6 s segment up to 50× slower than realtime
-    // (0.02× realtime). Both bounds are far below transcode_timeout, which remains the
-    // last backstop. Non-positive values fall back to the registry defaults.
+    // end-of-input flush. Measured: 4.7 s at 720p veryslow on one thread. On the dev host (load
+    // about 15), a 4K 1-thread veryslow flush is 30.6 s, and a 4K 1-thread encode takes 98.9 s
+    // wall. So an encode with no progress for 90 s is killed.
+    // That covers the 4K flush with about 3× margin, and about 1.5× under 2× contention (a
+    // linear projection of about 61 s). A kill frees the cap slot and the .part temp. The 300 s
+    // wall cap is about 3× the measured 4K wall time. Both bounds are far below
+    // transcode_timeout, which remains the last backstop. Non-positive values fall back to
+    // the registry defaults.
     'segment_stall_seconds' => 90,
     'segment_max_wall_seconds' => 300,
 

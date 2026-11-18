@@ -59,6 +59,14 @@ final class BifWriter
      */
     public const FILENAME = 'thumbs.bif';
 
+    /**
+     * Generation stamp written beside the archive. It holds the token of the pass that
+     * produced the BIF. The archive format has no room for a stamp (its reserved bytes
+     * are defined as zero), so the stamp is a sidecar. isComplete() requires it to match
+     * the sprite stamp and the timeline's generation fields.
+     */
+    public const GENERATION_FILENAME = 'thumbs.gen';
+
     /** Bytes 0-7 of every BIF file. */
     public const MAGIC = "\x89\x42\x49\x46\x0d\x0a\x1a\x0a";
 

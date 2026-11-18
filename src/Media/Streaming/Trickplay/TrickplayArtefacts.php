@@ -68,7 +68,7 @@ final class TrickplayArtefacts
     }
 
     /**
-     * Whether an item's directory holds all three artefacts, each whole.
+     * Whether an item's directory holds all three artefacts, each whole and from one pass.
      *
      * "Whole" is checked per format, not by size alone:
      * - the sprite is non-empty;
@@ -76,6 +76,18 @@ final class TrickplayArtefacts
      *   a numeric time and position;
      * - the BIF has the magic, at least two frames, and an index terminator whose
      *   end offset is the file size. A truncated archive fails that offset check.
+     *
+     * "One pass" is checked with a generation stamp. A pass writes one random token into
+     * the sprite stamp ({@see FfmpegRunner::SPRITE_GENERATION_FILENAME}), into the
+     * `generation` field of every timeline entry, and, when the BIF is written, into the
+     * BIF stamp ({@see BifWriter::GENERATION_FILENAME}). All of them must carry the same
+     * token. Each publish renames its stamp before its commit point, so a crash between
+     * renames leaves a mismatch and the item is regenerated, not advertised.
+     *
+     * The bound: an item written before stamps existed has no `generation` field and no
+     * stamp file. It is accepted when its three files are whole, as before stamps. Two
+     * legacy artefacts from different passes cannot be told apart from the files, and no
+     * stamp can be added to them afterwards, so only a regeneration removes that case.
      *
      * A half-finished run therefore counts as not complete, and the item is
      * regenerated rather than advertised broken.
@@ -89,16 +101,33 @@ final class TrickplayArtefacts
             return false;
         }
 
-        return self::timelineIsWhole($dir . '/' . FfmpegRunner::TIMELINE_FILENAME)
-            && self::bifIsWhole($dir . '/' . BifWriter::FILENAME);
+        $generation = self::timelineGeneration($dir . '/' . FfmpegRunner::TIMELINE_FILENAME);
+        if ($generation === false) {
+            return false;
+        }
+
+        $spriteStamp = self::readStamp($dir . '/' . FfmpegRunner::SPRITE_GENERATION_FILENAME);
+        $bifStamp = self::readStamp($dir . '/' . BifWriter::GENERATION_FILENAME);
+        if ($generation === null) {
+            // A legacy timeline has no generation, so no stamp may exist either.
+            $stampsAgree = $spriteStamp === null && $bifStamp === null;
+        } else {
+            $stampsAgree = $spriteStamp === $generation && $bifStamp === $generation;
+        }
+
+        return $stampsAgree && self::bifIsWhole($dir . '/' . BifWriter::FILENAME);
     }
 
     /**
-     * Whether a timeline file parses to the full sprite grid.
+     * Reads a timeline and reports the generation its entries carry.
      *
      * @param string $path Absolute path to timeline.json.
+     *
+     * @return string|null|false The generation all entries share; null for a legacy
+     *         timeline whose entries carry no generation field; false when the file is
+     *         not a whole grid, or its entries disagree (some tagged, or two tokens).
      */
-    private static function timelineIsWhole(string $path): bool
+    private static function timelineGeneration(string $path): string|null|false
     {
         if (!is_file($path)) {
             return false;
@@ -113,6 +142,8 @@ final class TrickplayArtefacts
             return false;
         }
 
+        $generation = null;
+        $tagged = 0;
         foreach ($entries as $entry) {
             if (
                 !is_array($entry)
@@ -121,10 +152,66 @@ final class TrickplayArtefacts
             ) {
                 return false;
             }
+
+            if (!array_key_exists('generation', $entry)) {
+                continue;
+            }
+            $value = $entry['generation'];
+            if (!is_string($value) || preg_match(self::GENERATION_PATTERN, $value) !== 1) {
+                return false;
+            }
+            if ($generation !== null && $generation !== $value) {
+                return false;
+            }
+            $generation = $value;
+            $tagged++;
+        }
+
+        // Some entries tagged and some not is a torn file, not a legacy one.
+        return $tagged === 0 || $tagged === count($entries) ? $generation : false;
+    }
+
+    /**
+     * Reads a generation stamp file.
+     *
+     * @param string $path Absolute path to the stamp file.
+     *
+     * @return string|null Null when the file is absent. Otherwise the trimmed content, which
+     *         is not a valid token when the file is damaged, so it never matches.
+     */
+    private static function readStamp(string $path): ?string
+    {
+        if (!is_file($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+
+        return is_string($raw) ? trim($raw) : '';
+    }
+
+    /**
+     * Renames a stamp file's temporary onto its final name, after checking the bytes.
+     *
+     * @param string $path       Final stamp path.
+     * @param string $generation The token to store.
+     */
+    private static function publishStamp(string $path, string $generation): bool
+    {
+        $temp = dirname($path) . '/' . FfmpegRunner::TEMP_FILE_PREFIX . basename($path);
+        $bytes = @file_put_contents($temp, $generation);
+        if ($bytes !== strlen($generation) || !@rename($temp, $path)) {
+            if (is_file($temp)) {
+                @unlink($temp);
+            }
+
+            return false;
         }
 
         return true;
     }
+
+    /** A generation token: 8 random bytes in lower-case hex. */
+    private const GENERATION_PATTERN = '/^[0-9a-f]{16}$/';
 
     /**
      * Whether a BIF file is a whole archive, judged from its header and terminator.
@@ -286,19 +373,74 @@ final class TrickplayArtefacts
      * @param list<string> $frames     Frame JPEG paths, in capture order.
      * @param int          $intervalMs Milliseconds between consecutive frames.
      * @param string       $dir        The item's trickplay directory.
+     * @param string|null  $generation The generation of the pass that produced the frames
+     *                                 (FfmpegRunner's result `generation`). The archive is
+     *                                 stamped with it, so isComplete() accepts it only
+     *                                 beside a sprite and timeline of the same pass. Null
+     *                                 writes an unstamped archive and removes any old stamp.
      *
-     * @return bool True if the archive was written.
+     * @return bool True if the archive was written and, when stamped, its stamp published.
      *
      * @throws \Throwable When the frames are not valid JPEGs (from {@see BifWriter}).
      */
-    public static function writeBif(array $frames, int $intervalMs, string $dir): bool
+    public static function writeBif(array $frames, int $intervalMs, string $dir, ?string $generation = null): bool
     {
         if (count($frames) < 2) {
             return false;
         }
 
+        $stampPath = $dir . '/' . BifWriter::GENERATION_FILENAME;
+        if ($generation === null && is_file($stampPath)) {
+            // An unstamped archive must not keep the stamp of the one it replaces.
+            @unlink($stampPath);
+        }
+
         BifWriter::writeFromFiles($frames, $intervalMs, $dir . '/' . BifWriter::FILENAME);
 
-        return true;
+        if ($generation === null) {
+            return true;
+        }
+
+        // The stamp is renamed after the archive it describes, so a stamp that matches a
+        // generation implies the archive of that generation is already in place.
+        return self::publishStamp($stampPath, $generation);
+    }
+
+    /**
+     * Name of the file that records that the BIF of the latest generation failed.
+     *
+     * Written when the sprite and timeline were published but the BIF was not. It is
+     * informational: unlike {@see self::FAILED_MARKER_FILENAME} it does NOT make the
+     * backfill skip the item. The next run regenerates the item, so the BIF is written
+     * again, and the item is still picked up because isComplete() needs the BIF.
+     */
+    public const BIF_FAILED_MARKER_FILENAME = 'bif-failed.json';
+
+    /**
+     * Records that the BIF of the item's latest generation failed, with the reason (UTC).
+     *
+     * @param string $dir    The item's trickplay directory (created if missing).
+     * @param string $reason Short human-readable reason, for the operator.
+     */
+    public static function markBifFailed(string $dir, string $reason): void
+    {
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $json = json_encode(['failed_at' => gmdate('c'), 'reason' => $reason], JSON_THROW_ON_ERROR);
+        @file_put_contents($dir . '/' . self::BIF_FAILED_MARKER_FILENAME, $json);
+    }
+
+    /**
+     * Removes the BIF failure marker, if present (once a BIF has been written).
+     *
+     * @param string $dir The item's trickplay directory.
+     */
+    public static function clearBifFailedMarker(string $dir): void
+    {
+        $path = $dir . '/' . self::BIF_FAILED_MARKER_FILENAME;
+        if (is_file($path)) {
+            @unlink($path);
+        }
     }
 }

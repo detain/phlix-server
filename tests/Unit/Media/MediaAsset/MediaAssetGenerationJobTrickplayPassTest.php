@@ -79,6 +79,7 @@ final class MediaAssetGenerationJobTrickplayPassTest extends TestCase
                 'timeline' => $spriteDir . '/timeline.json',
                 'bif_frames' => $frames,
                 'bif_interval_ms' => 10000,
+                'generation' => '0123456789abcdef',
             ]);
 
         $repo = $this->createMock(ItemRepository::class);
@@ -145,6 +146,7 @@ final class MediaAssetGenerationJobTrickplayPassTest extends TestCase
             'timeline' => $spriteDir . '/timeline.json',
             'bif_frames' => [],
             'bif_interval_ms' => 0,
+            'generation' => '0123456789abcdef',
         ]);
 
         $repo = $this->createMock(ItemRepository::class);

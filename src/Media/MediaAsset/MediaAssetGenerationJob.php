@@ -311,7 +311,7 @@ class MediaAssetGenerationJob
                 // Best-effort, and deliberately NOT folded into this method's return
                 // value: the sprite sheet is what the web player needs, and losing
                 // the BIF must not mark the whole asset job failed.
-                $this->writeTrickplayBif($job, $frames, $result['bif_interval_ms'], $spriteDir);
+                $this->writeTrickplayBif($job, $frames, $result['bif_interval_ms'], $spriteDir, $result['generation']);
             } finally {
                 // The per-frame JPEGs are an intermediate; only the archive is served.
                 foreach ($frames as $frame) {
@@ -349,13 +349,19 @@ class MediaAssetGenerationJob
      * @param list<string>   $frames     BIF frame JPEGs in capture order (empty when the BIF branch failed).
      * @param int            $intervalMs Milliseconds between consecutive frames.
      * @param string         $spriteDir  The item's trickplay directory.
+     * @param string         $generation The pass's generation token, which stamps the BIF.
      *
      * @return bool True if `thumbs.bif` was written.
      */
-    private function writeTrickplayBif(MediaAssetJob $job, array $frames, int $intervalMs, string $spriteDir): bool
-    {
+    private function writeTrickplayBif(
+        MediaAssetJob $job,
+        array $frames,
+        int $intervalMs,
+        string $spriteDir,
+        string $generation
+    ): bool {
         try {
-            if (!TrickplayArtefacts::writeBif($frames, $intervalMs, $spriteDir)) {
+            if (!TrickplayArtefacts::writeBif($frames, $intervalMs, $spriteDir, $generation)) {
                 return false;
             }
 

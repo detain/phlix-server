@@ -464,7 +464,7 @@ approximate across workers by at most that window.
 
 | | |
 |---|---|
-| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). |
+| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). Also `defaultGroupProbe()`, the group-member scan on the cancel/kill path (`scandir('/proc')` and one `file_get_contents()` per process on the host), reached only while a verified encode leader is gone and its group is being waited on. |
 | Reached from | `SegmentProcessRegistry::sweep()`, driven by the per-worker 5 s timer and the request-throttled 1 s sweep in `TranscodeManager`. Each live tracked encode costs about two `/proc` reads and one progress read per sweep. |
 | Why it is sync | `/proc` is a kernel pseudo-filesystem, and a `.prog` file is local segment-cache metadata. Neither has a network path. PHP has no non-blocking file or `stat` primitive. |
 | Bound | The progress read is bounded to 8 KB (`PROGRESS_TAIL_BYTES`), whatever the encode's length. The `/proc` read is one line. Both run only for the encodes this worker tracks, and that count is capped by `server.hls.max_concurrent_segments` per worker (8 by default). On non-Linux the `/proc` reader returns null with no read. |
@@ -481,6 +481,11 @@ progress probe, one temp                                     26.6 us  (p90 26.8 
 
 At the default ceiling of 8 encodes per worker, one sweep is about 8 × (27 + 22 +
 22) µs, or under 0.6 ms, every 1 to 5 s.
+
+The group-member scan (`defaultGroupProbe()`) is NOT measured. It reads one `stat`
+line per process on the host, so its cost grows with the process count. It runs at
+most once per 50 ms grace poll, for about 10 polls per kill, and only on the kill path
+after a leader is gone. Measure it on the target host before treating it as cheap.
 
 ---
 

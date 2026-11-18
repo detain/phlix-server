@@ -206,6 +206,28 @@ final class SegmentProcessRegistryWatchdogTest extends TestCase
         self::assertSame([self::SIGTERM, self::SIGKILL], $this->signalsFor(4007));
     }
 
+    public function testADeadLeaderKeepsTheGroupRecordThroughTheGrace(): void
+    {
+        // The leader exits on TERM, but its children can still run in the group. The record
+        // must be held through the grace, so the group gets its one SIGKILL before the temp goes.
+        $registry = $this->registry();
+        $tmp = '/segs/job/seg-00020.ts.part-1a2b3c4d';
+        $start = $this->launch($registry, '/segs/job/seg-00020.ts', 4010, $tmp);
+
+        $registry->sweep($start + 31 * self::SEC); // stall: TERM to the group
+        $this->alive[4010] = false;                // the leader dies on TERM
+
+        $registry->sweep($start + 31 * self::SEC + intdiv(self::SEC, 10));
+        self::assertSame(1, $registry->orphanCount(), 'a dead leader does not release the group inside the grace');
+        self::assertSame([], $this->cleaned, 'no temp is removed while the group may still be alive');
+        self::assertSame([self::SIGTERM], $this->signalsFor(4010));
+
+        $registry->sweep($start + 32 * self::SEC); // past the grace: one KILL to the group
+        self::assertSame([self::SIGTERM, self::SIGKILL], $this->signalsFor(4010));
+        self::assertSame(0, $registry->orphanCount(), 'the record is dropped after the SIGKILL');
+        self::assertSame([$tmp], $this->cleaned);
+    }
+
     public function testAHealthyFinishedLaunchIsDroppedWithoutSignalling(): void
     {
         $registry = $this->registry();

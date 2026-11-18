@@ -23,7 +23,7 @@ final class SegmentProcessRegistryTest extends TestCase
     {
         $this->signals = [];
         $this->cleaned = [];
-        return new SegmentProcessRegistry(
+        $registry = new SegmentProcessRegistry(
             null,
             function (int $pid, int $signal): void {
                 $this->signals[] = ['pid' => $pid, 'signal' => $signal];
@@ -37,6 +37,11 @@ final class SegmentProcessRegistryTest extends TestCase
                 $this->cleaned[] = $tmp;
             },
         );
+        // Fake PIDs must never match a real process group on this host, so the group
+        // probe is fixed to "empty". The real /proc scan is covered by the real-process test.
+        $registry->setGroupProbe(static fn (int $pid): bool => false);
+
+        return $registry;
     }
 
     public function test_register_tracks_pid_under_key(): void

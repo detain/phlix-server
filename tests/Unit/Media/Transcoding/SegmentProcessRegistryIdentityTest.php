@@ -22,6 +22,8 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
 
     private const SIGKILL = 9;
 
+    private const SEC = 1_000_000_000;
+
     /** @var array<int, string> pid => /proc/<pid>/stat line (absent = no such process) */
     private array $proc = [];
 
@@ -51,10 +53,10 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         return $pid . ' (' . $comm . ') ' . implode(' ', $fields);
     }
 
-    private function registry(): SegmentProcessRegistry
+    private function registry(?\Psr\Log\LoggerInterface $logger = null): SegmentProcessRegistry
     {
         $registry = new SegmentProcessRegistry(
-            null,
+            $logger,
             function (int $pid, int $signal): void {
                 $this->signals[] = [$pid, $signal];
                 if ($this->dieOnSignal) {
@@ -68,6 +70,8 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
             },
         );
         $registry->setProcStatReader(fn (int $pid): ?string => $this->proc[$pid] ?? null);
+        // Fake PIDs must never match a real process group on this host.
+        $registry->setGroupProbe(static fn (int $pid): bool => false);
 
         return $registry;
     }
@@ -194,6 +198,56 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry->kill($key);
 
         self::assertSame([self::SIGTERM], $this->signalsFor(5005));
+    }
+
+    /**
+     * Finding 5. `/proc` was readable at registration, so the start time is recorded. It
+     * is unreadable at signal time, so the identity is unknown. Nothing may be signalled.
+     * The record is held through the grace window, then dropped, and the warning is logged
+     * once for the registry, not once per refusal.
+     */
+    public function testAnUnreadableProcViewIsNeverSignalledAndTheRecordIsDroppedAfterTheGrace(): void
+    {
+        $key = '/segs/job/seg-00015.ts';
+        $this->proc[5006] = self::statLine(5006, 'S', 777);
+        $this->alive[5006] = true;
+        $logger = new class () extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                if ($level === \Psr\Log\LogLevel::WARNING) {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+        $registry = $this->registry($logger);
+        $registry->register($key, 5006, null, '/segs/job/seg-00015.ts.part-dddd4444');
+        $registry->configureWatchdog(30.0, 1.0);
+
+        // `/proc` becomes unreadable: no stat line, and no `/proc` view at all.
+        unset($this->proc[5006]);
+        $registry->setProcMountedProbe(static fn (): bool => false);
+
+        $start = hrtime(true);
+        $registry->sweep($start + 2 * self::SEC); // wall cap: TERM is refused (identity unknown)
+        self::assertSame([], $this->signals, 'an unknown identity is never signalled');
+        self::assertSame(1, $registry->orphanCount(), 'the record is held through the grace');
+
+        $registry->sweep($start + 2 * self::SEC + intdiv(self::SEC, 10)); // inside the grace
+        self::assertSame(1, $registry->orphanCount(), 'still held inside the grace');
+
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace: KILL refused, dropped
+        self::assertSame([], $this->signals, 'nothing is signalled while the identity is unknown');
+        self::assertSame(0, $registry->orphanCount(), 'the record is dropped after the grace');
+        self::assertSame(['/segs/job/seg-00015.ts.part-dddd4444'], $this->cleaned);
+        // The sweep also logs its own "reaping" warning, so count only the identity warning.
+        $identityWarnings = array_filter(
+            $logger->warnings,
+            static fn (string $message): bool => str_contains($message, '/proc unreadable'),
+        );
+        self::assertCount(1, $identityWarnings, 'the identity warning is logged once per registry');
     }
 
     /**

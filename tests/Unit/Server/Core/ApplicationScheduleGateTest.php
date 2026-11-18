@@ -234,6 +234,88 @@ final class ApplicationScheduleGateTest extends TestCase
         self::assertSame(403, $response->statusCode);
     }
 
+    public function test_the_exact_lifecycle_routes_stay_open_to_a_locked_session(): void
+    {
+        // The remaining allowlisted pairs: browser-form sign-in, the current identity, the
+        // session list and single-segment revoke, and the HEAD probes.
+        $schedule = $this->schedule($this->lockedOutP1(), null);
+
+        $exempt = [
+            ['POST', '/auth/login'],
+            ['POST', '/auth/refresh'],
+            ['GET', '/api/v1/auth/me'],
+            ['GET', '/api/v1/auth/sessions'],
+            ['DELETE', '/api/v1/auth/sessions/s1'],
+            ['HEAD', '/health'],
+            ['HEAD', '/'],
+            ['HEAD', '/app'],
+        ];
+        foreach ($exempt as [$method, $path]) {
+            self::assertNull(
+                Application::scheduleGateFor($this->request($method, $path, 'u1', 'p1'), $schedule),
+                $method . ' ' . $path . ' must stay open to a locked session',
+            );
+        }
+    }
+
+    public function test_routes_outside_the_exact_allowlist_are_gated_for_a_locked_session(): void
+    {
+        // The allowlist is exact. These are the near-miss and prefix cases a prefix match
+        // would have let through, plus the session-minting and credential-mutating routes
+        // the old `/auth/` and `/api/v1/auth/` prefixes exempted (identity link and unlink,
+        // passkey registration, quick-connect approve).
+        $schedule = $this->schedule($this->lockedOutP1(), null);
+
+        $gated = [
+            ['GET', '/apps'],
+            ['GET', '/authorize'],
+            ['GET', '/auth'],
+            ['GET', '/health/'],
+            ['POST', '/app'],
+            ['POST', '/health'],
+            ['PUT', '/app'],
+            ['DELETE', '/app/library'],
+            ['GET', '/auth/identities'],
+            ['DELETE', '/auth/identities/abc'],
+            ['POST', '/auth/identities/link/ldap'],
+            ['POST', '/auth/identities/link/hub'],
+            ['POST', '/api/v1/auth/webauthn/register/options'],
+            ['POST', '/api/v1/auth/webauthn/register/verify'],
+            ['POST', '/api/v1/auth/quick-connect/ABCD2345/approve'],
+            ['POST', '/api/v1/auth/register'],
+            ['POST', '/api/v1/auth/hub-token'],
+            ['DELETE', '/api/v1/auth/sessions'],
+            ['DELETE', '/api/v1/auth/sessions/a/b'],
+            ['GET', '/api/v1/auth/login'],
+            ['POST', '/api/v1/auth/me'],
+        ];
+        foreach ($gated as [$method, $path]) {
+            $response = Application::scheduleGateFor($this->request($method, $path, 'u1', 'p1'), $schedule);
+
+            self::assertNotNull($response, $method . ' ' . $path . ' must be gated for a locked session');
+            self::assertSame(403, $response->statusCode, $method . ' ' . $path);
+            self::assertSame('access.scheduled', $this->decodedBody($response)['code'], $method . ' ' . $path);
+        }
+    }
+
+    public function test_a_schedule_locked_approver_cannot_approve_a_quick_connect_pairing(): void
+    {
+        // The bypass: a child on a locked profile approves a pairing code shown on a TV,
+        // and the TV mints an unrestricted default-profile session. Approve is no longer
+        // exempt, so the approver's own request is refused before the controller runs.
+        $schedule = $this->schedule($this->lockedOutP1(), null);
+        $path = '/api/v1/auth/quick-connect/ABCD2345/approve';
+
+        $response = Application::scheduleGateFor($this->request('POST', $path, 'u1', 'p1'), $schedule);
+
+        self::assertNotNull($response);
+        self::assertSame(403, $response->statusCode);
+        self::assertSame('access.scheduled', $this->decodedBody($response)['code']);
+
+        // The same approver on a free profile is not refused by the gate.
+        self::assertNull(Application::scheduleGateFor($this->request('POST', $path, 'u1', 'p2'), $schedule));
+    }
+
     public function test_the_request_context_is_restored_after_the_gate(): void
     {
         RequestContext::setUserId('u-prev');

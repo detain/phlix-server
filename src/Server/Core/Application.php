@@ -2721,26 +2721,64 @@ class Application
     /**
      * Requests the global schedule gate never refuses.
      *
-     *  - The session lifecycle: `/auth/*` and `/api/v1/auth/*` (sign-in, refresh, sign-out,
-     *    the session list). A schedule-locked profile must still be able to end its session
-     *    and sign in again; streaming and content routes stay gated.
-     *  - The liveness probe `/health`.
-     *  - The SPA shell: GET and HEAD of `/` and `/app...`. The shell is HTML that renders
-     *    the lock message; the API calls it makes are gated.
+     * The list is EXACT: method and path are compared as whole strings, with no prefix
+     * matching. `/auth`, `/authorize`, `/apps`, `/health/`, `POST /app` and every
+     * other `/api/v1/auth/*` route not named here (quick-connect approve, passkey
+     * registration, identity link and unlink, register, OIDC/GitHub callbacks) are gated.
+     * Those routes either mint a session or mutate a credential that later mints one, so
+     * a schedule-locked session must not reach them.
+     *
+     *  - The session lifecycle, JSON and browser-form: `POST /api/v1/auth/login`,
+     *    `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`,
+     *    `GET /api/v1/auth/sessions`, `DELETE /api/v1/auth/sessions/{id}` (one segment),
+     *    and `POST /auth/login`, `POST /auth/refresh`, `GET|POST /auth/logout`. A
+     *    schedule-locked profile must still be able to end its session and sign in again.
+     *  - The liveness probe `GET|HEAD /health`.
+     *  - The SPA shell: `GET|HEAD /` and `GET|HEAD /app`, plus `/app/...` deep links.
+     *    The `/app/` subtree is a prefix on purpose, with its trailing slash, so `/apps`
+     *    does not match. No route is registered under it, and the shell HTML renders the
+     *    lock message; the API calls it makes are gated. Static bundles under
+     *    `/assets/app/` are served before dispatch and never reach this gate.
      *
      * @param Request $request The incoming request.
      */
     public static function isScheduleExempt(Request $request): bool
     {
+        $method = $request->method;
         $path = $request->path;
-        if ($path === '/health' || str_starts_with($path, '/auth/') || str_starts_with($path, '/api/v1/auth/')) {
-            return true;
+
+        if ($method === 'DELETE') {
+            // Session revoke: exactly one non-empty segment after `/api/v1/auth/sessions/`.
+            return preg_match('#\A/api/v1/auth/sessions/[^/]+\z#', $path) === 1;
         }
 
-        $readOnly = $request->method === 'GET' || $request->method === 'HEAD';
+        if ($method === 'GET' || $method === 'HEAD') {
+            return in_array($path, self::SCHEDULE_EXEMPT_READ_PATHS, true)
+                || str_starts_with($path, '/app/');
+        }
 
-        return $readOnly && ($path === '/' || $path === '/app' || str_starts_with($path, '/app/'));
+        return $method === 'POST' && in_array($path, self::SCHEDULE_EXEMPT_POST_PATHS, true);
     }
+
+    /** GET and HEAD paths the schedule gate never refuses (see {@see self::isScheduleExempt()}). */
+    private const SCHEDULE_EXEMPT_READ_PATHS = [
+        '/',
+        '/app',
+        '/health',
+        '/api/v1/auth/me',
+        '/api/v1/auth/sessions',
+        '/auth/logout',
+    ];
+
+    /** POST paths the schedule gate never refuses (see {@see self::isScheduleExempt()}). */
+    private const SCHEDULE_EXEMPT_POST_PATHS = [
+        '/api/v1/auth/login',
+        '/api/v1/auth/refresh',
+        '/api/v1/auth/logout',
+        '/auth/login',
+        '/auth/refresh',
+        '/auth/logout',
+    ];
 
     /**
      * Flag a GLOBAL middleware short-circuit reply head-only on a `HEAD`.

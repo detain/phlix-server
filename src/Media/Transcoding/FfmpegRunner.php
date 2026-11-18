@@ -3770,11 +3770,17 @@ class FfmpegRunner
     }
 
     /**
-     * Renames the verified temporaries onto their final names.
+     * Publishes the verified temporaries onto their final names, all or nothing.
      *
-     * If the second rename fails after the first succeeded, the first final is
-     * removed too, so the item never has a sprite that matches no timeline. The
-     * caller then treats the item as not generated.
+     * Each existing final is first hard-linked to a previous-copy name, so its old
+     * bytes stay reachable while the new file replaces it. Each replacement is a
+     * single rename over the final name, so a reader never sees the final missing.
+     * If any step fails, the replacements already made are undone, newest first: the
+     * previous copy is renamed back, or the new file removed when there was no
+     * previous one. An item that was complete before the pass therefore keeps its
+     * complete artefacts. The previous copies are deleted once everything is in place.
+     *
+     * @return bool True when every artefact is published; false with the previous state restored.
      */
     private function publishTrickplayFiles(
         ?string $spriteTemp,
@@ -3783,22 +3789,57 @@ class FfmpegRunner
         ?string $timelinePath
     ): bool {
         $pairs = [[$spriteTemp, $spritePath], [$timelineTemp, $timelinePath]];
-        $published = [];
+        $replaced = [];
         foreach ($pairs as [$temp, $final]) {
             if ($temp === null || $final === null) {
                 continue;
             }
-            if (!@rename($temp, $final)) {
-                foreach ($published as $done) {
-                    @unlink($done);
+
+            $previous = null;
+            if (is_file($final)) {
+                $previous = dirname($final) . '/' . self::TEMP_FILE_PREFIX . 'previous-' . basename($final);
+                self::removeTrickplayFile($previous);
+                if (!@link($final, $previous)) {
+                    $this->restoreTrickplayFiles($replaced);
+
+                    return false;
                 }
+            }
+
+            if (!@rename($temp, $final)) {
+                if ($previous !== null) {
+                    self::removeTrickplayFile($previous);
+                }
+                $this->restoreTrickplayFiles($replaced);
 
                 return false;
             }
-            $published[] = $final;
+            $replaced[] = [$final, $previous];
+        }
+
+        foreach ($replaced as [, $previous]) {
+            if ($previous !== null) {
+                self::removeTrickplayFile($previous);
+            }
         }
 
         return true;
+    }
+
+    /**
+     * Undoes the replacements of a publish that failed part way, newest first.
+     *
+     * @param list<array{string, string|null}> $replaced Pairs of [final path, previous copy or null].
+     */
+    private function restoreTrickplayFiles(array $replaced): void
+    {
+        foreach (array_reverse($replaced) as [$final, $previous]) {
+            if ($previous !== null) {
+                @rename($previous, $final);
+            } else {
+                self::removeTrickplayFile($final);
+            }
+        }
     }
 
     /**

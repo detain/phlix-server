@@ -372,6 +372,39 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
     }
 
+    public function testAFailedTimelinePublishKeepsThePreviousCompleteSprite(): void
+    {
+        // An item that was complete before this pass has a sprite and a timeline. The
+        // timeline's final name is a non-empty directory, so the timeline rename fails
+        // after the sprite rename has already happened. The previous sprite must come
+        // back, not be lost.
+        mkdir($this->dir . '/out/timeline.json', 0755, true);
+        file_put_contents($this->dir . '/out/timeline.json/keep', 'x');
+        file_put_contents($this->dir . '/out/sprite.jpg', 'PREVIOUS-SPRITE');
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $this->assertNull($result);
+        $this->assertSame('PREVIOUS-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testAPassReplacesAnExistingSpriteAndLeavesNoPreviousCopy(): void
+    {
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320);
+
+        $this->assertNotNull($result);
+        $this->assertNotSame('OLD-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertNotSame('OLD-TIMELINE', file_get_contents($this->dir . '/out/timeline.json'));
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
     public function testACleanRunWithEmptyOutputStillPublishes(): void
     {
         $runner = $this->scripted(6000.0);

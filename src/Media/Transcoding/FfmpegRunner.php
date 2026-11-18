@@ -3048,6 +3048,13 @@ class FfmpegRunner
     /** File name of the trickplay timeline written beside {@see self::SPRITE_FILENAME}. */
     public const TIMELINE_FILENAME = 'timeline.json';
 
+    /**
+     * Prefix of the temporary name a trickplay artefact is written under before it
+     * is renamed onto its final name. The temporary sits in the same directory, so
+     * the rename is atomic, and a reader never sees a partly written file.
+     */
+    public const TEMP_FILE_PREFIX = '.tmp-';
+
     /** Sprite-sheet columns; rows are derived from the requested thumb count. */
     private const TRICKPLAY_SPRITE_COLUMNS = 6;
 
@@ -3260,6 +3267,12 @@ class FfmpegRunner
         $timelinePath = $wantSprite ? $outputDir . '/' . self::TIMELINE_FILENAME : null;
         $bifPattern = $wantBif ? $outputDir . '/bifframe_%05d.jpg' : null;
 
+        // The sprite and timeline are written under temporary names and renamed
+        // onto the final names only after the whole pass has been checked. The
+        // sprite temporary keeps its .jpg extension, which selects the image muxer.
+        $spriteTemp = $spritePath === null ? null : $outputDir . '/' . self::TEMP_FILE_PREFIX . self::SPRITE_FILENAME;
+        $timelineTemp = $timelinePath === null ? null : $outputDir . '/' . self::TEMP_FILE_PREFIX . self::TIMELINE_FILENAME;
+
         $cols = self::TRICKPLAY_SPRITE_COLUMNS;
         $thumbW = self::TRICKPLAY_THUMB_WIDTH;
         $thumbH = self::TRICKPLAY_THUMB_HEIGHT;
@@ -3318,7 +3331,7 @@ class FfmpegRunner
             $videoPath,
             (string) $seekArg,
             $graph,
-            $spritePath,
+            $spriteTemp,
             $bifPattern,
             $bifCount
         );
@@ -3340,7 +3353,7 @@ class FfmpegRunner
 
         if ($exitCode !== 0) {
             $this->logger->warning('Trickplay pass failed: ffmpeg exited non-zero', $context);
-            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
             return null;
         }
@@ -3351,14 +3364,14 @@ class FfmpegRunner
         // so any output at all is an error report.
         if (self::reportedFfmpegError($outputLines)) {
             $this->logger->warning('Trickplay pass failed: ffmpeg reported an error (source truncated or corrupt?)', $context);
-            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
             return null;
         }
 
-        if ($spritePath !== null && (!is_file($spritePath) || filesize($spritePath) === 0)) {
+        if ($spriteTemp !== null && (!is_file($spriteTemp) || filesize($spriteTemp) === 0)) {
             $this->logger->warning('Trickplay sprite generation failed', $context);
-            $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
             return null;
         }
@@ -3374,14 +3387,27 @@ class FfmpegRunner
                     'frames' => count($frames),
                     'interval_ms' => $intervalMs,
                 ]);
-                $this->discardTrickplayPass($spritePath, $timelinePath, $bifPattern, $bifCount);
+                $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
                 return null;
             }
         }
 
-        if ($timelinePath !== null) {
-            $this->writeTrickplayTimeline($timelinePath, $spriteCount, $spriteOffset, $spriteInterval);
+        if (
+            $timelineTemp !== null
+            && !$this->writeTrickplayTimeline($timelineTemp, $spriteCount, $spriteOffset, $spriteInterval)
+        ) {
+            $this->logger->warning('Trickplay timeline could not be written; pass discarded', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
+
+            return null;
+        }
+
+        if (!$this->publishTrickplayFiles($spriteTemp, $spritePath, $timelineTemp, $timelinePath)) {
+            $this->logger->warning('Trickplay artefacts could not be published; pass discarded', $context);
+            $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
+
+            return null;
         }
 
         return [
@@ -3502,7 +3528,7 @@ class FfmpegRunner
      * put column 5 at 815, so every preview after the first column was
      * showing a slice of the wrong thumbnails.
      */
-    private function writeTrickplayTimeline(string $timelinePath, int $count, float $offset, float $interval): void
+    private function writeTrickplayTimeline(string $timelinePath, int $count, float $offset, float $interval): bool
     {
         $cols = self::TRICKPLAY_SPRITE_COLUMNS;
         $thumbW = self::TRICKPLAY_THUMB_WIDTH;
@@ -3521,7 +3547,9 @@ class FfmpegRunner
         }
 
         $json = json_encode($timeline, JSON_THROW_ON_ERROR);
-        file_put_contents($timelinePath, $json);
+        $bytes = @file_put_contents($timelinePath, $json);
+
+        return $bytes === strlen($json);
     }
 
     /**
@@ -3581,19 +3609,52 @@ class FfmpegRunner
     }
 
     /**
-     * Removes everything a failed trickplay pass wrote, so nothing partial is left
-     * under a published name. Called only on a failure path.
+     * Removes the temporary artefacts and BIF frames of a failed trickplay pass.
+     *
+     * The final names are never touched here: a failed pass leaves the previous
+     * complete artefacts (if any) in place, and nothing it wrote is published.
+     *
+     * @param string|null $spriteTemp   Sprite temporary, or null.
+     * @param string|null $timelineTemp Timeline temporary, or null.
      */
-    private function discardTrickplayPass(?string $spritePath, ?string $timelinePath, ?string $bifPattern, int $bifCount): void
+    private function discardTrickplayPass(?string $spriteTemp, ?string $timelineTemp, ?string $bifPattern, int $bifCount): void
     {
-        foreach ([$spritePath, $timelinePath] as $path) {
-            if ($path !== null && is_file($path)) {
+        foreach ([$spriteTemp, $timelineTemp] as $path) {
+            if ($path !== null && (is_file($path) || is_link($path))) {
                 @unlink($path);
             }
         }
         if ($bifPattern !== null) {
             $this->removeBifFrames($bifPattern, $bifCount);
         }
+    }
+
+    /**
+     * Renames the verified temporaries onto their final names.
+     *
+     * If the second rename fails after the first succeeded, the first final is
+     * removed too, so the item never has a sprite that matches no timeline. The
+     * caller then treats the item as not generated.
+     */
+    private function publishTrickplayFiles(?string $spriteTemp, ?string $spritePath, ?string $timelineTemp, ?string $timelinePath): bool
+    {
+        $pairs = [[$spriteTemp, $spritePath], [$timelineTemp, $timelinePath]];
+        $published = [];
+        foreach ($pairs as [$temp, $final]) {
+            if ($temp === null || $final === null) {
+                continue;
+            }
+            if (!@rename($temp, $final)) {
+                foreach ($published as $done) {
+                    @unlink($done);
+                }
+
+                return false;
+            }
+            $published[] = $final;
+        }
+
+        return true;
     }
 
     /**

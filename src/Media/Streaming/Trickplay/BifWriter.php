@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Streaming\Trickplay;
 
+use Phlix\Media\Transcoding\FfmpegRunner;
+
 /**
  * Writes Roku BIF (Base Index Frames) trickplay archives.
  *
@@ -107,15 +109,20 @@ final class BifWriter
      * Only one payload is resident at a time, so a long video's frame set never
      * has to fit in the worker's memory alongside everything else it is holding.
      *
+     * The archive is built under a temporary name beside the destination and
+     * renamed into place only after every write is checked and the file's size is
+     * verified against {@see archiveSize()}. On any failure the temporary is
+     * removed and the destination is left as it was.
+     *
      * @param list<string> $paths Absolute paths to JPEG files, in capture order.
      * @param int $timestampMultiplierMs Milliseconds between consecutive frames.
-     * @param string $outputPath Destination `.bif` path (overwritten if present).
+     * @param string $outputPath Destination `.bif` path (replaced atomically if present).
      *
-     * @return int Total bytes written.
+     * @return int Total bytes written, equal to {@see archiveSize()} for the frames.
      *
      * @throws \InvalidArgumentException If a frame is missing/unreadable/not a
      *         JPEG, or the inputs are otherwise invalid.
-     * @throws \RuntimeException If the destination cannot be written.
+     * @throws \RuntimeException If the destination cannot be written or verified.
      */
     public static function writeFromFiles(array $paths, int $timestampMultiplierMs, string $outputPath): int
     {
@@ -139,31 +146,85 @@ final class BifWriter
         }
 
         $prelude = self::buildHeaderAndIndex($sizes, $timestampMultiplierMs);
+        $expected = self::archiveSize($sizes);
 
-        $out = @\fopen($outputPath, 'wb');
+        // Written under a temporary name in the same directory and renamed into
+        // place only once every byte is verified. A reader, or a later run, never
+        // sees a partial archive under the published name, and a failure at any
+        // step (a full disk, an unreadable frame) leaves no temporary behind.
+        $temp = self::temporaryPath($outputPath);
+        $out = @\fopen($temp, 'wb');
         if ($out === false) {
-            throw new \RuntimeException("BifWriter: cannot open output for writing: {$outputPath}");
+            throw new \RuntimeException("BifWriter: cannot open output for writing: {$temp}");
         }
 
+        $closed = false;
         try {
-            $written = (int) \fwrite($out, $prelude);
+            self::writeAll($out, $prelude, $temp);
             foreach ($paths as $index => $path) {
                 $in = @\fopen($path, 'rb');
                 if ($in === false) {
                     throw new \InvalidArgumentException("BifWriter: frame {$index} is unreadable: {$path}");
                 }
                 try {
-                    $copied = \stream_copy_to_stream($in, $out);
+                    $copied = @\stream_copy_to_stream($in, $out);
                 } finally {
                     \fclose($in);
                 }
-                $written += (int) $copied;
+                if ($copied !== $sizes[$index]) {
+                    throw new \RuntimeException(
+                        "BifWriter: frame {$index} copied {$copied} of {$sizes[$index]} bytes into {$temp}"
+                    );
+                }
+            }
+
+            $closed = true;
+            if (!\fclose($out)) {
+                throw new \RuntimeException("BifWriter: cannot flush {$temp}");
+            }
+            clearstatcache(true, $temp);
+            if (\filesize($temp) !== $expected) {
+                throw new \RuntimeException(
+                    "BifWriter: {$temp} is " . (int) \filesize($temp) . " bytes, expected {$expected}"
+                );
+            }
+            if (!@\rename($temp, $outputPath)) {
+                throw new \RuntimeException("BifWriter: cannot publish {$outputPath}");
             }
         } finally {
-            \fclose($out);
+            if (!$closed) {
+                @\fclose($out);
+            }
+            if (\is_file($temp) || \is_link($temp)) {
+                @\unlink($temp);
+            }
         }
 
-        return $written;
+        return $expected;
+    }
+
+    /**
+     * Writes a whole string or throws; a short or failed write is never silent.
+     *
+     * @throws \RuntimeException On a failed or short write.
+     */
+    private static function writeAll(mixed $handle, string $bytes, string $path): void
+    {
+        // Silenced because PHP reports a failed write as a notice; the result is
+        // what is checked, and a failure is thrown below.
+        $written = @\fwrite($handle, $bytes);
+        if ($written === false || $written !== \strlen($bytes)) {
+            throw new \RuntimeException("BifWriter: short write to {$path}");
+        }
+    }
+
+    /**
+     * The temporary name an archive is built under: same directory, so the final
+     * rename stays on one filesystem and is atomic.
+     */
+    private static function temporaryPath(string $outputPath): string
+    {
+        return \dirname($outputPath) . '/' . FfmpegRunner::TEMP_FILE_PREFIX . \basename($outputPath);
     }
 
     /**

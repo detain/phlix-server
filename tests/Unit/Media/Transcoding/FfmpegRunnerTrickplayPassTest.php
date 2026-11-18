@@ -200,6 +200,49 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertFileDoesNotExist($this->dir . '/out/bifframe_00001.jpg');
     }
 
+    public function testASuccessfulPassLeavesNoTemporaryBehind(): void
+    {
+        $runner = $this->scripted(6000.0);
+
+        $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testADiskFullTimelineWritePublishesNothingAndLeavesNoTemporary(): void
+    {
+        if (!file_exists('/dev/full')) {
+            $this->markTestSkipped('/dev/full is needed to force a real ENOSPC on write.');
+        }
+        // The timeline's temporary is a link to /dev/full, so its write fails with
+        // ENOSPC the way a full disk does. The old code wrote in place and
+        // ignored the result, so a truncated timeline was published.
+        mkdir($this->dir . '/out', 0755, true);
+        symlink('/dev/full', $this->dir . '/out/.tmp-timeline.json');
+        $runner = $this->scripted(6000.0);
+
+        $result = $runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 600, 320);
+
+        $this->assertNull($result);
+        $this->assertFileDoesNotExist($this->dir . '/out/sprite.jpg');
+        $this->assertFileDoesNotExist($this->dir . '/out/timeline.json');
+        $this->assertFalse(is_link($this->dir . '/out/.tmp-timeline.json'), 'The temporary must be removed.');
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    /** @return list<string> Temporary names left in $dir. */
+    private function temporariesIn(string $dir): array
+    {
+        $names = [];
+        foreach (array_diff(scandir($dir) ?: [], ['.', '..']) as $name) {
+            if (str_starts_with($name, '.tmp-')) {
+                $names[] = $name;
+            }
+        }
+
+        return $names;
+    }
+
     public function testACleanRunWithEmptyOutputStillPublishes(): void
     {
         $runner = $this->scripted(6000.0);
@@ -350,7 +393,8 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
         $output = $this->ffmpegMessage === null ? [] : [$this->ffmpegMessage];
         $exitCode = $this->exitCodeToReturn;
 
-        if ($this->writeSprite && preg_match("#'([^']*/sprite\\.jpg)'#", $cmd, $m) === 1) {
+        // The sprite is written under its temporary name and renamed afterwards.
+        if ($this->writeSprite && preg_match("#'([^']*/\\.tmp-sprite\\.jpg)'#", $cmd, $m) === 1) {
             file_put_contents($m[1], self::JPEG);
         }
 

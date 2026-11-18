@@ -71,7 +71,10 @@ final class TrickplayArtefactsTest extends TestCase
             $timeline[] = ['time' => $i * 2.0, 'x' => 2, 'y' => 2];
         }
         file_put_contents($this->dir . '/' . FfmpegRunner::SPRITE_FILENAME, self::JPEG);
-        file_put_contents($this->dir . '/' . FfmpegRunner::TIMELINE_FILENAME, json_encode($timeline, JSON_THROW_ON_ERROR));
+        file_put_contents(
+            $this->dir . '/' . FfmpegRunner::TIMELINE_FILENAME,
+            json_encode($timeline, JSON_THROW_ON_ERROR)
+        );
         file_put_contents(
             $this->dir . '/' . BifWriter::FILENAME,
             $bif ?? BifWriter::build(array_fill(0, 12, self::JPEG), 10000)
@@ -131,7 +134,8 @@ final class TrickplayArtefactsTest extends TestCase
 
         TrickplayArtefacts::markFailed($this->dir, 'BIF not written');
         $this->assertTrue(TrickplayArtefacts::hasFailedMarker($this->dir));
-        $record = json_decode((string) file_get_contents($this->dir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME), true);
+        $marker = $this->dir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME;
+        $record = json_decode((string) file_get_contents($marker), true);
         $this->assertIsArray($record);
         $this->assertSame('BIF not written', $record['reason']);
 

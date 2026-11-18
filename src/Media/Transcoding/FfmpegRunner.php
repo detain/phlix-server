@@ -3275,8 +3275,9 @@ class FfmpegRunner
         // The sprite and timeline are written under temporary names and renamed
         // onto the final names only after the whole pass has been checked. The
         // sprite temporary keeps its .jpg extension, which selects the image muxer.
-        $spriteTemp = $spritePath === null ? null : $outputDir . '/' . self::TEMP_FILE_PREFIX . self::SPRITE_FILENAME;
-        $timelineTemp = $timelinePath === null ? null : $outputDir . '/' . self::TEMP_FILE_PREFIX . self::TIMELINE_FILENAME;
+        $tempPrefix = $outputDir . '/' . self::TEMP_FILE_PREFIX;
+        $spriteTemp = $spritePath === null ? null : $tempPrefix . self::SPRITE_FILENAME;
+        $timelineTemp = $timelinePath === null ? null : $tempPrefix . self::TIMELINE_FILENAME;
 
         $cols = self::TRICKPLAY_SPRITE_COLUMNS;
         $thumbW = self::TRICKPLAY_THUMB_WIDTH;
@@ -3301,7 +3302,8 @@ class FfmpegRunner
         $spriteChain = null;
         if ($wantSprite) {
             $spriteChain = sprintf(
-                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,scale=%d:%d,tile=%dx%d:margin=%d:padding=%d[sprite]',
+                'trim=start=%s,setpts=PTS-%s/TB,fps=1/%s:eof_action=pass,'
+                . 'scale=%d:%d,tile=%dx%d:margin=%d:padding=%d[sprite]',
                 $spriteTrimArg,
                 $spriteTrimArg,
                 $spriteIntervalArg,
@@ -3368,7 +3370,7 @@ class FfmpegRunner
         // black cells over the missing tail. The command runs at `-loglevel error`,
         // so any output at all is an error report.
         if (self::reportedFfmpegError($outputLines)) {
-            $this->logger->warning('Trickplay pass failed: ffmpeg reported an error (source truncated or corrupt?)', $context);
+            $this->logger->warning('Trickplay pass failed: ffmpeg reported an error', $context);
             $this->discardTrickplayPass($spriteTemp, $timelineTemp, $bifPattern, $bifCount);
 
             return null;
@@ -3627,8 +3629,12 @@ class FfmpegRunner
      * @param string|null $spriteTemp   Sprite temporary, or null.
      * @param string|null $timelineTemp Timeline temporary, or null.
      */
-    private function discardTrickplayPass(?string $spriteTemp, ?string $timelineTemp, ?string $bifPattern, int $bifCount): void
-    {
+    private function discardTrickplayPass(
+        ?string $spriteTemp,
+        ?string $timelineTemp,
+        ?string $bifPattern,
+        int $bifCount
+    ): void {
         foreach ([$spriteTemp, $timelineTemp] as $path) {
             if ($path !== null && (is_file($path) || is_link($path))) {
                 @unlink($path);
@@ -3646,8 +3652,12 @@ class FfmpegRunner
      * removed too, so the item never has a sprite that matches no timeline. The
      * caller then treats the item as not generated.
      */
-    private function publishTrickplayFiles(?string $spriteTemp, ?string $spritePath, ?string $timelineTemp, ?string $timelinePath): bool
-    {
+    private function publishTrickplayFiles(
+        ?string $spriteTemp,
+        ?string $spritePath,
+        ?string $timelineTemp,
+        ?string $timelinePath
+    ): bool {
         $pairs = [[$spriteTemp, $spritePath], [$timelineTemp, $timelinePath]];
         $published = [];
         foreach ($pairs as [$temp, $final]) {

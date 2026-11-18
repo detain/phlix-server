@@ -94,7 +94,10 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertStringContainsString("-ss '5'", $cmd);
         // Each branch shifts its clock by its own trim, so its fps grid stays
         // anchored on its own offset (PTS-STARTPTS would move it by a frame).
-        $this->assertStringContainsString('trim=start=45,setpts=PTS-45/TB,fps=1/100:eof_action=pass,scale=160:90,tile=6x10:margin=2:padding=1[sprite]', $cmd);
+        $this->assertStringContainsString(
+            'trim=start=45,setpts=PTS-45/TB,fps=1/100:eof_action=pass,scale=160:90,tile=6x10:margin=2:padding=1[sprite]',
+            $cmd
+        );
         $this->assertStringContainsString('trim=start=0,setpts=PTS-0/TB,fps=1/10:eof_action=pass,scale=320:-2[bif]', $cmd);
         $this->assertStringNotContainsString('STARTPTS', $cmd);
     }

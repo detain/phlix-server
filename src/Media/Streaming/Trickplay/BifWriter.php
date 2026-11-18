@@ -206,9 +206,11 @@ final class BifWriter
     /**
      * Writes a whole string or throws; a short or failed write is never silent.
      *
+     * @param resource $handle An open, writable stream.
+     *
      * @throws \RuntimeException On a failed or short write.
      */
-    private static function writeAll(mixed $handle, string $bytes, string $path): void
+    private static function writeAll($handle, string $bytes, string $path): void
     {
         // Silenced because PHP reports a failed write as a notice; the result is
         // what is checked, and a failure is thrown below.

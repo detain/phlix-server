@@ -3829,4 +3829,248 @@ class RelayConsumerTest extends TestCase
         self::assertSame(1, substr_count($source, '$this->armHelloAckDeadline();'));
         self::assertSame(4, substr_count($source, '$this->cancelHelloAckDeadline();'));
     }
+
+    // -----------------------------------------------------------------------
+    // The relay mapping step and the global schedule gate, together. A relayed
+    // stream start runs through the real RelayConsumer::buildRequest() identity
+    // mapping, then the schedule gate, then the stream-URL route. These pin the
+    // profile the minted token is bound to, end to end.
+    // -----------------------------------------------------------------------
+
+    private const RELAY_STREAM_SECRET = 'relay-consumer-gate-test-secret';
+
+    private function enableStreamSigning(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET=' . self::RELAY_STREAM_SECRET);
+        \Phlix\Auth\SignedUrl::resetSharedForTesting();
+        \Phlix\Server\Http\RequestContext::setUserId(null);
+        \Phlix\Server\Http\RequestContext::setProfileId(null);
+    }
+
+    private function disableStreamSigning(): void
+    {
+        putenv('PHLIX_SIGNED_URL_SECRET');
+        \Phlix\Auth\SignedUrl::resetSharedForTesting();
+        \Phlix\Server\Http\RequestContext::setUserId(null);
+        \Phlix\Server\Http\RequestContext::setProfileId(null);
+    }
+
+    /**
+     * One all-day window for profile p1: 'today' locks p1 now, 'tomorrow' leaves it open now.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private static function relayP1Window(string $when): array
+    {
+        $day = new \DateTimeImmutable($when === 'today' ? 'now' : '+1 day');
+
+        return [[
+            'id' => 1,
+            'profile_id' => 'p1',
+            'name' => 'Relay window',
+            'start_time' => '00:00:00',
+            'end_time' => '23:59:59',
+            'days_of_week' => strtolower(substr($day->format('D'), 0, 3)),
+            'is_active' => 1,
+        ]];
+    }
+
+    /**
+     * The schedule middleware over the given access_schedules rows, read through a scripted
+     * connection that filters by the profile the statement binds, as the real query does.
+     *
+     * @param list<array<string, mixed>> $rows
+     */
+    private function relayAccessSchedule(
+        array $rows,
+        \Phlix\Auth\UserProfileManager $profiles,
+    ): \Phlix\Server\Http\Middleware\AccessScheduleMiddleware {
+        $db = $this->createMock(\Workerman\MySQL\Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, mixed $params = null) use ($rows): mixed {
+                if (str_starts_with($sql, 'SELECT * FROM access_schedules')) {
+                    $profileId = is_array($params) ? ($params[0] ?? null) : null;
+
+                    return array_values(array_filter(
+                        $rows,
+                        static fn (array $row): bool => $row['profile_id'] === $profileId,
+                    ));
+                }
+
+                return 1;
+            }
+        );
+
+        return new \Phlix\Server\Http\Middleware\AccessScheduleMiddleware(
+            new \Phlix\Access\AccessScheduleService($db),
+            $profiles,
+        );
+    }
+
+    /**
+     * Relay one stream start through the real identity mapping, the global schedule gate and the
+     * stream-URL route. The dispatcher stands in for the relay fork's dispatcher: it runs the gate
+     * as Application::handle() does, and only a request the gate passes reaches the route.
+     *
+     * @return array{
+     *     request: \Phlix\Server\Http\Request,
+     *     refusal: \Phlix\Server\Http\Response|null,
+     *     response: \Phlix\Server\Http\Response|null,
+     * }
+     */
+    private function relayStreamStart(
+        RelayIdentityResolver $resolver,
+        \Phlix\Server\Http\Middleware\AccessScheduleMiddleware $schedule,
+    ): array {
+        /** @var \Phlix\Server\Http\Request|null $request */
+        $request = null;
+        /** @var \Phlix\Server\Http\Response|null $refusal */
+        $refusal = null;
+        /** @var \Phlix\Server\Http\Response|null $response */
+        $response = null;
+
+        $manager = $this->createMock(\Phlix\Media\Transcoding\TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'running',
+            'master_url' => '/hls/job-7/master.m3u8',
+            'hls_url' => '/hls/job-7/master.m3u8',
+            'dash_url' => null,
+            'reused' => false,
+            'subtitles' => [],
+        ]);
+        $manager->method('getJobVariants')->willReturn(null);
+        $controller = new \Phlix\Server\Http\Controllers\TranscodeController($manager);
+
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (
+            &$request,
+            &$refusal,
+            &$response,
+            $schedule,
+            $controller,
+        ): \Phlix\Server\Http\Response {
+            $request = $req;
+            $refusal = \Phlix\Server\Core\Application::scheduleGateFor($req, $schedule);
+            if ($refusal !== null) {
+                return $refusal;
+            }
+            $response = $controller->start($req, ['id' => 'media-1']);
+
+            return $response;
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher, null, $resolver);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/transcode/media-1',
+            '',
+            ['X-Phlix-Relay-User' => 'hub-user-42'],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000003, $envelope->toJson()));
+
+        self::assertInstanceOf(
+            \Phlix\Server\Http\Request::class,
+            $request,
+            'the relayed request must reach the dispatcher',
+        );
+
+        return ['request' => $request, 'refusal' => $refusal, 'response' => $response];
+    }
+
+    /**
+     * A hub principal that the server's own user_identities rows map to u1 runs as u1 through
+     * RelayConsumer::buildRequest(). The gate then tests u1's active profile (p1), and the stream token
+     * the route mints is bound to p1. The bound token is allowed while p1 is open and refused on use
+     * once p1 is locked.
+     */
+    public function test_a_relay_principal_mapped_by_the_resolver_mints_a_token_bound_to_its_profile(): void
+    {
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')
+            ->with('hub', '', 'hub-user-42')
+            ->willReturn(['user_id' => 'u1']);
+
+        // The gate asks for the resolved account's profile, so the mock pins the account it is asked for.
+        $profiles = $this->createMock(\Phlix\Auth\UserProfileManager::class);
+        $profiles->method('getActiveProfile')->with('u1')->willReturn(['id' => 'p1']);
+        $schedule = $this->relayAccessSchedule(self::relayP1Window('tomorrow'), $profiles);
+
+        $this->enableStreamSigning();
+        try {
+            $run = $this->relayStreamStart(new RelayIdentityResolver($identities), $schedule);
+
+            self::assertSame('u1', $run['request']->userId, 'the mapping step runs the principal as its server user');
+            self::assertFalse($run['request']->relayUnmapped, 'a linked principal is not the unmapped exemption');
+            self::assertNull($run['refusal'], 'p1 is outside its window now, so the gate passes the request');
+            self::assertSame('p1', $run['request']->gatedProfileId, 'the gate tested the resolved account profile');
+            self::assertNotNull($run['response']);
+            self::assertSame(200, $run['response']->statusCode);
+
+            /** @var array<string, mixed> $body */
+            $body = json_decode($run['response']->body, true, 512, JSON_THROW_ON_ERROR);
+            self::assertIsString($body['master_url']);
+            parse_str((string) parse_url($body['master_url'], PHP_URL_QUERY), $query);
+            self::assertSame(
+                'p1',
+                $query[\Phlix\Auth\SignedUrl::PROFILE_PARAM] ?? null,
+                'the token is bound to the profile the gate tested',
+            );
+
+            $use = new \Phlix\Server\Http\Request();
+            $use->method = 'GET';
+            $use->path = '/hls/job-7/master.m3u8';
+            $use->query = $query;
+            self::assertNull($schedule->denyForSignedRequest($use), 'p1 is open now, so the bound token is allowed');
+
+            $locked = $this->relayAccessSchedule(self::relayP1Window('today'), $profiles);
+            $refused = $locked->denyForSignedRequest($use);
+            self::assertNotNull($refused, 'once p1 is locked, the same token is refused on use');
+            self::assertSame(403, $refused->statusCode);
+        } finally {
+            $this->disableStreamSigning();
+        }
+    }
+
+    /**
+     * An unmapped hub principal has no server account, so the mapping step marks it relayUnmapped. The
+     * gate passes it with no profile, and the token the route mints carries no pid: it is bound to no
+     * profile, so no schedule is checked for it on use.
+     */
+    public function test_an_unmapped_relay_principal_mints_an_unbound_stream_token(): void
+    {
+        $identities = $this->createMock(\Phlix\Auth\UserIdentityRepository::class);
+        $identities->method('findByProviderExternalId')->willReturn(null);
+
+        $profiles = $this->createMock(\Phlix\Auth\UserProfileManager::class);
+        $profiles->method('getActiveProfile')->willReturn(null);
+        $schedule = $this->relayAccessSchedule([], $profiles);
+
+        $this->enableStreamSigning();
+        try {
+            $run = $this->relayStreamStart(new RelayIdentityResolver($identities), $schedule);
+
+            self::assertSame('hub-user-42', $run['request']->userId, 'an unmapped principal keeps its hub UUID');
+            self::assertTrue($run['request']->relayUnmapped, 'a principal with no linkage row is the unmapped case');
+            self::assertNull($run['refusal'], 'the unmapped exemption passes the gate with no profile');
+            self::assertNull($run['request']->gatedProfileId, 'the gate tested no profile for it');
+            self::assertNotNull($run['response']);
+            self::assertSame(200, $run['response']->statusCode);
+
+            /** @var array<string, mixed> $body */
+            $body = json_decode($run['response']->body, true, 512, JSON_THROW_ON_ERROR);
+            self::assertIsString($body['master_url']);
+            parse_str((string) parse_url($body['master_url'], PHP_URL_QUERY), $query);
+            self::assertArrayHasKey('sig', $query, 'the URL is still signed');
+            self::assertArrayNotHasKey(
+                \Phlix\Auth\SignedUrl::PROFILE_PARAM,
+                $query,
+                'an unmapped principal mints a token with no pid',
+            );
+        } finally {
+            $this->disableStreamSigning();
+        }
+    }
 }

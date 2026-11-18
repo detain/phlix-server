@@ -1768,7 +1768,10 @@ final class RequestDynamicPropertyCensusExecutableTest extends TestCase
     // +3 1267→1270 (perf/C gate-profile fix): Application::scheduleGateFor() publishes the tested
     // profile as `$request->gatedProfileId = …`, plus two writes in ApplicationScheduleGateTest (a
     // `relayUnmapped` seed and a `query` seed on the relayed-token case). Measured from the phpunit red.
-    private const EXPECTED_DECLARED_WRITES = 1270;
+    // +3 1270→1273 (perf/C relay token gate test): RelayConsumerTest's mapped-principal case seeds
+    // `$use->method`, `$use->path` and `$use->query` on a Request, to check the minted token on use.
+    // Measured from the phpunit red ("1273 is identical to 1270").
+    private const EXPECTED_DECLARED_WRITES = 1273;
 
     /** Census numbers 3 and 4 — the posture claims; never re-pin, fix source. */
     private const EXPECTED_DYNAMIC_READS = 0;

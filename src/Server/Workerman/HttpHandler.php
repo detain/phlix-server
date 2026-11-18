@@ -205,7 +205,7 @@ final class HttpHandler
                 // dispatched one — through the identical value generators
                 // (SecurityHeaders/CorsManager::headerValues), never a copy.
                 self::decorateRawReply($request, $static, $cors, $securityHeaders);
-                $connection->send($static);
+                self::emit($connection, $static);
                 return;
             }
 
@@ -255,9 +255,9 @@ final class HttpHandler
             // PreRouterFastPaths, which the relay dispatcher consults at this same
             // pipeline position. $request->userId is the authenticator's verdict
             // from above, exactly as it was when the methods took it as an
-            // argument; Response::toWorkermanResponse() forwards the file to
-            // Workerman's event-loop withFile(), so the bytes still never enter
-            // worker memory.
+            // argument; Response::toWorkermanResponse() makes the file-backed reply,
+            // and emit() routes it to FileBodySender, which streams the window in
+            // bounded chunks, so the bytes still never enter worker memory.
             // couldHandle() first so the storages (and, for the stream, the
             // container) are resolved only for a request that IS one of these —
             // the deleted private methods resolved theirs inside the matched
@@ -272,7 +272,7 @@ final class HttpHandler
                     // below use (no raw-reply helper needed here).
                     $fastResp = $cors->decorate($request, $fastResp);
                     $fastResp = $securityHeaders->decorate($fastResp);
-                    $connection->send($fastResp->toWorkermanResponse());
+                    self::emit($connection, $fastResp->toWorkermanResponse());
                     return;
                 }
             }
@@ -323,7 +323,7 @@ final class HttpHandler
                 $decorated = $cors->decorate($request, $appResponse);
                 $decorated = $securityHeaders->decorate($decorated);
                 $this->compressResponse($wr, $decorated);
-                $connection->send($decorated->toWorkermanResponse());
+                self::emit($connection, $decorated->toWorkermanResponse());
                 return;
             }
 
@@ -358,7 +358,7 @@ final class HttpHandler
                 $decorated = $cors->decorate($request, $apiResponse);
                 $decorated = $securityHeaders->decorate($decorated);
                 $this->compressResponse($wr, $decorated);
-                $connection->send($decorated->toWorkermanResponse());
+                self::emit($connection, $decorated->toWorkermanResponse());
                 return;
             }
 
@@ -395,7 +395,7 @@ final class HttpHandler
             // then-bare `404 - Page not found` fragment from self::dispatch() shipped
             // their bodies on a HEAD. AFTER compressResponse(), so the pinned length
             // is the gzipped one when the body was gzipped.
-            $connection->send(self::headAware($wr, $decorated)->toWorkermanResponse());
+            self::emit($connection, self::headAware($wr, $decorated)->toWorkermanResponse());
         } catch (RateLimitException $e) {
             // SV-4.15(c): central 429 mapping for any rate-limiter trip that
             // bubbles out of dispatch (e.g. the existing login limiter in
@@ -797,10 +797,10 @@ final class HttpHandler
         // next reply on the keep-alive connection.
         //
         // The HEAD arm reproduces the header set a GET would have carried rather
-        // than reusing withFile(): Workerman derives `Content-Length` /
-        // `Accept-Ranges` inside `Protocols\Http::encode()` and `Last-Modified`
-        // inside `createHeadForFile()`, and BOTH of those are reached only by
-        // actually sending the file. Naming the values here keeps the reply
+        // than reusing withFile(): `Content-Length` / `Accept-Ranges` are derived
+        // inside FileBodySender::send() (the path every file-backed reply takes
+        // through emit()), and `Last-Modified` inside `createHeadForFile()`, and
+        // BOTH of those are reached only by actually streaming the file. Naming the values here keeps the reply
         // truthful about the entity — Content-Length is the file's real size, never
         // 0 (for the gzip-negotiated client the variant branch above already
         // returned the compressed length, so each reader gets the length the
@@ -819,6 +819,28 @@ final class HttpHandler
         $resp = new WorkermanResponse(200, $headers);
         $resp->withFile($real);
         return $resp;
+    }
+
+    /**
+     * Put one reply on the wire.
+     *
+     * A file-backed reply ({@see Response::withFile()}, i.e. `$reply->file` set) goes to
+     * {@see FileBodySender::send()}, which writes the header block once and then streams
+     * the body in bounded chunks with backpressure. Every other reply goes to
+     * `$connection->send()` unchanged, so Workerman's default Http protocol still encodes
+     * it. A HEAD never reaches the file branch: it is answered by {@see BodylessResponse}.
+     *
+     * @param TcpConnection $connection The client connection.
+     * @param WorkermanResponse $reply  The reply built by one of this handler's arms.
+     */
+    private static function emit(TcpConnection $connection, WorkermanResponse $reply): void
+    {
+        if ($reply->file !== null) {
+            FileBodySender::send($connection, $reply);
+            return;
+        }
+
+        $connection->send($reply);
     }
 
     /**

@@ -40,9 +40,9 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * `Response::$body` still holds the entity, and `serveStatic()`'s reply has no Phlix
  * `Response` at all. Asserting on object properties would therefore pass on the
  * broken code. Every assertion below reads what a client actually receives —
- * `(string) $response` for a buffered reply, and for a file-backed one the output of
- * `Workerman\Protocols\Http::encode()`, which is where Workerman derives a file
- * response's `Content-Length` and hands the file's bytes to the connection.
+ * `(string) $response` for a buffered reply, and for a file-backed one the raw writes
+ * {@see \Phlix\Server\Workerman\FileBodySender} makes (header block, then body chunks),
+ * joined by {@see self::wireOfSent()}.
  *
  * ## Why each site also asserts a NON-ZERO `Content-Length`
  *
@@ -185,6 +185,24 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
      */
     private function invoke(string $method, string $path, ?Application $app = null, array $headers = []): mixed
     {
+        $sent = $this->sentBy($method, $path, $app, $headers);
+
+        self::assertCount(1, $sent, 'exactly one response is sent');
+
+        return $sent[0];
+    }
+
+    /**
+     * Drive one request end to end and return every raw write it made, in order.
+     *
+     * A file-backed GET is written as a header block followed by body chunks, so it
+     * does not come back as one response object; {@see self::wireOfSent()} joins them.
+     *
+     * @param array<string, string> $headers Extra request headers.
+     * @return list<mixed>
+     */
+    private function sentBy(string $method, string $path, ?Application $app = null, array $headers = []): array
+    {
         $raw = "{$method} {$path} HTTP/1.1\r\nHost: localhost\r\n";
         foreach ($headers as $name => $value) {
             $raw .= "{$name}: {$value}\r\n";
@@ -194,20 +212,34 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         $sent = [];
         $this->makeHandler($app)->__invoke($this->makeConnection($sent), new WorkermanRequest($raw));
 
-        self::assertCount(1, $sent, 'exactly one response is sent');
+        return $sent;
+    }
 
-        return $sent[0];
+    /**
+     * The bytes a list of raw writes puts on the socket: a buffered reply arrives as a
+     * response object and is encoded here, a file-backed reply already arrives as raw
+     * strings (header block, then body chunks) from FileBodySender.
+     *
+     * @param list<mixed> $sent
+     */
+    private function wireOfSent(array $sent): string
+    {
+        $wire = '';
+        foreach ($sent as $item) {
+            $wire .= $item instanceof WorkermanResponse ? $this->wireBytes($item) : (string) $item;
+        }
+
+        return $wire;
     }
 
     /**
      * The bytes this response actually puts on the socket.
      *
      * A buffered reply stringifies to the whole message. A FILE-backed reply does
-     * not: `Response::__toString()` emits only the head (with no `Content-Length` at
-     * all), and both the length and the file's bytes are produced by
-     * `Http::encode()`, which pushes them straight into the connection. Routing every
-     * measurement through `encode()` is what makes the static-file comparison below
-     * a wire comparison rather than a head comparison.
+     * not: `Response::__toString()` emits only the head, and the length and the file's
+     * bytes are written straight into the connection by FileBodySender as raw strings.
+     * {@see self::wireOfSent()} joins those writes so the static-file comparison below
+     * stays a wire comparison rather than a head comparison.
      */
     private function wireBytes(mixed $response): string
     {
@@ -278,7 +310,7 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         $path = '/assets/app/index-DaB12cd3.js';
         $onDisk = (string) file_get_contents($this->publicRoot . $path);
 
-        $getWire = $this->wireBytes($this->invoke('GET', $path));
+        $getWire = $this->wireOfSent($this->sentBy('GET', $path));
         $headWire = $this->wireBytes($this->invoke('HEAD', $path));
 
         // Premise: the GET really does stream the file, so the HEAD assertion below
@@ -308,9 +340,10 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         $head = $this->invoke('HEAD', '/assets/app/index-DaB12cd3.js');
         self::assertInstanceOf(BodylessResponse::class, $head);
 
-        $get = $this->invoke('GET', '/assets/app/index-DaB12cd3.js');
-        self::assertInstanceOf(WorkermanResponse::class, $get);
-        self::assertNotInstanceOf(BodylessResponse::class, $get, 'a GET must keep the streaming encoder');
+        // A GET keeps streaming the file: the header block, then the body as raw chunks.
+        $get = $this->sentBy('GET', '/assets/app/index-DaB12cd3.js');
+        self::assertGreaterThan(1, count($get), 'a GET must keep streaming the body');
+        self::assertStringContainsString('console.log', $this->wireOfSent($get));
     }
 
     // --- site 2: the page-rendering send --------------------------------------
@@ -545,7 +578,7 @@ final class HttpHandlerHeadNoBodyTest extends TestCase
         );
 
         $bodies = [
-            'serveStatic()'  => self::bodyBytes($this->wireBytes($this->invoke('GET', '/assets/app/index-DaB12cd3.js'))),
+            'serveStatic()'  => self::bodyBytes($this->wireOfSent($this->sentBy('GET', '/assets/app/index-DaB12cd3.js'))),
             'the SPA shell'  => self::bodyBytes((string) $this->invoke('GET', '/app')),
             'the 500'        => self::bodyBytes((string) $this->invoke('GET', '/api/v1/anything', $exploding)),
             'the 500 doc'    => self::bodyBytes(

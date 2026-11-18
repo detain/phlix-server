@@ -102,17 +102,15 @@ final class HttpHandlerImageFastPathWiringTest extends TestCase
             new WorkermanRequest("GET {$minted} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
         );
 
-        self::assertCount(1, $sent);
-        $response = $sent[0];
-        self::assertInstanceOf(WorkermanResponse::class, $response);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('image/jpeg', $response->getHeader('Content-Type'));
-
-        // The bytes are attached for event-loop streaming, not buffered — the
-        // property Response::toWorkermanResponse() has to preserve.
-        self::assertNotNull($response->file);
-        self::assertSame($this->posterPath, $response->file['file']);
-        self::assertSame($this->posterBytes, (string) file_get_contents($response->file['file']));
+        // The reply is file-backed, so HttpHandler hands it to FileBodySender: the header
+        // block goes out as one raw write, then the poster bytes as body chunks. Nothing
+        // is buffered into a single concatenated write.
+        self::assertGreaterThan(1, count($sent));
+        self::assertIsString($sent[0]);
+        self::assertStringStartsWith('HTTP/1.1 200', $sent[0]);
+        self::assertStringContainsString("Content-Type: image/jpeg\r\n", $sent[0]);
+        self::assertStringContainsString('Content-Length: ' . strlen($this->posterBytes) . "\r\n", $sent[0]);
+        self::assertSame($this->posterBytes, implode('', array_slice($sent, 1)));
     }
 
     /**

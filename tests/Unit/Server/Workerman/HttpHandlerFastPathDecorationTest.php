@@ -101,17 +101,16 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
 
     public function testStaticReplyCarriesTheFullSecurityHeaderSet(): void
     {
-        $response = $this->invoke('GET', '/assets/app/index-DaB12cd3.js');
+        $head = self::headBlock($this->sentBy('GET', '/assets/app/index-DaB12cd3.js'));
 
-        self::assertInstanceOf(WorkermanResponse::class, $response);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('nosniff', $response->getHeader('X-Content-Type-Options'));
-        self::assertSame('SAMEORIGIN', $response->getHeader('X-Frame-Options'));
-        self::assertIsString($response->getHeader('Strict-Transport-Security'));
-        self::assertIsString($response->getHeader('Content-Security-Policy'));
+        self::assertStringStartsWith('HTTP/1.1 200', $head);
+        self::assertSame('nosniff', self::headerValue($head, 'X-Content-Type-Options'));
+        self::assertSame('SAMEORIGIN', self::headerValue($head, 'X-Frame-Options'));
+        self::assertNotNull(self::headerValue($head, 'Strict-Transport-Security'));
+        self::assertNotNull(self::headerValue($head, 'Content-Security-Policy'));
         // The pre-existing header set survives untouched — decoration adds, never replaces.
-        self::assertSame('application/javascript; charset=utf-8', $response->getHeader('Content-Type'));
-        self::assertStringContainsString('immutable', (string) $response->getHeader('Cache-Control'));
+        self::assertSame('application/javascript; charset=utf-8', self::headerValue($head, 'Content-Type'));
+        self::assertStringContainsString('immutable', (string) self::headerValue($head, 'Cache-Control'));
     }
 
     public function testStaticHeadReplyCarriesSecurityHeadersToo(): void
@@ -126,34 +125,31 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
     {
         putenv(CorsManager::ENV_ALLOWED_ORIGINS . '=https://tv.example.com');
 
-        $response = $this->invoke('GET', '/robots.txt', headers: ['Origin' => 'https://tv.example.com']);
+        $head = self::headBlock($this->sentBy('GET', '/robots.txt', headers: ['Origin' => 'https://tv.example.com']));
 
-        self::assertInstanceOf(WorkermanResponse::class, $response);
-        self::assertSame('https://tv.example.com', $response->getHeader('Access-Control-Allow-Origin'));
-        self::assertSame('true', $response->getHeader('Access-Control-Allow-Credentials'));
-        self::assertSame('Origin', $response->getHeader('Vary'));
-        self::assertSame('nosniff', $response->getHeader('X-Content-Type-Options'));
+        self::assertSame('https://tv.example.com', self::headerValue($head, 'Access-Control-Allow-Origin'));
+        self::assertSame('true', self::headerValue($head, 'Access-Control-Allow-Credentials'));
+        self::assertSame('Origin', self::headerValue($head, 'Vary'));
+        self::assertSame('nosniff', self::headerValue($head, 'X-Content-Type-Options'));
     }
 
     public function testStaticReplyForForeignOriginCarriesNoCorsHeadersButKeepsSecurityHeaders(): void
     {
         putenv(CorsManager::ENV_ALLOWED_ORIGINS . '=https://tv.example.com');
 
-        $response = $this->invoke('GET', '/robots.txt', headers: ['Origin' => 'https://evil.example']);
+        $head = self::headBlock($this->sentBy('GET', '/robots.txt', headers: ['Origin' => 'https://evil.example']));
 
-        self::assertInstanceOf(WorkermanResponse::class, $response);
-        self::assertNull($response->getHeader('Access-Control-Allow-Origin'));
-        self::assertNull($response->getHeader('Vary'));
-        self::assertSame('nosniff', $response->getHeader('X-Content-Type-Options'));
+        self::assertNull(self::headerValue($head, 'Access-Control-Allow-Origin'));
+        self::assertNull(self::headerValue($head, 'Vary'));
+        self::assertSame('nosniff', self::headerValue($head, 'X-Content-Type-Options'));
     }
 
     public function testStaticReplyWithoutAllowlistCarriesNoCorsHeadersAtAll(): void
     {
-        $response = $this->invoke('GET', '/robots.txt', headers: ['Origin' => 'https://tv.example.com']);
+        $head = self::headBlock($this->sentBy('GET', '/robots.txt', headers: ['Origin' => 'https://tv.example.com']));
 
-        self::assertInstanceOf(WorkermanResponse::class, $response);
         self::assertNull(
-            $response->getHeader('Access-Control-Allow-Origin'),
+            self::headerValue($head, 'Access-Control-Allow-Origin'),
             'empty allowlist = CORS off, byte-for-byte',
         );
     }
@@ -273,18 +269,19 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
         putenv(CorsManager::ENV_ALLOWED_ORIGINS . '=https://app.example.com');
         $minted = SignedUrl::fromEnv()->mint('/api/v1/artwork/item-s50?size=w342');
 
-        $response = $this->invoke(
+        $sent = $this->sentBy(
             'GET',
             $minted,
             headers: ['Origin' => 'https://app.example.com'],
             imageStorage: true,
         );
+        // The file streaming must survive decoration: the header block carries the
+        // decorated headers and the body follows it as raw chunks.
+        $head = self::headBlock($sent);
 
-        self::assertInstanceOf(WorkermanResponse::class, $response);
-        self::assertSame(200, $response->getStatusCode());
-        self::assertSame('nosniff', $response->getHeader('X-Content-Type-Options'));
-        self::assertSame('https://app.example.com', $response->getHeader('Access-Control-Allow-Origin'));
-        self::assertNotNull($response->file, 'the withFile streaming must survive decoration');
+        self::assertStringStartsWith('HTTP/1.1 200', $head);
+        self::assertSame('nosniff', self::headerValue($head, 'X-Content-Type-Options'));
+        self::assertSame('https://app.example.com', self::headerValue($head, 'Access-Control-Allow-Origin'));
     }
 
     // --- control: dispatched replies keep their existing decoration ---------------
@@ -318,6 +315,30 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
         ?AuthManager $authManager = null,
         bool $imageStorage = false,
     ): mixed {
+        $sent = $this->sentBy($method, $path, $headers, $application, $authManager, $imageStorage);
+
+        self::assertCount(1, $sent, 'exactly one response is sent');
+
+        return $sent[0];
+    }
+
+    /**
+     * Drive one real `__invoke()` and return every raw write it made, in order.
+     *
+     * A file-backed reply is written as its header block (one raw string) followed by
+     * body chunks, so it does not come back as a single response object.
+     *
+     * @param array<string, string> $headers
+     * @return list<mixed>
+     */
+    private function sentBy(
+        string $method,
+        string $path,
+        array $headers = [],
+        ?Application $application = null,
+        ?AuthManager $authManager = null,
+        bool $imageStorage = false,
+    ): array {
         $raw = "{$method} {$path} HTTP/1.1\r\nHost: localhost\r\n";
         foreach ($headers as $name => $value) {
             $raw .= "{$name}: {$value}\r\n";
@@ -330,9 +351,32 @@ final class HttpHandlerFastPathDecorationTest extends TestCase
             new WorkermanRequest($raw),
         );
 
-        self::assertCount(1, $sent, 'exactly one response is sent');
+        return $sent;
+    }
+
+    /**
+     * The header block of a file-backed reply: the first raw write, with body chunks after it.
+     *
+     * @param list<mixed> $sent
+     */
+    private static function headBlock(array $sent): string
+    {
+        self::assertGreaterThan(1, count($sent), 'a file-backed reply is a header block followed by body chunks');
+        self::assertIsString($sent[0], 'the header block is written as a raw string');
 
         return $sent[0];
+    }
+
+    /** The value of one header in a raw head block, or null when it is absent. */
+    private static function headerValue(string $head, string $name): ?string
+    {
+        foreach (explode("\r\n", $head) as $line) {
+            if (stripos($line, $name . ':') === 0) {
+                return trim(substr($line, strlen($name) + 1));
+            }
+        }
+
+        return null;
     }
 
     /**

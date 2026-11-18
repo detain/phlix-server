@@ -41,6 +41,16 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
     }
 
+    public function testBatchCommandIsNicedAndCapsItsDecoderThreadsLikeTheTrickplayPass(): void
+    {
+        // A batch runs up to 20 inputs in one process. It must take the same
+        // background limits as the trickplay pass, not automatic threads at normal
+        // priority on the media-asset worker.
+        $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [30, 90], '/out');
+
+        $this->assertStringStartsWith("nice -n 19 '/usr/bin/ffmpeg' -y -hide_banner -loglevel error -threads 4 ", $cmd);
+    }
+
     public function testBuildThumbnailBatchCommandPairsEachSeekWithItsOwnInput(): void
     {
         $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [30, 90, 150], '/out');

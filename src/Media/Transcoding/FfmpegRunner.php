@@ -1178,9 +1178,14 @@ class FfmpegRunner
             );
         }
 
+        // Same background limits as the trickplay pass. A batch runs up to 20 inputs
+        // in one process, and without a thread cap each decoder takes automatic
+        // threads on the media-asset worker, competing with live playback.
         return sprintf(
-            '%s -y -hide_banner -loglevel error%s%s',
+            'nice -n %d %s -y -hide_banner -loglevel error -threads %d%s%s',
+            self::TRICKPLAY_NICE_LEVEL,
             escapeshellarg($this->ffmpegPath),
+            self::TRICKPLAY_DECODE_THREADS,
             $inputArgs,
             $outputArgs
         );

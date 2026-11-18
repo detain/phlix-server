@@ -99,6 +99,14 @@ use Psr\Log\NullLogger;
  *    cross-worker waiter marker in the shared segment tree (for example a
  *    `{final}.waiter-<pid>-<nonce>` created on join, removed in `finally`, and
  *    bounded by a TTL), consulted by hasOtherWaiter through a glob.
+ *  - Trailer sidecars. The group leader (the `timeout` wrapper) can exit at once on
+ *    SIGTERM, while ffmpeg is still writing its SIGTERM trailer. The temps are cleaned
+ *    when the leader is gone, so a trailer write can leave a 0-byte `.s0` or `.m3u8`
+ *    sidecar after the cleanup. Measured: the sidecar reappeared about 2 s after the
+ *    reap. Nothing counts or publishes a sidecar (the cap and the dedup count only the
+ *    `.part-<8 hex>` marker), and the job-directory LRU removes it. Tracking the whole
+ *    process group would close the gap, but `kill(-pgid, 0)` also sees unreaped zombies,
+ *    so it could keep an orphan forever. It is left as a bound.
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},

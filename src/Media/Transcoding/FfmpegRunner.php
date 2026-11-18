@@ -371,9 +371,8 @@ class FfmpegRunner
      * racy when it is probed, and is memoized and persisted as an old one is. So a racy file costs one
      * ffprobe launch per call until the clock passes its stamp plus the window. For a stamp that was
      * beyond the cap when probed, the racy span starts at stamp minus one day, so it is not bounded from
-     * the probe time (see Exception 11). Callers
-     * on the segment path call this one or more times per segment build; see Exception 11 in
-     * docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
+     * the probe time (see Exception 11). Callers on the segment path call this one or more times per
+     * segment build; see Exception 11 in docs/dev/BLOCKING_IO_EXCEPTIONS.md for the count on each path.
      *
      * @example
      * ```php

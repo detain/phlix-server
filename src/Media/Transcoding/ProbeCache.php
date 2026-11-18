@@ -44,7 +44,7 @@ use Workerman\Timer;
  *    rewrite keeps the stamp only if the granularity is above 3 seconds. Another residue is a wall
  *    clock that moves backwards after the probe, so that a rewrite lands on the stored second. The
  *    last residue is the cap itself: a mount whose clock runs ahead of this host by more than
- *    MAX_FUTURE_SKEW_SECONDS stamps its files past the cap, so they are not racy. A same-second
+ *    MAX_FUTURE_SKEW_SECONDS stamps its files past the cap, so they are not racy when probed. A same-second
  *    rewrite by that clock keeps the stamp unchanged, and a stale probe can then be served. A plain
  *    write from a host with sane skew cannot reach a stamp that far ahead, so the cap accepts this
  *    risk. No bound on that skew is set in the code or config. The guard also assumes that ctime is
@@ -123,7 +123,7 @@ final class ProbeCache
      * Largest distance, in whole seconds, that a file timestamp may lie ahead of the wall clock and
      * still be racy. A stamp further ahead than this is not racy when it is probed: it is persisted and
      * memoized like an old stamp, so the probe at the time it is first read costs one launch. It becomes
-     * racy again from stamp minus this value, and each call then costs one launch until stamp plus
+     * racy from stamp minus this value, and each call then costs one launch until stamp plus
      * RACY_WINDOW_SECONDS.
      *
      * The racy rule exists for a same-second rewrite. Such a rewrite leaves the stored stamp unchanged
@@ -131,7 +131,7 @@ final class ProbeCache
      * ahead of this host's as the stamp is. A plain write from a host with sane skew cannot stamp a file
      * a day ahead. An explicit utime restore changes ctime to the restore time, and the ctime term of
      * {@see isRacy()} guards that. So for a stamp far past any plausible skew, the racy rule costs one
-     * ffprobe per probe call and protects nothing. One day is well beyond the skew of an NFS or SMB
+     * ffprobe per probe call while the stamp is racy, and protects nothing. One day is well beyond the skew of an NFS or SMB
      * server, and its racy span is at most this value plus RACY_WINDOW_SECONDS long. For a stamp beyond the
      * cap, that span starts at stamp minus this value, not at the probe time (see Exception 11 in
      * docs/dev/BLOCKING_IO_EXCEPTIONS.md).

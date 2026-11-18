@@ -1642,8 +1642,9 @@ class AuthManager
         // The family's bound profile. The `profile_id` claim rides in the refresh token and is
         // re-carried on every rotation, so the claim IS the family's pid. A refresh re-mints
         // for that profile or refuses. It must never re-derive the account default, which is
-        // what resolveProfileForUser() does for a stale claim on the access path. Otherwise a
-        // bearer bound to a profile that was since removed would refresh into the default.
+        // what resolveProfileForUser() does for a stale claim. validateAccessToken() refuses
+        // such a token outright. Otherwise a bearer bound to a profile that was since removed
+        // would refresh into the default.
         //
         // This check runs BEFORE the family adjudication below (finding 6). Adjudication consumes
         // the presented grant, so a refusal made after it left the grant consumed, and the client's

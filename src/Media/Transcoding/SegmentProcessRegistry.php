@@ -133,11 +133,12 @@ use Psr\Log\NullLogger;
  *    Linux does not reallocate a PID while any process still names it as its group id, so a
  *    group id cannot be reused while a member of the old group is alive. The start-time check
  *    covers the rest of the window.
- *  - Unchecked leader in a mixed record. An unchecked leader (no start time, for example one that
- *    exited between shell_exec() and register()) gets TERM and no KILL, and its group is not
- *    snapshotted. The record is held after the grace while that group still exists (see
- *    {@see uncheckedGroupAlive()}), up to the hold bound after the TERM. Its group's members keep
- *    their temp and their cap slot until then, and they are never KILLed.
+ *  - Unchecked leader. An unchecked leader (no start time, for example one that exited between
+ *    shell_exec() and register(), or any leader on a host without `/proc`) gets TERM and no KILL,
+ *    and its group is not snapshotted. Its launch's temp and cap slot are held after the grace
+ *    while that group still exists (see {@see uncheckedGroupAlive()}), up to the hold bound after
+ *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a verified
+ *    launch is released at the grace, once it has been KILLed or is dead (see {@see heldPids()}).
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -203,6 +204,16 @@ final class SegmentProcessRegistry
      * @var array<string, array<int, string>>
      */
     private array $tmpsByKey = [];
+
+    /**
+     * Cancel key => (PID => the `.part-<hex>` temp(s) registered for that PID). Read at the grace
+     * of a TERMed record (see {@see heldPids()}), so each launch's temp is released as soon as that
+     * launch is dead or KILLed, while an unchecked launch keeps its temp for as long as its group
+     * exists. Dropped with the key, like {@see $tmpsByKey}.
+     *
+     * @var array<string, array<int, array<int, string>>>
+     */
+    private array $tmpsByPid = [];
 
     /**
      * Cancel key => (PID => /proc start time, or null when /proc was unreadable at
@@ -325,14 +336,14 @@ final class SegmentProcessRegistry
      * are cleaned. Bounded by the watchdog's own wall-clock and stall rules.
      *
      * `members` is the group membership snapshot taken before TERM (PID => start time), or
-     * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace. A
-     * null record keeps its temps and its cap count while a PID is still alive, up to
-     * {@see $unverifiedHoldSeconds} after TERM. A record with a snapshot and an unchecked leader
-     * keeps them while that leader's group still exists, up to the same bound.
+     * null when `/proc` was unreadable then. Only the members in it can be KILLed at grace. Each
+     * launch's temps are in `tmpsByPid`. At the grace, a launch that is dead or was KILLed
+     * releases its temp at once. A launch that may still run (see {@see heldPids()}) keeps its
+     * own temp and its cap slot, up to {@see $unverifiedHoldSeconds} after TERM.
      *
      * @var list<array{key: string, pids: array<int, int>, starts: array<int, int|null>,
-     *     tmps: array<int, string>, startedNs: int, lastToken: int, lastGrowNs: int,
-     *     termNs: int|null, members: array<int, int>|null}>
+     *     tmps: array<int, string>, tmpsByPid: array<int, array<int, string>>, startedNs: int,
+     *     lastToken: int, lastGrowNs: int, termNs: int|null, members: array<int, int>|null}>
      */
     private array $orphans = [];
 
@@ -396,10 +407,10 @@ final class SegmentProcessRegistry
 
     /**
      * Group-alive probe: fn(int $pid): bool. True while any process still carries `$pid` as its
-     * process group id (`kill(-pid, 0)`). It is asked only about an UNCHECKED leader of a record that
-     * has a membership snapshot (see {@see uncheckedGroupAlive()}): such a group's members were never
+     * process group id (`kill(-pid, 0)`). It is asked about each UNCHECKED leader of a TERMed record
+     * (see {@see heldPids()} and {@see uncheckedGroupAlive()}). Such a group's members were never
      * snapshotted, so nothing in it can be KILLed, but they still hold the temp and the cap slot.
-     * Overridable in tests, so no real process group is probed. Its default is false when posix is absent.
+     * Overridable in tests. Its default is false when posix is absent.
      *
      * @var callable(int): bool
      */
@@ -428,7 +439,7 @@ final class SegmentProcessRegistry
 
     /**
      * Seconds after its TERM that an orphan is held while something it cannot KILL may still run
-     * (see {@see sweep()} and {@see unverifiedHeld()}): an unknown membership snapshot while a PID
+     * (see {@see sweep()} and {@see heldPids()}): an unknown membership snapshot while a PID
      * is alive, or an unchecked leader's group. The container sets it from `ffmpeg.transcode_timeout`,
      * and it is measured from the TERM, not from registration. The default is the shipped value, so
      * the hold is always finite.
@@ -627,6 +638,7 @@ final class SegmentProcessRegistry
 
         if ($tmp !== null && $tmp !== '') {
             $this->tmpsByKey[$key][] = $tmp;
+            $this->tmpsByPid[$key][$pid][] = $tmp;
         }
 
         // The watchdog's clock starts at the first registration for this key.
@@ -693,8 +705,8 @@ final class SegmentProcessRegistry
      * later pass once the grace period has elapsed. A reaped record (from {@see kill()},
      * a stall or a wall-clock reap) is held for the whole grace, whatever its leader does.
      * Then one pass sends SIGKILL to each TERM-time member whose start time still matches
-     * (see {@see sigkillMembers()}), and its temps are removed unless the record is held (see
-     * the grace branch). The SIGKILL is not waited on.
+     * (see {@see sigkillMembers()}). Each launch's temp is removed unless that launch is still held
+     * (see the grace branch and {@see heldPids()}). The SIGKILL is not waited on.
      * Nothing in the pass sleeps. A launch that was found dead before any signal has its
      * temps removed at once. Driven by a per-worker timer and also, throttled, from the cap
      * check in TranscodeManager.
@@ -776,18 +788,29 @@ final class SegmentProcessRegistry
                     continue;
                 }
                 $this->sigkillMembers($orphan['pids'], $orphan['starts'], $orphan['members']);
-                if (
-                    $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
-                    && $this->unverifiedHeld($orphan['pids'], $orphan['starts'], $orphan['members'])
-                ) {
-                    // Something this record cannot KILL may still run: no snapshot at all, or an
-                    // unchecked leader's group. Keep the record, so its temp (and the cap slot it
-                    // counts) stays until that is verified gone or the hold bound passes.
-                    $keep[] = $orphan;
-                    continue;
+                // Each launch's temp is judged on its own launch (see heldPids()). A launch that is dead
+                // or was KILLed releases its temp now, even when a sibling launch of the same record is
+                // still held. Only a launch that may still run keeps its temp, and only up to the bound.
+                $held = $now - $orphan['termNs'] < $this->unverifiedHoldNanoseconds()
+                    ? $this->heldPids($orphan['pids'], $orphan['starts'], $orphan['members'])
+                    : [];
+                $remaining = [];
+                foreach ($orphan['tmpsByPid'] as $pid => $pidTmps) {
+                    if (in_array($pid, $held, true)) {
+                        $remaining[$pid] = $pidTmps;
+                    } else {
+                        $this->cleanTemps($pidTmps);
+                    }
                 }
-                $this->cleanTemps($orphan['tmps']);
-                continue; // escalated and dropped
+                if ($held === []) {
+                    continue; // escalated and dropped
+                }
+                // Something this launch cannot KILL may still run. Keep the record with only the held
+                // launches' temps, so their cap slot stays until that is verified gone or the bound passes.
+                $orphan['tmpsByPid'] = $remaining;
+                $orphan['tmps'] = array_values(array_merge([], ...array_values($remaining)));
+                $keep[] = $orphan;
+                continue;
             }
 
             if (!$this->anyAlive($orphan['pids'], $orphan['starts'])) {
@@ -842,6 +865,7 @@ final class SegmentProcessRegistry
     {
         $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
+        $tmpsByPid = $this->tmpsByPid[$key] ?? [];
         $progress = $this->progress[$key] ?? null;
         $starts = $this->startsFor($key);
         $this->drop($key);
@@ -855,6 +879,7 @@ final class SegmentProcessRegistry
             'pids' => $pids,
             'starts' => $starts,
             'tmps' => $tmps,
+            'tmpsByPid' => $tmpsByPid,
             'startedNs' => $progress['startedNs'],
             'lastToken' => $progress['lastToken'],
             'lastGrowNs' => $progress['lastGrowNs'],
@@ -887,21 +912,31 @@ final class SegmentProcessRegistry
 
     /**
      * Reap a tracked launch without waiting: SIGTERM now, and the SIGKILL escalation later from
-     * {@see sweep()}. A launch with nothing left to escalate (leader dead, no member in the
-     * snapshot, no unchecked group still alive, or an unknown snapshot that sweep() would drop once
-     * the leader is dead) has its temps removed at once. Otherwise its record moves to the orphan
-     * list with its TERM time, its membership snapshot and its temps. Its temps go when sweep()
-     * drops the record.
+     * {@see sweep()}. A launch with nothing left to escalate (no member in the snapshot, no PID
+     * alive, and no unchecked group still alive) has its temps removed at once. This holds for a
+     * null snapshot too, so an all-unchecked record whose leader exited on TERM is still held while
+     * its group lives. Otherwise its record moves to the orphan list with its TERM time, its
+     * membership snapshot and its temps. Its temps go when sweep() drops the record, or earlier
+     * for a launch that is no longer held.
      *
-     * @param array<int, int>      $pids
-     * @param array<int, int|null> $starts
-     * @param array<int, string>   $tmps
+     * @param array<int, int>                $pids
+     * @param array<int, int|null>           $starts
+     * @param array<int, string>             $tmps
+     * @param array<int, array<int, string>> $tmpsByPid
      */
-    private function reapTracked(string $key, array $pids, array $starts, array $tmps, int $now): void
-    {
+    private function reapTracked(
+        string $key,
+        array $pids,
+        array $starts,
+        array $tmps,
+        array $tmpsByPid,
+        int $now,
+    ): void {
         $members = $this->sendTerm($pids, $starts);
-        $heldByUncheckedGroup = $members !== null && $this->uncheckedGroupAlive($pids, $starts);
-        if (($members === [] || $members === null) && !$this->anyAlive($pids, $starts) && !$heldByUncheckedGroup) {
+        $nothingLeft = ($members === [] || $members === null)
+            && !$this->anyAlive($pids, $starts)
+            && !$this->uncheckedGroupAlive($pids, $starts);
+        if ($nothingLeft) {
             $this->cleanTemps($tmps);
 
             return;
@@ -912,6 +947,7 @@ final class SegmentProcessRegistry
             'pids' => $pids,
             'starts' => $starts,
             'tmps' => $tmps,
+            'tmpsByPid' => $tmpsByPid,
             'startedNs' => $now,
             'lastToken' => 0,
             'lastGrowNs' => $now,
@@ -929,11 +965,12 @@ final class SegmentProcessRegistry
      * snapshotted either. Returns null when the membership is unknown: a leader's identity is
      * unknown (`/proc` unreadable now), or no leader is verified and at least one is unchecked
      * (no start time was recorded, as on a host without `/proc`), so there is no group to snapshot.
-     * Null means no KILL later. The record is held while any of its PIDs is alive, up to the hold
-     * bound after the TERM (see {@see sweep()}). A MIXED record (a verified leader with a snapshot,
-     * and an unchecked leader) is different. The unchecked leader's group gets TERM and no KILL, and
-     * its members are not in the snapshot, so they are never KILLed. The record is held after the
-     * grace while that group still exists, up to the same bound (see {@see unverifiedHeld()}).
+     * Null means no KILL later. The record is held while any of its PIDs is alive, or while an
+     * unchecked leader's group still exists, up to the hold bound after the TERM (see {@see sweep()}
+     * and {@see heldPids()}). A MIXED record (a verified leader with a snapshot, and an unchecked
+     * leader) is different. The unchecked leader's group gets TERM and no KILL, and its members
+     * are not in the snapshot, so they are never KILLed. Its temp is held after the grace while that
+     * group still exists, up to the same bound (see {@see heldPids()}).
      * An empty array means no member was found, which is different from unknown.
      *
      * @param array<int, int>      $pids
@@ -1002,26 +1039,41 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Whether a TERMed record must still be held once its grace has elapsed, because something it
-     * cannot KILL may still be running:
-     *  - no membership snapshot (null): held while any PID is alive (the all-unchecked and unknown
-     *    cases, as before);
-     *  - a snapshot with an unchecked leader: held while that leader's group still exists. The
-     *    group's members were never snapshotted, so no KILL reaches them, but they still hold the
-     *    temp and the cap slot;
-     *  - a snapshot with only verified leaders: not held (the members were KILLed at the grace).
+     * The PIDs of a TERMed record whose launch may still run once its grace has elapsed. The
+     * verdict is per launch, so a dead or KILLed verified launch releases its temp even when a
+     * sibling launch of the same record is still held:
+     *  - an UNCHECKED launch (no start time) is held while its group still exists. With no
+     *    membership snapshot it is also held while its PID is alive. Its group's members were never
+     *    snapshotted, so no KILL reaches them, but they still hold the temp and the cap slot;
+     *  - a VERIFIED launch is held only when there is no membership snapshot and its PID is still
+     *    alive, because nothing can KILL it. With a snapshot, its group was KILLed at the grace, or
+     *    it is gone, so it is not held.
+     *
+     * An empty result means nothing is held, and the record is dropped at the grace.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts
      * @param array<int, int>|null $members
+     *
+     * @return array<int, int>
      */
-    private function unverifiedHeld(array $pids, array $starts, ?array $members): bool
+    private function heldPids(array $pids, array $starts, ?array $members): array
     {
-        if ($members === null) {
-            return $this->anyAlive($pids, $starts);
+        $held = [];
+        foreach ($pids as $pid) {
+            $start = $starts[$pid] ?? null;
+            if ($start === null) {
+                $stillRuns = ($this->groupAliveProbe)($pid)
+                    || ($members === null && $this->isLive($pid, null));
+            } else {
+                $stillRuns = $members === null && $this->isLive($pid, $start);
+            }
+            if ($stillRuns) {
+                $held[] = $pid;
+            }
         }
 
-        return $this->uncheckedGroupAlive($pids, $starts);
+        return $held;
     }
 
     /**
@@ -1400,6 +1452,7 @@ final class SegmentProcessRegistry
 
         $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
+        $tmpsByPid = $this->tmpsByPid[$key] ?? [];
         $starts = $this->startsFor($key);
         $this->drop($key);
         if ($pids === []) {
@@ -1428,7 +1481,7 @@ final class SegmentProcessRegistry
         // removed when the record is dropped (SV-4.2 finding #1: a signalled encode never runs
         // its atomic-publish `|| rm`). Only this launcher's own `.part-<hex>` temp(s) are removed,
         // never the whole `{$final}.part-*` family (SV-4.2 re-review Low).
-        $this->reapTracked($key, $pids, $starts, $tmps, (int) hrtime(true));
+        $this->reapTracked($key, $pids, $starts, $tmps, $tmpsByPid, (int) hrtime(true));
 
         return count($pids);
     }
@@ -1499,7 +1552,13 @@ final class SegmentProcessRegistry
      */
     private function drop(string $key): void
     {
-        unset($this->pids[$key], $this->tmpsByKey[$key], $this->progress[$key], $this->starts[$key]);
+        unset(
+            $this->pids[$key],
+            $this->tmpsByKey[$key],
+            $this->tmpsByPid[$key],
+            $this->progress[$key],
+            $this->starts[$key],
+        );
 
         $group = $this->groupOfKey[$key] ?? null;
         unset($this->groupOfKey[$key]);

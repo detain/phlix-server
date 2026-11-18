@@ -471,7 +471,8 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
     public function testAMixedRecordIsHeldWhileAnUncheckedGroupStillExists(): void
     {
         $key = '/segs/job/seg-00019.ts';
-        $tmp = '/segs/job/seg-00019.ts.part-aaaa1111';
+        $tmp = '/segs/job/seg-00019.ts.part-aaaa1111'; // the verified launch (7201)
+        $uncheckedTmp = '/segs/job/seg-00019.ts.part-bbbb2222'; // the unchecked launch (7202)
         $this->proc[7201] = self::statLine(7201, 'S', 100);
         $this->alive[7201] = true;
         $this->alive[7202] = false; // B's leader has exited; its children do not
@@ -480,7 +481,7 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry = $this->registry();
         $registry->setProcMountedProbe(static fn (): bool => true);
         $registry->register($key, 7201, null, $tmp);
-        $registry->register($key, 7202, null, null); // no `/proc` entry, so unchecked
+        $registry->register($key, 7202, null, $uncheckedTmp); // no `/proc` entry, so unchecked
 
         $start = (int) hrtime(true);
         $registry->kill($key);
@@ -494,16 +495,25 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         );
         self::assertSame([self::SIGTERM], $this->signalsFor(7202), 'the unchecked group never gets a KILL');
         self::assertSame(1, $registry->orphanCount(), 'held while the unchecked group still exists');
-        self::assertSame([], $this->cleaned, 'its temp and cap slot are kept while that group lives');
+        // Finding 1 (round 7). Before this fix this assertion was assertSame([], ...): the verified
+        // launch's temp was held with the whole record, although its leader 7201 was KILLed at the grace.
+        // The verified launch's temp is now released at the grace. Only the unchecked launch's temp is held.
+        self::assertSame([$tmp], $this->cleaned, 'the verified launch (KILLed at grace) releases its temp');
+        self::assertNotContains(
+            $uncheckedTmp,
+            $this->cleaned,
+            'the unchecked launch keeps its temp while its group lives',
+        );
 
         $registry->sweep($start + 2 * self::SEC);
         self::assertSame(1, $registry->orphanCount(), 'still held on a later pass');
         self::assertSame([self::SIGTERM], $this->signalsFor(7202), 'still no KILL to the unchecked group');
+        self::assertSame([$tmp], $this->cleaned, 'the unchecked temp is still held on a later pass');
 
         $this->groupAlive[7202] = false; // its children have exited
         $registry->sweep($start + 3 * self::SEC);
         self::assertSame(0, $registry->orphanCount(), 'dropped once the unchecked group is gone');
-        self::assertSame([$tmp], $this->cleaned);
+        self::assertSame([$tmp, $uncheckedTmp], $this->cleaned, 'the unchecked temp is cleaned when the record drops');
     }
 
     /**
@@ -529,7 +539,9 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry->kill($key);
         $registry->sweep($start + 2 * self::SEC);
         self::assertSame(1, $registry->orphanCount(), 'held inside the hold bound');
-        self::assertSame([], $this->cleaned);
+        // The verified leader 7211 was KILLed at the grace, so its temp is released there. The
+        // unchecked group holds the record, but it holds no temp of its own.
+        self::assertSame([$tmp], $this->cleaned, 'the verified launch releases its temp at the grace');
 
         $registry->sweep($start + 11 * self::SEC); // 11 s after the TERM, past the 10 s bound
         self::assertSame(0, $registry->orphanCount(), 'dropped once the hold bound passes');
@@ -571,5 +583,148 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
         $registry->sweep((int) hrtime(true) + self::SEC);
         self::assertSame(0, $registry->orphanCount());
         self::assertSame([$tmp], $this->cleaned);
+    }
+
+    /**
+     * Finding 2. Every leader is unchecked (no `/proc` at registration, and none at TERM time). The
+     * leader exited on TERM while its children kept running, so its PID is dead, but its group probe
+     * still reports the group alive. The record must be held with its temp until the group is gone
+     * or the hold bound passes. Before this fix, reapTracked() cleaned it at once, so those children
+     * could never be tracked again.
+     */
+    public function testAnAllUncheckedRecordWhoseLeaderDiedIsHeldWhileItsGroupLives(): void
+    {
+        $key = '/segs/job/seg-00022.ts';
+        $tmp = '/segs/job/seg-00022.ts.part-dddd7777';
+        $this->alive[7301] = false; // the leader exited on TERM
+        $this->groupAlive[7301] = true; // its children still run
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => false); // no `/proc`: every leader is unchecked
+        $registry->register($key, 7301, null, $tmp);
+        $registry->configureUnverifiedHold(10.0);
+
+        $start = (int) hrtime(true);
+        $registry->kill($key);
+        self::assertSame([self::SIGTERM], $this->signalsFor(7301), 'the unchecked leader gets TERM');
+        self::assertSame(1, $registry->orphanCount(), 'held at once: its group still exists');
+        self::assertSame([], $this->cleaned, 'its temp is kept while the group lives');
+
+        $registry->sweep($start + 2 * self::SEC); // past the 0.5 s grace
+        self::assertSame(1, $registry->orphanCount(), 'still held past the grace');
+        self::assertSame([], $this->cleaned, 'its temp is still kept');
+        self::assertSame([self::SIGTERM], $this->signalsFor(7301), 'no KILL: nothing was snapshotted');
+
+        $registry->sweep($start + 11 * self::SEC); // 11 s after the TERM, past the 10 s bound
+        self::assertSame(0, $registry->orphanCount(), 'dropped once the hold bound passes');
+        self::assertSame([$tmp], $this->cleaned);
+        self::assertSame([self::SIGTERM], $this->signalsFor(7301), 'still no KILL at the bound');
+    }
+
+    /**
+     * Finding 2, the group-gone half. The same all-unchecked record is dropped at the grace once its
+     * group has exited, well inside the hold bound.
+     */
+    public function testAnAllUncheckedRecordIsDroppedOnceItsGroupIsGone(): void
+    {
+        $key = '/segs/job/seg-00023.ts';
+        $tmp = '/segs/job/seg-00023.ts.part-eeee8888';
+        $this->alive[7311] = false;
+        $this->groupAlive[7311] = true;
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => false);
+        $registry->register($key, 7311, null, $tmp);
+        $registry->configureUnverifiedHold(10.0);
+
+        $start = (int) hrtime(true);
+        $registry->kill($key);
+        $registry->sweep($start + 2 * self::SEC);
+        self::assertSame(1, $registry->orphanCount(), 'held while the group lives');
+
+        $this->groupAlive[7311] = false; // the group has exited
+        $registry->sweep($start + 3 * self::SEC); // past the grace, well inside the bound
+        self::assertSame(0, $registry->orphanCount(), 'dropped once the group is gone');
+        self::assertSame([$tmp], $this->cleaned);
+        self::assertSame([self::SIGTERM], $this->signalsFor(7311));
+    }
+
+    /**
+     * Finding 3. The default group-alive probe is `posix_kill(-pid, 0)`, and every other test here
+     * injects a fake for it. This test uses the REAL default on a real process group. `setsid` makes
+     * the shell the group leader, so PGID == PID. The shell backgrounds a `sleep` and exits, which
+     * leaves only the sleep in the group. The leader is reaped by proc_get_status(), so its /proc
+     * entry is gone and it is UNCHECKED. The record must be held past the grace while the group
+     * lives, and dropped once the hold bound passes. A sign or target error in the default probe
+     * (for example `posix_kill(pid, 0)` on the gone leader) would drop the record at the grace and
+     * fail here. The TERM goes to a recorder, not to the group, and the group is killed in a finally
+     * block, so no sleep process is left behind.
+     */
+    public function testTheDefaultGroupAliveProbeHoldsARecordWhileARealProcessGroupLives(): void
+    {
+        if (!function_exists('posix_kill') || !is_readable('/proc/self/stat')) {
+            self::markTestSkipped('needs posix_kill and /proc');
+        }
+        if (!is_executable('/usr/bin/setsid') && !is_executable('/bin/setsid')) {
+            self::markTestSkipped('needs setsid(1) to start a process group');
+        }
+
+        $process = proc_open(
+            "exec setsid sh -c 'sleep 30 >/dev/null 2>&1 & exit 0'",
+            [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+            $pipes,
+        );
+        self::assertIsResource($process);
+        $pid = (int) proc_get_status($process)['pid'];
+
+        try {
+            // Wait for the leader to exit. proc_get_status() reaps it, so its /proc entry is gone.
+            $deadline = microtime(true) + 3.0;
+            while (proc_get_status($process)['running'] && microtime(true) < $deadline) {
+                usleep(10_000);
+            }
+            self::assertFalse(proc_get_status($process)['running'], 'the leader exits at once');
+            self::assertFalse(
+                is_readable('/proc/' . $pid . '/stat'),
+                'the leader has no /proc entry, so it is unchecked',
+            );
+            self::assertTrue(posix_kill(-$pid, 0), 'the backgrounded sleep keeps the process group alive');
+
+            $signals = [];
+            $cleaned = [];
+            // Only the group-alive probe is the real default here. The TERM goes to a recorder.
+            $registry = new SegmentProcessRegistry(
+                null,
+                function (int $p, int $s) use (&$signals): void {
+                    $signals[] = [$p, $s];
+                },
+                null, // the real posix_kill(pid, 0) liveness probe
+                0.5,
+                function (string $tmp) use (&$cleaned): void {
+                    $cleaned[] = $tmp;
+                },
+            );
+            $key = '/segs/job/seg-00024.ts';
+            $tmp = '/segs/job/seg-00024.ts.part-ffff9999';
+            $registry->register($key, $pid, null, $tmp);
+            $registry->configureUnverifiedHold(1.0);
+
+            $start = (int) hrtime(true);
+            $registry->kill($key);
+            self::assertSame([[$pid, self::SIGTERM]], $signals, 'the unchecked leader gets TERM');
+            self::assertSame(1, $registry->orphanCount(), 'held at once: the real group still exists');
+
+            $registry->sweep($start + 800_000_000); // past the 0.5 s grace, inside the 1 s bound
+            self::assertSame(1, $registry->orphanCount(), 'held past the grace while the real group lives');
+            self::assertSame([], $cleaned, 'its temp is kept while the group lives');
+
+            posix_kill(-$pid, self::SIGKILL); // the sleep ends here
+            $registry->sweep($start + 1_500_000_000); // past the 1 s bound
+            self::assertSame(0, $registry->orphanCount(), 'dropped once the hold bound passes');
+            self::assertSame([$tmp], $cleaned);
+            self::assertSame([[$pid, self::SIGTERM]], $signals, 'no other signal was sent');
+        } finally {
+            // Never leak the sleep, even when an assertion above failed.
+            posix_kill(-$pid, self::SIGKILL);
+            proc_close($process);
+        }
     }
 }

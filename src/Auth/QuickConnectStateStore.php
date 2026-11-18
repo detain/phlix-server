@@ -360,6 +360,11 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
         $profileId = $data['profile_id'] ?? null;
         $expires = $row['expires_epoch'] ?? null;
 
+        // A blob with no `profile_id` key predates the profile field. Only that shape is
+        // legacy. A key that is present but null came from an approval that stored no
+        // profile, and it must not be read as legacy.
+        $legacyNoProfileField = !array_key_exists('profile_id', $data);
+
         return new QuickConnectPair(
             $code,
             $secret,
@@ -367,6 +372,7 @@ final class QuickConnectStateStore implements QuickConnectStateStoreInterface
             is_string($userId) && $userId !== '' ? $userId : null,
             is_numeric($expires) ? (int) $expires : 0,
             is_string($profileId) && $profileId !== '' ? $profileId : null,
+            $legacyNoProfileField,
         );
     }
 

@@ -155,7 +155,8 @@ final class PasswordChangeRequiredHttpBoundaryTest extends TestCase
 
     public function test_quick_connect_token_on_held_approver_answers_403(): void
     {
-        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-held', time() + 300);
+        // The approval carries a concrete profile, so the redemption reaches the mint seam.
+        $pair = new QuickConnectPair('ACDFGH', 's', QuickConnectPair::STATE_APPROVED, 'user-held', time() + 300, 'profile-held');
         $store = $this->createMock(QuickConnectStateStoreInterface::class);
         $store->expects(self::once())
             ->method('consumeApproved')

@@ -246,8 +246,10 @@ final class QuickConnectStateStoreTest extends TestCase
         self::assertSame('profile-P', $pair->profileId);
     }
 
-    public function testRowApprovedWithoutAProfileHydratesToNullProfile(): void
+    public function testRowApprovedWithoutAProfileFieldHydratesAsTheLegacyShape(): void
     {
+        // The blob has NO profile_id key: it predates the field, so it is the one legacy shape
+        // that may redeem onto the account default.
         $store = new QuickConnectStateStore($this->db(
             selectRows: $this->liveRow('s3cret', QuickConnectPair::STATE_APPROVED, 'user-9'),
             deleteResult: 1,
@@ -257,6 +259,29 @@ final class QuickConnectStateStoreTest extends TestCase
 
         self::assertInstanceOf(QuickConnectPair::class, $pair);
         self::assertNull($pair->profileId);
+        self::assertTrue($pair->legacyNoProfileField);
+    }
+
+    public function testRowWhoseStoredProfileIsNullIsNotTheLegacyShape(): void
+    {
+        // A current-shape approval that stored no profile carries the key with a null value.
+        // That is not legacy, so redemption refuses it instead of resolving the default.
+        $row = [[
+            'data' => json_encode([
+                'secret' => 's3cret',
+                'state' => QuickConnectPair::STATE_APPROVED,
+                'user_id' => 'user-9',
+                'profile_id' => null,
+            ]),
+            'expires_epoch' => time() + 300,
+        ]];
+        $store = new QuickConnectStateStore($this->db(selectRows: $row, deleteResult: 1));
+
+        [, $pair] = $store->consumeApproved('ACDFGH', 's3cret');
+
+        self::assertInstanceOf(QuickConnectPair::class, $pair);
+        self::assertNull($pair->profileId);
+        self::assertFalse($pair->legacyNoProfileField);
     }
 
     public function testApproveRejectsWrongSecretAndPersistsNothing(): void

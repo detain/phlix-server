@@ -2046,6 +2046,40 @@ class AuthManager
     }
 
     /**
+     * The concrete profile a quick-connect approval is stored under, resolved at APPROVE time.
+     *
+     * A session that carries its own profile is verified as owned and that id is returned. A
+     * session with no profile claim (a token minted before S80) resolves to the account's
+     * active profile, read the same way the schedule gate reads it, so the approval stores the
+     * profile the gate just checked. Returns null when there is none, and the caller refuses
+     * the approval rather than storing nothing.
+     *
+     * @param string      $userId           The approving account.
+     * @param string|null $sessionProfileId The profile the approving session runs as, or null.
+     *
+     * @return string|null A concrete profile id owned by `$userId`, or null when none exists.
+     *
+     * @throws ProfileNotOwnedException When the session's own profile is not owned by the account.
+     *
+     * @since S80 (quick-connect binds the approving profile at approve time)
+     */
+    public function approvalProfileId(string $userId, ?string $sessionProfileId): ?string
+    {
+        if ($sessionProfileId !== null && $sessionProfileId !== '') {
+            return $this->requireOwnedProfile($userId, $sessionProfileId);
+        }
+
+        if ($this->profileManager === null) {
+            return null;
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        $profileId = is_array($profile) ? ($profile['id'] ?? null) : null;
+
+        return is_string($profileId) && $profileId !== '' ? $profileId : null;
+    }
+
+    /**
      * Refuse a refresh whose bound profile the account no longer owns. Audits the refusal and
      * throws the same \InvalidArgumentException the other refresh refusals use, which the auth
      * controller maps to a 401.

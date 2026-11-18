@@ -143,6 +143,9 @@ class TranscodeController
         $signer = SignedUrl::fromEnv();
         // Bound to the session's profile: the segment gate applies its schedule (see
         // SignedUrl::mint()). An unbound token is minted for a session without one.
+        // LATENT (perf/C round-6 finding 3): a relayed request has a null profile id here, so
+        // the token is unbound. This depends on the relay identity wiring (owner decision,
+        // HubServicesProvider), and is not fixed here.
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
             ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
             : $url;
@@ -244,6 +247,9 @@ class TranscodeController
         $signer = SignedUrl::fromEnv();
         // Bound to the session's profile: the segment gate applies its schedule (see
         // SignedUrl::mint()). An unbound token is minted for a session without one.
+        // LATENT (perf/C round-6 finding 3): a relayed request has a null profile id here, so
+        // the token is unbound. This depends on the relay identity wiring (owner decision,
+        // HubServicesProvider), and is not fixed here.
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== ''
             ? $signer->mint($url, null, null, \Phlix\Server\Http\RequestContext::getProfileId())
             : $url;

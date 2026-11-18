@@ -290,7 +290,9 @@ final class TrickplayArtefacts
      *
      * The backfill reads it before it spends a decode on the item. Without it, an
      * item whose BIF can never be written is re-decoded on every run for nothing.
-     * Deleting the file makes the item eligible again.
+     * Deleting the file makes the item eligible again. Only the backfill script's default
+     * run honours it (its --retry-failed flag ignores it); the in-app job and the
+     * operator's media_assets re-prime do not read it and re-decode the item anyway.
      */
     public const FAILED_MARKER_FILENAME = 'generation-failed.json';
 
@@ -328,16 +330,21 @@ final class TrickplayArtefacts
      * Why the backfill must not generate an item, or null when it should.
      *
      * An item is skipped when its generation failed (generation-failed.json) or when its BIF
-     * failed (bif-failed.json). Both record a failure that repeats on every run, so an item
-     * that carries either is left alone until an operator deletes the marker. When both are
-     * present the generation marker is reported.
+     * failed (bif-failed.json). Both record a failure, transient ones included, so an item that
+     * carries either is left alone until an operator deletes the marker or runs the backfill with
+     * --retry-failed. When both are present the generation marker is reported.
      *
-     * @param string $dir The item's trickplay directory.
+     * @param string $dir           The item's trickplay directory.
+     * @param bool   $honourMarkers False ignores the markers, as the backfill's --retry-failed does.
      *
      * @return string|null The marker file name that skips the item, or null to generate it.
      */
-    public static function backfillSkipMarker(string $dir): ?string
+    public static function backfillSkipMarker(string $dir, bool $honourMarkers = true): ?string
     {
+        if (!$honourMarkers) {
+            return null;
+        }
+
         if (self::hasFailedMarker($dir)) {
             return self::FAILED_MARKER_FILENAME;
         }
@@ -443,8 +450,10 @@ final class TrickplayArtefacts
      * Written when the sprite and timeline were published but the BIF was not. The backfill
      * skips an item that carries it, as it does for {@see self::FAILED_MARKER_FILENAME}, so a
      * deterministic BIF failure is not decoded again on every run and cannot use up a
-     * --limit ahead of later items. Deleting the file makes the item eligible again. The
-     * in-app job writes and clears the same marker.
+     * --limit ahead of later items. Deleting the file makes the item eligible again. Only the
+     * backfill script's default run honours it (its --retry-failed flag ignores it); the
+     * in-app job writes and clears the same marker but does not read it, and the operator's
+     * media_assets re-prime does not read it either, so both re-decode the item anyway.
      */
     public const BIF_FAILED_MARKER_FILENAME = 'bif-failed.json';
 

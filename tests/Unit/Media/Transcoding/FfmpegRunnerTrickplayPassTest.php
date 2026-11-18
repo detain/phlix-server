@@ -7,7 +7,9 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use Phlix\Media\Streaming\Trickplay\BifWriter;
 use Phlix\Media\Streaming\Trickplay\TrickplayArtefacts;
 use Phlix\Tests\Support\Trickplay\ScriptedTrickplayRunner;
+use Phlix\Tests\Unit\Media\Music\RecordingLogger;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
 
 /**
  * The single-pass trickplay command (sprite sheet, timeline and BIF frames from
@@ -45,9 +47,9 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         rmdir($dir);
     }
 
-    private function scripted(float $duration = 6000.0): ScriptedTrickplayRunner
+    private function scripted(float $duration = 6000.0, ?LoggerInterface $logger = null): ScriptedTrickplayRunner
     {
-        return new ScriptedTrickplayRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', $this->dir, $duration);
+        return new ScriptedTrickplayRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', $this->dir, $duration, $logger);
     }
 
     public function testCombinedPassDecodesOnceAndFansOutToBothOutputs(): void
@@ -344,9 +346,10 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
 
     public function testAFailedRenameOfTheTimelineRestoresEveryPreviousArtefact(): void
     {
-        // Rename-based publish, no link(): the timeline temporary's rename onto its final
-        // name fails after the sprite was already swapped. Both previous files must come
-        // back byte for byte, and no previous-copy name may be left behind.
+        // The publish keeps each existing final under a previous-copy hard link, then renames the
+        // temporary over the final. Here the timeline temporary's rename fails after the sprite was
+        // already swapped. Both previous files must come back byte for byte, and no previous-copy
+        // name may be left behind.
         mkdir($this->dir . '/out', 0755, true);
         file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
         file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
@@ -545,18 +548,19 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         // The publish replaces an existing final with one rename() over it. The final name must
         // still exist when that rename runs, and no rename may move a final name away.
         mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.gen', 'OLD-GEN');
         file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
         file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
         $runner = $this->scripted(6000.0);
 
         $this->assertNotNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
 
-        $finals = [$this->dir . '/out/sprite.jpg', $this->dir . '/out/timeline.json'];
+        $finals = [$this->dir . '/out/sprite.gen', $this->dir . '/out/sprite.jpg', $this->dir . '/out/timeline.json'];
         $publishes = array_values(array_filter(
             $runner->renames,
             static fn (array $rename): bool => in_array($rename['to'], $finals, true)
         ));
-        $this->assertCount(2, $publishes);
+        $this->assertCount(3, $publishes);
         foreach ($publishes as $rename) {
             $this->assertTrue($rename['toExisted'], 'The final must still exist when the temporary is renamed over it.');
         }
@@ -564,6 +568,60 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
             $this->assertNotContains($rename['from'], $finals, 'No rename may move a final name away.');
         }
         $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testAnExistingFinalIsNeverAbsentDuringThePublishWhenTheLinkIsRefused(): void
+    {
+        // Where a hard link is refused the previous copy is a plain copy. The final name must
+        // still exist when each temporary is renamed over it, and the publish must still succeed.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.gen', 'OLD-GEN');
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $runner = $this->scripted(6000.0);
+        $runner->failLink = true;
+
+        $this->assertNotNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
+
+        $finals = [$this->dir . '/out/sprite.gen', $this->dir . '/out/sprite.jpg', $this->dir . '/out/timeline.json'];
+        $this->assertCount(3, $runner->links, 'Each existing final was offered a hard link before its replacement.');
+        $publishes = array_values(array_filter(
+            $runner->renames,
+            static fn (array $rename): bool => in_array($rename['to'], $finals, true)
+        ));
+        $this->assertCount(3, $publishes);
+        foreach ($publishes as $rename) {
+            $this->assertTrue($rename['toExisted'], 'The final must still exist when the temporary is renamed over it.');
+        }
+        foreach ($runner->renames as $rename) {
+            $this->assertNotContains($rename['from'], $finals, 'No rename may move a final name away.');
+        }
+        $this->assertNotSame('OLD-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
+    public function testARollbackRestoreThatIsRefusedStopsAndNamesTheFile(): void
+    {
+        // The timeline's rename fails, so the publish rolls back the sprite and the stamp. The
+        // sprite is restored first and that restore is refused. The rollback stops there, so the
+        // stamp keeps the new token, the timeline keeps the old one, and the warning names the sprite.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.gen', 'OLD-GEN');
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $logger = new RecordingLogger();
+        $runner = $this->scripted(6000.0, $logger);
+        $runner->failRenameFrom = $this->dir . '/out/.tmp-timeline.json';
+        $runner->failRestoreRenames = true;
+
+        $this->assertNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
+
+        $this->assertSame('OLD-TIMELINE', file_get_contents($this->dir . '/out/timeline.json'));
+        $this->assertNotSame('OLD-SPRITE', file_get_contents($this->dir . '/out/sprite.jpg'));
+        $this->assertNotSame('OLD-GEN', file_get_contents($this->dir . '/out/sprite.gen'));
+        $context = $logger->contextOf('could not restore a file');
+        $this->assertNotNull($context, 'A refused restore must be logged.');
+        $this->assertSame($this->dir . '/out/sprite.jpg', $context['file']);
     }
 
     public function testACleanRunWithEmptyOutputStillPublishes(): void

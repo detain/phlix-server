@@ -25,13 +25,18 @@ declare(strict_types=1);
  * An item whose generation failed, or threw, gets generation-failed.json in its
  * directory and is skipped by later runs. When only the BIF could not be written, the
  * sprite and timeline stay published and bif-failed.json is recorded, and that item is
- * skipped by later runs too. Delete the marker to retry the item. A skipped item does not
- * count toward --limit, so a deterministic failure cannot starve the items after it.
+ * skipped by later runs too. Transient failures are included in these markers: a full disk
+ * or an I/O error during a BIF write is recorded the same way as a deterministic failure, so
+ * the item stays skipped until it is retried. --retry-failed is the way to retry them: it
+ * ignores the markers for that run, items are regenerated, and their markers are cleared on
+ * success. Deleting a marker by hand also makes its item eligible again. A skipped item does
+ * not count toward --limit, so a deterministic failure cannot starve the items after it.
  *
  * Usage:
  *   php scripts/backfill-trickplay.php                    # all libraries
  *   php scripts/backfill-trickplay.php --library=<id>   # scope to one library
  *   php scripts/backfill-trickplay.php --limit=500       # cap items generated this run
+ *   php scripts/backfill-trickplay.php --retry-failed    # also regenerate items skipped by a marker
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -46,12 +51,15 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 
 $libraryFilter = null;
 $limit = null;
+$retryFailed = false;
 
 foreach ($argv as $arg) {
     if (str_starts_with($arg, '--library=')) {
         $libraryFilter = substr($arg, strlen('--library='));
     } elseif (str_starts_with($arg, '--limit=')) {
         $limit = (int) substr($arg, strlen('--limit='));
+    } elseif ($arg === '--retry-failed') {
+        $retryFailed = true;
     }
 }
 
@@ -169,13 +177,13 @@ foreach ($rows as $row) {
     }
 
     // An item whose earlier generation failed, or whose BIF failed, is not decoded again on
-    // every run. The marker records why; deleting it makes the item eligible again. Skipping
-    // here, before the limit check and before $attempted, keeps a deterministic failure from
-    // using up --limit ahead of the items after it.
-    $skipMarker = TrickplayArtefacts::backfillSkipMarker($itemDir);
+    // every run. The marker records why; deleting it, or running with --retry-failed, makes
+    // the item eligible again. Skipping here, before the limit check and before $attempted,
+    // keeps a deterministic failure from using up --limit ahead of the items after it.
+    $skipMarker = TrickplayArtefacts::backfillSkipMarker($itemDir, !$retryFailed);
     if ($skipMarker !== null) {
         echo "  skip: {$path} (an earlier trickplay generation failed; delete "
-            . $itemDir . '/' . $skipMarker . " to retry)\n";
+            . $itemDir . '/' . $skipMarker . " to retry, or run with --retry-failed)\n";
         $skipped++;
         continue;
     }
@@ -270,6 +278,10 @@ foreach ($rows as $row) {
             $failed++;
             continue;
         }
+
+        // The sprite and timeline are published, so an earlier generation failure no longer
+        // applies. Clearing it here means a --retry-failed run leaves no stale marker behind.
+        TrickplayArtefacts::clearFailedMarker($itemDir);
 
         // Best-effort, like the job: a BIF failure must not undo the sprite.
         $bifWritten = false;

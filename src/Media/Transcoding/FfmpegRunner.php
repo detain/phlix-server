@@ -3848,13 +3848,18 @@ class FfmpegRunner
     }
 
     /**
-     * Deletes one file or symlink if it exists. Errors are ignored: this is cleanup.
+     * Deletes one file or symlink if it exists. Most callers are cleanup and ignore the result;
+     * the rollback checks it.
+     *
+     * @return bool True when no file or symlink remains at the path.
      */
-    private static function removeTrickplayFile(string $path): void
+    private static function removeTrickplayFile(string $path): bool
     {
-        if (is_file($path) || is_link($path)) {
-            @unlink($path);
+        if (!is_file($path) && !is_link($path)) {
+            return true;
         }
+
+        return @unlink($path);
     }
 
     /**
@@ -3897,14 +3902,23 @@ class FfmpegRunner
      * If any step fails, the replacements already made are undone, newest first: each
      * previous copy is renamed back over the new file, or the new file is removed when
      * there was no previous one. That removal is the only time a final name is absent. It
-     * happens only when a later pair of the same pass fails and the artefact had no
-     * previous copy, so the artefact was not complete before the pass either. An item that
-     * was complete before the pass keeps its complete artefacts. The previous copies are
-     * deleted once everything is in place.
+     * happens only when a later pair of the same pass fails and the name had no previous
+     * copy, so the name was absent before the pass too. An item that was complete before the
+     * pass keeps its complete artefacts. The previous copies are deleted once everything is
+     * in place.
      *
      * A rollback puts old bytes back under a name whose validators a reader may already
      * have taken from the new file. {@see TrickplayController::serveArtefact()} documents
      * that residual window.
+     *
+     * A restore can also fail: its rename or removal is refused. The rollback then stops at
+     * that name and logs a warning naming the file. It stops rather than carrying on, so the
+     * stamp, which is published first and therefore restored last, still holds the new pass's
+     * token. The timeline is published last, so a failed publish never renames it and it still
+     * holds the old token. The two disagree, and isComplete() reports the item as torn until it
+     * is regenerated. The name that failed keeps its new bytes, and its previous copy stays
+     * under the previous-copy name until the next pass sweeps it. Serving is unchanged: the
+     * controller still serves whichever files exist (see TrickplayArtefacts::isComplete()).
      *
      * @param list<array{string|null, string|null}> $pairs [temporary, final] in publish order.
      *
@@ -3963,12 +3977,23 @@ class FfmpegRunner
      */
     private function keepPreviousCopy(string $final, string $previous): bool
     {
-        if (@link($final, $previous) || @copy($final, $previous)) {
+        if ($this->linkTrickplayPath($final, $previous) || @copy($final, $previous)) {
             return true;
         }
         self::removeTrickplayFile($previous);
 
         return false;
+    }
+
+    /**
+     * Gives a path a second name as a hard link. Keeping the previous copy goes through this seam
+     * so a test can refuse the link and check the copy fallback. Production behaviour is plain link().
+     *
+     * @return bool True when the link was made.
+     */
+    protected function linkTrickplayPath(string $target, string $link): bool
+    {
+        return @link($target, $link);
     }
 
     /**
@@ -3985,15 +4010,24 @@ class FfmpegRunner
     /**
      * Undoes the replacements of a publish that failed part way, newest first.
      *
+     * Stops at the first restore that is refused and logs a warning naming the file; see
+     * {@see publishTrickplayFiles()} for what that leaves torn.
+     *
      * @param list<array{string, string|null}> $replaced Pairs of [final path, previous copy or null].
      */
     private function restoreTrickplayFiles(array $replaced): void
     {
         foreach (array_reverse($replaced) as [$final, $previous]) {
-            if ($previous !== null) {
-                $this->renameTrickplayPath($previous, $final);
-            } else {
-                self::removeTrickplayFile($final);
+            $restored = $previous !== null
+                ? $this->renameTrickplayPath($previous, $final)
+                : self::removeTrickplayFile($final);
+            if (!$restored) {
+                $this->logger->warning('Trickplay rollback could not restore a file; item left torn', [
+                    'file' => $final,
+                    'previous' => $previous,
+                ]);
+
+                return;
             }
         }
     }

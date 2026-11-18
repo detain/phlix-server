@@ -309,6 +309,24 @@ final class TrickplayArtefactsTest extends TestCase
         $this->assertNull(TrickplayArtefacts::backfillSkipMarker($this->dir));
     }
 
+    public function testRetryFailedIgnoresBothMarkersWithoutRemovingThem(): void
+    {
+        // The backfill's --retry-failed passes honourMarkers false for the run. Both markers are
+        // ignored, and they stay on disk: a successful regeneration is what clears them.
+        TrickplayArtefacts::markFailed($this->dir, 'trickplay generation threw');
+        TrickplayArtefacts::markBifFailed($this->dir, 'BIF not written');
+
+        $this->assertNull(TrickplayArtefacts::backfillSkipMarker($this->dir, false));
+        $this->assertTrue(TrickplayArtefacts::hasFailedMarker($this->dir));
+        $this->assertFileExists($this->dir . '/' . TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME);
+
+        // The default still honours them.
+        $this->assertSame(
+            TrickplayArtefacts::FAILED_MARKER_FILENAME,
+            TrickplayArtefacts::backfillSkipMarker($this->dir)
+        );
+    }
+
     public function testAFailureMarkerIsWrittenForAReasonThatIsNotValidUtf8(): void
     {
         // A thrown message can carry bytes that are not UTF-8. The marker must still be written,

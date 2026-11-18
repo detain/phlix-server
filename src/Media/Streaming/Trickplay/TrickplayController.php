@@ -393,10 +393,11 @@ class TrickplayController
      *   the old generation under the new ETag.
      * Closing these needs the response to stream from the handle that was stat'd. withFile()
      * takes a path and Workerman's send path re-opens it, so that is a larger change to the
-     * response path, not made here. The window is bounded by the browser's max-age
-     * ({@see self::CACHE_CONTROL}): a client that caches a mismatched pair does not revalidate
-     * until the entry expires, and then its conditional request computes the current validator
-     * and gets a fresh `200`.
+     * response path, not made here. The window is bounded by the browser's max-age of 24 hours
+     * (86400 seconds, {@see self::CACHE_CONTROL}): a client that caches a mismatched pair, such
+     * as the empty `200` of Failure A under the new ETag, does not revalidate until the entry
+     * expires, and then its conditional request computes the current validator and gets a fresh
+     * `200`.
      *
      * @param Request $request         The incoming request, for its conditional headers.
      * @param string  $path            Real path of the file to serve.

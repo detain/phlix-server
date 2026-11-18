@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Support\Trickplay;
 
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Psr\Log\LoggerInterface;
 
 /**
  * Runner whose probe and process launch are scripted. The launch seam writes the
@@ -53,6 +54,24 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
      */
     public array $renames = [];
 
+    /**
+     * Whether the rollback's restore renames fail: renames FROM a previous-copy name. The publish
+     * renames are unaffected, so the failure happens only once a publish has already gone wrong.
+     */
+    public bool $failRestoreRenames = false;
+
+    /**
+     * Whether the hard link to a previous copy is refused, so the copy fallback runs.
+     */
+    public bool $failLink = false;
+
+    /**
+     * Every hard-link attempt made to keep a previous copy, in order.
+     *
+     * @var list<array{target: string, link: string}>
+     */
+    public array $links = [];
+
     protected function renameTrickplayPath(string $from, string $to): bool
     {
         $this->renames[] = ['from' => $from, 'to' => $to, 'toExisted' => file_exists($to)];
@@ -61,15 +80,35 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
             return false;
         }
 
+        if ($this->failRestoreRenames && str_starts_with(basename($from), self::TEMP_FILE_PREFIX . 'previous-')) {
+            return false;
+        }
+
         return parent::renameTrickplayPath($from, $to);
+    }
+
+    protected function linkTrickplayPath(string $target, string $link): bool
+    {
+        $this->links[] = ['target' => $target, 'link' => $link];
+
+        if ($this->failLink) {
+            return false;
+        }
+
+        return parent::linkTrickplayPath($target, $link);
     }
 
     /** Path to replace with a symlink to /dev/full during the run, or null for none. */
     public ?string $devFullLinkAt = null;
 
-    public function __construct(string $ffmpeg, string $ffprobe, string $transcodeDir, private float $duration)
-    {
-        parent::__construct($ffmpeg, $ffprobe, $transcodeDir);
+    public function __construct(
+        string $ffmpeg,
+        string $ffprobe,
+        string $transcodeDir,
+        private float $duration,
+        ?LoggerInterface $logger = null
+    ) {
+        parent::__construct($ffmpeg, $ffprobe, $transcodeDir, $logger);
     }
 
     /**

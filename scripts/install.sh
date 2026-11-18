@@ -2056,6 +2056,10 @@ LimitNOFILE=1048576\\
 	# older pinned value cannot silently keep the encode slower than the code default.
 	phlix_set_env_key "$ENV_FILE" PHLIX_SEGMENT_ENCODE_THREADS 8 \
 		"Software segment encode thread ceiling (default 8; override per host)."
+	# Global ceiling on concurrent on-demand segment encodes (the slot ledger's cap).
+	# Forced to 8 on every --update, same reasoning as the thread ceiling above.
+	phlix_set_env_key "$ENV_FILE" HLS_MAX_CONCURRENT_SEGMENTS 8 \
+		"Max concurrent on-demand segment encodes across all HTTP workers (default 8; override per host)."
 
 	# 4f-B. Backfill the DB_* keys config/database.php actually reads. Older
 	# installs wrote ONLY DB_PASSWORD + the PHLIX_DATABASE_* aliases (which the

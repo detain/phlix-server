@@ -235,40 +235,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
 
-                    // Layer the admin's `server_settings` override (if any) over
-                    // the config default, exactly as MediaServicesProvider does
-                    // for metadata.genres_mode. Resolved once per worker (this
-                    // factory result is reused), never per request. A settings
-                    // store that is unavailable/misconfigured must not break
-                    // transcoding, so any failure falls back to the config value.
-                    $effectiveMaxTranscodes = $maxConcurrentTranscodes;
-                    try {
-                        $settings = $c->get(SettingsRepository::class);
-                        if ($settings instanceof SettingsRepository) {
-                            $override = $settings->getEffective('ffmpeg.max_concurrent_transcodes');
-                            if (is_int($override) && $override > 0) {
-                                $effectiveMaxTranscodes = $override;
-                            } elseif (is_string($override) && ctype_digit($override) && (int) $override > 0) {
-                                $effectiveMaxTranscodes = (int) $override;
-                            }
-                        }
-                    } catch (\Throwable $e) {
-                        // Keep the config-file default — but say so. This factory
-                        // result is reused for the worker's whole lifetime, so an
-                        // admin-saved concurrency cap stays ignored until a recycle,
-                        // and the config value is indistinguishable from an override
-                        // that happens to equal it.
-                        DegradedBuild::warnUnlessAbsent(
-                            $c,
-                            LogChannels::MEDIA,
-                            'ffmpeg.max_concurrent_transcodes: the settings store was unreachable; '
-                            . 'keeping the config-file transcode concurrency cap. An admin-saved cap '
-                            . 'stays ignored by this worker until it is recycled.',
-                            $e,
-                            ['config_max_concurrent_transcodes' => $maxConcurrentTranscodes]
-                        );
-                    }
-                    // The constructor args are POSITIONAL, so threading the SV-1.9
+                    // No settings-store override is read here. The job-count ceiling is
+                    // INERT (see TranscodeManager::$maxConcurrentTranscodes): the value
+                    // only reaches the `configured_job_ceiling_inert` log line, so an
+                    // admin-saved `ffmpeg.max_concurrent_transcodes` changes nothing and
+                    // the read that fed it was dead. The real ceiling is
+                    // `server.hls.max_concurrent_segments`. The constructor args are POSITIONAL, so threading the SV-1.9
                     // ENOSPC threshold (position 13) requires passing position 12
                     // ($segmentMaxWaitMs) too. It has never been surfaced in config,
                     // so pass null explicitly to preserve its existing default
@@ -290,10 +262,10 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         null,
                         $minDiskSpaceBytes,
                         $loudnormParams,
-                        $effectiveMaxTranscodes,
+                        $maxConcurrentTranscodes,
                         // Position 16: the software-encode tunables
                         // (`transcoding.preset` / `crf_h264` / `audio_bitrate`).
-                        // Unlike $effectiveMaxTranscodes above, this is NOT
+                        // Unlike the inert job-count value above, this is NOT
                         // resolved to a value here — EncodeSettings holds the
                         // store and reads it per param-assembly, so a change
                         // applies to the next transcode with no restart

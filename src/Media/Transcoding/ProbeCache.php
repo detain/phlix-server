@@ -126,16 +126,15 @@ final class ProbeCache
      * racy from stamp minus this value, and each call then costs one launch until stamp plus
      * RACY_WINDOW_SECONDS.
      *
-     * The racy rule exists for a same-second rewrite. Such a rewrite leaves the stored stamp unchanged
-     * only when the writer's clock reads the stored second, so the writer's clock must be about as far
-     * ahead of this host's as the stamp is. A plain write from a host with sane skew cannot stamp a file
-     * a day ahead. An explicit utime restore changes ctime to the restore time, and the ctime term of
-     * {@see isRacy()} guards that. So for a stamp far past any plausible skew, the racy rule costs one
-     * ffprobe per probe call while the stamp is racy, and protects nothing. One day is well beyond the skew of an NFS or SMB
-     * server, and its racy span is at most this value plus RACY_WINDOW_SECONDS long. For a stamp beyond the
-     * cap, that span starts at stamp minus this value, not at the probe time (see Exception 11 in
-     * docs/dev/BLOCKING_IO_EXCEPTIONS.md).
-     * The residual risk of this cap is in the class docblock.
+     * The racy rule exists for a same-second rewrite. Such a rewrite leaves the stored stamp unchanged only when the
+     * writer's clock reads the stored second, so the writer's clock must be about as far ahead of this host's as the
+     * stamp is. A plain write from a host with sane skew cannot stamp a file a day ahead. An explicit utime restore
+     * changes ctime to the restore time, and the ctime term of {@see isRacy()} guards that. So for a stamp far past any
+     * plausible skew, the racy rule costs one ffprobe per probe call while the stamp is racy, and protects nothing. One
+     * day is well beyond the skew of an NFS or SMB server, and its racy span is at most this value plus
+     * RACY_WINDOW_SECONDS long. For a stamp beyond the cap, that span starts at stamp minus this value, not at the
+     * probe time (see Exception 11 in docs/dev/BLOCKING_IO_EXCEPTIONS.md). The residual risk of this cap is in the
+     * class docblock.
      */
     public const MAX_FUTURE_SKEW_SECONDS = 86400;
 

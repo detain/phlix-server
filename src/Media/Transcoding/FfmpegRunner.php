@@ -3524,9 +3524,10 @@ class FfmpegRunner
 
     /**
      * Writes the sprite timeline: each entry maps a thumbnail index to its pixel
-     * offset within the sheet and the start time of the interval it represents
-     * (`i * interval`). That is the same labelling the BIF uses, so the two
-     * artefacts agree on every frame's timestamp.
+     * offset within the sheet and the time of the instant the thumbnail was sampled
+     * at, the midpoint of its interval (`(i + 0.5) * interval`). The BIF labels its
+     * frames at the interval start instead, so the two artefacts differ by half an
+     * interval.
      *
      * The `tile` filter lays a thumbnail's top-left corner at
      * `margin + index * (size + padding)` — the margin is an outer border
@@ -3551,10 +3552,10 @@ class FfmpegRunner
             $col = $i % $cols;
             $x = $margin + $col * ($thumbW + $padding);
             $y = $margin + $row * ($thumbH + $padding);
-            // Labelled at the START of the interval it covers, as a BIF frame is
-            // (frame i is shown at i * multiplier). The thumbnail itself is sampled at
-            // the midpoint of that interval, so the label is not the sample instant.
-            $time = $i * $interval;
+            // Labelled at the MIDPOINT of the interval it covers: the sampler's offset is
+            // interval / 2, so this is the instant the thumbnail is taken at. The BIF
+            // labels its frames at the interval start (i * multiplier); that is unchanged.
+            $time = ($i + 0.5) * $interval;
             $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
         }
 

@@ -430,6 +430,28 @@ changes.
 
 ---
 
+## Exception 11 — trickplay local metadata reads (`TrickplayController`, `TrickplayArtefacts`)
+
+Local filesystem metadata under the trickplay root: `realpath()`, `stat()`,
+`filesize()` and `is_file()` in `TrickplayController.php` (about lines 148, 318,
+323 and 351). `hasBif()` runs on the item-detail request path
+(`MediaItemController.php:612`). `TrickplayArtefacts.php` (about line 106) reads
+`timeline.json` whole, but only from `isComplete()`, which the job and the
+backfill call, not a request.
+
+Bound: a fixed number of metadata calls per request, with no loop over items,
+and a timeline of `SPRITE_COUNT` (60) entries, about 2.5 KB. Measured on a warm
+local cache: realpath, stat and filesize together take about 10 µs; a timeline
+read and decode takes about 54 µs.
+
+**No timeout is enforced.** A stalled network mount under `transcode_dir` would
+block the worker for as long as the kernel waits. The bound above assumes a
+local disk. This entry records the calls. It does not claim the register's rule
+(an enforced timeout) is met; the owner decides whether to keep the local-disk
+assumption or move these calls off the event loop.
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

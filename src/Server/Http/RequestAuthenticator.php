@@ -100,8 +100,8 @@ final class RequestAuthenticator
         // account no longer owns the claimed profile. It is not the raw claim.
         // A claimed bearer whose claim is unowned, whose lookup fails, or that has no resolver wired
         // is refused, and the request stays unauthenticated.
-        // A claimless bearer whose default-profile lookup fails is accepted with a null profile id.
-        // It is then tested on the account's active profile by the schedule gate.
+        // A claimless bearer is accepted with a null profile id if no resolver is wired or its
+        // default-profile lookup fails. It is then tested on the account's active profile by the schedule gate.
         $profileId = $auth['profile_id'] ?? null;
         $request->profileId = is_string($profileId) && $profileId !== '' ? $profileId : null;
 

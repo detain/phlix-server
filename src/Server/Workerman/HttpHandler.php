@@ -528,10 +528,12 @@ final class HttpHandler
      * clobbers nothing. Idempotently torn down by {@see disarmDirectCancelHook()}
      * in the caller's `finally`.
      *
-     * The kill closure calls {@see SegmentProcessRegistry::killGroup()}, which is
-     * O(1) and a no-op when nothing is registered under the id (every
-     * non-streaming request), and is waiter-aware (Chunk 1) so a piggybacking
-     * peer still waiting on the same segment defers the kill.
+     * The kill closure calls {@see SegmentProcessRegistry::killGroup()}. That is a no-op when
+     * nothing is registered under the id (every non-streaming request). When a tracked encode
+     * is registered, it sends SIGTERM and takes one `/proc` scan of the group, per tracked key.
+     * It never waits: the SIGKILL escalation runs later from the watchdog timer (blocking-IO
+     * Exception 12 lists the scan). It is waiter-aware (Chunk 1), so a piggybacking peer still
+     * waiting on the same segment defers the kill.
      *
      * @param TcpConnection $connection The live connection for this request.
      *

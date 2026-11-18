@@ -65,14 +65,16 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
             static function (int $pid, int $signal) use (&$signalled): void {
                 $signalled[] = $pid;
             },
-            // Report dead immediately so terminate() returns after a single
-            // SIGTERM without a coroutine sleep / SIGKILL escalation.
+            // Report dead immediately. kill() sends one SIGTERM and returns, with no wait and
+            // no SIGKILL, because the escalation runs later from sweep().
             static fn (int $pid): bool => false,
             0.01,
             static function (string $tmp): void {
                 // no-op temp cleaner (never touch the filesystem in tests)
             },
         );
+        // Fake PIDs: no real process group may match, so the membership snapshot is empty.
+        $registry->setGroupMembersProbe(static fn (array $leaders): array => []);
         if ($waiterGuard !== null) {
             $registry->setWaiterGuard($waiterGuard);
         }

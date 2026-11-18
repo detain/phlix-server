@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\RequestContext;
 use ReflectionMethod;
@@ -121,6 +122,24 @@ final class TranscodeManagerPrewarmTest extends TestCase
         }
         $this->assertSame(0.0, $launches[0]['start']);
         $this->assertSame(12.0, $launches[2]['start'], 'window segments encode their own offsets');
+    }
+
+    /**
+     * A TRANSCODE top rung (HEVC source: no stream-copy) is a full CPU encode per
+     * segment, so creation warms only segment 0 — the one whose latency the viewer
+     * feels — instead of the full 3-segment window (the old behaviour spent two
+     * extra encodes on a rung the player may never start on).
+     */
+    public function test_transcode_top_rung_warms_only_the_first_segment(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches, 'hevc'), 3, null);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused']);
+        $this->assertCount(1, $launches, 'a transcode rung warms exactly one segment');
+        $this->assertSame(0.0, $launches[0]['start'], 'the single warmed segment is segment 0');
     }
 
     /**
@@ -601,12 +620,12 @@ final class TranscodeManagerPrewarmTest extends TestCase
      *
      * @param list<array{out:string,start:float,init:?string}> $launches
      */
-    private function recordingRunner(array &$launches): FfmpegRunner
+    private function recordingRunner(array &$launches, string $videoCodec = 'h264'): FfmpegRunner
     {
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->method('probe')->willReturn([
             'streams' => [
-                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'video', 'codec_name' => $videoCodec, 'width' => 1280, 'height' => 720],
                 ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
             ],
             'format' => ['duration' => '25.0'],
@@ -811,6 +830,181 @@ final class TranscodeManagerPrewarmTest extends TestCase
         );
 
         return $ff;
+    }
+
+    /**
+     * Create $count live `.part-<hex>` temps in job directories other than the one
+     * under test. They stand in for encodes already in flight on the box.
+     */
+    private function liveTemps(int $count): void
+    {
+        for ($i = 1; $i <= $count; $i++) {
+            $dir = $this->segmentDir . '/other-job-' . $i;
+            mkdir($dir, 0755, true);
+            file_put_contents($dir . sprintf('/seg-voriginal-%05d.m4s.part-%08x', $i, $i), '');
+        }
+    }
+
+    /**
+     * Law 8a/8b (seek path): with the in-worker dedup snapshot pinned stale, so this
+     * worker cannot see a sibling's encode through its own bookkeeping.
+     */
+    private function pinSnapshotStale(TranscodeManager $manager): void
+    {
+        $prop = new \ReflectionProperty(TranscodeManager::class, 'lastInFlightReconcileMs');
+        $prop->setValue($manager, PHP_INT_MAX);
+    }
+
+    /**
+     * Law 8b: prewarm yields to interactive demand before a seek is refused. With six
+     * encodes live (cap 8), two slots remain for the reader, so the head start must
+     * stand down entirely.
+     */
+    public function testPrewarmYieldsToInteractiveHeadroom(): void
+    {
+        $this->liveTemps(6);
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 3, 8);
+
+        $result = $manager->ensureHlsJob('media-1', 'web');
+
+        $this->assertFalse($result['reused']);
+        $this->assertSame([], $launches, 'prewarm must leave the interactive headroom free');
+    }
+
+    /**
+     * Law 8a: a seek for a segment a SIBLING worker is already encoding joins that
+     * encode while the cap is full. It is not refused with SegmentBusyException.
+     */
+    public function testSeekJoinsALiveSiblingEncodeWhenTheCapIsFull(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        file_put_contents(
+            $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd',
+            ''
+        );
+        $this->liveTemps(7); // cap 8 is now full
+        $this->pinSnapshotStale($manager);
+        $prop = new \ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+        $prop->setValue($manager, 0); // join without polling for the file
+
+        $served = $manager->ensureSegment($jobId, 'original', 0);
+
+        $this->assertNull($served, 'the joined encode has not published yet, so no file is returned');
+        $this->assertCount(0, $launches, 'a joined seek must not launch a duplicate encode');
+    }
+
+    /**
+     * Law 8a, the bound still holds: a segment NOBODY is encoding is refused at the
+     * cap. Joining is for a live sibling of that exact segment only.
+     */
+    public function testUnclaimedSegmentIsStillRefusedAtTheCap(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        $this->liveTemps(8); // cap 8 full, none for this segment
+        $this->pinSnapshotStale($manager);
+
+        $this->expectException(\Phlix\Media\Transcoding\SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
+     * A killed ffmpeg can write its trailer after the registry cleaned the temps. That
+     * leaves a FRESH sidecar (`.s0`) with no `.part-<hex>` marker. It is not a live
+     * encode, so a seek must not join it. The cap is full, so the refusal is a 503.
+     */
+    public function testSeekDoesNotJoinAFreshTrailerSidecarWhoseMarkerIsGone(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        file_put_contents(
+            $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd.s0',
+            ''
+        );
+        $this->liveTemps(8); // cap 8 is full of other live encodes
+        $this->pinSnapshotStale($manager);
+        $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+        $prop->setValue($manager, 0);
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
+     * A corpse is a temp left by a killed chain (no `|| rm` ran). An hour old, it is
+     * not a live encode. Joining it made the request wait the full poll and then 404.
+     * The seek must be refused at the cap, with SegmentBusyException (503), as master
+     * did. The registry is wired, as in production, so the join window is the wall cap.
+     */
+    public function testSeekDoesNotJoinACorpseAndIsRefusedAtTheCap(): void
+    {
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        $corpse = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd';
+        file_put_contents($corpse, '');
+        touch($corpse, time() - 3600);
+        $this->liveTemps(7); // cap 8 is full, the corpse counted among them
+        $this->pinSnapshotStale($manager);
+        $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+        $prop->setValue($manager, 0);
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment($jobId, 'original', 0);
+    }
+
+    /**
+     * The same corpse, produced by a REAL process: a shell touches the temp and then
+     * runs a long sleep. The sleep is SIGKILLed, so nothing runs the chain's `|| rm`
+     * cleanup, and the process is left as a zombie that nothing reaps. The temp is then
+     * aged past the join window, as a corpse is after a while.
+     */
+    public function testSeekDoesNotJoinARealKilledChainsLeftoverTemp(): void
+    {
+        if (!function_exists('posix_kill')) {
+            self::markTestSkipped('needs posix_kill to kill the real process');
+        }
+        $launches = [];
+        $manager = $this->manager($this->jobDb(), $this->recordingRunner($launches), 0, 8);
+        $manager->setSegmentProcessRegistry(new SegmentProcessRegistry());
+        $jobId = (string) $manager->ensureHlsJob('media-1', 'web')['job_id'];
+        $corpse = $this->segmentDir . '/' . $jobId . '/seg-voriginal-00000.m4s.part-0000abcd';
+
+        $process = proc_open(
+            'touch ' . escapeshellarg($corpse) . '; exec sleep 60',
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        self::assertIsResource($process);
+        $pid = (int) proc_get_status($process)['pid'];
+        foreach ($pipes as $pipe) {
+            fclose($pipe);
+        }
+        try {
+            for ($i = 0; $i < 100 && !is_file($corpse); $i++) {
+                usleep(20_000);
+            }
+            self::assertFileExists($corpse, 'the real chain must have written its temp');
+            posix_kill($pid, 9); // SIGKILL: no `|| rm`, the temp survives
+            touch($corpse, time() - 3600);
+
+            $this->liveTemps(7);
+            $this->pinSnapshotStale($manager);
+            $prop = new ReflectionProperty(TranscodeManager::class, 'segmentMaxWaitMs');
+            $prop->setValue($manager, 0);
+
+            $this->expectException(SegmentBusyException::class);
+            $manager->ensureSegment($jobId, 'original', 0);
+        } finally {
+            proc_close($process); // reaps the killed child
+        }
     }
 
     private function rrmdir(string $dir): void

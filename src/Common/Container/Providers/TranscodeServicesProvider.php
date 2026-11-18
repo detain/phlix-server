@@ -144,7 +144,24 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c): SegmentProcessRegistry {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
-                    return new SegmentProcessRegistry($logger);
+                    $registry = new SegmentProcessRegistry($logger);
+                    // Stall and wall-clock watchdog bounds (config/ffmpeg.php). A missing
+                    // or non-numeric value passes 0.0, and the registry keeps its default.
+                    $ffmpegCfg = \Phlix\Config\EffectiveConfig::file('ffmpeg');
+                    $stallSeconds = $ffmpegCfg['segment_stall_seconds'] ?? null;
+                    $maxWallSeconds = $ffmpegCfg['segment_max_wall_seconds'] ?? null;
+                    $registry->configureWatchdog(
+                        is_numeric($stallSeconds) ? (float) $stallSeconds : 0.0,
+                        is_numeric($maxWallSeconds) ? (float) $maxWallSeconds : 0.0,
+                    );
+                    // Bound on holding an unverifiable encode's temp and cap slot after TERM
+                    // (see SegmentProcessRegistry::sweep()). The wrapper timeout is the bound.
+                    $transcodeTimeout = $ffmpegCfg['transcode_timeout'] ?? null;
+                    $registry->configureUnverifiedHold(
+                        is_numeric($transcodeTimeout) ? (float) $transcodeTimeout : 0.0,
+                    );
+
+                    return $registry;
                 }
             ),
 
@@ -224,39 +241,13 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
 
-                    // Layer the admin's `server_settings` override (if any) over
-                    // the config default, exactly as MediaServicesProvider does
-                    // for metadata.genres_mode. Resolved once per worker (this
-                    // factory result is reused), never per request. A settings
-                    // store that is unavailable/misconfigured must not break
-                    // transcoding, so any failure falls back to the config value.
-                    $effectiveMaxTranscodes = $maxConcurrentTranscodes;
-                    try {
-                        $settings = $c->get(SettingsRepository::class);
-                        if ($settings instanceof SettingsRepository) {
-                            $override = $settings->getEffective('ffmpeg.max_concurrent_transcodes');
-                            if (is_int($override) && $override > 0) {
-                                $effectiveMaxTranscodes = $override;
-                            } elseif (is_string($override) && ctype_digit($override) && (int) $override > 0) {
-                                $effectiveMaxTranscodes = (int) $override;
-                            }
-                        }
-                    } catch (\Throwable $e) {
-                        // Keep the config-file default — but say so. This factory
-                        // result is reused for the worker's whole lifetime, so an
-                        // admin-saved concurrency cap stays ignored until a recycle,
-                        // and the config value is indistinguishable from an override
-                        // that happens to equal it.
-                        DegradedBuild::warnUnlessAbsent(
-                            $c,
-                            LogChannels::MEDIA,
-                            'ffmpeg.max_concurrent_transcodes: the settings store was unreachable; '
-                            . 'keeping the config-file transcode concurrency cap. An admin-saved cap '
-                            . 'stays ignored by this worker until it is recycled.',
-                            $e,
-                            ['config_max_concurrent_transcodes' => $maxConcurrentTranscodes]
-                        );
-                    }
+                    // No settings-store override is read here. The job-count ceiling is
+                    // INERT (see TranscodeManager::$maxConcurrentTranscodes): the value
+                    // only reaches the `configured_job_ceiling_inert` log line, so an
+                    // admin-saved `ffmpeg.max_concurrent_transcodes` changes nothing and
+                    // the read that fed it was dead. The real ceiling is
+                    // `server.hls.max_concurrent_segments`.
+                    //
                     // The constructor args are POSITIONAL, so threading the SV-1.9
                     // ENOSPC threshold (position 13) requires passing position 12
                     // ($segmentMaxWaitMs) too. It has never been surfaced in config,
@@ -279,10 +270,10 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         null,
                         $minDiskSpaceBytes,
                         $loudnormParams,
-                        $effectiveMaxTranscodes,
+                        $maxConcurrentTranscodes,
                         // Position 16: the software-encode tunables
                         // (`transcoding.preset` / `crf_h264` / `audio_bitrate`).
-                        // Unlike $effectiveMaxTranscodes above, this is NOT
+                        // Unlike the inert job-count value above, this is NOT
                         // resolved to a value here — EncodeSettings holds the
                         // store and reads it per param-assembly, so a change
                         // applies to the next transcode with no restart
@@ -309,6 +300,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // → both entrypoints (public/index.php + start.php) get it.
                     /** @var SegmentProcessRegistry $registry */
                     $registry = $c->get(SegmentProcessRegistry::class);
+                    // The stall / wall-clock watchdog sweeps the same registry, so the
+                    // manager needs it to free a stalled encode's slot after its poll gives up.
+                    $manager->setSegmentProcessRegistry($registry);
                     $registry->setWaiterGuard(
                         static fn (string $key): bool => $manager->hasOtherWaiter($key)
                     );

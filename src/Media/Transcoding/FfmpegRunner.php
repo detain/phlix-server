@@ -75,6 +75,20 @@ class FfmpegRunner
     public const FMP4_MEDIA_TMP_SUFFIX = '.s';
 
     /**
+     * Suffix appended to the `.part-<hex>` temp for ffmpeg's `-progress` report
+     * (fMP4 branch only). The CMAF muxer writes NOTHING to the temp family until
+     * the whole segment is encoded (`-hls_time 86400`, measured: 0 bytes for the
+     * first 4 s of a 720p encode, then one write), so the byte size of the family
+     * is no progress signal. ffmpeg rewrites a `key=value` block about every 0.5 s
+     * into this file, and its `out_time_us` advances as the encode proceeds. The
+     * stall watchdog ({@see SegmentProcessRegistry}) reads it. It is a sibling of
+     * the temp, so it falls under the `{tmp}.*` cleanup and the publish `rm -f`.
+     *
+     * @since S56 (progress watchdog)
+     */
+    public const FMP4_PROGRESS_TMP_SUFFIX = '.prog';
+
+    /**
      * Suffix for the throwaway playlist the HLS muxer insists on writing. S57
      * generates the real media playlists; this one is discarded at publish.
      *
@@ -2812,8 +2826,11 @@ class FfmpegRunner
      *   && php fmp4-rebase-segment.php <tmp>.s0 <tmp>.i <start>
      *   && mv -f <tmp>.i  <initFile>             # init FIRST — see below
      *   && mv -f <tmp>.s0 <outFile>
-     * ; rm -f <tmp> <tmp>.i <tmp>.s0 <tmp>.m3u8
+     * ; rm -f <tmp> <tmp>.i <tmp>.s0 <tmp>.m3u8 <tmp>.prog
      * ```
+     *
+     * The `<tmp>.prog` progress file ({@see FMP4_PROGRESS_TMP_SUFFIX}) is removed
+     * on both the success and the failure path, by the same `;` rm as the others.
      *
      * Four things here are load-bearing:
      *
@@ -2860,6 +2877,7 @@ class FfmpegRunner
         // `-start_number 0` with no split means the one fragment is always `…s0`.
         $mediaTmp = $tmp . self::FMP4_MEDIA_TMP_SUFFIX . '0';
         $playlistTmp = $tmp . self::FMP4_PLAYLIST_TMP_SUFFIX;
+        $progressTmp = $tmp . self::FMP4_PROGRESS_TMP_SUFFIX;
 
         $rebase = escapeshellarg(self::phpBinary())
             . ' ' . escapeshellarg(self::rebaseScriptPath())
@@ -2875,7 +2893,8 @@ class FfmpegRunner
             . ' ; rm -f ' . escapeshellarg($tmp)
             . ' ' . escapeshellarg($initTmp)
             . ' ' . escapeshellarg($mediaTmp)
-            . ' ' . escapeshellarg($playlistTmp);
+            . ' ' . escapeshellarg($playlistTmp)
+            . ' ' . escapeshellarg($progressTmp);
     }
 
     /**
@@ -2990,6 +3009,11 @@ class FfmpegRunner
             return $tail;
         }
 
+        // Progress report for the stall watchdog: the CMAF muxer writes nothing to
+        // the temp family until the segment is done, so a progress file is the only
+        // live signal. Global option, placed before the muxer args. The MPEG-TS
+        // branch has no progress file: its temp grows continuously.
+        $tail .= ' -progress ' . escapeshellarg($outFile . self::FMP4_PROGRESS_TMP_SUFFIX);
         $tail .= ' -f hls';
         $tail .= ' -hls_time ' . self::FMP4_NEVER_SPLIT_SECONDS;
         $tail .= ' -hls_playlist_type vod -hls_list_size 0 -hls_segment_type fmp4 -start_number 0';

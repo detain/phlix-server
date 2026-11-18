@@ -430,6 +430,102 @@ changes.
 
 ---
 
+## Exception 11 — per-launch segment-tree scan (local directory metadata, `TranscodeManager`)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/TranscodeManager.php::scanInFlightTemps()` — one `glob()` of `{segmentDir}/*` for the job directories, one `filemtime()` per job directory, and one `glob()` of each job directory that is recent enough to hold a live temp. The per-temp `filemtime()`/`unlink()` in `purgeDeadInFlightTemps()` and the one-directory `glob()` in `liveEncodeExistsFor()` are the same class of call. |
+| Reached from | The on-demand HLS segment path, on every **launch decision** (`countInFlightSegmentEncodes()` in `produceSegment()` / `produceAudioSegment()`, `countInFlightPrewarmEncodes()` in the prewarm budget), and `reconcileInFlightSegments()` at most once per 1 s. Runs on an HTTP worker, one of the 14. |
+| Why it is sync | The scan reads local segment-cache metadata only. It has no network I/O. PHP has no non-blocking directory-listing or `stat` primitive, so the scan cannot be made async without a worker pool. The live count is deliberately real-time, not cached, because the global ceiling is enforced per worker and a cached count lets the fleet overshoot it (see the `countInFlightSegmentEncodes()` docblock). |
+| Bound | There is no timeout, because local metadata has none. The work is bounded instead. (1) One `filemtime()` per job directory. (2) A job directory older than the temp death bound (`ffmpeg.transcode_timeout` + 300 s) is **skipped** without a glob, because no temp inside it can be younger than that bound. (3) The purge stands down entirely when the wrapper timeout is 0, so the scan does no more work than a full-tree glob would. |
+| Cost | Scales with the number of job directories (one stat each) plus the files of the **recent** directories only. The shipped default cache holds 8 GiB, so the job count is the operator's to bound. Measured below. |
+
+### Measurement (2026-11-17, synthetic tree, the real private method)
+
+Driven by reflection on `TranscodeManager::scanInFlightTemps()` with the shipped
+`transcode_timeout` (7200 s), on a dev host (64 cores, load ~15, PHP 8.3.6 CLI). The
+tree holds 400 job directories with 40 segment files each. Median of 25 calls:
+
+```text
+400 job dirs, all old (mtime 1 day ago), 5 with a live temp   median 3.6 ms  p90 3.7 ms
+400 job dirs, all recent (live temp each), 16 000 files       median 36.7 ms p90 37.0 ms
+```
+
+A launch decision costs one scan, and reconcile adds at most one per second. So at
+about 400 job directories that were all active inside the death bound (the second row,
+a rare shape), each launch decision costs about 37 ms of one worker. Extrapolated linearly (not measured), 1 000
+recent job directories would cost about 90 ms per launch decision. That is the point
+at which the scan should be cached for a short window per worker. That would make the cap bound
+approximate across workers by at most that window.
+
+---
+
+## Exception 12 — encode watchdog reads: `/proc/<pid>/stat` and the `-progress` tail (`SegmentProcessRegistry`)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/SegmentProcessRegistry.php` — `defaultProcStatReader()` (one `is_readable()` + one `file_get_contents()` of `/proc/<pid>/stat`), `lastOutTimeMicros()` (one `fopen()`, `fstat()`, `fseek()` and a bounded `stream_get_contents()` of the last 8 KB of an encode's `.prog` file), and `progressSignal()` (one `filemtime()`). Also the MPEG-TS branch of `defaultProgressProbe()`, which runs for a temp with no `-progress` file: one `glob()` of `{tmp}*` (a listing of the temp's job directory) and one `filesize()` per match. Also `defaultGroupMembersProbe()`, the group-membership scan (`scandir('/proc')` and one `file_get_contents()` per process on the host, returning PID => start time for each non-zombie member of the named groups). It runs in `sendTerm()`, once per tracked leader group whose identity is verified, before the TERM. Also `cleanTemps()` / `defaultTempCleaner()` (per temp: `file_exists()`, `unlink()`, and one `glob()` of `{tmp}.*` with an `unlink()` of each match). Also `defaultProcessSignalSender()`, the per-PID KILL. When `posix_kill` is absent it falls back to a `shell_exec()` of `kill`. That fallback is new on this branch. The group-signal fallback in `defaultSignalSender()` (a `shell_exec()` of `kill`) already existed on master. |
+| Reached from | (a) `SegmentProcessRegistry::sweep()`, driven by the per-worker 5 s timer and the request-throttled 1 s sweep in `TranscodeManager`. Each live tracked encode costs about two `/proc` reads and one progress read per sweep (an MPEG-TS encode has no progress file, so its read is the job-directory listing above). The SIGKILL step (`sigkillMembers()`, with `defaultProcessSignalSender()`) also runs from `sweep()`, so the request-throttled sweep can reach it. A stall or wall-clock reap inside `sweep()` (`signalOrphanForStall()`, which TERMs a tracked launch the watchdog judged), and the TERM of an orphan in `sweep()`'s orphan loop, each call `sendTerm()`. So the membership scan also runs from `sweep()`, once per such reap, and the throttled sweep runs on the request thread (see the cost below). (b) **The request path.** `SegmentProcessRegistry::kill()` and `killGroup()` call `sendTerm()`, so the membership scan runs once per tracked key that is killed. The callers are the connection `onClose` in `HttpHandler` and the `HTTP_CANCEL` handler in `RelayConsumer`. A kill that finds nothing tracked returns before any scan. (c) **The request path, temp cleanup.** `kill()` calls `reapTracked()`, which calls `cleanTemps()` at once when no PID is alive, no unchecked leader's group is alive, and the snapshot has no member or is unknown (null). So a kill of a key with nothing left runs one `glob()` and one `unlink()` per temp on the request thread. |
+| Why it is sync | `/proc` is a kernel pseudo-filesystem, and a `.prog` file is local segment-cache metadata. Neither has a network path. PHP has no non-blocking file or `stat` primitive. The kill path does not wait for a process to exit. Its synchronous work is the membership scan and, for a key with nothing left alive, the temp glob and unlink. The SIGKILL step runs later from a sweep. |
+| Bound | The progress read is bounded to 8 KB (`PROGRESS_TAIL_BYTES`), whatever the encode's length. The `/proc` read is one line. The membership scan is bounded by the host's process count, and it runs once per reap, not once per PID. A reap is a kill of a tracked key (row (b)), or a stall, wall-clock or orphan TERM inside `sweep()` (row (a)). The temp glob is one directory listing per temp, and it matches only `{tmp}.*` for that one launcher's temp. The MPEG-TS progress glob is one listing of the temp's job directory per live MPEG-TS temp per sweep. A job directory belongs to one job, and every rendition and every audio group of that job writes into it, flat, with no subdirectory (`{segmentDir}/{jobId}`). Its listing is therefore bounded by (renditions + audio groups) × the segments produced so far, plus the job's playlists and init files. It is not bounded by one rendition's length alone. Segment names are `seg-v{rendition}-NNNNN.ts` for video and `seg-{audio}-NNNNN.ts` for an audio-only group (for example `seg-a0-NNNNN.ts`). At the 6 s default, a 2-hour title has 7 200 / 6 = 1 200 segments per stream. The live-temp count is capped by `server.hls.max_concurrent_segments` (8 by default). That cap is box-wide, not per worker: it counts the in-flight temps of all jobs and all workers (`countInFlightSegmentEncodes()`). Each worker's sweep reads only the temps it launched, and the cap bounds all of them together. On non-Linux there is no `/proc`. Every leader is then unchecked (no start time was recorded), and `sendTerm()` takes a null membership snapshot without running the membership scan. The SIGKILL step logs one warning per registry and sends nothing. Each launch's temp and cap slot are held after the grace while that launch's process group still exists (`kill(-pid, 0)`, which also sees an unreaped zombie leader whose group has no other member), up to `transcode_timeout` after the TERM. A PID that is alive but no longer leads a group does not hold the launch. The bound is measured from the TERM, not from registration. TERM still goes out. An unchecked leader (for example one that exited between `shell_exec()` and `register()`, or any leader when `/proc` is absent) is held after the grace while its own process group still exists. That is checked with `kill(-pid, 0)` through the injectable group-alive probe, up to the same bound, and the temp and cap slot kept are that launch's own. Nothing is KILLed in that group, because its members were never snapshotted. In a record with a membership snapshot, a verified leader's temp is released at the grace, once its group has been KILLed or the leader is gone. If its identity cannot be read at the grace (`/proc` unreadable, or a malformed stat line), its temp is held up to the same bound, because the KILL skips an unknown process and it may still run. |
+| Cost | Measured below. The CMAF sweep cost is linear in this worker's live encodes, and it is below a millisecond at the default ceiling. An MPEG-TS sweep adds about 0.62 µs per job-directory entry for each live MPEG-TS temp (measured below: 747 µs for 1 201 entries). The entry count is that of the whole job, so a multi-rendition job costs more (worked example below). At the box-wide ceiling of 8 live temps, a 4 800-entry job costs about 24 ms per sweep. The membership scan is linear in the host's process count, and it is about 31 ms on the dev host. It runs once per reap (see below). That, plus the temp glob for a key with nothing left alive, is the residual synchronous cost of a reap. |
+
+### Measurement (2026-11-17, real private helpers, median of 500 calls)
+
+```text
+progress file 405 KB (3 000 blocks), 8 KB tail read          22.1 us  (p90 22.4 us)
+progressSignal (mtime + tail), one temp                      22.6 us  (p90 22.8 us)
+progress probe, one temp                                     26.6 us  (p90 26.8 us)
+/proc/<pid>/stat read                                        21.5 us  (p90 21.7 us)
+```
+
+At the default box-wide ceiling of 8 live temps, one CMAF sweep is at most about 8 × (27 + 22 +
+22) µs, or under 0.6 ms, every 1 to 5 s.
+
+MPEG-TS progress glob (the `glob()` and `filesize()` loop of `defaultProgressProbe()`'s
+MPEG-TS branch, run as a standalone copy, one temp with no progress file). The directory
+holds 1 200 segment files and the temp, which is 1 201 entries:
+
+```text
+job dir with 1 201 entries, one temp     median 747 us   p90 753 us  (200 calls)
+```
+
+Worked example, the worst case for one job. Take a 2-hour title with 3 video renditions and 1
+audio group, all fully produced, in MPEG-TS. Each stream has 1 200 segment files, so the job
+directory holds 4 × 1 200 = 4 800 segment files. Its playlists add a few dozen more entries,
+which does not change the order of magnitude. Scaled linearly from the measurement (747 µs for
+1 201 entries, about 0.62 µs per entry), one live MPEG-TS temp of that job costs about 3 ms per
+sweep. At the box-wide ceiling of 8 live temps, one sweep is about 24 ms. The throttled sweep in
+`watchdogTick()` runs on the request thread at most once per second, and the 5 s timer adds one
+more sweep per tick. An earlier figure of about 6 ms assumed one rendition's
+1 200 entries, so it understated a multi-rendition job. The listing grows with the renditions and
+audio groups, not with the encode's run time. It is not cached, because a cached progress token
+would look frozen and trip the stall reap.
+
+### Kill-path measurement (2026-11-17, real private helper, median of 60 calls)
+
+The membership scan (`defaultGroupMembersProbe()`, one leader, no member matched) reads
+one `stat` line per process on the host. Dev host: 64 cores, load ~15, PHP 8.3 CLI.
+
+```text
+1 402 processes on the host, one leader     median 31.5 ms   p90 32.5 ms
+```
+
+This is the one synchronous cost left on the kill path. It runs once per tracked key killed,
+on the request path. The same scan also runs once per stall, wall-clock or orphan TERM inside
+`sweep()`, which the throttled sweep on the request thread can reach. A group with a video and an
+audio encode therefore costs about 2 scans when both are killed.
+The scan's cost is linear in the process count, so a busier host costs more per kill. The
+rate of kills is bounded by the tracked encodes, not by connections. A kill that finds nothing
+tracked does no scan. The earlier design waited up to the 0.5 s grace per PID on this path,
+and that wait is gone.
+
+Mitigation not yet built: one scan per `killGroup()` call, covering all of the group's
+leaders, with each leader's members filtered by its own group id. It would cut a 2-key kill
+from about 63 ms to about 32 ms, and it is the next step if the kill rate matters on a target host.
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

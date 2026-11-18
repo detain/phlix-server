@@ -64,7 +64,11 @@ class TranscodeManager
      */
     private DashStreamer $dashStreamer;
 
-    /** @var int Maximum concurrent transcode jobs allowed */
+    /**
+     * @var int Retained for constructor/config compatibility ONLY. Not enforced:
+     *          no admission path reads it (see {@see ensureHlsJob()}). The effective
+     *          encode bound is the in-flight segment cap, {@see $maxConcurrentSegments}.
+     */
     private int $maxConcurrentTranscodes;
 
     /**
@@ -265,6 +269,49 @@ class TranscodeManager
      * the shared tree live.
      */
     private const SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS = 1000;
+
+    /**
+     * The per-worker registry of detached segment-encode process groups. The stall
+     * and wall-clock watchdog ({@see SegmentProcessRegistry::sweep()}) runs on it, so
+     * an encode whose poll gave up still has an owner that can reap it. Wired from the
+     * container (TranscodeServicesProvider) via {@see setSegmentProcessRegistry()}.
+     */
+    private ?SegmentProcessRegistry $segmentRegistry = null;
+
+    /** Workerman timer id of this worker's encode watchdog; null until armed (retried while unarmed). */
+    private ?int $watchdogTimerId = null;
+
+    /**
+     * Test seam for the watchdog's timer add (see {@see setWatchdogTimerAdd()}). Untyped because
+     * `callable` cannot be a property type. Null means Workerman's `Timer::add`.
+     *
+     * @var (callable(int, callable): (int|false))|null
+     */
+    private $watchdogTimerAdd = null;
+
+    /** Monotonic ms of the last request-driven watchdog sweep (throttled). */
+    private ?int $lastWatchdogSweepMs = null;
+
+    /** Period (s) of the per-worker watchdog timer. */
+    private const ENCODE_WATCHDOG_TICK_SECONDS = 5;
+
+    /** Minimum spacing (ms) between request-driven watchdog sweeps. */
+    private const ENCODE_WATCHDOG_REQUEST_SWEEP_MS = 1000;
+
+    /**
+     * Seconds added to the wall-clock cap when deciding whether a temp is still a live
+     * encode to join ({@see joinWindowSeconds()}). It covers the sweep cadence (a 5 s
+     * timer and a 1 s request throttle), the SIGTERM→SIGKILL grace and the wrapper's
+     * own `-k` grace.
+     */
+    private const SEGMENT_JOIN_SLACK_SECONDS = 30;
+
+    /**
+     * Slots kept free for interactive (reader-driven) encodes. A prewarm launch is
+     * refused once the in-flight count would leave fewer than this many slots, so
+     * prewarm yields to a seek before the seek is refused. See {@see prewarmFirstSegments()}.
+     */
+    private const INTERACTIVE_HEADROOM_SLOTS = 2;
 
     /**
      * Grace (ms) before a tracked encode with neither a live `.part-*` temp nor a
@@ -501,9 +548,10 @@ class TranscodeManager
     private const LEGACY_BANDWIDTH = 3000000;
 
     /**
-     * Fallback ceiling on simultaneously-running transcode jobs when the
-     * caller supplies none. Mirrors `config/ffmpeg.php`'s
-     * `max_concurrent_transcodes` default.
+     * Fallback for the INERT job-count knob (see the constructor's
+     * `$maxConcurrentTranscodes`). Mirrors `config/ffmpeg.php`'s
+     * `max_concurrent_transcodes` default, which is kept so the shipped
+     * value and the class fallback agree.
      */
     public const DEFAULT_MAX_CONCURRENT_TRANSCODES = 4;
 
@@ -542,16 +590,14 @@ class TranscodeManager
      *                                  from `config/ffmpeg.php`'s `loudness` block, or null when
      *                                  disabled/unconfigured. Stored only — INERT until sub-step 1B
      *                                  consumes it at the encode param-assembly sites.
-     * @param int|null $maxConcurrentTranscodes Ceiling on simultaneously-running transcode JOBS
-     *                                  (enforced in {@see ensureHlsJob()}). Resolved by
-     *                                  {@see \Phlix\Common\Container\Providers\TranscodeServicesProvider}
-     *                                  from the EFFECTIVE `ffmpeg.max_concurrent_transcodes`
-     *                                  (`config/ffmpeg.php` default merged with any admin
-     *                                  `server_settings` override). Null → {@see DEFAULT_MAX_CONCURRENT_TRANSCODES}.
-     *                                  Until this parameter existed the ctor assigned a bare
-     *                                  literal `4`, so the shipped config key and its admin-UI
-     *                                  setting were both completely inert — an admin who followed
-     *                                  the setting's own help text and set 8 still got 4.
+     * @param int|null $maxConcurrentTranscodes INERT, retained for compatibility. Resolved
+     *                                  by TranscodeServicesProvider from
+     *                                  `ffmpeg.max_concurrent_transcodes` and stored, but no
+     *                                  admission path enforces it: the on-demand job row is
+     *                                  never 'running', so a job-count gate cannot count live
+     *                                  encodes. The effective ceiling is
+     *                                  `server.hls.max_concurrent_segments`
+     *                                  ({@see $maxConcurrentSegments}). Null → the default.
      * @param int|null $prewarmSegments C6 head-start window: top-rung segments the
      *                                  creation path pre-generates in the background
      *                                  (see {@see self::PREWARM_SEGMENT_COUNT}). Null →
@@ -731,11 +777,12 @@ class TranscodeManager
             ];
         }
 
-        if ($this->getRunningJobCount() >= $this->maxConcurrentTranscodes) {
-            throw new \RuntimeException(
-                "Maximum concurrent transcodes ({$this->maxConcurrentTranscodes}) reached"
-            );
-        }
+        // No job-count admission gate here. The on-demand model creates a job as a
+        // playlist row (status 'completed') and spends CPU only when a segment is
+        // requested, so a job is not a unit of encode work. The real encode bound is
+        // the in-flight SEGMENT cap (`server.hls.max_concurrent_segments`, default 8),
+        // enforced in produceSegment()/ensureSegmentInternal() with a 503 + Retry-After.
+        // See {@see $maxConcurrentTranscodes} for why the job-count knob is inert.
 
         $item = $this->getMediaItem($mediaItemId);
         if (!$item) {
@@ -971,6 +1018,8 @@ class TranscodeManager
             'audio_codec' => $segParams['audio_codec'] ?? null,
             'subtitle_tracks' => count($tracks),
             'prewarmed_segments' => $prewarmed,
+            // Surfaced so an operator can see the configured job ceiling is not enforced.
+            'configured_job_ceiling_inert' => $this->maxConcurrentTranscodes,
         ]);
 
         return [
@@ -1035,6 +1084,15 @@ class TranscodeManager
      * INLINE for the very viewer whose head start it was.
      */
     private const PREWARM_SEGMENT_COUNT = 3;
+
+    /**
+     * Head-start window for a TRANSCODE target rung (not stream-copy), in segments.
+     * A transcode segment is a full CPU encode; warming only the first keeps the
+     * start-latency win and drops the other encodes that would otherwise run at
+     * job creation for a rung the player may never start on. See
+     * {@see prewarmFirstSegments()}.
+     */
+    private const PREWARM_TRANSCODE_SEGMENT_COUNT = 1;
 
     /**
      * Default ceiling on simultaneous on-demand segment encodes across ALL jobs.
@@ -1486,6 +1544,7 @@ class TranscodeManager
         $reserved = false;
         $overCap = false;
         $myGen = 0;
+        $inFlight = 0;
         if (!$this->segmentEncodeInFlight($final)) {
             // Record the launch in-worker BEFORE the yieldable glob. The add and the
             // dedup check above run with no coroutine yield between them, so this
@@ -1511,16 +1570,26 @@ class TranscodeManager
             // seek-storm scenario this cap exists to prevent. Real-time accuracy is
             // preserved because this glob only runs on an actual launch decision
             // (after the dedup check found no in-flight encode for this segment).
-            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                $overCap = true;
+            $this->watchdogTick();
+            $inFlight = $this->countInFlightSegmentEncodes();
+            if ($inFlight >= $this->maxConcurrentSegments) {
+                // (8a) A sibling worker may already be encoding this exact segment. The
+                // in-worker dedup cannot see that (its snapshot lags by up to one reconcile
+                // interval), so check the shared tree for this segment only. If it is being
+                // encoded, join it as a waiter instead of refusing the seek. Only a segment
+                // nobody is encoding is refused, so the cap stays a real bound.
+                $overCap = !$this->liveEncodeExistsFor($final);
                 // Roll back the reservation immediately — the finally below never
                 // runs on this throw (it precedes the try), so the rollback must
                 // happen here. Compare-and-clear on our own generation so it stays
                 // correct even in the (guaranteed-safe here) event of concurrency.
                 $this->clearReservationIfMine($final, $myGen);
-                throw new SegmentBusyException(
-                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                );
+                if ($overCap) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                $reserved = false; // join the live encode below, as a dedup hit
             }
         }
 
@@ -1560,6 +1629,15 @@ class TranscodeManager
             // back half of the box to demand. This is what ends the measured
             // 7.9 s seg0-inline stall: creation could previously stack its
             // whole window against the ceiling ahead of the first real request.
+            // (8b) Prewarm yields to interactive demand BEFORE a seek is refused. Once this
+            // launch would leave fewer than INTERACTIVE_HEADROOM_SLOTS free, the head start
+            // stands down, so a seek (video + audio) always finds the slots it needs. The
+            // reader keeps the full ceiling, as before; only prewarm is held back.
+            if ($inFlight + 1 > $this->maxConcurrentSegments - $this->interactiveHeadroom()) {
+                $this->clearReservationIfMine($final, $myGen);
+
+                return null;
+            }
             if ($this->countInFlightPrewarmEncodes() >= $this->prewarmInFlightBudget()) {
                 // Same compare-and-clear discipline as the cap rollback above:
                 // we reserved this slot at :1433's family and own the generation.
@@ -1730,8 +1808,11 @@ class TranscodeManager
      * FIELD's traces show the client requesting first), video-bearing segments
      * only (an audio-group rendition's fragments are not the cold-start
      * blocker: the first read pays for what is requested, and hls.js starts
-     * from the top variant), and the shipped window length — lower rungs and
-     * the rest of the timeline stay purely demand-shaped.
+     * from the top variant), and the window length depends on the rung's cost:
+     * `original` stream-copy → the full {@see $prewarmSegments} (a remux is
+     * near-free); `original` transcode (or a legacy single-variant job) →
+     * {@see self::PREWARM_TRANSCODE_SEGMENT_COUNT} (segment 0 only). Lower rungs
+     * and the rest of the timeline stay purely demand-shaped.
      *
      * Failures here are INVISIBLE to the play request by design: the worst
      * case is exactly the pre-C6 world (cold inline build at read time).
@@ -1757,6 +1838,13 @@ class TranscodeManager
         // will: multi-variant jobs take the ladder's `original` rung; legacy
         // single-variant rows (variants IS NULL) take the unprefixed null rung.
         $variantId = null;
+        // Window length. A stream-copy rung is a `-c copy` remux (cheap), so it keeps the
+        // full head start. A transcode rung (HEVC/AC3/etc. source, or any legacy
+        // single-variant job, whose segments are always encoded) is a full libx264 encode
+        // per segment, so it warms only the first segment: that is the one whose latency
+        // the viewer feels (3.0–6.6 s cold inline), and later segments encode on demand
+        // faster than real time once playback starts.
+        $windowSegments = self::PREWARM_TRANSCODE_SEGMENT_COUNT;
         $variantsRaw = $row['variants'] ?? null;
         if (is_string($variantsRaw) && $variantsRaw !== '') {
             $decoded = $entry['variants'];
@@ -1768,11 +1856,15 @@ class TranscodeManager
                 return 0; // not a ladder shape we recognise — hands off
             }
             $variantId = $original['id'];
+            if (($original['is_copy'] ?? false) === true) {
+                $windowSegments = $this->prewarmSegments;
+            }
         }
+        $windowSegments = min($windowSegments, $this->prewarmSegments);
 
         $launched = 0;
         try {
-            for ($i = 0; $i < $this->prewarmSegments; $i++) {
+            for ($i = 0; $i < $windowSegments; $i++) {
                 if ($this->ensureSegmentInternal($jobId, $variantId, $i, null, false) === null) {
                     break; // out of range / sibling holds it / cap / A′ budget — stop
                 }
@@ -1945,12 +2037,18 @@ class TranscodeManager
             $this->segmentEncodesInFlight[$final] = ['at' => $this->monotonicMs(), 'gen' => $myGen];
             $reserved = true;
 
+            $this->watchdogTick();
             if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                $overCap = true;
+                // (8a) As in produceSegment(): join a live sibling encode of this exact
+                // segment instead of refusing it. Only an unclaimed segment is refused.
+                $overCap = !$this->liveEncodeExistsFor($final);
                 $this->clearReservationIfMine($final, $myGen);
-                throw new SegmentBusyException(
-                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                );
+                if ($overCap) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                $reserved = false; // join the live encode below, as a dedup hit
             }
         }
 
@@ -2349,8 +2447,9 @@ class TranscodeManager
 
     /**
      * Count on-demand segment encodes in flight across ALL jobs and ALL workers, by
-     * globbing the shared segment directory for the `*.part-*` atomic-write temp
-     * files. Bounds the global concurrency ceiling in {@see produceSegment()}.
+     * scanning the shared segment tree for the `*.part-*` atomic-write temp files
+     * ({@see scanInFlightTemps()}, which reads only the job directories that can
+     * hold a live temp). Bounds the global concurrency ceiling in {@see produceSegment()}.
      *
      * INTENTIONALLY a real-time, whole-tree glob — NOT derived from the throttled
      * in-worker snapshot. A prior version of this step summed the exact local set
@@ -2379,17 +2478,82 @@ class TranscodeManager
         // the prewarm BUDGET ({@see countInFlightPrewarmEncodes()}) treats the
         // families differently.
         //
-        // Fix A′′′: what the globs return first passes through
+        // Fix A′′′: what the scan returns first passes through
         // {@see purgeDeadInFlightTemps()} — provably-dead orphaned temps are
-        // unlinked and stop counting. The S2 real-time whole-tree glob doctrine
-        // is untouched (this is still never derived from memory); only the
-        // definition of LIVE changed, and it changed to something the wrapper
-        // timeout can prove.
-        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        $total = is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
-        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+        // unlinked and stop counting. The count is still read from the shared
+        // tree live, never from memory; see {@see scanInFlightTemps()} for why the
+        // live read is now bounded to the job directories that can hold a live temp.
+        $families = $this->scanInFlightTemps();
 
-        return $total + (is_array($prewarmParts) ? count($this->purgeDeadInFlightTemps($prewarmParts)) : 0);
+        return count($this->purgeDeadInFlightTemps($families['base']))
+            + count($this->purgeDeadInFlightTemps($families['prewarm']));
+    }
+
+    /**
+     * Every in-flight atomic-write temp in the shared segment tree, split into the
+     * two families (`base` = untagged on-demand, `prewarm` = `.part-p{8 hex}`),
+     * read live from disk.
+     *
+     * Replaces the former whole-tree globs (`{segmentDir}/*\/seg-*.part-…`, one per
+     * family, on every launch decision, plus the reconcile pass). A glob over
+     * `{segmentDir}/*\/…` lists every segment of every job on the box, so its cost
+     * grows with the cache, not with the load: hundreds of jobs × hundreds of
+     * segments, twice, per cache miss. This scan instead:
+     *
+     *   1. lists only the top-level job directories (names, no per-file listing);
+     *   2. skips a job directory whose mtime is older than the temp death bound
+     *      ({@see inflightTempDeathSeconds()}). A temp is created inside its job
+     *      directory, which bumps that directory's mtime to at least the temp's
+     *      creation time, so any directory holding a temp younger than the bound has
+     *      mtime >= now - bound. A skipped directory can hold only temps the purge
+     *      already treats as dead, so the result is the same set of LIVE temps the
+     *      whole-tree glob produced;
+     *   3. globs the surviving directories once, for both families together.
+     *
+     * When the death bound is unset (`ffmpeg.transcode_timeout` <= 0) no bound is
+     * provable and the purge stands down, so every directory is scanned, exactly as
+     * before.
+     *
+     * Family split: the base pattern matches an 8-char suffix after `.part-` and the
+     * prewarm pattern matches a 9-char suffix starting with `p`, so the two are
+     * disjoint by length. The split uses the same rule.
+     *
+     * @return array{base: list<string>, prewarm: list<string>}
+     */
+    private function scanInFlightTemps(): array
+    {
+        $families = ['base' => [], 'prewarm' => []];
+        $dirs = glob("{$this->segmentDir}/*", GLOB_ONLYDIR);
+        if (!is_array($dirs) || $dirs === []) {
+            return $families;
+        }
+
+        $deathSeconds = $this->inflightTempDeathSeconds();
+        $cutoff = $deathSeconds > 0 ? time() - $deathSeconds : null;
+        $pattern = '{' . self::INFLIGHT_TEMP_GLOB . ',' . self::INFLIGHT_PREWARM_TEMP_GLOB . '}';
+
+        foreach ($dirs as $dir) {
+            if ($cutoff !== null) {
+                $mtime = @filemtime($dir);
+                if ($mtime === false || $mtime < $cutoff) {
+                    continue; // no temp in here can be younger than the death bound
+                }
+            }
+            $parts = glob($dir . '/' . $pattern, GLOB_BRACE);
+            if (!is_array($parts)) {
+                continue;
+            }
+            foreach ($parts as $part) {
+                $suffix = substr($part, (int) strrpos($part, '.part-') + 6);
+                if (strlen($suffix) === 9) {
+                    $families['prewarm'][] = $part;
+                } else {
+                    $families['base'][] = $part;
+                }
+            }
+        }
+
+        return $families;
     }
 
     /**
@@ -2405,9 +2569,7 @@ class TranscodeManager
      */
     private function countInFlightPrewarmEncodes(): int
     {
-        $parts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
-
-        return is_array($parts) ? count($this->purgeDeadInFlightTemps($parts)) : 0;
+        return count($this->purgeDeadInFlightTemps($this->scanInFlightTemps()['prewarm']));
     }
 
     /**
@@ -2455,7 +2617,7 @@ class TranscodeManager
             // the unlink is then a no-op and counting it would only re-charge
             // the tax to a different segment's launch).
             @unlink($part);
-            foreach (glob($part . '.*') ?: [] as $sidecar) {
+            foreach (glob(addcslashes($part, '*?[]\\') . '.*') ?: [] as $sidecar) {
                 @unlink($sidecar);
             }
         }
@@ -2493,6 +2655,17 @@ class TranscodeManager
     private function prewarmInFlightBudget(): int
     {
         return intdiv($this->maxConcurrentSegments, 2);
+    }
+
+    /**
+     * Slots the interactive (reader) path keeps free from prewarm: the fixed
+     * {@see self::INTERACTIVE_HEADROOM_SLOTS}, but never more than the reader's own
+     * half of the ceiling, ceil(cap / 2). So a 2-slot box still lets prewarm hold its
+     * one slot (the wave A′ law), and a 1-slot box stands prewarm down entirely.
+     */
+    private function interactiveHeadroom(): int
+    {
+        return min(self::INTERACTIVE_HEADROOM_SLOTS, intdiv($this->maxConcurrentSegments + 1, 2));
     }
 
     /**
@@ -2539,11 +2712,10 @@ class TranscodeManager
         // reconcile tick after its wrapper timeout provably expired — the
         // fresh requester then RESERVES and re-encodes instead of riding a
         // ≤30 s piggyback poll into a 404 forever.
-        $baseParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_TEMP_GLOB);
-        $prewarmParts = glob("{$this->segmentDir}/*/" . self::INFLIGHT_PREWARM_TEMP_GLOB);
+        $families = $this->scanInFlightTemps();
         $allParts = array_merge(
-            $this->purgeDeadInFlightTemps(is_array($baseParts) ? $baseParts : []),
-            $this->purgeDeadInFlightTemps(is_array($prewarmParts) ? $prewarmParts : [])
+            $this->purgeDeadInFlightTemps($families['base']),
+            $this->purgeDeadInFlightTemps($families['prewarm'])
         );
         foreach ($allParts as $part) {
             $final = preg_replace('/\.part-p?[0-9a-f]+$/', '', $part);
@@ -2598,6 +2770,156 @@ class TranscodeManager
     private function monotonicMs(): int
     {
         return (int) (hrtime(true) / 1_000_000);
+    }
+
+    /**
+     * Wire the per-worker segment-process registry the encode watchdog sweeps. Null
+     * disables the watchdog (the request-driven sweep and the timer both stand down).
+     */
+    public function setSegmentProcessRegistry(?SegmentProcessRegistry $registry): void
+    {
+        $this->segmentRegistry = $registry;
+    }
+
+    /**
+     * Inject the timer-add the watchdog arms through (tests use it to exercise the success path
+     * outside Workerman). Null restores Workerman's `Timer::add`.
+     *
+     * @param (callable(int, callable): (int|false))|null $timerAdd Receives the period and the tick callback.
+     */
+    public function setWatchdogTimerAdd(?callable $timerAdd): void
+    {
+        $this->watchdogTimerAdd = $timerAdd;
+    }
+
+    /**
+     * Run before every launch decision: arm the per-worker watchdog timer once, and
+     * run a throttled sweep so slots held by stalled or over-age encodes are freed
+     * even when no timer tick has fired yet. Cheap when there is nothing to reap.
+     */
+    private function watchdogTick(): void
+    {
+        $this->armEncodeWatchdog();
+
+        if ($this->segmentRegistry === null) {
+            return;
+        }
+        $now = $this->monotonicMs();
+        if (
+            $this->lastWatchdogSweepMs !== null
+            && ($now - $this->lastWatchdogSweepMs) < self::ENCODE_WATCHDOG_REQUEST_SWEEP_MS
+        ) {
+            return;
+        }
+        $this->lastWatchdogSweepMs = $now;
+        $this->segmentRegistry->sweep();
+    }
+
+    /**
+     * Arm this worker's Workerman timer that sweeps the segment registry every
+     * {@see self::ENCODE_WATCHDOG_TICK_SECONDS}, so a stalled encode is reaped even
+     * when no request arrives. Armed once per worker; a failed attempt is retried on the
+     * next watchdogTick(). Outside a Workerman runtime (CLI, unit tests) Timer::add()
+     * throws on every attempt, and the request-driven sweep alone carries the watchdog.
+     */
+    private function armEncodeWatchdog(): void
+    {
+        if ($this->watchdogTimerId !== null || $this->segmentRegistry === null) {
+            return;
+        }
+
+        $registry = $this->segmentRegistry;
+        $logger = $this->logger;
+        $timerAdd = $this->watchdogTimerAdd ?? [\Workerman\Timer::class, 'add'];
+        try {
+            $this->watchdogTimerId = (int) $timerAdd(
+                self::ENCODE_WATCHDOG_TICK_SECONDS,
+                static function () use ($registry, $logger): void {
+                    try {
+                        $registry->sweep();
+                    } catch (\Throwable $e) {
+                        // A watchdog failure must never stop the timer or reach the event loop.
+                        $logger->warning('HLS encode watchdog sweep failed', ['exception' => $e->getMessage()]);
+                    }
+                },
+            );
+        } catch (\Throwable) {
+            // Leave the id null, so the next watchdogTick() (every launch decision) tries again.
+            // A 0 sentinel would latch the failure for the life of the worker, and escalation
+            // would then depend only on the request-driven sweep.
+        }
+    }
+
+    /**
+     * True when a LIVE encode for exactly this segment exists in the shared tree,
+     * whichever worker launched it. Scoped to this one job directory, so it costs a
+     * single directory listing rather than a tree scan. Used to piggyback on a
+     * sibling worker's in-flight encode instead of refusing the request with
+     * SegmentBusyException (the in-worker dedup cannot see it: its snapshot is up to
+     * one reconcile interval stale).
+     *
+     * "Live" means younger than {@see joinWindowSeconds()}. An encode launched by THIS
+     * worker since its last start is reaped by its owner within the wall-clock cap, or
+     * killed by the `timeout` wrapper, so an older temp from it is a corpse. An UNTRACKED
+     * encode (launched before this worker's last restart or deploy) has no owner. It runs
+     * up to the wrapper timeout (7200 s by default), so a LIVE untracked encode older than
+     * the window also counts as dead here. A request at the cap then gets an immediate 503
+     * instead of joining it. This is a known bound, listed in the open items of
+     * {@see SegmentProcessRegistry}. Joining a corpse made the request wait the full poll
+     * and then 404, where a refusal is an immediate 503. A corpse is also not purged here
+     * (no side effect on the join path). The count purge still bounds it.
+     *
+     * @param string $final Absolute path of the target segment.
+     */
+    private function liveEncodeExistsFor(string $final): bool
+    {
+        $pattern = addcslashes(dirname($final), '*?[]\\')
+            . '/' . addcslashes(basename($final), '*?[]\\') . '.part-*';
+        $hits = glob($pattern);
+        if (!is_array($hits) || $hits === []) {
+            return false;
+        }
+
+        // File mtimes are wall-clock by nature, so the age is taken against time(). An
+        // hrtime cannot be stored in a file. The slack in joinWindowSeconds() absorbs a
+        // clock step.
+        $window = $this->joinWindowSeconds();
+        $now = time();
+        foreach ($hits as $hit) {
+            // Only the `.part-<hex>` marker means an encode is running. Its siblings
+            // (`.i`, `.s0`, `.m3u8`, `.prog`) are the same glob's hits. A sidecar outlives
+            // its marker when a killed ffmpeg writes its trailer after the cleanup, so a
+            // fresh sidecar must not make a dead encode look live.
+            if (preg_match('/\.part-p?[0-9a-f]{8}$/', $hit) !== 1) {
+                continue;
+            }
+            $mtime = @filemtime($hit);
+            if ($mtime !== false && ($now - $mtime) <= $window) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The age in seconds up to which a temp still counts as a LIVE encode for a join.
+     *
+     * An encode this worker launched is reaped within the wall-clock cap by the watchdog,
+     * or killed by the `timeout` wrapper, whichever comes first. An UNTRACKED encode (one
+     * launched before this worker's last restart) is not in the watchdog. It is bounded
+     * only by the wrapper, so a live untracked encode older than this window is treated as
+     * dead. That is the open item noted in {@see SegmentProcessRegistry}. A temp older than
+     * the window, plus a small slack for the sweep cadence and the SIGKILL grace, is treated
+     * as dead. A wrapper timeout of 0 means none, so the cap alone applies.
+     */
+    private function joinWindowSeconds(): int
+    {
+        $wall = $this->segmentRegistry?->maxWallSeconds() ?? SegmentProcessRegistry::DEFAULT_MAX_WALL_SECONDS;
+        $timeout = $this->ffmpeg->getTranscodeTimeout();
+        $bound = $timeout > 0 ? min($wall, (float) $timeout) : $wall;
+
+        return (int) ceil($bound) + self::SEGMENT_JOIN_SLACK_SECONDS;
     }
 
     /**
@@ -4598,19 +4920,6 @@ class TranscodeManager
     }
 
     /**
-     * Counts the running jobs as recorded in the database.
-     *
-     * @return int Number of jobs with status='running'.
-     */
-    private function getRunningJobCount(): int
-    {
-        $result = $this->db->query("SELECT COUNT(*) AS c FROM transcode_jobs WHERE status = 'running'");
-        $rows = RowMap::listFromMixed($result);
-        $c = $rows[0]['c'] ?? 0;
-        return is_numeric($c) ? (int) $c : 0;
-    }
-
-    /**
      * The DASH manifest URL for a job, or null when the job has no manifest.
      *
      * S11 removed `dash_url` from the transcode payloads because it always
@@ -5304,14 +5613,13 @@ class TranscodeManager
 
     /**
      * Reap DB-recorded 'running' jobs that are no longer alive, marking them
-     * 'failed' so they stop counting against {@see $maxConcurrentTranscodes}.
+     * 'failed' so the status column tells the truth.
      *
-     * The concurrency gate counts `status='running'` rows in the DB. When the
-     * worker restarts (e.g. after a deploy) the DB still holds the previous run's
-     * 'running' rows — ghosts with no live ffmpeg behind them. Enough of them
-     * ({@see $maxConcurrentTranscodes}) and every new playback request is refused
-     * with "Maximum concurrent transcodes reached", which surfaces to the user as
-     * a video that simply will not play. A job is considered dead when:
+     * Nothing writes 'running' on the on-demand path any more (the job INSERT seeds
+     * 'completed'), so this reaps only legacy rows left by an older build or a
+     * crashed writer. It no longer gates admission: the job-count gate that used to
+     * read these rows was removed because it was inert (see {@see ensureHlsJob()}).
+     * A job is considered dead when:
      *
      *   - its working directory is gone (a live job creates that dir before it
      *     inserts the row, so a 'running' row without one is a corpse), or

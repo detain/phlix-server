@@ -19,17 +19,23 @@ final class SegmentProcessRegistryTest extends TestCase
     /** @var array<int, string> Temp paths the injected temp cleaner was asked to clean. */
     private array $cleaned = [];
 
+    /** @var array<int, string> Fake `/proc/<pid>/stat` lines by PID (the fake process table). */
+    private array $proc = [];
+
+    /** @var array<int, int> Fake group membership returned by the probe: PID => start time. */
+    private array $members = [];
+
     private function registry(callable $isAlive): SegmentProcessRegistry
     {
         $this->signals = [];
         $this->cleaned = [];
-        return new SegmentProcessRegistry(
+        $registry = new SegmentProcessRegistry(
             null,
             function (int $pid, int $signal): void {
                 $this->signals[] = ['pid' => $pid, 'signal' => $signal];
             },
             $isAlive,
-            // Tiny grace period so the SIGTERM→SIGKILL escalation is fast in tests.
+            // Tiny grace period so the TERM→SIGKILL escalation is fast in tests.
             0.05,
             // The cleaner is passed the launcher's OWN `.part-<hex>` temp path
             // (recorded via register()), never a `{$final}.part-*` glob.
@@ -37,6 +43,51 @@ final class SegmentProcessRegistryTest extends TestCase
                 $this->cleaned[] = $tmp;
             },
         );
+        // Fake PIDs must never match a real process on this host, so every /proc read and
+        // every membership scan is answered from the fakes above. The real /proc scan is
+        // covered by the real-process test.
+        $registry->setProcStatReader(fn (int $pid): ?string => $this->proc[$pid] ?? null);
+        $registry->setGroupMembersProbe(fn (array $leaders): array => $this->members);
+        $registry->setProcessSignalSender(function (int $pid, int $signal): void {
+            $this->signals[] = ['pid' => $pid, 'signal' => $signal];
+        });
+
+        return $registry;
+    }
+
+    /**
+     * The PIDs that were sent a given signal, in send order.
+     *
+     * @param array<int, array{pid: int, signal: int}> $sent
+     *
+     * @return list<int>
+     */
+    private static function pidsSentWith(array $sent, int $signal): array
+    {
+        $pids = [];
+        foreach ($sent as $entry) {
+            if ($entry['signal'] === $signal) {
+                $pids[] = $entry['pid'];
+            }
+        }
+
+        return $pids;
+    }
+
+    /**
+     * A `/proc/<pid>/stat` line in the real kernel layout, with the state, the process group
+     * id and the start time (field 22) set. Every other field is a fixed placeholder.
+     */
+    private static function stat(int $pid, string $state, int $start, ?int $pgrp = null): string
+    {
+        $group = (string) ($pgrp ?? $pid);
+        $fields = [
+            $state, '1', $group, $group, '0', '-1',
+            '0', '0', '0', '0', '0', '0', '0', '0', '0',
+            '20', '0', '1', '0', (string) $start,
+        ];
+
+        return $pid . ' (ffmpeg) ' . implode(' ', $fields) . ' 0 0';
     }
 
     public function test_register_tracks_pid_under_key(): void
@@ -89,18 +140,46 @@ final class SegmentProcessRegistryTest extends TestCase
         $this->assertSame(0, $registry->registeredKeyCount(), 'kill drops the entry — no leak');
     }
 
-    public function test_kill_escalates_to_sigkill_when_still_alive(): void
+    public function testKillEscalatesToSigkillFromTheSweepAfterTheGrace(): void
     {
-        // Always-alive process forces the SIGTERM → SIGKILL escalation.
+        // A live leader with one live child in its group. kill() sends TERM and returns at once.
+        // The SIGKILL comes from sweep(), once the grace has elapsed, to each member whose
+        // recorded start time still matches.
         $registry = $this->registry(static fn (int $pid): bool => true);
+        $this->proc[4242] = self::stat(4242, 'S', 100);
+        $this->proc[4343] = self::stat(4343, 'S', 200);
+        $this->members = [4242 => 100, 4343 => 200];
         $registry->register('seg-a', 4242);
 
         $registry->kill('seg-a');
 
-        $signals = array_map(static fn (array $s): int => $s['signal'], $this->signals);
-        $this->assertContains(SIGTERM, $signals);
-        $this->assertContains(SIGKILL, $signals);
-        $this->assertSame(0, $registry->registeredKeyCount());
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals, 'kill() sends TERM only, now');
+        $this->assertSame(0, $registry->registeredKeyCount(), 'the key is released at once');
+        $this->assertSame(1, $registry->orphanCount(), 'the record waits for the sweep');
+
+        // One second later is past the 0.05 s grace, so this pass is the SIGKILL step.
+        $registry->sweep((int) hrtime(true) + 1_000_000_000);
+
+        $kills = self::pidsSentWith($this->signals, SIGKILL);
+        $this->assertEqualsCanonicalizing([4242, 4343], $kills, 'each verified member gets one SIGKILL');
+        $this->assertSame(0, $registry->orphanCount(), 'the record is dropped after the SIGKILL step');
+    }
+
+    public function testKillNeverWaitsForTheGrace(): void
+    {
+        // The grace is 0.05 s here. A kill with a live member must return well inside it,
+        // because the wait now lives in sweep(), not in the request path.
+        $registry = $this->registry(static fn (int $pid): bool => true);
+        $this->proc[4242] = self::stat(4242, 'S', 100);
+        $this->members = [4242 => 100];
+        $registry->register('seg-a', 4242);
+
+        $start = hrtime(true);
+        $registry->kill('seg-a');
+        $elapsedMs = (hrtime(true) - $start) / 1_000_000.0;
+
+        $this->assertLessThan(20.0, $elapsedMs, 'kill() must return without the 50 ms grace wait');
+        $this->assertSame([SIGTERM], array_map(static fn (array $s): int => $s['signal'], $this->signals));
     }
 
     public function test_kill_of_unknown_key_returns_zero_and_signals_nothing(): void

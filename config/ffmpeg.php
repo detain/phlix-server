@@ -32,8 +32,36 @@ return [
     'ffprobe_path' => '/usr/bin/ffprobe',
     'transcode_dir' => '/var/transcodes',
     'segment_dir' => '/var/segments',
+    // INERT — kept for config/admin-UI compatibility only. No admission path enforces
+    // it: on-demand jobs are never 'running', and a job is a playlist that costs no CPU
+    // until a segment is requested. The real encode ceiling is
+    // server.hls.max_concurrent_segments (HLS_MAX_CONCURRENT_SEGMENTS, default 8).
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
+    // Watchdog for detached on-demand SEGMENT encodes (SegmentProcessRegistry::sweep()).
+    // A segment is 6 s of content. A healthy CMAF encode advances its progress
+    // (out_time_us) every 0.2–2 s, but it writes no progress at all during its
+    // end-of-input flush. Measured: 4.7 s at 720p veryslow on one thread. On the dev host (load
+    // about 15), a 4K 1-thread veryslow flush is 30.6 s, and a 4K 1-thread encode takes 98.9 s
+    // wall. So an encode with no progress for 90 s is killed.
+    // That covers the measured 4K flush with about 3× margin. Under 2× contention the flush is
+    // a linear projection of about 61 s, not a measurement, and 90 s covers that with about 1.5×
+    // margin. A kill does not free the cap slot or the .part temp itself. The SIGKILL pass does,
+    // 0.5 to 5.5 s after TERM (the grace, plus up to one 5 s watchdog tick). A temp and its slot
+    // are held past that pass only under the rule below, which applies when the membership is
+    // unknown at TERM (/proc unreadable then, or absent at registration so no start time was
+    // recorded) or when the identity is unknown at the grace. Such a hold lasts until
+    // transcode_timeout has passed since the TERM. The bound is measured from the TERM, not from
+    // registration. A launch with a recorded start time, and with no membership snapshot or an
+    // unknown identity at the grace, is held while its launched process is alive. An unchecked
+    // launch (no start time) is held while its process group is alive, not while its PID is alive.
+    // In a mixed record, a launch with a recorded start time is released at the grace once it has
+    // been KILLed or is dead, unless it has no snapshot or its identity is unknown at the grace.
+    // The 300 s wall cap is about 3× the measured 4K wall time.
+    // Both bounds are far below transcode_timeout, which remains the last backstop.
+    // Non-positive values fall back to the registry defaults.
+    'segment_stall_seconds' => 90,
+    'segment_max_wall_seconds' => 300,
 
     /**
      * playback-lag wave C: thread cap for the SOFTWARE libx264 segment encoder

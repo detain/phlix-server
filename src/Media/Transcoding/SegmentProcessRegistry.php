@@ -138,7 +138,8 @@ use Psr\Log\NullLogger;
  *    and its group is not snapshotted. Its launch's temp and cap slot are held after the grace
  *    while that group still exists (see {@see uncheckedGroupAlive()}), up to the hold bound after
  *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a verified
- *    launch is released at the grace, once it has been KILLed or is dead (see {@see heldPids()}).
+ *    launch is released at the grace, once it has been KILLed or is dead. While its identity is
+ *    unknown at the grace, it is held up to the same bound (see {@see heldPids()}).
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -1042,12 +1043,16 @@ final class SegmentProcessRegistry
      * The PIDs of a TERMed record whose launch may still run once its grace has elapsed. The
      * verdict is per launch, so a dead or KILLed verified launch releases its temp even when a
      * sibling launch of the same record is still held:
-     *  - an UNCHECKED launch (no start time) is held while its group still exists. With no
-     *    membership snapshot it is also held while its PID is alive. Its group's members were never
-     *    snapshotted, so no KILL reaches them, but they still hold the temp and the cap slot;
-     *  - a VERIFIED launch is held only when there is no membership snapshot and its PID is still
-     *    alive, because nothing can KILL it. With a snapshot, its group was KILLed at the grace, or
-     *    it is gone, so it is not held.
+     *  - an UNCHECKED launch (no start time) is held only while its process group still exists
+     *    (`kill(-pid, 0)`). Every launch runs under setsid, so a live leader is the leader of its own
+     *    group, and the group probe covers it. Its group's members were never snapshotted, so no
+     *    KILL reaches them, but they still hold the temp and the cap slot. A PID that is alive but
+     *    no longer leads a group does not hold the launch;
+     *  - a VERIFIED launch is held when there is no membership snapshot and its PID is still alive,
+     *    because nothing can KILL it. It is also held when its identity is unknown at the grace
+     *    (`/proc` unreadable, or a malformed stat line), because the SIGKILL step skips an unknown
+     *    process and it may still run. With a snapshot and a known identity, its group was KILLed at
+     *    the grace, or it is gone, so it is not held.
      *
      * An empty result means nothing is held, and the record is dropped at the grace.
      *
@@ -1063,10 +1068,10 @@ final class SegmentProcessRegistry
         foreach ($pids as $pid) {
             $start = $starts[$pid] ?? null;
             if ($start === null) {
-                $stillRuns = ($this->groupAliveProbe)($pid)
-                    || ($members === null && $this->isLive($pid, null));
+                $stillRuns = ($this->groupAliveProbe)($pid);
             } else {
-                $stillRuns = $members === null && $this->isLive($pid, $start);
+                $stillRuns = ($members === null || $this->identityOf($pid, $start) === 'unknown')
+                    && $this->isLive($pid, $start);
             }
             if ($stillRuns) {
                 $held[] = $pid;
@@ -1080,8 +1085,9 @@ final class SegmentProcessRegistry
      * True when an UNCHECKED leader (no start time was recorded) still has a live process group.
      * Such a leader was never verified, so its group is never snapshotted and never KILLed. Its
      * group can still hold a child that keeps the temp and the cap slot. The probe is
-     * `kill(-pid, 0)`, which also sees unreaped zombies. The hold it drives is bounded, so
-     * a zombie or a reused group id costs a held slot for at most the hold bound.
+     * `kill(-pid, 0)`, which also sees an unreaped zombie leader whose group has no other member,
+     * so that zombie reads as live. Accepted: the hold it drives is bounded, so a zombie or a
+     * reused group id costs a held slot for at most the hold bound.
      *
      * @param array<int, int>      $pids
      * @param array<int, int|null> $starts

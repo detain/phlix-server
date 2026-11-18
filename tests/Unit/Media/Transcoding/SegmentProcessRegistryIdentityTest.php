@@ -287,11 +287,16 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
      * unknown, not empty, so the record is held through the grace and until the hold bound. It keeps
      * its temp and its cap slot. An empty snapshot would drop it one sweep after the grace, while
      * ffmpeg still writes to an unlinked temp. Nothing is KILLed, since no group was snapshotted.
+     *
+     * Finding 1 of round 8. The hold for an unchecked launch follows its process group, not its PID.
+     * The leader runs under setsid, so its group lives while it does: the fake group is alive here.
+     * See {@see testAnAllUncheckedRecordWithAPidButNoLiveGroupIsDroppedAtTheGrace()} for the other side.
      */
-    public function testAnAllUncheckedRecordWithALivePidIsHeldUntilTheBound(): void
+    public function testAnAllUncheckedRecordWithALiveGroupIsHeldUntilTheBound(): void
     {
         $key = '/segs/job/seg-00018.ts';
         $this->alive[7101] = true;
+        $this->groupAlive[7101] = true; // the leader leads its own setsid group, so the group lives
         $registry = $this->registry();
         $registry->setProcMountedProbe(static fn (): bool => false); // no `/proc` at all
         $registry->register($key, 7101, null, '/segs/job/seg-00018.ts.part-ffff6666');
@@ -315,6 +320,74 @@ final class SegmentProcessRegistryIdentityTest extends TestCase
             $this->signalsFor(7101),
             'no KILL is sent, since the membership was never snapshotted',
         );
+    }
+
+    /**
+     * Finding 1 of round 8. An unchecked launch is held only while its process group still exists.
+     * Here the PID is alive, but it no longer leads a group (the group probe is false, as for a
+     * reused PID that is not a group leader). Before the fix, the PID alone kept the record and its
+     * cap slot to the hold bound. Now the record is dropped at the grace. Nothing is KILLed.
+     */
+    public function testAnAllUncheckedRecordWithAPidButNoLiveGroupIsDroppedAtTheGrace(): void
+    {
+        $key = '/segs/job/seg-00019.ts';
+        $this->alive[7102] = true;
+        $registry = $this->registry();
+        $registry->setProcMountedProbe(static fn (): bool => false); // no `/proc` at all
+        $registry->register($key, 7102, null, '/segs/job/seg-00019.ts.part-aaaa7777');
+        $registry->configureWatchdog(30.0, 1.0);
+        $registry->configureUnverifiedHold(10.0);
+
+        $start = hrtime(true);
+        $registry->sweep($start + 2 * self::SEC); // stalled: TERM goes out (the identity is unchecked)
+        self::assertSame([self::SIGTERM], $this->signalsFor(7102));
+        self::assertSame(1, $registry->orphanCount(), 'the reaped record is held as an orphan');
+
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace, PID alive, group gone
+        self::assertSame(0, $registry->orphanCount(), 'a PID with no live group does not hold the launch');
+        self::assertSame(['/segs/job/seg-00019.ts.part-aaaa7777'], $this->cleaned, 'its temp is released at the grace');
+        self::assertSame(
+            [self::SIGTERM],
+            $this->signalsFor(7102),
+            'no KILL is sent, since the membership was never snapshotted',
+        );
+    }
+
+    /**
+     * Finding 2 of round 8. A verified launch with a TERM-time snapshot is never held on the snapshot
+     * alone. `/proc` is readable at TERM, so the snapshot exists and the leader is verified. At the
+     * grace `/proc` is unreadable, so the identity is 'unknown'. The SIGKILL step skips an unknown
+     * process, so it may still run. Its temp is held up to the hold bound, not released at the grace.
+     */
+    public function testAVerifiedLaunchWithAnUnknownIdentityAtTheGraceKeepsItsTemp(): void
+    {
+        $key = '/segs/job/seg-00021.ts';
+        $this->proc[8001] = self::statLine(8001, 'S', 1000);
+        $this->alive[8001] = true;
+        $this->members = [8001 => 1000];
+        $registry = $this->registry();
+        $registry->register($key, 8001, null, '/segs/job/seg-00021.ts.part-bbbb8888');
+        $registry->configureWatchdog(30.0, 1.0);
+        $registry->configureUnverifiedHold(10.0);
+
+        $start = hrtime(true);
+        $registry->sweep($start + 2 * self::SEC); // stalled: TERM goes out, /proc readable, snapshot taken
+        self::assertSame([self::SIGTERM], $this->signalsFor(8001));
+        self::assertSame(1, $registry->orphanCount(), 'the reaped record is held as an orphan');
+
+        // At the grace, `/proc` is unreadable: no stat line, and no `/proc` view at all.
+        unset($this->proc[8001]);
+        $registry->setProcMountedProbe(static fn (): bool => false);
+
+        $registry->sweep($start + 3 * self::SEC); // past the 0.5 s grace, PID still alive
+        self::assertSame([self::SIGTERM], $this->signalsFor(8001), 'an unknown identity is never KILLed');
+        self::assertSame(1, $registry->orphanCount(), 'a verified launch with an unknown identity is held');
+        self::assertSame([], $this->cleaned, 'its temp is kept while the process may still run');
+
+        $registry->sweep($start + 13 * self::SEC); // 11 s after TERM, past the 10 s hold
+        self::assertSame(0, $registry->orphanCount(), 'the record is dropped once the hold bound passes');
+        self::assertSame(['/segs/job/seg-00021.ts.part-bbbb8888'], $this->cleaned);
+        self::assertSame([self::SIGTERM], $this->signalsFor(8001), 'the hold never signals');
     }
 
     /**

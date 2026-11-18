@@ -2609,7 +2609,7 @@ class TranscodeManager
             // the unlink is then a no-op and counting it would only re-charge
             // the tax to a different segment's launch).
             @unlink($part);
-            foreach (glob($part . '.*') ?: [] as $sidecar) {
+            foreach (glob(addcslashes($part, '*?[]\\') . '.*') ?: [] as $sidecar) {
                 @unlink($sidecar);
             }
         }
@@ -2836,12 +2836,16 @@ class TranscodeManager
      * SegmentBusyException (the in-worker dedup cannot see it: its snapshot is up to
      * one reconcile interval stale).
      *
-     * "Live" means younger than {@see joinWindowSeconds()}. Any encode that is still
-     * running is reaped by its owner, or killed by the `timeout` wrapper, within that
-     * window, so an OLDER temp can only be a corpse. Joining a corpse made the request
-     * wait the full poll and then 404, where a refusal is an immediate 503. A
-     * corpse is also not purged here (no side effect on the join path). The count
-     * purge still bounds it.
+     * "Live" means younger than {@see joinWindowSeconds()}. An encode launched by THIS
+     * worker since its last start is reaped by its owner within the wall-clock cap, or
+     * killed by the `timeout` wrapper, so an older temp from it is a corpse. An UNTRACKED
+     * encode (launched before this worker's last restart or deploy) has no owner. It runs
+     * up to the wrapper timeout (7200 s by default), so a LIVE untracked encode older than
+     * the window also counts as dead here. A request at the cap then gets an immediate 503
+     * instead of joining it. This is a known bound, listed in the open items of
+     * {@see SegmentProcessRegistry}. Joining a corpse made the request wait the full poll
+     * and then 404, where a refusal is an immediate 503. A corpse is also not purged here
+     * (no side effect on the join path). The count purge still bounds it.
      *
      * @param string $final Absolute path of the target segment.
      */
@@ -2879,10 +2883,13 @@ class TranscodeManager
     /**
      * The age in seconds up to which a temp still counts as a LIVE encode for a join.
      *
-     * Every live encode is reaped within the wall-clock cap by the watchdog, or killed
-     * by the `timeout` wrapper, whichever comes first. A temp older than that, plus a
-     * small slack for the sweep cadence and the SIGKILL grace, is dead. A wrapper
-     * timeout of 0 means none, so the cap alone applies.
+     * An encode this worker launched is reaped within the wall-clock cap by the watchdog,
+     * or killed by the `timeout` wrapper, whichever comes first. An UNTRACKED encode (one
+     * launched before this worker's last restart) is not in the watchdog. It is bounded
+     * only by the wrapper, so a live untracked encode older than this window is treated as
+     * dead. That is the open item noted in {@see SegmentProcessRegistry}. A temp older than
+     * the window, plus a small slack for the sweep cadence and the SIGKILL grace, is treated
+     * as dead. A wrapper timeout of 0 means none, so the cap alone applies.
      */
     private function joinWindowSeconds(): int
     {

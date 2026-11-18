@@ -137,9 +137,12 @@ use Psr\Log\NullLogger;
  *    shell_exec() and register(), or any leader on a host without `/proc`) gets TERM and no KILL,
  *    and its group is not snapshotted. Its launch's temp and cap slot are held after the grace
  *    while that group still exists (see {@see heldPids()}), up to the hold bound after
- *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a verified
- *    launch is released at the grace, once it has been KILLed or is dead. While its identity is
- *    unknown at the grace, it is held up to the same bound (see {@see heldPids()}).
+ *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a launch with
+ *    a recorded start time is released at the grace once it has been KILLed or is dead, unless
+ *    its identity is unknown at the grace, in which case it is held while alive, up to the bound.
+ *  - Launch with a recorded start time. Its identity is unknown at the grace when `/proc` is
+ *    unreadable or its stat line is malformed. Such a launch is held while its launched process
+ *    is alive, up to the bound (see {@see heldPids()}).
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -442,10 +445,11 @@ final class SegmentProcessRegistry
      * Seconds after its TERM that an orphan is held while something it cannot KILL may still run
      * (see {@see sweep()} and {@see heldPids()}). A launch with a recorded start time, and with no
      * membership snapshot or an unknown identity at the grace, is held while its launched process is
-     * alive (not a zombie, and with its start time still matching where `/proc` is readable). An
-     * unchecked launch (no start time) is held while its process group is alive, not its PID. The
-     * container sets it from `ffmpeg.transcode_timeout`, and it is measured from the TERM, not from
-     * registration. The default is the shipped value, so the hold is always finite.
+     * alive (isLive: not a zombie, with its start time still matching, where /proc/<pid>/stat can be
+     * read and parsed). An unchecked launch (no start time) is held while its process group is alive,
+     * not while its PID is alive. The container sets it from `ffmpeg.transcode_timeout`, and it is
+     * measured from the TERM, not from registration. The default is the shipped value, so the hold is
+     * always finite.
      */
     private float $unverifiedHoldSeconds = self::DEFAULT_UNVERIFIED_HOLD_SECONDS;
 
@@ -495,11 +499,11 @@ final class SegmentProcessRegistry
     /**
      * Set how long an orphan is held after its TERM while something it cannot KILL may still run
      * (see {@see sweep()}). A launch with a recorded start time, and with no membership snapshot or an
-     * unknown identity at the grace, is held while its launched process is alive (not a zombie, and
-     * with its start time still matching where `/proc` is readable). An unchecked launch (no start
-     * time) is held while its process group is alive, not its PID. The bound is measured from the
-     * TERM. The container passes `ffmpeg.transcode_timeout`. A non-positive value keeps the shipped
-     * default, so the hold is always finite.
+     * unknown identity at the grace, is held while its launched process is alive (isLive: not a zombie,
+     * with its start time still matching, where /proc/<pid>/stat can be read and parsed). An unchecked
+     * launch (no start time) is held while its process group is alive, not while its PID is alive.
+     * The bound is measured from the TERM. The container passes `ffmpeg.transcode_timeout`. A
+     * non-positive value keeps the shipped default, so the hold is always finite.
      *
      * @param float $seconds Hold bound in seconds.
      */
@@ -968,17 +972,17 @@ final class SegmentProcessRegistry
      * TERM, but it gets no snapshot: its PID may since have been reused as a group leader by an
      * unrelated process, so nothing in its group can be KILLed later. A reused leader is never
      * snapshotted either. Returns null when the membership is unknown: a leader's identity is
-     * unknown (`/proc` unreadable now), or no leader is verified and at least one is unchecked
+     * unknown (the stat cannot be read or parsed now), or no leader is verified and at least one is unchecked
      * (no start time was recorded, as on a host without `/proc`), so there is no group to snapshot.
      * Null means no KILL later. The record is held, up to the hold bound after the TERM (see
      * {@see sweep()} and {@see heldPids()}). A launch with a recorded start time, and with no
      * membership snapshot or an unknown identity at the grace, is held while its launched process is
-     * alive (not a zombie, and with its start time still matching where `/proc` is readable). An
-     * unchecked launch (no start time) is held while its process group is alive, not its PID. A MIXED
-     * record (a verified leader with a snapshot, and an unchecked leader) is different. The unchecked
-     * leader's group gets TERM and no KILL, and its members are not in the snapshot, so they are never
-     * KILLed. Its temp is held after the grace while that group still exists, up to the same bound
-     * (see {@see heldPids()}).
+     * alive (isLive: not a zombie, with its start time still matching, where /proc/<pid>/stat can be
+     * read and parsed). An unchecked launch (no start time) is held while its process group is alive,
+     * not while its PID is alive. A MIXED record (a verified leader with a snapshot, and an unchecked
+     * leader) is different. The unchecked leader's group gets TERM and no KILL, and its members are not
+     * in the snapshot, so they are never KILLed. Its temp is held after the grace while that group still
+     * exists, up to the same bound (see {@see heldPids()}).
      * An empty array means no member was found, which is different from unknown.
      *
      * @param array<int, int>      $pids
@@ -1048,18 +1052,19 @@ final class SegmentProcessRegistry
 
     /**
      * The PIDs of a TERMed record whose launch may still run once its grace has elapsed. The
-     * verdict is per launch, so a dead or KILLed verified launch releases its temp even when a
-     * sibling launch of the same record is still held:
+     * verdict is per launch, so a dead or KILLed launch with a recorded start time releases its
+     * temp even when a sibling launch of the same record is still held:
      *  - an UNCHECKED launch (no start time) is held only while its process group still exists
      *    (`kill(-pid, 0)`). Every launch runs under setsid, so a live leader is the leader of its own
      *    group, and the group probe covers it. Its group's members were never snapshotted, so no
      *    KILL reaches them, but they still hold the temp and the cap slot. A PID that is alive but
      *    no longer leads a group does not hold the launch;
-     *  - a VERIFIED launch is held when there is no membership snapshot and its PID is still alive,
-     *    because nothing can KILL it. It is also held when its identity is unknown at the grace
-     *    (`/proc` unreadable, or a malformed stat line), because the SIGKILL step skips an unknown
-     *    process and it may still run. With a snapshot and a known identity, its group was KILLed at
-     *    the grace, or it is gone, so it is not held.
+     *  - a launch with a recorded start time is held when it has no membership snapshot, or its
+     *    identity is unknown at the grace, while its launched process is alive (isLive: not a zombie,
+     *    and start time still matching where the stat can be read). With no snapshot nothing can KILL
+     *    it. An unknown identity (`/proc` unreadable, or a malformed stat line) is held because the
+     *    SIGKILL step skips an unknown process, which may still run. With a snapshot and a known
+     *    identity, its group was KILLed at the grace, or it is gone, so it is not held.
      *
      * An empty result means nothing is held, and the record is dropped at the grace.
      *
@@ -1090,7 +1095,7 @@ final class SegmentProcessRegistry
 
     /**
      * True when an UNCHECKED leader (no start time was recorded) still has a live process group.
-     * Such a leader was never verified, so its group is never snapshotted and never KILLed. Its
+     * Such a leader has no recorded start time, so its group is never snapshotted and never KILLed. Its
      * group can still hold a child that keeps the temp and the cap slot. The probe is
      * `kill(-pid, 0)`, which also sees an unreaped zombie leader whose group has no other member,
      * so that zombie reads as live. Accepted: the hold it drives is bounded, so a zombie or a

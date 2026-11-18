@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Common\Env;
 
+use Psr\Log\LoggerInterface;
+
 /**
  * The env-read idiom for config defaults, in one place.
  *
@@ -35,6 +37,13 @@ final class EnvConfig
      * @var array<string, true>
      */
     private static array $invalidIntegers = [];
+
+    /**
+     * Names already reported through {@see reportInvalidIntegers()} in this process.
+     *
+     * @var array<string, true>
+     */
+    private static array $reportedIntegers = [];
 
     /**
      * A whole integer, optionally signed, with optional surrounding whitespace, optionally
@@ -76,6 +85,25 @@ final class EnvConfig
     public static function invalidIntegerNames(): array
     {
         return array_keys(self::$invalidIntegers);
+    }
+
+    /**
+     * Log one warning per non-integer integer knob, at most once per process. Call it where
+     * a logger exists, after the container is built in each worker. Workers are separate
+     * processes, so each worker logs its own copy of the warning, once.
+     */
+    public static function reportInvalidIntegers(LoggerInterface $logger): void
+    {
+        foreach (array_keys(self::$invalidIntegers) as $name) {
+            if (isset(self::$reportedIntegers[$name])) {
+                continue;
+            }
+            self::$reportedIntegers[$name] = true;
+            $logger->warning(
+                'Ignoring a non-integer env value; the default applies',
+                ['env' => $name]
+            );
+        }
     }
 
 

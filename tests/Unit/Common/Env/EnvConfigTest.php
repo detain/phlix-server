@@ -22,6 +22,7 @@ final class EnvConfigTest extends TestCase
         'PHLIX_WMIN34_INT',
         'PHLIX_WMIN34_TEXT',
         'PHLIX_WMIN34_NULL',
+        'PHLIX_WMIN34_RPT',
     ];
 
     protected function tearDown(): void
@@ -240,5 +241,34 @@ final class EnvConfigTest extends TestCase
 
         self::assertGreaterThanOrEqual(1, $first);
         self::assertSame($first, EnvConfig::availableCpuCount());
+    }
+
+    // ---- reportInvalidIntegers() -----------------------------------------
+
+    /**
+     * A non-integer knob is reported once per process with its name, and a second report
+     * in the same process does not repeat it.
+     */
+    public function testReportLogsANonIntegerKnobOnceAndNotAgain(): void
+    {
+        putenv('PHLIX_WMIN34_RPT=auto');
+        self::assertSame(5, EnvConfig::integer('PHLIX_WMIN34_RPT', 5));
+
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $envs = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning' && isset($context['env'])) {
+                    $this->envs[] = (string) $context['env'];
+                }
+            }
+        };
+
+        EnvConfig::reportInvalidIntegers($logger);
+        EnvConfig::reportInvalidIntegers($logger);
+
+        self::assertSame(1, count(array_keys($logger->envs, 'PHLIX_WMIN34_RPT', true)));
     }
 }

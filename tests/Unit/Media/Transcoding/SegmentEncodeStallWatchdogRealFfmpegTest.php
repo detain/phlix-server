@@ -10,20 +10,28 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * A real local ffmpeg CMAF segment encode, through the real command builder and the
- * real registry, must not be reaped by the stall rule.
+ * real registry, must not be reaped by the stall rule. It also proves that the progress
+ * signal, not the byte size, is what keeps it alive (review finding 4).
  *
- * The encode is a 720p `veryslow` one-thread segment of a generated test pattern. It
- * takes about 15-17 s on the dev host. The stall window is 30 s. That is a generous
- * margin over the measured 4.7 s end-of-input flush, so a host slowed about 6x still
- * never reaches it, and a healthy encode is never reaped by the stall rule. The window
- * is not tuned to this encode's length. At 30 s the window is longer than the encode,
- * so this test does not, by itself, prove that the progress file beats the byte-size
- * probe. That discrimination is covered by SegmentProcessRegistryProgressTest. Skipped
- * when ffmpeg or ffprobe is not installed.
+ * The encode is a 12 s 720p `veryslow` one-thread segment of a generated test pattern,
+ * which takes about 30-35 s on the dev host. The stall window is 20 s, so the encode
+ * outlasts the window by a wide margin. A CMAF encode's temp is 0 bytes until the end, so
+ * a byte-size probe would reap it at 20 s, and this test would then fail. The progress
+ * probe keeps it alive. The end-of-input flush is about 4.7 s for a 6 s 720p encode, so
+ * the 20 s window leaves about 4x headroom over it. The elapsed-time assertion below
+ * fails loudly if the host is so fast that the encode no longer outlasts the window,
+ * because then the test would prove nothing. Skipped when ffmpeg or ffprobe is not
+ * installed. Runs in about 35 s.
  */
 final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
 {
     private const SEC = 1_000_000_000;
+
+    /** The stall window this test runs under, in seconds. */
+    private const STALL_WINDOW_SECONDS = 20;
+
+    /** The segment length. At 720p veryslow on one thread it takes well past the window. */
+    private const SEGMENT_SECONDS = 12;
 
     private string $dir;
 
@@ -79,7 +87,7 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         exec(
             escapeshellarg($ffmpeg) . ' -nostdin -y -hide_banner -loglevel error'
             . ' -f lavfi -i ' . escapeshellarg('testsrc2=size=1280x720:rate=25')
-            . ' -t 8 -c:v libx264 -preset ultrafast -pix_fmt yuv420p '
+            . ' -t ' . (self::SEGMENT_SECONDS + 2) . ' -c:v libx264 -preset ultrafast -pix_fmt yuv420p '
             . escapeshellarg($source) . ' < /dev/null',
             $out,
             $rc,
@@ -96,16 +104,17 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         $runner = new FfmpegRunner($ffmpeg, $ffprobe, $this->dir);
         $runner->setSegmentEncodeThreads(1);
         $registry = new SegmentProcessRegistry();
-        // 30 s stall window (the measured 4.7 s flush x about 6 for a loaded host), 120 s wall cap.
-        $registry->configureWatchdog(30.0, 120.0);
+        // A 20 s stall window, shorter than this encode. A 120 s wall cap.
+        $registry->configureWatchdog((float) self::STALL_WINDOW_SECONDS, 120.0);
         $runner->setSegmentProcessRegistry($registry);
 
         $final = $this->dir . '/seg-v720p-00000.m4s';
+        $launched = hrtime(true);
         $pid = $runner->startSegmentEncode(
             $source,
             $final,
             0.0,
-            6.0,
+            (float) self::SEGMENT_SECONDS,
             [
                 'video_codec' => 'libx264',
                 'preset' => 'veryslow',
@@ -125,14 +134,21 @@ final class SegmentEncodeStallWatchdogRealFfmpegTest extends TestCase
         );
         self::assertGreaterThan(0, $pid, 'the encode must launch');
 
-        // Drive the watchdog at the same cadence as the timer, until the segment lands.
+        // Drive the watchdog at the same cadence as the timer, until the segment lands. The
+        // deadline is generous, so a loaded host finishes the encode and does not fail here.
         $signalled = 0;
-        $deadline = hrtime(true) + 60 * self::SEC;
+        $deadline = hrtime(true) + 150 * self::SEC;
         while (!is_file($final) && hrtime(true) < $deadline) {
             usleep(100_000);
             $signalled += $registry->sweep();
         }
+        $elapsedSeconds = (hrtime(true) - $launched) / self::SEC;
 
+        self::assertGreaterThan(
+            self::STALL_WINDOW_SECONDS,
+            $elapsedSeconds,
+            'the encode must outlast the stall window, or this test proves nothing about the progress signal',
+        );
         self::assertSame(0, $signalled, 'a healthy CMAF encode must not be reaped by the stall rule');
         self::assertFileExists($final, 'the encode must publish the segment');
 

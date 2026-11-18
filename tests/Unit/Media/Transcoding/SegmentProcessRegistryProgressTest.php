@@ -67,6 +67,8 @@ final class SegmentProcessRegistryProgressTest extends TestCase
         );
         // No real /proc for the fake PIDs.
         $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // No real process group for the fake PIDs: the membership snapshot is empty.
+        $registry->setGroupMembersProbe(static fn (array $leaders): array => []);
         // These scenarios were written against a 30 s stall window. The default is tested apart.
         $registry->configureWatchdog(30.0, 300.0);
 
@@ -88,10 +90,18 @@ final class SegmentProcessRegistryProgressTest extends TestCase
         return "frame=1\nfps=25.00\nbitrate=N/A\nout_time_us={$outTime}\nout_time={$outTime}\nprogress=continue\n";
     }
 
+    /**
+     * Unit-level proof for the stall rule (review finding 4). A CMAF encode's `.part` marker
+     * exists but stays at 0 bytes until the end, so its byte size shows no growth for the whole
+     * run. The run here is 56 s, past the 30 s window. A byte-size probe would call that a stall
+     * at 31 s. The out_time progress must keep the encode alive, and it is the only signal that
+     * does.
+     */
     public function testAnEncodeWhoseOutTimeAdvancesIsNeverStalled(): void
     {
         $tmp = $this->dir . '/seg-v360p-00000.m4s.part-0a1b2c3d';
         $prog = $tmp . '.prog';
+        touch($tmp); // the 0-byte CMAF marker: the temp family shows no size growth at all
         file_put_contents($prog, $this->block('N/A'));
         $this->alive[4101] = true;
         $registry = $this->registry();
@@ -195,6 +205,8 @@ final class SegmentProcessRegistryProgressTest extends TestCase
             },
         );
         $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // No real process group for the fake PIDs: the membership snapshot is empty.
+        $registry->setGroupMembersProbe(static fn (array $leaders): array => []);
         $registry->setProgressProbe(static fn (array $tmps): int => 0);
         $tmp = $this->dir . '/seg-v720p-00005.ts.part-5e6f7081';
         $registry->register($tmp, 4107, null, $tmp);
@@ -257,6 +269,8 @@ final class SegmentProcessRegistryProgressTest extends TestCase
             null,
         );
         $registry->setProcStatReader(static fn (int $pid): ?string => null);
+        // No real process group for the fake PIDs: the membership snapshot is empty.
+        $registry->setGroupMembersProbe(static fn (array $leaders): array => []);
         $registry->register('/key/seg-v360p-00000.m4s', 4106, null, $tmp);
         $registry->releaseAfterWaitTimeout('/key/seg-v360p-00000.m4s');
 

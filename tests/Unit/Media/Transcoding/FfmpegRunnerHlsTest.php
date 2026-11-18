@@ -113,9 +113,17 @@ class FfmpegRunnerHlsTest extends TestCase
         }
     }
 
+    /**
+     * Pins the input-side decode cap to 0 (off), so the framing assertions below are exact
+     * and do not depend on the environment or on the perf #5 default. The positive case is
+     * covered by {@see testAPositiveDecodeCapSitsBeforeTheInput()}.
+     */
     private function runner(): FfmpegRunner
     {
-        return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
+        $runner->setSegmentDecodeThreads(0);
+
+        return $runner;
     }
 
     // S59 REMOVED five `buildCmafCommand()` command-string tests here. That
@@ -482,7 +490,7 @@ class FfmpegRunnerHlsTest extends TestCase
         ]);
 
         // Accurate fast INPUT seek (before -i) to the segment start.
-        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $cmd);
+        $this->assertStringContainsString('-ss 780 -i ', $cmd);
         $this->assertStringContainsString('-t 6', $cmd);
         // First output frame is an IDR → independently decodable segment.
         $this->assertStringContainsString("-force_key_frames 'expr:eq(n,0)'", $cmd);
@@ -726,7 +734,7 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('-force_key_frames', $cmd);
         $this->assertStringNotContainsString('scale=', $cmd);
         // Same segment framing as the video segments (shared VOD timeline).
-        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $cmd);
+        $this->assertStringContainsString('-ss 780 -i ', $cmd);
         $this->assertStringContainsString('-t 6', $cmd);
         $this->assertStringContainsString('-output_ts_offset 780', $cmd);
         $this->assertStringContainsString('-muxdelay 0 -muxpreload 0', $cmd);
@@ -818,10 +826,10 @@ class FfmpegRunnerHlsTest extends TestCase
             $this->assertStringContainsString($shared, $rung480);
             $this->assertStringContainsString($shared, $rung1080);
         }
-        // The seek+input framing is shared too; the optional input-side decode cap
-        // (perf #5) is the same on both rungs, so match it without pinning its value.
-        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $rung480);
-        $this->assertMatchesRegularExpression('/-ss 780 (-threads \d+ )?-i /', $rung1080);
+        // The seek+input framing is shared too. The decode cap is pinned off by runner(),
+        // so the flag must be absent on both rungs, not merely allowed.
+        $this->assertStringContainsString('-ss 780 -i ', $rung480);
+        $this->assertStringContainsString('-ss 780 -i ', $rung1080);
 
         // ...and ONLY the scale/bitrate/level differ.
         $this->assertStringContainsString('scale=854:480', $rung480);
@@ -840,8 +848,23 @@ class FfmpegRunnerHlsTest extends TestCase
             'video_codec' => 'libx264',
         ]);
 
-        $this->assertMatchesRegularExpression('/-ss 1422 (-threads \d+ )?-i /', $cmd);
+        $this->assertStringContainsString('-ss 1422 -i ', $cmd);
         $this->assertStringContainsString('-t 1.4', $cmd);
         $this->assertStringContainsString('-output_ts_offset 1422', $cmd);
+    }
+
+    /** perf #5: a positive decode cap is an input-side `-threads` between the seek and the input. */
+    public function testAPositiveDecodeCapSitsBeforeTheInput(): void
+    {
+        $runner = $this->runner();
+        $runner->setSegmentDecodeThreads(2);
+
+        $cmd = $runner->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+        ]);
+
+        $this->assertStringContainsString('-ss 780 -threads 2 -i ', $cmd);
     }
 }

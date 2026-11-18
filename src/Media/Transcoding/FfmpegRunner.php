@@ -117,14 +117,20 @@ class FfmpegRunner
      * cached probe result. Caps ffprobe invocations to at most one per file per
      * worker lifetime — critical for the tone-map decision path where multiple
      * segment encodes can ask about the same file in quick succession. Bounded at
-     * {@see self::PROBE_MEMO_LIMIT} entries; the persisted {@see ProbeCache} sits
-     * beneath it and survives restarts (perf #11).
+     * {@see self::PROBE_MEMO_LIMIT} ENTRIES, a count and not a byte size. The memo keeps
+     * each probe result in full, with no byte bound per entry: the 64 KiB bound in
+     * {@see ProbeCache::MAX_ENTRY_BYTES} applies to disk entries only. The persisted
+     * {@see ProbeCache} sits beneath it and survives restarts (perf #11).
      *
      * @var array<string, array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null>
      */
     private array $probeMemo = [];
 
-    /** Maximum in-process probe memo entries per worker (oldest evicted first). */
+    /**
+     * Maximum in-process probe memo ENTRIES per worker (a count, not bytes; the oldest
+     * entry is evicted first). A probe result has no byte bound in the memo, so the memory
+     * held is the count times the size of the largest result seen, not 512 times a fixed size.
+     */
     private const PROBE_MEMO_LIMIT = 512;
 
     /**

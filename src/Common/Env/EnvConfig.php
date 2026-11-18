@@ -26,20 +26,31 @@ namespace Phlix\Common\Env;
 final class EnvConfig
 {
     /**
-     * Names of integer knobs whose env value was set but not a whole number. Each such
-     * knob falls back to its default. Keyed by name, so it holds at most one entry per
-     * knob. Read it with {@see invalidIntegerNames()} where a logger is available: this
-     * class never logs, because the config files load before the logger is initialised.
+     * Names of integer knobs whose env value was set but is not an integer. Each such knob
+     * falls back to its default. Keyed by name, so it holds at most one entry per knob (the
+     * knob names are fixed config literals, so the map is bounded). This class never logs
+     * itself: the config files load before the logger is initialised. Read the list with
+     * {@see invalidIntegerNames()} once a logger exists.
      *
      * @var array<string, true>
      */
     private static array $invalidIntegers = [];
 
     /**
-     * Read an integer knob: unset/empty → $default; a whole number (optionally signed,
-     * surrounding whitespace allowed) → that value, so `"0"` is an explicit 0. Anything
-     * else, such as `"abc"` or `"12x"`, is NOT silently cast to 0 (which would disable
-     * a cap). It yields $default and the name is recorded in {@see invalidIntegerNames()}.
+     * A whole integer, optionally signed, with optional surrounding whitespace, optionally
+     * followed by a `#` comment. The comment form exists because systemd EnvironmentFile and
+     * docker env_file do not strip inline comments, so `PHLIX_X=0 # off` must still read 0,
+     * exactly as the old `(int)` cast read it. Group 1 is the integer token.
+     */
+    private const INTEGER_PATTERN = '/^\s*([+-]?\d+)(?:\s*#.*)?\s*$/s';
+
+    /**
+     * Read an integer knob. Unset or empty gives $default. A whole integer gives that value,
+     * with `"0"` an explicit 0, and `"010"` 10 and `"+5"` 5 as the old `(int)` cast read
+     * them. The value may be followed by whitespace and a `#` comment, which reads the
+     * integer before the comment. Anything else, such as `"auto"`, `"8G"`, `"1e3"` or
+     * `"12x"`, gives $default and records the name for {@see invalidIntegerNames()}. A
+     * non-integer is never cast to a prefix, and never to 0, which would disable a cap.
      */
     public static function integer(string $name, int $default): int
     {
@@ -48,18 +59,17 @@ final class EnvConfig
             return $default;
         }
 
-        $value = filter_var(trim($raw), FILTER_VALIDATE_INT);
-        if ($value === false) {
-            self::$invalidIntegers[$name] = true;
-
-            return $default;
+        if (preg_match(self::INTEGER_PATTERN, $raw, $matches) === 1) {
+            return (int) $matches[1];
         }
 
-        return $value;
+        self::$invalidIntegers[$name] = true;
+
+        return $default;
     }
 
     /**
-     * The env names read by {@see integer()} whose value was not a whole number.
+     * The env names read by {@see integer()} whose value was not an integer.
      *
      * @return list<string>
      */
@@ -67,6 +77,7 @@ final class EnvConfig
     {
         return array_keys(self::$invalidIntegers);
     }
+
 
     /**
      * Read a string knob: unset/empty → $default, otherwise the raw value —

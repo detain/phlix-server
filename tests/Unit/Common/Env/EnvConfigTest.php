@@ -90,6 +90,82 @@ final class EnvConfigTest extends TestCase
         self::assertSame(-3, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
     }
 
+    /**
+     * Upgrade rule: systemd EnvironmentFile and docker env_file do not strip inline comments, so
+     * `PHLIX_X=0 # off` must read 0 as the old `(int)` cast did, not fall back to the default.
+     *
+     * @dataProvider inlineCommentProvider
+     */
+    public function testIntegerReadsTheWholeIntegerBeforeAnInlineComment(string $raw, int $expected): void
+    {
+        putenv('PHLIX_WMIN34_INT=' . $raw);
+
+        self::assertSame($expected, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
+    }
+
+    /** @return iterable<string, array{string, int}> */
+    public static function inlineCommentProvider(): iterable
+    {
+        yield 'zero then comment (prewarm off)' => ['0 # off', 0];
+        yield 'three then comment' => ['3 # three segments', 3];
+        yield 'tab before comment' => ["0\t#off", 0];
+        yield 'no space before comment' => ['8#note', 8];
+        yield 'padded then comment' => ['  12   # padded  ', 12];
+    }
+
+    /**
+     * Upgrade rule (b): every whole-integer value the old `(int)` cast read keeps the SAME
+     * integer. Each case is asserted against the literal `(int)` cast of the same string.
+     *
+     * @dataProvider preservedWholeIntegerProvider
+     */
+    public function testIntegerPreservesTheValueTheOldCastRead(string $raw): void
+    {
+        putenv('PHLIX_WMIN34_INT=' . $raw);
+
+        self::assertSame((int) $raw, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function preservedWholeIntegerProvider(): iterable
+    {
+        yield 'zero' => ['0'];
+        yield 'double zero' => ['00'];
+        yield 'leading zero is decimal' => ['010'];
+        yield 'explicit plus' => ['+5'];
+        yield 'negative zero' => ['-0'];
+        yield 'padded' => [' 42 '];
+        yield 'tab padded' => ["\t7\n"];
+        yield 'overflow saturates like the old cast' => ['99999999999999999999'];
+    }
+
+    /**
+     * Upgrade rule (c): a value that is not an integer must not be read as a prefix (`8G` was 8
+     * bytes) or as 0 (`auto` disabled a cap). It uses the default and is recorded as invalid.
+     *
+     * @dataProvider nonIntegerProvider
+     */
+    public function testIntegerUsesTheDefaultForAValueThatIsNotAnInteger(string $raw): void
+    {
+        putenv('PHLIX_WMIN34_INT=' . $raw);
+
+        self::assertSame(8, EnvConfig::integer('PHLIX_WMIN34_INT', 8));
+        self::assertContains('PHLIX_WMIN34_INT', EnvConfig::invalidIntegerNames());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonIntegerProvider(): iterable
+    {
+        yield 'auto' => ['auto'];
+        yield 'size suffix' => ['8G'];
+        yield 'exponent' => ['1e3'];
+        yield 'fraction' => ['1.5'];
+        yield 'hex' => ['0x1A'];
+        yield 'comment only' => ['# off'];
+        yield 'two numbers' => ['12 13'];
+        yield 'whitespace only' => ['   '];
+    }
+
     // ---- text() ----------------------------------------------------------
 
     public function test_text_falls_back_when_unset(): void

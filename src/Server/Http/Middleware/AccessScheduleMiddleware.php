@@ -185,9 +185,9 @@ final class AccessScheduleMiddleware
      * the profile as {@see __invoke()} does, with one difference below:
      *
      *   - a session with its own profile is tested on that profile;
-     *   - a profile-less session (a relayed principal, or a local bearer whose claim lookup
-     *     failed outright) is tested on the account's active profile, through the same bounded
-     *     no-profile memo;
+     *   - a profile-less session (a relayed principal) is tested on the account's active profile,
+     *     through the same bounded no-profile memo. A local bearer whose claim lookup fails is refused
+     *     upstream, in validateAccessToken(), so it does not arrive here;
      *   - an account with no resolvable profile is refused with the same 403 the gate gives,
      *     unless the request is an unmapped relayed principal (see {@see self::allowsWithoutProfile()}).
      *

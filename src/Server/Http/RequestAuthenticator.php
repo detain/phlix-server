@@ -97,8 +97,10 @@ final class RequestAuthenticator
         // `$auth['profile_id']` has already been ownership-checked.
         // validateAccessToken() resolves the claim through
         // UserProfileManager::resolveProfileIdForUser() and refuses the token when the
-        // account no longer owns the claimed profile. It is not the raw claim, and a
-        // failed lookup yields null, never the account default.
+        // account no longer owns the claimed profile. It is not the raw claim. A failed
+        // lookup refuses the token outright: validateAccessToken() returns null and the
+        // request stays unauthenticated. It never yields a null profile, and never the
+        // account default.
         $profileId = $auth['profile_id'] ?? null;
         $request->profileId = is_string($profileId) && $profileId !== '' ? $profileId : null;
 

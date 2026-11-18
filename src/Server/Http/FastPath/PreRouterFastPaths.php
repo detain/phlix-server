@@ -394,10 +394,10 @@ final class PreRouterFastPaths
      * A session with its own profile is tested on that profile, on both routes.
      *
      * A session with no profile id is a RELAYED principal (the relay consumer stamps a userId and
-     * never a profileId), or a local bearer whose claim lookup failed outright.
-     * {@see \Phlix\Auth\AuthManager::validateAccessToken()} resolves every other local bearer to a
-     * profile: the token's claim if the account still owns it, else the account default (the
-     * resolver creates one when missing). A failed lookup yields null, never the default. For a
+     * never a profileId). {@see \Phlix\Auth\AuthManager::validateAccessToken()} refuses a local bearer
+     * whose claimed profile the account no longer owns, or whose claim lookup fails outright, so
+     * neither reaches this path. A local bearer with no claim resolves to the account default (the
+     * resolver creates one when missing). For a
      * session with no profile id, the account's active profile is tested, through the memo, so a
      * grid of posters costs one profile read. An account with no resolvable profile is refused with
      * the gate's 403, unless it is an unmapped relayed principal

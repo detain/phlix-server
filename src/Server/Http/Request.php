@@ -143,7 +143,11 @@ class Request
 
     /**
      * True when the hub relay authenticated this request as a principal the server holds no
-     * linkage for (a hub user UUID with no `user_identities` row, or the `hub-relay` fallback).
+     * linkage for. The rule, as {@see \Phlix\Hub\RelayConsumer::buildRequest()} sets it: the
+     * request carries a non-empty `x-phlix-relay-user` header AND no hub link row (no
+     * `user_identities` row maps it), and no unexpected relay trust marker refused the mapping.
+     * An absent header is not an unmapped principal. It is the `hub-relay` fallback, which has
+     * no identity and keeps the fail-closed no-profile refusal.
      *
      * Such a principal has no server account, so it has no profile and no access schedule can
      * apply to it. The schedule gate and the artwork and avatar fast paths therefore do not refuse

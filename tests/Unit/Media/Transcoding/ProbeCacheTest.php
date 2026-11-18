@@ -358,4 +358,19 @@ final class ProbeCacheTest extends TestCase
             fclose($held);
         }
     }
+
+    /**
+     * Item 2: the racy-stat window. A timestamp within RACY_WINDOW_SECONDS of now (either side, so a
+     * future one counts) makes the file racy, through mtime or through ctime. The bounds are inclusive.
+     */
+    public function testARecentMtimeOrCtimeIsRacy(): void
+    {
+        $now = 1_000;
+        self::assertTrue(ProbeCache::isRacy($now, 0, $now), 'written this second');
+        self::assertTrue(ProbeCache::isRacy($now - 2, 0, $now), 'two seconds old is still inside the window');
+        self::assertFalse(ProbeCache::isRacy($now - 3, 0, $now), 'three seconds old is outside the window');
+        self::assertTrue(ProbeCache::isRacy(0, $now - 1, $now), 'a recent ctime alone is racy');
+        self::assertTrue(ProbeCache::isRacy($now + 2, 0, $now), 'a future mtime counts, for clock skew');
+        self::assertFalse(ProbeCache::isRacy(0, 0, $now), 'an old file is not racy');
+    }
 }

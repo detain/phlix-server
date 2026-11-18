@@ -25,8 +25,14 @@ use Workerman\Timer;
  * Contract:
  *  - Key: the realpath. The file is `sha1(realpath).json`; the entry also records the
  *    realpath, size, mtime, ctime and inode, and a read is a hit only when all five
- *    still match. ctime and inode are there because mtime is whole seconds: a
- *    same-size rewrite within one second, or a replace-by-rename, is a miss.
+ *    still match. ctime and inode catch a replace-by-rename. mtime and ctime are whole
+ *    seconds, so a same-size in-place rewrite within the same second as the probe leaves all
+ *    five unchanged. The racy-stat guard ({@see isRacy()}) covers that: when the file's mtime
+ *    or ctime is within RACY_WINDOW_SECONDS of the wall clock at probe time, the result is
+ *    neither persisted nor kept in the in-process memo, so the next probe runs ffprobe again.
+ *    A rewrite after that window cannot leave the stamp unchanged: the mtime has moved on, so
+ *    it is a miss. The residue is a filesystem whose timestamps are coarser than one second
+ *    (its window would need widening) or a wall clock that moves backwards.
  *  - Trust: the directory is used only when all of these hold. The configured path is
  *    absolute and has no "." or ".." segment, which is refused rather than normalised,
  *    because lstat follows a link through "." (for example /x/link/.). Its trailing
@@ -87,6 +93,12 @@ final class ProbeCache
 
     /** Largest entry (bytes of encoded JSON) stored. Larger probes are simply not cached. */
     public const MAX_ENTRY_BYTES = 65536;
+
+    /**
+     * Racy-stat window, in whole seconds. A file whose mtime or ctime is within this many seconds of
+     * the wall clock at probe time is not persisted and is not memoized. See {@see isRacy()}.
+     */
+    public const RACY_WINDOW_SECONDS = 2;
 
     /**
      * Entry-count cap. A prune pass evicts only while the count is above this cap, and once
@@ -230,6 +242,19 @@ final class ProbeCache
             $logger?->warning('ffprobe disk cache disabled: ' . $e::class, ['directory' => $directory]);
             return null;
         }
+    }
+
+    /**
+     * True when a file's mtime or ctime is within {@see self::RACY_WINDOW_SECONDS} of $now, in either
+     * direction (a future timestamp counts, because of clock skew). Such a file can be rewritten in
+     * place without changing its size, mtime, ctime or inode, so its probe result must not be stored.
+     * The caller passes time(): this compares wall-clock file timestamps, which the hrtime() rule for
+     * elapsed intervals does not cover.
+     */
+    public static function isRacy(int $mtime, int $ctime, int $now): bool
+    {
+        return abs($now - $mtime) <= self::RACY_WINDOW_SECONDS
+            || abs($now - $ctime) <= self::RACY_WINDOW_SECONDS;
     }
 
     /**

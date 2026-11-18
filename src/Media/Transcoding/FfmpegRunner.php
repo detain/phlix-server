@@ -139,6 +139,14 @@ class FfmpegRunner
      */
     private ?ProbeCache $probeCache = null;
 
+    /**
+     * Wall clock, in whole seconds, that the racy-stat guard compares file timestamps against.
+     * Null uses time(). Set only by tests (see {@see setWallClock()}).
+     *
+     * @var (\Closure(): int)|null
+     */
+    private ?\Closure $wallClock = null;
+
     /** @var bool|null Whether FFmpeg has libplacebo filter support (null = not yet checked) */
     private ?bool $hasLibplacebo = null;
 
@@ -357,6 +365,10 @@ class FfmpegRunner
         // lifetime. The size/mtime guard handles a file that changes on disk (e.g.
         // after a re-encode). A failed probe is memoized as null but is retried.
         $stamp = $this->probeFileStamp($inputPath);
+        // Racy-stat guard: a file whose mtime or ctime is within ProbeCache::RACY_WINDOW_SECONDS of now
+        // can be rewritten in place without changing its stamp, so this probe's result is neither
+        // persisted nor memoized, and the next call runs ffprobe again.
+        $racy = $stamp !== null && ProbeCache::isRacy($stamp['mtime'], $stamp['ctime'], $this->probeClock());
         $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [
             $stamp['mtime'],
             $stamp['size'],
@@ -390,10 +402,12 @@ class FfmpegRunner
         );
 
         $result = $this->parseProbeOutput($this->runProbeCommand($cmd));
-        $this->rememberProbe($cacheKey, $result);
+        if (!$racy) {
+            $this->rememberProbe($cacheKey, $result);
+        }
 
-        // Only a successful probe is persisted; a failure may be transient and is retried.
-        if ($result !== null && $stamp !== null && $this->probeCache !== null) {
+        // Only a successful, non-racy probe is persisted; a failure may be transient and is retried.
+        if ($result !== null && !$racy && $stamp !== null && $this->probeCache !== null) {
             $this->probeCache->write(
                 $stamp['realpath'],
                 $stamp['size'],
@@ -416,6 +430,27 @@ class FfmpegRunner
     public function setProbeCache(?ProbeCache $cache): void
     {
         $this->probeCache = $cache;
+    }
+
+    /**
+     * Replace the wall clock the racy-stat guard uses, in whole seconds. Null restores time().
+     * This is a test seam: production never calls it, and the guard only compares file
+     * timestamps against it.
+     *
+     * @param (\Closure(): int)|null $clock
+     */
+    public function setWallClock(?\Closure $clock): void
+    {
+        $this->wallClock = $clock;
+    }
+
+    /**
+     * The wall clock, in whole seconds, for the racy-stat guard. time() is correct here: the value is
+     * compared with file mtime and ctime, which are wall-clock timestamps, not an elapsed interval.
+     */
+    private function probeClock(): int
+    {
+        return $this->wallClock !== null ? ($this->wallClock)() : time();
     }
 
     /**

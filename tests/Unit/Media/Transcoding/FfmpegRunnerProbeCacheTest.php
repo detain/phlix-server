@@ -73,9 +73,15 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
         @rmdir($path);
     }
 
+    /**
+     * A runner whose clock is a minute ahead, so the media file (written "now" in setUp) is past the
+     * racy-stat window and its result is persisted and memoized as it is in production. The racy
+     * tests set their own clock, see {@see runnerAt()}.
+     */
     private function runner(?string $cacheDir = null, ?string $ffprobe = null): FfmpegRunner
     {
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', $ffprobe ?? $this->ffprobe, $this->dir);
+        $runner->setWallClock(static fn (): int => time() + 60);
         if ($cacheDir !== null) {
             $runner->setProbeCache(new ProbeCache($cacheDir));
         }
@@ -86,6 +92,16 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
     private function probeRuns(): int
     {
         return is_file($this->counter) ? count(file($this->counter, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+    }
+
+    /** A runner over $cacheDir whose wall clock reads exactly $now. */
+    private function runnerAt(string $cacheDir, int $now): FfmpegRunner
+    {
+        $runner = new FfmpegRunner('/usr/bin/ffmpeg', $this->ffprobe, $this->dir);
+        $runner->setProbeCache(new ProbeCache($cacheDir));
+        $runner->setWallClock(static fn (): int => $now);
+
+        return $runner;
     }
 
     public function testASecondWorkerIsServedFromThePersistedCacheWithoutRunningFfprobe(): void
@@ -181,5 +197,48 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
 
         self::assertSame(1, $this->probeRuns());
         self::assertDirectoryDoesNotExist($this->dir . '/cache');
+    }
+
+    /**
+     * Item 2: the racy-stat guard. The media file was written in the same second as the probe, so a
+     * same-size in-place rewrite would leave its stamp unchanged. The result is therefore neither
+     * persisted nor kept in the memo, and the next probe runs ffprobe again. The clock is the file's
+     * own mtime, so the file is exactly "now" and the test does not depend on how fast it runs.
+     */
+    public function testAFreshlyWrittenFileIsNotPersisted(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $mtime = filemtime($this->media);
+        self::assertIsInt($mtime);
+        $runner = $this->runnerAt($cacheDir, $mtime);
+
+        $result = $runner->probe($this->media);
+
+        self::assertIsArray($result);
+        self::assertSame(1, $this->probeRuns());
+        self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'a racy result is not persisted');
+
+        $runner->probe($this->media);
+        self::assertSame(2, $this->probeRuns(), 'a racy result is not memoized, so the next call probes again');
+    }
+
+    /**
+     * Item 2: the window is inclusive at RACY_WINDOW_SECONDS. At two seconds the file is still racy and
+     * is not stored; at three seconds it is stored and a fresh runner is served from the disk cache.
+     */
+    public function testTheRacyWindowIsInclusiveAtTwoSeconds(): void
+    {
+        $cacheDir = $this->dir . '/cache';
+        $mtime = filemtime($this->media);
+        self::assertIsInt($mtime);
+
+        $this->runnerAt($cacheDir, $mtime + ProbeCache::RACY_WINDOW_SECONDS)->probe($this->media);
+        self::assertSame([], glob($cacheDir . '/*.json') ?: [], 'two seconds old is still racy');
+
+        $this->runnerAt($cacheDir, $mtime + ProbeCache::RACY_WINDOW_SECONDS + 1)->probe($this->media);
+        self::assertCount(1, glob($cacheDir . '/*.json') ?: [], 'three seconds old is stored');
+
+        $this->runnerAt($cacheDir, $mtime + ProbeCache::RACY_WINDOW_SECONDS + 1)->probe($this->media);
+        self::assertSame(2, $this->probeRuns(), 'the stored entry answers the fresh runner');
     }
 }

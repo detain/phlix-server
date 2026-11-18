@@ -61,10 +61,10 @@ use Psr\Log\NullLogger;
  * registration. A PID whose state is `Z`, or whose start time has changed, is dead
  * for liveness.
  *  - TERM is a GROUP signal (to `-pgid`), gated on the identity of the group leader
- *    ({@see signalGroup()}). It is sent only while the leader is verified as the
- *    launched process. A zombie leader still holds its PID, so its group cannot have
- *    been reused. Never when the leader's PID now belongs to another process (reused),
- *    and never when `/proc` was readable at registration but is unreadable now.
+ *    ({@see signalGroup()}). It is sent only while the leader is verified as the launched process,
+ *    or while the launch is unchecked (no start time). A zombie leader still holds its PID, so its
+ *    group cannot have been reused. Never when the leader's PID now belongs to another process
+ *    (reused), and never when `/proc` was readable at registration but is unreadable now.
  *  - KILL is never a group signal. At TERM time the group's members (PID => start time)
  *    are snapshotted from `/proc`, BEFORE the signal ({@see sendTerm()}). At SIGKILL time
  *    ({@see sigkillMembers()}) a process gets the KILL only if its recorded start time
@@ -140,9 +140,9 @@ use Psr\Log\NullLogger;
  *    the TERM. Its group's members are never KILLed. In a mixed record, the temp of a launch with
  *    a recorded start time is released at the grace once it has been KILLed or is dead, unless
  *    its identity is unknown at the grace, in which case it is held while alive, up to the bound.
- *  - Launch with a recorded start time. Its identity is unknown at the grace when `/proc` is
- *    unreadable or its stat line is malformed. Such a launch is held while its launched process
- *    is alive, up to the bound (see {@see heldPids()}).
+ *  - Launch with a recorded start time. A launch whose identity is unknown at the grace (`/proc`
+ *    unreadable, or its stat line malformed) is held while its launched process is alive, up to
+ *    the bound (see {@see heldPids()}).
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -791,7 +791,8 @@ final class SegmentProcessRegistry
                 // leader's state. The leader (the `timeout` wrapper) can exit at once on TERM
                 // while its children keep running in the same group, so "leader dead" does not
                 // mean "group empty". Once the grace has elapsed, send SIGKILL to the verified
-                // TERM-time members, then drop the record. Non-blocking: a pass never waits.
+                // TERM-time members. The record is dropped only when nothing holds it (see heldPids()).
+                // Non-blocking: a pass never waits.
                 if ($now - $orphan['termNs'] < $this->graceNanoseconds()) {
                     $keep[] = $orphan;
                     continue;
@@ -972,8 +973,9 @@ final class SegmentProcessRegistry
      * TERM, but it gets no snapshot: its PID may since have been reused as a group leader by an
      * unrelated process, so nothing in its group can be KILLed later. A reused leader is never
      * snapshotted either. Returns null when the membership is unknown: a leader's identity is
-     * unknown (the stat cannot be read or parsed now), or no leader is verified and at least one is unchecked
-     * (no start time was recorded, as on a host without `/proc`), so there is no group to snapshot.
+     * unknown (`/proc` unreadable now, or the stat line malformed), or no leader is verified and at
+     * least one is unchecked (no start time was recorded, as on a host without `/proc`), so there is
+     * no group to snapshot.
      * Null means no KILL later. The record is held, up to the hold bound after the TERM (see
      * {@see sweep()} and {@see heldPids()}). A launch with a recorded start time, and with no
      * membership snapshot or an unknown identity at the grace, is held while its launched process is
@@ -1064,7 +1066,8 @@ final class SegmentProcessRegistry
      *    and start time still matching where the stat can be read). With no snapshot nothing can KILL
      *    it. An unknown identity (`/proc` unreadable, or a malformed stat line) is held because the
      *    SIGKILL step skips an unknown process, which may still run. With a snapshot and a known
-     *    identity, its group was KILLed at the grace, or it is gone, so it is not held.
+     *    identity, its group was KILLed at the grace, or it is gone, or its identity is 'reused',
+     *    so it is not held.
      *
      * An empty result means nothing is held, and the record is dropped at the grace.
      *

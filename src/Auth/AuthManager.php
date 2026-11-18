@@ -1949,10 +1949,13 @@ class AuthManager
         // schedule. The refresh path refuses for the same reason
         // (refuseUnownedRefreshProfile()). A token with NO claim (pre-S80) keeps the
         // account default. A profile lookup that fails outright (the DB is unavailable)
-        // yields a null profile, never the account default, so an outage does not lock
-        // users out and does not run the token as the default. That lookup is not
-        // retried through resolveProfileForUser(): the retry re-ran the same claim
-        // lookup, and an unowned claim there fell back to the default.
+        // REFUSES the token too, the same null as an unowned claim. It must not yield a
+        // null profile: a null profile falls back to the account-active profile, which
+        // would run the token as the default. The cost is that a DB outage refuses
+        // claim-bearing access tokens for its duration, rather than admitting them as
+        // the default. That lookup is not retried through resolveProfileForUser(): the
+        // retry re-ran the same claim lookup, and an unowned claim there fell back to
+        // the default.
         $claimedProfileId = JwtHandler::profileIdClaim($payload);
         if ($claimedProfileId === null || $this->profileManager === null) {
             $profileId = $this->resolveProfileForUser($userId, $claimedProfileId);
@@ -1966,11 +1969,12 @@ class AuthManager
 
                 return null;
             } catch (\Throwable $e) {
-                $this->logger->warning('Could not verify the access token profile claim; no profile for this request', [
+                $this->logger->warning('Could not verify the access token profile claim; refusing the token', [
                     'user_id' => $userId,
                     'error' => $e->getMessage(),
                 ]);
-                $profileId = null;
+
+                return null;
             }
         }
 

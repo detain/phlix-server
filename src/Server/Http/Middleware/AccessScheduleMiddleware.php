@@ -101,10 +101,10 @@ final class AccessScheduleMiddleware
      * carry no profile, so each poster in a grid would otherwise read the account profile once.
      * Held for the same 30 s TTL as the schedule rows, so a switch takes up to 30 s to apply to
      * these requests on the bytes path. Written only by {@see denyForSession()}, never by the
-     * global gate, which reads the account profile fresh on every request. A local bearer reaches
-     * this path with no profile id only when its claim lookup failed outright: validateAccessToken()
-     * then yields a null profile, never the account default, and the bytes path tests the account's
-     * active profile through this memo, with the same 30 s lag. Bounded like the no-profile memo.
+     * global gate, which reads the account profile fresh on every request. (Finding 2, perf/C
+     * round 6: validateAccessToken() refuses a bearer whose claim lookup failed outright, with the
+     * same null as an unowned claim, so that failure never reaches this path as a null profile id
+     * that would test the account-active profile.) Bounded like the no-profile memo.
      *
      * @var array<string, array{at: int|float, profileId: string}>
      */

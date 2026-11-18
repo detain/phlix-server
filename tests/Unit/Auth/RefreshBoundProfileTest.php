@@ -162,6 +162,52 @@ final class RefreshBoundProfileTest extends TestCase
     }
 
     /**
+     * Finding 7. A single UNCONSUMED presentation for a profile the account no longer owns is audited
+     * as the ownership refusal alone. The grant is not consumed and the family is not revoked, so the
+     * refusal does not reach the reuse path at all.
+     */
+    public function testAnUnconsumedRefreshForAnUnownedProfileIsAuditedAsOwnershipAndLeavesTheGrantUnconsumed(): void
+    {
+        $jwt = $this->jwt();
+        $family = 'f' . str_repeat('e', 35);
+        $token = $jwt->createRefreshToken(self::USER, [
+            JwtHandler::CLAIM_PROFILE_ID => self::BOUND,
+            JwtHandler::CLAIM_SESSION_ID => $family,
+        ]);
+        $jti = (string) (($jwt->validateToken($token)['jti'] ?? ''));
+
+        $this->owned = [self::DEFAULT];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturn([
+            'jti' => $jti,
+            'sessionId' => $family,
+            'sessionStatus' => 'active',
+            'consumed' => false,
+            'withinGrace' => false,
+        ]);
+        $store->expects(self::never())->method('markGrantConsumed');
+        $store->expects(self::never())->method('revokeSession');
+
+        $reasons = [];
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason) use (&$reasons): void {
+                $reasons[] = $reason;
+            }
+        );
+
+        try {
+            $this->manager($jwt, null, $store, $audit)->refreshToken($token);
+            self::fail('a refused refresh must not mint');
+        } catch (\InvalidArgumentException) {
+            // expected: the ownership refusal
+        }
+
+        self::assertSame(['profile_not_owned'], $reasons, 'an unconsumed presentation is the ownership refusal alone');
+    }
+
+    /**
      * Finding 6. A family-carrying refresh whose bound profile is gone is refused BEFORE the family
      * adjudication, so the refusal never consumes the presented grant. A retry is then audited as the
      * same ownership refusal, not as 'refresh_token_reuse' (which would revoke the family).
@@ -373,9 +419,10 @@ final class RefreshBoundProfileTest extends TestCase
     /**
      * A claim lookup that fails outright must not resolve to the account default. The first lookup
      * throws (the DB is down). The previous code then retried the same claim lookup, and the retry
-     * found the claim unowned and fell back to the default. Now the failed lookup yields no profile.
+     * found the claim unowned and fell back to the default. Now the failed lookup refuses the token,
+     * the same null as an unowned claim, and the retry is never made.
      */
-    public function testAFailedClaimLookupNeverResolvesToTheAccountDefault(): void
+    public function testAFailedClaimLookupRefusesTheTokenAndNeverResolvesToTheAccountDefault(): void
     {
         $jwt = $this->jwt();
         $token = $jwt->createAccessToken(self::USER, [JwtHandler::CLAIM_PROFILE_ID => self::BOUND]);
@@ -397,10 +444,11 @@ final class RefreshBoundProfileTest extends TestCase
             }
         );
 
-        $info = $this->manager($jwt, $profiles)->validateAccessToken($token);
-
-        self::assertIsArray($info, 'an outage must not lock the user out of the token');
-        self::assertNull($info['profile_id'], 'a failed lookup yields no profile, never the account default');
+        self::assertNull(
+            $this->manager($jwt, $profiles)->validateAccessToken($token),
+            'a failed lookup refuses the token, it never resolves to the account default'
+        );
+        self::assertSame(1, $claimLookups, 'the refused token is not retried through the default path');
     }
 
     /**

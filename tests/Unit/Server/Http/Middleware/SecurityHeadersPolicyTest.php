@@ -249,11 +249,33 @@ final class SecurityHeadersPolicyTest extends TestCase
         self::assertSame(60, $bound);
     }
 
-    public function test_the_production_clock_is_monotonic_not_wall_time(): void
+    public function test_the_production_clock_reads_hrtime_not_the_wall_clock(): void
     {
-        // Without an injected clock the memo must measure an elapsed interval on
-        // the monotonic clock (repo rule: hrtime, never time()). A cold read and an
-        // immediate second read both hit the one memo window.
+        // The memo's elapsed interval must come from the monotonic counter (repo rule:
+        // hrtime, never time()). This reads the private production clock directly. It is
+        // a source pin, not a monotonicity proof: it fails if now() returns wall time,
+        // which is the regression that would let an NTP step move the memo window.
+        $settings = $this->createMock(SettingsRepository::class);
+        $policy = new SecurityHeadersPolicy($settings);
+
+        $now = new \ReflectionMethod(SecurityHeadersPolicy::class, 'now');
+        $value = $now->invoke($policy);
+        self::assertIsInt($value);
+
+        $monotonic = intdiv(hrtime(true), 1_000_000_000);
+        self::assertLessThanOrEqual(2, abs($value - $monotonic), 'now() must track hrtime');
+        self::assertGreaterThan(
+            2,
+            abs(time() - $value),
+            'now() must not be the wall clock: uptime seconds sit far below the Unix epoch count',
+        );
+    }
+
+    public function test_a_repeat_read_with_the_production_clock_is_served_from_the_memo(): void
+    {
+        // Without an injected clock the memo still holds for one window: a cold read and
+        // an immediate second read hit the store once. This does not test which clock
+        // is used; see test_the_production_clock_reads_hrtime_not_the_wall_clock.
         $calls = [];
         $settings = $this->createMock(SettingsRepository::class);
         $settings

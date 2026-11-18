@@ -380,7 +380,7 @@ class TrickplayController
      * mtime and ctime have one-second resolution, so a same-size rewrite within the
      * same second keeps both. The producers publish by renaming a verified temporary
      * over the final name, which gives the file a new inode, and that is what changes
-     * the tag. The same formula is used by TranscodeFileServer::etagFor().
+     * the tag.
      *
      * @param int $inode Inode number.
      * @param int $size  File size, bytes.

@@ -306,8 +306,9 @@ final class SegmentProcessRegistry
     /**
      * Wall-clock cap, in seconds, for one on-demand segment encode. Measured: a 6 s
      * 720p `veryslow` encode on one thread took 17 s on this box at load ~15. The
-     * slowest legitimate case is 4K at one thread, about 9× the pixels, so roughly
-     * 150 s. 300 s covers that with 2× headroom for contention. The cap only catches
+     * slowest legitimate case we can expect is 4K at one thread. That figure is
+     * extrapolated, not measured: about 9× the pixels, so roughly 150 s. 300 s covers
+     * it with 2× headroom for contention. The cap only catches
      * an encode that keeps progressing but will not finish. Stalls are handled by
      * {@see $stallSeconds}, and the `timeout` wrapper stays the last backstop.
      */

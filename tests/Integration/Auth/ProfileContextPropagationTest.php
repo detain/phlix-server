@@ -192,39 +192,23 @@ final class ProfileContextPropagationTest extends TestCase
     }
 
     /**
-     * A token for user A that NAMES user B's profile is refused: the resolver
-     * degrades to A's own default and A reads A's data, never B's.
+     * A token for user A that NAMES user B's profile is refused: validateAccessToken()
+     * returns null and never resolves B's profile. perf/C d2bcdf2a made an unowned claim a
+     * refusal, not a degrade to the account default.
      *
-     * ⚠ The succeeding control is in the same test and it matters: without it,
-     * a resolver that ignored the claim entirely and always answered `profileA1`
-     * would pass the refusal half. The control proves the very same call DOES
-     * honour a claim when the claim is legitimate.
+     * ⚠ The succeeding control is in the same test and it matters: without it, a validator
+     * that refused every claim would pass the refusal half. The control proves the very same
+     * call DOES honour a claim the account owns.
      */
     public function testATokenNamingAnotherAccountsProfileIsRefusedWhileAnOwnedOneIsHonoured(): void
     {
         // ---- the refusal ----
+        // d2bcdf2a: a claim naming a profile the account does not own is refused (null, a 401 at
+        // RequestAuthenticator). It is not degraded to the default, and B's profile is never read.
         $crossAccount = $this->tokenFor($this->userA, $this->profileB1);
-        $refused = $this->resolvedProfile($crossAccount);
-
-        $this->assertNotSame(
-            $this->profileB1,
-            $refused,
-            "a token for user A must never resolve to user B's profile"
-        );
-        $this->assertSame(
-            $this->profileA1,
-            $refused,
-            "the refusal must degrade to A's own default profile, not to nothing"
-        );
-        $this->assertSame(
-            self::RATING_A_FIRST,
-            $this->ratingFor($this->userA, (string) $refused),
-            "user A must read user A's data"
-        );
-        $this->assertNotSame(
-            self::RATING_B,
-            $this->ratingFor($this->userA, (string) $refused),
-            "user B's rating must never surface for user A"
+        $this->assertNull(
+            $this->authManager()->validateAccessToken($crossAccount),
+            "a token for user A naming user B's profile must be refused, not validated"
         );
 
         // ---- the succeeding control: A naming A's OTHER profile IS honoured ----
@@ -242,10 +226,9 @@ final class ProfileContextPropagationTest extends TestCase
             "the honoured claim must read that profile's own data, not the default's"
         );
         $this->assertNotSame(
-            $refused,
+            $this->profileB1,
             $honoured,
-            'the refused and honoured cases must produce DIFFERENT profiles — '
-            . 'if they matched, the resolver would simply be ignoring the claim'
+            "the honoured claim must not be the other account's profile"
         );
     }
 
@@ -334,13 +317,12 @@ final class ProfileContextPropagationTest extends TestCase
     }
 
     /**
-     * A claim naming a profile that has since been DELETED degrades to the account
-     * default rather than failing the request.
-     *
-     * Refusing outright would lock the user out of their own account for the
-     * remaining lifetime of the token, with nothing they could do but wait.
+     * A claim naming a profile that has since been DELETED is refused: the token no longer
+     * validates, so the removed profile's schedule and data cannot ride on a bearer for its
+     * whole TTL. perf/C d2bcdf2a made that the designed behaviour. A token with NO profile
+     * claim (pre-S80) still resolves to the account default.
      */
-    public function testAClaimForADeletedProfileDegradesToTheAccountDefault(): void
+    public function testAClaimForADeletedProfileIsRefusedAndNoClaimKeepsTheDefault(): void
     {
         $session = $this->tokenFor($this->userA, $this->profileA2);
 
@@ -349,10 +331,17 @@ final class ProfileContextPropagationTest extends TestCase
 
         $this->conn()->query('DELETE FROM user_profiles WHERE id = ?', [$this->profileA2]);
 
+        $this->assertNull(
+            $this->authManager()->validateAccessToken($session),
+            'a claim for a deleted profile must be refused, not degraded to the account default'
+        );
+
+        // The designed default still applies to a token that carries no profile claim.
+        $noClaim = $this->jwtHandler()->createAccessToken($this->userA, []);
         $this->assertSame(
             $this->profileA1,
-            $this->resolvedProfile($session),
-            'a stale claim must degrade to the default, not break the session'
+            $this->resolvedProfile($noClaim),
+            'a token with no profile claim still resolves to the account default'
         );
     }
 

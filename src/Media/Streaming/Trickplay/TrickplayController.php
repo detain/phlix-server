@@ -24,7 +24,7 @@ use Phlix\Server\Http\Response;
  *
  * Every artefact is streamed from disk with {@see Response::withFile()}, so a
  * multi-hundred-KB archive is never buffered into worker memory. Each response
- * carries an `ETag` (size and mtime, the same tag the artwork responder uses)
+ * carries an `ETag` (inode, size, mtime and ctime, as TranscodeFileServer does)
  * and a `Last-Modified`, and a request whose `If-None-Match` or
  * `If-Modified-Since` already matches is answered `304` with no body. The
  * cache lifetime is unchanged.
@@ -326,8 +326,8 @@ class TrickplayController
     /**
      * Serves a file with validators and conditional-GET handling.
      *
-     * The validators are derived from one `stat()`: the ETag is `"<size>-<mtime>"`
-     * in hex and Last-Modified is the same mtime. A request whose conditional
+     * The validators are derived from one `stat()`: the ETag hashes the inode, size,
+     * mtime and ctime (see {@see self::etagFor()}) and Last-Modified is the mtime. A request whose conditional
      * headers already match is answered `304` carrying the validators and no
      * body. Otherwise the file is streamed with {@see Response::withFile()}.
      *
@@ -354,7 +354,7 @@ class TrickplayController
         }
 
         $mtime = (int) $stat['mtime'];
-        $etag = sprintf('"%x-%x"', (int) $stat['size'], $mtime);
+        $etag = self::etagFor((int) $stat['ino'], (int) $stat['size'], $mtime, (int) $stat['ctime']);
         $lastModified = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
 
         if ($this->isNotModified($request, $etag, $mtime)) {
@@ -372,6 +372,24 @@ class TrickplayController
             ->header('ETag', $etag)
             ->header('Last-Modified', $lastModified)
             ->withFile($path);
+    }
+
+    /**
+     * Strong validator for an artefact: a hash of its inode, size, mtime and ctime.
+     *
+     * mtime and ctime have one-second resolution, so a same-size rewrite within the
+     * same second keeps both. The producers publish by renaming a verified temporary
+     * over the final name, which gives the file a new inode, and that is what changes
+     * the tag. The same formula is used by TranscodeFileServer::etagFor().
+     *
+     * @param int $inode Inode number.
+     * @param int $size  File size, bytes.
+     * @param int $mtime Last-modified time, seconds.
+     * @param int $ctime Inode change time, seconds.
+     */
+    private static function etagFor(int $inode, int $size, int $mtime, int $ctime): string
+    {
+        return '"' . md5($inode . ':' . $size . ':' . $mtime . ':' . $ctime) . '"';
     }
 
     /**

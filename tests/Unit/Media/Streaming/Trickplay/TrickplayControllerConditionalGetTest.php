@@ -82,11 +82,18 @@ final class TrickplayControllerConditionalGetTest extends TestCase
         return $request;
     }
 
+    /**
+     * The validator the controller must mint for a file: md5 of inode, size, mtime
+     * and ctime, read from the same stat() the controller uses.
+     */
     private function etagFor(string $name): string
     {
-        $size = (int) filesize($this->jobDir . '/' . $name);
+        $path = $this->jobDir . '/' . $name;
+        clearstatcache(true, $path);
+        $stat = stat($path);
+        $this->assertIsArray($stat);
 
-        return sprintf('"%x-%x"', $size, self::MTIME);
+        return '"' . md5($stat['ino'] . ':' . $stat['size'] . ':' . $stat['mtime'] . ':' . $stat['ctime']) . '"';
     }
 
     private function lastModified(): string
@@ -239,6 +246,30 @@ final class TrickplayControllerConditionalGetTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode, 'The old tag must not survive a rewrite.');
+        $this->assertNotSame($oldEtag, $response->headers['ETag'] ?? null);
+    }
+
+    public function testASameSizeRewriteInTheSameSecondChangesTheTagWhenItIsRenamedIntoPlace(): void
+    {
+        // The producer publishes by renaming a verified temporary over the final
+        // name. A same-size replacement with the same mtime (the same second) used
+        // to keep the old size-mtime tag, so a client's cached copy would 304 forever.
+        // The new inode changes the tag.
+        $oldEtag = $this->etagFor('sprite.jpg');
+        $size = (int) filesize($this->jobDir . '/sprite.jpg');
+        $temp = $this->jobDir . '/.tmp-sprite.jpg';
+        file_put_contents($temp, "\xFF\xD8" . str_repeat('Z', $size - 4) . "\xFF\xD9");
+        touch($temp, self::MTIME);
+        $this->assertTrue(rename($temp, $this->jobDir . '/sprite.jpg'));
+        clearstatcache();
+        $this->assertSame($size, (int) filesize($this->jobDir . '/sprite.jpg'));
+
+        $response = $this->controller()->getSprite(
+            $this->request(['If-None-Match' => $oldEtag]),
+            ['jobId' => 'job-123']
+        );
+
+        $this->assertSame(200, $response->statusCode, 'Same size and mtime, new inode: the old tag must not match.');
         $this->assertNotSame($oldEtag, $response->headers['ETag'] ?? null);
     }
 

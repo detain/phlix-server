@@ -3887,21 +3887,24 @@ class FfmpegRunner
      * Publishes the verified temporaries onto their final names, all or nothing.
      *
      * Each pair is [temporary, final], applied in order; a null pair is skipped. An
-     * existing final is renamed aside to a previous-copy name, so its old bytes stay
-     * reachable, and the temporary is then renamed onto the final name. Both steps are
-     * plain rename() calls, which work on every filesystem. The earlier design hard-linked
-     * the old file instead, and link() fails on a mount without hard-link support, which
-     * made every re-publish over an existing artefact fail there.
-     *
-     * No step leaves a final name pointing at a partial file: a final only ever holds a
-     * whole temporary or a whole previous copy. The price of rename-based swapping is a
-     * window of two renames in one directory during which an existing final is absent. A
-     * reader in that window gets "not found", never partial bytes.
+     * existing final keeps its old bytes under a previous-copy name, made as a hard link
+     * (or a plain copy where links are not supported), and the temporary is then renamed
+     * over the final name in one rename(). rename() replaces an existing target atomically
+     * on the same filesystem, which the generation stamps already rely on. So the final name
+     * is never absent during a publish: a reader sees the old whole file or the new whole
+     * file, never "not found" and never a partial one.
      *
      * If any step fails, the replacements already made are undone, newest first: each
-     * previous copy is renamed back, or the new file removed when there was no previous
-     * one. An item that was complete before the pass keeps its complete artefacts. The
-     * previous copies are deleted once everything is in place.
+     * previous copy is renamed back over the new file, or the new file is removed when
+     * there was no previous one. That removal is the only time a final name is absent. It
+     * happens only when a later pair of the same pass fails and the artefact had no
+     * previous copy, so the artefact was not complete before the pass either. An item that
+     * was complete before the pass keeps its complete artefacts. The previous copies are
+     * deleted once everything is in place.
+     *
+     * A rollback puts old bytes back under a name whose validators a reader may already
+     * have taken from the new file. {@see TrickplayController::serveArtefact()} documents
+     * that residual window.
      *
      * @param list<array{string|null, string|null}> $pairs [temporary, final] in publish order.
      *
@@ -3919,7 +3922,7 @@ class FfmpegRunner
             if (is_file($final)) {
                 $previous = dirname($final) . '/' . self::TEMP_FILE_PREFIX . 'previous-' . basename($final);
                 self::removeTrickplayFile($previous);
-                if (!$this->renameTrickplayPath($final, $previous)) {
+                if (!$this->keepPreviousCopy($final, $previous)) {
                     $this->restoreTrickplayFiles($replaced);
 
                     return false;
@@ -3927,9 +3930,9 @@ class FfmpegRunner
             }
 
             if (!$this->renameTrickplayPath($temp, $final)) {
-                // The final name was moved aside, so the previous copy is the only copy left.
+                // The final name still holds its previous bytes, so only the extra name goes.
                 if ($previous !== null) {
-                    $this->renameTrickplayPath($previous, $final);
+                    self::removeTrickplayFile($previous);
                 }
                 $this->restoreTrickplayFiles($replaced);
 
@@ -3945,6 +3948,27 @@ class FfmpegRunner
         }
 
         return true;
+    }
+
+    /**
+     * Gives an existing final a second name for its current bytes, so a rollback can restore them.
+     *
+     * A hard link costs no I/O and leaves the final name where it is. Where links are not
+     * supported the bytes are copied instead. Either way the final name itself is not touched.
+     *
+     * @param string $final    The published name that holds the old bytes.
+     * @param string $previous The previous-copy name to create.
+     *
+     * @return bool True when the previous copy exists.
+     */
+    private function keepPreviousCopy(string $final, string $previous): bool
+    {
+        if (@link($final, $previous) || @copy($final, $previous)) {
+            return true;
+        }
+        self::removeTrickplayFile($previous);
+
+        return false;
     }
 
     /**

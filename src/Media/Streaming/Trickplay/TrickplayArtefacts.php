@@ -82,15 +82,20 @@ final class TrickplayArtefacts
      * `generation` field of every timeline entry, and, when the BIF is written, into the
      * BIF stamp ({@see BifWriter::GENERATION_FILENAME}). All of them must carry the same
      * token. Each publish renames its stamp before its commit point, so a crash between
-     * renames leaves a mismatch and the item is regenerated, not advertised.
+     * renames leaves a mismatch. isComplete() reports such a torn set as not complete, and the
+     * backfill script and MediaAssetBackfill::reenqueueLibrary() then regenerate it. The
+     * controller does not consult
+     * isComplete(): it serves whichever of the three files exist (see
+     * {@see \Phlix\Media\Streaming\Trickplay\TrickplayController::resolveSpritePath()}), so a torn
+     * set is served until the next regeneration replaces it.
      *
      * The bound: an item written before stamps existed has no `generation` field and no
      * stamp file. It is accepted when its three files are whole, as before stamps. Two
      * legacy artefacts from different passes cannot be told apart from the files, and no
      * stamp can be added to them afterwards, so only a regeneration removes that case.
      *
-     * A half-finished run therefore counts as not complete, and the item is
-     * regenerated rather than advertised broken.
+     * A half-finished run therefore counts as not complete. The backfill regenerates such an
+     * item; the controller still serves the files that exist (see above).
      *
      * @param string $dir The item's trickplay directory.
      */
@@ -300,7 +305,12 @@ final class TrickplayArtefacts
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
-        $json = json_encode(['failed_at' => gmdate('c'), 'reason' => $reason], JSON_THROW_ON_ERROR);
+        // The reason can carry a message from a thrown exception, which may hold bytes that are
+        // not valid UTF-8. Substitute them, so the marker is written and the item is still skipped.
+        $json = json_encode(
+            ['failed_at' => gmdate('c'), 'reason' => $reason],
+            JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
+        );
         @file_put_contents($dir . '/' . self::FAILED_MARKER_FILENAME, $json);
     }
 
@@ -312,6 +322,27 @@ final class TrickplayArtefacts
     public static function hasFailedMarker(string $dir): bool
     {
         return is_file($dir . '/' . self::FAILED_MARKER_FILENAME);
+    }
+
+    /**
+     * Why the backfill must not generate an item, or null when it should.
+     *
+     * An item is skipped when its generation failed (generation-failed.json) or when its BIF
+     * failed (bif-failed.json). Both record a failure that repeats on every run, so an item
+     * that carries either is left alone until an operator deletes the marker. When both are
+     * present the generation marker is reported.
+     *
+     * @param string $dir The item's trickplay directory.
+     *
+     * @return string|null The marker file name that skips the item, or null to generate it.
+     */
+    public static function backfillSkipMarker(string $dir): ?string
+    {
+        if (self::hasFailedMarker($dir)) {
+            return self::FAILED_MARKER_FILENAME;
+        }
+
+        return is_file($dir . '/' . self::BIF_FAILED_MARKER_FILENAME) ? self::BIF_FAILED_MARKER_FILENAME : null;
     }
 
     /**
@@ -409,10 +440,11 @@ final class TrickplayArtefacts
     /**
      * Name of the file that records that the BIF of the latest generation failed.
      *
-     * Written when the sprite and timeline were published but the BIF was not. It is
-     * informational: unlike {@see self::FAILED_MARKER_FILENAME} it does NOT make the
-     * backfill skip the item. The next run regenerates the item, so the BIF is written
-     * again, and the item is still picked up because isComplete() needs the BIF.
+     * Written when the sprite and timeline were published but the BIF was not. The backfill
+     * skips an item that carries it, as it does for {@see self::FAILED_MARKER_FILENAME}, so a
+     * deterministic BIF failure is not decoded again on every run and cannot use up a
+     * --limit ahead of later items. Deleting the file makes the item eligible again. The
+     * in-app job writes and clears the same marker.
      */
     public const BIF_FAILED_MARKER_FILENAME = 'bif-failed.json';
 

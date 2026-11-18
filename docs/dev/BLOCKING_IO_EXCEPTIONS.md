@@ -437,14 +437,14 @@ Local filesystem metadata under the trickplay root, on two paths.
 **Request path (`TrickplayController.php`).** `hasBif()` calls `filesize()` (line
 194) and runs on the item-detail request path (`MediaItemController.php:612`).
 `resolveArtefact()` calls `realpath()` (line 364), and `serveArtefact()` calls
-`stat()` (line 407). The constructor's `realpath()` (line 108, in `resolveRoot()`)
+`stat()` (line 418). The constructor's `realpath()` (line 108, in `resolveRoot()`)
 runs once per process per configured root, memoised, so it is not a per-request
 call.
 
 **Background path (`TrickplayArtefacts.php`).** `isComplete()` reads
-`timeline.json` whole (`timelineGeneration()`, line 135), two stamp files
-(`readStamp()`, line 187) and the BIF header and terminator (`bifIsWhole()`, line
-226). It is not reached from any request. The only callers are:
+`timeline.json` whole (`timelineGeneration()`, line 140), two stamp files
+(`readStamp()`, line 192) and the BIF header and terminator (`bifIsWhole()`, line
+231). It is not reached from any request. The only callers are:
 
 - `LibraryScanWorker::start()` installs `Timer::add()` (`LibraryScanWorker.php:504`),
   which calls `runOnce()` once per tick.
@@ -452,7 +452,7 @@ call.
   (`LibraryScanWorker.php:312`).
 - `reenqueueLibrary()` pages the library in pages of 500 (`MediaAssetBackfill.php:128`,
   `PAGE_SIZE = 500`) and calls `hasArtefacts()` for each item (line 147), which calls
-  `isComplete()` (line 220).
+  `isComplete()` (line 221).
 - The backfill script calls `isComplete()` as well, from the CLI.
 
 Bound. Per request: a fixed number of metadata calls, with no loop over items. Per

@@ -377,15 +377,26 @@ class TrickplayController
      * headers already match is answered `304` carrying the validators and no
      * body. Otherwise the file is streamed with {@see Response::withFile()}.
      *
-     * Residual race, not closed here: {@see Response::withFile()} takes a path and the
-     * worker opens it later, when the response is sent. A publish between the `stat()` and
-     * that open sends the newer file under the older validator. The newer file is always a
-     * whole generation, because publishes are renames of verified temporaries. A client
-     * that caches the pair then holds bytes at least as new as its tag. Its next conditional
-     * request computes the newer validator, which does not match the old one, so it gets a
-     * fresh `200`. The reverse, an old body under a new validator, cannot happen, because
-     * the stat comes first. Closing the window would need the response to stream from the
-     * handle that was stat'd, which withFile() does not offer.
+     * Residual race, not closed here. {@see Response::withFile()} takes a path, and Workerman
+     * opens that path again when the response is sent: filesize() for Content-Length, then
+     * file_get_contents() for a body under 2 MiB or fopen() above that. The body is therefore
+     * not read from the inode that was stat'd. A publish between the `stat()` and those calls
+     * can make the response disagree with its validator:
+     * - Failure A: the final name is absent at filesize(), so the client gets `200`,
+     *   Content-Length 0, an empty body and the new ETag. A publish never removes a final that
+     *   has a previous copy (see FfmpegRunner::publishTrickplayFiles()). What remains is a
+     *   rollback of an artefact with no previous copy, which removes the new file.
+     * - Failure B: the file is replaced by one of a different size between filesize() and the
+     *   read, so the body is a prefix of the new file, or does not match Content-Length, under
+     *   the old ETag.
+     * - Failure C: a rollback renames the previous copy back after the stat, so the body is
+     *   the old generation under the new ETag.
+     * Closing these needs the response to stream from the handle that was stat'd. withFile()
+     * takes a path and Workerman's send path re-opens it, so that is a larger change to the
+     * response path, not made here. The window is bounded by the browser's max-age
+     * ({@see self::CACHE_CONTROL}): a client that caches a mismatched pair does not revalidate
+     * until the entry expires, and then its conditional request computes the current validator
+     * and gets a fresh `200`.
      *
      * @param Request $request         The incoming request, for its conditional headers.
      * @param string  $path            Real path of the file to serve.

@@ -45,8 +45,18 @@ final class ScriptedTrickplayRunner extends FfmpegRunner
      */
     public ?string $failRenameFrom = null;
 
+    /**
+     * Every rename the publish made, in order: the source, the target, and whether the target
+     * existed when the rename was called. Used to check that a final name is never absent.
+     *
+     * @var list<array{from: string, to: string, toExisted: bool}>
+     */
+    public array $renames = [];
+
     protected function renameTrickplayPath(string $from, string $to): bool
     {
+        $this->renames[] = ['from' => $from, 'to' => $to, 'toExisted' => file_exists($to)];
+
         if ($this->failRenameFrom !== null && $from === $this->failRenameFrom) {
             return false;
         }

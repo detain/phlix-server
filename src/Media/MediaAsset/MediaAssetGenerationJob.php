@@ -362,8 +362,15 @@ class MediaAssetGenerationJob
     ): bool {
         try {
             if (!TrickplayArtefacts::writeBif($frames, $intervalMs, $spriteDir, $generation)) {
+                // Recorded so the backfill's bif-failed.json skip reflects this failure, not a
+                // stale one from an earlier backfill run.
+                TrickplayArtefacts::markBifFailed($spriteDir, 'in-app job: BIF not written');
+
                 return false;
             }
+
+            // A BIF written now replaces any failure an earlier run recorded.
+            TrickplayArtefacts::clearBifFailedMarker($spriteDir);
 
             $this->logger->info('MediaAssetGenerationJob: BIF written', [
                 'item_id' => $job->itemId,
@@ -373,6 +380,7 @@ class MediaAssetGenerationJob
 
             return true;
         } catch (\Throwable $e) {
+            TrickplayArtefacts::markBifFailed($spriteDir, 'in-app job: BIF generation threw');
             $this->logger->warning('MediaAssetGenerationJob: BIF generation failed', [
                 'item_id' => $job->itemId,
                 'error' => $e->getMessage(),

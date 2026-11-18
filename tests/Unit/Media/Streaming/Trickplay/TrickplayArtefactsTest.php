@@ -279,17 +279,46 @@ final class TrickplayArtefactsTest extends TestCase
         $this->assertFileDoesNotExist($this->dir . '/' . BifWriter::GENERATION_FILENAME);
     }
 
-    public function testABifFailureMarkerDoesNotSkipTheItem(): void
+    public function testTheBackfillSkipsAnItemOnEitherFailureMarkerUntilItIsDeleted(): void
     {
-        // The BIF-only marker is informational. The backfill's skip check reads only the
-        // generation-failed marker, so a BIF failure must not set it.
+        // Nothing recorded: the item is generated.
+        $this->assertNull(TrickplayArtefacts::backfillSkipMarker($this->dir));
+
+        // A BIF-only failure skips the item, so a deterministic BIF failure is not retried on
+        // every run and cannot use up a --limit ahead of later items.
         TrickplayArtefacts::markBifFailed($this->dir, 'BIF not written');
+        $this->assertSame(
+            TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME,
+            TrickplayArtefacts::backfillSkipMarker($this->dir)
+        );
 
-        $this->assertFileExists($this->dir . '/' . TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME);
-        $this->assertFalse(TrickplayArtefacts::hasFailedMarker($this->dir));
+        // A generation failure skips it too, and is reported first when both are present.
+        TrickplayArtefacts::markFailed($this->dir, 'pass failed');
+        $this->assertSame(
+            TrickplayArtefacts::FAILED_MARKER_FILENAME,
+            TrickplayArtefacts::backfillSkipMarker($this->dir)
+        );
 
+        // Deleting the markers makes the item eligible again.
+        TrickplayArtefacts::clearFailedMarker($this->dir);
+        $this->assertSame(
+            TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME,
+            TrickplayArtefacts::backfillSkipMarker($this->dir)
+        );
         TrickplayArtefacts::clearBifFailedMarker($this->dir);
-        $this->assertFileDoesNotExist($this->dir . '/' . TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME);
+        $this->assertNull(TrickplayArtefacts::backfillSkipMarker($this->dir));
+    }
+
+    public function testAFailureMarkerIsWrittenForAReasonThatIsNotValidUtf8(): void
+    {
+        // A thrown message can carry bytes that are not UTF-8. The marker must still be written,
+        // or the item would be retried on every run.
+        TrickplayArtefacts::markFailed($this->dir, "trickplay generation threw: \xC3(bad");
+
+        $this->assertTrue(TrickplayArtefacts::hasFailedMarker($this->dir));
+        $record = json_decode((string) file_get_contents($this->dir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME), true);
+        $this->assertIsArray($record);
+        $this->assertStringStartsWith('trickplay generation threw:', (string) $record['reason']);
     }
 
     public function testWriteBifNeedsAtLeastTwoFrames(): void

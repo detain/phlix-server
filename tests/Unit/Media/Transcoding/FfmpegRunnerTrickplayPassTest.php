@@ -540,6 +540,32 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
     }
 
+    public function testAnExistingFinalIsNeverAbsentDuringThePublish(): void
+    {
+        // The publish replaces an existing final with one rename() over it. The final name must
+        // still exist when that rename runs, and no rename may move a final name away.
+        mkdir($this->dir . '/out', 0755, true);
+        file_put_contents($this->dir . '/out/sprite.jpg', 'OLD-SPRITE');
+        file_put_contents($this->dir . '/out/timeline.json', 'OLD-TIMELINE');
+        $runner = $this->scripted(6000.0);
+
+        $this->assertNotNull($runner->generateTrickplayArtefacts('/in.mkv', $this->dir . '/out', 60, 0, 320));
+
+        $finals = [$this->dir . '/out/sprite.jpg', $this->dir . '/out/timeline.json'];
+        $publishes = array_values(array_filter(
+            $runner->renames,
+            static fn (array $rename): bool => in_array($rename['to'], $finals, true)
+        ));
+        $this->assertCount(2, $publishes);
+        foreach ($publishes as $rename) {
+            $this->assertTrue($rename['toExisted'], 'The final must still exist when the temporary is renamed over it.');
+        }
+        foreach ($runner->renames as $rename) {
+            $this->assertNotContains($rename['from'], $finals, 'No rename may move a final name away.');
+        }
+        $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
+    }
+
     public function testACleanRunWithEmptyOutputStillPublishes(): void
     {
         $runner = $this->scripted(6000.0);

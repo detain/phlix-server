@@ -154,6 +154,39 @@ final class MediaAssetGenerationJobTrickplayPassTest extends TestCase
 
         $this->assertTrue($this->runJob($ffmpeg, $repo), 'A BIF failure must not fail the sprite job.');
         $this->assertFileDoesNotExist($spriteDir . '/' . BifWriter::FILENAME);
+        $this->assertFileExists(
+            $spriteDir . '/' . TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME,
+            'A BIF the pass could not write is recorded, so the backfill skips the item.'
+        );
+    }
+
+    public function testASuccessfulBifClearsAPriorBifFailureMarker(): void
+    {
+        // An earlier backfill run recorded a BIF failure for this item. The BIF this pass writes
+        // replaces that failure, so the marker must go and the backfill must not keep skipping it.
+        $spriteDir = $this->root . '/trickplay/item-1';
+        mkdir($spriteDir, 0755, true);
+        TrickplayArtefacts::markBifFailed($spriteDir, 'earlier run');
+        $frames = [$spriteDir . '/bifframe_00001.jpg', $spriteDir . '/bifframe_00002.jpg'];
+        foreach ($frames as $frame) {
+            file_put_contents($frame, self::JPEG);
+        }
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('getTranscodeDir')->willReturn($this->root);
+        $ffmpeg->method('generateTrickplayArtefacts')->willReturn([
+            'sprite' => $spriteDir . '/sprite.jpg',
+            'timeline' => $spriteDir . '/timeline.json',
+            'bif_frames' => $frames,
+            'bif_interval_ms' => 10000,
+            'generation' => '0123456789abcdef',
+        ]);
+        $repo = $this->createMock(ItemRepository::class);
+
+        $this->assertTrue($this->runJob($ffmpeg, $repo));
+
+        $this->assertFileExists($spriteDir . '/' . BifWriter::FILENAME);
+        $this->assertFileDoesNotExist($spriteDir . '/' . TrickplayArtefacts::BIF_FAILED_MARKER_FILENAME);
     }
 
     public function testAFailedPassRecordsNothingAndFailsTheJob(): void

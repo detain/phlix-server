@@ -22,10 +22,11 @@ declare(strict_types=1);
  * media-asset worker and this script never write the same item at once. The lock
  * is released on every path, including when generation or the logger throws.
  *
- * An item whose generation failed gets generation-failed.json in its directory and
- * is skipped by later runs; delete that file to retry the item. When only the BIF
- * could not be written, the sprite and timeline stay published and bif-failed.json
- * is recorded. That marker does not skip the item: the next run regenerates it.
+ * An item whose generation failed, or threw, gets generation-failed.json in its
+ * directory and is skipped by later runs. When only the BIF could not be written, the
+ * sprite and timeline stay published and bif-failed.json is recorded, and that item is
+ * skipped by later runs too. Delete the marker to retry the item. A skipped item does not
+ * count toward --limit, so a deterministic failure cannot starve the items after it.
  *
  * Usage:
  *   php scripts/backfill-trickplay.php                    # all libraries
@@ -167,12 +168,14 @@ foreach ($rows as $row) {
         continue;
     }
 
-    // An item whose earlier generation failed is not decoded again on every run.
-    // The marker records why; deleting it makes the item eligible again. A BIF-only
-    // failure (bif-failed.json) does not reach this check: that item is regenerated.
-    if (TrickplayArtefacts::hasFailedMarker($itemDir)) {
-        echo "  skip: {$path} (an earlier generation failed; delete "
-            . $itemDir . '/' . TrickplayArtefacts::FAILED_MARKER_FILENAME . " to retry)\n";
+    // An item whose earlier generation failed, or whose BIF failed, is not decoded again on
+    // every run. The marker records why; deleting it makes the item eligible again. Skipping
+    // here, before the limit check and before $attempted, keeps a deterministic failure from
+    // using up --limit ahead of the items after it.
+    $skipMarker = TrickplayArtefacts::backfillSkipMarker($itemDir);
+    if ($skipMarker !== null) {
+        echo "  skip: {$path} (an earlier trickplay generation failed; delete "
+            . $itemDir . '/' . $skipMarker . " to retry)\n";
         $skipped++;
         continue;
     }
@@ -218,9 +221,16 @@ foreach ($rows as $row) {
     }
 
     if ($thrown !== null) {
-        // Count and release the lock first, then log. The logger may throw; the
-        // counter and the lock must already be settled when it does.
+        // Count, record the marker, and release the lock, then log. The marker makes a
+        // deterministic throw skip the item on later runs, so it cannot starve the items
+        // after it. The logger may throw; the counter, marker and lock must already be
+        // settled when it does.
         $failed++;
+        try {
+            TrickplayArtefacts::markFailed($itemDir, 'trickplay generation threw: ' . $thrown->getMessage());
+        } catch (\Throwable $markError) {
+            echo "  warn: could not record failure marker for {$path} ({$markError->getMessage()})\n";
+        }
         TrickplayArtefacts::unlock($lock);
         echo "  FAIL: {$path} (trickplay generation threw: {$thrown->getMessage()})\n";
         try {
@@ -281,9 +291,9 @@ foreach ($rows as $row) {
         if ($bifWritten) {
             TrickplayArtefacts::clearBifFailedMarker($itemDir);
         } else {
-            // The sprite and timeline stay published. Only the BIF failure is recorded,
-            // under its own marker, which does not skip the item. isComplete() needs the
-            // BIF, so the next run regenerates the item and tries the BIF again.
+            // The sprite and timeline stay published. Only the BIF failure is recorded, under
+            // its own marker. That marker skips the item on later runs, so a deterministic BIF
+            // failure is not retried on every run. Delete the marker to try the BIF again.
             TrickplayArtefacts::markBifFailed($itemDir, 'BIF not written; sprite and timeline are published');
         }
         $updated++;

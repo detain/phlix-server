@@ -287,8 +287,10 @@ final class SecurityHeadersPolicyTest extends TestCase
             });
         $policy = new SecurityHeadersPolicy($settings);
 
-        self::assertSame(3600, $policy->hstsMaxAgeSeconds());
-        self::assertSame(3600, $policy->hstsMaxAgeSeconds());
+        $cold = $policy->hstsMaxAgeSeconds();
+        self::assertSame(3600, $cold);
+        $warm = $policy->hstsMaxAgeSeconds();
+        self::assertSame(3600, $warm);
         self::assertSame([SecurityHeadersPolicy::SETTING_KEY_HSTS_MAX_AGE => 1], $calls);
     }
 }

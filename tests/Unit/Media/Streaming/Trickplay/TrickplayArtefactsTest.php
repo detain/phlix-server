@@ -152,7 +152,8 @@ final class TrickplayArtefactsTest extends TestCase
 
         // A second acquisition on the same item is refused without waiting. This
         // is the same arbitration two processes get.
-        $this->assertNull(TrickplayArtefacts::tryLock($this->dir));
+        $refused = TrickplayArtefacts::tryLock($this->dir);
+        $this->assertNull($refused);
 
         TrickplayArtefacts::unlock($first);
         $second = TrickplayArtefacts::tryLock($this->dir);

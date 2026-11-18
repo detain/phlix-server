@@ -1960,9 +1960,12 @@ class AuthManager
         if ($claimedProfileId === null) {
             $profileId = $this->resolveProfileForUser($userId, null);
         } elseif ($this->profileManager === null) {
-            $this->logger->warning('Access token profile claim cannot be verified with no profile resolver wired; refusing the token', [
-                'user_id' => $userId,
-            ]);
+            $this->logger->warning(
+                'Access token profile claim cannot be verified with no profile resolver wired; refusing the token',
+                [
+                    'user_id' => $userId,
+                ]
+            );
 
             return null;
         } else {
@@ -2204,8 +2207,12 @@ class AuthManager
      * @param string                 $sessionId The family to revoke (this session id only).
      * @param string                 $jti       The presented refresh token's jti.
      */
-    private function revokeReusedFamily(TokenSessionRepository $store, string $userId, string $sessionId, string $jti): void
-    {
+    private function revokeReusedFamily(
+        TokenSessionRepository $store,
+        string $userId,
+        string $sessionId,
+        string $jti
+    ): void {
         $store->revokeSession($sessionId, 'refresh_token_reuse');
         $this->auditLogger->logFailedAuth('refresh_token_reuse', [
             'user_id' => $userId,
@@ -2347,7 +2354,8 @@ class AuthManager
      *
      * @param string      $userId    The authenticated account.
      * @param string      $profileId The profile the session should run as (non-empty).
-     * @param string|null $familyHint The existing family a rotation stays inside (see {@see self::buildAuthResponse()}).
+     * @param string|null $familyHint The existing family a rotation stays inside
+     *                                (see {@see self::buildAuthResponse()}).
      * @param string|null $deviceType Display metadata for a NEW family.
      * @param string|null $deviceName Display metadata for a NEW family.
      *

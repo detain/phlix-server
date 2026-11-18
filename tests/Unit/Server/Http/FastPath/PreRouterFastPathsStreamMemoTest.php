@@ -191,13 +191,15 @@ final class PreRouterFastPathsStreamMemoTest extends TestCase
         );
 
         $this->activeProfileId = 'pB';
-        self::assertSame(200, $fastPaths->dispatch($this->request('m1'))?->statusCode);
+        $uncapped = $fastPaths->dispatch($this->request('m1'));
+        self::assertSame(200, $uncapped?->statusCode);
 
         $this->activeProfileId = 'pA';
         $now = 5_000_000_000; // inside the 10 s TTL: a same-profile hit would be served from the memo
+        $capped = $fastPaths->dispatch($this->request('m1'));
         self::assertSame(
             404,
-            $fastPaths->dispatch($this->request('m1'))?->statusCode,
+            $capped?->statusCode,
             'the capped profile must not inherit the uncapped profile\'s cached ALLOW',
         );
         self::assertSame(['m1', 'm1'], $this->lookups, 'the switched profile must re-evaluate the item');

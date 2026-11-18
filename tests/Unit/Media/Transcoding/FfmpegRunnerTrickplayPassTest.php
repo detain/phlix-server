@@ -322,7 +322,6 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         $this->assertSame([], $this->temporariesIn($this->dir . '/out'));
     }
 
-    /** @return list<string> Temporary names left in $dir. */
     public function testASpriteCountThatIsNotWholeRowsIsRefusedBeforeAnyDecode(): void
     {
         // 61 cells would be 11 rows of 6, with 5 cells the sampler never fills. The pass
@@ -455,6 +454,7 @@ final class FfmpegRunnerTrickplayPassTest extends TestCase
         TrickplayArtefacts::unlock($again);
     }
 
+    /** @return list<string> Temporary names left in $dir. */
     private function temporariesIn(string $dir): array
     {
         $names = [];

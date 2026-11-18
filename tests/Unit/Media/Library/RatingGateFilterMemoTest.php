@@ -32,9 +32,12 @@ final class RatingGateFilterMemoTest extends TestCase
 
         $gate = new RatingGate($this->createMock(ItemRepository::class), $profiles, $users);
 
-        self::assertSame(self::CAP, $gate->resolveFilterForUser('u1', 'kid'));
-        self::assertSame(self::CAP, $gate->resolveFilterForUser('u1', 'kid'));
-        self::assertSame(self::CAP, $gate->resolveFilterForUser('u1', 'kid'));
+        $first = $gate->resolveFilterForUser('u1', 'kid');
+        self::assertSame(self::CAP, $first);
+        $second = $gate->resolveFilterForUser('u1', 'kid');
+        self::assertSame(self::CAP, $second);
+        $third = $gate->resolveFilterForUser('u1', 'kid');
+        self::assertSame(self::CAP, $third);
     }
 
     public function test_a_different_profile_of_the_same_user_is_resolved_separately(): void

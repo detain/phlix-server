@@ -430,6 +430,18 @@ changes.
 
 ---
 
+## Exception 11 — persisted ffprobe cache (`ProbeCache`, perf #11)
+
+| | |
+|---|---|
+| Site | `src/Media/Transcoding/ProbeCache.php` — `read()` (one `is_file`, `filesize`, `file_get_contents`), `write()` (`fopen 'xb'`, `chmod`, `fwrite`, `rename`), `directoryIsTrusted()` (one `lstat`, run per call), and `prune()`, which runs from a Workerman timer started by `TranscodeServicesProvider` (`startPruneTimer()`), never from a request |
+| Reached from | `FfmpegRunner::probe()` on an in-process memo miss. That is on the HLS request path (`TranscodeController` → `TranscodeManager::ensureHlsJob()`, which probes the source) and on `SubtitleController`; the scanners reach it too. The ffprobe run itself is not in this entry: it already goes through the coroutine-aware `runProbeCommand()` |
+| Why it is sync | A probe result is one small local JSON file, at most 64 KiB. Its cost is page-cache bound. A non-blocking file API is not available here: the Swoole file hook would move the same syscalls to a thread pool, which costs more than the read. The expensive part, the ffprobe fork, is already non-blocking. |
+| Bound | Entry: `ProbeCache::MAX_ENTRY_BYTES` = 65536. `read()` checks `filesize` before it reads, and `write()` checks the encoded length before it writes a byte. Directory: `MAX_ENTRIES` = 10000, pruned to 9000. Prune pass: at most `PRUNE_SCAN_LIMIT` = 20000 names examined, at most `PRUNE_DELETE_LIMIT` = 1000 unlinks, and the pass ends at the first failed unlink (no rescan within a pass). Measured firing: a 60 187-byte entry is stored, a payload over the bound is refused (`ProbeCacheTest`), and a 10 000-entry directory prunes exactly 1 000 files in one pass. |
+| Cost | Measured on this host (ext4, warm page cache, 300 iterations): 60 187-byte entry, write average 237 µs (create, chmod, write, rename), read average 122 µs. Prune of 10 000 entries down to a cap of 9 000: 80 ms wall. The prune runs once per 300 s per HTTP worker that built a runner, so the worst case is about 80 ms of one worker every 5 minutes, and a pass unlinks anything only while the directory is over the cap. |
+
+---
+
 ## Not on this list
 
 Everything else. In particular, do not add an entry for a call you have not

@@ -101,11 +101,18 @@ return [
      * every file once and the first request after a restart pays for it.
      *
      * Entries are written atomically (mode 0600) and bounded: entries over 64 KiB
-     * are not stored and the directory is pruned to 9000 entries once it passes
-     * 10000. A directory that cannot be created or written is a cache miss, never a
-     * request failure. Point PHLIX_PROBE_CACHE_DIR at a persistent path (e.g. under
-     * /var/phlix) to keep the cache across reboots; the default lives in the system
-     * temp directory and is therefore lost on reboot, which only costs re-probing.
+     * are not stored, and a background timer prunes the directory to 9000 entries once
+     * it passes 10000 (never on a probe request). A directory that cannot be created or
+     * written is a cache miss, never a request failure.
+     *
+     * Trust: the directory must be a real directory (not a symlink), owned by the
+     * Phlix process uid, with no group or other write bit. Another local user could
+     * otherwise plant probe results that drive copy/transcode decisions. A directory
+     * that fails the check disables the disk cache (one warning per worker) and the
+     * server probes as before. The default under the system temp directory is therefore
+     * safe only while no other user can write to that location; point
+     * PHLIX_PROBE_CACHE_DIR at a persistent path owned by the service user (e.g. under
+     * /var/phlix) to keep the cache across reboots. A reboot only costs re-probing.
      */
     'probe_cache_dir' => EnvConfig::text('PHLIX_PROBE_CACHE_DIR', sys_get_temp_dir() . '/phlix-ffprobe-cache'),
 

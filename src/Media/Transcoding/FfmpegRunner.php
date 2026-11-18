@@ -113,7 +113,7 @@ class FfmpegRunner
     private array $config = [];
 
     /**
-     * Per-worker probe memoization cache: keyed by "path:mtime:size", value is the
+     * Per-worker probe memoization cache: keyed by "path:mtime:size:ctime:inode", value is the
      * cached probe result. Caps ffprobe invocations to at most one per file per
      * worker lifetime — critical for the tone-map decision path where multiple
      * segment encodes can ask about the same file in quick succession. Bounded at
@@ -351,15 +351,26 @@ class FfmpegRunner
         // lifetime. The size/mtime guard handles a file that changes on disk (e.g.
         // after a re-encode). A failed probe is memoized as null but is retried.
         $stamp = $this->probeFileStamp($inputPath);
-        $cacheKey = $inputPath . ':' . ($stamp === null ? '' : $stamp['mtime'] . ':' . $stamp['size']);
+        $cacheKey = $inputPath . ':' . ($stamp === null ? '' : implode(':', [
+            $stamp['mtime'],
+            $stamp['size'],
+            $stamp['ctime'],
+            $stamp['inode'],
+        ]));
         if (isset($this->probeMemo[$cacheKey])) {
             return $this->probeMemo[$cacheKey];
         }
 
-        // perf #11: a persisted result for this exact file (realpath + size + mtime)
-        // skips the ffprobe run, and it is shared with every other worker.
+        // perf #11: a persisted result for this exact file (realpath, size, mtime, ctime
+        // and inode) skips the ffprobe run, and it is shared with every other worker.
         if ($stamp !== null && $this->probeCache !== null) {
-            $persisted = $this->probeCache->read($stamp['realpath'], $stamp['size'], $stamp['mtime']);
+            $persisted = $this->probeCache->read(
+                $stamp['realpath'],
+                $stamp['size'],
+                $stamp['mtime'],
+                $stamp['ctime'],
+                $stamp['inode']
+            );
             if ($persisted !== null) {
                 $this->rememberProbe($cacheKey, $persisted);
                 return $persisted;
@@ -377,7 +388,14 @@ class FfmpegRunner
 
         // Only a successful probe is persisted; a failure may be transient and is retried.
         if ($result !== null && $stamp !== null && $this->probeCache !== null) {
-            $this->probeCache->write($stamp['realpath'], $stamp['size'], $stamp['mtime'], $result);
+            $this->probeCache->write(
+                $stamp['realpath'],
+                $stamp['size'],
+                $stamp['mtime'],
+                $stamp['ctime'],
+                $stamp['inode'],
+                $result
+            );
         }
 
         return $result;
@@ -395,13 +413,18 @@ class FfmpegRunner
     }
 
     /**
-     * The size, mtime and realpath a probe result is keyed on, or null when the path
-     * is not a readable regular file.
+     * The realpath, size, mtime, ctime and inode a probe result is keyed on, or null
+     * when the path is not a readable regular file. ctime and inode are included
+     * because mtime is whole seconds: a same-size rewrite in the same second, or a
+     * replace-by-rename, must not be a stale hit.
      *
-     * @return array{realpath: string, size: int, mtime: int}|null
+     * @return array{realpath: string, size: int, mtime: int, ctime: int, inode: int}|null
      */
     private function probeFileStamp(string $inputPath): ?array
     {
+        // Drop PHP's cached stat for this path first: a long-lived worker must key the
+        // probe on the file as it is now, not on the last stat() it happened to make.
+        clearstatcache(true, $inputPath);
         if (!is_file($inputPath)) {
             return null;
         }
@@ -409,13 +432,19 @@ class FfmpegRunner
         if ($realPath === false) {
             return null;
         }
-        $size = @filesize($realPath);
-        $mtime = @filemtime($realPath);
-        if (!is_int($size) || !is_int($mtime)) {
+        clearstatcache(true, $realPath);
+        $st = @stat($realPath);
+        if ($st === false) {
             return null;
         }
 
-        return ['realpath' => $realPath, 'size' => $size, 'mtime' => $mtime];
+        return [
+            'realpath' => $realPath,
+            'size' => $st['size'],
+            'mtime' => $st['mtime'],
+            'ctime' => $st['ctime'],
+            'inode' => $st['ino'],
+        ];
     }
 
     /**

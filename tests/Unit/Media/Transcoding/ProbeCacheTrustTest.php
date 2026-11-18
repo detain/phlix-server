@@ -136,10 +136,10 @@ final class ProbeCacheTrustTest extends TestCase
 
         // Constructed directly so the refusal is the per-call check, not the factory.
         $cache = new ProbeCache($dir, ProbeCache::MAX_ENTRIES, null, $this->uid() + 1);
-        $cache->write('/media/a.mkv', 1, 1, $this->sampleProbe());
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
 
         self::assertSame([], glob($dir . '/*') ?: [], 'nothing is written to an untrusted directory');
-        self::assertNull($cache->read('/media/a.mkv', 1, 1));
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
     }
 
     public function testADirectoryWidenedAfterBuildIsRefusedOnTheNextCall(): void
@@ -148,14 +148,14 @@ final class ProbeCacheTrustTest extends TestCase
         mkdir($dir, 0700);
         $cache = ProbeCache::createIfSecure($dir);
         self::assertInstanceOf(ProbeCache::class, $cache);
-        $cache->write('/media/a.mkv', 1, 1, $this->sampleProbe());
-        self::assertNotNull($cache->read('/media/a.mkv', 1, 1), 'trusted while private');
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        self::assertNotNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'trusted while private');
 
         // Another local user widens the directory after build: the per-call check refuses it.
         chmod($dir, 0777);
 
-        self::assertNull($cache->read('/media/a.mkv', 1, 1), 'a widened directory is never read');
-        $cache->write('/media/b.mkv', 1, 1, $this->sampleProbe());
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9), 'a widened directory is never read');
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
         self::assertFileDoesNotExist($dir . '/' . sha1('/media/b.mkv') . '.json');
     }
 }

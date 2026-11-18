@@ -206,11 +206,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     // The directory trust check (owner, no symlink, no group/other write)
                     // runs once here, at build, not per probe. A refused directory yields
                     // null, which leaves the runner memo-only, and logs one warning.
-                    $runner->setProbeCache(
-                        $probeCacheDir !== null
-                            ? ProbeCache::createIfSecure($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
-                            : null
-                    );
+                    $probeCache = $probeCacheDir !== null
+                        ? ProbeCache::createIfSecure($probeCacheDir, ProbeCache::MAX_ENTRIES, $logger)
+                        : null;
+                    // Pruning runs on a Workerman timer, never on a probe request.
+                    $probeCache?->startPruneTimer();
+                    $runner->setProbeCache($probeCache);
 
                     // SV-4.2: wire the segment-process registry so on-demand encode
                     // PIDs are tracked for cancellation / wait-timeout kill.

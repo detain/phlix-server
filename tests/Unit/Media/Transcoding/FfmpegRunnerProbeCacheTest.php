@@ -131,6 +131,26 @@ final class FfmpegRunnerProbeCacheTest extends TestCase
         self::assertCount(1, glob($cacheDir . '/*.json') ?: [], 'the entry is replaced, not duplicated');
     }
 
+    public function testASameSizeReplaceWithTheOldMtimeIsReprobed(): void
+    {
+        // mtime is whole seconds and size is unchanged, so only the inode (and ctime)
+        // tell this replacement apart from the cached file. It must not be a stale hit.
+        $cacheDir = $this->dir . '/cache';
+        $this->runner($cacheDir)->probe($this->media);
+        self::assertSame(1, $this->probeRuns());
+
+        $mtime = filemtime($this->media);
+        $replacement = $this->dir . '/replacement.mkv';
+        file_put_contents($replacement, 'media-bytes-v2');
+        self::assertSame(strlen('media-bytes-v1'), strlen('media-bytes-v2'));
+        touch($replacement, is_int($mtime) ? $mtime : time());
+        rename($replacement, $this->media);
+
+        $this->runner($cacheDir)->probe($this->media);
+
+        self::assertSame(2, $this->probeRuns(), 'a replaced inode forces a re-probe');
+    }
+
     public function testAnUnwritableCacheDirectoryFallsBackToProbing(): void
     {
         // The configured cache "directory" is a regular file, so every write fails.

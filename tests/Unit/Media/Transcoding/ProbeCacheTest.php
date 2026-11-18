@@ -78,36 +78,36 @@ final class ProbeCacheTest extends TestCase
     {
         $probe = $this->sampleProbe();
 
-        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, $probe);
+        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, 7, 9, $probe);
 
-        self::assertSame($probe, $this->cache()->read('/media/a.mkv', 100, 1_700_000_000));
+        self::assertSame($probe, $this->cache()->read('/media/a.mkv', 100, 1_700_000_000, 7, 9));
     }
 
     public function testAChangedSizeOrMtimeIsAMiss(): void
     {
-        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, $this->sampleProbe());
+        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, 7, 9, $this->sampleProbe());
 
-        self::assertNull($this->cache()->read('/media/a.mkv', 101, 1_700_000_000), 'size changed');
-        self::assertNull($this->cache()->read('/media/a.mkv', 100, 1_700_000_001), 'mtime changed');
+        self::assertNull($this->cache()->read('/media/a.mkv', 101, 1_700_000_000, 7, 9), 'size changed');
+        self::assertNull($this->cache()->read('/media/a.mkv', 100, 1_700_000_001, 7, 9), 'mtime changed');
     }
 
     public function testAnEntryWhosePathDoesNotMatchIsAMiss(): void
     {
-        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, $this->sampleProbe());
+        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, 7, 9, $this->sampleProbe());
         // Simulate a hash collision / tampered entry: the file is found by the sha1 of
         // the realpath, but the recorded path is some other file.
         $raw = (string) file_get_contents($this->entryFile('/media/a.mkv'));
         $tampered = str_replace('/media/a.mkv', '/media/other.mkv', $raw);
         file_put_contents($this->entryFile('/media/a.mkv'), $tampered);
 
-        self::assertNull($this->cache()->read('/media/a.mkv', 100, 1_700_000_000));
+        self::assertNull($this->cache()->read('/media/a.mkv', 100, 1_700_000_000, 7, 9));
     }
 
     public function testCorruptOrWrongVersionEntriesAreMissesNotErrors(): void
     {
         mkdir($this->dir . '/cache', 0700, true);
         file_put_contents($this->entryFile('/media/bad.mkv'), '{not json');
-        self::assertNull($this->cache()->read('/media/bad.mkv', 1, 1));
+        self::assertNull($this->cache()->read('/media/bad.mkv', 1, 1, 7, 9));
 
         file_put_contents(
             $this->entryFile('/media/old.mkv'),
@@ -119,18 +119,26 @@ final class ProbeCacheTest extends TestCase
                 'probe' => $this->sampleProbe(),
             ]),
         );
-        self::assertNull($this->cache()->read('/media/old.mkv', 1, 1), 'unknown format version');
+        self::assertNull($this->cache()->read('/media/old.mkv', 1, 1, 7, 9), 'unknown format version');
 
         file_put_contents(
             $this->entryFile('/media/shape.mkv'),
-            json_encode(['v' => 1, 'path' => '/media/shape.mkv', 'size' => 1, 'mtime' => 1, 'probe' => 'nope']),
+            json_encode([
+                'v' => ProbeCache::FORMAT_VERSION,
+                'path' => '/media/shape.mkv',
+                'size' => 1,
+                'mtime' => 1,
+                'ctime' => 7,
+                'ino' => 9,
+                'probe' => 'nope',
+            ]),
         );
-        self::assertNull($this->cache()->read('/media/shape.mkv', 1, 1), 'probe is not the expected shape');
+        self::assertNull($this->cache()->read('/media/shape.mkv', 1, 1, 7, 9), 'probe is not the expected shape');
     }
 
     public function testMissingCacheDirectoryIsAMissNotAnError(): void
     {
-        self::assertNull($this->cache()->read('/media/never-written.mkv', 1, 1));
+        self::assertNull($this->cache()->read('/media/never-written.mkv', 1, 1, 7, 9));
     }
 
     public function testAnUnwritableDirectoryDoesNotThrowOrPersist(): void
@@ -141,9 +149,9 @@ final class ProbeCacheTest extends TestCase
         file_put_contents($blocker, 'not a directory');
 
         $cache = new ProbeCache($blocker);
-        $cache->write('/media/a.mkv', 1, 1, $this->sampleProbe());
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
 
-        self::assertNull($cache->read('/media/a.mkv', 1, 1));
+        self::assertNull($cache->read('/media/a.mkv', 1, 1, 7, 9));
         self::assertSame('not a directory', file_get_contents($blocker), 'the blocking file is untouched');
     }
 
@@ -151,15 +159,15 @@ final class ProbeCacheTest extends TestCase
     {
         $huge = $this->sampleProbe(str_repeat('x', ProbeCache::MAX_ENTRY_BYTES + 1));
 
-        $this->cache()->write('/media/huge.mkv', 1, 1, $huge);
+        $this->cache()->write('/media/huge.mkv', 1, 1, 7, 9, $huge);
 
         self::assertFileDoesNotExist($this->entryFile('/media/huge.mkv'));
-        self::assertNull($this->cache()->read('/media/huge.mkv', 1, 1));
+        self::assertNull($this->cache()->read('/media/huge.mkv', 1, 1, 7, 9));
     }
 
     public function testEntriesAreWrittenAtomicallyWithOwnerOnlyMode(): void
     {
-        $this->cache()->write('/media/a.mkv', 1, 1, $this->sampleProbe());
+        $this->cache()->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
 
         self::assertFileExists($this->entryFile('/media/a.mkv'));
         self::assertSame([], glob($this->dir . '/cache/.*.tmp') ?: [], 'no temp file is left behind');
@@ -174,7 +182,7 @@ final class ProbeCacheTest extends TestCase
         $base = 1_700_000_000;
         for ($i = 0; $i < 8; $i++) {
             $path = '/media/' . $i . '.mkv';
-            $cache->write($path, 1, $base, $this->sampleProbe());
+            $cache->write($path, 1, $base, 7, 9, $this->sampleProbe());
             // Distinct mtimes so "oldest" is well defined: 0 is oldest, 7 is newest.
             touch($this->entryFile($path), $base + $i);
         }
@@ -195,11 +203,93 @@ final class ProbeCacheTest extends TestCase
     public function testPruneIsANoOpUnderTheCap(): void
     {
         $cache = $this->cache(10);
-        $cache->write('/media/a.mkv', 1, 1, $this->sampleProbe());
-        $cache->write('/media/b.mkv', 1, 1, $this->sampleProbe());
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        $cache->write('/media/b.mkv', 1, 1, 7, 9, $this->sampleProbe());
 
         $cache->prune();
 
         self::assertCount(2, glob($this->dir . '/cache/*.json') ?: []);
+    }
+
+    public function testTheStampIncludesCtimeAndInode(): void
+    {
+        $this->cache()->write('/media/a.mkv', 100, 1_700_000_000, 1_700_000_500, 4242, $this->sampleProbe());
+
+        self::assertNotNull($this->cache()->read('/media/a.mkv', 100, 1_700_000_000, 1_700_000_500, 4242));
+        $cache = $this->cache();
+        self::assertNull($cache->read('/media/a.mkv', 100, 1_700_000_000, 1_700_000_501, 4242), 'ctime changed');
+        self::assertNull($cache->read('/media/a.mkv', 100, 1_700_000_000, 1_700_000_500, 4243), 'inode changed');
+    }
+
+    public function testWriteNeverChangesTheProcessUmask(): void
+    {
+        $before = umask();
+
+        $this->cache()->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+
+        self::assertSame($before, umask(), 'the private mode comes from chmod on the temp file, not a global umask');
+    }
+
+    public function testWriteNeverPrunes(): void
+    {
+        $cache = $this->cache(2);
+        for ($i = 0; $i < 5; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        self::assertCount(5, glob($this->dir . '/cache/*.json') ?: [], 'pruning is not on the probe write path');
+    }
+
+    public function testPruneRemovesStaleTempFilesAndKeepsRecentOnes(): void
+    {
+        $cache = $this->cache();
+        $cache->write('/media/a.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        $stale = $this->dir . '/cache/.x.json.deadbeef.tmp';
+        $recent = $this->dir . '/cache/.y.json.cafebabe.tmp';
+        file_put_contents($stale, 'partial');
+        file_put_contents($recent, 'partial');
+        touch($stale, time() - ProbeCache::STALE_TMP_SECONDS - 60);
+
+        self::assertSame(1, $cache->prune());
+        self::assertFileDoesNotExist($stale);
+        self::assertFileExists($recent, 'a recent temp file may still be in flight');
+    }
+
+    public function testOnePruneIsBoundedToTheDeleteLimit(): void
+    {
+        $cache = $this->cache(10);
+        $total = ProbeCache::PRUNE_DELETE_LIMIT + 100;
+        for ($i = 0; $i < $total; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        self::assertSame(ProbeCache::PRUNE_DELETE_LIMIT, $cache->prune(), 'one pass unlinks at most the limit');
+        self::assertCount($total - ProbeCache::PRUNE_DELETE_LIMIT, glob($this->dir . '/cache/*.json') ?: []);
+    }
+
+    public function testAFailedUnlinkEndsThePassWithoutRescanning(): void
+    {
+        if (!function_exists('posix_getuid') || posix_getuid() === 0) {
+            self::markTestSkipped('A read-only directory blocks unlink only for a non-root user.');
+        }
+        $cache = $this->cache(5);
+        for ($i = 0; $i < 8; $i++) {
+            $cache->write('/media/' . $i . '.mkv', 1, 1, 7, 9, $this->sampleProbe());
+        }
+
+        chmod($this->dir . '/cache', 0500);
+        try {
+            self::assertSame(0, $cache->prune(), 'every unlink fails, so the pass returns after the first failure');
+            self::assertCount(8, glob($this->dir . '/cache/*.json') ?: []);
+        } finally {
+            chmod($this->dir . '/cache', 0700);
+        }
+    }
+
+    public function testStartingThePruneTimerOutsideAWorkerDoesNotThrow(): void
+    {
+        self::expectNotToPerformAssertions();
+
+        $this->cache()->startPruneTimer();
     }
 }

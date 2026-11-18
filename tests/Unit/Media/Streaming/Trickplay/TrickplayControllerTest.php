@@ -143,6 +143,31 @@ class TrickplayControllerTest extends TestCase
         }
     }
 
+    public function testAConfiguredRootThatIsASymlinkStillServesItsArtefacts(): void
+    {
+        // The configured root is a symlink to the real directory. Artefacts resolve to
+        // real paths, so the root must be canonical too, or every artefact would fail
+        // the containment check and 404.
+        $real = $this->tempDir . '-real';
+        mkdir($real . '/trickplay/job-123', 0755, true);
+        $bif = $this->sampleBif();
+        file_put_contents($real . '/trickplay/job-123/thumbs.bif', $bif);
+        $link = $this->tempDir . '-root-link';
+        symlink($real, $link);
+
+        try {
+            $controller = new TrickplayController($link, $this->baseUrl);
+
+            $this->assertTrue($controller->hasBif('job-123'));
+            $response = $controller->getBif(new Request(), ['jobId' => 'job-123'])->materializeFileWindow();
+            $this->assertSame(200, $response->statusCode);
+            $this->assertSame($bif, $response->body);
+        } finally {
+            unlink($link);
+            $this->removeDirectory($real);
+        }
+    }
+
     public function testGetBifHandlerServesTheArchive(): void
     {
         $controller = new TrickplayController($this->tempDir, $this->baseUrl);

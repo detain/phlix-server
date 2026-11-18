@@ -61,12 +61,20 @@ class TrickplayController
     /**
      * Creates a new TrickplayController instance.
      *
+     * The root is canonicalised once here with realpath(), because artefact paths are
+     * resolved with realpath() and checked against it. A configured root that is a
+     * symlink would otherwise fail every containment check. A root that does not exist
+     * yet keeps its configured spelling. If that spelling goes through a symlink, its
+     * artefacts stay unreachable (fail closed) until the controller is rebuilt.
+     *
      * @param string $trickplayDir Base directory for trickplay files
      * @param string $baseUrl Base URL for trickplay endpoints
      */
     public function __construct(string $trickplayDir, string $baseUrl)
     {
-        $this->trickplayDir = rtrim($trickplayDir, '/');
+        $configured = rtrim($trickplayDir, '/');
+        $real = realpath($configured);
+        $this->trickplayDir = $real !== false ? rtrim($real, '/') : $configured;
         $this->baseUrl = rtrim($baseUrl, '/');
     }
 
